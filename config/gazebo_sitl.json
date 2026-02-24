@@ -48,8 +48,7 @@
         "imu_rate_hz": 400,
         "imu": {
             "backend": "gazebo",
-            "gz_topic": "/imu",
-            "rate_hz": 200
+            "gz_topic": "/imu"
         },
         "keyframe": {
             "min_parallax_px": 15.0,

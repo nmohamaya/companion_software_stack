@@ -2,8 +2,8 @@
 // HAL backend: IMU data from Gazebo transport (gz::msgs::IMU).
 //
 // Subscribes to a gz-transport IMU topic and caches the latest reading.
-// Thread-safe: uses a spinlock (atomic flag) for the cached ImuReading,
-// since the struct is small (~56 bytes) and copies are fast.
+// Thread-safe: uses a std::mutex to guard access to the cached ImuReading.
+// The struct is small (~56 bytes), so copying it under the lock is cheap.
 //
 // Compile guard: only available when HAVE_GAZEBO is defined by CMake.
 #pragma once
@@ -37,13 +37,19 @@ public:
         : gz_topic_(std::move(gz_topic)) {}
 
     ~GazeboIMUBackend() override {
-        // Ensure we unsubscribe on destruction
-        if (active_.load(std::memory_order_relaxed)) {
-            node_.Unsubscribe(gz_topic_);
-            active_.store(false, std::memory_order_relaxed);
-            spdlog::info("[GazeboIMU] Destroyed — unsubscribed from '{}'",
-                         gz_topic_);
+        shutdown();
+    }
+
+    /// Explicitly shut down: prevents callbacks from racing the destructor.
+    void shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(reading_mutex_);
+            if (!active_.load(std::memory_order_relaxed)) return;
+            active_.store(false, std::memory_order_release);
         }
+        node_.Unsubscribe(gz_topic_);
+        spdlog::info("[GazeboIMU] Shut down — unsubscribed from '{}'",
+                     gz_topic_);
     }
 
     // Non-copyable, non-movable (owns gz::transport::Node)
@@ -103,28 +109,37 @@ public:
 private:
     // ── gz-transport callback (called on transport thread) ──────────
     void on_imu_msg(const gz::msgs::IMU& msg) {
+        // Early-out if shutdown is in progress (prevents use-after-free)
+        if (!active_.load(std::memory_order_acquire)) return;
+
         ImuReading r;
 
         // Extract linear acceleration (m/s²)
-        if (msg.has_linear_acceleration()) {
+        bool has_accel = msg.has_linear_acceleration();
+        if (has_accel) {
             const auto& la = msg.linear_acceleration();
             r.accel = Eigen::Vector3d(la.x(), la.y(), la.z());
         }
 
         // Extract angular velocity (rad/s)
-        if (msg.has_angular_velocity()) {
+        bool has_gyro = msg.has_angular_velocity();
+        if (has_gyro) {
             const auto& av = msg.angular_velocity();
             r.gyro = Eigen::Vector3d(av.x(), av.y(), av.z());
         }
 
+        // Mark valid only when both required fields are present
+        r.valid = has_accel && has_gyro;
+        if (!r.valid) return;  // discard incomplete messages
+
         // Timestamp: use steady_clock for monotonic time
         r.timestamp = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        r.valid = true;
 
         // Store under lock (fast — ImuReading is ~56 bytes)
         {
             std::lock_guard<std::mutex> lock(reading_mutex_);
+            if (!active_.load(std::memory_order_relaxed)) return;
             cached_reading_ = r;
         }
 

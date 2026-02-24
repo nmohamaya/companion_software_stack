@@ -153,7 +153,7 @@ TEST(GazeboIMUTest, FactoryStillCreatesSimulated) {
 // Fallback tests — verify factory falls back to simulated
 // ═══════════════════════════════════════════════════════════
 
-TEST(GazeboIMUFallbackTest, FactoryFallsBackToSimulated) {
+TEST(GazeboIMUFallbackTest, FactoryCreatesSimulatedBackend) {
     auto path = create_temp_config(R"({
         "slam": {
             "imu": {
