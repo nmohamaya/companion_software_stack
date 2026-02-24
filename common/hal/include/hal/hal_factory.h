@@ -34,7 +34,7 @@
 #endif
 
 #ifdef HAVE_GAZEBO
-// TODO(#9):  #include "hal/gazebo_camera.h"
+#include "hal/gazebo_camera.h"
 // TODO(#10): #include "hal/gazebo_imu.h"
 #endif
 
@@ -59,7 +59,10 @@ inline std::unique_ptr<ICamera> create_camera(
         return std::make_unique<SimulatedCamera>();
     }
 #ifdef HAVE_GAZEBO
-    // TODO(#9): if (backend == "gazebo") return std::make_unique<GazeboCamera>();
+    if (backend == "gazebo") {
+        auto gz_topic = cfg.get<std::string>(section + ".gz_topic", "/camera");
+        return std::make_unique<GazeboCameraBackend>(gz_topic);
+    }
 #endif
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
 
