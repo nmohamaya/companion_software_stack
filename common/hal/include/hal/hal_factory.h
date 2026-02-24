@@ -35,7 +35,7 @@
 
 #ifdef HAVE_GAZEBO
 #include "hal/gazebo_camera.h"
-// TODO(#10): #include "hal/gazebo_imu.h"
+#include "hal/gazebo_imu.h"
 #endif
 
 #include "util/config.h"
@@ -136,7 +136,11 @@ inline std::unique_ptr<IIMUSource> create_imu_source(
         return std::make_unique<SimulatedIMU>();
     }
 #ifdef HAVE_GAZEBO
-    // TODO(#10): if (backend == "gazebo") return std::make_unique<GazeboIMU>();
+    if (backend == "gazebo") {
+        auto gz_topic = cfg.get<std::string>(section + ".gz_topic", "/imu");
+        auto imu = std::make_unique<GazeboIMUBackend>(gz_topic);
+        return imu;
+    }
 #endif
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
 
