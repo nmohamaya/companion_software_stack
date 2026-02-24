@@ -58,7 +58,7 @@ make -j$(nproc)
 LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" \
   ctest --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 91 across 9 suites)
+- All tests must pass (currently 121 across 10 suites)
 - No regressions in existing tests
 - New features must include tests
 

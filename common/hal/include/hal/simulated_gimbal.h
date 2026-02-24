@@ -39,8 +39,10 @@ public:
 
     uint64_t capture_image() override {
         capture_count_++;
+        auto now = std::chrono::steady_clock::now();
         auto ts = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now.time_since_epoch()).count());
         spdlog::info("[SimulatedGimbal] Image captured #{} pitch={:.1f} yaw={:.1f}",
                      capture_count_, state_.pitch, state_.yaw);
         return ts;

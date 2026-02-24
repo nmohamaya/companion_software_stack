@@ -1,10 +1,12 @@
 // common/hal/include/hal/simulated_fc_link.h
 // Simulated flight controller link backend.
 // Mirrors the behaviour of comms/mavlink_sim.h behind the IFCLink interface.
+// Thread-safe: all mutable state guarded by mutex.
 #pragma once
 #include "hal/ifc_link.h"
 #include <chrono>
 #include <cmath>
+#include <mutex>
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -12,6 +14,7 @@ namespace drone::hal {
 class SimulatedFCLink : public IFCLink {
 public:
     bool open(const std::string& port, int baud) override {
+        std::lock_guard<std::mutex> lock(mtx_);
         (void)port; (void)baud;
         spdlog::info("[SimulatedFCLink] Opened simulated link {}@{}", port, baud);
         connected_ = true;
@@ -20,13 +23,18 @@ public:
     }
 
     void close() override {
+        std::lock_guard<std::mutex> lock(mtx_);
         connected_ = false;
         spdlog::info("[SimulatedFCLink] Closed");
     }
 
-    bool is_connected() const override { return connected_; }
+    bool is_connected() const override {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return connected_;
+    }
 
     bool send_trajectory(float vx, float vy, float vz, float yaw) override {
+        std::lock_guard<std::mutex> lock(mtx_);
         if (!connected_) return false;
         spdlog::debug("[SimulatedFCLink] SET_POSITION_TARGET vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}",
                       vx, vy, vz, yaw);
@@ -35,18 +43,21 @@ public:
     }
 
     bool send_arm(bool arm) override {
+        std::lock_guard<std::mutex> lock(mtx_);
         spdlog::info("[SimulatedFCLink] {} command", arm ? "ARM" : "DISARM");
         state_.armed = arm;
         return true;
     }
 
     bool send_mode(uint8_t mode) override {
+        std::lock_guard<std::mutex> lock(mtx_);
         spdlog::info("[SimulatedFCLink] MODE change to {}", mode);
         state_.flight_mode = mode;
         return true;
     }
 
     FCState receive_state() override {
+        std::lock_guard<std::mutex> lock(mtx_);
         auto now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(now - start_time_).count();
 
@@ -67,6 +78,7 @@ public:
     std::string name() const override { return "SimulatedFCLink"; }
 
 private:
+    mutable std::mutex mtx_;
     bool connected_{false};
     FCState state_{};
     float last_vx_{0}, last_vy_{0}, last_vz_{0};

@@ -12,17 +12,45 @@
 
 #include <fstream>
 #include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <vector>
 
 // ═══════════════════════════════════════════════════════════
-// Helper: create a temporary config file
+// Helper: create a unique temporary config file (cleaned up via RAII)
 // ═══════════════════════════════════════════════════════════
+static std::vector<std::string> g_temp_files;
+
 static std::string create_temp_config(const std::string& json_content) {
-    std::string path = "/tmp/test_hal_config.json";
+    char tmpl[] = "/tmp/test_hal_XXXXXX.json";
+    int fd = mkstemps(tmpl, 5);  // 5 = strlen(".json")
+    if (fd < 0) {
+        // Fallback
+        std::string path = "/tmp/test_hal_" + std::to_string(getpid()) + ".json";
+        std::ofstream ofs(path);
+        ofs << json_content;
+        ofs.close();
+        g_temp_files.push_back(path);
+        return path;
+    }
+    ::close(fd);
+    std::string path(tmpl);
     std::ofstream ofs(path);
     ofs << json_content;
     ofs.close();
+    g_temp_files.push_back(path);
     return path;
 }
+
+// Clean up temp files after all tests
+struct TempFileCleanup {
+    ~TempFileCleanup() {
+        for (const auto& f : g_temp_files) {
+            std::remove(f.c_str());
+        }
+    }
+};
+static TempFileCleanup g_cleanup;
 
 // ═══════════════════════════════════════════════════════════
 // Factory Tests

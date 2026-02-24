@@ -49,7 +49,8 @@ public:
         }
 
         f.timestamp_ns = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
         f.sequence = seq_++;
         f.width = width_;
         f.height = height_;

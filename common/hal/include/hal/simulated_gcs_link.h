@@ -1,9 +1,11 @@
 // common/hal/include/hal/simulated_gcs_link.h
 // Simulated GCS link backend.
 // Mirrors the behaviour of comms/gcs_link.h behind the IGCSLink interface.
+// Thread-safe: all mutable state guarded by mutex.
 #pragma once
 #include "hal/igcs_link.h"
 #include <chrono>
+#include <mutex>
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -11,6 +13,7 @@ namespace drone::hal {
 class SimulatedGCSLink : public IGCSLink {
 public:
     bool open(const std::string& addr, int port) override {
+        std::lock_guard<std::mutex> lock(mtx_);
         (void)addr; (void)port;
         spdlog::info("[SimulatedGCSLink] Simulated UDP link {}:{}", addr, port);
         connected_ = true;
@@ -19,14 +22,19 @@ public:
     }
 
     void close() override {
+        std::lock_guard<std::mutex> lock(mtx_);
         connected_ = false;
         spdlog::info("[SimulatedGCSLink] Closed");
     }
 
-    bool is_connected() const override { return connected_; }
+    bool is_connected() const override {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return connected_;
+    }
 
     bool send_telemetry(float lat, float lon, float alt,
                         float battery, uint8_t state) override {
+        std::lock_guard<std::mutex> lock(mtx_);
         if (!connected_) return false;
         telem_count_++;
         if (telem_count_ % 50 == 0) {
@@ -38,6 +46,7 @@ public:
     }
 
     GCSCommand poll_command() override {
+        std::lock_guard<std::mutex> lock(mtx_);
         GCSCommand cmd{};
         auto now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(now - start_time_).count();
@@ -58,6 +67,7 @@ public:
     std::string name() const override { return "SimulatedGCSLink"; }
 
 private:
+    mutable std::mutex mtx_;
     bool connected_{false};
     bool rtl_sent_{false};
     uint64_t telem_count_{0};

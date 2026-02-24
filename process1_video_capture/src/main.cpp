@@ -1,6 +1,6 @@
 // process1_video_capture/src/main.cpp
 // Process 1 — Video Capture: camera capture + SHM publish.
-// Uses HAL ICamera interface — backend selected via config ("simulated" or "v4l2").
+// Uses HAL ICamera interface — backend selected via config ("simulated" today; "v4l2" planned).
 
 #include "video/frame.h"
 #include "ipc/shm_writer.h"
@@ -12,6 +12,7 @@
 #include "util/scoped_timer.h"
 #include "hal/hal_factory.h"
 
+#include <algorithm>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -37,7 +38,10 @@ static void mission_cam_thread(
         ScopedTimer timer("MissionCam", 50.0);
 
         auto frame = camera.capture();
-        if (!frame.valid) continue;
+        if (!frame.valid) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            continue;
+        }
 
         drone::ipc::ShmVideoFrame shm_frame{};
         shm_frame.timestamp_ns    = frame.timestamp_ns;
@@ -85,21 +89,30 @@ static void stereo_cam_thread(
         auto left_frame  = left_cam.capture();
         auto right_frame = right_cam.capture();
 
+        // Ensure both frames are valid before publishing
+        if (!left_frame.valid || !right_frame.valid) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            continue;
+        }
+
         drone::ipc::ShmStereoFrame shm_frame{};
         shm_frame.timestamp_ns    = left_frame.timestamp_ns;
         shm_frame.sequence_number = left_frame.sequence;
         shm_frame.width           = left_frame.width;
         shm_frame.height          = left_frame.height;
 
-        // Copy left and right data
-        size_t copy_size = std::min(
-            static_cast<size_t>(left_frame.height) * left_frame.width,
+        // Copy left and right data using height * stride for correct padding
+        size_t copy_size_left = std::min(
+            static_cast<size_t>(left_frame.height) * left_frame.stride,
             sizeof(shm_frame.left_data));
+        size_t copy_size_right = std::min(
+            static_cast<size_t>(right_frame.height) * right_frame.stride,
+            sizeof(shm_frame.right_data));
         if (left_frame.data) {
-            std::memcpy(shm_frame.left_data, left_frame.data, copy_size);
+            std::memcpy(shm_frame.left_data, left_frame.data, copy_size_left);
         }
         if (right_frame.data) {
-            std::memcpy(shm_frame.right_data, right_frame.data, copy_size);
+            std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
         }
 
         writer.write(shm_frame);
