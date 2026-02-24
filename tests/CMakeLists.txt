@@ -62,6 +62,9 @@ add_drone_test(test_system_monitor  test_system_monitor.cpp)
 # ── HAL tests ────────────────────────────────────────────────
 add_drone_test(test_hal             test_hal.cpp)
 
+# ── MavlinkFCLink tests ─────────────────────────────────────
+add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
+
 # ── Message Bus / API Interface tests ────────────────────────
 add_drone_test(test_message_bus     test_message_bus.cpp)
 
