@@ -9,3 +9,18 @@ target_link_libraries(drone_hal INTERFACE
     Eigen3::Eigen
     spdlog::spdlog
 )
+
+# ── Optional: MAVSDK backend ────────────────────────────────
+if(MAVSDK_FOUND)
+    target_compile_definitions(drone_hal INTERFACE HAVE_MAVSDK)
+    target_link_libraries(drone_hal INTERFACE MAVSDK::mavsdk)
+endif()
+
+# ── Optional: Gazebo transport backend ──────────────────────
+if(GAZEBO_FOUND)
+    target_compile_definitions(drone_hal INTERFACE HAVE_GAZEBO)
+    target_link_libraries(drone_hal INTERFACE
+        gz-transport13::core
+        gz-msgs10::core
+    )
+endif()

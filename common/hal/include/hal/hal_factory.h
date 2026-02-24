@@ -12,7 +12,8 @@
 //
 // The factory reads the "backend" key from the given config section.
 // Currently supported: "simulated" (default).
-// Future backends: "v4l2", "mavlink_v2", "udp", "siyi", "bmi088", etc.
+// Compile-guarded backends: "mavlink" (HAVE_MAVSDK), "gazebo" (HAVE_GAZEBO).
+// Future backends: "v4l2", "udp", "siyi", "bmi088", etc.
 #pragma once
 
 #include "hal/icamera.h"
@@ -26,6 +27,16 @@
 #include "hal/simulated_gcs_link.h"
 #include "hal/simulated_gimbal.h"
 #include "hal/simulated_imu.h"
+
+// Optional backends — only included when the dependency is found by CMake
+#ifdef HAVE_MAVSDK
+// TODO(#8): #include "hal/mavlink_fc_link.h"
+#endif
+
+#ifdef HAVE_GAZEBO
+// TODO(#9):  #include "hal/gazebo_camera.h"
+// TODO(#10): #include "hal/gazebo_imu.h"
+#endif
 
 #include "util/config.h"
 
@@ -47,6 +58,9 @@ inline std::unique_ptr<ICamera> create_camera(
     if (backend == "simulated") {
         return std::make_unique<SimulatedCamera>();
     }
+#ifdef HAVE_GAZEBO
+    // TODO(#9): if (backend == "gazebo") return std::make_unique<GazeboCamera>();
+#endif
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
 
     throw std::runtime_error("[HAL] Unknown camera backend: " + backend);
@@ -64,6 +78,9 @@ inline std::unique_ptr<IFCLink> create_fc_link(
     if (backend == "simulated") {
         return std::make_unique<SimulatedFCLink>();
     }
+#ifdef HAVE_MAVSDK
+    // TODO(#8): if (backend == "mavlink") return std::make_unique<MavlinkFCLink>();
+#endif
     // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
 
     throw std::runtime_error("[HAL] Unknown FC link backend: " + backend);
@@ -115,6 +132,9 @@ inline std::unique_ptr<IIMUSource> create_imu_source(
     if (backend == "simulated") {
         return std::make_unique<SimulatedIMU>();
     }
+#ifdef HAVE_GAZEBO
+    // TODO(#10): if (backend == "gazebo") return std::make_unique<GazeboIMU>();
+#endif
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
 
     throw std::runtime_error("[HAL] Unknown IMU backend: " + backend);
