@@ -144,9 +144,17 @@ int main(int argc, char* argv[]) {
 
     // ── Create links via HAL factory ────────────────────────
     auto fc_link  = drone::hal::create_fc_link(cfg, "comms.mavlink");
-    fc_link->open(
-        cfg.get<std::string>("comms.mavlink.serial_port", "/dev/ttyTHS1"),
-        cfg.get<int>("comms.mavlink.baud_rate", 921600));
+    auto fc_backend = cfg.get<std::string>("comms.mavlink.backend", "simulated");
+    if (fc_backend == "mavlink") {
+        // MavlinkFCLink: "port" = connection URI, "baud" = timeout_ms
+        fc_link->open(
+            cfg.get<std::string>("comms.mavlink.uri", "udp://:14540"),
+            cfg.get<int>("comms.mavlink.timeout_ms", 8000));
+    } else {
+        fc_link->open(
+            cfg.get<std::string>("comms.mavlink.serial_port", "/dev/ttyTHS1"),
+            cfg.get<int>("comms.mavlink.baud_rate", 921600));
+    }
 
     auto gcs_link = drone::hal::create_gcs_link(cfg, "comms.gcs");
     gcs_link->open("0.0.0.0",

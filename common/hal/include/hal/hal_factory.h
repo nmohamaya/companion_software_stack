@@ -30,7 +30,7 @@
 
 // Optional backends — only included when the dependency is found by CMake
 #ifdef HAVE_MAVSDK
-// TODO(#8): #include "hal/mavlink_fc_link.h"
+#include "hal/mavlink_fc_link.h"
 #endif
 
 #ifdef HAVE_GAZEBO
@@ -79,7 +79,7 @@ inline std::unique_ptr<IFCLink> create_fc_link(
         return std::make_unique<SimulatedFCLink>();
     }
 #ifdef HAVE_MAVSDK
-    // TODO(#8): if (backend == "mavlink") return std::make_unique<MavlinkFCLink>();
+    if (backend == "mavlink") return std::make_unique<MavlinkFCLink>();
 #endif
     // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
 
