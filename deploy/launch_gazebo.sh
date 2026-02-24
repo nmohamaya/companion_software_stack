@@ -54,6 +54,7 @@ fi
 
 PX4_BIN="${PX4_DIR}/build/px4_sitl_default/bin/px4"
 PX4_ETC="${PX4_DIR}/build/px4_sitl_default/etc"
+PX4_ROOTFS="${PX4_DIR}/build/px4_sitl_default/rootfs"
 
 if [[ ! -x "$PX4_BIN" ]]; then
     echo "ERROR: PX4 SITL binary not found at ${PX4_BIN}."
@@ -62,6 +63,11 @@ if [[ ! -x "$PX4_BIN" ]]; then
 fi
 if [[ ! -d "$PX4_ETC" ]]; then
     echo "ERROR: PX4 SITL config dir not found at ${PX4_ETC}."
+    exit 1
+fi
+if [[ ! -d "$PX4_ROOTFS" ]]; then
+    echo "ERROR: PX4 SITL rootfs dir not found at ${PX4_ROOTFS}."
+    echo "       Run: cd ${PX4_DIR} && make px4_sitl_default"
     exit 1
 fi
 if [[ ! -f "$GZ_WORLD" ]]; then
@@ -139,9 +145,9 @@ trap cleanup EXIT INT TERM
 echo ""
 echo "[SITL] Starting PX4 SITL with Gazebo (model=${PX4_MODEL})..."
 
-export PX4_SYS_AUTOSTART=4001   # x500 quad
-export PX4_GZ_MODEL="${PX4_MODEL}"
-export PX4_GZ_WORLD_FILE="${GZ_WORLD}"
+export PX4_SYS_AUTOSTART=4001   # x500 quad airframe
+export PX4_SIM_MODEL="${PX4_MODEL}"
+export PX4_GZ_WORLD="test_world"
 
 # Explicitly export HEADLESS for both cases so that inherited
 # environment values don't override the --gui / default choice.
@@ -151,10 +157,14 @@ else
     export HEADLESS=0
 fi
 
-pushd "$PX4_DIR" > /dev/null
-# PX4's rcS script detects PX4_GZ_MODEL and starts gz sim
-# automatically (headless when HEADLESS=1). The x500_companion
-# model is found via GZ_SIM_RESOURCE_PATH set above.
+pushd "$PX4_ROOTFS" > /dev/null
+# PX4 must run from its rootfs directory so that px4-rc.gzsim can
+# find and source ./gz_env.sh, which sets PX4_GZ_WORLDS, PX4_GZ_MODELS,
+# and GZ_SIM_RESOURCE_PATH. It then starts gz sim with the world from
+# ${PX4_GZ_WORLDS}/${PX4_GZ_WORLD}.sdf and spawns the model from
+# ${PX4_GZ_MODELS}/${PX4_SIM_MODEL}/model.sdf.
+# The x500_companion model and test_world.sdf are symlinked into
+# PX4's gz directories; see deploy section in the README.
 "$PX4_BIN" \
     -d "$PX4_ETC" \
     -s "${PX4_ETC}/init.d-posix/rcS" \
