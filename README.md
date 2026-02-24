@@ -74,13 +74,13 @@ Multi-process C++17 software stack for an autonomous drone companion computer. 7
 
 All hardware access goes through abstract C++ interfaces. A factory reads the `"backend"` key from config and instantiates the corresponding implementation.
 
-| Interface | Purpose | Simulated Backend | Planned Real Backend |
-|---|---|---|---|
-| `ICamera` | Frame capture | `SimulatedCamera` — synthetic gradient frames | V4L2 / libargus (Jetson) |
-| `IFCLink` | Flight controller comms | `SimulatedFCLink` — synthetic battery drain, GPS | MAVLink 2 via serial UART |
-| `IGCSLink` | Ground station comms | `SimulatedGCSLink` — simulated RTL after 120 s | UDP / MAVLink GCS protocol |
-| `IGimbal` | Gimbal control | `SimulatedGimbal` — rate-limited slew model | UART / PWM gimbal protocol |
-| `IIMUSource` | Inertial measurement | `SimulatedIMU` — noisy synthetic accel + gyro | SPI / I2C IMU driver |
+| Interface | Purpose | Simulated Backend | Gazebo/SITL Backend | Planned Real Backend |
+|---|---|---|---|---|
+| `ICamera` | Frame capture | `SimulatedCamera` — synthetic gradient frames | `GazeboCamera` (gz-transport) | V4L2 / libargus (Jetson) |
+| `IFCLink` | Flight controller comms | `SimulatedFCLink` — synthetic battery drain, GPS | `MavlinkFCLink` (MAVSDK) | MAVLink 2 via serial UART |
+| `IGCSLink` | Ground station comms | `SimulatedGCSLink` — simulated RTL after 120 s | — | UDP / MAVLink GCS protocol |
+| `IGimbal` | Gimbal control | `SimulatedGimbal` — rate-limited slew model | — | UART / PWM gimbal protocol |
+| `IIMUSource` | Inertial measurement | `SimulatedIMU` — noisy synthetic accel + gyro | `GazeboIMU` (gz-transport) | SPI / I2C IMU driver |
 
 ---
 
@@ -585,9 +585,23 @@ Services (external RPC):
 ## Prerequisites
 
 ```bash
-# Ubuntu 22.04 / 24.04
-sudo apt-get install -y build-essential cmake libspdlog-dev libeigen3-dev
+# Ubuntu 22.04 / 24.04 — core dependencies
+sudo apt-get install -y build-essential cmake libspdlog-dev libeigen3-dev \
+    nlohmann-json3-dev libgtest-dev
 ```
+
+### Optional: Gazebo + PX4 SITL (for simulation backends)
+
+The Gazebo/MAVSDK backends are **optional** — the stack always builds and runs with simulated backends. To enable simulation backends:
+
+```bash
+# See full guide: docs/gazebo_setup.md
+sudo apt-get install -y gz-harmonic       # Gazebo Harmonic
+# MAVSDK: build from source (see docs/gazebo_setup.md §4)
+# PX4 SITL: clone and build (see docs/gazebo_setup.md §2)
+```
+
+CMake auto-detects these and enables compile guards (`HAVE_MAVSDK`, `HAVE_GAZEBO`).
 
 ## Build
 
