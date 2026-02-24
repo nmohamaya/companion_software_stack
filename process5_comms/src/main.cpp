@@ -1,14 +1,13 @@
 // process5_comms/src/main.cpp
 // Process 5 — Comms: bridges companion computer ↔ flight controller (FC)
 //                    and companion computer ↔ ground control station (GCS).
+// Uses HAL interfaces — backends selected via config.
 // Threads:
-//   fc_rx    — receives FC heartbeats, publishes ShmFCState
+//   fc_rx    — receives FC state, publishes ShmFCState
 //   fc_tx    — reads ShmTrajectoryCmd, sends to FC
 //   gcs_rx   — polls GCS for commands, publishes ShmGCSCommand
 //   gcs_tx   — reads mission status + pose, sends telemetry to GCS
 
-#include "comms/mavlink_sim.h"
-#include "comms/gcs_link.h"
 #include "ipc/shm_reader.h"
 #include "ipc/shm_writer.h"
 #include "ipc/shm_types.h"
@@ -17,6 +16,7 @@
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
+#include "hal/hal_factory.h"
 
 #include <thread>
 #include <atomic>
@@ -26,13 +26,13 @@
 static std::atomic<bool> g_running{true};
 
 // ── FC receive thread (10 Hz) ───────────────────────────────
-static void fc_rx_thread(drone::comms::MavlinkSim& mav,
+static void fc_rx_thread(drone::hal::IFCLink& fc,
                          ShmWriter<drone::ipc::ShmFCState>& writer) {
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] fc_rx thread started");
+    spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
 
     while (g_running.load(std::memory_order_relaxed)) {
-        auto hb = mav.receive_heartbeat();
+        auto hb = fc.receive_state();
 
         drone::ipc::ShmFCState state{};
         state.timestamp_ns      = hb.timestamp_ns;
@@ -51,10 +51,10 @@ static void fc_rx_thread(drone::comms::MavlinkSim& mav,
 }
 
 // ── FC transmit thread (20 Hz) ──────────────────────────────
-static void fc_tx_thread(drone::comms::MavlinkSim& mav,
+static void fc_tx_thread(drone::hal::IFCLink& fc,
                          ShmReader<drone::ipc::ShmTrajectoryCmd>& reader) {
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] fc_tx thread started");
+    spdlog::info("[Comms] fc_tx thread started using {}", fc.name());
 
     // Wait for trajectory SHM
     while (g_running.load(std::memory_order_relaxed) && !reader.is_open()) {
@@ -65,7 +65,7 @@ static void fc_tx_thread(drone::comms::MavlinkSim& mav,
     while (g_running.load(std::memory_order_relaxed)) {
         drone::ipc::ShmTrajectoryCmd cmd{};
         if (reader.read(cmd) && cmd.valid) {
-            mav.send_trajectory(cmd.velocity_x, cmd.velocity_y,
+            fc.send_trajectory(cmd.velocity_x, cmd.velocity_y,
                                cmd.velocity_z, cmd.target_yaw);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -73,10 +73,10 @@ static void fc_tx_thread(drone::comms::MavlinkSim& mav,
 }
 
 // ── GCS receive thread (2 Hz) ───────────────────────────────
-static void gcs_rx_thread(drone::comms::GCSLink& gcs,
+static void gcs_rx_thread(drone::hal::IGCSLink& gcs,
                           ShmWriter<drone::ipc::ShmGCSCommand>& writer) {
     set_thread_params("gcs_rx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] gcs_rx thread started");
+    spdlog::info("[Comms] gcs_rx thread started using {}", gcs.name());
 
     while (g_running.load(std::memory_order_relaxed)) {
         auto msg = gcs.poll_command();
@@ -84,10 +84,10 @@ static void gcs_rx_thread(drone::comms::GCSLink& gcs,
             drone::ipc::ShmGCSCommand shm_cmd{};
             shm_cmd.timestamp_ns = msg.timestamp_ns;
             switch (msg.type) {
-                case drone::comms::GCSMessageType::RTL_CMD:
+                case drone::hal::GCSCommandType::RTL:
                     shm_cmd.command = drone::ipc::GCSCommandType::RTL;
                     break;
-                case drone::comms::GCSMessageType::LAND_CMD:
+                case drone::hal::GCSCommandType::LAND:
                     shm_cmd.command = drone::ipc::GCSCommandType::LAND;
                     break;
                 default:
@@ -102,12 +102,12 @@ static void gcs_rx_thread(drone::comms::GCSLink& gcs,
 }
 
 // ── GCS telemetry transmit (2 Hz) ───────────────────────────
-static void gcs_tx_thread(drone::comms::GCSLink& gcs,
+static void gcs_tx_thread(drone::hal::IGCSLink& gcs,
                           ShmReader<drone::ipc::ShmPose>& pose_reader,
                           ShmReader<drone::ipc::ShmMissionStatus>& status_reader,
                           ShmReader<drone::ipc::ShmFCState>& fc_reader) {
     set_thread_params("gcs_tx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] gcs_tx thread started");
+    spdlog::info("[Comms] gcs_tx thread started using {}", gcs.name());
 
     // Wait for SHM sources
     while (g_running.load(std::memory_order_relaxed)) {
@@ -132,8 +132,8 @@ static void gcs_tx_thread(drone::comms::GCSLink& gcs,
         fc_reader.read(fc);
 
         gcs.send_telemetry(
-            static_cast<float>(pose.translation[0]),  // use as "lat" sim
-            static_cast<float>(pose.translation[1]),  // use as "lon" sim
+            static_cast<float>(pose.translation[0]),
+            static_cast<float>(pose.translation[1]),
             static_cast<float>(pose.translation[2]),
             fc.battery_remaining,
             static_cast<uint8_t>(mission.state));
@@ -155,15 +155,17 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Comms process starting (PID {}) ===", getpid());
 
-    // ── Open simulated links ────────────────────────────────
-    drone::comms::MavlinkSim mavlink;
-    mavlink.open(
+    // ── Create links via HAL factory ────────────────────────
+    auto fc_link  = drone::hal::create_fc_link(cfg, "comms.mavlink");
+    fc_link->open(
         cfg.get<std::string>("comms.mavlink.serial_port", "/dev/ttyTHS1"),
         cfg.get<int>("comms.mavlink.baud_rate", 921600));
 
-    drone::comms::GCSLink gcs;
-    gcs.open("0.0.0.0",
-             cfg.get<int>("comms.gcs.udp_port", 14550));
+    auto gcs_link = drone::hal::create_gcs_link(cfg, "comms.gcs");
+    gcs_link->open("0.0.0.0",
+                   cfg.get<int>("comms.gcs.udp_port", 14550));
+
+    spdlog::info("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
     // ── SHM writers ─────────────────────────────────────────
     ShmWriter<drone::ipc::ShmFCState>   fc_writer;
@@ -178,20 +180,23 @@ int main(int argc, char* argv[]) {
     ShmReader<drone::ipc::ShmTrajectoryCmd> traj_reader;
     ShmReader<drone::ipc::ShmPose>          pose_reader;
     ShmReader<drone::ipc::ShmMissionStatus> mission_reader;
-    ShmReader<drone::ipc::ShmFCState>       fc_reader;  // read own output for telem
+    ShmReader<drone::ipc::ShmFCState>       fc_reader;
 
     spdlog::info("Comms READY");
 
     // ── Launch threads ──────────────────────────────────────
-    std::thread t1(fc_rx_thread,  std::ref(mavlink), std::ref(fc_writer));
-    std::thread t2(fc_tx_thread,  std::ref(mavlink), std::ref(traj_reader));
-    std::thread t3(gcs_rx_thread, std::ref(gcs),     std::ref(gcs_cmd_writer));
-    std::thread t4(gcs_tx_thread, std::ref(gcs),
+    std::thread t1(fc_rx_thread,  std::ref(*fc_link),  std::ref(fc_writer));
+    std::thread t2(fc_tx_thread,  std::ref(*fc_link),  std::ref(traj_reader));
+    std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(gcs_cmd_writer));
+    std::thread t4(gcs_tx_thread, std::ref(*gcs_link),
                    std::ref(pose_reader),
                    std::ref(mission_reader),
                    std::ref(fc_reader));
 
     t1.join(); t2.join(); t3.join(); t4.join();
+
+    fc_link->close();
+    gcs_link->close();
 
     spdlog::info("=== Comms stopped ===");
     return 0;

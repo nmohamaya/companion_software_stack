@@ -23,6 +23,7 @@ function(add_drone_test TEST_NAME)
         ${PROJECT_SOURCE_DIR}/process6_payload_manager/include
         ${PROJECT_SOURCE_DIR}/process7_system_monitor/include
     )
+    target_link_libraries(${TEST_NAME} PRIVATE drone_hal)
     gtest_discover_tests(${TEST_NAME})
 endfunction()
 
@@ -57,3 +58,6 @@ add_drone_test(test_payload_manager test_payload_manager.cpp)
 
 # ── System Monitor tests ─────────────────────────────────────
 add_drone_test(test_system_monitor  test_system_monitor.cpp)
+
+# ── HAL tests ────────────────────────────────────────────────
+add_drone_test(test_hal             test_hal.cpp)

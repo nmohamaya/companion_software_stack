@@ -4,12 +4,14 @@
 
     "video_capture": {
         "mission_cam": {
+            "backend": "simulated",
             "width": 1920,
             "height": 1080,
             "fps": 30,
             "format": "RGB24"
         },
         "stereo_cam": {
+            "backend": "simulated",
             "width": 640,
             "height": 480,
             "fps": 30,
@@ -42,6 +44,9 @@
         "vio_rate_hz": 100,
         "visual_frontend_rate_hz": 30,
         "imu_rate_hz": 400,
+        "imu": {
+            "backend": "simulated"
+        },
         "keyframe": {
             "min_parallax_px": 15.0,
             "min_tracked_ratio": 0.6,
@@ -69,6 +74,7 @@
 
     "comms": {
         "mavlink": {
+            "backend": "simulated",
             "serial_port": "/dev/ttyTHS1",
             "baud_rate": 921600,
             "heartbeat_rate_hz": 1,
@@ -76,6 +82,7 @@
             "rx_rate_hz": 10
         },
         "gcs": {
+            "backend": "simulated",
             "udp_port": 14550,
             "telemetry_rate_hz": 2
         }
@@ -84,6 +91,7 @@
     "payload_manager": {
         "update_rate_hz": 50,
         "gimbal": {
+            "backend": "simulated",
             "max_slew_rate_dps": 60.0,
             "pitch_min_deg": -90.0,
             "pitch_max_deg": 30.0,

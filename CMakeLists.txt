@@ -38,6 +38,7 @@ find_package(nlohmann_json REQUIRED)
 # ── Shared interface libraries ───────────────────────────────
 add_subdirectory(common/ipc)
 add_subdirectory(common/util)
+add_subdirectory(common/hal)
 
 # ── Process executables ──────────────────────────────────────
 add_subdirectory(process1_video_capture)
