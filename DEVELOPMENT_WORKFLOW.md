@@ -174,6 +174,35 @@ Batch review comments by severity:
 | **P3** | Code quality | Within PR | Unused variables, naming, style |
 | **P4** | Tests/Docs | Before merge | Missing edge-case tests, comments |
 
+### Review Fix Documentation
+
+When addressing review comments, maintain a clear record of what was changed and why:
+
+1. **Commit message** — list each fix in the commit body:
+   ```
+   fix: address PR #N review comments
+
+   - Fix A: description
+   - Fix B: description
+   ```
+
+2. **Update PR body** — add a "Review Fixes" section with a table mapping each comment to the fix applied:
+   ```markdown
+   ## Review Fixes (commit `abc1234`)
+   | # | File | Issue | Fix |
+   |---|------|-------|-----|
+   | 1 | file.h | Description of problem | What was changed |
+   ```
+
+3. **Post a PR comment** — summarize all fixes grouped by category (Correctness, Robustness, Testing, Documentation) so reviewers can quickly verify each one.
+
+4. **Re-run build + tests** — always verify `cmake --build build -j$(nproc)` and `ctest --output-on-failure` pass before pushing review fixes.
+
+This ensures:
+- Reviewers can efficiently re-review without re-reading all changed files
+- Future contributors understand *why* certain patterns were chosen
+- The PR serves as a permanent reference for design decisions
+
 ---
 
 ## Commit Message Standards
