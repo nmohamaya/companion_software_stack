@@ -47,8 +47,8 @@
         "visual_frontend_rate_hz": 30,
         "imu_rate_hz": 400,
         "imu": {
-            "backend": "simulated",
-            "_note": "TODO(#10): switch to 'gazebo' backend after GazeboIMU is implemented"
+            "backend": "gazebo",
+            "gz_topic": "/imu"
         },
         "keyframe": {
             "min_parallax_px": 15.0,
