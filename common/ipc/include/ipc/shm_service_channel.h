@@ -34,7 +34,9 @@ namespace drone::ipc {
 inline void ensure_shm_exists(const std::string& name, size_t size) {
     int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
     if (fd >= 0) {
-        ftruncate(fd, static_cast<off_t>(size));
+        if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
+            spdlog::warn("[ensure_shm_exists] ftruncate failed for '{}'", name);
+        }
         ::close(fd);
     }
 }

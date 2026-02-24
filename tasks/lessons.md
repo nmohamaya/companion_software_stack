@@ -25,3 +25,7 @@
 ### 6. Follow `tasks/todo.md` workflow from the start
 **Mistake:** Started implementation without creating `tasks/todo.md` and `tasks/lessons.md` as required by `prompt_instructions.md`.
 **Rule:** At session start, read `prompt_instructions.md`, create `tasks/todo.md` with the plan, and create `tasks/lessons.md`. Do this BEFORE writing any code.
+
+### 7. Always build locally with exact CI flags before pushing
+**Mistake:** Pushed code that compiled locally but failed CI because `ensure_shm_exists()` called `ftruncate()` without checking the return value, which triggers `-Werror=unused-result` under `-Werror -Wall -Wextra`.
+**Rule:** Before every push, do a clean build with `-DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra"` to match CI. A `(void)` cast does NOT suppress `warn_unused_result` — must actually branch on the return value.
