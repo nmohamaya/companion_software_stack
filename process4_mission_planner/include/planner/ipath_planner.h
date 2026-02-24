@@ -58,7 +58,17 @@ public:
         float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         if (dist > 0.01f) {
-            float speed = std::min(target.speed, dist);
+            // Ramp speed linearly from target.speed down to min_speed
+            // within the last ramp_dist metres, but never below min_speed
+            // so the drone doesn't crawl near waypoints.
+            constexpr float min_speed  = 1.0f;   // m/s floor
+            constexpr float ramp_dist  = 2.0f;   // metres to begin ramp
+            float desired = target.speed;
+            if (dist < ramp_dist) {
+                desired = min_speed + (target.speed - min_speed)
+                          * (dist / ramp_dist);
+            }
+            float speed = std::min(desired, target.speed);
             cmd.velocity_x = (dx / dist) * speed;
             cmd.velocity_y = (dy / dist) * speed;
             cmd.velocity_z = (dz / dist) * speed;

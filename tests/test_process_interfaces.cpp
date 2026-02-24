@@ -106,8 +106,9 @@ TEST(PathPlannerTest, WithObstacles) {
     Waypoint target{10.0f, 0.0f, 0.0f, 0.0f, 2.0f, 5.0f, false};
     auto cmd = pp->plan(pose, target);
     EXPECT_TRUE(cmd.valid);
-    // Small distance => small velocity
-    EXPECT_LT(std::abs(cmd.velocity_x), 1.0f);
+    // Close to target — speed ramps down but stays above min_speed (1 m/s)
+    EXPECT_GT(std::abs(cmd.velocity_x), 0.5f);
+    EXPECT_LT(std::abs(cmd.velocity_x), 5.0f);
 }
 
 TEST(PathPlannerTest, AtGoalZeroVelocity) {

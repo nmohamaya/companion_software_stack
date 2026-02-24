@@ -188,7 +188,10 @@ int main(int argc, char* argv[]) {
     // Create visual frontend via strategy factory
     auto frontend_backend = cfg.get<std::string>(
         "slam.visual_frontend.backend", "simulated");
-    auto frontend = drone::slam::create_visual_frontend(frontend_backend);
+    auto frontend_gz_topic = cfg.get<std::string>(
+        "slam.visual_frontend.gz_topic", "/model/x500_companion_0/odometry");
+    auto frontend = drone::slam::create_visual_frontend(
+        frontend_backend, frontend_gz_topic);
     spdlog::info("Visual frontend: {}", frontend->name());
 
     // Launch threads

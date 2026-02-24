@@ -118,6 +118,10 @@ COMPANION_PIDS=()
 cleanup() {
     echo ""
     echo "Shutting down all processes..."
+    # 0. Stop GUI client
+    if [[ -n "${GUI_PID:-}" ]]; then
+        kill -SIGTERM "$GUI_PID" 2>/dev/null || true
+    fi
     # 1. Stop companion processes by tracked PID
     for pid in "${COMPANION_PIDS[@]}"; do
         kill -SIGINT "$pid" 2>/dev/null || true
@@ -193,6 +197,54 @@ if [[ $WAITED -ge $MAX_WAIT ]]; then
 fi
 # Additional settle time for PX4 to fully initialise
 sleep 3
+
+# ── Step 2b: Launch Gazebo GUI client (if --gui) ────────────
+GUI_PID=""
+if [[ "$HEADLESS" -eq 0 ]]; then
+    echo ""
+    echo "[GUI] Launching Gazebo GUI client..."
+    GUI_CONFIG="${PROJECT_DIR}/sim/gui.config"
+    # Use clean environment to avoid Snap/Conda library conflicts
+    env -i \
+        HOME="$HOME" \
+        DISPLAY="${DISPLAY:-:1}" \
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+        XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+        PATH="/usr/bin:/usr/local/bin:/bin" \
+        GZ_SIM_RESOURCE_PATH="${GZ_SIM_RESOURCE_PATH}" \
+        gz sim -g --gui-config "$GUI_CONFIG" \
+        > "${LOG_DIR}/gz_gui.log" 2>&1 &
+    GUI_PID=$!
+    echo "[GUI] Gazebo GUI PID: ${GUI_PID}"
+
+    # Give the GUI time to connect and render, then tell camera to
+    # follow the drone model so it stays in view during flight.
+    (
+        sleep 8
+        echo "[GUI] Requesting camera to follow drone..."
+        # Set follow offset: 6m behind, 3m above
+        env -i \
+            HOME="$HOME" \
+            PATH="/usr/bin:/usr/local/bin:/bin" \
+            gz service -s /gui/follow/offset \
+            --reqtype gz.msgs.Vector3d \
+            --reptype gz.msgs.Boolean \
+            --timeout 5000 \
+            --req "x: -6, y: 0, z: 3" \
+            > /dev/null 2>&1 || true
+        # Start following the drone model
+        env -i \
+            HOME="$HOME" \
+            PATH="/usr/bin:/usr/local/bin:/bin" \
+            gz service -s /gui/follow \
+            --reqtype gz.msgs.StringMsg \
+            --reptype gz.msgs.Boolean \
+            --timeout 5000 \
+            --req "data: 'x500_companion_0'" \
+            > /dev/null 2>&1 || true
+        echo "[GUI] Camera follow request sent"
+    ) &
+fi
 
 # ── Step 3: Launch companion stack ───────────────────────────
 CONFIG_ARG="--config ${CONFIG_FILE}"

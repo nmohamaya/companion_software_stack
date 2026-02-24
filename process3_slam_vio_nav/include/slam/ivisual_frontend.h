@@ -15,6 +15,14 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef HAVE_GAZEBO
+#include <gz/transport/Node.hh>
+#include <gz/msgs/odometry.pb.h>
+#include <atomic>
+#include <mutex>
+#include <spdlog/spdlog.h>
+#endif
+
 namespace drone::slam {
 
 /// Abstract visual frontend — processes stereo frames and outputs poses.
@@ -64,13 +72,101 @@ private:
     std::normal_distribution<double> noise_{0.0, 0.01};
 };
 
+// ─────────────────────────────────────────────────────────────
+// Gazebo ground-truth frontend — reads odometry from gz-transport.
+//
+// Subscribes to the OdometryPublisher topic (default:
+// /model/<model>/odometry) and returns the ground-truth pose.
+// ─────────────────────────────────────────────────────────────
+#ifdef HAVE_GAZEBO
+
+class GazeboVisualFrontend final : public IVisualFrontend {
+public:
+    /// @param gz_topic  Gazebo odometry topic
+    ///                  (e.g. "/model/x500_companion_0/odometry")
+    explicit GazeboVisualFrontend(std::string gz_topic)
+        : gz_topic_(std::move(gz_topic))
+    {
+        bool ok = node_.Subscribe(gz_topic_,
+            &GazeboVisualFrontend::on_odom, this);
+        if (!ok) {
+            spdlog::error("[GazeboVIO] Failed to subscribe to '{}'", gz_topic_);
+        } else {
+            spdlog::info("[GazeboVIO] Subscribed to '{}'", gz_topic_);
+        }
+    }
+
+    ~GazeboVisualFrontend() override {
+        node_.Unsubscribe(gz_topic_);
+    }
+
+    // Non-copyable, non-movable (owns gz::transport::Node)
+    GazeboVisualFrontend(const GazeboVisualFrontend&) = delete;
+    GazeboVisualFrontend& operator=(const GazeboVisualFrontend&) = delete;
+
+    Pose process_frame(const drone::ipc::ShmStereoFrame& /*frame*/) override {
+        std::lock_guard<std::mutex> lk(mtx_);
+        return cached_;
+    }
+
+    std::string name() const override {
+        return "GazeboVisualFrontend(" + gz_topic_ + ")";
+    }
+
+private:
+    void on_odom(const gz::msgs::Odometry& msg) {
+        Pose p;
+        // Use monotonic counter as timestamp (same units as SimulatedFrontend)
+        p.timestamp = count_.fetch_add(1, std::memory_order_relaxed) * 0.01;
+
+        if (msg.has_pose()) {
+            const auto& pose = msg.pose();
+            if (pose.has_position()) {
+                // Gazebo world frame: X=East, Y=North, Z=Up
+                // Our internal frame: X=North, Y=East, Z=Up
+                // (matches MavlinkFCLink which sends vx→north, vy→east)
+                p.position = Eigen::Vector3d(
+                    pose.position().y(),   // our North = Gazebo Y
+                    pose.position().x(),   // our East  = Gazebo X
+                    pose.position().z());  // Up = Up
+            }
+            if (pose.has_orientation()) {
+                p.orientation = Eigen::Quaterniond(
+                    pose.orientation().w(),
+                    pose.orientation().x(),
+                    pose.orientation().y(),
+                    pose.orientation().z());
+            }
+        }
+        p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.001;
+        p.quality = 3;  // excellent (ground truth)
+
+        std::lock_guard<std::mutex> lk(mtx_);
+        cached_ = p;
+    }
+
+    std::string gz_topic_;
+    gz::transport::Node node_;
+    mutable std::mutex mtx_;
+    Pose cached_;
+    std::atomic<uint64_t> count_{0};
+};
+
+#endif  // HAVE_GAZEBO
+
 /// Factory — creates the appropriate frontend based on config.
 inline std::unique_ptr<IVisualFrontend> create_visual_frontend(
-    const std::string& backend = "simulated")
+    const std::string& backend = "simulated",
+    const std::string& gz_topic = "/model/x500_companion_0/odometry")
 {
     if (backend == "simulated") {
         return std::make_unique<SimulatedVisualFrontend>();
     }
+#ifdef HAVE_GAZEBO
+    if (backend == "gazebo") {
+        return std::make_unique<GazeboVisualFrontend>(gz_topic);
+    }
+#endif
     throw std::runtime_error("Unknown visual frontend: " + backend);
 }
 

@@ -50,6 +50,10 @@
             "backend": "gazebo",
             "gz_topic": "/imu"
         },
+        "visual_frontend": {
+            "backend": "gazebo",
+            "gz_topic": "/model/x500_companion_0/odometry"
+        },
         "keyframe": {
             "min_parallax_px": 15.0,
             "min_tracked_ratio": 0.6,
@@ -59,18 +63,18 @@
 
     "mission_planner": {
         "update_rate_hz": 10,
-        "takeoff_altitude_m": 10.0,
-        "acceptance_radius_m": 1.5,
-        "cruise_speed_mps": 2.0,
+        "takeoff_altitude_m": 5.0,
+        "acceptance_radius_m": 2.0,
+        "cruise_speed_mps": 5.0,
         "obstacle_avoidance": {
             "min_distance_m": 2.0,
             "influence_radius_m": 5.0,
             "repulsive_gain": 2.0
         },
         "waypoints": [
-            {"x": 10, "y": 0,  "z": 10, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
-            {"x": 10, "y": 10, "z": 10, "yaw": 1.57,  "speed": 2.0, "payload_trigger": true},
-            {"x": 0,  "y": 0,  "z": 10, "yaw": 0,     "speed": 2.0, "payload_trigger": false}
+            {"x": 15, "y": 0,  "z": 5, "yaw": 0,    "speed": 5.0, "payload_trigger": false},
+            {"x": 15, "y": 15, "z": 5, "yaw": 1.57,  "speed": 5.0, "payload_trigger": true},
+            {"x": 0,  "y": 0,  "z": 5, "yaw": 0,     "speed": 5.0, "payload_trigger": false}
         ]
     },
 

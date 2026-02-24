@@ -108,6 +108,18 @@ public:
         // Subscribe to telemetry for cached state
         setup_subscriptions();
 
+        // Set RTL return altitude to current flight altitude so RTL
+        // doesn't climb to the PX4 default of 30 m before returning.
+        constexpr float rtl_alt_m = 5.0f;
+        auto rtl_result = action_->set_return_to_launch_altitude(rtl_alt_m);
+        if (rtl_result == mavsdk::Action::Result::Success) {
+            spdlog::info("[MavlinkFCLink] RTL return altitude set to {} m",
+                         rtl_alt_m);
+        } else {
+            spdlog::warn("[MavlinkFCLink] Failed to set RTL altitude: {}",
+                         action_result_str(rtl_result));
+        }
+
         spdlog::info("[MavlinkFCLink] Connected to autopilot (sys_id={})",
                      system_->get_system_id());
         return true;
