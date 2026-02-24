@@ -3,8 +3,7 @@
 // Uses HAL IGimbal interface — backend selected via config.
 // Reads ShmPayloadCommand from Mission Planner, publishes ShmPayloadStatus.
 
-#include "ipc/shm_reader.h"
-#include "ipc/shm_writer.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -37,20 +36,20 @@ int main(int argc, char* argv[]) {
     gimbal->init();
     spdlog::info("Gimbal: {}", gimbal->name());
 
-    // ── SHM ─────────────────────────────────────────────────
-    ShmReader<drone::ipc::ShmPayloadCommand> cmd_reader;
-    for (int i = 0; i < 50 && g_running; ++i) {
-        if (cmd_reader.open(drone::ipc::shm_names::PAYLOAD_COMMANDS)) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    if (!cmd_reader.is_open()) {
+    // ── Create message bus ────────────────────────────────────
+    drone::ipc::ShmMessageBus bus;
+
+    auto cmd_sub = bus.subscribe<drone::ipc::ShmPayloadCommand>(
+        drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    if (!cmd_sub->is_connected()) {
         spdlog::error("Cannot open payload commands SHM");
         return 1;
     }
 
-    ShmWriter<drone::ipc::ShmPayloadStatus> status_writer;
-    if (!status_writer.create(drone::ipc::shm_names::PAYLOAD_STATUS)) {
-        spdlog::error("Failed to create payload status SHM");
+    auto status_pub = bus.advertise<drone::ipc::ShmPayloadStatus>(
+        drone::ipc::shm_names::PAYLOAD_STATUS);
+    if (!status_pub->is_ready()) {
+        spdlog::error("Failed to create payload status publisher");
         return 1;
     }
 
@@ -66,7 +65,7 @@ int main(int argc, char* argv[]) {
 
         // Read commands
         drone::ipc::ShmPayloadCommand cmd{};
-        if (cmd_reader.read(cmd) && cmd.valid &&
+        if (cmd_sub->receive(cmd) && cmd.valid &&
             cmd.timestamp_ns != last_cmd_ts) {
             last_cmd_ts = cmd.timestamp_ns;
 
@@ -100,7 +99,7 @@ int main(int argc, char* argv[]) {
         status.gimbal_yaw        = g_state.yaw;
         status.gimbal_stabilized = g_state.stabilised;
         status.recording_video   = gimbal->is_recording();
-        status_writer.write(status);
+        status_pub->publish(status);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

@@ -1,9 +1,10 @@
 // process1_video_capture/src/main.cpp
 // Process 1 — Video Capture: camera capture + SHM publish.
 // Uses HAL ICamera interface — backend selected via config ("simulated" today; "v4l2" planned).
+// Uses IMessageBus for publishing — transport selected at compile time (SHM today).
 
 #include "video/frame.h"
-#include "ipc/shm_writer.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -24,7 +25,7 @@ static std::atomic<bool> g_running{true};
 // ── Mission camera thread ───────────────────────────────────
 static void mission_cam_thread(
     drone::hal::ICamera& camera,
-    ShmWriter<drone::ipc::ShmVideoFrame>& writer,
+    drone::ipc::IPublisher<drone::ipc::ShmVideoFrame>& publisher,
     std::atomic<bool>& stop_flag,
     int fps)
 {
@@ -59,7 +60,7 @@ static void mission_cam_thread(
             std::memcpy(shm_frame.pixel_data, frame.data, copy_size);
         }
 
-        writer.write(shm_frame);
+        publisher.publish(shm_frame);
 
         ++seq;
         if (seq % 300 == 0) {
@@ -75,7 +76,7 @@ static void mission_cam_thread(
 static void stereo_cam_thread(
     drone::hal::ICamera& left_cam,
     drone::hal::ICamera& right_cam,
-    ShmWriter<drone::ipc::ShmStereoFrame>& writer,
+    drone::ipc::IPublisher<drone::ipc::ShmStereoFrame>& publisher,
     std::atomic<bool>& stop_flag,
     int fps)
 {
@@ -115,7 +116,7 @@ static void stereo_cam_thread(
             std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
         }
 
-        writer.write(shm_frame);
+        publisher.publish(shm_frame);
 
         ++seq;
         if (seq % 300 == 0) {
@@ -160,28 +161,32 @@ int main(int argc, char* argv[]) {
     spdlog::info("Cameras: mission={}, stereo_l={}, stereo_r={}",
                  mission_cam->name(), stereo_left->name(), stereo_right->name());
 
-    // ── Create SHM writers ──────────────────────────────────
-    ShmWriter<drone::ipc::ShmVideoFrame> mission_writer;
-    if (!mission_writer.create(drone::ipc::shm_names::VIDEO_MISSION_CAM)) {
-        spdlog::error("Failed to create SHM: {}", drone::ipc::shm_names::VIDEO_MISSION_CAM);
-        return 1;
-    }
-    spdlog::info("SHM created: {}", drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    // ── Create publishers via message bus ───────────────────
+    drone::ipc::ShmMessageBus bus;
 
-    ShmWriter<drone::ipc::ShmStereoFrame> stereo_writer;
-    if (!stereo_writer.create(drone::ipc::shm_names::VIDEO_STEREO_CAM)) {
-        spdlog::error("Failed to create SHM: {}", drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    auto mission_pub = bus.advertise<drone::ipc::ShmVideoFrame>(
+        drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    if (!mission_pub->is_ready()) {
+        spdlog::error("Failed to create publisher: {}",
+                      drone::ipc::shm_names::VIDEO_MISSION_CAM);
         return 1;
     }
-    spdlog::info("SHM created: {}", drone::ipc::shm_names::VIDEO_STEREO_CAM);
+
+    auto stereo_pub = bus.advertise<drone::ipc::ShmStereoFrame>(
+        drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    if (!stereo_pub->is_ready()) {
+        spdlog::error("Failed to create publisher: {}",
+                      drone::ipc::shm_names::VIDEO_STEREO_CAM);
+        return 1;
+    }
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t_mission(mission_cam_thread,
-                          std::ref(*mission_cam), std::ref(mission_writer),
+                          std::ref(*mission_cam), std::ref(*mission_pub),
                           std::ref(g_running), m_fps);
     std::thread t_stereo(stereo_cam_thread,
                           std::ref(*stereo_left), std::ref(*stereo_right),
-                          std::ref(stereo_writer), std::ref(g_running), s_fps);
+                          std::ref(*stereo_pub), std::ref(g_running), s_fps);
 
     spdlog::info("All threads started — video_capture is READY");
 

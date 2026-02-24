@@ -8,8 +8,7 @@
 //   gcs_rx   — polls GCS for commands, publishes ShmGCSCommand
 //   gcs_tx   — reads mission status + pose, sends telemetry to GCS
 
-#include "ipc/shm_reader.h"
-#include "ipc/shm_writer.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -27,7 +26,7 @@ static std::atomic<bool> g_running{true};
 
 // ── FC receive thread (10 Hz) ───────────────────────────────
 static void fc_rx_thread(drone::hal::IFCLink& fc,
-                         ShmWriter<drone::ipc::ShmFCState>& writer) {
+                         drone::ipc::IPublisher<drone::ipc::ShmFCState>& pub) {
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
 
@@ -44,7 +43,7 @@ static void fc_rx_thread(drone::hal::IFCLink& fc,
         state.flight_mode       = hb.flight_mode;
         state.armed             = hb.armed;
         state.connected         = true;
-        writer.write(state);
+        pub.publish(state);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -52,19 +51,13 @@ static void fc_rx_thread(drone::hal::IFCLink& fc,
 
 // ── FC transmit thread (20 Hz) ──────────────────────────────
 static void fc_tx_thread(drone::hal::IFCLink& fc,
-                         ShmReader<drone::ipc::ShmTrajectoryCmd>& reader) {
+                         drone::ipc::ISubscriber<drone::ipc::ShmTrajectoryCmd>& sub) {
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_tx thread started using {}", fc.name());
 
-    // Wait for trajectory SHM
-    while (g_running.load(std::memory_order_relaxed) && !reader.is_open()) {
-        reader.open(drone::ipc::shm_names::TRAJECTORY_CMD);
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-
     while (g_running.load(std::memory_order_relaxed)) {
         drone::ipc::ShmTrajectoryCmd cmd{};
-        if (reader.read(cmd) && cmd.valid) {
+        if (sub.receive(cmd) && cmd.valid) {
             fc.send_trajectory(cmd.velocity_x, cmd.velocity_y,
                                cmd.velocity_z, cmd.target_yaw);
         }
@@ -74,7 +67,7 @@ static void fc_tx_thread(drone::hal::IFCLink& fc,
 
 // ── GCS receive thread (2 Hz) ───────────────────────────────
 static void gcs_rx_thread(drone::hal::IGCSLink& gcs,
-                          ShmWriter<drone::ipc::ShmGCSCommand>& writer) {
+                          drone::ipc::IPublisher<drone::ipc::ShmGCSCommand>& pub) {
     set_thread_params("gcs_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] gcs_rx thread started using {}", gcs.name());
 
@@ -95,7 +88,7 @@ static void gcs_rx_thread(drone::hal::IGCSLink& gcs,
                     break;
             }
             shm_cmd.valid = true;
-            writer.write(shm_cmd);
+            pub.publish(shm_cmd);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -103,22 +96,16 @@ static void gcs_rx_thread(drone::hal::IGCSLink& gcs,
 
 // ── GCS telemetry transmit (2 Hz) ───────────────────────────
 static void gcs_tx_thread(drone::hal::IGCSLink& gcs,
-                          ShmReader<drone::ipc::ShmPose>& pose_reader,
-                          ShmReader<drone::ipc::ShmMissionStatus>& status_reader,
-                          ShmReader<drone::ipc::ShmFCState>& fc_reader) {
+                          drone::ipc::ISubscriber<drone::ipc::ShmPose>& pose_sub,
+                          drone::ipc::ISubscriber<drone::ipc::ShmMissionStatus>& status_sub,
+                          drone::ipc::ISubscriber<drone::ipc::ShmFCState>& fc_sub) {
     set_thread_params("gcs_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] gcs_tx thread started using {}", gcs.name());
 
-    // Wait for SHM sources
+    // Wait for subscribers to connect
     while (g_running.load(std::memory_order_relaxed)) {
-        bool ok = true;
-        if (!pose_reader.is_open())
-            ok &= pose_reader.open(drone::ipc::shm_names::SLAM_POSE);
-        if (!status_reader.is_open())
-            ok &= status_reader.open(drone::ipc::shm_names::MISSION_STATUS);
-        if (!fc_reader.is_open())
-            ok &= fc_reader.open(drone::ipc::shm_names::FC_STATE);
-        if (ok) break;
+        if (pose_sub.is_connected() && status_sub.is_connected() &&
+            fc_sub.is_connected()) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
@@ -127,9 +114,9 @@ static void gcs_tx_thread(drone::hal::IGCSLink& gcs,
         drone::ipc::ShmMissionStatus mission{};
         drone::ipc::ShmFCState fc{};
 
-        pose_reader.read(pose);
-        status_reader.read(mission);
-        fc_reader.read(fc);
+        pose_sub.receive(pose);
+        status_sub.receive(mission);
+        fc_sub.receive(fc);
 
         gcs.send_telemetry(
             static_cast<float>(pose.translation[0]),
@@ -167,31 +154,39 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
-    // ── SHM writers ─────────────────────────────────────────
-    ShmWriter<drone::ipc::ShmFCState>   fc_writer;
-    ShmWriter<drone::ipc::ShmGCSCommand> gcs_cmd_writer;
-    if (!fc_writer.create(drone::ipc::shm_names::FC_STATE) ||
-        !gcs_cmd_writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
-        spdlog::error("Failed to create Comms SHM outputs");
+    // ── Create message bus ──────────────────────────────────
+    drone::ipc::ShmMessageBus bus;
+
+    // ── Publishers ──────────────────────────────────────────
+    auto fc_pub = bus.advertise<drone::ipc::ShmFCState>(
+        drone::ipc::shm_names::FC_STATE);
+    auto gcs_cmd_pub = bus.advertise<drone::ipc::ShmGCSCommand>(
+        drone::ipc::shm_names::GCS_COMMANDS);
+    if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready()) {
+        spdlog::error("Failed to create Comms publishers");
         return 1;
     }
 
-    // ── SHM readers ─────────────────────────────────────────
-    ShmReader<drone::ipc::ShmTrajectoryCmd> traj_reader;
-    ShmReader<drone::ipc::ShmPose>          pose_reader;
-    ShmReader<drone::ipc::ShmMissionStatus> mission_reader;
-    ShmReader<drone::ipc::ShmFCState>       fc_reader;
+    // ── Subscribers ─────────────────────────────────────────
+    auto traj_sub = bus.subscribe<drone::ipc::ShmTrajectoryCmd>(
+        drone::ipc::shm_names::TRAJECTORY_CMD, 50, 200);
+    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(
+        drone::ipc::shm_names::SLAM_POSE, 50, 200);
+    auto mission_sub = bus.subscribe<drone::ipc::ShmMissionStatus>(
+        drone::ipc::shm_names::MISSION_STATUS, 50, 200);
+    auto fc_sub = bus.subscribe<drone::ipc::ShmFCState>(
+        drone::ipc::shm_names::FC_STATE, 50, 200);
 
     spdlog::info("Comms READY");
 
     // ── Launch threads ──────────────────────────────────────
-    std::thread t1(fc_rx_thread,  std::ref(*fc_link),  std::ref(fc_writer));
-    std::thread t2(fc_tx_thread,  std::ref(*fc_link),  std::ref(traj_reader));
-    std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(gcs_cmd_writer));
+    std::thread t1(fc_rx_thread,  std::ref(*fc_link),  std::ref(*fc_pub));
+    std::thread t2(fc_tx_thread,  std::ref(*fc_link),  std::ref(*traj_sub));
+    std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(*gcs_cmd_pub));
     std::thread t4(gcs_tx_thread, std::ref(*gcs_link),
-                   std::ref(pose_reader),
-                   std::ref(mission_reader),
-                   std::ref(fc_reader));
+                   std::ref(*pose_sub),
+                   std::ref(*mission_sub),
+                   std::ref(*fc_sub));
 
     t1.join(); t2.join(); t3.join(); t4.join();
 

@@ -3,8 +3,9 @@
 // Reads SLAM pose and detected objects, outputs trajectory + payload commands.
 
 #include "planner/mission_fsm.h"
-#include "ipc/shm_reader.h"
-#include "ipc/shm_writer.h"
+#include "planner/ipath_planner.h"
+#include "planner/iobstacle_avoider.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -22,56 +23,6 @@ using namespace drone::planner;
 
 static std::atomic<bool> g_running{true};
 
-// ── Obstacle avoidance (simple potential field) ─────────────
-static drone::ipc::ShmTrajectoryCmd compute_trajectory(
-    const drone::ipc::ShmPose& pose,
-    const drone::ipc::ShmDetectedObjectList& objects,
-    const Waypoint& target,
-    float influence_radius,
-    float repulsive_gain)
-{
-    drone::ipc::ShmTrajectoryCmd cmd{};
-    cmd.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    cmd.valid = true;
-
-    // Attractive force toward waypoint
-    float dx = target.x - static_cast<float>(pose.translation[0]);
-    float dy = target.y - static_cast<float>(pose.translation[1]);
-    float dz = target.z - static_cast<float>(pose.translation[2]);
-    float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-
-    if (dist > 0.01f) {
-        float speed = std::min(target.speed, dist);  // slow down near target
-        cmd.velocity_x = (dx / dist) * speed;
-        cmd.velocity_y = (dy / dist) * speed;
-        cmd.velocity_z = (dz / dist) * speed;
-    }
-
-    // Repulsive force from obstacles
-    for (uint32_t i = 0; i < objects.num_objects; ++i) {
-        const auto& obj = objects.objects[i];
-        float ox = obj.position_x - static_cast<float>(pose.translation[0]);
-        float oy = obj.position_y - static_cast<float>(pose.translation[1]);
-        float obj_dist = std::sqrt(ox*ox + oy*oy);
-
-        if (obj_dist < influence_radius && obj_dist > 0.1f) {
-            float repulsion = repulsive_gain / (obj_dist * obj_dist);
-            cmd.velocity_x -= (ox / obj_dist) * repulsion;
-            cmd.velocity_y -= (oy / obj_dist) * repulsion;
-            spdlog::debug("[Planner] Obstacle avoidance: obj at {:.1f}m, "
-                          "repulsion={:.2f}", obj_dist, repulsion);
-        }
-    }
-
-    cmd.target_x = target.x;
-    cmd.target_y = target.y;
-    cmd.target_z = target.z;
-    cmd.target_yaw = target.yaw;
-
-    return cmd;
-}
-
 // ═══════════════════════════════════════════════════════════
 // main()
 // ═══════════════════════════════════════════════════════════
@@ -87,40 +38,38 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
 
-    // ── Open SHM inputs ─────────────────────────────────────
-    ShmReader<drone::ipc::ShmPose> pose_reader;
-    for (int i = 0; i < 50; ++i) {
-        if (pose_reader.open(drone::ipc::shm_names::SLAM_POSE)) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    if (!pose_reader.is_open()) {
+    // ── Create message bus ──────────────────────────────────
+    drone::ipc::ShmMessageBus bus;
+
+    // ── Subscribe to inputs ─────────────────────────────────
+    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(
+        drone::ipc::shm_names::SLAM_POSE);
+    if (!pose_sub->is_connected()) {
         spdlog::error("Cannot connect to SLAM pose SHM");
         return 1;
     }
 
-    ShmReader<drone::ipc::ShmDetectedObjectList> obj_reader;
-    for (int i = 0; i < 50; ++i) {
-        if (obj_reader.open(drone::ipc::shm_names::DETECTED_OBJECTS)) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    if (!obj_reader.is_open()) {
+    auto obj_sub = bus.subscribe<drone::ipc::ShmDetectedObjectList>(
+        drone::ipc::shm_names::DETECTED_OBJECTS);
+    if (!obj_sub->is_connected()) {
         spdlog::error("Cannot connect to detected objects SHM");
         return 1;
     }
 
-    ShmReader<drone::ipc::ShmGCSCommand> gcs_reader;
-    // GCS commands may not be available yet, just try
-    gcs_reader.open(drone::ipc::shm_names::GCS_COMMANDS);
+    auto gcs_sub = bus.subscribe_lazy<drone::ipc::ShmGCSCommand>();
+    gcs_sub->connect(drone::ipc::shm_names::GCS_COMMANDS);
 
-    // ── Create SHM outputs ──────────────────────────────────
-    ShmWriter<drone::ipc::ShmMissionStatus> status_writer;
-    ShmWriter<drone::ipc::ShmTrajectoryCmd> traj_writer;
-    ShmWriter<drone::ipc::ShmPayloadCommand> payload_writer;
+    // ── Create publishers ───────────────────────────────────
+    auto status_pub = bus.advertise<drone::ipc::ShmMissionStatus>(
+        drone::ipc::shm_names::MISSION_STATUS);
+    auto traj_pub = bus.advertise<drone::ipc::ShmTrajectoryCmd>(
+        drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto payload_pub = bus.advertise<drone::ipc::ShmPayloadCommand>(
+        drone::ipc::shm_names::PAYLOAD_COMMANDS);
 
-    if (!status_writer.create(drone::ipc::shm_names::MISSION_STATUS) ||
-        !traj_writer.create(drone::ipc::shm_names::TRAJECTORY_CMD) ||
-        !payload_writer.create(drone::ipc::shm_names::PAYLOAD_COMMANDS)) {
-        spdlog::error("Failed to create mission planner SHM outputs");
+    if (!status_pub->is_ready() || !traj_pub->is_ready() ||
+        !payload_pub->is_ready()) {
+        spdlog::error("Failed to create mission planner publishers");
         return 1;
     }
 
@@ -155,13 +104,24 @@ int main(int argc, char* argv[]) {
     fsm.on_takeoff();
     fsm.on_navigate();
 
-    // ── Obstacle avoidance config ────────────────────────────
+    // ── Create path planner and obstacle avoider strategies ──
     const float influence_radius = cfg.get<float>(
         "mission_planner.obstacle_avoidance.influence_radius_m", 5.0f);
     const float repulsive_gain = cfg.get<float>(
         "mission_planner.obstacle_avoidance.repulsive_gain", 2.0f);
     const int update_ms = cfg.get<int>("mission_planner.update_rate_hz", 10);
     const int loop_sleep_ms = update_ms > 0 ? 1000 / update_ms : 100;
+
+    auto planner_backend = cfg.get<std::string>(
+        "mission_planner.path_planner.backend", "potential_field");
+    auto path_planner = drone::planner::create_path_planner(planner_backend);
+    spdlog::info("Path planner: {}", path_planner->name());
+
+    auto avoider_backend = cfg.get<std::string>(
+        "mission_planner.obstacle_avoider.backend", "potential_field");
+    auto avoider = drone::planner::create_obstacle_avoider(
+        avoider_backend, influence_radius, repulsive_gain);
+    spdlog::info("Obstacle avoider: {}", avoider->name());
 
     spdlog::info("Mission Planner READY — {} waypoints loaded",
                  fsm.total_waypoints());
@@ -172,14 +132,14 @@ int main(int argc, char* argv[]) {
 
         // Read inputs
         drone::ipc::ShmPose pose{};
-        pose_reader.read(pose);
+        pose_sub->receive(pose);
 
         drone::ipc::ShmDetectedObjectList objects{};
-        obj_reader.read(objects);
+        obj_sub->receive(objects);
 
         // Check GCS commands
         drone::ipc::ShmGCSCommand gcs_cmd{};
-        if (gcs_reader.is_open() && gcs_reader.read(gcs_cmd) && gcs_cmd.valid) {
+        if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) && gcs_cmd.valid) {
             switch (gcs_cmd.command) {
                 case drone::ipc::GCSCommandType::RTL:
                     spdlog::info("[Planner] GCS command: RTL");
@@ -198,9 +158,11 @@ int main(int argc, char* argv[]) {
         if (fsm.state() == MissionState::NAVIGATE) {
             const Waypoint* wp = fsm.current_waypoint();
             if (wp) {
-                auto traj = compute_trajectory(pose, objects, *wp,
-                                                influence_radius, repulsive_gain);
-                traj_writer.write(traj);
+                // Plan trajectory via IPathPlanner
+                auto planned = path_planner->plan(pose, *wp);
+                // Apply obstacle avoidance via IObstacleAvoider
+                auto traj = avoider->avoid(planned, pose, objects);
+                traj_pub->publish(traj);
 
                 // Check if waypoint reached
                 if (fsm.waypoint_reached(
@@ -217,7 +179,7 @@ int main(int argc, char* argv[]) {
                         pay_cmd.gimbal_pitch = -90.0f;
                         pay_cmd.gimbal_yaw = 0.0f;
                         pay_cmd.valid = true;
-                        payload_writer.write(pay_cmd);
+                        payload_pub->publish(pay_cmd);
                     }
 
                     if (!fsm.advance_waypoint()) {
@@ -238,7 +200,7 @@ int main(int argc, char* argv[]) {
         status.progress_percent = fsm.total_waypoints() > 0
             ? 100.0f * fsm.current_wp_index() / fsm.total_waypoints() : 0.0f;
         status.mission_active = (fsm.state() != MissionState::IDLE);
-        status_writer.write(status);
+        status_pub->publish(status);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }
