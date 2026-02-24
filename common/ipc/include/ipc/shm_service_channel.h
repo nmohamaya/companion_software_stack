@@ -84,6 +84,7 @@ public:
     std::optional<ServiceResponse<Resp>> poll_response(
         uint64_t correlation_id) override
     {
+        if (!resp_reader_.is_open()) return std::nullopt;
         ServiceResponse<Resp> resp;
         if (resp_reader_.read(resp) && resp.valid &&
             resp.correlation_id == correlation_id) {
@@ -134,6 +135,7 @@ public:
     }
 
     std::optional<ServiceEnvelope<Req>> poll_request() override {
+        if (!req_reader_.is_open()) return std::nullopt;
         ServiceEnvelope<Req> env;
         if (req_reader_.read(env) && env.valid &&
             env.correlation_id != last_processed_id_) {

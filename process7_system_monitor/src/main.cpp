@@ -55,14 +55,19 @@ int main(int argc, char* argv[]) {
     const float batt_warn  = cfg.get<float>("system_monitor.thresholds.battery_warn_percent", 20.0f);
     const float batt_crit  = cfg.get<float>("system_monitor.thresholds.battery_crit_percent", 10.0f);
     const float disk_crit  = cfg.get<float>("system_monitor.thresholds.disk_crit_percent", 98.0f);
-    const int disk_interval = cfg.get<int>("system_monitor.disk_check_interval_s", 10);
-    const int update_rate   = cfg.get<int>("system_monitor.update_rate_hz", 1);
+    const int disk_check_s = cfg.get<int>("system_monitor.disk_check_interval_s", 10);
+    const int update_rate  = cfg.get<int>("system_monitor.update_rate_hz", 1);
     const int loop_sleep_ms = update_rate > 0 ? 1000 / update_rate : 1000;
 
-    // Create process monitor via strategy factory
+    // Convert disk check interval from seconds to ticks (calls)
+    const int disk_interval_ticks = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
+
+    // Create process monitor via strategy factory (backend from config)
+    const std::string monitor_backend = cfg.get<std::string>(
+        "system_monitor.backend", "linux");
     auto monitor = drone::monitor::create_process_monitor(
-        "linux", cpu_warn, mem_warn, temp_warn, temp_crit,
-        disk_crit, batt_warn, batt_crit, disk_interval);
+        monitor_backend, cpu_warn, mem_warn, temp_warn, temp_crit,
+        disk_crit, batt_warn, batt_crit, disk_interval_ticks);
     spdlog::info("Process monitor: {}", monitor->name());
 
     uint32_t tick = 0;
@@ -71,24 +76,17 @@ int main(int argc, char* argv[]) {
     while (g_running.load(std::memory_order_relaxed)) {
         tick++;
 
-        // Collect health via IProcessMonitor strategy
-        auto health = monitor->collect();
-
         // Incorporate battery from FC if available
         float battery = 100.0f;
         drone::ipc::ShmFCState fc{};
         if (fc_sub->is_connected() && fc_sub->receive(fc) && fc.connected) {
             battery = fc.battery_remaining;
         }
-        health.power_watts = battery * 0.16f;  // rough estimate
+        monitor->set_battery_percent(battery);
 
-        // Apply battery thresholds
-        if (battery < batt_warn) {
-            health.thermal_zone = std::max(health.thermal_zone, static_cast<uint8_t>(2));
-        }
-        if (battery < batt_crit) {
-            health.thermal_zone = 3;
-        }
+        // Collect health via IProcessMonitor strategy
+        // (battery thresholds are applied inside the strategy)
+        auto health = monitor->collect();
 
         health_pub->publish(health);
 

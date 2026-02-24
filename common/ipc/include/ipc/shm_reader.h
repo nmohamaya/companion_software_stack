@@ -31,7 +31,7 @@ public:
 
     // Read with SeqLock retry
     bool read(T& out, uint64_t* timestamp_ns = nullptr) const {
-        if (!ptr_) return false;
+        if (!ptr_ || ptr_ == MAP_FAILED) return false;
         for (int attempt = 0; attempt < 4; ++attempt) {
             uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
             if (s1 & 1) continue;  // writer is mid-write

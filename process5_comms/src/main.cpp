@@ -169,13 +169,13 @@ int main(int argc, char* argv[]) {
 
     // ── Subscribers ─────────────────────────────────────────
     auto traj_sub = bus.subscribe<drone::ipc::ShmTrajectoryCmd>(
-        drone::ipc::shm_names::TRAJECTORY_CMD, 50, 200);
+        drone::ipc::shm_names::TRAJECTORY_CMD);
     auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(
-        drone::ipc::shm_names::SLAM_POSE, 50, 200);
+        drone::ipc::shm_names::SLAM_POSE);
     auto mission_sub = bus.subscribe<drone::ipc::ShmMissionStatus>(
-        drone::ipc::shm_names::MISSION_STATUS, 50, 200);
+        drone::ipc::shm_names::MISSION_STATUS);
     auto fc_sub = bus.subscribe<drone::ipc::ShmFCState>(
-        drone::ipc::shm_names::FC_STATE, 50, 200);
+        drone::ipc::shm_names::FC_STATE);
 
     spdlog::info("Comms READY");
 

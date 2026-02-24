@@ -545,8 +545,8 @@ The current IPC layer uses a **shared-register (SeqLock)** model — every reade
 
 | Pattern | Semantics | Current State | Production Target | Transport |
 |---|---|---|---|---|
-| **Pub-Sub** | 1-to-N, latest-value or queued | SeqLock SHM (latest-value only) | `IMessageBus` / `ITopic<T>` with optional SPSC queuing | SHM (intra-host) |
-| **Request-Response** | 1-to-1, with ACK/timeout | Not implemented (fire-and-forget writes) | `IServiceChannel` with correlation IDs + timeouts | Paired SPSC rings |
+| **Pub-Sub** | 1-to-N, latest-value or queued | `IPublisher` / `ISubscriber` on `ShmMessageBus` (latest-value only) | Extend `ShmMessageBus` with optional per-subscriber SPSC queuing | SHM (intra-host) |
+| **Request-Response** | 1-to-1, with ACK/timeout | `IServiceClient` / `IServiceServer` over `ShmService*` with correlation IDs + timeouts | Hardened service layer with richer error handling and backpressure | Paired SPSC rings |
 | **Services (RPC)** | External N-to-1, schema-defined | Simulated GCS link (polled SHM) | gRPC / MAVLink microservices | TCP/UDP (external) |
 
 #### Where Each Pattern Applies
@@ -575,8 +575,8 @@ Services (external RPC):
 
 | Priority | Item | Effort | Impact |
 |---|---|---|---|
-| **P1** | `IMessageBus` / `ITopic<T>` — abstract pub-sub over SHM | 3 days | Decouples all producers from consumers |
-| **P1** | `IServiceChannel` — request-response with correlation IDs | 2 days | Enables reliable command delivery |
+| **P1** | `IPublisher<T>` / `ISubscriber<T>` + `ShmMessageBus` — abstract pub-sub over SHM | 3 days | Decouples all producers from consumers |
+| **P1** | `IServiceClient` / `IServiceServer` — request-response with correlation IDs | 2 days | Enables reliable command delivery |
 | **P2** | Internal process interfaces (`IVisualFrontend`, `IPathPlanner`, `IObstacleAvoider`, `IProcessMonitor`) | 1 week | Full strategy-pattern modularity |
 | **P3** | gRPC service layer for external comms | 2 weeks | Production GCS/fleet integration |
 

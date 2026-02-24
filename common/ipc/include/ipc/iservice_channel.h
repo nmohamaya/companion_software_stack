@@ -14,6 +14,7 @@
 #include <optional>
 #include <chrono>
 #include <type_traits>
+#include <thread>
 
 namespace drone::ipc {
 
@@ -82,7 +83,12 @@ public:
         // Timed out
         ServiceResponse<Resp> timeout_resp;
         timeout_resp.correlation_id = correlation_id;
+        timeout_resp.timestamp_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
         timeout_resp.status = ServiceStatus::TIMEOUT;
+        timeout_resp.valid = true;
         return timeout_resp;
     }
 };

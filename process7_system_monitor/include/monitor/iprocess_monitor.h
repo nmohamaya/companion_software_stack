@@ -25,6 +25,9 @@ public:
     /// @return A filled ShmSystemHealth struct.
     virtual drone::ipc::ShmSystemHealth collect() = 0;
 
+    /// Incorporate external battery level into the next health reading.
+    virtual void set_battery_percent(float /*battery*/) {}
+
     /// Human-readable name for logging.
     virtual std::string name() const = 0;
 };
@@ -90,6 +93,7 @@ public:
         health.cpu_temp_c           = temp;
         health.max_temp_c           = temp;
         health.disk_usage_percent   = disk_.usage_percent;
+        health.power_watts          = battery_ * 0.16f;  // rough estimate
 
         // Thermal zone (overall status)
         health.thermal_zone = 0;  // normal
@@ -100,6 +104,14 @@ public:
         if (temp > temp_crit_ || disk_.usage_percent > disk_crit_) {
             health.thermal_zone = 3;  // critical
         }
+        // Battery thresholds
+        if (battery_ < batt_warn_) {
+            health.thermal_zone = std::max(health.thermal_zone,
+                                           static_cast<uint8_t>(2));
+        }
+        if (battery_ < batt_crit_) {
+            health.thermal_zone = 3;
+        }
 
         return health;
     }
@@ -107,7 +119,7 @@ public:
     std::string name() const override { return "LinuxProcessMonitor"; }
 
     /// Incorporate battery level into the health reading.
-    void set_battery_percent(float battery) { battery_ = battery; }
+    void set_battery_percent(float battery) override { battery_ = battery; }
 
 private:
     float cpu_warn_, mem_warn_, temp_warn_, temp_crit_;

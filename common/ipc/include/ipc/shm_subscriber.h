@@ -55,6 +55,7 @@ public:
     }
 
     bool receive(T& out, uint64_t* timestamp_ns = nullptr) const override {
+        if (!is_connected()) return false;
         return reader_.read(out, timestamp_ns);
     }
 
