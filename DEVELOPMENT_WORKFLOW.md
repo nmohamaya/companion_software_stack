@@ -75,6 +75,17 @@ kill %1 %2
 - Verify SHM segments created/cleaned up
 - No segfaults or assertion failures
 
+##### 4d. Integration / Simulation Tests (when applicable)
+For changes that interact with external simulators or hardware:
+```bash
+# Example: run Gazebo SITL integration test
+./build/bin/integration_test_gazebo --config config/gazebo_sitl.json
+```
+- Only required when the change involves HAL backends or end-to-end pipelines
+- These tests are **not** part of the CI gate (simulators may not be installed)
+- Mark simulation-dependent tests with a GTest filter tag: `TEST(Integration, ...)`
+- Document any required environment setup in the PR description
+
 #### Step 5: Create Pull Request
 1. Push branch: `git push origin feature/issue-XX-description`
 2. Create PR with:
@@ -134,6 +145,22 @@ Parent Issue (#XX): Hardware Abstraction Layer
 └─ Phase 4+: Real hardware backends
 ```
 
+### Dependency Graph
+
+When creating an epic, include a dependency graph showing which phases can run in parallel and which are sequential. This prevents wasted effort and clarifies the critical path.
+
+```
+Phase 0 (Environment Setup)
+   │
+   ├──→ Phase 1 (Backend A)  ──┐
+   ├──→ Phase 2 (Backend B)  ──┼──→ Phase 4 (Integration Test)
+   └──→ Phase 3 (Backend C)  ──┘
+```
+
+- Phases without arrows between them can be developed in parallel
+- Mark blocking dependencies explicitly in sub-issue descriptions
+- Update the graph as phases complete or new dependencies emerge
+
 ### Steps
 
 1. **Create Sub-Issues for Each Phase**
@@ -162,6 +189,26 @@ Parent Issue (#XX): Hardware Abstraction Layer
    - If leaving TODOs for later phases, create a GitHub issue
    - Link in code: `// TODO(#YY): implement real V4L2 backend`
    - Label as `deferred` or `technical-debt`
+
+5. **Optional Dependencies (compile guards)**
+   When a phase introduces an external dependency (e.g., MAVSDK, Gazebo), keep it **optional** so the core stack always builds without it:
+   ```cmake
+   # CMakeLists.txt — look for dependency, don't fail if absent
+   find_package(MAVSDK QUIET)
+   if(MAVSDK_FOUND)
+     target_compile_definitions(my_target PRIVATE HAVE_MAVSDK)
+     target_link_libraries(my_target PRIVATE MAVSDK::mavsdk)
+   endif()
+   ```
+   ```cpp
+   // hal_factory.h — guard backend registration
+   #ifdef HAVE_MAVSDK
+   #include "hal/mavlink_fc_link.h"
+   #endif
+   ```
+   - CI must always pass **without** the optional dependency installed
+   - Document install steps in `docs/` for developers who need the backend
+   - Use `HAVE_<LIB>` naming convention for all compile guards
 
 ### Review Comment Handling
 
