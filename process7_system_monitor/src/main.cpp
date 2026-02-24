@@ -3,8 +3,8 @@
 // watchdog.  Publishes ShmSystemHealth.
 
 #include "monitor/sys_info.h"
-#include "ipc/shm_writer.h"
-#include "ipc/shm_reader.h"
+#include "monitor/iprocess_monitor.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -31,16 +31,19 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== System Monitor starting (PID {}) ===", getpid());
 
-    // ── SHM output ──────────────────────────────────────────
-    ShmWriter<drone::ipc::ShmSystemHealth> health_writer;
-    if (!health_writer.create(drone::ipc::shm_names::SYSTEM_HEALTH)) {
-        spdlog::error("Failed to create system health SHM");
+    // ── Create message bus ──────────────────────────────────
+    drone::ipc::ShmMessageBus bus;
+
+    auto health_pub = bus.advertise<drone::ipc::ShmSystemHealth>(
+        drone::ipc::shm_names::SYSTEM_HEALTH);
+    if (!health_pub->is_ready()) {
+        spdlog::error("Failed to create system health publisher");
         return 1;
     }
 
-    // ── Optional: read FC state for battery info ────────────
-    ShmReader<drone::ipc::ShmFCState> fc_reader;
-    fc_reader.open(drone::ipc::shm_names::FC_STATE);
+    // ── Optional: subscribe to FC state for battery info ────
+    auto fc_sub = bus.subscribe_lazy<drone::ipc::ShmFCState>();
+    fc_sub->connect(drone::ipc::shm_names::FC_STATE);
 
     spdlog::info("System Monitor READY");
 
@@ -52,64 +55,40 @@ int main(int argc, char* argv[]) {
     const float batt_warn  = cfg.get<float>("system_monitor.thresholds.battery_warn_percent", 20.0f);
     const float batt_crit  = cfg.get<float>("system_monitor.thresholds.battery_crit_percent", 10.0f);
     const float disk_crit  = cfg.get<float>("system_monitor.thresholds.disk_crit_percent", 98.0f);
-    const int disk_interval = cfg.get<int>("system_monitor.disk_check_interval_s", 10);
-    const int update_rate   = cfg.get<int>("system_monitor.update_rate_hz", 1);
+    const int disk_check_s = cfg.get<int>("system_monitor.disk_check_interval_s", 10);
+    const int update_rate  = cfg.get<int>("system_monitor.update_rate_hz", 1);
     const int loop_sleep_ms = update_rate > 0 ? 1000 / update_rate : 1000;
 
-    auto prev_cpu = drone::monitor::read_cpu_times();
+    // Convert disk check interval from seconds to ticks (calls)
+    const int disk_interval_ticks = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
+
+    // Create process monitor via strategy factory (backend from config)
+    const std::string monitor_backend = cfg.get<std::string>(
+        "system_monitor.backend", "linux");
+    auto monitor = drone::monitor::create_process_monitor(
+        monitor_backend, cpu_warn, mem_warn, temp_warn, temp_crit,
+        disk_crit, batt_warn, batt_crit, disk_interval_ticks);
+    spdlog::info("Process monitor: {}", monitor->name());
+
     uint32_t tick = 0;
 
     // ── Main loop (1 Hz) ────────────────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
         tick++;
 
-        // CPU
-        auto now_cpu = drone::monitor::read_cpu_times();
-        float cpu_usage = drone::monitor::compute_cpu_usage(prev_cpu, now_cpu);
-        prev_cpu = now_cpu;
-
-        // Memory
-        auto mem = drone::monitor::read_meminfo();
-
-        // Temperature
-        float temp = drone::monitor::read_cpu_temp();
-
-        // Disk (every N ticks to reduce overhead)
-        static drone::monitor::DiskInfo disk{};
-        if (tick % disk_interval == 1) {
-            disk = drone::monitor::read_disk_usage();
-        }
-
-        // Battery (from FC)
+        // Incorporate battery from FC if available
         float battery = 100.0f;
         drone::ipc::ShmFCState fc{};
-        if (fc_reader.is_open() && fc_reader.read(fc) && fc.connected) {
+        if (fc_sub->is_connected() && fc_sub->receive(fc) && fc.connected) {
             battery = fc.battery_remaining;
         }
+        monitor->set_battery_percent(battery);
 
-        // Build health status
-        drone::ipc::ShmSystemHealth health{};
-        health.timestamp_ns = std::chrono::duration_cast<
-            std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        health.cpu_usage_percent    = cpu_usage;
-        health.memory_usage_percent = mem.usage_percent;
-        health.cpu_temp_c           = temp;
-        health.max_temp_c           = temp;
-        health.disk_usage_percent   = disk.usage_percent;
-        health.power_watts          = battery * 0.16f;  // rough estimate
+        // Collect health via IProcessMonitor strategy
+        // (battery thresholds are applied inside the strategy)
+        auto health = monitor->collect();
 
-        // Determine overall status via thermal_zone
-        health.thermal_zone = 0;  // normal
-        if (cpu_usage > cpu_warn || mem.usage_percent > mem_warn ||
-            temp > temp_warn || battery < batt_warn) {
-            health.thermal_zone = 2;  // hot
-        }
-        if (temp > temp_crit || battery < batt_crit || disk.usage_percent > disk_crit) {
-            health.thermal_zone = 3;  // critical
-        }
-
-        health_writer.write(health);
+        health_pub->publish(health);
 
         // Log summary
         if (tick % 5 == 0) {
@@ -121,8 +100,9 @@ int main(int argc, char* argv[]) {
 
             spdlog::info("[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}°C "
                          "DISK={:.0f}% BATT={:.0f}% => {}",
-                         cpu_usage, mem.usage_percent, temp,
-                         disk.usage_percent, battery, status_str);
+                         health.cpu_usage_percent, health.memory_usage_percent,
+                         health.cpu_temp_c,
+                         health.disk_usage_percent, battery, status_str);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));

@@ -3,8 +3,8 @@
 // Simulated: generates fake VIO pose estimates from stereo camera SHM.
 
 #include "slam/types.h"
-#include "ipc/shm_reader.h"
-#include "ipc/shm_writer.h"
+#include "slam/ivisual_frontend.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -52,38 +52,23 @@ private:
 
 static std::atomic<bool> g_running{true};
 
-// ── Simulated Visual Frontend thread ────────────────────────
+// ── Visual Frontend thread (uses IVisualFrontend strategy) ──
 // In real system: ORB/KLT feature detection + tracking on stereo frames
 static void visual_frontend_thread(
-    ShmReader<drone::ipc::ShmStereoFrame>& stereo_reader,
+    drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
+    drone::slam::IVisualFrontend& frontend,
     PoseDoubleBuffer& pose_buffer,
     std::atomic<bool>& stop_flag)
 {
-    spdlog::info("[VisualFrontend] Thread started (simulation)");
+    spdlog::info("[VisualFrontend] Thread started using {}", frontend.name());
 
-    double t = 0.0;
-    std::mt19937 rng(42);
-    std::normal_distribution<double> noise(0.0, 0.01);
     uint64_t frame_count = 0;
-    Pose p;  // stack-allocated, reused each iteration
 
     while (!stop_flag.load(std::memory_order_relaxed)) {
         drone::ipc::ShmStereoFrame frame;
-        (void)stereo_reader.read(frame);
+        (void)stereo_sub.receive(frame);
 
-        // Simulate circular trajectory with noise
-        t += 0.033;  // 30 Hz
-        p.timestamp = t;
-        p.position = Eigen::Vector3d(
-            5.0 * std::cos(t * 0.5) + noise(rng),
-            5.0 * std::sin(t * 0.5) + noise(rng),
-            2.0 + 0.1 * std::sin(t) + noise(rng)   // ~2m altitude
-        );
-        double yaw = t * 0.5 + M_PI / 2.0;
-        p.orientation = Eigen::Quaterniond(
-            Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()));
-        p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.01;
-        p.quality = 2;  // good
+        auto p = frontend.process_frame(frame);
 
         pose_buffer.write(p);
         pose_buffer.mark_initialized();
@@ -121,7 +106,7 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu,
 
 // ── Pose publisher thread ───────────────────────────────────
 static void pose_publisher_thread(
-    ShmWriter<drone::ipc::ShmPose>& pose_writer,
+    drone::ipc::IPublisher<drone::ipc::ShmPose>& pose_pub,
     PoseDoubleBuffer& pose_buffer,
     std::atomic<bool>& stop_flag,
     int publish_rate_hz)
@@ -149,7 +134,7 @@ static void pose_publisher_thread(
                 shm_pose.covariance[i] = p.covariance.data()[i];
             }
             shm_pose.quality = p.quality;
-            pose_writer.write(shm_pose);
+            pose_pub.publish(shm_pose);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms)); // configurable
     }
@@ -171,27 +156,22 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== SLAM/VIO/Nav process starting (PID {}) ===", getpid());
 
-    // Open stereo camera SHM from Process 1
-    ShmReader<drone::ipc::ShmStereoFrame> stereo_reader;
-    for (int attempt = 0; attempt < 50; ++attempt) {
-        if (stereo_reader.open(drone::ipc::shm_names::VIDEO_STEREO_CAM)) {
-            spdlog::info("Connected to SHM: {}",
-                         drone::ipc::shm_names::VIDEO_STEREO_CAM);
-            break;
-        }
-        spdlog::warn("Waiting for stereo SHM (attempt {}/50)...", attempt + 1);
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    if (!stereo_reader.is_open()) {
+    // ── Create message bus ──────────────────────────────────
+    drone::ipc::ShmMessageBus bus;
+
+    // Subscribe to stereo camera SHM from Process 1
+    auto stereo_sub = bus.subscribe<drone::ipc::ShmStereoFrame>(
+        drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    if (!stereo_sub->is_connected()) {
         spdlog::error("Cannot connect to stereo SHM — is video_capture running?");
         return 1;
     }
 
-    // Create pose output SHM
-    ShmWriter<drone::ipc::ShmPose> pose_writer;
-    if (!pose_writer.create(drone::ipc::shm_names::SLAM_POSE)) {
-        spdlog::error("Failed to create SHM: {}",
-                       drone::ipc::shm_names::SLAM_POSE);
+    // Create pose output publisher
+    auto pose_pub = bus.advertise<drone::ipc::ShmPose>(
+        drone::ipc::shm_names::SLAM_POSE);
+    if (!pose_pub->is_ready()) {
+        spdlog::error("Failed to create pose publisher");
         return 1;
     }
 
@@ -205,12 +185,19 @@ int main(int argc, char* argv[]) {
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
     imu->init(imu_rate);
 
+    // Create visual frontend via strategy factory
+    auto frontend_backend = cfg.get<std::string>(
+        "slam.visual_frontend.backend", "simulated");
+    auto frontend = drone::slam::create_visual_frontend(frontend_backend);
+    spdlog::info("Visual frontend: {}", frontend->name());
+
     // Launch threads
     std::thread t_frontend(visual_frontend_thread,
-        std::ref(stereo_reader), std::ref(pose_buffer), std::ref(g_running));
+        std::ref(*stereo_sub), std::ref(*frontend),
+        std::ref(pose_buffer), std::ref(g_running));
     std::thread t_imu(imu_reader_thread, std::ref(*imu), std::ref(g_running), imu_rate);
     std::thread t_publisher(pose_publisher_thread,
-        std::ref(pose_writer), std::ref(pose_buffer), std::ref(g_running),
+        std::ref(*pose_pub), std::ref(pose_buffer), std::ref(g_running),
         vio_rate);
 
     spdlog::info("All SLAM threads started — READY");

@@ -7,8 +7,7 @@
 #include "perception/detector_interface.h"
 #include "perception/kalman_tracker.h"
 #include "perception/fusion_engine.h"
-#include "ipc/shm_reader.h"
-#include "ipc/shm_writer.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -29,7 +28,7 @@ static std::atomic<bool> g_running{true};
 
 // ── Inference thread ────────────────────────────────────────
 static void inference_thread(
-    ShmReader<drone::ipc::ShmVideoFrame>& video_reader,
+    drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>& video_sub,
     drone::SPSCRing<Detection2DList, 4>& output_queue,
     std::atomic<bool>& stop_flag)
 {
@@ -40,7 +39,7 @@ static void inference_thread(
     uint64_t frame_count = 0;
     while (!stop_flag.load(std::memory_order_relaxed)) {
         drone::ipc::ShmVideoFrame frame;
-        bool got_frame = video_reader.read(frame);
+        bool got_frame = video_sub.receive(frame);
 
         if (got_frame) {
             ScopedTimer timer("Inference", 33.0);
@@ -162,7 +161,7 @@ static void fusion_thread(
     drone::SPSCRing<TrackedObjectList, 4>& tracked_queue,
     drone::SPSCRing<std::vector<LiDARCluster>, 4>& lidar_queue,
     drone::SPSCRing<RadarDetectionList, 4>& radar_queue,
-    ShmWriter<drone::ipc::ShmDetectedObjectList>& det_writer,
+    drone::ipc::IPublisher<drone::ipc::ShmDetectedObjectList>& det_pub,
     std::atomic<bool>& stop_flag,
     const drone::Config& cfg)
 {
@@ -221,7 +220,7 @@ static void fusion_thread(
                 dst.has_lidar  = src.has_lidar;
                 dst.has_radar  = src.has_radar;
             }
-            det_writer.write(shm_list);
+            det_pub.publish(shm_list);
             ++fusion_count;
 
             if (fusion_count % 100 == 0) {
@@ -250,26 +249,22 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Perception process starting (PID {}) ===", getpid());
 
-    // ── Open SHM input (video frames from Process 1) ────────
-    ShmReader<drone::ipc::ShmVideoFrame> video_reader;
-    for (int attempt = 0; attempt < 50; ++attempt) {
-        if (video_reader.open(drone::ipc::shm_names::VIDEO_MISSION_CAM)) {
-            spdlog::info("Connected to SHM: {}",
-                         drone::ipc::shm_names::VIDEO_MISSION_CAM);
-            break;
-        }
-        spdlog::warn("Waiting for video SHM (attempt {}/50)...", attempt + 1);
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    if (!video_reader.is_open()) {
+    // ── Create message bus ──────────────────────────────────
+    drone::ipc::ShmMessageBus bus;
+
+    // ── Subscribe to video frames from Process 1 ────────────
+    auto video_sub = bus.subscribe<drone::ipc::ShmVideoFrame>(
+        drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    if (!video_sub->is_connected()) {
         spdlog::error("Cannot connect to video SHM — is video_capture running?");
         return 1;
     }
 
-    // ── Create SHM output (detected objects → Process 4) ────
-    ShmWriter<drone::ipc::ShmDetectedObjectList> det_writer;
-    if (!det_writer.create(drone::ipc::shm_names::DETECTED_OBJECTS)) {
-        spdlog::error("Failed to create SHM: {}",
+    // ── Create publisher for detected objects → Process 4 ───
+    auto det_pub = bus.advertise<drone::ipc::ShmDetectedObjectList>(
+        drone::ipc::shm_names::DETECTED_OBJECTS);
+    if (!det_pub->is_ready()) {
+        spdlog::error("Failed to create publisher: {}",
                        drone::ipc::shm_names::DETECTED_OBJECTS);
         return 1;
     }
@@ -282,7 +277,7 @@ int main(int argc, char* argv[]) {
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread,
-        std::ref(video_reader), std::ref(inference_to_tracker),
+        std::ref(*video_sub), std::ref(inference_to_tracker),
         std::ref(g_running));
 
     std::thread t_tracker(tracker_thread,
@@ -297,7 +292,7 @@ int main(int argc, char* argv[]) {
 
     std::thread t_fusion(fusion_thread,
         std::ref(tracker_to_fusion), std::ref(lidar_to_fusion),
-        std::ref(radar_to_fusion), std::ref(det_writer),
+        std::ref(radar_to_fusion), std::ref(*det_pub),
         std::ref(g_running), std::cref(cfg));
 
     spdlog::info("All perception threads started — READY");

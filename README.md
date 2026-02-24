@@ -537,6 +537,49 @@ Based on the analysis above, here is the recommended implementation order:
 | **P4** | Geofencing + advanced contingencies | 1 week | Regulatory compliance | Mission planner |
 | **P4** | OTA update system | 2 weeks | Field deployment | None |
 
+### Messaging Patterns Architecture
+
+The current IPC layer uses a **shared-register (SeqLock)** model — every reader sees only the latest value. This is optimal for real-time telemetry but insufficient for reliable command delivery and external integrations. A production stack needs three complementary messaging patterns:
+
+#### Pattern Comparison
+
+| Pattern | Semantics | Current State | Production Target | Transport |
+|---|---|---|---|---|
+| **Pub-Sub** | 1-to-N, latest-value or queued | `IPublisher` / `ISubscriber` on `ShmMessageBus` (latest-value only) | Extend `ShmMessageBus` with optional per-subscriber SPSC queuing | SHM (intra-host) |
+| **Request-Response** | 1-to-1, with ACK/timeout | `IServiceClient` / `IServiceServer` over `ShmService*` with correlation IDs + timeouts | Hardened service layer with richer error handling and backpressure | Paired SPSC rings |
+| **Services (RPC)** | External N-to-1, schema-defined | Simulated GCS link (polled SHM) | gRPC / MAVLink microservices | TCP/UDP (external) |
+
+#### Where Each Pattern Applies
+
+```
+Pub-Sub (high-rate telemetry):
+  P1 → P2,P3    frames @ 30 Hz
+  P3 → P4       pose @ 100 Hz
+  P2 → P4       detections @ 30 Hz
+  P5 → P4       GCS commands (latest)
+  P7 → all      health heartbeats @ 1 Hz
+
+Request-Response (reliable commands):
+  P4 → P5       trajectory cmd  →  ACK/NACK
+  P4 → P6       payload trigger →  confirm
+  P7 → P1-P6    health ping     →  pong
+  P5 → P4       mode change req →  ACK
+
+Services (external RPC):
+  GCS → P5              telemetry stream, mission upload (gRPC/MAVLink)
+  Fleet manager → P5    task assignment (gRPC)
+  P7 → ground ops       alert escalation (gRPC)
+```
+
+#### Implementation Plan
+
+| Priority | Item | Effort | Impact |
+|---|---|---|---|
+| **P1** | `IPublisher<T>` / `ISubscriber<T>` + `ShmMessageBus` — abstract pub-sub over SHM | 3 days | Decouples all producers from consumers |
+| **P1** | `IServiceClient` / `IServiceServer` — request-response with correlation IDs | 2 days | Enables reliable command delivery |
+| **P2** | Internal process interfaces (`IVisualFrontend`, `IPathPlanner`, `IObstacleAvoider`, `IProcessMonitor`) | 1 week | Full strategy-pattern modularity |
+| **P3** | gRPC service layer for external comms | 2 weeks | Production GCS/fleet integration |
+
 ---
 
 ## Prerequisites

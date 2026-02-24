@@ -61,3 +61,9 @@ add_drone_test(test_system_monitor  test_system_monitor.cpp)
 
 # ── HAL tests ────────────────────────────────────────────────
 add_drone_test(test_hal             test_hal.cpp)
+
+# ── Message Bus / API Interface tests ────────────────────────
+add_drone_test(test_message_bus     test_message_bus.cpp)
+
+# ── Process Strategy Interface tests ─────────────────────────
+add_drone_test(test_process_interfaces test_process_interfaces.cpp)
