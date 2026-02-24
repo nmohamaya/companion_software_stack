@@ -1,0 +1,31 @@
+=== Listing 15-2: Example payload_config.json ===
+
+// Example payload_config.json:
+{
+  "plugins": [
+    {
+      "type": "gimbal",
+      "pwm_pitch": 0,
+      "pwm_roll": 1,
+      "pwm_yaw": 2,
+      "imu_bus": 1,
+      "imu_addr": "0x68",
+      "pid_pitch": {"kp": 2.0, "ki": 0.1, "kd": 0.5},
+      "pid_roll":  {"kp": 2.0, "ki": 0.1, "kd": 0.5},
+      "pid_yaw":   {"kp": 1.5, "ki": 0.05, "kd": 0.3},
+      "rate_hz": 200
+    },
+    {
+      "type": "camera",
+      "trigger_gpio": 12,
+      "default_interval_s": 2.0,
+      "geotag_dir": "/opt/drone/data/geotags"
+    },
+    {
+      "type": "spotlight",
+      "pwm_channel": 3,
+      "ramp_rate": 0.1
+    }
+  ],
+  "log_level": "info"
+}

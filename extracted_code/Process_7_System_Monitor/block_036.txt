@@ -1,0 +1,3 @@
+=== Appendix: C++ Concepts Reference ===
+
+Section 14 — deterministic struct size for binary records

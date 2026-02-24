@@ -1,0 +1,4 @@
+=== The GCS link may use different physical transports: UDP over WiFi, UDP over LTE, serial radio (SiK 433/915 MHz), or even a mesh network. We abstract the transport behind a common interface so the rest of the Comms process is transport-agnostic. ===
+
+💡 C++ Concept: Abstract Factory Pattern for Transport Selection
+An Abstract Factory creates families of related objects (transport + config) without specifying their concrete classes. The factory method create_transport(config) reads a config file entry ('type': 'udp' | 'serial' | 'mesh') and returns a unique_ptr to the appropriate implementation. The calling code only sees the Transport interface. This lets us swap radio hardware (WiFi → LTE → SiK) by changing one config line, with zero code changes in the telemetry threads.

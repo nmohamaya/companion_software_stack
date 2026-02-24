@@ -1,0 +1,7 @@
+=== The Mission Planner is divided into six implementation phases spanning approximately 12 weeks. Each phase produces testable, incrementally useful functionality. ===
+
+• State base class & all 9 state implementations
+• MissionFSM runner
+• Command queue & operator interface
+• Unit tests for all state transitions
+• systemd service file

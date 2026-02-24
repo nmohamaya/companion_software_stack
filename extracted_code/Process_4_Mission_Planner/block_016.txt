@@ -1,0 +1,4 @@
+=== 6.1 Strategy Pattern for Algorithms ===
+
+💡 C++ Concept: Strategy Pattern (GoF)
+The Strategy pattern defines a family of interchangeable algorithms behind a common interface. The Path Planner holds a pointer to a PlanningStrategy and can swap algorithms at runtime (e.g., switch from A* to RRT* when entering unknown terrain). This avoids a brittle if/else chain and lets you add new planners (e.g., PRM, Theta*) without touching the path planner thread code. Combined with std::unique_ptr, strategy ownership is clean and leak-free.

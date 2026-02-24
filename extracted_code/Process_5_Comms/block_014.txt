@@ -1,0 +1,4 @@
+=== CONCEPT: Listing 7-2: GCS Command Parser ===
+
+💡 C++ Concept: Separation of Parsing and Action (Single Responsibility Principle)
+GCSCommandParser only translates MAVLink messages into our internal GCSCommand enum, then writes to SHM via GCSCommandWriter. It does NOT execute the commands — that is Process 4's job. This Single Responsibility Principle keeps the Comms process decoupled from mission logic. If the command protocol changes (e.g., adding a new MAV_CMD), only the parser changes. If the action semantics change (e.g., RTL now spirals down), only Process 4's state machine changes. Clean boundaries = fewer cascade bugs.

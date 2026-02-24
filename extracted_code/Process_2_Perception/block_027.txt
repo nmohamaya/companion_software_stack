@@ -1,0 +1,50 @@
+Context: LiDAR → Camera projection for sensor fusion
+File path: // file: src/perception/fusion_thread.cpp
+Source: table_row0_col0
+---
+// file: src/perception/fusion_thread.cpp
+#include "perception/types.h"
+#include <Eigen/Dense>
+#include <opencv2/calib3d.hpp>
+
+namespace drone::perception {
+
+/// Camera-LiDAR calibration (from extrinsic calibration procedure)
+struct CalibrationData {
+    Eigen::Matrix3f K;          // camera intrinsic matrix (3×3)
+    Eigen::Matrix3f R_lidar2cam;  // rotation: LiDAR → camera frame
+    Eigen::Vector3f t_lidar2cam;  // translation: LiDAR → camera frame
+    uint32_t image_width;
+    uint32_t image_height;
+};
+
+/// Project a 3D point (LiDAR frame) to 2D pixel coordinates (camera frame)
+Eigen::Vector2f project_lidar_to_camera(
+    const Eigen::Vector3f& point_lidar,
+    const CalibrationData& calib)
+{
+    // Transform to camera frame
+    Eigen::Vector3f p_cam = calib.R_lidar2cam * point_lidar + calib.t_lidar2cam;
+
+    // Check if point is in front of camera
+    if (p_cam.z() <= 0) return {-1, -1};  // behind camera
+
+    // Project to image plane
+    Eigen::Vector3f p_img = calib.K * p_cam;
+    float u = p_img.x() / p_img.z();
+    float v = p_img.y() / p_img.z();
+
+    // Check bounds
+    if (u < 0 || u >= calib.image_width || v < 0 || v >= calib.image_height)
+        return {-1, -1};  // outside image
+
+    return {u, v};
+}
+
+/// Check if a projected point falls inside a bounding box
+bool point_in_bbox(const Eigen::Vector2f& pt, const Detection2D& bbox) {
+    return pt.x() >= bbox.x && pt.x() <= bbox.x + bbox.w &&
+           pt.y() >= bbox.y && pt.y() <= bbox.y + bbox.h;
+}
+
+} // namespace drone::perception

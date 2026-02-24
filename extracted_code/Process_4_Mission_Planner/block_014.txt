@@ -1,0 +1,62 @@
+=== Listing 5-4: MissionContext — Shared Data for All States ===
+
+// mission/mission_context.h
+#pragma once
+#include "waypoint/waypoint_manager.h"
+#include "ipc/pose_reader.h"
+#include "ipc/object_reader.h"
+#include <Eigen/Core>
+#include <mutex>
+#include <atomic>
+#include <queue>
+
+enum class MissionCommand : uint8_t {
+    NONE, ARM, TAKEOFF, LOITER, RESUME, RTL, LAND, EMERGENCY_STOP
+};
+
+class MissionContext {
+public:
+    // ── Pose (read from SHM) ──
+    bool get_pose(Eigen::Vector3d& pos, Eigen::Quaterniond& quat,
+                  Eigen::Vector3d& vel) const {
+        uint8_t q;
+        return pose_reader_.read(pos, quat, vel, q);
+    }
+
+    // ── Operator commands (thread-safe queue) ──
+    void push_command(MissionCommand cmd) {
+        std::lock_guard lock(cmd_mtx_);
+        cmd_queue_.push(cmd);
+    }
+
+    bool has_command(MissionCommand cmd) {
+        std::lock_guard lock(cmd_mtx_);
+        if (!cmd_queue_.empty() && cmd_queue_.front() == cmd) {
+            cmd_queue_.pop();
+            return true;
+        }
+        return false;
+    }
+
+    // ── Safety ──
+    bool battery_critical() const { return battery_pct_.load() < 15; }
+    bool geofence_breached() const { return geofence_breach_.load(); }
+    void set_battery_pct(uint8_t pct) { battery_pct_.store(pct); }
+    void set_geofence_breach(bool b) { geofence_breach_.store(b); }
+
+    // ── Sub-systems ──
+    WaypointManager& waypoint_manager() { return wp_mgr_; }
+    void set_planning_active(bool v) { planning_active_.store(v); }
+    bool planning_active() const { return planning_active_.load(); }
+
+private:
+    PoseReader pose_reader_;
+    WaypointManager wp_mgr_;
+
+    std::mutex cmd_mtx_;
+    std::queue<MissionCommand> cmd_queue_;
+
+    std::atomic<uint8_t> battery_pct_{100};
+    std::atomic<bool> geofence_breach_{false};
+    std::atomic<bool> planning_active_{false};
+};

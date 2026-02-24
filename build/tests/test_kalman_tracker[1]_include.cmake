@@ -1,0 +1,5 @@
+if(EXISTS "/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_kalman_tracker[1]_tests.cmake")
+  include("/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_kalman_tracker[1]_tests.cmake")
+else()
+  add_test(test_kalman_tracker_NOT_BUILT test_kalman_tracker_NOT_BUILT)
+endif()

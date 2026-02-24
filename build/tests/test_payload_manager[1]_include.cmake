@@ -1,0 +1,5 @@
+if(EXISTS "/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_payload_manager[1]_tests.cmake")
+  include("/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_payload_manager[1]_tests.cmake")
+else()
+  add_test(test_payload_manager_NOT_BUILT test_payload_manager_NOT_BUILT)
+endif()

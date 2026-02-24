@@ -1,0 +1,5 @@
+if(EXISTS "/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_mission_fsm[1]_tests.cmake")
+  include("/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_mission_fsm[1]_tests.cmake")
+else()
+  add_test(test_mission_fsm_NOT_BUILT test_mission_fsm_NOT_BUILT)
+endif()

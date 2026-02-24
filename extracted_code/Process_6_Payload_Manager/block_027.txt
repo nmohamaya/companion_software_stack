@@ -1,0 +1,4 @@
+=== CONCEPT: Figure 12-1: Gimbal Stabilisation Pipeline ===
+
+💡 C++ Concept: Complementary Filter for IMU Fusion
+When a dedicated gimbal IMU is available, we fuse its gyroscope (fast, drifty) with its accelerometer (slow, noisy but drift-free) using a complementary filter: angle = α × (angle + gyro × dt) + (1 - α) × accel_angle. The coefficient α ≈ 0.98 trusts the gyro for short-term dynamics and the accelerometer for long-term truth. This is computationally trivial (3 multiplies + 2 adds per axis) versus a full Kalman filter, making it ideal for a 200 Hz inner loop on an embedded ARM core.

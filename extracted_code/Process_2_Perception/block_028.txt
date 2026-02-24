@@ -1,0 +1,117 @@
+Context: Sensor fusion thread — LiDAR-camera-radar association
+Source: table_row0_col0
+---
+/// Sensor fusion thread entry point
+void fusion_thread(
+    // Inputs
+    SPSCRing<TrackedObjectList, 4>& track_input,        // from tracker
+    SPSCRing<std::vector<LiDARCluster>, 4>& lidar_input,  // from LiDAR thread
+    SPSCRing<RadarDetectionList, 4>& radar_input,       // from radar thread
+    // Output
+    // In production: publish to shared data bus
+    std::atomic<bool>& stop_flag,
+    const CalibrationData& calib)
+{
+    // Latest sensor data (updated asynchronously)
+    std::vector<LiDARCluster> latest_lidar;
+    RadarDetectionList latest_radar;
+
+    spdlog::info("Fusion thread started");
+
+    while (!stop_flag.load(std::memory_order_relaxed)) {
+        // Drain sensor queues (non-blocking — take latest available)
+        if (auto lc = lidar_input.try_pop()) latest_lidar = std::move(*lc);
+        if (auto rd = radar_input.try_pop()) latest_radar = std::move(*rd);
+
+        // Wait for tracked objects (this is the primary cadence — 30Hz)
+        auto tracks_opt = track_input.try_pop();
+        if (!tracks_opt) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+        }
+
+        auto& tracks = *tracks_opt;
+        FusedObjectList fused;
+        fused.timestamp_ns = tracks.timestamp_ns;
+        fused.frame_sequence = tracks.frame_sequence;
+
+        // STEP 1+2: Associate tracks with LiDAR clusters
+        std::vector<bool> lidar_matched(latest_lidar.size(), false);
+
+        for (auto& track : tracks.objects) {
+            FusedObject obj;
+            obj.track_id = track.track_id;
+            obj.class_id = track.class_id;
+            obj.confidence = track.confidence;
+            obj.has_camera = true;
+            obj.has_lidar = false;
+            obj.has_radar = false;
+            obj.timestamp_ns = track.timestamp_ns;
+
+            // Build a pseudo Detection2D from tracked position for bbox
+            Detection2D track_bbox;
+            track_bbox.x = track.position_2d.x() - 50;  // approximate bbox
+            track_bbox.y = track.position_2d.y() - 50;
+            track_bbox.w = 100;
+            track_bbox.h = 100;
+
+            // Find best matching LiDAR cluster
+            float best_dist = std::numeric_limits<float>::max();
+            int best_lidar = -1;
+
+            for (size_t i = 0; i < latest_lidar.size(); ++i) {
+                if (lidar_matched[i]) continue;
+
+                auto proj = project_lidar_to_camera(
+                    latest_lidar[i].centroid, calib);
+                if (proj.x() < 0) continue;  // not visible
+
+                float dist = (proj - track.position_2d).norm();
+                if (dist < best_dist && dist < 100.0f) {  // within 100px
+                    best_dist = dist;
+                    best_lidar = i;
+                }
+            }
+
+            if (best_lidar >= 0) {
+                obj.has_lidar = true;
+                obj.position_3d = latest_lidar[best_lidar].centroid;
+                lidar_matched[best_lidar] = true;
+                obj.confidence = std::min(1.0f, obj.confidence + 0.1f);
+            }
+
+            // STEP 3: Cross-check with radar
+            for (auto& rd : latest_radar.detections) {
+                if (!obj.has_lidar) break;  // need 3D position to compare
+
+                float range_diff = std::abs(
+                    obj.position_3d.norm() - rd.range);
+                float azimuth_diff = std::abs(
+                    std::atan2(obj.position_3d.y(), obj.position_3d.x())
+                    - rd.azimuth);
+
+                if (range_diff < 2.0f && azimuth_diff < 0.26f) {  // ±2m, ±15°
+                    obj.has_radar = true;
+                    obj.velocity_3d.x() = rd.velocity_radial *
+                        std::cos(rd.azimuth);
+                    obj.velocity_3d.y() = rd.velocity_radial *
+                        std::sin(rd.azimuth);
+                    obj.confidence = std::min(1.0f, obj.confidence + 0.15f);
+                    break;
+                }
+            }
+
+            fused.objects.push_back(obj);
+        }
+
+        // Publish to data bus
+        // data_bus.publish("/perception/objects", fused);
+        spdlog::debug("Fused: {} objects ({} with LiDAR, {} with radar)",
+            fused.objects.size(),
+            std::count_if(fused.objects.begin(), fused.objects.end(),
+                         [](const auto& o) { return o.has_lidar; }),
+            std::count_if(fused.objects.begin(), fused.objects.end(),
+                         [](const auto& o) { return o.has_radar; }));
+    }
+    spdlog::info("Fusion thread stopped");
+}

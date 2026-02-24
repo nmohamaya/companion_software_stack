@@ -1,0 +1,31 @@
+Context: 6.4 Thread Loop
+Source: code_paragraphs
+---
+void LoopClosureThread::run() {
+    while (!stop_flag_.load(std::memory_order_relaxed)) {
+        loop_closure_event_.wait();  // signaled by backend on new keyframe
+
+        auto [kf_id, descriptors, keypoints, map_points] =
+            map_manager_.get_latest_keyframe_data();
+
+        auto candidate = detector_.detect(kf_id, descriptors);
+        if (!candidate) continue;
+
+        // Geometric verification
+        auto [match_kf_data] = map_manager_.get_keyframe_data(candidate->match_kf);
+        auto verification = verify_loop(keypoints, map_points,
+                                         match_kf_data, camera_intrinsics_);
+        if (!verification) continue;
+
+        // Package and send to backend
+        LoopClosureFactor factor{
+            .from_kf = candidate->query_kf,
+            .to_kf   = candidate->match_kf,
+            .T_from_to = verification->relative_pose,
+            .information = verification->information_matrix
+        };
+        loop_factor_queue_.push(std::move(factor));
+        spdlog::info("Loop closure accepted: KF{} → KF{}",
+                     factor.from_kf, factor.to_kf);
+    }
+}

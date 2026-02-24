@@ -1,0 +1,108 @@
+Context: src/perception/inference_thread.cpp — TensorRT engine (RAII)
+File path: // file: src/perception/inference_thread.cpp
+Source: table_row0_col0
+---
+// file: src/perception/inference_thread.cpp
+#include "perception/types.h"
+#include "video/shm_ring.h"
+#include "video/spsc_ring.h"
+#include <NvInfer.h>
+#include <cuda_runtime.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <spdlog/spdlog.h>
+#include <memory>
+#include <fstream>
+
+namespace drone::perception {
+
+/// TensorRT logger (required by the API)
+class TRTLogger : public nvinfer1::ILogger {
+public:
+    void log(Severity severity, const char* msg) noexcept override {
+        if (severity <= Severity::kWARNING)
+            spdlog::warn("TensorRT: {}", msg);
+    }
+};
+
+/// RAII wrapper for TensorRT inference engine
+class TensorRTEngine {
+public:
+    explicit TensorRTEngine(const std::string& engine_path) {
+        // Load serialized engine from file
+        std::ifstream file(engine_path, std::ios::binary);
+        if (!file) throw std::runtime_error("Cannot open engine: " + engine_path);
+
+        file.seekg(0, std::ios::end);
+        size_t size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<char> engine_data(size);
+        file.read(engine_data.data(), size);
+
+        // Create runtime + engine + context
+        runtime_.reset(nvinfer1::createInferRuntime(logger_));
+        engine_.reset(runtime_->deserializeCudaEngine(
+            engine_data.data(), size));
+        context_.reset(engine_->createExecutionContext());
+
+        if (!context_)
+            throw std::runtime_error("Failed to create TensorRT context");
+
+        // Allocate GPU I/O buffers
+        cudaMalloc(&input_gpu_,  INPUT_SIZE);
+        cudaMalloc(&output_gpu_, OUTPUT_SIZE);
+        cudaStreamCreate(&stream_);
+
+        spdlog::info("TensorRT engine loaded: {}", engine_path);
+    }
+
+    ~TensorRTEngine() {
+        cudaFree(input_gpu_);
+        cudaFree(output_gpu_);
+        cudaStreamDestroy(stream_);
+    }
+
+    // Non-copyable, movable
+    TensorRTEngine(const TensorRTEngine&) = delete;
+    TensorRTEngine& operator=(const TensorRTEngine&) = delete;
+
+    /// Run inference on a preprocessed image (CHW, FP32, normalized)
+    /// Returns raw output tensor — caller must post-process
+    std::vector<float> infer(const float* input_data) {
+        // Copy input to GPU
+        cudaMemcpyAsync(input_gpu_, input_data, INPUT_SIZE,
+                        cudaMemcpyHostToDevice, stream_);
+
+        // Execute
+        void* bindings[] = {input_gpu_, output_gpu_};
+        context_->enqueueV2(bindings, stream_, nullptr);
+
+        // Copy output from GPU
+        std::vector<float> output(OUTPUT_ELEMENTS);
+        cudaMemcpyAsync(output.data(), output_gpu_, OUTPUT_SIZE,
+                        cudaMemcpyDeviceToHost, stream_);
+
+        cudaStreamSynchronize(stream_);
+        return output;
+    }
+
+private:
+    static constexpr int INPUT_C = 3, INPUT_H = 640, INPUT_W = 640;
+    static constexpr size_t INPUT_SIZE = INPUT_C * INPUT_H * INPUT_W * sizeof(float);
+    static constexpr int OUTPUT_ELEMENTS = 8400 * 85;  // YOLOv8 output
+    static constexpr size_t OUTPUT_SIZE = OUTPUT_ELEMENTS * sizeof(float);
+
+    TRTLogger logger_;
+    // unique_ptr with custom deleter for TensorRT objects
+    struct TRTDeleter {
+        template <typename T>
+        void operator()(T* p) { if (p) p->destroy(); }
+    };
+    std::unique_ptr<nvinfer1::IRuntime, TRTDeleter> runtime_;
+    std::unique_ptr<nvinfer1::ICudaEngine, TRTDeleter> engine_;
+    std::unique_ptr<nvinfer1::IExecutionContext, TRTDeleter> context_;
+
+    void* input_gpu_  = nullptr;
+    void* output_gpu_ = nullptr;
+    cudaStream_t stream_ = nullptr;
+};

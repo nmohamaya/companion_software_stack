@@ -1,0 +1,27 @@
+=== Listing 16-1: Fault-Isolated Plugin Update Loop ===
+
+// Thread loop with plugin isolation:
+void aux_sensor_thread(std::vector<PayloadPlugin*> plugins,
+                        std::atomic<bool>& running) {
+    set_thread_params("AuxSens", 2, SCHED_FIFO, 35);
+    const auto period = std::chrono::milliseconds(100);  // 10 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        for (auto* plugin : plugins) {
+            if (plugin->state() != PluginState::READY &&
+                plugin->state() != PluginState::ACTIVE)
+                continue;
+
+            try {
+                plugin->update();
+            } catch (const std::exception& e) {
+                spdlog::error("Plugin [{}] threw: {}", plugin->name(), e.what());
+                plugin->set_error();  // move to ERROR state
+            }
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}

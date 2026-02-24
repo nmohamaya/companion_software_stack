@@ -1,0 +1,74 @@
+=== Listing 7-1: UDP Transport for GCS Communication ===
+
+// transport/udp_transport.h
+#pragma once
+#include <boost/asio.hpp>
+#include "mavlink/mavlink_wrapper.h"
+#include <functional>
+#include <array>
+
+namespace asio = boost::asio;
+using udp = asio::ip::udp;
+
+class UDPTransport {
+public:
+    UDPTransport(asio::io_context& io, uint16_t listen_port,
+                  uint8_t chan_id = MAVLINK_COMM_1)
+        : socket_(io, udp::endpoint(udp::v4(), listen_port)),
+          channel_(chan_id) {
+        spdlog::info("UDP listening on port {}", listen_port);
+    }
+
+    using MessageCallback = std::function<void(const mavlink_message_t&,
+                                                const udp::endpoint& sender)>;
+
+    void on_message(MessageCallback cb) { callback_ = std::move(cb); }
+
+    void start() { do_receive(); }
+
+    void send_to(const mavlink_message_t& msg, const udp::endpoint& dest) {
+        auto bytes = channel_.serialise(msg);
+        socket_.async_send_to(asio::buffer(bytes), dest,
+            [](boost::system::error_code ec, std::size_t) {
+                if (ec) spdlog::warn("UDP send error: {}", ec.message());
+            });
+    }
+
+    // Broadcast to last-known GCS endpoint
+    void send_to_gcs(const mavlink_message_t& msg) {
+        if (gcs_endpoint_.port() != 0)
+            send_to(msg, gcs_endpoint_);
+    }
+
+    const udp::endpoint& gcs_endpoint() const { return gcs_endpoint_; }
+
+private:
+    udp::socket socket_;
+    MAVLinkChannel channel_;
+    udp::endpoint sender_endpoint_;
+    udp::endpoint gcs_endpoint_;     // learned from first GCS heartbeat
+    std::array<uint8_t, 1024> rx_buf_;
+    MessageCallback callback_;
+
+    void do_receive() {
+        socket_.async_receive_from(
+            asio::buffer(rx_buf_), sender_endpoint_,
+            [this](boost::system::error_code ec, std::size_t n) {
+                if (ec) {
+                    spdlog::warn("UDP receive error: {}", ec.message());
+                } else {
+                    for (std::size_t i = 0; i < n; ++i) {
+                        if (auto msg = channel_.parse_byte(rx_buf_[i])) {
+                            // Learn GCS endpoint from heartbeat
+                            if (msg->msgid == MAVLINK_MSG_ID_HEARTBEAT &&
+                                msg->sysid >= 200) {
+                                gcs_endpoint_ = sender_endpoint_;
+                            }
+                            if (callback_) callback_(*msg, sender_endpoint_);
+                        }
+                    }
+                }
+                do_receive();
+            });
+    }
+};

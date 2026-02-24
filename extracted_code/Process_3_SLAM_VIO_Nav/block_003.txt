@@ -1,0 +1,23 @@
+Context: The backend optimiser queue is empty (opportunistic keyframe insertion)
+Source: code_paragraphs
+---
+struct KeyframePolicy {
+    double min_parallax_px    = 15.0;
+    double min_tracked_ratio  = 0.6;
+    double max_time_sec       = 0.5;
+
+    bool should_create_keyframe(
+        double median_parallax,
+        int tracked_count,
+        int initial_count,
+        double dt_since_last_kf,
+        bool backend_idle) const
+    {
+        if (median_parallax > min_parallax_px) return true;
+        double ratio = static_cast<double>(tracked_count) / initial_count;
+        if (ratio < min_tracked_ratio) return true;
+        if (dt_since_last_kf > max_time_sec) return true;
+        if (backend_idle && median_parallax > min_parallax_px * 0.5) return true;
+        return false;
+    }
+};

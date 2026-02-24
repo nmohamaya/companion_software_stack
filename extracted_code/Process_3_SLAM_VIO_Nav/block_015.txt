@@ -1,0 +1,11 @@
+Context: The detect() method above returns std::optional<LoopCandidate>. This is cleaner than returning a bool + out-parameter, or using a sentinel value. The caller checks with has_value() or uses value_or(). std::optional avoids heap allocation (unlike std::unique_ptr) and communicates intent clearly: "this function might not produce a result."
+Source: code_paragraphs
+---
+auto candidate = loop_detector.detect(kf_id, descriptors);
+if (candidate) {
+    // Use candidate->query_kf, candidate->match_kf, candidate->score
+    spdlog::info("Loop closure: KF {} → KF {} (score {:.3f})",
+                 candidate->query_kf, candidate->match_kf, candidate->score);
+    backend.add_loop_closure(*candidate);
+}
+// No raw pointers, no sentinel values, no exceptions for control flow.

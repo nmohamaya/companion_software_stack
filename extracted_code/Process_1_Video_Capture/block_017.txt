@@ -1,0 +1,124 @@
+Context: src/video/main.cpp — Process entry point, thread orchestration
+File path: // file: src/video/main.cpp
+Source: table_row0_col0
+---
+// file: src/video/main.cpp
+#include "video/frame.h"
+#include "video/spsc_ring.h"
+#include "video/shm_ring.h"
+#include <thread>
+#include <atomic>
+#include <signal.h>
+#include <spdlog/spdlog.h>
+#include <systemd/sd-daemon.h>  // for sd_notify
+
+namespace drone::video {
+
+// Forward declarations (defined in individual thread source files)
+void mission_cam_thread(SPSCRing<V4L2Camera::CapturedFrame, 4>&,
+                        std::atomic<bool>&, const char*);
+void stereo_cam_thread(SPSCRing<StereoFrame, 4>&,
+                       std::atomic<bool>&, const char*, const char*);
+void isp_thread(SPSCRing<V4L2Camera::CapturedFrame, 4>&,
+                SPSCRing<StereoFrame, 4>&,
+                ShmRingProducer&, ShmRingProducer&,
+                SPSCRing<EncoderFrame, 4>&, SPSCRing<EncoderFrame, 4>&,
+                std::atomic<bool>&, const ISPConfig&);
+void encoder_thread(SPSCRing<EncoderFrame, 4>&,
+                    std::atomic<bool>&, std::atomic<uint32_t>&,
+                    const char*, uint16_t);
+void recorder_thread(SPSCRing<EncoderFrame, 4>&,
+                     std::atomic<bool>&, const std::string&);
+
+} // namespace drone::video
+
+static std::atomic<bool> g_stop{false};
+
+void signal_handler(int) {
+    g_stop.store(true, std::memory_order_relaxed);
+}
+
+int main(int argc, char* argv[]) {
+    spdlog::set_level(spdlog::level::info);
+    spdlog::info("video-capture process starting (PID {})", getpid());
+
+    // Register signal handlers for graceful shutdown
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT,  signal_handler);
+
+    using namespace drone::video;
+
+    // ── 1. Create shared data structures ──
+
+    // Intra-process queues (thread ↔ thread)
+    SPSCRing<V4L2Camera::CapturedFrame, 4> mission_cam_queue;
+    SPSCRing<StereoFrame, 4>               stereo_cam_queue;
+    SPSCRing<EncoderFrame, 4>              encoder_queue;
+    SPSCRing<EncoderFrame, 4>              recorder_queue;
+
+    // Inter-process shared memory (this process → Perception / SLAM)
+    ShmRingProducer shm_perception("/drone_mission_cam", 4, 1920, 1080, 3);
+    ShmRingProducer shm_slam("/drone_stereo_cam", 4, 640, 480, 1);
+
+    // Adaptive bitrate target (set by comms process via data bus)
+    std::atomic<uint32_t> target_bitrate_kbps{8000};
+
+    // Load ISP calibration config
+    ISPConfig isp_cfg;
+    // isp_cfg = load_config("/opt/drone/config/isp.yaml");
+
+    // ── 2. Launch threads (order matters — start consumers before producers) ──
+
+    std::thread t_encoder(encoder_thread,
+        std::ref(encoder_queue), std::ref(g_stop),
+        std::ref(target_bitrate_kbps), "192.168.1.100", 5600);
+
+    std::thread t_recorder(recorder_thread,
+        std::ref(recorder_queue), std::ref(g_stop), "/data/recordings");
+
+    std::thread t_isp(isp_thread,
+        std::ref(mission_cam_queue), std::ref(stereo_cam_queue),
+        std::ref(shm_perception), std::ref(shm_slam),
+        std::ref(encoder_queue), std::ref(recorder_queue),
+        std::ref(g_stop), std::cref(isp_cfg));
+
+    std::thread t_mission_cam(mission_cam_thread,
+        std::ref(mission_cam_queue), std::ref(g_stop), "/dev/video0");
+
+    std::thread t_stereo_cam(stereo_cam_thread,
+        std::ref(stereo_cam_queue), std::ref(g_stop),
+        "/dev/video2", "/dev/video3");
+
+    // ── 3. Notify systemd we're ready ──
+    sd_notify(0, "READY=1");
+    spdlog::info("All threads started — notified systemd READY");
+
+    // ── 4. Main thread: watchdog loop ──
+    while (!g_stop.load(std::memory_order_relaxed)) {
+        // Send watchdog keepalive to systemd
+        sd_notify(0, "WATCHDOG=1");
+
+        // Monitor thread health (check if queues are flowing)
+        // ... log stats every 10 seconds ...
+
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
+    // ── 5. Graceful shutdown ──
+    spdlog::info("Shutting down...");
+    sd_notify(0, "STOPPING=1");
+
+    // Threads check g_stop and exit their loops
+    t_mission_cam.join();
+    t_stereo_cam.join();
+    t_isp.join();
+    t_encoder.join();
+    t_recorder.join();
+
+    // Clean up shared memory
+    shm_unlink("/drone_mission_cam");
+    shm_unlink("/drone_stereo_cam");
+
+    spdlog::info("video-capture process stopped cleanly");
+    return 0;
+}

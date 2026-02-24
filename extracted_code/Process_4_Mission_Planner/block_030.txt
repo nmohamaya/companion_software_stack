@@ -1,0 +1,4 @@
+=== 8.3 Mission File Loading (JSON) ===
+
+💡 C++ Concept: nlohmann::json — Structured Deserialization
+nlohmann/json is the de facto standard JSON library for C++. Its from_json/to_json free functions enable automatic serialisation of custom types. By defining these functions, you can read a mission JSON file into strongly-typed C++ structs with one line: auto mission = j.get<MissionFile>(). This is much safer than manual parsing and automatically validates types and required fields.

@@ -1,0 +1,4 @@
+=== 8.1 Waypoint Types ===
+
+💡 C++ Concept: std::variant for Type-Safe Unions
+std::variant<T1, T2, ...> (C++17) is a type-safe union: it holds exactly one of the listed types at any time. Unlike a raw union, it prevents accessing the wrong type (throws std::bad_variant_access) and supports exhaustive visitation via std::visit. We use it for waypoint data — a waypoint might be a simple position, a loiter circle, or a survey pattern. std::variant is stack-allocated (no heap), making it cache-friendly for the small waypoint list.

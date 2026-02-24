@@ -1,0 +1,81 @@
+=== Listing 11-1: GPIO Output with RAII (auto-unexport on destruction) ===
+
+// hardware/gpio_output.h
+#pragma once
+#include <string>
+#include <fstream>
+#include <spdlog/spdlog.h>
+
+class GPIOOutput {
+public:
+    GPIOOutput() = default;
+
+    bool init(int pin) {
+        pin_ = pin;
+        // Export the GPIO pin
+        write_file("/sys/class/gpio/export", std::to_string(pin));
+        std::string base = "/sys/class/gpio/gpio" + std::to_string(pin);
+
+        // Set direction
+        if (!write_file(base + "/direction", "out")) return false;
+
+        // Open value file for fast writes
+        value_path_ = base + "/value";
+        value_fd_.open(value_path_);
+        if (!value_fd_.is_open()) {
+            spdlog::error("Cannot open GPIO {} value file", pin);
+            return false;
+        }
+
+        initialised_ = true;
+        spdlog::info("GPIO {} initialised as output", pin);
+        return true;
+    }
+
+    void set(bool high) {
+        if (!initialised_) return;
+        value_fd_.seekp(0);
+        value_fd_ << (high ? "1" : "0") << std::flush;
+    }
+
+    void pulse_us(int duration_us) {
+        set(true);
+        // Busy-wait for precise short pulses (< 1 ms)
+        auto start = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - start <
+               std::chrono::microseconds(duration_us)) {}
+        set(false);
+    }
+
+    ~GPIOOutput() {
+        if (initialised_) {
+            set(false);  // ensure pin is low
+            value_fd_.close();
+            write_file("/sys/class/gpio/unexport", std::to_string(pin_));
+            spdlog::debug("GPIO {} unexported", pin_);
+        }
+    }
+
+    // Non-copyable, movable
+    GPIOOutput(const GPIOOutput&) = delete;
+    GPIOOutput& operator=(const GPIOOutput&) = delete;
+    GPIOOutput(GPIOOutput&& other) noexcept
+        : pin_(other.pin_), initialised_(other.initialised_),
+          value_path_(std::move(other.value_path_)),
+          value_fd_(std::move(other.value_fd_)) {
+        other.initialised_ = false;  // prevent double-unexport
+    }
+
+private:
+    int pin_ = -1;
+    bool initialised_ = false;
+    std::string value_path_;
+    std::ofstream value_fd_;
+
+    static bool write_file(const std::string& path, const std::string& val) {
+        std::ofstream f(path);
+        if (!f) return false;
+        f << val;
+        return true;
+    }
+};

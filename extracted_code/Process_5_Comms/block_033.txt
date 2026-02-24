@@ -1,0 +1,40 @@
+=== Listing 14-2: Flight Controller State (published to SHM) ===
+
+// data/fc_state.h
+#pragma once
+#include <cstdint>
+#include <atomic>
+
+struct FCState {
+    // From HEARTBEAT
+    uint8_t  base_mode;
+    uint32_t custom_mode;
+    uint8_t  system_status;
+
+    // From SYS_STATUS
+    float    battery_voltage;     // V
+    float    battery_current;     // A
+    int8_t   battery_remaining;   // %
+
+    // From GPS_RAW_INT
+    uint8_t  gps_fix_type;
+    int32_t  lat;                 // degE7
+    int32_t  lon;                 // degE7
+    int32_t  alt;                 // mm MSL
+    uint16_t satellites_visible;
+
+    // From ATTITUDE (from FC's own IMU)
+    float    roll;                // rad
+    float    pitch;               // rad
+    float    yaw;                 // rad
+
+    // Link quality
+    uint8_t  rssi;                // 0-254
+    bool     armed;
+};
+
+struct ShmFCState {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    FCState  state;
+};

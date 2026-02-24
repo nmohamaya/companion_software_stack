@@ -1,0 +1,47 @@
+Context: 3.5 Visual Frontend Thread Loop
+Source: code_paragraphs
+---
+void VisualFrontend::run() {
+    while (!stop_flag_.load(std::memory_order_relaxed)) {
+        // 1. Wait for new frame from shared memory
+        FrameHandle frame = shm_reader_.wait_and_acquire();  // blocks on semaphore
+        if (!frame.valid()) continue;
+
+        cv::Mat grey(frame.height(), frame.width(), CV_8UC1,
+                     frame.data());  // zero-copy wrap
+
+        // 2. Detect & match features
+        auto result = detector_->detect(grey);
+        auto matches = matcher_.match(prev_result_, result);
+
+        // 3. Geometric verification (Essential matrix via RANSAC)
+        auto [inlier_matches, E] = geometric_verify(matches, camera_intrinsics_);
+
+        // 4. Compute relative pose R|t from Essential matrix
+        Sophus::SE3d T_cur_prev = decompose_essential(E, inlier_matches, camera_intrinsics_);
+
+        // 5. Accumulate relative motion since last keyframe
+        T_cur_kf_ = T_cur_prev * T_cur_kf_;
+
+        double parallax = compute_median_parallax(inlier_matches);
+        double dt = frame.timestamp() - last_kf_time_;
+
+        // 6. Keyframe decision
+        if (kf_policy_.should_create_keyframe(
+                parallax, inlier_matches.size(),
+                prev_result_.keypoints.size(), dt,
+                backend_queue_.was_empty())) {
+            KeyframeData kf{frame.timestamp(), grey.clone(), result,
+                            inlier_matches, T_cur_kf_};
+            backend_queue_.push(std::move(kf));     // SPSC → Thread 3
+            T_cur_kf_ = Sophus::SE3d{};             // reset
+            last_kf_time_ = frame.timestamp();
+        }
+
+        // 7. Always publish fast odometry pose
+        pose_queue_.push(PoseStamped{frame.timestamp(), T_world_cur_});
+
+        prev_result_ = std::move(result);
+        shm_reader_.release(frame);
+    }
+}

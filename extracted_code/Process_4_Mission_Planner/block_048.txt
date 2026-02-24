@@ -1,0 +1,43 @@
+=== Listing 14-1: Per-Thread Watchdog Timer ===
+
+// util/watchdog.h
+#pragma once
+#include <atomic>
+#include <chrono>
+#include <string>
+#include <spdlog/spdlog.h>
+
+class ThreadWatchdog {
+public:
+    explicit ThreadWatchdog(std::string name, std::chrono::milliseconds timeout)
+        : name_(std::move(name)), timeout_(timeout) {
+        kick();  // initialise
+    }
+
+    // Called by the monitored thread each iteration
+    void kick() {
+        last_kick_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                         std::memory_order_release);
+    }
+
+    // Called by a supervisor thread to check health
+    bool is_alive() const {
+        auto last = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(
+                last_kick_.load(std::memory_order_acquire)));
+        auto elapsed = std::chrono::steady_clock::now() - last;
+        if (elapsed > timeout_) {
+            spdlog::error("Watchdog timeout: {} (elapsed={:.0f}ms, limit={:.0f}ms)",
+                          name_,
+                          std::chrono::duration<double, std::milli>(elapsed).count(),
+                          std::chrono::duration<double, std::milli>(timeout_).count());
+            return false;
+        }
+        return true;
+    }
+
+private:
+    std::string name_;
+    std::chrono::milliseconds timeout_;
+    std::atomic<int64_t> last_kick_{0};
+};

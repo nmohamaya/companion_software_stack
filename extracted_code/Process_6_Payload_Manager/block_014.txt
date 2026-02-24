@@ -1,0 +1,132 @@
+=== Listing 7-2: CameraPlugin with Geo-Tag Capture ===
+
+// camera/camera_plugin.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "camera/trigger_modes.h"
+#include "camera/geo_tag.h"
+#include "hardware/gpio_output.h"
+#include "ipc/pose_reader.h"
+#include <atomic>
+#include <mutex>
+#include <queue>
+
+struct CaptureEvent {
+    uint64_t image_id;
+    uint64_t timestamp_ns;
+    Eigen::Vector3d position;
+    Eigen::Quaterniond orientation;
+    std::string filename;
+};
+
+class CameraPlugin : public PayloadPlugin {
+public:
+    std::string name() const override { return "survey_camera"; }
+    std::string type() const override { return "camera"; }
+
+    void update() override {
+        // Read current pose
+        Eigen::Vector3d pos;
+        Eigen::Quaterniond quat;
+        Eigen::Vector3d vel;
+        uint8_t quality;
+        if (!pose_reader_.read(pos, quat, vel, quality)) return;
+
+        // Check trigger condition using visitor
+        bool should_fire = std::visit(overloaded{
+            [](SingleShot& m) { return m.should_trigger(); },
+            [](IntervalTime& m) { return m.should_trigger(); },
+            [&pos](IntervalDistance& m) { return m.should_trigger(pos); },
+            [](Continuous& m) { return m.should_trigger(); },
+        }, trigger_mode_);
+
+        if (should_fire && active_) {
+            // Snapshot pose at exact trigger moment
+            uint64_t ts = current_time_ns();
+            uint64_t id = ++image_counter_;
+
+            // Trigger camera via GPIO (falling edge pulse)
+            gpio_trigger_.pulse_us(50);  // 50 μs pulse
+
+            // Queue geo-tag event
+            CaptureEvent evt{id, ts, pos, quat,
+                              format_filename(id)};
+            {
+                std::lock_guard lock(queue_mtx_);
+                capture_queue_.push(std::move(evt));
+            }
+
+            spdlog::debug("Camera trigger #{}: pos=({:.1f},{:.1f},{:.1f})",
+                           id, pos.x(), pos.y(), pos.z());
+        }
+    }
+
+    bool handle_command(const PayloadCmd& cmd) override {
+        switch (cmd.type) {
+            case PayloadCmdType::CAMERA_TRIGGER:
+                if (auto* ss = std::get_if<SingleShot>(&trigger_mode_))
+                    ss->pending = true;
+                else {
+                    trigger_mode_ = SingleShot{true};
+                }
+                return true;
+
+            case PayloadCmdType::CAMERA_START_INTERVAL:
+                if (cmd.param2 > 0) {
+                    trigger_mode_ = IntervalDistance{
+                        static_cast<double>(cmd.param2)};
+                } else {
+                    trigger_mode_ = IntervalTime{
+                        static_cast<double>(cmd.param1)};
+                }
+                active_ = true;
+                return true;
+
+            case PayloadCmdType::CAMERA_STOP_INTERVAL:
+                active_ = false;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    // Consume geo-tag events (called by geo-tag writer thread)
+    std::vector<CaptureEvent> drain_captures() {
+        std::lock_guard lock(queue_mtx_);
+        std::vector<CaptureEvent> events;
+        while (!capture_queue_.empty()) {
+            events.push_back(std::move(capture_queue_.front()));
+            capture_queue_.pop();
+        }
+        return events;
+    }
+
+    nlohmann::json status() const override {
+        return {
+            {"type", "camera"},
+            {"images_captured", image_counter_.load()},
+            {"active", active_.load()},
+            {"state", static_cast<int>(state_)}
+        };
+    }
+
+protected:
+    bool do_init(const nlohmann::json& config) override;
+    void do_shutdown() override;
+
+private:
+    PoseReader pose_reader_;
+    GPIOOutput gpio_trigger_;
+    TriggerMode trigger_mode_{SingleShot{}};
+    std::atomic<bool> active_{false};
+    std::atomic<uint64_t> image_counter_{0};
+
+    std::mutex queue_mtx_;
+    std::queue<CaptureEvent> capture_queue_;
+
+    std::string format_filename(uint64_t id) const;
+    uint64_t current_time_ns() const;
+};
+
+REGISTER_PLUGIN("camera", CameraPlugin);

@@ -1,0 +1,7 @@
+=== 21. Implementation Roadmap ===
+
+• FlightRecorder (mmap ring buffer)
+• FlightRecord binary format
+• Recorder thread (10 Hz)
+• Post-flight analysis tool (Python)
+• File recovery from partial writes

@@ -1,0 +1,38 @@
+Context: 16. systemd Service Configuration
+File path: # /etc/systemd/system/slam-vio-nav.service
+Source: code_paragraphs
+---
+# /etc/systemd/system/slam-vio-nav.service
+[Unit]
+Description=Process 3 – SLAM / VIO Navigation
+After=video-capture.service
+Requires=video-capture.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=notify
+ExecStart=/opt/drone/bin/slam_vio_nav \
+    --config /opt/drone/config/slam_config.yaml
+WatchdogSec=5
+Restart=on-failure
+RestartSec=2
+
+# Resource limits (cgroups v2)
+MemoryMax=512M
+MemoryHigh=400M
+CPUAffinity=2 3 4 5
+IOWeight=50
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+ReadWritePaths=/dev/shm /opt/drone/maps
+
+# Real-time scheduling
+LimitRTPRIO=70
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=drone.target

@@ -1,0 +1,4 @@
+=== CONCEPT: The Telemetry Aggregator thread consolidates all monitoring data into a single SystemHealth structure and publishes it to /system_health SHM. Process 5 (Comms) reads this and relays the health summary to the GCS over MAVLink. ===
+
+💡 C++ Concept: Aggregate Root Pattern (Domain-Driven Design)
+The HealthStore is an 'aggregate root' — a single object that provides transactional access to a cluster of related entities (CPU data, thermal data, watchdog data, etc.). External consumers only read through the aggregate root (get_snapshot()), never directly from individual collectors. This enforces consistency: you never see CPU data from t=0 paired with thermal data from t=1. The aggregate root locks once, copies all data, and returns an immutable snapshot. This pattern comes from Domain-Driven Design but applies perfectly to real-time monitoring systems.

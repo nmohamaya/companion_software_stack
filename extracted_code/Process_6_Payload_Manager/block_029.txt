@@ -1,0 +1,4 @@
+=== Listing 13-1: Geo-Tag CSV Writer ===
+
+💡 C++ Concept: Structured Bindings (C++17)
+The line: for (const auto& [tag, fname] : batch) uses C++17 structured bindings to decompose the std::pair into named variables. Without structured bindings, you'd write entry.first and entry.second — far less readable. Structured bindings work with pairs, tuples, arrays, and any struct with public members. They make code that iterates over containers of compound types much cleaner and self-documenting.

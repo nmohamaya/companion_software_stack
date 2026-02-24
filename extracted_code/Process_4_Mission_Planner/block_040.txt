@@ -1,0 +1,78 @@
+=== Listing 11-1: Geofence Checker with Keep-In / Keep-Out Zones ===
+
+// geofence/geofence.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+#include <string>
+
+enum class GeofenceType { KEEP_IN, KEEP_OUT };
+enum class GeofenceAction { RTL, LOITER, LAND, WARN };
+
+struct GeofenceZone {
+    std::string name;
+    GeofenceType type;
+    GeofenceAction action;
+    std::vector<Eigen::Vector2d> polygon;  // 2D vertices (NE plane)
+    double alt_min = 0.0;    // metres AGL
+    double alt_max = 120.0;  // metres AGL (regulatory limit)
+};
+
+class GeofenceChecker {
+public:
+    void load_zones(const std::vector<GeofenceZone>& zones) {
+        zones_ = zones;
+    }
+
+    struct BreachInfo {
+        bool breached = false;
+        std::string zone_name;
+        GeofenceAction action;
+        double distance_to_boundary;  // metres (negative = inside breach)
+    };
+
+    BreachInfo check(const Eigen::Vector3d& pos_ned) const {
+        Eigen::Vector2d pos_2d(pos_ned.x(), pos_ned.y());
+        double alt = -pos_ned.z();  // NED to AGL
+
+        for (const auto& zone : zones_) {
+            bool inside = point_in_polygon(pos_2d, zone.polygon);
+            bool alt_ok = (alt >= zone.alt_min && alt <= zone.alt_max);
+
+            if (zone.type == GeofenceType::KEEP_IN) {
+                if (!inside || !alt_ok)
+                    return {true, zone.name, zone.action,
+                            distance_to_polygon(pos_2d, zone.polygon)};
+            } else {  // KEEP_OUT
+                if (inside && alt_ok)
+                    return {true, zone.name, zone.action,
+                            -distance_to_polygon(pos_2d, zone.polygon)};
+            }
+        }
+        return {};  // no breach
+    }
+
+    // Warning when approaching boundary
+    BreachInfo check_with_margin(const Eigen::Vector3d& pos_ned,
+                                  double margin_m = 10.0) const;
+
+private:
+    std::vector<GeofenceZone> zones_;
+
+    bool point_in_polygon(const Eigen::Vector2d& p,
+                           const std::vector<Eigen::Vector2d>& poly) const {
+        // Ray-casting algorithm
+        bool inside = false;
+        for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+            if (((poly[i].y() > p.y()) != (poly[j].y() > p.y())) &&
+                (p.x() < (poly[j].x() - poly[i].x()) *
+                          (p.y() - poly[i].y()) /
+                          (poly[j].y() - poly[i].y()) + poly[i].x()))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    double distance_to_polygon(const Eigen::Vector2d& p,
+                                const std::vector<Eigen::Vector2d>& poly) const;
+};

@@ -1,0 +1,4 @@
+=== Listing 5-3: FSM Runner with State Transitions ===
+
+💡 C++ Concept: std::unique_ptr for Exclusive Ownership
+The FSM holds the current state via std::unique_ptr<MissionState>. This enforces single ownership — exactly one state object exists at a time. When transitioning, std::move transfers ownership of the new state, and the old state is automatically destroyed. This eliminates memory leaks and dangling pointers without manual new/delete. The transition() method returns unique_ptr to signal intent: returning nullptr means 'stay in current state', returning a new unique_ptr means 'switch to this state'. This is a natural and self-documenting API.

@@ -1,0 +1,72 @@
+=== Listing 4-1: Generic SHM Freshness Checker ===
+
+// ipc/shm_health_reader.h
+#pragma once
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string>
+#include <chrono>
+
+struct ShmFreshness {
+    bool        is_open     = false;
+    bool        is_fresh    = false;
+    uint64_t    last_seq    = 0;
+    uint64_t    last_ts_ns  = 0;
+    double      age_ms      = 0.0;
+    std::string name;
+};
+
+// Generic SHM freshness checker — works for any SHM that has
+// std::atomic<uint64_t> seq as its first member followed by uint64_t timestamp
+class ShmFreshnessChecker {
+public:
+    bool open(const std::string& shm_name) {
+        name_ = shm_name;
+        fd_ = shm_open(shm_name.c_str(), O_RDONLY, 0);
+        if (fd_ < 0) return false;
+        // Map just the header: seq (8 bytes) + timestamp (8 bytes)
+        ptr_ = mmap(nullptr, 16, PROT_READ, MAP_SHARED, fd_, 0);
+        return ptr_ != MAP_FAILED;
+    }
+
+    ShmFreshness check() const {
+        ShmFreshness result;
+        result.name = name_;
+        result.is_open = (ptr_ != nullptr && ptr_ != MAP_FAILED);
+        if (!result.is_open) return result;
+
+        auto* seq_ptr = static_cast<const std::atomic<uint64_t>*>(ptr_);
+        uint64_t seq = seq_ptr->load(std::memory_order_acquire);
+
+        // Timestamp is at offset 8
+        uint64_t ts;
+        std::memcpy(&ts, static_cast<const char*>(ptr_) + 8, sizeof(ts));
+
+        result.last_seq = seq;
+        result.last_ts_ns = ts;
+
+        auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        result.age_ms = static_cast<double>(now_ns - ts) / 1e6;
+        result.is_fresh = result.age_ms < timeout_ms_;
+
+        return result;
+    }
+
+    void set_timeout_ms(double ms) { timeout_ms_ = ms; }
+
+    ~ShmFreshnessChecker() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, 16);
+        if (fd_ >= 0) close(fd_);
+    }
+
+private:
+    int fd_ = -1;
+    void* ptr_ = nullptr;
+    std::string name_;
+    double timeout_ms_ = 1000.0;  // default 1 second
+};

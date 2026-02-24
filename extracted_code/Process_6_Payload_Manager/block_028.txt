@@ -1,0 +1,63 @@
+=== Listing 13-1: Geo-Tag CSV Writer ===
+
+// camera/geo_tag.h
+#pragma once
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <string>
+#include <fstream>
+#include <vector>
+#include <iomanip>
+
+struct GeoTag {
+    uint64_t image_id;
+    uint64_t timestamp_ns;
+    double latitude;      // WGS84 degrees
+    double longitude;     // WGS84 degrees
+    double altitude_msl;  // metres above mean sea level
+    double roll;          // camera roll (radians)
+    double pitch;         // camera pitch (radians)
+    double yaw;           // camera yaw (radians)
+    double accuracy_h;    // horizontal accuracy (metres)
+    double accuracy_v;    // vertical accuracy (metres)
+};
+
+class GeoTagWriter {
+public:
+    bool open(const std::string& path) {
+        ofs_.open(path);
+        if (!ofs_) return false;
+        // CSV header
+        ofs_ << "image_id,timestamp_ns,latitude,longitude,altitude_msl,"
+             << "roll_deg,pitch_deg,yaw_deg,accuracy_h,accuracy_v,filename\n";
+        return true;
+    }
+
+    void write(const GeoTag& tag, const std::string& filename) {
+        ofs_ << tag.image_id << ","
+             << tag.timestamp_ns << ","
+             << std::fixed << std::setprecision(8)
+             << tag.latitude << ","
+             << tag.longitude << ","
+             << std::setprecision(3)
+             << tag.altitude_msl << ","
+             << rad_to_deg(tag.roll) << ","
+             << rad_to_deg(tag.pitch) << ","
+             << rad_to_deg(tag.yaw) << ","
+             << tag.accuracy_h << ","
+             << tag.accuracy_v << ","
+             << filename << "\n";
+        ofs_.flush();
+    }
+
+    void write_batch(const std::vector<std::pair<GeoTag, std::string>>& batch) {
+        for (const auto& [tag, fname] : batch)
+            write(tag, fname);
+    }
+
+    ~GeoTagWriter() { if (ofs_.is_open()) ofs_.close(); }
+
+private:
+    std::ofstream ofs_;
+    static double rad_to_deg(double rad) { return rad * 180.0 / M_PI; }
+};

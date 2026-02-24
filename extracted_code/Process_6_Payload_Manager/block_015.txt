@@ -1,0 +1,4 @@
+=== Listing 7-2: CameraPlugin with Geo-Tag Capture ===
+
+💡 C++ Concept: std::get_if for Safe Variant Access
+std::get_if<T>(&variant) returns a T* if the variant currently holds type T, or nullptr otherwise. Unlike std::get<T>(variant) which throws std::bad_variant_access on type mismatch, get_if never throws. This is ideal for command handlers: 'if the current mode is SingleShot, mark it pending, otherwise switch to SingleShot'. It's a non-throwing, pointer-based check that naturally integrates with if-else flow.

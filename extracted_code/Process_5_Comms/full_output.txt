@@ -1,0 +1,2206 @@
+[PARA|Normal] Process 5: Comms
+[PARA|Normal] MAVLink Communication, GCS Telemetry & Data Relay
+[PARA|Normal] NVIDIA Jetson Orin Nano — Drone Companion Computer
+[PARA|Normal] Generated: 2026-02-23
+[PARA|Heading 1] Table of Contents
+[PARA|List Number] 1. Executive Summary
+[PARA|List Number] 2. Process Architecture Overview
+[PARA|List Number] 3. Thread Architecture & Responsibilities
+[PARA|List Number] 4. Inter-Process Communication (IPC) — Inputs
+[PARA|List Number] 5. MAVLink Protocol Layer
+[PARA|List Number] 6. Serial Transport Thread (FC Link)
+[PARA|List Number] 7. Telemetry Uplink Thread (GCS → Drone)
+[PARA|List Number] 8. Telemetry Downlink Thread (Drone → GCS)
+[PARA|List Number] 9. Trajectory Relay Thread
+[PARA|List Number] 10. Heartbeat & Link Health Monitor Thread
+[PARA|List Number] 11. Inter-Thread Communication
+[PARA|List Number] 12. Radio Transport Abstraction
+[PARA|List Number] 13. Message Routing & Filtering
+[PARA|List Number] 14. Data Structures & Types
+[PARA|List Number] 15. Configuration Management
+[PARA|List Number] 16. Error Handling & Recovery
+[PARA|List Number] 17. IPC — Output: Commands to Other Processes
+[PARA|List Number] 18. systemd Service Configuration
+[PARA|List Number] 19. CMakeLists.txt
+[PARA|List Number] 20. Implementation Roadmap
+[PARA|Heading 1] 1. Executive Summary
+[PARA|Normal] Process 5 (Comms) is the communication hub of the drone companion computer. It bridges the companion computer's internal shared-memory IPC with the external world: the flight controller (FC) via UART/MAVLink, the ground control station (GCS) via radio telemetry, and optionally a mesh network for multi-drone coordination.
+[PARA|Normal] The process encodes and decodes MAVLink v2 messages, relays trajectory commands from Process 4 (Mission Planner) to the FC as SET_POSITION_TARGET_LOCAL_NED, streams mission status and video telemetry to the GCS, and forwards operator commands (arm, takeoff, RTL, etc.) from the GCS to Process 4. It maintains heartbeat monitoring for both the FC and GCS links, and implements automatic failsafe behaviour on link loss.
+[PARA|Normal] Design priorities: zero message loss for safety-critical commands (acknowledged with retries), bounded latency for trajectory relay (< 5 ms serial write), bandwidth-aware telemetry throttling for limited radio links, and clean separation between transport (serial/UDP/TCP) and protocol (MAVLink) layers.
+[TABLE_CELL_0] Attribute
+[TABLE_CELL_1] Value
+[END_TABLE_ROW]
+[TABLE_CELL_0] Process name
+[TABLE_CELL_1] comms
+[END_TABLE_ROW]
+[TABLE_CELL_0] Language / Standard
+[TABLE_CELL_1] C++17
+[END_TABLE_ROW]
+[TABLE_CELL_0] Target hardware
+[TABLE_CELL_1] NVIDIA Jetson Orin Nano (8 GB)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Thread count
+[TABLE_CELL_1] 5 (Serial Transport, Telemetry Uplink, Telemetry Downlink, Trajectory Relay, Heartbeat Monitor)
+[END_TABLE_ROW]
+[TABLE_CELL_0] IPC inputs
+[TABLE_CELL_1] /trajectory_cmd (Process 4), /mission_status (Process 4), /video_frame (Process 1, optional)
+[END_TABLE_ROW]
+[TABLE_CELL_0] IPC outputs
+[TABLE_CELL_1] /gcs_commands (to Process 4), /fc_state (to all)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Protocol
+[TABLE_CELL_1] MAVLink v2 (dialect: common + ardupilotmega)
+[END_TABLE_ROW]
+[TABLE_CELL_0] FC link
+[TABLE_CELL_1] UART /dev/ttyTHS1 @ 921600 baud (or USB)
+[END_TABLE_ROW]
+[TABLE_CELL_0] GCS link
+[TABLE_CELL_1] UDP 14550 (WiFi/LTE) or serial radio (SiK 433/915 MHz)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Key dependencies
+[TABLE_CELL_1] MAVLink C headers, Boost.Asio, spdlog, nlohmann/json
+[END_TABLE_ROW]
+[PARA|Heading 1] 2. Process Architecture Overview
+[PARA|Normal] The Comms process sits at the boundary between deterministic internal IPC and non-deterministic external I/O (serial ports, radio, network). It isolates external latency from safety-critical planning loops by running I/O on dedicated threads and using lock-free queues for message hand-off.
+[PARA|Normal] Figure 2-1: Comms Process Architecture
+[TABLE_CELL_0] 
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        PROCESS 5: COMMS                                │
+│                                                                         │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                    Message Router                                  │ │
+│  │         routes MAVLink messages between threads                    │ │
+│  └───┬──────────┬──────────────┬────────────────┬─────────────────────┘ │
+│      │          │              │                │                       │
+│      ▼          ▼              ▼                ▼                       │
+│  ┌────────┐ ┌──────────┐ ┌──────────┐  ┌──────────────────┐           │
+│  │Serial  │ │Telemetry │ │Telemetry │  │ Trajectory       │           │
+│  │Trans-  │ │Uplink    │ │Downlink  │  │ Relay            │           │
+│  │port    │ │(GCS→     │ │(Drone→   │  │ (SHM→FC)         │           │
+│  │(FC)    │ │ Drone)   │ │ GCS)     │  │                  │           │
+│  └───┬────┘ └────┬─────┘ └────┬─────┘  └───────┬──────────┘           │
+│      │           │            │                 │                       │
+│      │ UART      │ UDP/       │ UDP/            │ UART                  │
+│      │ MAVLink   │ Serial     │ Serial          │ MAVLink               │
+│      ▼           ▼            ▼                 ▼                       │
+│  ┌────────┐ ┌──────────┐ ┌──────────┐  ┌──────────────────┐           │
+│  │Flight  │ │ GCS      │ │ GCS      │  │ Flight           │           │
+│  │Contrlr │ │ Radio RX │ │ Radio TX │  │ Controller       │           │
+│  │(UART)  │ │          │ │          │  │ (UART)           │           │
+│  └────────┘ └──────────┘ └──────────┘  └──────────────────┘           │
+│                                                                         │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │           Heartbeat & Link Health Monitor (1 Hz)                   │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+├───────────────────── IPC (Shared Memory) ──────────────────────────────┤
+│ IN:  /trajectory_cmd ← Proc 4  │  /mission_status ← Proc 4            │
+│ OUT: /gcs_commands → Proc 4    │  /fc_state → all processes            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+[END_TABLE_ROW]
+[PARA|Normal] The architecture cleanly separates concerns: Serial Transport handles raw FC I/O, Trajectory Relay converts SHM setpoints to MAVLink and writes to the FC, Telemetry Downlink aggregates status for the GCS, Telemetry Uplink parses GCS commands, and the Heartbeat Monitor ensures all links are alive.
+[PARA|Heading 1] 3. Thread Architecture & Responsibilities
+[TABLE_CELL_0] Thread
+[TABLE_CELL_1] Core
+[TABLE_CELL_2] Priority
+[TABLE_CELL_3] Rate (Hz)
+[TABLE_CELL_4] Responsibility
+[END_TABLE_ROW]
+[TABLE_CELL_0] SerialTransport
+[TABLE_CELL_1] 3
+[TABLE_CELL_2] SCHED_FIFO 75
+[TABLE_CELL_3] event-driven
+[TABLE_CELL_4] UART read/write to FC, MAVLink parse/serialise
+[END_TABLE_ROW]
+[TABLE_CELL_0] TelemetryUplink
+[TABLE_CELL_1] 3
+[TABLE_CELL_2] SCHED_FIFO 50
+[TABLE_CELL_3] event-driven
+[TABLE_CELL_4] Receive GCS commands via UDP/serial radio, parse MAVLink
+[END_TABLE_ROW]
+[TABLE_CELL_0] TelemetryDownlink
+[TABLE_CELL_1] 3
+[TABLE_CELL_2] SCHED_FIFO 45
+[TABLE_CELL_3] 1–10
+[TABLE_CELL_4] Send mission status, attitude, GPS to GCS
+[END_TABLE_ROW]
+[TABLE_CELL_0] TrajectoryRelay
+[TABLE_CELL_1] 3
+[TABLE_CELL_2] SCHED_FIFO 70
+[TABLE_CELL_3] 50
+[TABLE_CELL_4] Read /trajectory_cmd SHM → encode MAVLink → write FC UART
+[END_TABLE_ROW]
+[TABLE_CELL_0] HeartbeatMonitor
+[TABLE_CELL_1] 3
+[TABLE_CELL_2] SCHED_FIFO 40
+[TABLE_CELL_3] 1
+[TABLE_CELL_4] Send/check heartbeats, detect link loss, failsafe trigger
+[END_TABLE_ROW]
+[PARA|Normal] All threads share core 3, keeping cores 4-5 free for the Mission Planner and perception pipeline. TrajectoryRelay has the second-highest priority (70) because delayed setpoints cause flight instability. SerialTransport is highest (75) since it handles the raw FC serial line that all MAVLink traffic depends on.
+[TABLE_CELL_0] 💡 C++ Concept: Event-Driven vs. Periodic Threads
+Some threads (SerialTransport, TelemetryUplink) are event-driven: they block on I/O (epoll/select on a file descriptor) and wake only when data arrives. This is more efficient than polling because the thread sleeps at zero CPU while waiting. Other threads (TrajectoryRelay, TelemetryDownlink, HeartbeatMonitor) are periodic: they wake at a fixed rate using std::this_thread::sleep_until. The choice depends on the data source: external I/O is event-driven, internal SHM processing is periodic. Boost.Asio provides a unified event loop (io_context) for both patterns.
+[END_TABLE_ROW]
+[PARA|Heading 1] 4. Inter-Process Communication (IPC) — Inputs
+[PARA|Normal] Process 5 reads three shared-memory regions published by upstream processes via lock-free SeqLock readers (same pattern as Process 4).
+[TABLE_CELL_0] SHM Segment
+[TABLE_CELL_1] Source
+[TABLE_CELL_2] Structure
+[TABLE_CELL_3] Read Rate
+[TABLE_CELL_4] Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] /trajectory_cmd
+[TABLE_CELL_1] Process 4
+[TABLE_CELL_2] ShmTrajectoryCmd (88 bytes)
+[TABLE_CELL_3] 50 Hz
+[TABLE_CELL_4] Position/velocity setpoints for FC
+[END_TABLE_ROW]
+[TABLE_CELL_0] /mission_status
+[TABLE_CELL_1] Process 4
+[TABLE_CELL_2] ShmMissionStatus (80 bytes)
+[TABLE_CELL_3] 2 Hz
+[TABLE_CELL_4] Telemetry to GCS
+[END_TABLE_ROW]
+[TABLE_CELL_0] /slam_pose
+[TABLE_CELL_1] Process 3
+[TABLE_CELL_2] ShmPoseStamped (96 bytes)
+[TABLE_CELL_3] 10 Hz
+[TABLE_CELL_4] Attitude/position for GCS HUD
+[END_TABLE_ROW]
+[PARA|Normal] All readers use the SeqLock pattern (described in Process 3/4 documents): check atomic sequence counter before and after copy, retry on mismatch. No locks, no blocking the publisher.
+[PARA|Normal] Listing 4-1: Trajectory Command SHM Reader
+[TABLE_CELL_0] // ipc/trajectory_reader.h — reads setpoints from Process 4
+#pragma once
+#include <atomic>
+#include <cstring>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <Eigen/Core>
+
+struct ShmTrajectoryCmd {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    double position[3];
+    double velocity[3];
+    double acceleration[3];
+    double yaw;
+    double yaw_rate;
+    uint16_t type_mask;
+    uint8_t  coordinate_frame;
+    uint8_t  padding[5];
+};
+
+class TrajectoryReader {
+public:
+    bool open(const char* name = "/trajectory_cmd") {
+        fd_ = shm_open(name, O_RDONLY, 0);
+        if (fd_ < 0) return false;
+        ptr_ = static_cast<ShmTrajectoryCmd*>(
+            mmap(nullptr, sizeof(ShmTrajectoryCmd), PROT_READ, MAP_SHARED, fd_, 0));
+        return ptr_ != MAP_FAILED;
+    }
+
+    struct SetpointData {
+        uint64_t timestamp_ns;
+        double position[3];
+        double velocity[3];
+        double acceleration[3];
+        double yaw;
+        double yaw_rate;
+        uint16_t type_mask;
+        uint8_t  coordinate_frame;
+    };
+
+    bool read(SetpointData& out) const {
+        if (!ptr_) return false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
+            if (s1 & 1) continue;
+            out.timestamp_ns = ptr_->timestamp_ns;
+            std::memcpy(out.position, ptr_->position, sizeof(out.position));
+            std::memcpy(out.velocity, ptr_->velocity, sizeof(out.velocity));
+            std::memcpy(out.acceleration, ptr_->acceleration, sizeof(out.acceleration));
+            out.yaw = ptr_->yaw;
+            out.yaw_rate = ptr_->yaw_rate;
+            out.type_mask = ptr_->type_mask;
+            out.coordinate_frame = ptr_->coordinate_frame;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            uint64_t s2 = ptr_->seq.load(std::memory_order_relaxed);
+            if (s1 == s2) return true;
+        }
+        return false;
+    }
+
+    ~TrajectoryReader() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmTrajectoryCmd));
+        if (fd_ >= 0) close(fd_);
+    }
+
+private:
+    int fd_ = -1;
+    ShmTrajectoryCmd* ptr_ = nullptr;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 5. MAVLink Protocol Layer
+[PARA|Normal] MAVLink v2 is the standard telemetry/command protocol for autopilots (ArduPilot, PX4). It is a lightweight, header-only C library that serialises typed messages into compact binary packets with CRC validation. The Comms process uses the auto-generated MAVLink C headers directly — no external libraries beyond the header files.
+[PARA|Heading 2] 5.1 MAVLink v2 Packet Format
+[PARA|Normal] Figure 5-1: MAVLink v2 Packet Layout
+[TABLE_CELL_0] 
+ MAVLink v2 Packet Structure (280 bytes max):
+ ┌──────┬──────┬─────────┬──────┬───────┬────────┬────────────┬────────┬───────┐
+ │ STX  │ LEN  │ INC_FL  │ CMP  │ SEQ   │ SYS_ID │ COMP_ID    │MSG_ID │ PAYLOAD│
+ │ 0xFD │ 1B   │ 1B      │ 1B   │ 1B    │ 1B     │ 1B         │ 3B    │ 0-255B │
+ └──────┴──────┴─────────┴──────┴───────┴────────┴────────────┴────────┴───────┘
+ │                                                                     │ CRC_LO │
+ │                                                                     │ CRC_HI │
+ └─────────────────────────────────────────────────────────────────────┴────────┘
+
+ Key fields:
+ • STX   = 0xFD (v2 marker; v1 uses 0xFE)
+ • SYS_ID = system identifier (1 = FC, 2 = companion, 255 = GCS)
+ • COMP_ID = component within a system
+ • MSG_ID = 24-bit message identifier (e.g., 0=HEARTBEAT, 33=GPS_RAW, 84=SET_POSITION_TARGET)
+ • CRC    = X.25 CRC with message-specific "CRC extra" byte for validation
+
+[END_TABLE_ROW]
+[PARA|Heading 2] 5.2 MAVLink Message Wrapper
+[TABLE_CELL_0] 💡 C++ Concept: Header-Only Libraries & Zero-Cost Abstraction
+MAVLink generates C header files (mavlink_msg_*.h) that inline serialisation/deserialisation functions. This means: (1) no library to link — just #include the headers, (2) the compiler inlines pack/unpack calls, eliminating function-call overhead, (3) the serialised format is defined at compile time via constexpr arrays. The trade-off is longer compile times (many headers), but runtime cost is zero. This 'header-only' approach is common in performance-sensitive C++ libraries (Eigen, nlohmann/json, abseil inline headers).
+[END_TABLE_ROW]
+[PARA|Normal] Listing 5-1: MAVLink Channel Wrapper
+[TABLE_CELL_0] // mavlink/mavlink_wrapper.h
+#pragma once
+
+// MAVLink configuration — must be set BEFORE including MAVLink headers
+#define MAVLINK_USE_MESSAGE_INFO
+#define MAVLINK_EXTERNAL_RX_STATUS   // we manage our own mavlink_status_t
+
+#include <mavlink/v2.0/ardupilotmega/mavlink.h>
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+#include <functional>
+
+// Our system/component IDs
+constexpr uint8_t COMPANION_SYS_ID  = 2;
+constexpr uint8_t COMPANION_COMP_ID = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
+
+class MAVLinkChannel {
+public:
+    explicit MAVLinkChannel(uint8_t chan_id = MAVLINK_COMM_0)
+        : chan_id_(chan_id) {
+        std::memset(&status_, 0, sizeof(status_));
+    }
+
+    // Parse incoming bytes — returns messages as they complete
+    std::optional<mavlink_message_t> parse_byte(uint8_t byte) {
+        mavlink_message_t msg;
+        if (mavlink_parse_char(chan_id_, byte, &msg, &status_)
+            == MAVLINK_FRAMING_OK) {
+            return msg;
+        }
+        return std::nullopt;
+    }
+
+    // Serialise a message to bytes
+    std::vector<uint8_t> serialise(const mavlink_message_t& msg) {
+        std::vector<uint8_t> buf(MAVLINK_MAX_PACKET_LEN);
+        uint16_t len = mavlink_msg_to_send_buffer(buf.data(), &msg);
+        buf.resize(len);
+        return buf;
+    }
+
+    // Convenience: pack a heartbeat message
+    mavlink_message_t pack_heartbeat() {
+        mavlink_message_t msg;
+        mavlink_msg_heartbeat_pack(
+            COMPANION_SYS_ID, COMPANION_COMP_ID, &msg,
+            MAV_TYPE_ONBOARD_CONTROLLER,    // type
+            MAV_AUTOPILOT_INVALID,          // autopilot (we're a companion)
+            0, 0, MAV_STATE_ACTIVE);        // modes, state
+        return msg;
+    }
+
+    // Pack SET_POSITION_TARGET_LOCAL_NED from trajectory data
+    mavlink_message_t pack_setpoint(
+        uint32_t time_boot_ms,
+        uint8_t target_sys, uint8_t target_comp,
+        uint8_t coord_frame, uint16_t type_mask,
+        float x, float y, float z,
+        float vx, float vy, float vz,
+        float afx, float afy, float afz,
+        float yaw, float yaw_rate)
+    {
+        mavlink_message_t msg;
+        mavlink_msg_set_position_target_local_ned_pack(
+            COMPANION_SYS_ID, COMPANION_COMP_ID, &msg,
+            time_boot_ms, target_sys, target_comp,
+            coord_frame, type_mask,
+            x, y, z, vx, vy, vz,
+            afx, afy, afz, yaw, yaw_rate);
+        return msg;
+    }
+
+    const mavlink_status_t& status() const { return status_; }
+
+private:
+    uint8_t chan_id_;
+    mavlink_status_t status_;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::optional for Incremental Parsing
+MAVLink parsing is byte-by-byte: each incoming byte may or may not complete a message. parse_byte() returns std::optional<mavlink_message_t> — std::nullopt if the byte is part of an incomplete frame, or a fully-parsed message when the final CRC byte validates. This is a natural fit for optional: the return type documents that 'most calls produce nothing'. The caller writes: if (auto msg = channel.parse_byte(b)) { handle(*msg); } — clean, self-documenting, and no sentinel values.
+[END_TABLE_ROW]
+[PARA|Heading 1] 6. Serial Transport Thread (FC Link)
+[PARA|Normal] The Serial Transport thread owns the UART connection to the flight controller. It runs an event-driven loop using Boost.Asio async_read to receive FC messages and a write queue to send commands. All other threads submit messages to the write queue; this thread serialises access to the physical serial port.
+[PARA|Heading 2] 6.1 UART Configuration
+[PARA|Normal] Listing 6-1: UART Serial Port Wrapper (Boost.Asio)
+[TABLE_CELL_0] // transport/serial_port.h
+#pragma once
+#include <boost/asio.hpp>
+#include <string>
+#include <spdlog/spdlog.h>
+
+namespace asio = boost::asio;
+
+class SerialPort {
+public:
+    SerialPort(asio::io_context& io, const std::string& device,
+               unsigned int baud_rate)
+        : port_(io, device)
+    {
+        port_.set_option(asio::serial_port::baud_rate(baud_rate));
+        port_.set_option(asio::serial_port::character_size(8));
+        port_.set_option(asio::serial_port::parity(
+            asio::serial_port::parity::none));
+        port_.set_option(asio::serial_port::stop_bits(
+            asio::serial_port::stop_bits::one));
+        port_.set_option(asio::serial_port::flow_control(
+            asio::serial_port::flow_control::none));
+
+        spdlog::info("SerialPort opened: {} @ {} baud", device, baud_rate);
+    }
+
+    // Non-copyable, movable
+    SerialPort(const SerialPort&) = delete;
+    SerialPort& operator=(const SerialPort&) = delete;
+    SerialPort(SerialPort&&) = default;
+
+    asio::serial_port& native() { return port_; }
+
+    bool is_open() const { return port_.is_open(); }
+
+    void close() {
+        boost::system::error_code ec;
+        port_.close(ec);
+        if (ec) spdlog::warn("SerialPort close error: {}", ec.message());
+    }
+
+private:
+    asio::serial_port port_;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Rule of Five — Non-Copyable, Movable Resources
+SerialPort wraps a system resource (file descriptor). Copying it would create two owners of the same FD — a bug. We delete the copy constructor and copy-assignment operator, but default the move constructor. This is the 'Rule of Five' (C++11): if you define any of the five special member functions (destructor, copy ctor, copy assign, move ctor, move assign), you should consider all five. For resource wrappers: delete copies, default moves, and let the moved-from object be in a valid but empty state.
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.2 Async Read Loop & Message Dispatch
+[PARA|Normal] Listing 6-2: Async Serial Transport with Message Dispatch
+[TABLE_CELL_0] // transport/serial_transport.h
+#pragma once
+#include "transport/serial_port.h"
+#include "mavlink/mavlink_wrapper.h"
+#include <functional>
+#include <array>
+#include <deque>
+#include <mutex>
+
+using MessageHandler = std::function<void(const mavlink_message_t&)>;
+
+class SerialTransport {
+public:
+    SerialTransport(asio::io_context& io, const std::string& device,
+                     unsigned baud, uint8_t chan_id = MAVLINK_COMM_0)
+        : io_(io), serial_(io, device, baud), channel_(chan_id) {}
+
+    // Register handler for specific message IDs
+    void on_message(uint32_t msg_id, MessageHandler handler) {
+        handlers_[msg_id] = std::move(handler);
+    }
+
+    // Register catch-all handler
+    void on_any_message(MessageHandler handler) {
+        any_handler_ = std::move(handler);
+    }
+
+    // Start async read loop
+    void start() {
+        do_read();
+    }
+
+    // Queue a message for sending (thread-safe)
+    void send(const mavlink_message_t& msg) {
+        auto bytes = channel_.serialise(msg);
+        {
+            std::lock_guard lock(tx_mtx_);
+            tx_queue_.push_back(std::move(bytes));
+        }
+        // Trigger write if not already in progress
+        asio::post(io_, [this]() { do_write(); });
+    }
+
+private:
+    asio::io_context& io_;
+    SerialPort serial_;
+    MAVLinkChannel channel_;
+
+    std::array<uint8_t, 512> rx_buf_;
+    std::mutex tx_mtx_;
+    std::deque<std::vector<uint8_t>> tx_queue_;
+    bool writing_ = false;
+
+    std::unordered_map<uint32_t, MessageHandler> handlers_;
+    MessageHandler any_handler_;
+
+    void do_read() {
+        serial_.native().async_read_some(
+            asio::buffer(rx_buf_),
+            [this](boost::system::error_code ec, std::size_t n) {
+                if (ec) {
+                    spdlog::error("Serial read error: {}", ec.message());
+                    reconnect();
+                    return;
+                }
+
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (auto msg = channel_.parse_byte(rx_buf_[i])) {
+                        dispatch(*msg);
+                    }
+                }
+
+                do_read();  // continue reading
+            });
+    }
+
+    void dispatch(const mavlink_message_t& msg) {
+        if (any_handler_) any_handler_(msg);
+        auto it = handlers_.find(msg.msgid);
+        if (it != handlers_.end()) {
+            it->second(msg);
+        }
+    }
+
+    void do_write() {
+        if (writing_) return;
+
+        std::vector<uint8_t> data;
+        {
+            std::lock_guard lock(tx_mtx_);
+            if (tx_queue_.empty()) return;
+            data = std::move(tx_queue_.front());
+            tx_queue_.pop_front();
+        }
+
+        writing_ = true;
+        asio::async_write(serial_.native(), asio::buffer(data),
+            [this](boost::system::error_code ec, std::size_t) {
+                writing_ = false;
+                if (ec) {
+                    spdlog::error("Serial write error: {}", ec.message());
+                    return;
+                }
+                do_write();  // drain queue
+            });
+    }
+
+    void reconnect();  // attempt to re-open serial port after error
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::function for Type-Erased Callbacks
+std::function<void(const mavlink_message_t&)> can hold any callable with that signature: a lambda, a free function, a bound member function (via std::bind or lambda capture). This lets the SerialTransport accept message handlers without knowing who provides them. The on_message(msg_id, handler) API is the Observer pattern — register interest, get notified on arrival. The trade-off: std::function has a small overhead (~32 bytes + possible heap allocation for large captures). For our message-dispatch use case (<100 handler registrations, called max 1000×/sec), this is negligible.
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.3 Serial Transport Thread Entry
+[PARA|Normal] Listing 6-3: Serial Transport Thread with io_context
+[TABLE_CELL_0] // transport/serial_thread.cpp
+#include "transport/serial_transport.h"
+#include "util/realtime.h"
+
+void serial_transport_thread(const CommsConfig& cfg,
+                              SerialTransport& transport,
+                              std::atomic<bool>& running) {
+    set_thread_params("SerialIO", 3, SCHED_FIFO, 75);
+
+    // The io_context::run() blocks until all async operations complete
+    // or the context is stopped.
+    asio::io_context& io = transport.io_context();
+
+    transport.start();  // begin async reading
+
+    while (running.load(std::memory_order_relaxed)) {
+        try {
+            io.run_for(std::chrono::milliseconds(100));
+        } catch (const std::exception& e) {
+            spdlog::error("Serial thread exception: {}", e.what());
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            io.restart();
+        }
+    }
+
+    transport.stop();
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 7. Telemetry Uplink Thread (GCS → Drone)
+[PARA|Normal] The Telemetry Uplink thread receives messages from the Ground Control Station (GCS) over a UDP socket or serial radio link. It parses MAVLink commands (arm, takeoff, mode change, mission upload) and translates them into internal commands written to the /gcs_commands SHM region for Process 4.
+[PARA|Heading 2] 7.1 UDP Transport
+[PARA|Normal] Listing 7-1: UDP Transport for GCS Communication
+[TABLE_CELL_0] // transport/udp_transport.h
+#pragma once
+#include <boost/asio.hpp>
+#include "mavlink/mavlink_wrapper.h"
+#include <functional>
+#include <array>
+
+namespace asio = boost::asio;
+using udp = asio::ip::udp;
+
+class UDPTransport {
+public:
+    UDPTransport(asio::io_context& io, uint16_t listen_port,
+                  uint8_t chan_id = MAVLINK_COMM_1)
+        : socket_(io, udp::endpoint(udp::v4(), listen_port)),
+          channel_(chan_id) {
+        spdlog::info("UDP listening on port {}", listen_port);
+    }
+
+    using MessageCallback = std::function<void(const mavlink_message_t&,
+                                                const udp::endpoint& sender)>;
+
+    void on_message(MessageCallback cb) { callback_ = std::move(cb); }
+
+    void start() { do_receive(); }
+
+    void send_to(const mavlink_message_t& msg, const udp::endpoint& dest) {
+        auto bytes = channel_.serialise(msg);
+        socket_.async_send_to(asio::buffer(bytes), dest,
+            [](boost::system::error_code ec, std::size_t) {
+                if (ec) spdlog::warn("UDP send error: {}", ec.message());
+            });
+    }
+
+    // Broadcast to last-known GCS endpoint
+    void send_to_gcs(const mavlink_message_t& msg) {
+        if (gcs_endpoint_.port() != 0)
+            send_to(msg, gcs_endpoint_);
+    }
+
+    const udp::endpoint& gcs_endpoint() const { return gcs_endpoint_; }
+
+private:
+    udp::socket socket_;
+    MAVLinkChannel channel_;
+    udp::endpoint sender_endpoint_;
+    udp::endpoint gcs_endpoint_;     // learned from first GCS heartbeat
+    std::array<uint8_t, 1024> rx_buf_;
+    MessageCallback callback_;
+
+    void do_receive() {
+        socket_.async_receive_from(
+            asio::buffer(rx_buf_), sender_endpoint_,
+            [this](boost::system::error_code ec, std::size_t n) {
+                if (ec) {
+                    spdlog::warn("UDP receive error: {}", ec.message());
+                } else {
+                    for (std::size_t i = 0; i < n; ++i) {
+                        if (auto msg = channel_.parse_byte(rx_buf_[i])) {
+                            // Learn GCS endpoint from heartbeat
+                            if (msg->msgid == MAVLINK_MSG_ID_HEARTBEAT &&
+                                msg->sysid >= 200) {
+                                gcs_endpoint_ = sender_endpoint_;
+                            }
+                            if (callback_) callback_(*msg, sender_endpoint_);
+                        }
+                    }
+                }
+                do_receive();
+            });
+    }
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 7.2 GCS Command Parser
+[PARA|Normal] Listing 7-2: GCS Command Parser
+[TABLE_CELL_0] // comms/gcs_command_parser.h
+#pragma once
+#include <mavlink/v2.0/ardupilotmega/mavlink.h>
+#include "ipc/gcs_command_writer.h"
+
+class GCSCommandParser {
+public:
+    explicit GCSCommandParser(GCSCommandWriter& writer) : writer_(writer) {}
+
+    void handle(const mavlink_message_t& msg) {
+        switch (msg.msgid) {
+            case MAVLINK_MSG_ID_COMMAND_LONG:
+                handle_command_long(msg);
+                break;
+            case MAVLINK_MSG_ID_SET_MODE:
+                handle_set_mode(msg);
+                break;
+            case MAVLINK_MSG_ID_MISSION_ITEM_INT:
+                handle_mission_item(msg);
+                break;
+            case MAVLINK_MSG_ID_MISSION_COUNT:
+                handle_mission_count(msg);
+                break;
+            default:
+                break;
+        }
+    }
+
+private:
+    GCSCommandWriter& writer_;
+
+    void handle_command_long(const mavlink_message_t& msg) {
+        mavlink_command_long_t cmd;
+        mavlink_msg_command_long_decode(&msg, &cmd);
+
+        switch (cmd.command) {
+            case MAV_CMD_COMPONENT_ARM_DISARM:
+                if (cmd.param1 > 0.5f)
+                    writer_.write_command(GCSCommand::ARM);
+                else
+                    writer_.write_command(GCSCommand::DISARM);
+                break;
+
+            case MAV_CMD_NAV_TAKEOFF:
+                writer_.write_command(GCSCommand::TAKEOFF, cmd.param7);  // alt
+                break;
+
+            case MAV_CMD_NAV_RETURN_TO_LAUNCH:
+                writer_.write_command(GCSCommand::RTL);
+                break;
+
+            case MAV_CMD_NAV_LAND:
+                writer_.write_command(GCSCommand::LAND);
+                break;
+
+            case MAV_CMD_DO_PAUSE_CONTINUE:
+                if (cmd.param1 > 0.5f)
+                    writer_.write_command(GCSCommand::RESUME);
+                else
+                    writer_.write_command(GCSCommand::LOITER);
+                break;
+
+            case MAV_CMD_COMPONENT_ARM_DISARM + 1000:  // emergency stop
+                writer_.write_command(GCSCommand::EMERGENCY_STOP);
+                break;
+
+            default:
+                spdlog::debug("Unhandled COMMAND_LONG: {}", cmd.command);
+                break;
+        }
+    }
+
+    void handle_set_mode(const mavlink_message_t& msg);
+    void handle_mission_item(const mavlink_message_t& msg);
+    void handle_mission_count(const mavlink_message_t& msg);
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Separation of Parsing and Action (Single Responsibility Principle)
+GCSCommandParser only translates MAVLink messages into our internal GCSCommand enum, then writes to SHM via GCSCommandWriter. It does NOT execute the commands — that is Process 4's job. This Single Responsibility Principle keeps the Comms process decoupled from mission logic. If the command protocol changes (e.g., adding a new MAV_CMD), only the parser changes. If the action semantics change (e.g., RTL now spirals down), only Process 4's state machine changes. Clean boundaries = fewer cascade bugs.
+[END_TABLE_ROW]
+[PARA|Heading 1] 8. Telemetry Downlink Thread (Drone → GCS)
+[PARA|Normal] The Telemetry Downlink thread periodically reads vehicle state from SHM and FC messages, then sends telemetry to the GCS. It implements bandwidth-aware rate throttling so that low-bandwidth radio links (e.g., SiK at 56 kbps) are not saturated.
+[PARA|Heading 2] 8.1 Telemetry Rate Management
+[TABLE_CELL_0] 💡 C++ Concept: Token Bucket Rate Limiter
+A token bucket algorithm controls the rate of message transmission. The bucket holds up to B tokens (representing bytes). Tokens are added at a fixed rate R (bytes/sec = link bandwidth). Before sending a message of N bytes, the sender checks: if bucket >= N, send and subtract N tokens; otherwise, defer. This allows bursts (up to B bytes) but enforces an average rate of R. Unlike a simple timer-per-message, token bucket handles variable-size messages correctly and allows high-priority messages to use burst capacity.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 8-1: Token Bucket Rate Limiter
+[TABLE_CELL_0] // transport/rate_limiter.h
+#pragma once
+#include <chrono>
+#include <algorithm>
+
+class TokenBucketRateLimiter {
+public:
+    // bandwidth_bps: link bandwidth in bytes per second
+    // burst_bytes:  maximum burst size
+    TokenBucketRateLimiter(double bandwidth_bps, double burst_bytes)
+        : rate_(bandwidth_bps), max_tokens_(burst_bytes),
+          tokens_(burst_bytes),
+          last_refill_(std::chrono::steady_clock::now()) {}
+
+    bool try_consume(std::size_t bytes) {
+        refill();
+        if (tokens_ >= static_cast<double>(bytes)) {
+            tokens_ -= static_cast<double>(bytes);
+            return true;
+        }
+        return false;
+    }
+
+    void set_bandwidth(double bps) { rate_ = bps; }
+
+private:
+    double rate_;        // bytes per second
+    double max_tokens_;
+    double tokens_;
+    std::chrono::steady_clock::time_point last_refill_;
+
+    void refill() {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - last_refill_).count();
+        tokens_ = std::min(max_tokens_, tokens_ + elapsed * rate_);
+        last_refill_ = now;
+    }
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 8.2 Telemetry Scheduler
+[PARA|Normal] Listing 8-2: Priority-Based Telemetry Scheduler
+[TABLE_CELL_0] // telemetry/telemetry_scheduler.h
+#pragma once
+#include "transport/rate_limiter.h"
+#include "mavlink/mavlink_wrapper.h"
+#include <vector>
+#include <functional>
+#include <chrono>
+
+struct TelemetryStream {
+    std::string name;
+    uint32_t msg_id;
+    double rate_hz;                        // desired send rate
+    uint8_t priority;                      // 0=highest, 255=lowest
+    std::function<mavlink_message_t()> pack_fn;
+    std::chrono::steady_clock::time_point last_sent;
+};
+
+class TelemetryScheduler {
+public:
+    explicit TelemetryScheduler(double link_bps, double burst = 4096.0)
+        : limiter_(link_bps, burst) {}
+
+    void add_stream(TelemetryStream stream) {
+        stream.last_sent = std::chrono::steady_clock::now();
+        streams_.push_back(std::move(stream));
+        // Sort by priority (lower = higher priority)
+        std::sort(streams_.begin(), streams_.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.priority < b.priority;
+                  });
+    }
+
+    // Called from downlink thread; returns messages ready to send
+    std::vector<mavlink_message_t> tick() {
+        auto now = std::chrono::steady_clock::now();
+        std::vector<mavlink_message_t> out;
+
+        for (auto& stream : streams_) {
+            double interval = 1.0 / stream.rate_hz;
+            auto elapsed = std::chrono::duration<double>(
+                now - stream.last_sent).count();
+
+            if (elapsed >= interval) {
+                auto msg = stream.pack_fn();
+                auto bytes = mavlink_msg_get_send_buffer_length(&msg);
+
+                if (limiter_.try_consume(bytes)) {
+                    out.push_back(msg);
+                    stream.last_sent = now;
+                }
+                // If rate limited, skip this tick — will retry next tick
+            }
+        }
+        return out;
+    }
+
+    void set_link_bandwidth(double bps) { limiter_.set_bandwidth(bps); }
+
+private:
+    TokenBucketRateLimiter limiter_;
+    std::vector<TelemetryStream> streams_;
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 8.3 Downlink Thread Loop
+[PARA|Normal] Listing 8-3: Telemetry Downlink Thread (50 Hz scheduler tick)
+[TABLE_CELL_0] // telemetry/downlink_thread.cpp
+#include "telemetry/telemetry_scheduler.h"
+#include "transport/udp_transport.h"
+#include "ipc/mission_status_reader.h"
+#include "ipc/pose_reader.h"
+#include "util/realtime.h"
+
+void telemetry_downlink_thread(CommsContext& ctx,
+                                UDPTransport& udp,
+                                std::atomic<bool>& running) {
+    set_thread_params("TelDL", 3, SCHED_FIFO, 45);
+
+    // Default: WiFi @ 1 Mbps effective
+    TelemetryScheduler scheduler(125000.0, 8192.0);  // 1 Mbps / 8
+
+    // Register telemetry streams (priority: 0=highest)
+    scheduler.add_stream({
+        "HEARTBEAT", MAVLINK_MSG_ID_HEARTBEAT, 1.0, 0,
+        [&]() { return ctx.mavlink().pack_heartbeat(); }
+    });
+
+    scheduler.add_stream({
+        "SYS_STATUS", MAVLINK_MSG_ID_SYS_STATUS, 2.0, 1,
+        [&]() { return pack_sys_status(ctx); }
+    });
+
+    scheduler.add_stream({
+        "ATTITUDE", MAVLINK_MSG_ID_ATTITUDE, 10.0, 2,
+        [&]() { return pack_attitude_from_pose(ctx.pose_reader()); }
+    });
+
+    scheduler.add_stream({
+        "LOCAL_POSITION_NED", MAVLINK_MSG_ID_LOCAL_POSITION_NED, 5.0, 3,
+        [&]() { return pack_local_position(ctx.pose_reader()); }
+    });
+
+    scheduler.add_stream({
+        "MISSION_STATUS", MAVLINK_MSG_ID_STATUSTEXT, 1.0, 5,
+        [&]() { return pack_mission_status_text(ctx.status_reader()); }
+    });
+
+    scheduler.add_stream({
+        "GPS_RAW_INT", MAVLINK_MSG_ID_GPS_RAW_INT, 2.0, 4,
+        [&]() { return pack_gps_raw(ctx); }
+    });
+
+    const auto period = std::chrono::milliseconds(20);  // 50 Hz tick
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        auto messages = scheduler.tick();
+        for (const auto& msg : messages) {
+            udp.send_to_gcs(msg);
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Lambda Captures for Deferred Execution
+Each TelemetryStream stores a std::function<mavlink_message_t()> that packs the message on demand. The lambda [&]() { return pack_attitude_from_pose(ctx.pose_reader()); } captures ctx by reference and is called later when the scheduler decides it's time to send. This defers work: the message is only packed when it will actually be sent, avoiding wasted serialisation if the rate limiter blocks it. Lambda captures are the C++ way to create closures — functions bundled with their environment.
+[END_TABLE_ROW]
+[PARA|Heading 1] 9. Trajectory Relay Thread
+[PARA|Normal] The Trajectory Relay thread is the critical bridge between Process 4's internal trajectory commands and the flight controller. It reads SET_POSITION_TARGET data from shared memory at 50 Hz and immediately encodes and writes MAVLink to the FC's UART.
+[PARA|Normal] Listing 9-1: Trajectory Relay Thread (SHM → MAVLink → FC)
+[TABLE_CELL_0] // relay/trajectory_relay_thread.cpp
+#include "ipc/trajectory_reader.h"
+#include "transport/serial_transport.h"
+#include "mavlink/mavlink_wrapper.h"
+#include "util/realtime.h"
+#include <chrono>
+
+void trajectory_relay_thread(TrajectoryReader& traj_reader,
+                              SerialTransport& fc_serial,
+                              MAVLinkChannel& mav,
+                              std::atomic<bool>& running) {
+    set_thread_params("TrajRelay", 3, SCHED_FIFO, 70);
+
+    const auto period = std::chrono::milliseconds(20);  // 50 Hz
+    uint64_t last_timestamp = 0;
+    uint32_t stale_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        TrajectoryReader::SetpointData sp;
+        if (traj_reader.read(sp)) {
+            // Only send if data is fresh (avoid re-sending stale setpoints)
+            if (sp.timestamp_ns != last_timestamp) {
+                last_timestamp = sp.timestamp_ns;
+                stale_count = 0;
+
+                // Convert to MAVLink message
+                uint32_t time_boot_ms = static_cast<uint32_t>(
+                    sp.timestamp_ns / 1'000'000);
+
+                auto msg = mav.pack_setpoint(
+                    time_boot_ms,
+                    1, 1,  // target: sys=1 (FC), comp=1 (autopilot)
+                    sp.coordinate_frame,
+                    sp.type_mask,
+                    static_cast<float>(sp.position[0]),
+                    static_cast<float>(sp.position[1]),
+                    static_cast<float>(sp.position[2]),
+                    static_cast<float>(sp.velocity[0]),
+                    static_cast<float>(sp.velocity[1]),
+                    static_cast<float>(sp.velocity[2]),
+                    static_cast<float>(sp.acceleration[0]),
+                    static_cast<float>(sp.acceleration[1]),
+                    static_cast<float>(sp.acceleration[2]),
+                    static_cast<float>(sp.yaw),
+                    static_cast<float>(sp.yaw_rate));
+
+                fc_serial.send(msg);
+            } else {
+                ++stale_count;
+                if (stale_count > 100) {  // 2 seconds with no new data
+                    spdlog::warn("TrajRelay: setpoint stale for {:.1f}s",
+                                  stale_count * 0.02);
+                }
+            }
+        } else {
+            spdlog::warn("TrajRelay: cannot read /trajectory_cmd SHM");
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Narrowing Conversions with static_cast
+The SHM trajectory data uses double precision (64-bit) for maximum internal accuracy, but MAVLink SET_POSITION_TARGET uses float (32-bit) to minimise packet size. We use explicit static_cast<float>() for each conversion. In C++, implicit narrowing (double→float) in brace initialisation is an error; in function calls it's a warning. Explicit casts: (1) silence warnings, (2) document that precision loss is intentional, (3) make the conversion grep-able for code review. Always prefer static_cast over C-style (float)x casts — static_cast is checked at compile time and won't accidentally reinterpret bits.
+[END_TABLE_ROW]
+[PARA|Heading 1] 10. Heartbeat & Link Health Monitor Thread
+[PARA|Normal] The Heartbeat Monitor runs at 1 Hz and is responsible for: (1) sending MAVLink HEARTBEAT to both FC and GCS, (2) monitoring incoming heartbeats from FC and GCS, (3) computing link quality metrics, and (4) triggering failsafe actions on link loss.
+[PARA|Normal] Listing 10-1: Link Health Tracker
+[TABLE_CELL_0] // monitor/link_health.h
+#pragma once
+#include <chrono>
+#include <atomic>
+#include <string>
+#include <spdlog/spdlog.h>
+
+enum class LinkStatus : uint8_t { HEALTHY, DEGRADED, LOST };
+
+class LinkHealth {
+public:
+    explicit LinkHealth(std::string name, double timeout_s = 5.0)
+        : name_(std::move(name)), timeout_s_(timeout_s) {}
+
+    void heartbeat_received() {
+        auto now = std::chrono::steady_clock::now();
+        auto prev = last_heartbeat_.load(std::memory_order_relaxed);
+        auto tp = now.time_since_epoch().count();
+        last_heartbeat_.store(tp, std::memory_order_release);
+
+        ++total_heartbeats_;
+
+        // Calculate one-way latency estimate (heartbeat round-trip / 2)
+        if (prev > 0) {
+            double dt = std::chrono::duration<double>(
+                now - std::chrono::steady_clock::time_point(
+                    std::chrono::steady_clock::duration(prev))).count();
+            // Exponential moving average
+            avg_interval_s_ = 0.9 * avg_interval_s_ + 0.1 * dt;
+        }
+    }
+
+    LinkStatus status() const {
+        auto now = std::chrono::steady_clock::now();
+        auto last = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(
+                last_heartbeat_.load(std::memory_order_acquire)));
+        double elapsed = std::chrono::duration<double>(now - last).count();
+
+        if (elapsed < timeout_s_ * 0.5) return LinkStatus::HEALTHY;
+        if (elapsed < timeout_s_)        return LinkStatus::DEGRADED;
+        return LinkStatus::LOST;
+    }
+
+    double seconds_since_last() const {
+        auto now = std::chrono::steady_clock::now();
+        auto last = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(
+                last_heartbeat_.load(std::memory_order_acquire)));
+        return std::chrono::duration<double>(now - last).count();
+    }
+
+    double avg_interval() const { return avg_interval_s_; }
+    uint64_t total() const { return total_heartbeats_; }
+    const std::string& name() const { return name_; }
+
+private:
+    std::string name_;
+    double timeout_s_;
+    std::atomic<int64_t> last_heartbeat_{0};
+    std::atomic<uint64_t> total_heartbeats_{0};
+    double avg_interval_s_ = 1.0;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 10-2: Heartbeat Monitor Thread (1 Hz)
+[TABLE_CELL_0] // monitor/heartbeat_thread.cpp
+#include "monitor/link_health.h"
+#include "transport/serial_transport.h"
+#include "transport/udp_transport.h"
+#include "comms/comms_context.h"
+#include "util/realtime.h"
+
+void heartbeat_monitor_thread(CommsContext& ctx,
+                               SerialTransport& fc,
+                               UDPTransport& gcs_udp,
+                               std::atomic<bool>& running) {
+    set_thread_params("HBMon", 3, SCHED_FIFO, 40);
+
+    LinkHealth fc_link("FC", 5.0);
+    LinkHealth gcs_link("GCS", 10.0);  // GCS may be on slow radio
+
+    // Register heartbeat handler for FC
+    fc.on_message(MAVLINK_MSG_ID_HEARTBEAT, [&](const mavlink_message_t& msg) {
+        if (msg.sysid == 1)  // Flight controller
+            fc_link.heartbeat_received();
+    });
+
+    // GCS heartbeats come via UDP
+    gcs_udp.on_message([&](const mavlink_message_t& msg, const auto&) {
+        if (msg.msgid == MAVLINK_MSG_ID_HEARTBEAT && msg.sysid >= 200)
+            gcs_link.heartbeat_received();
+    });
+
+    const auto period = std::chrono::seconds(1);  // 1 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        // Send our heartbeat to FC and GCS
+        auto hb = ctx.mavlink().pack_heartbeat();
+        fc.send(hb);
+        gcs_udp.send_to_gcs(hb);
+
+        // Check link health
+        auto fc_status = fc_link.status();
+        auto gcs_status = gcs_link.status();
+
+        if (fc_status == LinkStatus::LOST) {
+            spdlog::error("FC LINK LOST — no heartbeat for {:.1f}s",
+                           fc_link.seconds_since_last());
+            ctx.set_fc_link_status(false);
+            // Trigger failsafe via Process 4
+            ctx.gcs_cmd_writer().write_command(GCSCommand::EMERGENCY_STOP);
+        } else {
+            ctx.set_fc_link_status(true);
+        }
+
+        if (gcs_status == LinkStatus::LOST) {
+            spdlog::warn("GCS LINK LOST — no heartbeat for {:.1f}s",
+                          gcs_link.seconds_since_last());
+            ctx.set_gcs_link_status(false);
+            // Configurable: continue mission or RTL
+            if (ctx.config().gcs_loss_action == "rtl") {
+                ctx.gcs_cmd_writer().write_command(GCSCommand::RTL);
+            }
+        } else {
+            ctx.set_gcs_link_status(true);
+        }
+
+        // Publish link stats to mission status
+        ctx.update_link_quality(
+            fc_link.avg_interval(), gcs_link.avg_interval(),
+            fc_status, gcs_status);
+
+        spdlog::debug("Links — FC: {} ({:.0f}ms avg), GCS: {} ({:.0f}ms avg)",
+                       link_status_str(fc_status),
+                       fc_link.avg_interval() * 1000,
+                       link_status_str(gcs_status),
+                       gcs_link.avg_interval() * 1000);
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Exponential Moving Average (EMA) for Link Quality
+avg_interval_s_ = 0.9 * avg_interval_s_ + 0.1 * dt smooths noisy heartbeat intervals. EMA is a single-line, O(1) memory filter: no ring buffer, no reallocation. The coefficient (α=0.1) controls responsiveness: low α smooths more (slow to react to changes), high α is more responsive but noisy. For link monitoring, α=0.1 means a sudden link degradation takes ~10 samples (~10 seconds) to fully reflect — acceptable for a non-safety path while the hard timeout (5/10 seconds) handles actual loss immediately.
+[END_TABLE_ROW]
+[PARA|Heading 1] 11. Inter-Thread Communication
+[TABLE_CELL_0] Data Channel
+[TABLE_CELL_1] Producer
+[TABLE_CELL_2] Consumer
+[TABLE_CELL_3] Mechanism
+[TABLE_CELL_4] Rationale
+[END_TABLE_ROW]
+[TABLE_CELL_0] FC → Router
+[TABLE_CELL_1] SerialTransport
+[TABLE_CELL_2] All handlers
+[TABLE_CELL_3] Boost.Asio dispatch
+[TABLE_CELL_4] Event-driven, non-blocking
+[END_TABLE_ROW]
+[TABLE_CELL_0] Router → FC TX
+[TABLE_CELL_1] Any thread
+[TABLE_CELL_2] SerialTransport
+[TABLE_CELL_3] Lock-free MPSC queue
+[TABLE_CELL_4] Multiple senders, one UART write path
+[END_TABLE_ROW]
+[TABLE_CELL_0] GCS → Parser
+[TABLE_CELL_1] TelemetryUplink
+[TABLE_CELL_2] GCSCommandParser
+[TABLE_CELL_3] Direct callback
+[TABLE_CELL_4] Same thread, no sync needed
+[END_TABLE_ROW]
+[TABLE_CELL_0] Parsed cmds → SHM
+[TABLE_CELL_1] GCSCommandParser
+[TABLE_CELL_2] Process 4 (IPC)
+[TABLE_CELL_3] SeqLock SHM write
+[TABLE_CELL_4] Cross-process, lock-free
+[END_TABLE_ROW]
+[TABLE_CELL_0] SHM → Relay
+[TABLE_CELL_1] Process 4
+[TABLE_CELL_2] TrajectoryRelay
+[TABLE_CELL_3] SeqLock SHM read
+[TABLE_CELL_4] Cross-process, lock-free
+[END_TABLE_ROW]
+[TABLE_CELL_0] Link status
+[TABLE_CELL_1] HeartbeatMonitor
+[TABLE_CELL_2] CommsContext
+[TABLE_CELL_3] Atomics
+[TABLE_CELL_4] Simple, frequently updated
+[END_TABLE_ROW]
+[PARA|Heading 2] 11.1 Lock-Free MPSC Queue for FC TX
+[TABLE_CELL_0] 💡 C++ Concept: Lock-Free MPSC (Multi-Producer Single-Consumer) Queue
+Multiple threads (TrajectoryRelay, HeartbeatMonitor, TelemetryUplink forwarding) need to write MAVLink messages to the single FC serial port. A lock-free MPSC queue allows all producers to enqueue without mutex contention. The SerialTransport thread is the sole consumer that dequeues and writes to UART. We implement this with an atomic linked-list (Michael-Scott queue variant) or a bounded ring buffer with CAS. This eliminates priority inversion: the high-priority TrajectoryRelay never blocks waiting for the low-priority HeartbeatMonitor to release a mutex.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 11-1: Lock-Free MPSC Bounded Queue (CAS-based)
+[TABLE_CELL_0] // util/mpsc_queue.h
+#pragma once
+#include <atomic>
+#include <optional>
+#include <new>  // std::hardware_destructive_interference_size
+
+template <typename T, std::size_t Capacity = 256>
+class MPSCBoundedQueue {
+    static_assert((Capacity & (Capacity - 1)) == 0,
+                  "Capacity must be power of 2");
+
+public:
+    MPSCBoundedQueue() : head_(0), tail_(0) {
+        for (auto& slot : slots_)
+            slot.seq.store(0, std::memory_order_relaxed);
+    }
+
+    // Thread-safe for multiple producers
+    bool try_push(const T& value) {
+        std::size_t pos = tail_.load(std::memory_order_relaxed);
+
+        for (;;) {
+            auto& slot = slots_[pos & (Capacity - 1)];
+            std::size_t seq = slot.seq.load(std::memory_order_acquire);
+            intptr_t diff = static_cast<intptr_t>(seq) -
+                            static_cast<intptr_t>(pos);
+
+            if (diff == 0) {
+                // Slot is available — try to claim it
+                if (tail_.compare_exchange_weak(pos, pos + 1,
+                        std::memory_order_relaxed)) {
+                    slot.data = value;
+                    slot.seq.store(pos + 1, std::memory_order_release);
+                    return true;
+                }
+            } else if (diff < 0) {
+                return false;  // queue full
+            } else {
+                pos = tail_.load(std::memory_order_relaxed);
+            }
+        }
+    }
+
+    // Single consumer only
+    std::optional<T> try_pop() {
+        auto& slot = slots_[head_ & (Capacity - 1)];
+        std::size_t seq = slot.seq.load(std::memory_order_acquire);
+        intptr_t diff = static_cast<intptr_t>(seq) -
+                        static_cast<intptr_t>(head_ + 1);
+
+        if (diff < 0) return std::nullopt;  // queue empty
+
+        T value = std::move(slot.data);
+        slot.seq.store(head_ + Capacity, std::memory_order_release);
+        ++head_;
+        return value;
+    }
+
+private:
+    struct Slot {
+        std::atomic<std::size_t> seq;
+        T data;
+    };
+
+    // Pad to avoid false sharing between head and tail
+    alignas(64) std::size_t head_;
+    alignas(64) std::atomic<std::size_t> tail_;
+    std::array<Slot, Capacity> slots_;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: False Sharing & Cache Line Padding (alignas(64))
+head_ and tail_ are accessed by different threads (consumer and producers). If they share a 64-byte cache line, modifying one invalidates the cache for the other — this is 'false sharing', causing 10-100× slowdown. alignas(64) ensures each atomic lives on its own cache line. C++17 provides std::hardware_destructive_interference_size for the portable cache line size, though 64 bytes is correct for all modern ARM and x86.
+[END_TABLE_ROW]
+[PARA|Heading 1] 12. Radio Transport Abstraction
+[PARA|Normal] The GCS link may use different physical transports: UDP over WiFi, UDP over LTE, serial radio (SiK 433/915 MHz), or even a mesh network. We abstract the transport behind a common interface so the rest of the Comms process is transport-agnostic.
+[TABLE_CELL_0] 💡 C++ Concept: Abstract Factory Pattern for Transport Selection
+An Abstract Factory creates families of related objects (transport + config) without specifying their concrete classes. The factory method create_transport(config) reads a config file entry ('type': 'udp' | 'serial' | 'mesh') and returns a unique_ptr to the appropriate implementation. The calling code only sees the Transport interface. This lets us swap radio hardware (WiFi → LTE → SiK) by changing one config line, with zero code changes in the telemetry threads.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 12-1: Transport Interface
+[TABLE_CELL_0] // transport/transport_interface.h
+#pragma once
+#include <cstdint>
+#include <vector>
+#include <functional>
+#include <memory>
+
+class Transport {
+public:
+    virtual ~Transport() = default;
+
+    virtual bool start() = 0;
+    virtual void stop() = 0;
+    virtual bool is_connected() const = 0;
+
+    // Send raw bytes
+    virtual bool send(const std::vector<uint8_t>& data) = 0;
+
+    // Register receive callback
+    using ReceiveCallback = std::function<void(const uint8_t*, std::size_t)>;
+    virtual void on_receive(ReceiveCallback cb) = 0;
+
+    // Transport info
+    virtual std::string name() const = 0;
+    virtual double bandwidth_bps() const = 0;  // estimated link bandwidth
+};
+
+// Factory
+std::unique_ptr<Transport> create_transport(const nlohmann::json& config);
+[END_TABLE_ROW]
+[PARA|Normal] Listing 12-2: Transport Factory
+[TABLE_CELL_0] // transport/transport_factory.cpp
+#include "transport/transport_interface.h"
+#include "transport/udp_transport_impl.h"
+#include "transport/serial_radio_impl.h"
+
+std::unique_ptr<Transport> create_transport(const nlohmann::json& config) {
+    std::string type = config.value("type", "udp");
+
+    if (type == "udp") {
+        auto port = config.value("port", 14550);
+        auto bind_ip = config.value("bind", "0.0.0.0");
+        return std::make_unique<UDPTransportImpl>(bind_ip, port);
+    }
+    else if (type == "serial") {
+        auto device = config.at("device").get<std::string>();
+        auto baud = config.value("baud", 57600);
+        return std::make_unique<SerialRadioImpl>(device, baud);
+    }
+    else {
+        throw std::runtime_error("Unknown transport type: " + type);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 13. Message Routing & Filtering
+[PARA|Normal] The Message Router sits at the centre of the Comms process, forwarding MAVLink messages between the FC serial link and the GCS radio link. It supports: (1) pass-through routing (FC messages forwarded to GCS and vice versa), (2) filtering (block certain message IDs), and (3) injection (companion-generated messages inserted into the stream).
+[PARA|Normal] Listing 13-1: MAVLink Message Router
+[TABLE_CELL_0] // routing/message_router.h
+#pragma once
+#include <mavlink/v2.0/ardupilotmega/mavlink.h>
+#include <unordered_set>
+#include <functional>
+#include <vector>
+
+class MessageRouter {
+public:
+    enum class Direction { FC_TO_GCS, GCS_TO_FC, COMPANION_TO_FC, COMPANION_TO_GCS };
+
+    using RouteHandler = std::function<void(const mavlink_message_t&, Direction)>;
+
+    void add_route(RouteHandler handler) {
+        routes_.push_back(std::move(handler));
+    }
+
+    // message IDs to NOT forward (high-bandwidth, companion handles internally)
+    void add_block_filter(Direction dir, uint32_t msg_id) {
+        if (dir == Direction::FC_TO_GCS)
+            fc_to_gcs_block_.insert(msg_id);
+        else if (dir == Direction::GCS_TO_FC)
+            gcs_to_fc_block_.insert(msg_id);
+    }
+
+    void route_fc_to_gcs(const mavlink_message_t& msg) {
+        if (fc_to_gcs_block_.count(msg.msgid)) return;
+        for (auto& handler : routes_)
+            handler(msg, Direction::FC_TO_GCS);
+    }
+
+    void route_gcs_to_fc(const mavlink_message_t& msg) {
+        if (gcs_to_fc_block_.count(msg.msgid)) return;
+        for (auto& handler : routes_)
+            handler(msg, Direction::GCS_TO_FC);
+    }
+
+    void inject_companion_to_fc(const mavlink_message_t& msg) {
+        for (auto& handler : routes_)
+            handler(msg, Direction::COMPANION_TO_FC);
+    }
+
+    void inject_companion_to_gcs(const mavlink_message_t& msg) {
+        for (auto& handler : routes_)
+            handler(msg, Direction::COMPANION_TO_GCS);
+    }
+
+private:
+    std::vector<RouteHandler> routes_;
+    std::unordered_set<uint32_t> fc_to_gcs_block_;
+    std::unordered_set<uint32_t> gcs_to_fc_block_;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Typical routing table: FC HEARTBEAT → GCS (pass-through), FC ATTITUDE → blocked (companion replaces with SLAM-fused attitude at higher accuracy), GCS COMMAND_LONG → FC (pass-through) + companion (for mission planner commands), companion SET_POSITION_TARGET → FC (injected).
+[TABLE_CELL_0] Message
+[TABLE_CELL_1] FC→GCS
+[TABLE_CELL_2] GCS→FC
+[TABLE_CELL_3] Companion→FC
+[TABLE_CELL_4] Companion→GCS
+[END_TABLE_ROW]
+[TABLE_CELL_0] HEARTBEAT
+[TABLE_CELL_1] ✓ pass
+[TABLE_CELL_2] ✓ pass
+[TABLE_CELL_3] ✓ inject
+[TABLE_CELL_4] ✓ inject
+[END_TABLE_ROW]
+[TABLE_CELL_0] ATTITUDE
+[TABLE_CELL_1] ✗ blocked
+[TABLE_CELL_2] —
+[TABLE_CELL_3] —
+[TABLE_CELL_4] ✓ inject (SLAM-fused)
+[END_TABLE_ROW]
+[TABLE_CELL_0] COMMAND_LONG
+[TABLE_CELL_1] —
+[TABLE_CELL_2] ✓ pass + parse
+[TABLE_CELL_3] —
+[TABLE_CELL_4] —
+[END_TABLE_ROW]
+[TABLE_CELL_0] SET_POSITION_TARGET
+[TABLE_CELL_1] —
+[TABLE_CELL_2] —
+[TABLE_CELL_3] ✓ inject (trajectory)
+[TABLE_CELL_4] —
+[END_TABLE_ROW]
+[TABLE_CELL_0] SYS_STATUS
+[TABLE_CELL_1] ✓ pass
+[TABLE_CELL_2] —
+[TABLE_CELL_3] —
+[TABLE_CELL_4] ✓ inject (companion)
+[END_TABLE_ROW]
+[TABLE_CELL_0] STATUSTEXT
+[TABLE_CELL_1] ✓ pass
+[TABLE_CELL_2] —
+[TABLE_CELL_3] —
+[TABLE_CELL_4] ✓ inject (mission)
+[END_TABLE_ROW]
+[TABLE_CELL_0] GPS_RAW_INT
+[TABLE_CELL_1] ✓ pass
+[TABLE_CELL_2] —
+[TABLE_CELL_3] —
+[TABLE_CELL_4] —
+[END_TABLE_ROW]
+[PARA|Heading 1] 14. Data Structures & Types
+[PARA|Normal] Listing 14-1: GCS Command Types
+[TABLE_CELL_0] // data/gcs_command.h
+#pragma once
+#include <cstdint>
+
+enum class GCSCommand : uint8_t {
+    NONE,
+    ARM,
+    DISARM,
+    TAKEOFF,
+    LAND,
+    RTL,
+    LOITER,
+    RESUME,
+    EMERGENCY_STOP,
+    SET_MODE,
+    MISSION_START,
+    MISSION_PAUSE,
+    MISSION_CLEAR,
+};
+
+struct GCSCommandMsg {
+    GCSCommand command;
+    float      param1;     // e.g., takeoff altitude
+    float      param2;
+    uint64_t   timestamp_ns;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 14-2: Flight Controller State (published to SHM)
+[TABLE_CELL_0] // data/fc_state.h
+#pragma once
+#include <cstdint>
+#include <atomic>
+
+struct FCState {
+    // From HEARTBEAT
+    uint8_t  base_mode;
+    uint32_t custom_mode;
+    uint8_t  system_status;
+
+    // From SYS_STATUS
+    float    battery_voltage;     // V
+    float    battery_current;     // A
+    int8_t   battery_remaining;   // %
+
+    // From GPS_RAW_INT
+    uint8_t  gps_fix_type;
+    int32_t  lat;                 // degE7
+    int32_t  lon;                 // degE7
+    int32_t  alt;                 // mm MSL
+    uint16_t satellites_visible;
+
+    // From ATTITUDE (from FC's own IMU)
+    float    roll;                // rad
+    float    pitch;               // rad
+    float    yaw;                 // rad
+
+    // Link quality
+    uint8_t  rssi;                // 0-254
+    bool     armed;
+};
+
+struct ShmFCState {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    FCState  state;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: POD (Plain Old Data) Types for SHM Compatibility
+FCState is a POD type: no constructors, no virtual functions, no complex members. This guarantees memcpy-safe layout — essential for SHM because shared memory is raw bytes. Non-POD types (std::string, std::vector) have internal pointers that would be invalid in another process's address space. The atomic<uint64_t> seq in the wrapper struct is the only non-trivial member, and std::atomic is explicitly designed for inter-thread/inter-process use. std::is_trivially_copyable_v<FCState> should be static_asserted to enforce this at compile time.
+[END_TABLE_ROW]
+[PARA|Heading 1] 15. Configuration Management
+[PARA|Normal] Listing 15-1: CommsConfig — All Tuneable Parameters
+[TABLE_CELL_0] // config/comms_config.h
+#pragma once
+#include <string>
+
+struct CommsConfig {
+    // FC serial link
+    std::string fc_device     = "/dev/ttyTHS1";
+    unsigned    fc_baud       = 921600;
+    double      fc_timeout_s  = 5.0;
+
+    // GCS link
+    std::string gcs_transport = "udp";       // "udp" or "serial"
+    uint16_t    gcs_udp_port  = 14550;
+    std::string gcs_device    = "/dev/ttyUSB0";  // for serial radio
+    unsigned    gcs_baud      = 57600;
+    double      gcs_timeout_s = 10.0;
+    std::string gcs_loss_action = "continue";  // "continue" or "rtl"
+
+    // Telemetry rates (Hz)
+    double telem_attitude_hz  = 10.0;
+    double telem_position_hz  = 5.0;
+    double telem_status_hz    = 2.0;
+    double telem_gps_hz       = 2.0;
+
+    // Bandwidth limit (bytes/sec) — 0 = unlimited
+    double link_bandwidth_bps = 125000.0;  // 1 Mbps / 8 (WiFi)
+    double burst_bytes        = 8192.0;
+
+    // MAVLink IDs
+    uint8_t companion_sys_id  = 2;
+    uint8_t companion_comp_id = 191;
+    uint8_t fc_sys_id         = 1;
+    uint8_t fc_comp_id        = 1;
+
+    // Trajectory relay
+    double  relay_rate_hz     = 50.0;
+    bool    relay_enabled     = true;
+
+    // Logging
+    std::string log_level     = "info";
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 15-2: Example comms_config.json
+[TABLE_CELL_0] // Example comms_config.json:
+{
+  "fc_device": "/dev/ttyTHS1",
+  "fc_baud": 921600,
+  "fc_timeout_s": 5.0,
+
+  "gcs_transport": "udp",
+  "gcs_udp_port": 14550,
+  "gcs_timeout_s": 10.0,
+  "gcs_loss_action": "continue",
+
+  "telem_attitude_hz": 10.0,
+  "telem_position_hz": 5.0,
+  "telem_status_hz": 2.0,
+
+  "link_bandwidth_bps": 125000,
+  "burst_bytes": 8192,
+
+  "companion_sys_id": 2,
+  "fc_sys_id": 1,
+
+  "relay_rate_hz": 50,
+  "relay_enabled": true,
+  "log_level": "info"
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 16. Error Handling & Recovery
+[TABLE_CELL_0] Failure Mode
+[TABLE_CELL_1] Detection
+[TABLE_CELL_2] Response
+[TABLE_CELL_3] Recovery
+[END_TABLE_ROW]
+[TABLE_CELL_0] FC serial disconnected
+[TABLE_CELL_1] Read returns error / errno
+[TABLE_CELL_2] Log error, attempt reconnect every 2s
+[TABLE_CELL_3] Re-open /dev/ttyTHS1, re-init MAVLink state
+[END_TABLE_ROW]
+[TABLE_CELL_0] FC heartbeat timeout
+[TABLE_CELL_1] LinkHealth::status() == LOST
+[TABLE_CELL_2] EMERGENCY_STOP to Process 4
+[TABLE_CELL_3] Resume when heartbeats return
+[END_TABLE_ROW]
+[TABLE_CELL_0] GCS link lost
+[TABLE_CELL_1] LinkHealth::status() == LOST
+[TABLE_CELL_2] Continue mission or RTL (configurable)
+[TABLE_CELL_3] Auto-resume on reconnect
+[END_TABLE_ROW]
+[TABLE_CELL_0] MAVLink CRC error
+[TABLE_CELL_1] mavlink_parse_char returns BAD_CRC
+[TABLE_CELL_2] Increment error counter, discard frame
+[TABLE_CELL_3] Automatic (next valid frame)
+[END_TABLE_ROW]
+[TABLE_CELL_0] TX queue full (MPSC)
+[TABLE_CELL_1] try_push returns false
+[TABLE_CELL_2] Drop message, log warning
+[TABLE_CELL_3] Queue drains as serial writes complete
+[END_TABLE_ROW]
+[TABLE_CELL_0] SHM read failure
+[TABLE_CELL_1] SeqLock torn read after 4 retries
+[TABLE_CELL_2] Use last known value, increment stale counter
+[TABLE_CELL_3] Auto-recovers on next consistent read
+[END_TABLE_ROW]
+[TABLE_CELL_0] Bandwidth exceeded
+[TABLE_CELL_1] TokenBucket rejects
+[TABLE_CELL_2] Defer low-priority telemetry
+[TABLE_CELL_3] Automatic (bucket refills)
+[END_TABLE_ROW]
+[PARA|Heading 2] 16.1 Serial Reconnection with Exponential Backoff
+[TABLE_CELL_0] 💡 C++ Concept: Exponential Backoff for Resource Recovery
+When the serial port disconnects (cable vibration, USB issue), we don't spin-retry. Instead, we wait 1s, then 2s, then 4s, up to a maximum of 30s between retries. This exponential backoff prevents CPU waste and excessive log spam during extended outages. The pattern is standard in network programming (TCP retransmission, gRPC, AWS SDK). We add a small random jitter to avoid thundering herd if multiple processes reconnect simultaneously.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 16-1: Exponential Backoff with Jitter
+[TABLE_CELL_0] // util/reconnect.h
+#pragma once
+#include <chrono>
+#include <random>
+#include <algorithm>
+#include <thread>
+#include <spdlog/spdlog.h>
+
+class ExponentialBackoff {
+public:
+    ExponentialBackoff(double init_s = 1.0, double max_s = 30.0,
+                       double multiplier = 2.0)
+        : init_(init_s), max_(max_s), mult_(multiplier),
+          current_(init_s), rng_(std::random_device{}()) {}
+
+    void wait() {
+        // Add jitter: ±25%
+        double jitter = std::uniform_real_distribution<>(0.75, 1.25)(rng_);
+        double wait_s = current_ * jitter;
+
+        spdlog::info("Backoff: waiting {:.1f}s before retry", wait_s);
+        std::this_thread::sleep_for(
+            std::chrono::duration<double>(wait_s));
+
+        current_ = std::min(current_ * mult_, max_);
+    }
+
+    void reset() { current_ = init_; }
+
+private:
+    double init_, max_, mult_, current_;
+    std::mt19937 rng_;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 17. IPC — Output: Commands & FC State
+[PARA|Normal] Process 5 publishes two shared-memory segments consumed by other processes.
+[TABLE_CELL_0] SHM Segment
+[TABLE_CELL_1] Destination
+[TABLE_CELL_2] Structure
+[TABLE_CELL_3] Write Rate
+[TABLE_CELL_4] Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] /gcs_commands
+[TABLE_CELL_1] Process 4
+[TABLE_CELL_2] ShmGCSCommand (32 bytes)
+[TABLE_CELL_3] On command arrival
+[TABLE_CELL_4] Operator commands from GCS
+[END_TABLE_ROW]
+[TABLE_CELL_0] /fc_state
+[TABLE_CELL_1] All processes
+[TABLE_CELL_2] ShmFCState (128 bytes)
+[TABLE_CELL_3] 5 Hz
+[TABLE_CELL_4] Flight controller state (battery, GPS, modes)
+[END_TABLE_ROW]
+[PARA|Normal] Listing 17-1: GCS Command Writer (SeqLock SHM)
+[TABLE_CELL_0] // ipc/gcs_command_writer.h
+#pragma once
+#include "data/gcs_command.h"
+#include <atomic>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+struct ShmGCSCommand {
+    std::atomic<uint64_t> seq;
+    GCSCommandMsg cmd;
+};
+
+class GCSCommandWriter {
+public:
+    bool create(const char* name = "/gcs_commands") {
+        fd_ = shm_open(name, O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        ftruncate(fd_, sizeof(ShmGCSCommand));
+        ptr_ = static_cast<ShmGCSCommand*>(
+            mmap(nullptr, sizeof(ShmGCSCommand),
+                 PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) return false;
+        ptr_->seq.store(0);
+        return true;
+    }
+
+    void write_command(GCSCommand cmd, float p1 = 0.0f, float p2 = 0.0f) {
+        if (!ptr_) return;
+        uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+        ptr_->seq.store(s + 1, std::memory_order_release);
+
+        ptr_->cmd.command = cmd;
+        ptr_->cmd.param1 = p1;
+        ptr_->cmd.param2 = p2;
+        ptr_->cmd.timestamp_ns = current_time_ns();
+
+        ptr_->seq.store(s + 2, std::memory_order_release);
+    }
+
+    ~GCSCommandWriter() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmGCSCommand));
+        if (fd_ >= 0) { shm_unlink("/gcs_commands"); close(fd_); }
+    }
+
+private:
+    int fd_ = -1;
+    ShmGCSCommand* ptr_ = nullptr;
+    uint64_t current_time_ns() const;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 17-2: FC State Writer (SeqLock SHM)
+[TABLE_CELL_0] // ipc/fc_state_writer.h
+#pragma once
+#include "data/fc_state.h"
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+class FCStateWriter {
+public:
+    bool create(const char* name = "/fc_state") {
+        fd_ = shm_open(name, O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        ftruncate(fd_, sizeof(ShmFCState));
+        ptr_ = static_cast<ShmFCState*>(
+            mmap(nullptr, sizeof(ShmFCState),
+                 PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) return false;
+        ptr_->seq.store(0);
+        return true;
+    }
+
+    void write(const FCState& state) {
+        if (!ptr_) return;
+        uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+        ptr_->seq.store(s + 1, std::memory_order_release);
+        ptr_->timestamp_ns = current_time_ns();
+        ptr_->state = state;
+        ptr_->seq.store(s + 2, std::memory_order_release);
+    }
+
+    ~FCStateWriter() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmFCState));
+        if (fd_ >= 0) { shm_unlink("/fc_state"); close(fd_); }
+    }
+
+private:
+    int fd_ = -1;
+    ShmFCState* ptr_ = nullptr;
+    uint64_t current_time_ns() const;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 18. systemd Service Configuration
+[PARA|Normal] Listing 18-1: systemd Service Unit File
+[TABLE_CELL_0] # /etc/systemd/system/comms.service
+[Unit]
+Description=Drone Comms — MAVLink Communication Hub (Process 5)
+After=mission-planner.service
+Requires=mission-planner.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=drone
+Group=drone
+
+ExecStartPre=/usr/local/bin/check_shm.sh /trajectory_cmd /mission_status
+ExecStart=/opt/drone/bin/comms \
+    --config /opt/drone/etc/comms_config.json \
+    --log-level info
+
+Restart=on-failure
+RestartSec=2
+WatchdogSec=10
+
+# Real-time scheduling
+CPUAffinity=3
+Nice=-10
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+
+# Memory
+MemoryMax=128M
+MemoryHigh=96M
+
+# Device access
+DeviceAllow=/dev/ttyTHS1 rw
+DeviceAllow=/dev/ttyUSB0 rw
+
+# Sandboxing
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /opt/drone/logs /dev/ttyTHS1 /dev/ttyUSB0
+ProtectHome=yes
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_SYS_NICE CAP_IPC_LOCK CAP_NET_BIND_SERVICE
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=comms
+
+# Signal handling
+TimeoutStopSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=drone.target
+[END_TABLE_ROW]
+[TABLE_CELL_0] Directive
+[TABLE_CELL_1] Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] After/Requires mission-planner
+[TABLE_CELL_1] Ensures Process 4 SHM segments exist before we read them
+[END_TABLE_ROW]
+[TABLE_CELL_0] CPUAffinity=3
+[TABLE_CELL_1] Pins all 5 comms threads to core 3
+[END_TABLE_ROW]
+[TABLE_CELL_0] DeviceAllow
+[TABLE_CELL_1] Whitelists UART devices (FC serial, radio serial)
+[END_TABLE_ROW]
+[TABLE_CELL_0] MemoryMax=128M
+[TABLE_CELL_1] Comms is lightweight — strict cap prevents leaks
+[END_TABLE_ROW]
+[TABLE_CELL_0] WatchdogSec=10
+[TABLE_CELL_1] systemd kills & restarts if no sd_notify within 10s
+[END_TABLE_ROW]
+[TABLE_CELL_0] CAP_NET_BIND_SERVICE
+[TABLE_CELL_1] Allows binding UDP port 14550 (< 1024 not needed, but future-proofs)
+[END_TABLE_ROW]
+[TABLE_CELL_0] ExecReload
+[TABLE_CELL_1] SIGHUP triggers config reload (bandwidth, rates)
+[END_TABLE_ROW]
+[PARA|Heading 1] 19. CMakeLists.txt
+[PARA|Normal] Listing 19-1: Complete CMakeLists.txt
+[TABLE_CELL_0] # CMakeLists.txt — Process 5: Comms
+cmake_minimum_required(VERSION 3.18)
+project(comms VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ── Compiler flags ──────────────────────────────────────────────
+add_compile_options(
+    -Wall -Wextra -Wpedantic -Werror
+    -O2
+    -march=armv8.2-a+fp16
+)
+
+# ── Dependencies ────────────────────────────────────────────────
+find_package(Boost 1.74 REQUIRED COMPONENTS system)
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(spdlog REQUIRED)
+find_package(nlohmann_json 3.11 REQUIRED)
+find_package(Threads REQUIRED)
+
+# MAVLink headers (header-only, installed to /usr/local/include/mavlink)
+find_path(MAVLINK_INCLUDE_DIR mavlink/v2.0/ardupilotmega/mavlink.h
+          HINTS /usr/local/include /opt/drone/include)
+if(NOT MAVLINK_INCLUDE_DIR)
+    message(FATAL_ERROR "MAVLink headers not found")
+endif()
+
+# ── Sources ─────────────────────────────────────────────────────
+set(COMMS_SOURCES
+    src/main.cpp
+    src/comms/comms_context.cpp
+    src/mavlink/mavlink_wrapper.cpp
+    src/transport/serial_port.cpp
+    src/transport/serial_transport.cpp
+    src/transport/serial_thread.cpp
+    src/transport/udp_transport.cpp
+    src/transport/transport_factory.cpp
+    src/transport/rate_limiter.cpp
+    src/telemetry/telemetry_scheduler.cpp
+    src/telemetry/downlink_thread.cpp
+    src/telemetry/uplink_thread.cpp
+    src/relay/trajectory_relay_thread.cpp
+    src/monitor/link_health.cpp
+    src/monitor/heartbeat_thread.cpp
+    src/routing/message_router.cpp
+    src/comms/gcs_command_parser.cpp
+    src/ipc/trajectory_reader.cpp
+    src/ipc/mission_status_reader.cpp
+    src/ipc/pose_reader.cpp
+    src/ipc/gcs_command_writer.cpp
+    src/ipc/fc_state_writer.cpp
+    src/config/config_loader.cpp
+    src/util/realtime.cpp
+    src/util/reconnect.cpp
+)
+
+# ── Executable ──────────────────────────────────────────────────
+add_executable(comms ${COMMS_SOURCES})
+
+target_include_directories(comms PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${MAVLINK_INCLUDE_DIR}
+)
+
+target_link_libraries(comms PRIVATE
+    Boost::system
+    Eigen3::Eigen
+    spdlog::spdlog
+    nlohmann_json::nlohmann_json
+    Threads::Threads
+    rt          # POSIX shared memory
+    pthread     # POSIX threads
+)
+
+# ── Install ─────────────────────────────────────────────────────
+install(TARGETS comms DESTINATION /opt/drone/bin)
+install(FILES config/comms_config.json DESTINATION /opt/drone/etc)
+
+# ── Tests ───────────────────────────────────────────────────────
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(GTest REQUIRED)
+
+    add_executable(test_mavlink_wrapper
+        tests/test_mavlink_wrapper.cpp
+        src/mavlink/mavlink_wrapper.cpp
+    )
+    target_include_directories(test_mavlink_wrapper PRIVATE include ${MAVLINK_INCLUDE_DIR})
+    target_link_libraries(test_mavlink_wrapper GTest::gtest_main)
+    add_test(NAME MAVLinkWrapperTest COMMAND test_mavlink_wrapper)
+
+    add_executable(test_rate_limiter
+        tests/test_rate_limiter.cpp
+        src/transport/rate_limiter.cpp
+    )
+    target_include_directories(test_rate_limiter PRIVATE include)
+    target_link_libraries(test_rate_limiter GTest::gtest_main)
+    add_test(NAME RateLimiterTest COMMAND test_rate_limiter)
+
+    add_executable(test_mpsc_queue tests/test_mpsc_queue.cpp)
+    target_include_directories(test_mpsc_queue PRIVATE include)
+    target_link_libraries(test_mpsc_queue GTest::gtest_main Threads::Threads)
+    add_test(NAME MPSCQueueTest COMMAND test_mpsc_queue)
+
+    add_executable(test_message_router
+        tests/test_message_router.cpp
+        src/routing/message_router.cpp
+    )
+    target_include_directories(test_message_router PRIVATE include ${MAVLINK_INCLUDE_DIR})
+    target_link_libraries(test_message_router GTest::gtest_main)
+    add_test(NAME MessageRouterTest COMMAND test_message_router)
+
+    add_executable(test_gcs_parser
+        tests/test_gcs_parser.cpp
+        src/comms/gcs_command_parser.cpp
+    )
+    target_include_directories(test_gcs_parser PRIVATE include ${MAVLINK_INCLUDE_DIR})
+    target_link_libraries(test_gcs_parser GTest::gtest_main)
+    add_test(NAME GCSParserTest COMMAND test_gcs_parser)
+
+    add_executable(test_link_health
+        tests/test_link_health.cpp
+        src/monitor/link_health.cpp
+    )
+    target_include_directories(test_link_health PRIVATE include)
+    target_link_libraries(test_link_health GTest::gtest_main)
+    add_test(NAME LinkHealthTest COMMAND test_link_health)
+endif()
+[END_TABLE_ROW]
+[PARA|Heading 1] 20. Implementation Roadmap
+[PARA|Normal] The Comms process is divided into six implementation phases spanning approximately 10 weeks. Each phase produces testable, incrementally useful functionality.
+[TABLE_CELL_0] Phase
+[TABLE_CELL_1] Duration
+[TABLE_CELL_2] Deliverables
+[TABLE_CELL_3] Dependencies
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 1: Foundation
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • Project scaffolding & CMake setup
+• MAVLinkChannel wrapper
+• SerialPort (Boost.Asio UART)
+• CommsConfig & JSON loader
+• Realtime thread utilities
+[TABLE_CELL_3] MAVLink C headers, Boost.Asio
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 2: FC Serial Link
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • SerialTransport (async read/write)
+• MAVLink parse + dispatch
+• MPSC queue for TX
+• FC heartbeat detection
+• Reconnection with exponential backoff
+• Unit tests for parser & queue
+[TABLE_CELL_3] Phase 1
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 3: GCS Communication
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • UDPTransport for GCS
+• SerialRadio transport (SiK)
+• Transport factory & abstraction
+• GCSCommandParser
+• GCSCommandWriter (SHM)
+• FCStateWriter (SHM)
+[TABLE_CELL_3] Phase 1, 2
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 4: Telemetry
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • TokenBucketRateLimiter
+• TelemetryScheduler (priority-based)
+• Downlink thread (all streams)
+• SHM readers for pose & status
+• Bandwidth testing
+[TABLE_CELL_3] Phase 3
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 5: Trajectory Relay
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • TrajectoryReader (SHM)
+• TrajectoryRelay thread (50 Hz)
+• Staleness detection
+• Latency measurement
+• End-to-end test with Process 4 SHM
+[TABLE_CELL_3] Phase 2, Process 4
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 6: Integration & Hardening
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • MessageRouter (pass-through/filter/inject)
+• HeartbeatMonitor thread
+• Full link-loss failsafe testing
+• systemd integration
+• SITL test with ArduPilot
+• Performance profiling on Jetson
+[TABLE_CELL_3] All phases
+[END_TABLE_ROW]
+[PARA|Heading 2] 20.1 Testing Strategy
+[TABLE_CELL_0] Test Type
+[TABLE_CELL_1] Scope
+[TABLE_CELL_2] Tools
+[END_TABLE_ROW]
+[TABLE_CELL_0] Unit tests
+[TABLE_CELL_1] MAVLink parser, rate limiter, MPSC queue, router, GCS parser
+[TABLE_CELL_2] GTest
+[END_TABLE_ROW]
+[TABLE_CELL_0] Component tests
+[TABLE_CELL_1] Serial loopback, UDP echo, SHM round-trip
+[TABLE_CELL_2] GTest + mock serial/UDP
+[END_TABLE_ROW]
+[TABLE_CELL_0] Integration tests
+[TABLE_CELL_1] All threads with recorded MAVLink traffic
+[TABLE_CELL_2] tcpreplay + SHM replay
+[END_TABLE_ROW]
+[TABLE_CELL_0] SITL tests
+[TABLE_CELL_1] Full process against ArduPilot SITL (TCP/UDP)
+[TABLE_CELL_2] ArduPilot SITL, MAVProxy
+[END_TABLE_ROW]
+[TABLE_CELL_0] Radio tests
+[TABLE_CELL_1] SiK radio pair at various ranges
+[TABLE_CELL_2] Field test, signal analyser
+[END_TABLE_ROW]
+[TABLE_CELL_0] Stress tests
+[TABLE_CELL_1] Saturate bandwidth, kill/restart FC serial
+[TABLE_CELL_2] Custom load generator
+[END_TABLE_ROW]
+[PARA|Heading 2] 20.2 Performance Targets
+[TABLE_CELL_0] Metric
+[TABLE_CELL_1] Target
+[TABLE_CELL_2] Measurement Method
+[END_TABLE_ROW]
+[TABLE_CELL_0] Trajectory relay latency (SHM→UART)
+[TABLE_CELL_1] < 5 ms end-to-end
+[TABLE_CELL_2] Timestamped SHM vs. UART write callback
+[END_TABLE_ROW]
+[TABLE_CELL_0] MAVLink parse throughput
+[TABLE_CELL_1] > 10,000 msg/sec
+[TABLE_CELL_2] GTest benchmark, batch parse
+[END_TABLE_ROW]
+[TABLE_CELL_0] Telemetry downlink bandwidth
+[TABLE_CELL_1] Stay within configured limit ±5%
+[TABLE_CELL_2] Wireshark capture + analysis
+[END_TABLE_ROW]
+[TABLE_CELL_0] FC heartbeat detection
+[TABLE_CELL_1] < 1s from first byte
+[TABLE_CELL_2] Timestamp logging
+[END_TABLE_ROW]
+[TABLE_CELL_0] Link loss detection
+[TABLE_CELL_1] < 5s (FC), < 10s (GCS)
+[TABLE_CELL_2] Kill link, measure time to failsafe
+[END_TABLE_ROW]
+[TABLE_CELL_0] Memory usage
+[TABLE_CELL_1] < 80 MB RSS
+[TABLE_CELL_2] valgrind + /proc/pid/status
+[END_TABLE_ROW]
+[TABLE_CELL_0] CPU usage (all threads)
+[TABLE_CELL_1] < 15% of 1 core
+[TABLE_CELL_2] perf stat + htop
+[END_TABLE_ROW]
+[PARA|Heading 1] Appendix: C++ Concepts Reference
+[TABLE_CELL_0] C++ Concept
+[TABLE_CELL_1] Location & Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] Header-Only Libraries
+[TABLE_CELL_1] Section 5 — MAVLink as zero-cost compiled-in protocol
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::optional (Incremental Parsing)
+[TABLE_CELL_1] Section 5 — byte-by-byte MAVLink parser return
+[END_TABLE_ROW]
+[TABLE_CELL_0] Rule of Five (Non-Copyable Resources)
+[TABLE_CELL_1] Section 6 — SerialPort UART wrapper
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::function (Type-Erased Callbacks)
+[TABLE_CELL_1] Section 6 — message handler registration
+[END_TABLE_ROW]
+[TABLE_CELL_0] Event-Driven vs. Periodic Threads
+[TABLE_CELL_1] Section 3 — Boost.Asio vs. sleep_until patterns
+[END_TABLE_ROW]
+[TABLE_CELL_0] Lambda Captures (Closures)
+[TABLE_CELL_1] Section 8 — deferred telemetry packing
+[END_TABLE_ROW]
+[TABLE_CELL_0] Token Bucket Rate Limiter
+[TABLE_CELL_1] Section 8 — bandwidth-aware telemetry throttling
+[END_TABLE_ROW]
+[TABLE_CELL_0] Single Responsibility Principle
+[TABLE_CELL_1] Section 7 — parser vs. executor separation
+[END_TABLE_ROW]
+[TABLE_CELL_0] static_cast (Narrowing Conversions)
+[TABLE_CELL_1] Section 9 — double→float for MAVLink fields
+[END_TABLE_ROW]
+[TABLE_CELL_0] Exponential Moving Average
+[TABLE_CELL_1] Section 10 — link quality smoothing
+[END_TABLE_ROW]
+[TABLE_CELL_0] Lock-Free MPSC Queue
+[TABLE_CELL_1] Section 11 — multi-producer FC TX queue
+[END_TABLE_ROW]
+[TABLE_CELL_0] False Sharing & alignas(64)
+[TABLE_CELL_1] Section 11 — cache line padding for atomics
+[END_TABLE_ROW]
+[TABLE_CELL_0] Abstract Factory Pattern
+[TABLE_CELL_1] Section 12 — runtime transport selection
+[END_TABLE_ROW]
+[TABLE_CELL_0] POD Types for SHM
+[TABLE_CELL_1] Section 14 — memcpy-safe structs for shared memory
+[END_TABLE_ROW]
+[TABLE_CELL_0] Exponential Backoff with Jitter
+[TABLE_CELL_1] Section 16 — serial port reconnection
+[END_TABLE_ROW]
+[PARA|Heading 1] Appendix B: Main Entry Point
+[PARA|Normal] Listing B-1: main.cpp — Process Entry Point
+[TABLE_CELL_0] // src/main.cpp — Process 5: Comms
+#include "comms/comms_context.h"
+#include "transport/serial_transport.h"
+#include "transport/udp_transport.h"
+#include "relay/trajectory_relay_thread.h"
+#include "telemetry/downlink_thread.h"
+#include "telemetry/uplink_thread.h"
+#include "monitor/heartbeat_thread.h"
+#include "config/config_loader.h"
+#include "util/realtime.h"
+#include <csignal>
+#include <thread>
+#include <atomic>
+#include <spdlog/spdlog.h>
+
+static std::atomic<bool> g_running{true};
+
+void signal_handler(int sig) {
+    spdlog::info("Signal {} received, shutting down...", sig);
+    g_running.store(false);
+}
+
+int main(int argc, char* argv[]) {
+    std::signal(SIGTERM, signal_handler);
+    std::signal(SIGINT, signal_handler);
+
+    // Parse args
+    std::string config_path = "/opt/drone/etc/comms_config.json";
+    for (int i = 1; i < argc - 1; ++i) {
+        if (std::string(argv[i]) == "--config") config_path = argv[i + 1];
+    }
+
+    // Load config
+    CommsConfig cfg;
+    load_comms_config(config_path, cfg);
+    spdlog::set_level(spdlog::level::from_str(cfg.log_level));
+
+    spdlog::info("=== Process 5: Comms starting ===");
+
+    // Create shared context
+    CommsContext ctx(cfg);
+
+    // Open IPC
+    if (!ctx.init_ipc()) {
+        spdlog::critical("Failed to initialise SHM segments");
+        return 1;
+    }
+
+    // Create transports
+    asio::io_context fc_io;
+    SerialTransport fc_serial(fc_io, cfg.fc_device, cfg.fc_baud,
+                               MAVLINK_COMM_0);
+
+    asio::io_context gcs_io;
+    UDPTransport gcs_udp(gcs_io, cfg.gcs_udp_port, MAVLINK_COMM_1);
+
+    // Launch threads
+    std::vector<std::thread> threads;
+
+    threads.emplace_back(serial_transport_thread,
+                          std::ref(cfg), std::ref(fc_serial), std::ref(g_running));
+    threads.emplace_back(telemetry_uplink_thread,
+                          std::ref(ctx), std::ref(gcs_udp), std::ref(g_running));
+    threads.emplace_back(telemetry_downlink_thread,
+                          std::ref(ctx), std::ref(gcs_udp), std::ref(g_running));
+    threads.emplace_back(trajectory_relay_thread,
+                          std::ref(ctx.traj_reader()), std::ref(fc_serial),
+                          std::ref(ctx.mavlink()), std::ref(g_running));
+    threads.emplace_back(heartbeat_monitor_thread,
+                          std::ref(ctx), std::ref(fc_serial), std::ref(gcs_udp),
+                          std::ref(g_running));
+
+    spdlog::info("All 5 threads launched");
+
+    // Wait for shutdown
+    for (auto& t : threads)
+        t.join();
+
+    spdlog::info("=== Process 5: Comms shutdown complete ===");
+    return 0;
+}
+[END_TABLE_ROW]

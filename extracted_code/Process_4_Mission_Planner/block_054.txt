@@ -1,0 +1,3 @@
+=== Key systemd features used: ===
+
+Pins threads to cores 4-5 (shared with our 5 threads)

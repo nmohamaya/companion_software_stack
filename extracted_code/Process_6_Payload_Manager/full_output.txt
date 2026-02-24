@@ -1,0 +1,2037 @@
+[PARA|Normal] Process 6: Payload Manager
+[PARA|Normal] Camera Gimbal Control, Payload Triggering & Sensor Management
+[PARA|Normal] NVIDIA Jetson Orin Nano — Drone Companion Computer
+[PARA|Normal] Generated: 2026-02-23
+[PARA|Heading 1] Table of Contents
+[PARA|List Number] 1. Executive Summary
+[PARA|List Number] 2. Process Architecture Overview
+[PARA|List Number] 3. Thread Architecture & Responsibilities
+[PARA|List Number] 4. Inter-Process Communication (IPC) — Inputs
+[PARA|List Number] 5. Payload Plugin Architecture
+[PARA|List Number] 6. Camera Gimbal Controller Thread
+[PARA|List Number] 7. Camera Trigger & Image Capture Thread
+[PARA|List Number] 8. Auxiliary Sensor Manager Thread
+[PARA|List Number] 9. Payload Command Dispatcher Thread
+[PARA|List Number] 10. Inter-Thread Communication
+[PARA|List Number] 11. GPIO & PWM Hardware Interface
+[PARA|List Number] 12. Gimbal Stabilisation Algorithms
+[PARA|List Number] 13. Geo-Tagged Image Pipeline
+[PARA|List Number] 14. Data Structures & Types
+[PARA|List Number] 15. Configuration Management
+[PARA|List Number] 16. Error Handling & Recovery
+[PARA|List Number] 17. IPC — Output: Payload Status
+[PARA|List Number] 18. systemd Service Configuration
+[PARA|List Number] 19. CMakeLists.txt
+[PARA|List Number] 20. Implementation Roadmap
+[PARA|Heading 1] 1. Executive Summary
+[PARA|Normal] Process 6 (Payload Manager) controls all non-flight-critical hardware attached to the drone: camera gimbals, survey cameras, multi-spectral sensors, LiDAR scanners, spotlights, speakers, drop mechanisms, and any future payload. It abstracts payload diversity behind a plugin architecture, enabling hot-swappable payload support without recompiling the core.
+[PARA|Normal] The process reads vehicle pose from Process 3 (SLAM/VIO Nav) for gimbal stabilisation, receives payload commands from Process 4 (Mission Planner) via shared memory, and coordinates with Process 1 (Video/Capture) for camera trigger synchronisation. It publishes payload status to /payload_status for telemetry via Process 5 (Comms).
+[PARA|Normal] Key design goals: sub-millisecond gimbal stabilisation loop (> 200 Hz), precise geo-tagged image capture synchronised with vehicle pose, extensible plugin system for new payloads, safe hardware access through RAII wrappers, and graceful degradation when payloads are absent or malfunctioning.
+[TABLE_CELL_0] Attribute
+[TABLE_CELL_1] Value
+[END_TABLE_ROW]
+[TABLE_CELL_0] Process name
+[TABLE_CELL_1] payload_manager
+[END_TABLE_ROW]
+[TABLE_CELL_0] Language / Standard
+[TABLE_CELL_1] C++17
+[END_TABLE_ROW]
+[TABLE_CELL_0] Target hardware
+[TABLE_CELL_1] NVIDIA Jetson Orin Nano (8 GB)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Thread count
+[TABLE_CELL_1] 4 (Gimbal Controller, Camera Trigger, Aux Sensor Mgr, Command Dispatcher)
+[END_TABLE_ROW]
+[TABLE_CELL_0] IPC inputs
+[TABLE_CELL_1] /slam_pose (Process 3), /payload_commands (Process 4), /mission_status (Process 4)
+[END_TABLE_ROW]
+[TABLE_CELL_0] IPC outputs
+[TABLE_CELL_1] /payload_status (to Process 5/7)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Hardware interfaces
+[TABLE_CELL_1] I2C (gimbal IMU), SPI (sensors), GPIO (triggers), PWM (servos), USB (cameras)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Update rates
+[TABLE_CELL_1] Gimbal: 200 Hz, Camera trigger: event-driven, Aux sensors: 10 Hz
+[END_TABLE_ROW]
+[TABLE_CELL_0] Key dependencies
+[TABLE_CELL_1] Eigen3, spdlog, nlohmann/json, libgpiod, linux/i2c-dev
+[END_TABLE_ROW]
+[PARA|Heading 1] 2. Process Architecture Overview
+[PARA|Normal] The Payload Manager follows a plugin-based architecture. The core process provides thread management, IPC, hardware abstraction, and lifecycle control. Individual payloads implement a PayloadPlugin interface and are loaded from a configuration file at startup. This separation allows field teams to add new payloads by writing a plugin class and updating the config — no changes to the core infrastructure.
+[PARA|Normal] Figure 2-1: Payload Manager Architecture
+[TABLE_CELL_0] 
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    PROCESS 6: PAYLOAD MANAGER                          │
+│                                                                         │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                  Payload Command Dispatcher                        │ │
+│  │    reads /payload_commands SHM, routes to active plugins           │ │
+│  └───┬─────────────────┬──────────────────────┬───────────────────────┘ │
+│      │                 │                      │                         │
+│      ▼                 ▼                      ▼                         │
+│  ┌──────────────┐ ┌──────────────────┐ ┌────────────────────────┐      │
+│  │ Gimbal       │ │ Camera Trigger   │ │ Aux Sensor Manager     │      │
+│  │ Controller   │ │ & Image Capture  │ │ (multi-spectral,       │      │
+│  │ (200 Hz PID) │ │ (event-driven)   │ │  spotlight, drop mech) │      │
+│  └──────┬───────┘ └────────┬─────────┘ └──────────┬─────────────┘      │
+│         │                  │                      │                     │
+│    PWM/I2C            GPIO trigger           GPIO/SPI/I2C               │
+│         │                  │                      │                     │
+│  ┌──────┴───────┐ ┌────────┴─────────┐ ┌──────────┴─────────────┐      │
+│  │  Gimbal HW   │ │ Survey Camera    │ │ Multi-spectral, LiDAR, │      │
+│  │  (servos +   │ │ (USB / CSI)      │ │ spotlight, drop mech   │      │
+│  │   IMU)       │ │                  │ │                        │      │
+│  └──────────────┘ └──────────────────┘ └────────────────────────┘      │
+│                                                                         │
+│  ┌─────────────── Plugin Registry ──────────────────────────────┐      │
+│  │  GimbalPlugin │ CameraPlugin │ SpotlightPlugin │ DropPlugin  │      │
+│  └──────────────────────────────────────────────────────────────┘      │
+│                                                                         │
+├───────────────────── IPC (Shared Memory) ──────────────────────────────┤
+│ IN:  /slam_pose ← Proc 3  │  /payload_commands ← Proc 4              │
+│ OUT: /payload_status → Proc 5, 7                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+
+[END_TABLE_ROW]
+[PARA|Heading 1] 3. Thread Architecture & Responsibilities
+[TABLE_CELL_0] Thread
+[TABLE_CELL_1] Core
+[TABLE_CELL_2] Priority
+[TABLE_CELL_3] Rate (Hz)
+[TABLE_CELL_4] Responsibility
+[END_TABLE_ROW]
+[TABLE_CELL_0] GimbalController
+[TABLE_CELL_1] 2
+[TABLE_CELL_2] SCHED_FIFO 65
+[TABLE_CELL_3] 200
+[TABLE_CELL_4] PID stabilisation loop, PWM servo commands, IMU read
+[END_TABLE_ROW]
+[TABLE_CELL_0] CameraTrigger
+[TABLE_CELL_1] 2
+[TABLE_CELL_2] SCHED_FIFO 55
+[TABLE_CELL_3] event-driven
+[TABLE_CELL_4] Geo-tagged image capture, GPIO trigger, pose snapshot
+[END_TABLE_ROW]
+[TABLE_CELL_0] AuxSensorManager
+[TABLE_CELL_1] 2
+[TABLE_CELL_2] SCHED_FIFO 35
+[TABLE_CELL_3] 10
+[TABLE_CELL_4] Read multi-spectral, manage spotlight, drop mechanism
+[END_TABLE_ROW]
+[TABLE_CELL_0] CommandDispatcher
+[TABLE_CELL_1] 2
+[TABLE_CELL_2] SCHED_FIFO 45
+[TABLE_CELL_3] 20
+[TABLE_CELL_4] Read /payload_commands SHM, route to plugins
+[END_TABLE_ROW]
+[PARA|Normal] All payload threads run on core 2, keeping time-critical cores free for perception (0-1), comms (3), and mission planning (4-5). The gimbal controller has the highest priority (65) because jittery servo commands cause visible camera shake in video. The camera trigger runs at 55 to minimise shutter-to-pose-sample latency.
+[TABLE_CELL_0] 💡 C++ Concept: Thread Affinity & CPU Isolation for Determinism
+set_thread_params() calls pthread_setaffinity_np() to pin a thread to a specific core and sched_setscheduler() for SCHED_FIFO real-time priority. On the Jetson Orin Nano's 6-core ARM CPU, we isolate cores for different functions: cores 0-1 for perception, core 2 for payload, core 3 for comms, cores 4-5 for planning. This prevents unrelated work from preempting time-sensitive threads. The Linux kernel isolcpus= boot parameter can further prevent non-pinned kernel threads from using dedicated cores.
+[END_TABLE_ROW]
+[PARA|Heading 1] 4. Inter-Process Communication (IPC) — Inputs
+[TABLE_CELL_0] SHM Segment
+[TABLE_CELL_1] Source
+[TABLE_CELL_2] Structure
+[TABLE_CELL_3] Read Rate
+[TABLE_CELL_4] Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] /slam_pose
+[TABLE_CELL_1] Process 3
+[TABLE_CELL_2] ShmPoseStamped (96 B)
+[TABLE_CELL_3] 200 Hz
+[TABLE_CELL_4] Gimbal stabilisation + geo-tagging
+[END_TABLE_ROW]
+[TABLE_CELL_0] /payload_commands
+[TABLE_CELL_1] Process 4
+[TABLE_CELL_2] ShmPayloadCmd (64 B)
+[TABLE_CELL_3] 20 Hz
+[TABLE_CELL_4] Gimbal target, trigger, aux control
+[END_TABLE_ROW]
+[TABLE_CELL_0] /mission_status
+[TABLE_CELL_1] Process 4
+[TABLE_CELL_2] ShmMissionStatus (80 B)
+[TABLE_CELL_3] 1 Hz
+[TABLE_CELL_4] Mission phase for auto-trigger logic
+[END_TABLE_ROW]
+[PARA|Normal] Listing 4-1: Payload Command SHM Reader
+[TABLE_CELL_0] // ipc/payload_command_reader.h
+#pragma once
+#include <atomic>
+#include <cstring>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+enum class PayloadCmdType : uint8_t {
+    NONE = 0,
+    GIMBAL_SET_ANGLE,       // set pitch/roll/yaw target
+    GIMBAL_SET_RATE,        // set angular rate
+    GIMBAL_SET_MODE,        // stabilised / follow / lock / FPV
+    CAMERA_TRIGGER,         // single shot
+    CAMERA_START_INTERVAL,  // interval capture (survey)
+    CAMERA_STOP_INTERVAL,
+    CAMERA_START_VIDEO,
+    CAMERA_STOP_VIDEO,
+    AUX_SPOTLIGHT_ON,
+    AUX_SPOTLIGHT_OFF,
+    AUX_SPOTLIGHT_BRIGHTNESS,
+    AUX_DROP_RELEASE,
+    AUX_SENSOR_START,
+    AUX_SENSOR_STOP,
+};
+
+struct PayloadCmd {
+    PayloadCmdType type;
+    float param1;   // e.g., pitch angle, brightness 0-1
+    float param2;   // e.g., roll angle, interval_s
+    float param3;   // e.g., yaw angle
+    uint64_t timestamp_ns;
+};
+
+struct ShmPayloadCmd {
+    std::atomic<uint64_t> seq;
+    PayloadCmd cmd;
+};
+
+class PayloadCommandReader {
+public:
+    bool open(const char* name = "/payload_commands") {
+        fd_ = shm_open(name, O_RDONLY, 0);
+        if (fd_ < 0) return false;
+        ptr_ = static_cast<ShmPayloadCmd*>(
+            mmap(nullptr, sizeof(ShmPayloadCmd), PROT_READ, MAP_SHARED, fd_, 0));
+        return ptr_ != MAP_FAILED;
+    }
+
+    bool read(PayloadCmd& out) const {
+        if (!ptr_) return false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
+            if (s1 & 1) continue;
+            std::memcpy(&out, &ptr_->cmd, sizeof(PayloadCmd));
+            std::atomic_thread_fence(std::memory_order_acquire);
+            uint64_t s2 = ptr_->seq.load(std::memory_order_relaxed);
+            if (s1 == s2) return true;
+        }
+        return false;
+    }
+
+    ~PayloadCommandReader() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmPayloadCmd));
+        if (fd_ >= 0) close(fd_);
+    }
+
+private:
+    int fd_ = -1;
+    ShmPayloadCmd* ptr_ = nullptr;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 5. Payload Plugin Architecture
+[PARA|Normal] The plugin architecture allows different payload hardware to be managed through a uniform interface. Each payload type (gimbal, camera, spotlight, drop mechanism) implements the PayloadPlugin interface. Plugins are registered at startup from configuration and the command dispatcher routes commands to the appropriate plugin.
+[TABLE_CELL_0] 💡 C++ Concept: Template Method Pattern (GoF)
+The Template Method pattern defines the skeleton of an algorithm in a base class, deferring specific steps to subclasses. PayloadPlugin::init() calls do_init() (the customisation point), followed by base-class housekeeping (logging, state update). Subclasses override do_init() to perform hardware-specific setup. This ensures every plugin follows the same lifecycle (init → configure → update → shutdown) without duplicating the lifecycle management code. The 'non-virtual interface' (NVI) idiom makes init() non-virtual (controls the skeleton) while do_init() is virtual (varies).
+[END_TABLE_ROW]
+[PARA|Normal] Listing 5-1: PayloadPlugin Interface (Template Method Pattern)
+[TABLE_CELL_0] // plugin/payload_plugin.h
+#pragma once
+#include <string>
+#include <memory>
+#include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
+
+enum class PluginState : uint8_t {
+    UNINITIALIZED,
+    INITIALIZING,
+    READY,
+    ACTIVE,
+    ERROR,
+    SHUTDOWN
+};
+
+class PayloadPlugin {
+public:
+    virtual ~PayloadPlugin() = default;
+
+    // Template Method: init lifecycle
+    bool init(const nlohmann::json& config) {
+        state_ = PluginState::INITIALIZING;
+        spdlog::info("Plugin [{}] initialising...", name());
+
+        if (!do_init(config)) {
+            state_ = PluginState::ERROR;
+            spdlog::error("Plugin [{}] init failed", name());
+            return false;
+        }
+
+        state_ = PluginState::READY;
+        spdlog::info("Plugin [{}] ready", name());
+        return true;
+    }
+
+    // Template Method: shutdown lifecycle
+    void shutdown() {
+        spdlog::info("Plugin [{}] shutting down...", name());
+        do_shutdown();
+        state_ = PluginState::SHUTDOWN;
+    }
+
+    // Called by the appropriate thread at its update rate
+    virtual void update() = 0;
+
+    // Handle a command routed to this plugin
+    virtual bool handle_command(const PayloadCmd& cmd) = 0;
+
+    // Status query
+    virtual nlohmann::json status() const = 0;
+
+    // Identity
+    virtual std::string name() const = 0;
+    virtual std::string type() const = 0;
+
+    PluginState state() const { return state_; }
+
+protected:
+    // Customisation points (Template Method hooks)
+    virtual bool do_init(const nlohmann::json& config) = 0;
+    virtual void do_shutdown() = 0;
+
+    PluginState state_ = PluginState::UNINITIALIZED;
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 5.2 Plugin Registry
+[TABLE_CELL_0] 💡 C++ Concept: Factory Registry Pattern (Self-Registering Factories)
+A factory registry maps string names to factory functions: registry["gimbal"] → make_unique<GimbalPlugin>(). Each plugin registers itself with a static initialiser, so adding a new plugin only requires (1) writing the class and (2) adding one REGISTER_PLUGIN macro. The core code never mentions specific plugin types — full Open/Closed Principle compliance. The config file lists which plugins to load: [{"type": "gimbal", ...}, {"type": "camera", ...}], and the registry instantiates them.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 5-2: Plugin Registry with Self-Registration Macro
+[TABLE_CELL_0] // plugin/plugin_registry.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include <functional>
+#include <unordered_map>
+#include <memory>
+#include <string>
+
+class PluginRegistry {
+public:
+    using FactoryFn = std::function<std::unique_ptr<PayloadPlugin>()>;
+
+    static PluginRegistry& instance() {
+        static PluginRegistry reg;
+        return reg;
+    }
+
+    void register_type(const std::string& type_name, FactoryFn factory) {
+        factories_[type_name] = std::move(factory);
+        spdlog::debug("Plugin type registered: {}", type_name);
+    }
+
+    std::unique_ptr<PayloadPlugin> create(const std::string& type_name) const {
+        auto it = factories_.find(type_name);
+        if (it == factories_.end()) {
+            spdlog::error("Unknown plugin type: {}", type_name);
+            return nullptr;
+        }
+        return it->second();
+    }
+
+    std::vector<std::string> registered_types() const {
+        std::vector<std::string> types;
+        for (const auto& [name, _] : factories_)
+            types.push_back(name);
+        return types;
+    }
+
+private:
+    PluginRegistry() = default;
+    std::unordered_map<std::string, FactoryFn> factories_;
+};
+
+// Macro for self-registration
+#define REGISTER_PLUGIN(TypeName, ClassName) \
+    static bool _registered_##ClassName = []() { \
+        PluginRegistry::instance().register_type( \
+            TypeName, \
+            []() { return std::make_unique<ClassName>(); }); \
+        return true; \
+    }();
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Meyers' Singleton (Static Local Variable)
+PluginRegistry::instance() uses the 'Meyers' Singleton' pattern: a function-local static variable. In C++11 and later, function-local statics are guaranteed to be initialised exactly once, even under concurrent access (the compiler inserts thread-safe guards). This avoids the classic 'static initialisation order fiasco' where global objects in different translation units might initialise in unpredictable order. The singleton is created on first use and destroyed at program exit.
+[END_TABLE_ROW]
+[PARA|Heading 1] 6. Camera Gimbal Controller Thread
+[PARA|Normal] The Gimbal Controller thread is the highest-frequency loop in the Payload Manager, running at 200 Hz. It reads the current vehicle attitude from the SLAM process, computes the error between the desired camera pointing direction and the current gimbal orientation, applies PID control, and outputs PWM commands to gimbal servos.
+[PARA|Heading 2] 6.1 Gimbal Modes
+[TABLE_CELL_0] Mode
+[TABLE_CELL_1] Description
+[TABLE_CELL_2] Example Use
+[END_TABLE_ROW]
+[TABLE_CELL_0] STABILISED
+[TABLE_CELL_1] Camera maintains earth-fixed pointing angle regardless of vehicle attitude
+[TABLE_CELL_2] Surveillance, filming
+[END_TABLE_ROW]
+[TABLE_CELL_0] FOLLOW
+[TABLE_CELL_1] Camera follows vehicle heading (yaw), stabilised in pitch/roll
+[TABLE_CELL_2] FPV-style, forward camera
+[END_TABLE_ROW]
+[TABLE_CELL_0] LOCK
+[TABLE_CELL_1] Camera locked to a GPS coordinate, auto-tracks as vehicle moves
+[TABLE_CELL_2] Target tracking
+[END_TABLE_ROW]
+[TABLE_CELL_0] RATE
+[TABLE_CELL_1] Direct angular rate control (manual joystick input from GCS)
+[TABLE_CELL_2] Manual inspection
+[END_TABLE_ROW]
+[TABLE_CELL_0] RETRACT
+[TABLE_CELL_1] Camera stowed to safe position (pitch 0, roll 0, yaw forward)
+[TABLE_CELL_2] Takeoff/landing
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.2 PID Controller
+[TABLE_CELL_0] 💡 C++ Concept: CRTP for Zero-Overhead PID Variants
+We define a PID controller base using CRTP (Curiously Recurring Template Pattern) so that different axis controllers (pitch, roll, yaw) can specialize output clamping, integral windup behaviour, or derivative filtering without virtual function overhead. At 200 Hz, the PID runs 200 times per second per axis (600 calls/sec total). Virtual dispatch would add ~5-10 ns per call; CRTP eliminates this entirely via compile-time binding. For a resource-constrained Jetson, every nanosecond in the inner loop matters.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 6-1: CRTP PID Controller with Derivative Filtering
+[TABLE_CELL_0] // gimbal/pid_controller.h
+#pragma once
+#include <algorithm>
+#include <cmath>
+
+struct PIDGains {
+    double kp = 1.0;
+    double ki = 0.0;
+    double kd = 0.0;
+    double output_min = -1.0;
+    double output_max =  1.0;
+    double integral_max = 0.5;   // anti-windup clamp
+    double d_filter_tau = 0.02;  // derivative low-pass filter time constant
+};
+
+template <typename Derived>
+class PIDControllerBase {
+public:
+    explicit PIDControllerBase(const PIDGains& gains)
+        : gains_(gains) {}
+
+    double compute(double setpoint, double measurement, double dt) {
+        double error = static_cast<Derived*>(this)->wrap_error(
+            setpoint - measurement);
+
+        // Proportional
+        double p_term = gains_.kp * error;
+
+        // Integral with anti-windup
+        integral_ += error * dt;
+        integral_ = std::clamp(integral_, -gains_.integral_max,
+                                gains_.integral_max);
+        double i_term = gains_.ki * integral_;
+
+        // Derivative with low-pass filter
+        double raw_d = (error - prev_error_) / dt;
+        double alpha = dt / (gains_.d_filter_tau + dt);
+        filtered_d_ = alpha * raw_d + (1.0 - alpha) * filtered_d_;
+        double d_term = gains_.kd * filtered_d_;
+
+        prev_error_ = error;
+
+        double output = p_term + i_term + d_term;
+        return std::clamp(output, gains_.output_min, gains_.output_max);
+    }
+
+    void reset() {
+        integral_ = 0.0;
+        prev_error_ = 0.0;
+        filtered_d_ = 0.0;
+    }
+
+    PIDGains& gains() { return gains_; }
+
+protected:
+    PIDGains gains_;
+    double integral_ = 0.0;
+    double prev_error_ = 0.0;
+    double filtered_d_ = 0.0;
+};
+
+// Pitch/Roll PID — error is linear angle in radians
+class PitchRollPID : public PIDControllerBase<PitchRollPID> {
+public:
+    using PIDControllerBase::PIDControllerBase;
+    double wrap_error(double e) const { return e; }  // no wrapping needed
+};
+
+// Yaw PID — error wraps around ±π
+class YawPID : public PIDControllerBase<YawPID> {
+public:
+    using PIDControllerBase::PIDControllerBase;
+    double wrap_error(double e) const {
+        while (e >  M_PI) e -= 2.0 * M_PI;
+        while (e < -M_PI) e += 2.0 * M_PI;
+        return e;
+    }
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.3 Gimbal Plugin Implementation
+[PARA|Normal] Listing 6-2: GimbalPlugin with PID Stabilisation
+[TABLE_CELL_0] // gimbal/gimbal_plugin.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "gimbal/pid_controller.h"
+#include "hardware/pwm_output.h"
+#include "hardware/i2c_imu.h"
+#include "ipc/pose_reader.h"
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+
+enum class GimbalMode : uint8_t {
+    STABILISED, FOLLOW, LOCK, RATE, RETRACT
+};
+
+class GimbalPlugin : public PayloadPlugin {
+public:
+    std::string name() const override { return "gimbal"; }
+    std::string type() const override { return "gimbal"; }
+
+    void update() override {
+        // Read vehicle attitude from SLAM
+        Eigen::Vector3d pos;
+        Eigen::Quaterniond vehicle_quat;
+        Eigen::Vector3d vel;
+        uint8_t quality;
+        if (!pose_reader_.read(pos, vehicle_quat, vel, quality)) return;
+
+        auto vehicle_euler = quat_to_euler(vehicle_quat);
+
+        // Compute desired gimbal angles based on mode
+        Eigen::Vector3d target = compute_target(vehicle_euler);
+
+        // Read gimbal IMU for feedback (if available)
+        Eigen::Vector3d gimbal_euler = gimbal_imu_ ?
+            gimbal_imu_->read_euler() : vehicle_euler;
+
+        // PID for each axis
+        double dt = 1.0 / 200.0;  // 200 Hz
+        double pitch_cmd = pitch_pid_.compute(target.x(), gimbal_euler.x(), dt);
+        double roll_cmd  = roll_pid_.compute(target.y(), gimbal_euler.y(), dt);
+        double yaw_cmd   = yaw_pid_.compute(target.z(), gimbal_euler.z(), dt);
+
+        // Output to servos
+        pwm_pitch_.set_normalised(pitch_cmd);  // -1.0 → +1.0
+        pwm_roll_.set_normalised(roll_cmd);
+        pwm_yaw_.set_normalised(yaw_cmd);
+    }
+
+    bool handle_command(const PayloadCmd& cmd) override {
+        switch (cmd.type) {
+            case PayloadCmdType::GIMBAL_SET_ANGLE:
+                target_pitch_ = cmd.param1;
+                target_roll_  = cmd.param2;
+                target_yaw_   = cmd.param3;
+                return true;
+
+            case PayloadCmdType::GIMBAL_SET_MODE:
+                mode_ = static_cast<GimbalMode>(static_cast<int>(cmd.param1));
+                spdlog::info("Gimbal mode: {}", static_cast<int>(mode_));
+                if (mode_ == GimbalMode::RETRACT) {
+                    target_pitch_ = 0.0f;
+                    target_roll_  = 0.0f;
+                    target_yaw_   = 0.0f;
+                }
+                return true;
+
+            case PayloadCmdType::GIMBAL_SET_RATE:
+                rate_pitch_ = cmd.param1;
+                rate_roll_  = cmd.param2;
+                rate_yaw_   = cmd.param3;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    nlohmann::json status() const override {
+        return {
+            {"type", "gimbal"},
+            {"mode", static_cast<int>(mode_)},
+            {"pitch", current_pitch_},
+            {"roll", current_roll_},
+            {"yaw", current_yaw_},
+            {"state", static_cast<int>(state_)}
+        };
+    }
+
+protected:
+    bool do_init(const nlohmann::json& config) override;
+    void do_shutdown() override;
+
+private:
+    PoseReader pose_reader_;
+    std::unique_ptr<I2CIMU> gimbal_imu_;
+    PWMOutput pwm_pitch_, pwm_roll_, pwm_yaw_;
+    PitchRollPID pitch_pid_{PIDGains{2.0, 0.1, 0.5, -1, 1, 0.3, 0.02}};
+    PitchRollPID roll_pid_{PIDGains{2.0, 0.1, 0.5, -1, 1, 0.3, 0.02}};
+    YawPID yaw_pid_{PIDGains{1.5, 0.05, 0.3, -1, 1, 0.3, 0.02}};
+
+    GimbalMode mode_ = GimbalMode::STABILISED;
+    float target_pitch_ = 0.0f, target_roll_ = 0.0f, target_yaw_ = 0.0f;
+    float rate_pitch_ = 0.0f, rate_roll_ = 0.0f, rate_yaw_ = 0.0f;
+    float current_pitch_ = 0.0f, current_roll_ = 0.0f, current_yaw_ = 0.0f;
+
+    Eigen::Vector3d compute_target(const Eigen::Vector3d& vehicle_euler);
+    Eigen::Vector3d quat_to_euler(const Eigen::Quaterniond& q);
+};
+
+REGISTER_PLUGIN("gimbal", GimbalPlugin);
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.4 Gimbal Controller Thread Loop
+[PARA|Normal] Listing 6-3: Gimbal Controller Thread (200 Hz)
+[TABLE_CELL_0] // gimbal/gimbal_thread.cpp
+#include "plugin/payload_plugin.h"
+#include "util/realtime.h"
+#include "util/scoped_timer.h"
+#include <chrono>
+
+void gimbal_controller_thread(PayloadPlugin* gimbal,
+                               std::atomic<bool>& running) {
+    if (!gimbal) return;  // no gimbal configured
+    set_thread_params("Gimbal", 2, SCHED_FIFO, 65);
+
+    const auto period = std::chrono::microseconds(5000);  // 200 Hz = 5 ms
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+        {
+            ScopedTimer timer("Gimbal tick", 4.5);  // warn if > 4.5 ms
+            gimbal->update();
+        }
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 7. Camera Trigger & Image Capture Thread
+[PARA|Normal] The Camera Trigger thread manages survey camera capture. It supports single-shot triggers, interval-based capture (e.g., every 2 seconds for aerial mapping), and distance-based capture (every N metres of travel). Each image is paired with a precise pose snapshot for geo-tagging.
+[PARA|Heading 2] 7.1 Trigger Modes
+[TABLE_CELL_0] Mode
+[TABLE_CELL_1] Trigger Condition
+[TABLE_CELL_2] Typical Use
+[END_TABLE_ROW]
+[TABLE_CELL_0] SINGLE
+[TABLE_CELL_1] Explicit command from GCS or mission planner
+[TABLE_CELL_2] Inspection, POI capture
+[END_TABLE_ROW]
+[TABLE_CELL_0] INTERVAL_TIME
+[TABLE_CELL_1] Every N seconds
+[TABLE_CELL_2] Photogrammetry survey (time-based)
+[END_TABLE_ROW]
+[TABLE_CELL_0] INTERVAL_DISTANCE
+[TABLE_CELL_1] Every N metres of travel
+[TABLE_CELL_2] Photogrammetry survey (overlap-based)
+[END_TABLE_ROW]
+[TABLE_CELL_0] CONTINUOUS
+[TABLE_CELL_1] As fast as camera allows
+[TABLE_CELL_2] Video recording / burst mode
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::variant + std::visit for Trigger Mode Dispatch
+We model trigger modes as a std::variant<SingleShot, IntervalTime, IntervalDistance, Continuous>. Each mode struct holds its own state (timer, distance accumulator). The camera thread calls std::visit to dispatch the correct check_trigger() logic. This is exhaustive: if a new mode is added to the variant, the compiler errors if the visitor doesn't handle it. The variant is stack-allocated (no heap) and the visit uses a jump table — both cache-friendly and fast.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 7-1: Trigger Mode Types with std::variant
+[TABLE_CELL_0] // camera/trigger_modes.h
+#pragma once
+#include <chrono>
+#include <Eigen/Core>
+#include <variant>
+
+struct SingleShot {
+    bool pending = false;
+    bool should_trigger() {
+        if (pending) { pending = false; return true; }
+        return false;
+    }
+};
+
+struct IntervalTime {
+    double interval_s = 2.0;
+    std::chrono::steady_clock::time_point last_trigger;
+
+    bool should_trigger() {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(
+            now - last_trigger).count();
+        if (elapsed >= interval_s) {
+            last_trigger = now;
+            return true;
+        }
+        return false;
+    }
+};
+
+struct IntervalDistance {
+    double interval_m = 5.0;
+    Eigen::Vector3d last_position = Eigen::Vector3d::Zero();
+    bool first = true;
+
+    bool should_trigger(const Eigen::Vector3d& pos) {
+        if (first) {
+            last_position = pos;
+            first = false;
+            return true;  // trigger first image
+        }
+        double dist = (pos - last_position).norm();
+        if (dist >= interval_m) {
+            last_position = pos;
+            return true;
+        }
+        return false;
+    }
+};
+
+struct Continuous {
+    bool should_trigger() { return true; }
+};
+
+using TriggerMode = std::variant<SingleShot, IntervalTime,
+                                  IntervalDistance, Continuous>;
+[END_TABLE_ROW]
+[PARA|Heading 2] 7.2 Camera Plugin
+[PARA|Normal] Listing 7-2: CameraPlugin with Geo-Tag Capture
+[TABLE_CELL_0] // camera/camera_plugin.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "camera/trigger_modes.h"
+#include "camera/geo_tag.h"
+#include "hardware/gpio_output.h"
+#include "ipc/pose_reader.h"
+#include <atomic>
+#include <mutex>
+#include <queue>
+
+struct CaptureEvent {
+    uint64_t image_id;
+    uint64_t timestamp_ns;
+    Eigen::Vector3d position;
+    Eigen::Quaterniond orientation;
+    std::string filename;
+};
+
+class CameraPlugin : public PayloadPlugin {
+public:
+    std::string name() const override { return "survey_camera"; }
+    std::string type() const override { return "camera"; }
+
+    void update() override {
+        // Read current pose
+        Eigen::Vector3d pos;
+        Eigen::Quaterniond quat;
+        Eigen::Vector3d vel;
+        uint8_t quality;
+        if (!pose_reader_.read(pos, quat, vel, quality)) return;
+
+        // Check trigger condition using visitor
+        bool should_fire = std::visit(overloaded{
+            [](SingleShot& m) { return m.should_trigger(); },
+            [](IntervalTime& m) { return m.should_trigger(); },
+            [&pos](IntervalDistance& m) { return m.should_trigger(pos); },
+            [](Continuous& m) { return m.should_trigger(); },
+        }, trigger_mode_);
+
+        if (should_fire && active_) {
+            // Snapshot pose at exact trigger moment
+            uint64_t ts = current_time_ns();
+            uint64_t id = ++image_counter_;
+
+            // Trigger camera via GPIO (falling edge pulse)
+            gpio_trigger_.pulse_us(50);  // 50 μs pulse
+
+            // Queue geo-tag event
+            CaptureEvent evt{id, ts, pos, quat,
+                              format_filename(id)};
+            {
+                std::lock_guard lock(queue_mtx_);
+                capture_queue_.push(std::move(evt));
+            }
+
+            spdlog::debug("Camera trigger #{}: pos=({:.1f},{:.1f},{:.1f})",
+                           id, pos.x(), pos.y(), pos.z());
+        }
+    }
+
+    bool handle_command(const PayloadCmd& cmd) override {
+        switch (cmd.type) {
+            case PayloadCmdType::CAMERA_TRIGGER:
+                if (auto* ss = std::get_if<SingleShot>(&trigger_mode_))
+                    ss->pending = true;
+                else {
+                    trigger_mode_ = SingleShot{true};
+                }
+                return true;
+
+            case PayloadCmdType::CAMERA_START_INTERVAL:
+                if (cmd.param2 > 0) {
+                    trigger_mode_ = IntervalDistance{
+                        static_cast<double>(cmd.param2)};
+                } else {
+                    trigger_mode_ = IntervalTime{
+                        static_cast<double>(cmd.param1)};
+                }
+                active_ = true;
+                return true;
+
+            case PayloadCmdType::CAMERA_STOP_INTERVAL:
+                active_ = false;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    // Consume geo-tag events (called by geo-tag writer thread)
+    std::vector<CaptureEvent> drain_captures() {
+        std::lock_guard lock(queue_mtx_);
+        std::vector<CaptureEvent> events;
+        while (!capture_queue_.empty()) {
+            events.push_back(std::move(capture_queue_.front()));
+            capture_queue_.pop();
+        }
+        return events;
+    }
+
+    nlohmann::json status() const override {
+        return {
+            {"type", "camera"},
+            {"images_captured", image_counter_.load()},
+            {"active", active_.load()},
+            {"state", static_cast<int>(state_)}
+        };
+    }
+
+protected:
+    bool do_init(const nlohmann::json& config) override;
+    void do_shutdown() override;
+
+private:
+    PoseReader pose_reader_;
+    GPIOOutput gpio_trigger_;
+    TriggerMode trigger_mode_{SingleShot{}};
+    std::atomic<bool> active_{false};
+    std::atomic<uint64_t> image_counter_{0};
+
+    std::mutex queue_mtx_;
+    std::queue<CaptureEvent> capture_queue_;
+
+    std::string format_filename(uint64_t id) const;
+    uint64_t current_time_ns() const;
+};
+
+REGISTER_PLUGIN("camera", CameraPlugin);
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::get_if for Safe Variant Access
+std::get_if<T>(&variant) returns a T* if the variant currently holds type T, or nullptr otherwise. Unlike std::get<T>(variant) which throws std::bad_variant_access on type mismatch, get_if never throws. This is ideal for command handlers: 'if the current mode is SingleShot, mark it pending, otherwise switch to SingleShot'. It's a non-throwing, pointer-based check that naturally integrates with if-else flow.
+[END_TABLE_ROW]
+[PARA|Heading 1] 8. Auxiliary Sensor Manager Thread
+[PARA|Normal] The Auxiliary Sensor Manager handles non-camera payloads: spotlights, drop mechanisms, multi-spectral sensors, and any other GPIO/SPI/I2C peripherals. It runs at a moderate 10 Hz since these payloads don't require high-frequency control.
+[PARA|Heading 2] 8.1 Spotlight Plugin
+[PARA|Normal] Listing 8-1: SpotlightPlugin with Brightness Ramping
+[TABLE_CELL_0] // aux/spotlight_plugin.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "hardware/pwm_output.h"
+
+class SpotlightPlugin : public PayloadPlugin {
+public:
+    std::string name() const override { return "spotlight"; }
+    std::string type() const override { return "spotlight"; }
+
+    void update() override {
+        // Ramp brightness smoothly to target
+        if (std::abs(current_brightness_ - target_brightness_) > 0.01f) {
+            float step = (target_brightness_ > current_brightness_)
+                         ? ramp_rate_ : -ramp_rate_;
+            current_brightness_ += step;
+            current_brightness_ = std::clamp(current_brightness_, 0.0f, 1.0f);
+            pwm_.set_normalised(current_brightness_);
+        }
+    }
+
+    bool handle_command(const PayloadCmd& cmd) override {
+        switch (cmd.type) {
+            case PayloadCmdType::AUX_SPOTLIGHT_ON:
+                target_brightness_ = 1.0f;
+                return true;
+            case PayloadCmdType::AUX_SPOTLIGHT_OFF:
+                target_brightness_ = 0.0f;
+                return true;
+            case PayloadCmdType::AUX_SPOTLIGHT_BRIGHTNESS:
+                target_brightness_ = std::clamp(cmd.param1, 0.0f, 1.0f);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    nlohmann::json status() const override {
+        return {
+            {"type", "spotlight"},
+            {"brightness", current_brightness_},
+            {"target", target_brightness_},
+            {"state", static_cast<int>(state_)}
+        };
+    }
+
+protected:
+    bool do_init(const nlohmann::json& config) override {
+        auto channel = config.value("pwm_channel", 2);
+        if (!pwm_.init(channel)) return false;
+        ramp_rate_ = config.value("ramp_rate", 0.1f);
+        return true;
+    }
+    void do_shutdown() override { pwm_.set_normalised(0.0f); }
+
+private:
+    PWMOutput pwm_;
+    float target_brightness_ = 0.0f;
+    float current_brightness_ = 0.0f;
+    float ramp_rate_ = 0.1f;  // per update step (0.1 * 10 Hz = 1 sec ramp)
+};
+
+REGISTER_PLUGIN("spotlight", SpotlightPlugin);
+[END_TABLE_ROW]
+[PARA|Heading 2] 8.2 Drop Mechanism Plugin
+[PARA|Normal] Listing 8-2: DropPlugin with Safety Arming
+[TABLE_CELL_0] // aux/drop_plugin.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "hardware/gpio_output.h"
+#include <chrono>
+
+class DropPlugin : public PayloadPlugin {
+public:
+    std::string name() const override { return "drop_mechanism"; }
+    std::string type() const override { return "drop"; }
+
+    void update() override {
+        // Auto-close servo after hold time
+        if (servo_open_ && hold_timer_active_) {
+            auto elapsed = std::chrono::steady_clock::now() - open_time_;
+            if (std::chrono::duration<double>(elapsed).count() > hold_time_s_) {
+                servo_gpio_.set(false);  // close servo
+                servo_open_ = false;
+                hold_timer_active_ = false;
+                spdlog::info("Drop mechanism: servo closed after {:.1f}s",
+                              hold_time_s_);
+            }
+        }
+    }
+
+    bool handle_command(const PayloadCmd& cmd) override {
+        if (cmd.type != PayloadCmdType::AUX_DROP_RELEASE) return false;
+
+        if (released_) {
+            spdlog::warn("Drop mechanism: already released");
+            return false;
+        }
+
+        // Safety: require armed confirmation
+        if (!armed_) {
+            spdlog::warn("Drop mechanism: not armed — ignoring release");
+            return false;
+        }
+
+        spdlog::info("DROP MECHANISM RELEASED");
+        servo_gpio_.set(true);   // open servo
+        servo_open_ = true;
+        hold_timer_active_ = true;
+        open_time_ = std::chrono::steady_clock::now();
+        released_ = true;
+
+        return true;
+    }
+
+    void arm() { armed_ = true; }
+    void disarm() { armed_ = false; }
+
+    nlohmann::json status() const override {
+        return {
+            {"type", "drop"},
+            {"armed", armed_},
+            {"released", released_},
+            {"servo_open", servo_open_},
+            {"state", static_cast<int>(state_)}
+        };
+    }
+
+protected:
+    bool do_init(const nlohmann::json& config) override {
+        auto gpio_pin = config.value("gpio_pin", 17);
+        hold_time_s_ = config.value("hold_time_s", 2.0);
+        if (!servo_gpio_.init(gpio_pin)) return false;
+        return true;
+    }
+    void do_shutdown() override { servo_gpio_.set(false); }
+
+private:
+    GPIOOutput servo_gpio_;
+    double hold_time_s_ = 2.0;
+    bool armed_ = false;
+    bool released_ = false;
+    bool servo_open_ = false;
+    bool hold_timer_active_ = false;
+    std::chrono::steady_clock::time_point open_time_;
+};
+
+REGISTER_PLUGIN("drop", DropPlugin);
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Safety Interlocks in Hardware Control
+The DropPlugin uses a two-step safety interlock: the mechanism must be armed_ before it accepts a release command, and it can only fire once (released_ flag). This is a defensive programming pattern for irreversible hardware actions. In safety-critical systems, you want as many gates as possible between software command and physical consequence. The arming state is typically controlled by Process 4's mission state machine — only armed when the drone is at the correct position and altitude.
+[END_TABLE_ROW]
+[PARA|Heading 1] 9. Payload Command Dispatcher Thread
+[PARA|Normal] The Command Dispatcher reads payload commands from shared memory and routes them to the appropriate plugin. It acts as the bridge between the mission planner's high-level directives and the payload plugins' hardware-level execution.
+[TABLE_CELL_0] 💡 C++ Concept: Command Pattern (GoF)
+The Command pattern encapsulates a request as an object, allowing parameterisation of clients with different requests. PayloadCmd is a command object: it contains the action (type), parameters (param1-3), and timestamp. The dispatcher doesn't interpret the command — it just finds the right handler and passes the command through. This decouples the command source (Process 4) from the command executor (plugins). Commands can also be logged, queued, or replayed for testing.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 9-1: Command Dispatcher with Plugin Routing
+[TABLE_CELL_0] // dispatch/command_dispatcher.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "ipc/payload_command_reader.h"
+#include <vector>
+#include <memory>
+#include <unordered_map>
+
+class CommandDispatcher {
+public:
+    void register_plugin(PayloadPlugin* plugin,
+                          const std::vector<PayloadCmdType>& handled_cmds) {
+        for (auto cmd : handled_cmds) {
+            cmd_routes_[cmd] = plugin;
+        }
+        plugins_.push_back(plugin);
+    }
+
+    void dispatch(const PayloadCmd& cmd) {
+        // Skip NONE commands
+        if (cmd.type == PayloadCmdType::NONE) return;
+
+        auto it = cmd_routes_.find(cmd.type);
+        if (it != cmd_routes_.end()) {
+            auto* plugin = it->second;
+            if (plugin->state() == PluginState::READY ||
+                plugin->state() == PluginState::ACTIVE) {
+                if (!plugin->handle_command(cmd)) {
+                    spdlog::warn("Plugin [{}] rejected command type {}",
+                                  plugin->name(), static_cast<int>(cmd.type));
+                }
+            } else {
+                spdlog::warn("Plugin [{}] not ready (state={}), dropping cmd",
+                              plugin->name(), static_cast<int>(plugin->state()));
+            }
+        } else {
+            spdlog::debug("No handler for command type {}",
+                           static_cast<int>(cmd.type));
+        }
+    }
+
+    const std::vector<PayloadPlugin*>& plugins() const { return plugins_; }
+
+private:
+    std::unordered_map<PayloadCmdType, PayloadPlugin*> cmd_routes_;
+    std::vector<PayloadPlugin*> plugins_;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 9-2: Command Dispatcher Thread (20 Hz)
+[TABLE_CELL_0] // dispatch/dispatcher_thread.cpp
+#include "dispatch/command_dispatcher.h"
+#include "ipc/payload_command_reader.h"
+#include "util/realtime.h"
+
+void command_dispatcher_thread(CommandDispatcher& dispatcher,
+                                PayloadCommandReader& cmd_reader,
+                                std::atomic<bool>& running) {
+    set_thread_params("PayCmdDisp", 2, SCHED_FIFO, 45);
+
+    const auto period = std::chrono::milliseconds(50);  // 20 Hz
+    uint64_t last_seq = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        PayloadCmd cmd;
+        if (cmd_reader.read(cmd)) {
+            // Only process NEW commands (check timestamp)
+            if (cmd.timestamp_ns > last_seq) {
+                last_seq = cmd.timestamp_ns;
+                dispatcher.dispatch(cmd);
+            }
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 10. Inter-Thread Communication
+[TABLE_CELL_0] Data Channel
+[TABLE_CELL_1] Producer
+[TABLE_CELL_2] Consumer
+[TABLE_CELL_3] Mechanism
+[TABLE_CELL_4] Rationale
+[END_TABLE_ROW]
+[TABLE_CELL_0] Payload commands
+[TABLE_CELL_1] Dispatcher thread
+[TABLE_CELL_2] All plugins
+[TABLE_CELL_3] Direct call
+[TABLE_CELL_4] Single-threaded dispatch — no sync needed
+[END_TABLE_ROW]
+[TABLE_CELL_0] Gimbal target angles
+[TABLE_CELL_1] Dispatcher
+[TABLE_CELL_2] GimbalPlugin
+[TABLE_CELL_3] Atomic floats
+[TABLE_CELL_4] Cross-thread, simple scalars
+[END_TABLE_ROW]
+[TABLE_CELL_0] Capture events
+[TABLE_CELL_1] CameraPlugin
+[TABLE_CELL_2] GeoTag writer
+[TABLE_CELL_3] Mutex + queue
+[TABLE_CELL_4] Variable-rate events, FIFO
+[END_TABLE_ROW]
+[TABLE_CELL_0] Plugin status
+[TABLE_CELL_1] All plugins
+[TABLE_CELL_2] Status publisher
+[TABLE_CELL_3] JSON aggregation
+[TABLE_CELL_4] Low-rate (1 Hz), no contention
+[END_TABLE_ROW]
+[TABLE_CELL_0] Pose data
+[TABLE_CELL_1] SHM (Process 3)
+[TABLE_CELL_2] Gimbal + Camera
+[TABLE_CELL_3] SeqLock SHM read
+[TABLE_CELL_4] Lock-free, latest value
+[END_TABLE_ROW]
+[PARA|Normal] The Payload Manager has a simpler inter-thread model than the Mission Planner or Comms processes. The Command Dispatcher is the sole command entry point — it runs sequentially, so plugin handle_command() calls don't require synchronisation. The gimbal thread reads atomic target values set by the dispatcher. The camera thread queues events for asynchronous geo-tag file writing.
+[TABLE_CELL_0] 💡 C++ Concept: Single-Writer Principle for Simplicity
+By routing ALL commands through a single dispatcher thread, we guarantee that handle_command() is only ever called from one thread. This means plugins don't need internal mutexes for their command handling path — a massive simplification. The only cross-thread data flows are: (a) atomic target values (gimbal angles), (b) the capture event queue (mutex-protected). This 'single-writer' discipline eliminates entire categories of concurrency bugs.
+[END_TABLE_ROW]
+[PARA|Heading 1] 11. GPIO & PWM Hardware Interface
+[PARA|Normal] All hardware access is wrapped in RAII classes that acquire resources on construction and release them on destruction. This ensures GPIO pins are unexported and PWM channels disabled even if the process crashes or throws an exception.
+[TABLE_CELL_0] 💡 C++ Concept: RAII for Hardware Resources (Deterministic Cleanup)
+RAII (Resource Acquisition Is Initialisation) ensures that hardware resources are released when the C++ object goes out of scope. For a GPIO pin: the constructor exports the pin and sets direction; the destructor unexports it. If the process throws an exception or a function returns early, the destructor still runs. Without RAII, a crash could leave GPIO pins in an undefined state (driving current into a motor, keeping a spotlight on). RAII makes hardware cleanup automatic and exception-safe. Combined with unique_ptr ownership, it extends to dynamically allocated hardware wrappers.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 11-1: GPIO Output with RAII (auto-unexport on destruction)
+[TABLE_CELL_0] // hardware/gpio_output.h
+#pragma once
+#include <string>
+#include <fstream>
+#include <spdlog/spdlog.h>
+
+class GPIOOutput {
+public:
+    GPIOOutput() = default;
+
+    bool init(int pin) {
+        pin_ = pin;
+        // Export the GPIO pin
+        write_file("/sys/class/gpio/export", std::to_string(pin));
+        std::string base = "/sys/class/gpio/gpio" + std::to_string(pin);
+
+        // Set direction
+        if (!write_file(base + "/direction", "out")) return false;
+
+        // Open value file for fast writes
+        value_path_ = base + "/value";
+        value_fd_.open(value_path_);
+        if (!value_fd_.is_open()) {
+            spdlog::error("Cannot open GPIO {} value file", pin);
+            return false;
+        }
+
+        initialised_ = true;
+        spdlog::info("GPIO {} initialised as output", pin);
+        return true;
+    }
+
+    void set(bool high) {
+        if (!initialised_) return;
+        value_fd_.seekp(0);
+        value_fd_ << (high ? "1" : "0") << std::flush;
+    }
+
+    void pulse_us(int duration_us) {
+        set(true);
+        // Busy-wait for precise short pulses (< 1 ms)
+        auto start = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - start <
+               std::chrono::microseconds(duration_us)) {}
+        set(false);
+    }
+
+    ~GPIOOutput() {
+        if (initialised_) {
+            set(false);  // ensure pin is low
+            value_fd_.close();
+            write_file("/sys/class/gpio/unexport", std::to_string(pin_));
+            spdlog::debug("GPIO {} unexported", pin_);
+        }
+    }
+
+    // Non-copyable, movable
+    GPIOOutput(const GPIOOutput&) = delete;
+    GPIOOutput& operator=(const GPIOOutput&) = delete;
+    GPIOOutput(GPIOOutput&& other) noexcept
+        : pin_(other.pin_), initialised_(other.initialised_),
+          value_path_(std::move(other.value_path_)),
+          value_fd_(std::move(other.value_fd_)) {
+        other.initialised_ = false;  // prevent double-unexport
+    }
+
+private:
+    int pin_ = -1;
+    bool initialised_ = false;
+    std::string value_path_;
+    std::ofstream value_fd_;
+
+    static bool write_file(const std::string& path, const std::string& val) {
+        std::ofstream f(path);
+        if (!f) return false;
+        f << val;
+        return true;
+    }
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 11-2: PWM Output with RAII (servo control)
+[TABLE_CELL_0] // hardware/pwm_output.h
+#pragma once
+#include <string>
+#include <fstream>
+#include <spdlog/spdlog.h>
+
+class PWMOutput {
+public:
+    PWMOutput() = default;
+
+    bool init(int channel, int period_ns = 20000000,  // 20 ms (50 Hz servo)
+              int min_pulse_ns = 1000000,              // 1 ms
+              int max_pulse_ns = 2000000) {            // 2 ms
+        channel_ = channel;
+        min_pulse_ = min_pulse_ns;
+        max_pulse_ = max_pulse_ns;
+
+        std::string base = "/sys/class/pwm/pwmchip0/pwm" + std::to_string(channel);
+
+        // Export PWM channel
+        write_file("/sys/class/pwm/pwmchip0/export", std::to_string(channel));
+
+        // Configure period
+        if (!write_file(base + "/period", std::to_string(period_ns))) return false;
+
+        // Set initial duty cycle to centre
+        int centre = (min_pulse_ns + max_pulse_ns) / 2;
+        if (!write_file(base + "/duty_cycle", std::to_string(centre))) return false;
+
+        // Enable
+        if (!write_file(base + "/enable", "1")) return false;
+
+        duty_path_ = base + "/duty_cycle";
+        duty_fd_.open(duty_path_);
+        if (!duty_fd_.is_open()) return false;
+
+        initialised_ = true;
+        spdlog::info("PWM channel {} initialised (period={}ns, range={}-{}ns)",
+                      channel, period_ns, min_pulse_ns, max_pulse_ns);
+        return true;
+    }
+
+    // value: -1.0 to +1.0, mapped to min_pulse → max_pulse
+    void set_normalised(double value) {
+        if (!initialised_) return;
+        value = std::clamp(value, -1.0, 1.0);
+        double t = (value + 1.0) / 2.0;  // 0.0 → 1.0
+        int pulse = min_pulse_ + static_cast<int>(t * (max_pulse_ - min_pulse_));
+        duty_fd_.seekp(0);
+        duty_fd_ << pulse << std::flush;
+    }
+
+    ~PWMOutput() {
+        if (initialised_) {
+            // Return to centre before disabling
+            set_normalised(0.0);
+            std::string base = "/sys/class/pwm/pwmchip0/pwm" +
+                               std::to_string(channel_);
+            duty_fd_.close();
+            write_file(base + "/enable", "0");
+            write_file("/sys/class/pwm/pwmchip0/unexport",
+                        std::to_string(channel_));
+            spdlog::debug("PWM channel {} unexported", channel_);
+        }
+    }
+
+    PWMOutput(const PWMOutput&) = delete;
+    PWMOutput& operator=(const PWMOutput&) = delete;
+    PWMOutput(PWMOutput&&) noexcept = default;
+
+private:
+    int channel_ = -1;
+    int min_pulse_ = 1000000;
+    int max_pulse_ = 2000000;
+    bool initialised_ = false;
+    std::string duty_path_;
+    std::ofstream duty_fd_;
+
+    static bool write_file(const std::string& path, const std::string& val) {
+        std::ofstream f(path);
+        if (!f) return false;
+        f << val;
+        return true;
+    }
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 12. Gimbal Stabilisation Algorithms
+[PARA|Normal] The gimbal stabilisation pipeline converts desired earth-fixed camera angles into servo commands that compensate for vehicle attitude changes. The pipeline consists of four stages: attitude estimation, target computation, PID control, and PWM output.
+[PARA|Normal] Figure 12-1: Gimbal Stabilisation Pipeline
+[TABLE_CELL_0] 
+ Gimbal Stabilisation Pipeline (200 Hz):
+ ────────────────────────────────────────
+
+ 1. READ INPUTS
+    ├── Vehicle attitude (quaternion) from /slam_pose SHM
+    └── Gimbal IMU (optional, I2C) for direct feedback
+
+ 2. COMPUTE TARGET (depends on mode)
+    ├── STABILISED: target = desired_earth_angle
+    │   servo_target = desired - vehicle_attitude  (compensate)
+    │
+    ├── FOLLOW: target_yaw = vehicle_yaw + offset
+    │   target_pitch/roll = desired (stabilised)
+    │
+    ├── LOCK: target = atan2(target_GPS - vehicle_pos)
+    │   continuously recompute as vehicle moves
+    │
+    └── RATE: target += rate * dt (integrate rate command)
+
+ 3. PID CONTROL
+    ├── pitch_cmd = pitch_pid.compute(target_pitch, current_pitch, dt)
+    ├── roll_cmd  = roll_pid.compute(target_roll, current_roll, dt)
+    └── yaw_cmd   = yaw_pid.compute(target_yaw, current_yaw, dt)
+    Note: yaw PID uses angle wrapping (±π)
+
+ 4. PWM OUTPUT
+    ├── pitch_servo.set_normalised(pitch_cmd)  // -1→+1 mapped to pulse
+    ├── roll_servo.set_normalised(roll_cmd)
+    └── yaw_servo.set_normalised(yaw_cmd)
+
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Complementary Filter for IMU Fusion
+When a dedicated gimbal IMU is available, we fuse its gyroscope (fast, drifty) with its accelerometer (slow, noisy but drift-free) using a complementary filter: angle = α × (angle + gyro × dt) + (1 - α) × accel_angle. The coefficient α ≈ 0.98 trusts the gyro for short-term dynamics and the accelerometer for long-term truth. This is computationally trivial (3 multiplies + 2 adds per axis) versus a full Kalman filter, making it ideal for a 200 Hz inner loop on an embedded ARM core.
+[END_TABLE_ROW]
+[PARA|Heading 1] 13. Geo-Tagged Image Pipeline
+[PARA|Normal] For aerial mapping and photogrammetry, each image must be tagged with the precise camera position and orientation at the moment of capture. The pipeline timestamps the trigger event, snapshots the SLAM pose, and writes EXIF geo-tags to the image file or a sidecar CSV for post-processing.
+[PARA|Normal] Listing 13-1: Geo-Tag CSV Writer
+[TABLE_CELL_0] // camera/geo_tag.h
+#pragma once
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <string>
+#include <fstream>
+#include <vector>
+#include <iomanip>
+
+struct GeoTag {
+    uint64_t image_id;
+    uint64_t timestamp_ns;
+    double latitude;      // WGS84 degrees
+    double longitude;     // WGS84 degrees
+    double altitude_msl;  // metres above mean sea level
+    double roll;          // camera roll (radians)
+    double pitch;         // camera pitch (radians)
+    double yaw;           // camera yaw (radians)
+    double accuracy_h;    // horizontal accuracy (metres)
+    double accuracy_v;    // vertical accuracy (metres)
+};
+
+class GeoTagWriter {
+public:
+    bool open(const std::string& path) {
+        ofs_.open(path);
+        if (!ofs_) return false;
+        // CSV header
+        ofs_ << "image_id,timestamp_ns,latitude,longitude,altitude_msl,"
+             << "roll_deg,pitch_deg,yaw_deg,accuracy_h,accuracy_v,filename\n";
+        return true;
+    }
+
+    void write(const GeoTag& tag, const std::string& filename) {
+        ofs_ << tag.image_id << ","
+             << tag.timestamp_ns << ","
+             << std::fixed << std::setprecision(8)
+             << tag.latitude << ","
+             << tag.longitude << ","
+             << std::setprecision(3)
+             << tag.altitude_msl << ","
+             << rad_to_deg(tag.roll) << ","
+             << rad_to_deg(tag.pitch) << ","
+             << rad_to_deg(tag.yaw) << ","
+             << tag.accuracy_h << ","
+             << tag.accuracy_v << ","
+             << filename << "\n";
+        ofs_.flush();
+    }
+
+    void write_batch(const std::vector<std::pair<GeoTag, std::string>>& batch) {
+        for (const auto& [tag, fname] : batch)
+            write(tag, fname);
+    }
+
+    ~GeoTagWriter() { if (ofs_.is_open()) ofs_.close(); }
+
+private:
+    std::ofstream ofs_;
+    static double rad_to_deg(double rad) { return rad * 180.0 / M_PI; }
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Structured Bindings (C++17)
+The line: for (const auto& [tag, fname] : batch) uses C++17 structured bindings to decompose the std::pair into named variables. Without structured bindings, you'd write entry.first and entry.second — far less readable. Structured bindings work with pairs, tuples, arrays, and any struct with public members. They make code that iterates over containers of compound types much cleaner and self-documenting.
+[END_TABLE_ROW]
+[PARA|Heading 1] 14. Data Structures & Types
+[PARA|Normal] Listing 14-1: PayloadStatus Published to SHM
+[TABLE_CELL_0] // data/payload_status.h
+#pragma once
+#include <cstdint>
+#include <atomic>
+
+struct PayloadStatus {
+    // Gimbal
+    float gimbal_pitch;           // degrees
+    float gimbal_roll;
+    float gimbal_yaw;
+    uint8_t gimbal_mode;          // GimbalMode enum
+    bool gimbal_connected;
+
+    // Camera
+    uint32_t images_captured;
+    bool camera_active;
+    bool camera_connected;
+
+    // Aux
+    float spotlight_brightness;   // 0.0-1.0
+    bool drop_armed;
+    bool drop_released;
+
+    // Overall
+    uint8_t num_plugins_active;
+    uint8_t num_plugins_error;
+};
+
+struct ShmPayloadStatus {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    PayloadStatus status;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 14-2: I2C IMU Interface
+[TABLE_CELL_0] // data/i2c_imu_data.h
+#pragma once
+#include <Eigen/Core>
+
+struct IMUReading {
+    Eigen::Vector3d gyro;          // rad/s
+    Eigen::Vector3d accel;         // m/s²
+    Eigen::Vector3d mag;           // μT (optional)
+    double temperature;            // °C
+    uint64_t timestamp_ns;
+};
+
+// I2C IMU interface (e.g., BMI088, ICM-42688)
+class I2CIMU {
+public:
+    virtual ~I2CIMU() = default;
+    virtual bool init(int bus, int addr) = 0;
+    virtual IMUReading read_raw() = 0;
+    virtual Eigen::Vector3d read_euler() = 0; // fused orientation
+    virtual void calibrate() = 0;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 15. Configuration Management
+[PARA|Normal] Listing 15-1: PayloadConfig
+[TABLE_CELL_0] // config/payload_config.h
+#pragma once
+#include <string>
+#include <vector>
+#include <nlohmann/json.hpp>
+
+struct PayloadConfig {
+    // Gimbal
+    bool gimbal_enabled         = true;
+    int  gimbal_pwm_pitch       = 0;
+    int  gimbal_pwm_roll        = 1;
+    int  gimbal_pwm_yaw         = 2;
+    int  gimbal_imu_bus         = 1;  // I2C bus
+    int  gimbal_imu_addr        = 0x68;
+    double gimbal_rate_hz       = 200.0;
+
+    // Camera
+    bool camera_enabled         = true;
+    int  camera_trigger_gpio    = 12;
+    double default_interval_s   = 2.0;
+    std::string geotag_dir      = "/opt/drone/data/geotags";
+
+    // Aux payloads
+    bool spotlight_enabled      = false;
+    int  spotlight_pwm_channel  = 3;
+    bool drop_enabled           = false;
+    int  drop_gpio_pin          = 17;
+    double drop_hold_time_s     = 2.0;
+
+    // General
+    std::string log_level       = "info";
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 15-2: Example payload_config.json
+[TABLE_CELL_0] // Example payload_config.json:
+{
+  "plugins": [
+    {
+      "type": "gimbal",
+      "pwm_pitch": 0,
+      "pwm_roll": 1,
+      "pwm_yaw": 2,
+      "imu_bus": 1,
+      "imu_addr": "0x68",
+      "pid_pitch": {"kp": 2.0, "ki": 0.1, "kd": 0.5},
+      "pid_roll":  {"kp": 2.0, "ki": 0.1, "kd": 0.5},
+      "pid_yaw":   {"kp": 1.5, "ki": 0.05, "kd": 0.3},
+      "rate_hz": 200
+    },
+    {
+      "type": "camera",
+      "trigger_gpio": 12,
+      "default_interval_s": 2.0,
+      "geotag_dir": "/opt/drone/data/geotags"
+    },
+    {
+      "type": "spotlight",
+      "pwm_channel": 3,
+      "ramp_rate": 0.1
+    }
+  ],
+  "log_level": "info"
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 16. Error Handling & Recovery
+[TABLE_CELL_0] Failure Mode
+[TABLE_CELL_1] Detection
+[TABLE_CELL_2] Response
+[TABLE_CELL_3] Recovery
+[END_TABLE_ROW]
+[TABLE_CELL_0] GPIO init fails
+[TABLE_CELL_1] write_file returns false
+[TABLE_CELL_2] Plugin enters ERROR state, disabled
+[TABLE_CELL_3] Check permissions, retry on SIGHUP
+[END_TABLE_ROW]
+[TABLE_CELL_0] PWM channel unavailable
+[TABLE_CELL_1] Cannot open sysfs files
+[TABLE_CELL_2] Gimbal plugin ERROR, log warning
+[TABLE_CELL_3] Physical check, config reload
+[END_TABLE_ROW]
+[TABLE_CELL_0] I2C IMU disconnected
+[TABLE_CELL_1] read_raw returns timeout
+[TABLE_CELL_2] Fall back to SLAM-only stabilisation
+[TABLE_CELL_3] Auto-reconnect on next read success
+[END_TABLE_ROW]
+[TABLE_CELL_0] SHM pose stale
+[TABLE_CELL_1] Timestamp > 200ms old
+[TABLE_CELL_2] Hold last known gimbal angles
+[TABLE_CELL_3] Resume when fresh pose arrives
+[END_TABLE_ROW]
+[TABLE_CELL_0] Camera trigger no response
+[TABLE_CELL_1] No GPIO ack / no image_id increment
+[TABLE_CELL_2] Increment error counter, retry trigger
+[TABLE_CELL_3] Hardware check, camera power cycle
+[END_TABLE_ROW]
+[TABLE_CELL_0] Plugin exception
+[TABLE_CELL_1] catch(...) in thread loop
+[TABLE_CELL_2] Log error, set plugin ERROR state
+[TABLE_CELL_3] Plugin auto-retries init on next tick
+[END_TABLE_ROW]
+[TABLE_CELL_0] Drop mechanism fault
+[TABLE_CELL_1] GPIO state != expected
+[TABLE_CELL_2] Lock drop, refuse further commands
+[TABLE_CELL_3] Manual reset required (safety)
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Exception Safety in Plugin Update Loops
+Each plugin's update() call is wrapped in try/catch within the thread loop. A crashing plugin must not bring down the entire Payload Manager — other plugins must continue. This is the 'bulkhead' pattern: isolate failure to the smallest possible scope. The plugin is moved to PluginState::ERROR; the thread continues calling other plugins. After a cooldown period, the thread can attempt to re-initialise the failed plugin. This design is essential for drone safety — a spotlight failure must never prevent gimbal stabilisation from continuing.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 16-1: Fault-Isolated Plugin Update Loop
+[TABLE_CELL_0] // Thread loop with plugin isolation:
+void aux_sensor_thread(std::vector<PayloadPlugin*> plugins,
+                        std::atomic<bool>& running) {
+    set_thread_params("AuxSens", 2, SCHED_FIFO, 35);
+    const auto period = std::chrono::milliseconds(100);  // 10 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        for (auto* plugin : plugins) {
+            if (plugin->state() != PluginState::READY &&
+                plugin->state() != PluginState::ACTIVE)
+                continue;
+
+            try {
+                plugin->update();
+            } catch (const std::exception& e) {
+                spdlog::error("Plugin [{}] threw: {}", plugin->name(), e.what());
+                plugin->set_error();  // move to ERROR state
+            }
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 17. IPC — Output: Payload Status
+[PARA|Normal] The Payload Manager publishes a consolidated status summary to /payload_status SHM. This is read by Process 5 (Comms) for GCS telemetry and Process 7 (System Monitor) for health tracking.
+[PARA|Normal] Listing 17-1: Payload Status SHM Writer
+[TABLE_CELL_0] // ipc/payload_status_writer.h
+#pragma once
+#include "data/payload_status.h"
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+class PayloadStatusWriter {
+public:
+    bool create(const char* name = "/payload_status") {
+        fd_ = shm_open(name, O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        ftruncate(fd_, sizeof(ShmPayloadStatus));
+        ptr_ = static_cast<ShmPayloadStatus*>(
+            mmap(nullptr, sizeof(ShmPayloadStatus),
+                 PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) return false;
+        ptr_->seq.store(0);
+        return true;
+    }
+
+    void write(const PayloadStatus& status) {
+        if (!ptr_) return;
+        uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+        ptr_->seq.store(s + 1, std::memory_order_release);
+        ptr_->timestamp_ns = current_time_ns();
+        ptr_->status = status;
+        ptr_->seq.store(s + 2, std::memory_order_release);
+    }
+
+    ~PayloadStatusWriter() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmPayloadStatus));
+        if (fd_ >= 0) { shm_unlink("/payload_status"); close(fd_); }
+    }
+
+private:
+    int fd_ = -1;
+    ShmPayloadStatus* ptr_ = nullptr;
+    uint64_t current_time_ns() const;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 17-2: Status Aggregation from Plugins
+[TABLE_CELL_0] // Status aggregation from all plugins:
+PayloadStatus aggregate_status(const CommandDispatcher& dispatcher) {
+    PayloadStatus ps{};
+    uint8_t active = 0, errors = 0;
+
+    for (auto* plugin : dispatcher.plugins()) {
+        auto js = plugin->status();
+
+        if (plugin->type() == "gimbal") {
+            ps.gimbal_pitch = js.value("pitch", 0.0f);
+            ps.gimbal_roll  = js.value("roll", 0.0f);
+            ps.gimbal_yaw   = js.value("yaw", 0.0f);
+            ps.gimbal_mode  = js.value("mode", 0);
+            ps.gimbal_connected = (plugin->state() != PluginState::ERROR);
+        }
+        else if (plugin->type() == "camera") {
+            ps.images_captured = js.value("images_captured", 0u);
+            ps.camera_active   = js.value("active", false);
+            ps.camera_connected = (plugin->state() != PluginState::ERROR);
+        }
+        else if (plugin->type() == "spotlight") {
+            ps.spotlight_brightness = js.value("brightness", 0.0f);
+        }
+        else if (plugin->type() == "drop") {
+            ps.drop_armed    = js.value("armed", false);
+            ps.drop_released = js.value("released", false);
+        }
+
+        if (plugin->state() == PluginState::ACTIVE ||
+            plugin->state() == PluginState::READY) ++active;
+        if (plugin->state() == PluginState::ERROR) ++errors;
+    }
+
+    ps.num_plugins_active = active;
+    ps.num_plugins_error  = errors;
+    return ps;
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 18. systemd Service Configuration
+[PARA|Normal] Listing 18-1: systemd Service Unit File
+[TABLE_CELL_0] # /etc/systemd/system/payload-manager.service
+[Unit]
+Description=Drone Payload Manager (Process 6)
+After=slam-vio-nav.service
+Wants=slam-vio-nav.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=drone
+Group=drone
+
+ExecStartPre=/usr/local/bin/check_shm.sh /slam_pose
+ExecStart=/opt/drone/bin/payload_manager \
+    --config /opt/drone/etc/payload_config.json \
+    --log-level info
+
+Restart=on-failure
+RestartSec=2
+WatchdogSec=10
+
+# Real-time scheduling
+CPUAffinity=2
+Nice=-10
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+
+# Memory
+MemoryMax=128M
+MemoryHigh=96M
+
+# Hardware access
+DeviceAllow=/dev/i2c-* rw
+DeviceAllow=/dev/spidev* rw
+SupplementaryGroups=gpio i2c spi
+
+# Sandboxing
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /opt/drone/logs /opt/drone/data /sys/class/gpio /sys/class/pwm
+ProtectHome=yes
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_SYS_NICE CAP_IPC_LOCK
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=payload_manager
+
+# Signal handling
+TimeoutStopSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=drone.target
+[END_TABLE_ROW]
+[TABLE_CELL_0] Directive
+[TABLE_CELL_1] Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] After/Wants slam-vio-nav
+[TABLE_CELL_1] Pose SHM should exist; 'Wants' not 'Requires' — payload can degrade without SLAM
+[END_TABLE_ROW]
+[TABLE_CELL_0] CPUAffinity=2
+[TABLE_CELL_1] All payload threads on core 2
+[END_TABLE_ROW]
+[TABLE_CELL_0] DeviceAllow=/dev/i2c-*
+[TABLE_CELL_1] Whitelist I2C bus access for gimbal IMU
+[END_TABLE_ROW]
+[TABLE_CELL_0] SupplementaryGroups=gpio i2c spi
+[TABLE_CELL_1] Grants hardware access without running as root
+[END_TABLE_ROW]
+[TABLE_CELL_0] ReadWritePaths=/sys/class/gpio
+[TABLE_CELL_1] Allows sysfs GPIO export/unexport under ProtectSystem=strict
+[END_TABLE_ROW]
+[TABLE_CELL_0] ReadWritePaths=/sys/class/pwm
+[TABLE_CELL_1] Allows sysfs PWM export/enable for servo control
+[END_TABLE_ROW]
+[TABLE_CELL_0] ReadWritePaths=/opt/drone/data
+[TABLE_CELL_1] Where geo-tag CSV output is stored
+[END_TABLE_ROW]
+[PARA|Heading 1] 19. CMakeLists.txt
+[PARA|Normal] Listing 19-1: Complete CMakeLists.txt
+[TABLE_CELL_0] # CMakeLists.txt — Process 6: Payload Manager
+cmake_minimum_required(VERSION 3.18)
+project(payload_manager VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ── Compiler flags ──────────────────────────────────────────────
+add_compile_options(
+    -Wall -Wextra -Wpedantic -Werror
+    -O2
+    -march=armv8.2-a+fp16
+)
+
+# ── Dependencies ────────────────────────────────────────────────
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(spdlog REQUIRED)
+find_package(nlohmann_json 3.11 REQUIRED)
+find_package(Threads REQUIRED)
+
+# ── Sources ─────────────────────────────────────────────────────
+set(PAYLOAD_SOURCES
+    src/main.cpp
+    src/plugin/plugin_registry.cpp
+    src/gimbal/gimbal_plugin.cpp
+    src/gimbal/gimbal_thread.cpp
+    src/gimbal/pid_controller.cpp
+    src/camera/camera_plugin.cpp
+    src/camera/camera_thread.cpp
+    src/camera/geo_tag.cpp
+    src/aux/spotlight_plugin.cpp
+    src/aux/drop_plugin.cpp
+    src/aux/aux_sensor_thread.cpp
+    src/dispatch/command_dispatcher.cpp
+    src/dispatch/dispatcher_thread.cpp
+    src/hardware/gpio_output.cpp
+    src/hardware/pwm_output.cpp
+    src/hardware/i2c_imu.cpp
+    src/ipc/pose_reader.cpp
+    src/ipc/payload_command_reader.cpp
+    src/ipc/mission_status_reader.cpp
+    src/ipc/payload_status_writer.cpp
+    src/config/config_loader.cpp
+    src/util/realtime.cpp
+)
+
+# ── Executable ──────────────────────────────────────────────────
+add_executable(payload_manager ${PAYLOAD_SOURCES})
+
+target_include_directories(payload_manager PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(payload_manager PRIVATE
+    Eigen3::Eigen
+    spdlog::spdlog
+    nlohmann_json::nlohmann_json
+    Threads::Threads
+    rt          # POSIX shared memory
+    pthread     # POSIX threads
+)
+
+# ── Install ─────────────────────────────────────────────────────
+install(TARGETS payload_manager DESTINATION /opt/drone/bin)
+install(FILES config/payload_config.json DESTINATION /opt/drone/etc)
+
+# ── Tests ───────────────────────────────────────────────────────
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(GTest REQUIRED)
+
+    add_executable(test_pid
+        tests/test_pid.cpp
+        src/gimbal/pid_controller.cpp
+    )
+    target_include_directories(test_pid PRIVATE include)
+    target_link_libraries(test_pid GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME PIDTest COMMAND test_pid)
+
+    add_executable(test_trigger_modes tests/test_trigger_modes.cpp)
+    target_include_directories(test_trigger_modes PRIVATE include)
+    target_link_libraries(test_trigger_modes GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME TriggerModeTest COMMAND test_trigger_modes)
+
+    add_executable(test_plugin_registry
+        tests/test_plugin_registry.cpp
+        src/plugin/plugin_registry.cpp
+    )
+    target_include_directories(test_plugin_registry PRIVATE include)
+    target_link_libraries(test_plugin_registry GTest::gtest_main)
+    add_test(NAME PluginRegistryTest COMMAND test_plugin_registry)
+
+    add_executable(test_geotag
+        tests/test_geotag.cpp
+        src/camera/geo_tag.cpp
+    )
+    target_include_directories(test_geotag PRIVATE include)
+    target_link_libraries(test_geotag GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME GeoTagTest COMMAND test_geotag)
+
+    add_executable(test_command_dispatcher
+        tests/test_command_dispatcher.cpp
+        src/dispatch/command_dispatcher.cpp
+    )
+    target_include_directories(test_command_dispatcher PRIVATE include)
+    target_link_libraries(test_command_dispatcher GTest::gtest_main)
+    add_test(NAME CommandDispatcherTest COMMAND test_command_dispatcher)
+endif()
+[END_TABLE_ROW]
+[PARA|Heading 1] 20. Implementation Roadmap
+[TABLE_CELL_0] Phase
+[TABLE_CELL_1] Duration
+[TABLE_CELL_2] Deliverables
+[TABLE_CELL_3] Dependencies
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 1: Core Framework
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • Project scaffolding & CMake
+• PayloadPlugin interface
+• PluginRegistry with self-registration
+• CommandDispatcher
+• PayloadCommandReader (SHM)
+• Configuration loader
+• Thread infrastructure (realtime.h)
+[TABLE_CELL_3] Process 3 SHM format
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 2: Hardware Abstraction
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • GPIOOutput (sysfs RAII wrapper)
+• PWMOutput (servo control)
+• I2CIMU (IMU driver, BMI088)
+• Hardware mock layer for unit tests
+• Unit tests for all HW wrappers
+[TABLE_CELL_3] Phase 1, Jetson GPIO access
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 3: Gimbal Controller
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • PID controller with CRTP
+• GimbalPlugin (all 5 modes)
+• Gimbal thread (200 Hz)
+• Complementary filter for IMU
+• PID tuning on physical gimbal
+• Stabilisation performance tests
+[TABLE_CELL_3] Phase 1, 2
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 4: Camera & Geo-Tagging
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • CameraPlugin with trigger modes
+• GPIO trigger pulse
+• GeoTagWriter (CSV output)
+• Pose snapshot synchronisation
+• Distance-based triggering
+• Unit tests for trigger logic
+[TABLE_CELL_3] Phase 1, 2
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 5: Auxiliary Payloads
+[TABLE_CELL_1] 1 week
+[TABLE_CELL_2] • SpotlightPlugin (PWM + ramp)
+• DropPlugin (safety interlocks)
+• Any additional payload plugins
+• Integration with command dispatcher
+[TABLE_CELL_3] Phase 1, 2
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 6: Integration & Testing
+[TABLE_CELL_1] 1.5 weeks
+[TABLE_CELL_2] • Full integration test (all threads)
+• PayloadStatusWriter (SHM output)
+• systemd service integration
+• End-to-end test with Process 4 commands
+• Flight test with physical gimbal + camera
+• Performance profiling on Jetson
+[TABLE_CELL_3] All phases
+[END_TABLE_ROW]
+[PARA|Heading 2] 20.1 Testing Strategy
+[TABLE_CELL_0] Test Type
+[TABLE_CELL_1] Scope
+[TABLE_CELL_2] Tools
+[END_TABLE_ROW]
+[TABLE_CELL_0] Unit tests
+[TABLE_CELL_1] PID, trigger modes, plugin registry, dispatcher, geo-tag
+[TABLE_CELL_2] GTest
+[END_TABLE_ROW]
+[TABLE_CELL_0] Hardware mock tests
+[TABLE_CELL_1] GPIO/PWM/I2C with mock sysfs filesystem
+[TABLE_CELL_2] GTest + tmpfs
+[END_TABLE_ROW]
+[TABLE_CELL_0] Integration tests
+[TABLE_CELL_1] All plugins + command dispatch + SHM
+[TABLE_CELL_2] Recorded SHM + assertions
+[END_TABLE_ROW]
+[TABLE_CELL_0] Hardware-in-loop
+[TABLE_CELL_1] Physical gimbal on bench with simulated pose
+[TABLE_CELL_2] SHM replay + servo analyser
+[END_TABLE_ROW]
+[TABLE_CELL_0] Flight tests
+[TABLE_CELL_1] Full payload operation with live vehicle
+[TABLE_CELL_2] Log analysis + image quality review
+[END_TABLE_ROW]
+[PARA|Heading 2] 20.2 Performance Targets
+[TABLE_CELL_0] Metric
+[TABLE_CELL_1] Target
+[TABLE_CELL_2] Measurement Method
+[END_TABLE_ROW]
+[TABLE_CELL_0] Gimbal loop jitter
+[TABLE_CELL_1] < 0.5 ms at 200 Hz
+[TABLE_CELL_2] ScopedTimer histogram
+[END_TABLE_ROW]
+[TABLE_CELL_0] Gimbal stabilisation bandwidth
+[TABLE_CELL_1] > 20 Hz (-3 dB)
+[TABLE_CELL_2] Frequency sweep test
+[END_TABLE_ROW]
+[TABLE_CELL_0] Camera trigger-to-pose latency
+[TABLE_CELL_1] < 1 ms
+[TABLE_CELL_2] Timestamp comparison
+[END_TABLE_ROW]
+[TABLE_CELL_0] Geo-tag write throughput
+[TABLE_CELL_1] > 50 images/sec
+[TABLE_CELL_2] Benchmark file I/O
+[END_TABLE_ROW]
+[TABLE_CELL_0] Plugin init time
+[TABLE_CELL_1] < 500 ms each
+[TABLE_CELL_2] Startup timestamp logging
+[END_TABLE_ROW]
+[TABLE_CELL_0] Memory usage
+[TABLE_CELL_1] < 64 MB RSS
+[TABLE_CELL_2] /proc/pid/status
+[END_TABLE_ROW]
+[TABLE_CELL_0] CPU usage (all threads)
+[TABLE_CELL_1] < 15% of 1 core
+[TABLE_CELL_2] perf stat + htop
+[END_TABLE_ROW]
+[PARA|Heading 1] Appendix: C++ Concepts Reference
+[TABLE_CELL_0] C++ Concept
+[TABLE_CELL_1] Location & Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] Thread Affinity & CPU Isolation
+[TABLE_CELL_1] Section 3 — pinning payload threads to core 2
+[END_TABLE_ROW]
+[TABLE_CELL_0] Template Method Pattern (GoF)
+[TABLE_CELL_1] Section 5 — plugin lifecycle with do_init()/do_shutdown() hooks
+[END_TABLE_ROW]
+[TABLE_CELL_0] Factory Registry (Self-Registration)
+[TABLE_CELL_1] Section 5 — REGISTER_PLUGIN macro + static init
+[END_TABLE_ROW]
+[TABLE_CELL_0] Meyers' Singleton
+[TABLE_CELL_1] Section 5 — thread-safe PluginRegistry::instance()
+[END_TABLE_ROW]
+[TABLE_CELL_0] CRTP for Zero-Overhead PID
+[TABLE_CELL_1] Section 6 — compile-time polymorphism for axis controllers
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::variant + std::visit
+[TABLE_CELL_1] Section 7 — type-safe trigger mode dispatch
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::get_if (Non-Throwing Variant Access)
+[TABLE_CELL_1] Section 7 — safe variant type check
+[END_TABLE_ROW]
+[TABLE_CELL_0] RAII for Hardware Resources
+[TABLE_CELL_1] Section 11 — GPIO auto-unexport, PWM auto-disable
+[END_TABLE_ROW]
+[TABLE_CELL_0] Rule of Five (Move-Only Resources)
+[TABLE_CELL_1] Section 11 — non-copyable GPIO/PWM wrappers
+[END_TABLE_ROW]
+[TABLE_CELL_0] Complementary Filter
+[TABLE_CELL_1] Section 12 — lightweight IMU gyro/accel fusion
+[END_TABLE_ROW]
+[TABLE_CELL_0] Command Pattern (GoF)
+[TABLE_CELL_1] Section 9 — PayloadCmd as parameterised command object
+[END_TABLE_ROW]
+[TABLE_CELL_0] Single-Writer Principle
+[TABLE_CELL_1] Section 10 — dispatcher serialises all plugin commands
+[END_TABLE_ROW]
+[TABLE_CELL_0] Structured Bindings (C++17)
+[TABLE_CELL_1] Section 13 — auto& [tag, fname] decomposition
+[END_TABLE_ROW]
+[TABLE_CELL_0] Bulkhead Pattern
+[TABLE_CELL_1] Section 16 — fault isolation per plugin in update loop
+[END_TABLE_ROW]
+[TABLE_CELL_0] Safety Interlocks
+[TABLE_CELL_1] Section 8 — two-step arm + release for drop mechanism
+[END_TABLE_ROW]

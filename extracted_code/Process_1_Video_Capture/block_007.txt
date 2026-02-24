@@ -1,0 +1,50 @@
+Context: Mission camera thread entry point
+File path: // file: src/video/mission_cam_thread.cpp (continued)
+Source: table_row0_col0
+---
+// file: src/video/mission_cam_thread.cpp (continued)
+
+#include <thread>
+#include <atomic>
+
+namespace drone::video {
+
+/// This is the thread entry point. Runs until stop_flag is set.
+void mission_cam_thread(
+    SPSCRing<CapturedFrame, 4>& output_queue,   // → consumed by ISP thread
+    std::atomic<bool>& stop_flag,
+    const char* device = "/dev/video0")
+{
+    try {
+        V4L2Camera cam(device, 1920, 1080, V4L2_PIX_FMT_SRGGB10);
+        spdlog::info("Mission camera started: {}x{}", cam.width(), cam.height());
+
+        uint64_t frame_count = 0;
+        uint64_t drop_count  = 0;
+
+        while (!stop_flag.load(std::memory_order_relaxed)) {
+            auto frame = cam.capture();  // blocks on poll()
+
+            if (!output_queue.try_push(frame)) {
+                // ISP thread can't keep up — drop this frame
+                ++drop_count;
+                if (drop_count % 100 == 0) {
+                    spdlog::warn("Mission cam: dropped {} frames (ISP too slow)",
+                                 drop_count);
+                }
+            }
+
+            cam.release(frame.buffer_index);  // re-enqueue to kernel
+            ++frame_count;
+        }
+
+        spdlog::info("Mission cam stopped. {} frames captured, {} dropped",
+                     frame_count, drop_count);
+    }
+    catch (const std::exception& e) {
+        spdlog::error("Mission cam thread FATAL: {}", e.what());
+        // Process-level error handler will decide: restart thread or whole process
+    }
+}
+
+} // namespace drone::video

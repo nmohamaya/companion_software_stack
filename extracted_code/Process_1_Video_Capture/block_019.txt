@@ -1,0 +1,68 @@
+Context: CMakeLists.txt for Process 1
+File path: # file: process1_video_capture/CMakeLists.txt
+Source: table_row0_col0
+---
+# file: process1_video_capture/CMakeLists.txt
+
+cmake_minimum_required(VERSION 3.16)
+project(video-capture LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # For clangd/IDE support
+
+# ── Dependencies ──
+
+find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SPDLOG REQUIRED spdlog)
+
+# Optional: V4L2 (usually part of linux-headers, not a separate package)
+# Optional: NVENC (NVIDIA Video Codec SDK)
+
+# ── Library: video-capture core ──
+
+add_library(video_capture_lib STATIC
+    src/video/mission_cam_thread.cpp
+    src/video/stereo_cam_thread.cpp
+    src/video/isp_thread.cpp
+    src/video/encoder_thread.cpp
+    src/video/recorder_thread.cpp
+)
+
+target_include_directories(video_capture_lib PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS}
+    ${SPDLOG_INCLUDE_DIRS}
+)
+
+target_link_libraries(video_capture_lib PUBLIC
+    ${OpenCV_LIBS}
+    ${SPDLOG_LIBRARIES}
+    rt          # for shm_open, shm_unlink
+    pthread     # for std::thread
+    systemd     # for sd_notify
+)
+
+# ── Executable: video-capture ──
+
+add_executable(video-capture src/video/main.cpp)
+target_link_libraries(video-capture PRIVATE video_capture_lib)
+
+# ── Install ──
+
+install(TARGETS video-capture DESTINATION /opt/drone/bin)
+install(FILES config/isp.yaml DESTINATION /opt/drone/config)
+
+# ── Tests ──
+
+enable_testing()
+add_executable(test_spsc_ring tests/test_spsc_ring.cpp)
+target_include_directories(test_spsc_ring PRIVATE include)
+target_link_libraries(test_spsc_ring pthread)
+add_test(NAME SPSCRingTest COMMAND test_spsc_ring)
+
+add_executable(test_shm_ring tests/test_shm_ring.cpp)
+target_include_directories(test_shm_ring PRIVATE include)
+target_link_libraries(test_shm_ring pthread rt)
+add_test(NAME ShmRingTest COMMAND test_shm_ring)

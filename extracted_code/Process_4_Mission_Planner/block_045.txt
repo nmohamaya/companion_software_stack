@@ -1,0 +1,50 @@
+=== Listing 13-1: Configuration Manager with Atomic Swap ===
+
+// config/config_loader.h
+#pragma once
+#include "config/planner_config.h"
+#include <nlohmann/json.hpp>
+#include <fstream>
+#include <memory>
+#include <atomic>
+
+class ConfigManager {
+public:
+    bool load(const std::string& path) {
+        try {
+            std::ifstream ifs(path);
+            if (!ifs) return false;
+            auto j = nlohmann::json::parse(ifs);
+
+            auto cfg = std::make_shared<PlannerConfig>();
+
+            cfg->max_velocity      = j.value("max_velocity", cfg->max_velocity);
+            cfg->max_acceleration  = j.value("max_acceleration", cfg->max_acceleration);
+            cfg->max_yaw_rate      = j.value("max_yaw_rate", cfg->max_yaw_rate);
+            cfg->grid_resolution   = j.value("grid_resolution", cfg->grid_resolution);
+            cfg->safety_margin     = j.value("safety_margin", cfg->safety_margin);
+            cfg->max_altitude_agl  = j.value("max_altitude_agl", cfg->max_altitude_agl);
+            cfg->battery_warning_pct = j.value("battery_warning_pct",
+                                                 cfg->battery_warning_pct);
+            cfg->battery_critical_pct = j.value("battery_critical_pct",
+                                                  cfg->battery_critical_pct);
+
+            std::atomic_store(&config_, cfg);
+            config_path_ = path;
+            return true;
+        } catch (const std::exception& e) {
+            spdlog::error("Config load failed: {}", e.what());
+            return false;
+        }
+    }
+
+    std::shared_ptr<const PlannerConfig> get() const {
+        return std::atomic_load(&config_);
+    }
+
+    void reload() { load(config_path_); }
+
+private:
+    std::shared_ptr<PlannerConfig> config_ = std::make_shared<PlannerConfig>();
+    std::string config_path_;
+};

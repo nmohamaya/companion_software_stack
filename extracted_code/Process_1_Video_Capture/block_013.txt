@@ -1,0 +1,33 @@
+Context: 7.2 Encoding Pipeline
+Source: table_row0_col0
+---
+  RGB/NV12 frame (from ISP)
+        │
+        ▼
+  ┌───────────────────┐
+  │  H.265 ENCODER    │  NVENC (Jetson HW) or x265 (software fallback)
+  │                    │  Bitrate: 2-15 Mbps (adaptive)
+  │  Produces NAL      │  Keyframe interval: 1 per second (or on demand)
+  │  units (compressed) │  Encoding latency: < 5ms (HW), ~20ms (SW)
+  └──────┬─────────────┘
+         ▼
+  ┌───────────────────┐
+  │  FEC ENCODER      │  Reed-Solomon or XOR-based
+  │                    │  Adds K redundancy packets per N data packets
+  │  e.g., 20 data    │  Receiver can reconstruct any K losses from N+K
+  │  + 5 FEC = 25     │  25% overhead, tolerates 20% packet loss
+  └──────┬─────────────┘
+         ▼
+  ┌───────────────────┐
+  │  RTP PACKETIZER   │  Split NAL units into RTP packets (≤ 1400 bytes)
+  │                    │  Add RTP header (sequence number, timestamp, SSRC)
+  │  RFC 7798          │  H.265 RTP payload format
+  └──────┬─────────────┘
+         ▼
+  ┌───────────────────┐
+  │  UDP SOCKET       │  sendmmsg() for batch sending
+  │                    │  Destination: GCS IP (or broadcast)
+  │  Non-blocking     │  If send buffer full → drop oldest, not newest
+  └──────┬─────────────┘
+         ▼
+      RF DATA LINK → GCS

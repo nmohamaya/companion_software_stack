@@ -1,0 +1,93 @@
+Context: src/perception/radar_thread.cpp
+File path: // file: src/perception/radar_thread.cpp
+Source: table_row0_col0
+---
+// file: src/perception/radar_thread.cpp
+#include "perception/types.h"
+#include "video/spsc_ring.h"
+#include <spdlog/spdlog.h>
+#include <atomic>
+#include <cmath>
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+
+namespace drone::perception {
+
+/// UART reader for radar sensor (many small radars use UART/serial)
+class RadarUART {
+public:
+    explicit RadarUART(const char* device = "/dev/ttyUSB0", int baud = 115200) {
+        fd_ = open(device, O_RDWR | O_NOCTTY);
+        if (fd_ < 0) throw std::runtime_error("Cannot open radar device");
+
+        termios tty{};
+        tcgetattr(fd_, &tty);
+        cfsetispeed(&tty, B115200);
+        cfsetospeed(&tty, B115200);
+        tty.c_cflag = CS8 | CLOCAL | CREAD;
+        tty.c_iflag = 0;
+        tty.c_oflag = 0;
+        tty.c_lflag = 0;
+        tty.c_cc[VMIN]  = 0;
+        tty.c_cc[VTIME] = 1;  // 100ms timeout
+        tcsetattr(fd_, TCSANOW, &tty);
+    }
+
+    ~RadarUART() { if (fd_ >= 0) close(fd_); }
+
+    ssize_t read_data(uint8_t* buf, size_t max_len) {
+        return read(fd_, buf, max_len);
+    }
+
+private:
+    int fd_ = -1;
+};
+
+/// Convert radar spherical coordinates to Cartesian (body frame)
+Point3D radar_to_cartesian(const RadarDetection& det) {
+    return {
+        det.range * std::cos(det.elevation) * std::cos(det.azimuth),
+        det.range * std::cos(det.elevation) * std::sin(det.azimuth),
+        det.range * std::sin(det.elevation),
+        0.0f  // intensity not applicable
+    };
+}
+
+/// Radar capture thread
+void radar_thread(
+    SPSCRing<RadarDetectionList, 4>& output_queue,
+    std::atomic<bool>& stop_flag,
+    const char* device = "/dev/ttyUSB0")
+{
+    RadarUART radar(device);
+    uint8_t buf[4096];
+
+    spdlog::info("Radar thread started on {}", device);
+
+    while (!stop_flag.load(std::memory_order_relaxed)) {
+        ssize_t len = radar.read_data(buf, sizeof(buf));
+        if (len <= 0) continue;
+
+        // Parse radar protocol (sensor-specific: TI AWR1843, Ainstein, etc.)
+        RadarDetectionList detections;
+        // ... parse_radar_frame(buf, len, detections) ...
+
+        // Filter out weak returns (RCS too low = noise)
+        detections.detections.erase(
+            std::remove_if(detections.detections.begin(),
+                          detections.detections.end(),
+                          [](const RadarDetection& d) {
+                              return d.rcs < -10.0f;  // below -10 dBsm = noise
+                          }),
+            detections.detections.end());
+
+        if (!detections.detections.empty()) {
+            detections.timestamp_ns = /* clock_gettime */ 0;
+            output_queue.try_push(std::move(detections));
+        }
+    }
+    spdlog::info("Radar thread stopped");
+}
+
+} // namespace drone::perception

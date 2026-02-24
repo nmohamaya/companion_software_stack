@@ -1,0 +1,24 @@
+=== Listing 6-3: Gimbal Controller Thread (200 Hz) ===
+
+// gimbal/gimbal_thread.cpp
+#include "plugin/payload_plugin.h"
+#include "util/realtime.h"
+#include "util/scoped_timer.h"
+#include <chrono>
+
+void gimbal_controller_thread(PayloadPlugin* gimbal,
+                               std::atomic<bool>& running) {
+    if (!gimbal) return;  // no gimbal configured
+    set_thread_params("Gimbal", 2, SCHED_FIFO, 65);
+
+    const auto period = std::chrono::microseconds(5000);  // 200 Hz = 5 ms
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+        {
+            ScopedTimer timer("Gimbal tick", 4.5);  // warn if > 4.5 ms
+            gimbal->update();
+        }
+        std::this_thread::sleep_until(start + period);
+    }
+}

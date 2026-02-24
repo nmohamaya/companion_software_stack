@@ -1,0 +1,3 @@
+=== Key design goals: deterministic worst-case latency < 50 ms for obstacle avoidance, graceful degradation on sensor loss, geofence enforcement with configurable keep-in/keep-out zones, and full mission logging for post-flight review. ===
+
+5 (State Machine, Path Planner, Obstacle Avoidance, Waypoint Mgr, Trajectory Exec)

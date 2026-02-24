@@ -1,0 +1,23 @@
+=== Listing 5-1: Abstract MissionState Interface ===
+
+// mission/mission_state.h
+#pragma once
+#include <memory>
+#include <string>
+
+class MissionContext;  // forward declaration
+
+// Abstract state interface
+class MissionState {
+public:
+    virtual ~MissionState() = default;
+
+    virtual void on_enter(MissionContext& ctx) = 0;
+    virtual void update(MissionContext& ctx)   = 0;  // called @ 10 Hz
+    virtual void on_exit(MissionContext& ctx)   = 0;
+
+    virtual std::string name() const = 0;
+
+    // Each state returns the next state (or nullptr to remain)
+    virtual std::unique_ptr<MissionState> transition(MissionContext& ctx) = 0;
+};

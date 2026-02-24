@@ -1,0 +1,19 @@
+Context: Sophus is a header-only C++ library that provides Lie group types (SO3, SE3) built on Eigen. Unlike using raw 4×4 matrices, Sophus::SE3d ensures that transformations always remain on the SE(3) manifold (valid rotation + translation). Composing poses is simply multiplication: T_world_cur = T_world_kf * T_kf_cur. Sophus also provides log/exp maps needed by optimisers (e.g., Ceres) to parameterise incremental updates in the tangent space.
+Source: code_paragraphs
+---
+#include <sophus/se3.hpp>
+
+// Compose two transforms
+Sophus::SE3d T_world_body = T_world_ref * T_ref_body;
+
+// Inverse
+Sophus::SE3d T_body_world = T_world_body.inverse();
+
+// Extract translation & rotation
+Eigen::Vector3d position = T_world_body.translation();
+Eigen::Quaterniond orientation(T_world_body.rotationMatrix());
+
+// Tangent-space perturbation (6-vector: [tx,ty,tz, rx,ry,rz])
+Eigen::Matrix<double,6,1> delta;
+delta << 0.01, 0.0, 0.0, 0.0, 0.0, 0.001;
+Sophus::SE3d T_perturbed = Sophus::SE3d::exp(delta) * T_world_body;

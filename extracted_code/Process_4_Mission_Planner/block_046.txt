@@ -1,0 +1,4 @@
+=== Listing 13-1: Configuration Manager with Atomic Swap ===
+
+💡 C++ Concept: std::shared_ptr Atomic Operations for Lock-Free Config Reload
+std::atomic_load/store on shared_ptr (C++11/14) provides thread-safe pointer swaps without a mutex. When config is reloaded, a new shared_ptr is atomically published. Readers that already hold a copy of the old shared_ptr continue using it safely — the old config is only destroyed when the last reader releases it. This is the Read-Copy-Update (RCU) pattern: readers never block, and writers only do a pointer swap. Note: C++20 adds std::atomic<std::shared_ptr<T>> as a cleaner API for this pattern.

@@ -1,0 +1,113 @@
+=== Listing 6-3: RRT* Path Planner Implementation ===
+
+// planning/rrt_star_planner.h
+#pragma once
+#include "planning/planning_strategy.h"
+#include <random>
+
+struct RRTNode {
+    Eigen::Vector3d pos;
+    int parent = -1;
+    double cost = 0.0;
+};
+
+class RRTStarPlanner : public PlanningStrategy {
+public:
+    explicit RRTStarPlanner(double step_size = 0.5, double goal_bias = 0.1,
+                             double rewire_radius = 2.0)
+        : step_(step_size), goal_bias_(goal_bias), rewire_r_(rewire_radius) {}
+
+    std::optional<PathResult> plan(
+        const Eigen::Vector3d& start,
+        const Eigen::Vector3d& goal,
+        const OccupancyGrid& grid,
+        double timeout_ms = 200.0) override
+    {
+        auto t0 = std::chrono::steady_clock::now();
+        nodes_.clear();
+        nodes_.push_back({start, -1, 0.0});
+
+        std::mt19937 rng(std::random_device{}());
+        auto bounds = grid.bounds();
+
+        int best_goal = -1;
+        double best_cost = std::numeric_limits<double>::infinity();
+
+        while (true) {
+            auto elapsed = std::chrono::steady_clock::now() - t0;
+            double ms = std::chrono::duration<double, std::milli>(elapsed).count();
+            if (ms > timeout_ms) break;
+
+            // Sample random point (biased towards goal)
+            Eigen::Vector3d sample;
+            if (std::uniform_real_distribution<>(0, 1)(rng) < goal_bias_) {
+                sample = goal;
+            } else {
+                sample = random_point(bounds, rng);
+            }
+
+            // Find nearest node
+            int nearest_idx = find_nearest(sample);
+            Eigen::Vector3d dir = (sample - nodes_[nearest_idx].pos).normalized();
+            Eigen::Vector3d new_pos = nodes_[nearest_idx].pos + dir * step_;
+
+            if (!grid.is_free_line(nodes_[nearest_idx].pos, new_pos)) continue;
+
+            // RRT* rewiring
+            double new_cost = nodes_[nearest_idx].cost + step_;
+            auto near_indices = find_near(new_pos, rewire_r_);
+
+            int best_parent = nearest_idx;
+            for (int ni : near_indices) {
+                double c = nodes_[ni].cost + (new_pos - nodes_[ni].pos).norm();
+                if (c < new_cost && grid.is_free_line(nodes_[ni].pos, new_pos)) {
+                    best_parent = ni;
+                    new_cost = c;
+                }
+            }
+
+            int new_idx = nodes_.size();
+            nodes_.push_back({new_pos, best_parent, new_cost});
+
+            // Rewire neighbours
+            for (int ni : near_indices) {
+                double c = new_cost + (nodes_[ni].pos - new_pos).norm();
+                if (c < nodes_[ni].cost && grid.is_free_line(new_pos, nodes_[ni].pos)) {
+                    nodes_[ni].parent = new_idx;
+                    nodes_[ni].cost = c;
+                }
+            }
+
+            // Check goal reached
+            if ((new_pos - goal).norm() < step_ && new_cost < best_cost) {
+                best_goal = new_idx;
+                best_cost = new_cost;
+            }
+        }
+
+        if (best_goal < 0) return std::nullopt;
+
+        PathResult result;
+        result.total_cost = best_cost;
+        result.is_partial = false;
+        result.compute_time_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+
+        // Trace path back
+        for (int i = best_goal; i >= 0; i = nodes_[i].parent)
+            result.waypoints.push_back(nodes_[i].pos);
+        std::reverse(result.waypoints.begin(), result.waypoints.end());
+        return result;
+    }
+
+    std::string name() const override { return "RRT*"; }
+
+private:
+    double step_, goal_bias_, rewire_r_;
+    std::vector<RRTNode> nodes_;
+
+    int find_nearest(const Eigen::Vector3d& p) const;
+    std::vector<int> find_near(const Eigen::Vector3d& p, double r) const;
+    Eigen::Vector3d random_point(const auto& bounds, std::mt19937& rng) const;
+};

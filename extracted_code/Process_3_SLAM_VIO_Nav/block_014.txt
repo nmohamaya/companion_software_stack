@@ -1,0 +1,41 @@
+Context: The classic approach converts each keyframe's feature descriptors into a compact bag-of-words (BoW) vector using a pre-trained visual vocabulary. Candidate loop closures are found by comparing BoW vectors (L1 score). Candidates are then verified geometrically (PnP RANSAC).
+Source: code_paragraphs
+---
+#include <DBoW2/DBoW2.h>
+
+class LoopClosureDetector {
+    OrbVocabulary vocab_;             // Pre-trained ORB vocabulary
+    OrbDatabase db_;                  // Inverse-index database
+    std::map<DBoW2::EntryId, uint64_t> entry_to_kf_;
+
+public:
+    explicit LoopClosureDetector(const std::string& vocab_path)
+        : vocab_(vocab_path), db_(vocab_, false, 0) {}
+
+    std::optional<LoopCandidate> detect(uint64_t kf_id,
+                                         const cv::Mat& descriptors)
+    {
+        // Convert descriptors to vector of cv::Mat rows
+        std::vector<cv::Mat> desc_vec;
+        for (int i = 0; i < descriptors.rows; ++i)
+            desc_vec.push_back(descriptors.row(i));
+
+        // Query database
+        DBoW2::QueryResults results;
+        db_.query(desc_vec, results, /*max_results=*/5);
+
+        // Add current keyframe to database
+        auto entry_id = db_.add(desc_vec);
+        entry_to_kf_[entry_id] = kf_id;
+
+        // Filter: ignore recent keyframes (within 30 KFs)
+        for (auto& r : results) {
+            uint64_t candidate_kf = entry_to_kf_[r.Id];
+            if (kf_id - candidate_kf < 30) continue;
+            if (r.Score < 0.03) continue;
+
+            return LoopCandidate{kf_id, candidate_kf, r.Score};
+        }
+        return std::nullopt;
+    }
+};

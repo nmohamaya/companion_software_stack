@@ -1,0 +1,61 @@
+=== Listing 8-3: Telemetry Downlink Thread (50 Hz scheduler tick) ===
+
+// telemetry/downlink_thread.cpp
+#include "telemetry/telemetry_scheduler.h"
+#include "transport/udp_transport.h"
+#include "ipc/mission_status_reader.h"
+#include "ipc/pose_reader.h"
+#include "util/realtime.h"
+
+void telemetry_downlink_thread(CommsContext& ctx,
+                                UDPTransport& udp,
+                                std::atomic<bool>& running) {
+    set_thread_params("TelDL", 3, SCHED_FIFO, 45);
+
+    // Default: WiFi @ 1 Mbps effective
+    TelemetryScheduler scheduler(125000.0, 8192.0);  // 1 Mbps / 8
+
+    // Register telemetry streams (priority: 0=highest)
+    scheduler.add_stream({
+        "HEARTBEAT", MAVLINK_MSG_ID_HEARTBEAT, 1.0, 0,
+        [&]() { return ctx.mavlink().pack_heartbeat(); }
+    });
+
+    scheduler.add_stream({
+        "SYS_STATUS", MAVLINK_MSG_ID_SYS_STATUS, 2.0, 1,
+        [&]() { return pack_sys_status(ctx); }
+    });
+
+    scheduler.add_stream({
+        "ATTITUDE", MAVLINK_MSG_ID_ATTITUDE, 10.0, 2,
+        [&]() { return pack_attitude_from_pose(ctx.pose_reader()); }
+    });
+
+    scheduler.add_stream({
+        "LOCAL_POSITION_NED", MAVLINK_MSG_ID_LOCAL_POSITION_NED, 5.0, 3,
+        [&]() { return pack_local_position(ctx.pose_reader()); }
+    });
+
+    scheduler.add_stream({
+        "MISSION_STATUS", MAVLINK_MSG_ID_STATUSTEXT, 1.0, 5,
+        [&]() { return pack_mission_status_text(ctx.status_reader()); }
+    });
+
+    scheduler.add_stream({
+        "GPS_RAW_INT", MAVLINK_MSG_ID_GPS_RAW_INT, 2.0, 4,
+        [&]() { return pack_gps_raw(ctx); }
+    });
+
+    const auto period = std::chrono::milliseconds(20);  // 50 Hz tick
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        auto messages = scheduler.tick();
+        for (const auto& msg : messages) {
+            udp.send_to_gcs(msg);
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}

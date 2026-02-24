@@ -1,0 +1,43 @@
+Context: include/perception/types.h — Detection2D
+File path: // file: include/perception/types.h
+Source: table_row0_col0
+---
+// file: include/perception/types.h
+#pragma once
+#include <cstdint>
+#include <vector>
+#include <string>
+#include <Eigen/Core>
+
+namespace drone::perception {
+
+/// Object class IDs — extend as needed
+enum class ObjectClass : uint8_t {
+    UNKNOWN     = 0,
+    PERSON      = 1,
+    VEHICLE_CAR = 2,
+    VEHICLE_TRUCK = 3,
+    DRONE       = 4,
+    ANIMAL      = 5,
+    BUILDING    = 6,
+    TREE        = 7,
+};
+
+/// 2D bounding box detection from DNN inference
+struct Detection2D {
+    float x, y, w, h;          // bbox in pixel coordinates (top-left + size)
+    float confidence;           // 0.0 to 1.0
+    ObjectClass class_id;
+    uint64_t timestamp_ns;      // from camera frame metadata
+    uint64_t frame_sequence;    // to correlate with other sensors
+
+    /// Center point of bbox
+    Eigen::Vector2f center() const { return {x + w/2, y + h/2}; }
+};
+
+/// List of detections from one frame
+struct Detection2DList {
+    std::vector<Detection2D> detections;
+    uint64_t timestamp_ns;
+    uint64_t frame_sequence;
+};

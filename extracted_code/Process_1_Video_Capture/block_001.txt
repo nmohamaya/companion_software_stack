@@ -1,0 +1,54 @@
+Context: 2. Architecture Diagram — Internal Thread Layout
+Source: table_row0_col0
+---
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        PROCESS 1: VIDEO / CAPTURE                               │
+│                        PID: video-capture                                        │
+│                                                                                  │
+│  ┌──────────────────┐   ┌──────────────────┐                                    │
+│  │ Thread 1:        │   │ Thread 2:        │                                    │
+│  │ MISSION CAM      │   │ STEREO CAM       │        HARDWARE                    │
+│  │                   │   │                   │        ════════                    │
+│  │ /dev/video0       │   │ /dev/video2 (L)   │        Mission: IMX477 / OV5647   │
+│  │ V4L2 MMAP        │   │ /dev/video3 (R)   │        Stereo: OAK-D / RealSense  │
+│  │ 1920×1080 @30fps │   │ V4L2 MMAP        │        or custom stereo pair       │
+│  │                   │   │ 640×480 @30fps   │                                    │
+│  └────────┬──────────┘   └────────┬──────────┘                                    │
+│           │                       │                                               │
+│           │ raw Bayer/YUV         │ raw Bayer/YUV                                │
+│           ▼                       ▼                                               │
+│  ┌──────────────────────────────────────────────────┐                             │
+│  │ Thread 3: ISP / PREPROCESSING                     │                             │
+│  │                                                    │                             │
+│  │  Debayer → White Balance → Denoise → Undistort    │                             │
+│  │                                                    │                             │
+│  │  Input: SPSC queue from Thread 1 & 2              │                             │
+│  │  Output 1: mission_cam RGB → shm ring → Perception│                             │
+│  │  Output 2: stereo pair RGB → shm ring → SLAM      │                             │
+│  │  Output 3: mission_cam RGB → internal queue → T4  │                             │
+│  │  Output 4: mission_cam RGB → internal queue → T5  │                             │
+│  └──────────────────────┬────────────────────────────┘                             │
+│                          │                                                         │
+│              ┌───────────┴───────────┐                                             │
+│              ▼                       ▼                                             │
+│  ┌──────────────────────┐  ┌──────────────────────┐                               │
+│  │ Thread 4:            │  │ Thread 5:            │                               │
+│  │ H.265 ENCODE+STREAM  │  │ SSD RECORDING        │                               │
+│  │                       │  │                       │                               │
+│  │ NVENC HW encoder     │  │ MKV container         │                               │
+│  │ → NAL units          │  │ async write (O_DIRECT)│                               │
+│  │ → FEC packets        │  │ circular buffer mode  │                               │
+│  │ → RTP/UDP            │  │                       │                               │
+│  │ → RF link → GCS      │  │ /data/recording/      │                               │
+│  └──────────────────────┘  └──────────────────────┘                               │
+│                                                                                    │
+│  ┌──────────────────────────────────────────────────────────────────┐              │
+│  │ SHARED MEMORY OUTPUT (IPC to other processes)                    │              │
+│  │                                                                   │              │
+│  │  /drone_mission_cam  ──────────────────────────►  PERCEPTION      │              │
+│  │  (shm ring buffer, 4 slots × 6MB = 24MB)                         │              │
+│  │                                                                   │              │
+│  │  /drone_stereo_cam   ──────────────────────────►  SLAM            │              │
+│  │  (shm ring buffer, 4 slots × 1.8MB = 7.2MB)                      │              │
+│  └──────────────────────────────────────────────────────────────────┘              │
+└─────────────────────────────────────────────────────────────────────────────────────┘

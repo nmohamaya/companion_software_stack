@@ -1,0 +1,4 @@
+=== Listing 5-3: Per-Process Monitor (reads /proc/<pid>/stat) ===
+
+💡 C++ Concept: Parsing /proc as a Monitoring Data Source
+Linux exposes comprehensive process and system data through the /proc virtual filesystem. Reading /proc/stat, /proc/meminfo, and /proc/<pid>/stat are guaranteed race-free by the kernel: each read returns a consistent snapshot. This is the standard approach used by htop, perf, and container runtimes. The alternative — ptrace() or eBPF — provides more detail but is astronomically more complex. For a drone companion computer, /proc provides all the data we need with zero overhead (the kernel generates the data on-demand when the file is read, no background collection). The per-process CPU calculation divides the delta in user+system jiffies by the elapsed time.

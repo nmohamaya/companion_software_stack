@@ -1,0 +1,94 @@
+=== Listing 5-1: CPU Monitor (reads /proc/stat) ===
+
+// monitor/cpu_monitor.h
+#pragma once
+#include <fstream>
+#include <string>
+#include <array>
+#include <sstream>
+#include <spdlog/spdlog.h>
+
+struct CPUSnapshot {
+    uint64_t user    = 0;
+    uint64_t nice    = 0;
+    uint64_t system  = 0;
+    uint64_t idle    = 0;
+    uint64_t iowait  = 0;
+    uint64_t irq     = 0;
+    uint64_t softirq = 0;
+    uint64_t steal   = 0;
+
+    uint64_t total() const {
+        return user + nice + system + idle + iowait + irq + softirq + steal;
+    }
+    uint64_t active() const { return total() - idle - iowait; }
+};
+
+class CPUMonitor {
+public:
+    // Returns overall CPU usage as percentage (0.0 - 100.0)
+    double update() {
+        CPUSnapshot current = read_proc_stat();
+        double usage = 0.0;
+
+        uint64_t total_delta  = current.total()  - prev_.total();
+        uint64_t active_delta = current.active() - prev_.active();
+
+        if (total_delta > 0) {
+            usage = 100.0 * static_cast<double>(active_delta) /
+                    static_cast<double>(total_delta);
+        }
+
+        prev_ = current;
+        return usage;
+    }
+
+    // Per-core usage (index 0 .. N-1)
+    std::vector<double> per_core_usage() {
+        std::vector<double> usages;
+        std::ifstream f("/proc/stat");
+        std::string line;
+
+        // Skip aggregate "cpu " line
+        std::getline(f, line);
+
+        size_t core = 0;
+        while (std::getline(f, line)) {
+            if (line.substr(0, 3) != "cpu") break;
+
+            CPUSnapshot snap = parse_cpu_line(line);
+            if (core < prev_cores_.size()) {
+                uint64_t td = snap.total()  - prev_cores_[core].total();
+                uint64_t ad = snap.active() - prev_cores_[core].active();
+                usages.push_back(td > 0 ? 100.0 * double(ad) / double(td) : 0.0);
+            }
+
+            if (core >= prev_cores_.size())
+                prev_cores_.push_back(snap);
+            else
+                prev_cores_[core] = snap;
+            ++core;
+        }
+        return usages;
+    }
+
+private:
+    CPUSnapshot prev_{};
+    std::vector<CPUSnapshot> prev_cores_;
+
+    CPUSnapshot read_proc_stat() {
+        std::ifstream f("/proc/stat");
+        std::string line;
+        std::getline(f, line);
+        return parse_cpu_line(line);
+    }
+
+    CPUSnapshot parse_cpu_line(const std::string& line) {
+        CPUSnapshot s;
+        std::istringstream iss(line);
+        std::string label;
+        iss >> label >> s.user >> s.nice >> s.system >> s.idle
+            >> s.iowait >> s.irq >> s.softirq >> s.steal;
+        return s;
+    }
+};

@@ -1,0 +1,40 @@
+=== Listing 8-4: Example mission.json File ===
+
+// Example mission.json:
+{
+  "name": "Survey Mission Alpha",
+  "version": "1.0",
+  "waypoints": [
+    {
+      "id": 1,
+      "type": "position",
+      "label": "Takeoff climb",
+      "position": [0.0, 0.0, -30.0],
+      "speed": 3.0
+    },
+    {
+      "id": 2,
+      "type": "position",
+      "label": "WP-A",
+      "position": [100.0, 50.0, -30.0],
+      "acceptance_radius": 3.0,
+      "speed": 5.0
+    },
+    {
+      "id": 3,
+      "type": "loiter",
+      "label": "Observation point",
+      "center": [200.0, 100.0, -25.0],
+      "radius": 15.0,
+      "duration": 60.0,
+      "clockwise": true
+    },
+    {
+      "id": 4,
+      "type": "position",
+      "label": "Return to home",
+      "position": [0.0, 0.0, -10.0],
+      "speed": 4.0
+    }
+  ]
+}

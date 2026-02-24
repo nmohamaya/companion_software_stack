@@ -1,0 +1,4 @@
+=== CONCEPT: The Alert engine evaluates health data and generates alerts at four severity levels. Alerts are deduplicated, rate-limited, and forwarded to the Comms process for GCS telemetry. Critical alerts can also trigger automatic responses (e.g., request safe landing from Process 4). ===
+
+💡 C++ Concept: Token Bucket for Alert Rate Limiting
+If thermal oscillates near a threshold, it could generate hundreds of alerts per minute. A token bucket rate limiter allows a configurable burst of alerts (e.g., 3 in 10 seconds) and then suppresses further alerts until the bucket refills. The bucket has max_tokens (burst size), a refill rate (tokens per second), and a current token count. Each alert consumes one token. When tokens are exhausted, alerts are suppressed and a summary ('N alerts suppressed') is emitted when the bucket refills. This is the same algorithm used for network traffic shaping (e.g., Linux tc token bucket filter).

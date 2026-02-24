@@ -1,0 +1,27 @@
+Context: For persistent re-localisation, the map must be saved to disk. We use a compact binary format (or optionally cereal/protobuf) containing keyframe poses, 3-D landmarks, BoW vectors, and vocabulary reference.
+Source: code_paragraphs
+---
+#include <cereal/archives/binary.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/map.hpp>
+
+struct SerializableMap {
+    std::vector<KeyframePose> keyframes;
+    std::vector<Landmark3D> landmarks;
+    std::vector<BowVector> bow_vectors;
+    std::string vocabulary_hash;  // to verify vocabulary compatibility
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        ar(keyframes, landmarks, bow_vectors, vocabulary_hash);
+    }
+};
+
+void MapManager::save_map(const std::string& path) {
+    SerializableMap smap = build_serializable();
+    std::ofstream ofs(path, std::ios::binary);
+    cereal::BinaryOutputArchive archive(ofs);
+    archive(smap);
+    spdlog::info("Map saved: {} KFs, {} landmarks → {}",
+                 smap.keyframes.size(), smap.landmarks.size(), path);
+}

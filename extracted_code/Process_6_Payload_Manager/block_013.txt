@@ -1,0 +1,58 @@
+=== Listing 7-1: Trigger Mode Types with std::variant ===
+
+// camera/trigger_modes.h
+#pragma once
+#include <chrono>
+#include <Eigen/Core>
+#include <variant>
+
+struct SingleShot {
+    bool pending = false;
+    bool should_trigger() {
+        if (pending) { pending = false; return true; }
+        return false;
+    }
+};
+
+struct IntervalTime {
+    double interval_s = 2.0;
+    std::chrono::steady_clock::time_point last_trigger;
+
+    bool should_trigger() {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(
+            now - last_trigger).count();
+        if (elapsed >= interval_s) {
+            last_trigger = now;
+            return true;
+        }
+        return false;
+    }
+};
+
+struct IntervalDistance {
+    double interval_m = 5.0;
+    Eigen::Vector3d last_position = Eigen::Vector3d::Zero();
+    bool first = true;
+
+    bool should_trigger(const Eigen::Vector3d& pos) {
+        if (first) {
+            last_position = pos;
+            first = false;
+            return true;  // trigger first image
+        }
+        double dist = (pos - last_position).norm();
+        if (dist >= interval_m) {
+            last_position = pos;
+            return true;
+        }
+        return false;
+    }
+};
+
+struct Continuous {
+    bool should_trigger() { return true; }
+};
+
+using TriggerMode = std::variant<SingleShot, IntervalTime,
+                                  IntervalDistance, Continuous>;

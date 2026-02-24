@@ -1,0 +1,4 @@
+=== CONCEPT: The Command Dispatcher reads payload commands from shared memory and routes them to the appropriate plugin. It acts as the bridge between the mission planner's high-level directives and the payload plugins' hardware-level execution. ===
+
+💡 C++ Concept: Command Pattern (GoF)
+The Command pattern encapsulates a request as an object, allowing parameterisation of clients with different requests. PayloadCmd is a command object: it contains the action (type), parameters (param1-3), and timestamp. The dispatcher doesn't interpret the command — it just finds the right handler and passes the command through. This decouples the command source (Process 4) from the command executor (plugins). Commands can also be logged, queued, or replayed for testing.

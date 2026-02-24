@@ -1,0 +1,76 @@
+=== Listing 9-1: Power/Voltage Monitor (INA3221) ===
+
+// monitor/power_monitor.h
+#pragma once
+#include <fstream>
+#include <string>
+#include <spdlog/spdlog.h>
+
+struct PowerSnapshot {
+    double voltage_v       = 0.0;  // main rail voltage
+    double current_a       = 0.0;  // current draw (amps)
+    double power_w         = 0.0;  // instantaneous power
+    double battery_percent = 0.0;  // from FC state (0-100%)
+    bool   low_voltage     = false;
+    bool   critical_voltage = false;
+};
+
+class PowerMonitor {
+public:
+    bool init() {
+        // Jetson Orin Nano INA3221 paths (may vary by board revision)
+        voltage_path_ = find_ina_path("in_voltage0_input");
+        current_path_ = find_ina_path("in_current0_input");
+        return !voltage_path_.empty();
+    }
+
+    PowerSnapshot update(double fc_battery_percent = -1.0) {
+        PowerSnapshot snap;
+
+        if (!voltage_path_.empty()) {
+            snap.voltage_v = read_value(voltage_path_) / 1000.0;
+            snap.current_a = read_value(current_path_) / 1000.0;
+            snap.power_w = snap.voltage_v * snap.current_a;
+        }
+
+        if (fc_battery_percent >= 0.0)
+            snap.battery_percent = fc_battery_percent;
+
+        // Voltage thresholds (typical 4S LiPo via BEC)
+        snap.low_voltage = (snap.voltage_v > 0 && snap.voltage_v < 4.8);
+        snap.critical_voltage = (snap.voltage_v > 0 && snap.voltage_v < 4.5);
+
+        if (snap.critical_voltage)
+            spdlog::error("POWER CRITICAL: {:.2f}V — prepare for shutdown",
+                           snap.voltage_v);
+        else if (snap.low_voltage)
+            spdlog::warn("POWER LOW: {:.2f}V", snap.voltage_v);
+
+        return snap;
+    }
+
+private:
+    std::string voltage_path_;
+    std::string current_path_;
+
+    double read_value(const std::string& path) {
+        std::ifstream f(path);
+        double val = 0;
+        f >> val;
+        return val;
+    }
+
+    std::string find_ina_path(const std::string& channel) {
+        // Search common Jetson INA3221 sysfs locations
+        std::vector<std::string> search = {
+            "/sys/bus/i2c/drivers/ina3221/1-0040/hwmon/hwmon0/",
+            "/sys/bus/i2c/drivers/ina3221/1-0041/hwmon/hwmon0/",
+        };
+        for (const auto& base : search) {
+            std::string path = base + channel;
+            std::ifstream f(path);
+            if (f.good()) return path;
+        }
+        return "";
+    }
+};

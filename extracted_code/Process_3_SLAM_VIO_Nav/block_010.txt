@@ -1,0 +1,23 @@
+Context: The SPI driver above opens a file descriptor in the constructor and closes it in the destructor – the classic RAII (Resource Acquisition Is Initialization) pattern. This guarantees the FD is released even if an exception is thrown. For extra safety, delete copy operations and implement move semantics so the driver object can be transferred but never duplicated.
+Source: code_paragraphs
+---
+class SpiImuDriver {
+    int fd_ = -1;
+public:
+    SpiImuDriver(const std::string& dev, uint32_t speed);
+    ~SpiImuDriver() { if (fd_ >= 0) ::close(fd_); }
+
+    // Non-copyable
+    SpiImuDriver(const SpiImuDriver&) = delete;
+    SpiImuDriver& operator=(const SpiImuDriver&) = delete;
+
+    // Movable
+    SpiImuDriver(SpiImuDriver&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    SpiImuDriver& operator=(SpiImuDriver&& o) noexcept {
+        if (this != &o) {
+            if (fd_ >= 0) ::close(fd_);
+            fd_ = std::exchange(o.fd_, -1);
+        }
+        return *this;
+    }
+};

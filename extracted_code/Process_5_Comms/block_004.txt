@@ -1,0 +1,4 @@
+=== 5.2 MAVLink Message Wrapper ===
+
+💡 C++ Concept: Header-Only Libraries & Zero-Cost Abstraction
+MAVLink generates C header files (mavlink_msg_*.h) that inline serialisation/deserialisation functions. This means: (1) no library to link — just #include the headers, (2) the compiler inlines pack/unpack calls, eliminating function-call overhead, (3) the serialised format is defined at compile time via constexpr arrays. The trade-off is longer compile times (many headers), but runtime cost is zero. This 'header-only' approach is common in performance-sensitive C++ libraries (Eigen, nlohmann/json, abseil inline headers).

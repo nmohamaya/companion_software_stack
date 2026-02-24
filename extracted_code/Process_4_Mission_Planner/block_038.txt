@@ -1,0 +1,41 @@
+=== Listing 10-1: Path Hand-off (std::swap) and Atomic Avoidance Data ===
+
+// Planned path hand-off in MissionContext:
+
+class MissionContext {
+    // ... (other members)
+
+    void set_planned_path(std::vector<Eigen::Vector3d> path) {
+        std::lock_guard lock(path_mtx_);
+        planned_path_ = std::move(path);
+        path_updated_ = true;
+    }
+
+    std::optional<std::vector<Eigen::Vector3d>> consume_planned_path() {
+        std::lock_guard lock(path_mtx_);
+        if (!path_updated_) return std::nullopt;
+        path_updated_ = false;
+        std::vector<Eigen::Vector3d> out;
+        out.swap(planned_path_);           // O(1) swap, no copy
+        return out;
+    }
+
+    // Avoidance output — small, use atomics
+    void set_avoidance_output(double heading, double speed_factor) {
+        avoidance_heading_.store(heading, std::memory_order_relaxed);
+        avoidance_speed_.store(speed_factor, std::memory_order_relaxed);
+    }
+
+    void get_avoidance_output(double& heading, double& speed_factor) const {
+        heading = avoidance_heading_.load(std::memory_order_relaxed);
+        speed_factor = avoidance_speed_.load(std::memory_order_relaxed);
+    }
+
+private:
+    std::mutex path_mtx_;
+    std::vector<Eigen::Vector3d> planned_path_;
+    bool path_updated_ = false;
+
+    std::atomic<double> avoidance_heading_{0.0};
+    std::atomic<double> avoidance_speed_{1.0};
+};

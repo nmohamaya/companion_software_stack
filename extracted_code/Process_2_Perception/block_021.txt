@@ -1,0 +1,82 @@
+Context: Inference thread — Strategy pattern + SHM consumer
+Source: table_row0_col0
+---
+/// Inference Strategy interface (from Section 3)
+class IDetector {
+public:
+    virtual ~IDetector() = default;
+    virtual Detection2DList detect(const cv::Mat& frame,
+                                    uint64_t timestamp_ns,
+                                    uint64_t frame_seq) = 0;
+};
+
+/// TensorRT YOLO detector — concrete strategy
+class TRTYoloDetector : public IDetector {
+public:
+    explicit TRTYoloDetector(const std::string& engine_path,
+                              float conf_thresh = 0.5f,
+                              float nms_thresh = 0.45f)
+        : engine_(engine_path), conf_thresh_(conf_thresh),
+          nms_thresh_(nms_thresh) {}
+
+    Detection2DList detect(const cv::Mat& frame,
+                            uint64_t timestamp_ns,
+                            uint64_t frame_seq) override {
+        // 1. Pre-process
+        float scale; int pad_x, pad_y;
+        cv::Mat letterboxed = letterbox(frame, 640, 640, scale, pad_x, pad_y);
+        auto blob = preprocess(letterboxed);
+
+        // 2. Infer
+        auto output = engine_.infer(blob.data());
+
+        // 3. Post-process: decode YOLO output
+        std::vector<Detection2D> dets;
+        // ... decode output tensor into Detection2D objects ...
+        // ... apply confidence threshold ...
+        // ... scale boxes back to original resolution ...
+
+        // 4. NMS
+        auto final_dets = nms(dets, nms_thresh_);
+
+        return Detection2DList{std::move(final_dets), timestamp_ns, frame_seq};
+    }
+
+private:
+    TensorRTEngine engine_;
+    float conf_thresh_;
+    float nms_thresh_;
+};
+
+/// Inference thread entry point
+void inference_thread(
+    drone::video::ShmRingConsumer& camera_input,   // from Process 1
+    SPSCRing<Detection2DList, 4>& output_queue,    // to Tracker thread
+    std::atomic<bool>& stop_flag,
+    const std::string& model_path)
+{
+    // Create detector using Strategy pattern
+    auto detector = std::make_unique<TRTYoloDetector>(model_path);
+    spdlog::info("Inference thread started with {}", model_path);
+
+    while (!stop_flag.load(std::memory_order_relaxed)) {
+        auto* slot = camera_input.peek();
+        if (!slot) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+        }
+
+        // Wrap SHM pixel data in cv::Mat (zero-copy — no memcpy!)
+        cv::Mat frame(slot->meta.height, slot->meta.width, CV_8UC3,
+                      const_cast<uint8_t*>(slot->pixel_data),
+                      slot->meta.stride);
+
+        auto detections = detector->detect(
+            frame, slot->meta.timestamp_ns, slot->meta.sequence_number);
+
+        camera_input.advance();  // release SHM slot
+
+        output_queue.try_push(std::move(detections));
+    }
+    spdlog::info("Inference thread stopped");
+}

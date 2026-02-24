@@ -1,0 +1,32 @@
+Context: FusedObject — final pipeline output
+Source: table_row0_col0
+---
+/// Fully fused object with 3D position from multi-sensor
+struct FusedObject {
+    uint32_t track_id;
+    ObjectClass class_id;
+    float confidence;
+
+    // 3D state (world/body frame)
+    Eigen::Vector3f position_3d;    // meters [x, y, z] in body frame
+    Eigen::Vector3f velocity_3d;    // m/s
+    float heading;                  // radians (if estimable)
+
+    // Source information
+    bool has_camera;                // detection from camera
+    bool has_lidar;                 // associated with LiDAR cluster
+    bool has_radar;                 // associated with radar return
+
+    // Uncertainty
+    Eigen::Matrix3f position_covariance;  // from Kalman filter
+
+    uint64_t timestamp_ns;
+};
+
+struct FusedObjectList {
+    std::vector<FusedObject> objects;
+    uint64_t timestamp_ns;
+    uint32_t frame_sequence;
+};
+
+} // namespace drone::perception

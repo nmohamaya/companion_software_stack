@@ -1,0 +1,23 @@
+=== Listing 14-2: I2C IMU Interface ===
+
+// data/i2c_imu_data.h
+#pragma once
+#include <Eigen/Core>
+
+struct IMUReading {
+    Eigen::Vector3d gyro;          // rad/s
+    Eigen::Vector3d accel;         // m/s²
+    Eigen::Vector3d mag;           // μT (optional)
+    double temperature;            // °C
+    uint64_t timestamp_ns;
+};
+
+// I2C IMU interface (e.g., BMI088, ICM-42688)
+class I2CIMU {
+public:
+    virtual ~I2CIMU() = default;
+    virtual bool init(int bus, int addr) = 0;
+    virtual IMUReading read_raw() = 0;
+    virtual Eigen::Vector3d read_euler() = 0; // fused orientation
+    virtual void calibrate() = 0;
+};

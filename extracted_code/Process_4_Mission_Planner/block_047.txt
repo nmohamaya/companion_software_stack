@@ -1,0 +1,23 @@
+=== Listing 13-2: Example planner_config.json ===
+
+// Example planner_config.json:
+{
+  "max_velocity": 5.0,
+  "max_acceleration": 2.0,
+  "max_yaw_rate": 1.0,
+  "grid_resolution": 0.25,
+  "safety_margin": 0.5,
+  "max_altitude_agl": 120.0,
+  "battery_warning_pct": 25,
+  "battery_critical_pct": 15,
+  "geofence_zones": [
+    {
+      "name": "Operating Area",
+      "type": "keep_in",
+      "action": "rtl",
+      "polygon": [[0,0], [500,0], [500,500], [0,500]],
+      "alt_min": 5,
+      "alt_max": 120
+    }
+  ]
+}

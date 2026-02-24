@@ -1,0 +1,62 @@
+Context: include/video/spsc_ring.h — Lock-free SPSC ring buffer
+File path: // file: include/video/spsc_ring.h
+Source: table_row0_col0
+---
+// file: include/video/spsc_ring.h
+#pragma once
+#include <atomic>
+#include <array>
+#include <optional>
+#include <cassert>
+
+namespace drone::video {
+
+/// Lock-free SPSC ring buffer for intra-process thread communication.
+/// T must be trivially copyable (e.g., FrameBuffer with pixel data).
+/// N must be a power of 2.
+template <typename T, size_t N>
+class SPSCRing {
+    static_assert((N & (N - 1)) == 0, "N must be power of 2");
+
+public:
+    /// Producer calls this. Returns false if ring is full (consumer too slow).
+    bool try_push(const T& item) {
+        const uint64_t w = write_idx_.load(std::memory_order_relaxed);
+        const uint64_t r = read_idx_.load(std::memory_order_acquire);
+
+        if (w - r >= N) {
+            return false;  // ring full — drop frame or block
+        }
+
+        slots_[w & (N - 1)] = item;
+        write_idx_.store(w + 1, std::memory_order_release);
+        return true;
+    }
+
+    /// Consumer calls this. Returns std::nullopt if ring is empty.
+    std::optional<T> try_pop() {
+        const uint64_t r = read_idx_.load(std::memory_order_relaxed);
+        const uint64_t w = write_idx_.load(std::memory_order_acquire);
+
+        if (r >= w) {
+            return std::nullopt;  // ring empty — no new frame
+        }
+
+        T item = slots_[r & (N - 1)];
+        read_idx_.store(r + 1, std::memory_order_release);
+        return item;
+    }
+
+    /// How many items are available to consume.
+    uint64_t available() const {
+        return write_idx_.load(std::memory_order_acquire)
+             - read_idx_.load(std::memory_order_relaxed);
+    }
+
+private:
+    alignas(64) std::atomic<uint64_t> write_idx_{0};  // own cache line
+    alignas(64) std::atomic<uint64_t> read_idx_{0};   // own cache line
+    std::array<T, N> slots_;
+};
+
+} // namespace drone::video

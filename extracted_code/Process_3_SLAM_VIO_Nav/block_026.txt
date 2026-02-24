@@ -1,0 +1,12 @@
+Context: Obtain from IMU datasheet or Allan variance analysis. These parameters feed directly into the pre-integrator noise model.
+Source: code_paragraphs
+---
+struct ImuNoiseParams {
+    double gyro_noise_density  = 0.004;    // rad/s/√Hz
+    double gyro_random_walk    = 2.2e-5;   // rad/s²/√Hz
+    double accel_noise_density = 0.012;    // m/s²/√Hz
+    double accel_random_walk   = 8.0e-5;   // m/s³/√Hz
+
+    Eigen::Matrix3d gyro_cov()  const { return Eigen::Matrix3d::Identity() * gyro_noise_density * gyro_noise_density; }
+    Eigen::Matrix3d accel_cov() const { return Eigen::Matrix3d::Identity() * accel_noise_density * accel_noise_density; }
+};

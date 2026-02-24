@@ -1,0 +1,4 @@
+=== The Payload Manager has a simpler inter-thread model than the Mission Planner or Comms processes. The Command Dispatcher is the sole command entry point — it runs sequentially, so plugin handle_command() calls don't require synchronisation. The gimbal thread reads atomic target values set by the dispatcher. The camera thread queues events for asynchronous geo-tag file writing. ===
+
+💡 C++ Concept: Single-Writer Principle for Simplicity
+By routing ALL commands through a single dispatcher thread, we guarantee that handle_command() is only ever called from one thread. This means plugins don't need internal mutexes for their command handling path — a massive simplification. The only cross-thread data flows are: (a) atomic target values (gimbal angles), (b) the capture event queue (mutex-protected). This 'single-writer' discipline eliminates entire categories of concurrency bugs.

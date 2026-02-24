@@ -1,0 +1,4 @@
+=== Listing 14-1: Per-Thread Watchdog Timer ===
+
+💡 C++ Concept: RAII Scoped Timer for Performance Monitoring
+A ScopedTimer object starts a clock on construction and logs the elapsed time on destruction. This leverages RAII (Resource Acquisition Is Initialisation): you declare it at the top of a function, and it automatically logs timing when the function returns (even via exceptions). No manual stop_timer() call needed. This is invaluable for performance profiling in real-time loops — place ScopedTimer at the top of each thread's main loop body to continuously monitor execution time.

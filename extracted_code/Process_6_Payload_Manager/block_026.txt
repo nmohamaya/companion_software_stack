@@ -1,0 +1,33 @@
+=== Figure 12-1: Gimbal Stabilisation Pipeline ===
+
+
+ Gimbal Stabilisation Pipeline (200 Hz):
+ ────────────────────────────────────────
+
+ 1. READ INPUTS
+    ├── Vehicle attitude (quaternion) from /slam_pose SHM
+    └── Gimbal IMU (optional, I2C) for direct feedback
+
+ 2. COMPUTE TARGET (depends on mode)
+    ├── STABILISED: target = desired_earth_angle
+    │   servo_target = desired - vehicle_attitude  (compensate)
+    │
+    ├── FOLLOW: target_yaw = vehicle_yaw + offset
+    │   target_pitch/roll = desired (stabilised)
+    │
+    ├── LOCK: target = atan2(target_GPS - vehicle_pos)
+    │   continuously recompute as vehicle moves
+    │
+    └── RATE: target += rate * dt (integrate rate command)
+
+ 3. PID CONTROL
+    ├── pitch_cmd = pitch_pid.compute(target_pitch, current_pitch, dt)
+    ├── roll_cmd  = roll_pid.compute(target_roll, current_roll, dt)
+    └── yaw_cmd   = yaw_pid.compute(target_yaw, current_yaw, dt)
+    Note: yaw PID uses angle wrapping (±π)
+
+ 4. PWM OUTPUT
+    ├── pitch_servo.set_normalised(pitch_cmd)  // -1→+1 mapped to pulse
+    ├── roll_servo.set_normalised(roll_cmd)
+    └── yaw_servo.set_normalised(yaw_cmd)
+

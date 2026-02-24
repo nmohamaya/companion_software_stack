@@ -1,0 +1,35 @@
+=== Listing 7-2: Watchdog Thread (5 Hz, highest priority) ===
+
+// watchdog/watchdog_thread.cpp
+#include "watchdog/process_watchdog.h"
+#include "util/realtime.h"
+#include <systemd/sd-daemon.h>
+
+void watchdog_thread(ProcessWatchdog& watchdog,
+                     HealthStore& store,
+                     std::atomic<bool>& running) {
+    set_thread_params("Watchdog", 5, SCHED_FIFO, 80);
+
+    const auto period = std::chrono::milliseconds(200);  // 5 Hz
+    uint64_t tick = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        WatchdogReport report = watchdog.check();
+        store.update_watchdog(report);
+
+        // Notify systemd that we're alive (service watchdog)
+        sd_notify(0, "WATCHDOG=1");
+
+        if (!report.all_healthy && (tick % 25 == 0)) {
+            // Every 5 seconds, log a summary
+            spdlog::warn("WATCHDOG SUMMARY: {} healthy, {} degraded, {} dead",
+                          report.total_healthy, report.total_degraded,
+                          report.total_dead);
+        }
+
+        ++tick;
+        std::this_thread::sleep_until(start + period);
+    }
+}

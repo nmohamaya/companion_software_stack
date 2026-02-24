@@ -1,0 +1,4 @@
+=== 16.1 Serial Reconnection with Exponential Backoff ===
+
+💡 C++ Concept: Exponential Backoff for Resource Recovery
+When the serial port disconnects (cable vibration, USB issue), we don't spin-retry. Instead, we wait 1s, then 2s, then 4s, up to a maximum of 30s between retries. This exponential backoff prevents CPU waste and excessive log spam during extended outages. The pattern is standard in network programming (TCP retransmission, gRPC, AWS SDK). We add a small random jitter to avoid thundering herd if multiple processes reconnect simultaneously.

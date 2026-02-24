@@ -1,0 +1,21 @@
+Context: std::move — zero-copy transfer of large sensor data
+Source: table_row0_col0
+---
+// Moving a PointCloud into the fusion queue
+void lidar_thread(SPSCRing<PointCloud, 4>& queue) {
+    PointCloud cloud;
+    cloud.points.reserve(100'000);
+    // ... fill cloud from sensor ...
+
+    // BAD: copies 1.6MB of point data
+    // queue.try_push(cloud);
+
+    // GOOD: moves ownership — cloud is now empty, no copy happened
+    queue.try_push(std::move(cloud));
+    // cloud.points is now in moved-from state (empty)
+    // The queue now owns the data
+
+    // After move, reuse the vector's allocation for next frame:
+    cloud.points.clear();   // size=0 but capacity is still 100K
+    cloud.points.reserve(100'000);  // no-op — already reserved
+}

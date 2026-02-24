@@ -1,0 +1,65 @@
+=== Listing 9-1: Trajectory Relay Thread (SHM → MAVLink → FC) ===
+
+// relay/trajectory_relay_thread.cpp
+#include "ipc/trajectory_reader.h"
+#include "transport/serial_transport.h"
+#include "mavlink/mavlink_wrapper.h"
+#include "util/realtime.h"
+#include <chrono>
+
+void trajectory_relay_thread(TrajectoryReader& traj_reader,
+                              SerialTransport& fc_serial,
+                              MAVLinkChannel& mav,
+                              std::atomic<bool>& running) {
+    set_thread_params("TrajRelay", 3, SCHED_FIFO, 70);
+
+    const auto period = std::chrono::milliseconds(20);  // 50 Hz
+    uint64_t last_timestamp = 0;
+    uint32_t stale_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        TrajectoryReader::SetpointData sp;
+        if (traj_reader.read(sp)) {
+            // Only send if data is fresh (avoid re-sending stale setpoints)
+            if (sp.timestamp_ns != last_timestamp) {
+                last_timestamp = sp.timestamp_ns;
+                stale_count = 0;
+
+                // Convert to MAVLink message
+                uint32_t time_boot_ms = static_cast<uint32_t>(
+                    sp.timestamp_ns / 1'000'000);
+
+                auto msg = mav.pack_setpoint(
+                    time_boot_ms,
+                    1, 1,  // target: sys=1 (FC), comp=1 (autopilot)
+                    sp.coordinate_frame,
+                    sp.type_mask,
+                    static_cast<float>(sp.position[0]),
+                    static_cast<float>(sp.position[1]),
+                    static_cast<float>(sp.position[2]),
+                    static_cast<float>(sp.velocity[0]),
+                    static_cast<float>(sp.velocity[1]),
+                    static_cast<float>(sp.velocity[2]),
+                    static_cast<float>(sp.acceleration[0]),
+                    static_cast<float>(sp.acceleration[1]),
+                    static_cast<float>(sp.acceleration[2]),
+                    static_cast<float>(sp.yaw),
+                    static_cast<float>(sp.yaw_rate));
+
+                fc_serial.send(msg);
+            } else {
+                ++stale_count;
+                if (stale_count > 100) {  // 2 seconds with no new data
+                    spdlog::warn("TrajRelay: setpoint stale for {:.1f}s",
+                                  stale_count * 0.02);
+                }
+            }
+        } else {
+            spdlog::warn("TrajRelay: cannot read /trajectory_cmd SHM");
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}

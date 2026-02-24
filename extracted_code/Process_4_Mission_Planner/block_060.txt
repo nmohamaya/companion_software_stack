@@ -1,0 +1,3 @@
+=== Appendix: C++ Concepts Reference ===
+
+Section 8 — type-safe waypoint union with pattern matching

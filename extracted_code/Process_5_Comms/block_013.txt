@@ -1,0 +1,78 @@
+=== Listing 7-2: GCS Command Parser ===
+
+// comms/gcs_command_parser.h
+#pragma once
+#include <mavlink/v2.0/ardupilotmega/mavlink.h>
+#include "ipc/gcs_command_writer.h"
+
+class GCSCommandParser {
+public:
+    explicit GCSCommandParser(GCSCommandWriter& writer) : writer_(writer) {}
+
+    void handle(const mavlink_message_t& msg) {
+        switch (msg.msgid) {
+            case MAVLINK_MSG_ID_COMMAND_LONG:
+                handle_command_long(msg);
+                break;
+            case MAVLINK_MSG_ID_SET_MODE:
+                handle_set_mode(msg);
+                break;
+            case MAVLINK_MSG_ID_MISSION_ITEM_INT:
+                handle_mission_item(msg);
+                break;
+            case MAVLINK_MSG_ID_MISSION_COUNT:
+                handle_mission_count(msg);
+                break;
+            default:
+                break;
+        }
+    }
+
+private:
+    GCSCommandWriter& writer_;
+
+    void handle_command_long(const mavlink_message_t& msg) {
+        mavlink_command_long_t cmd;
+        mavlink_msg_command_long_decode(&msg, &cmd);
+
+        switch (cmd.command) {
+            case MAV_CMD_COMPONENT_ARM_DISARM:
+                if (cmd.param1 > 0.5f)
+                    writer_.write_command(GCSCommand::ARM);
+                else
+                    writer_.write_command(GCSCommand::DISARM);
+                break;
+
+            case MAV_CMD_NAV_TAKEOFF:
+                writer_.write_command(GCSCommand::TAKEOFF, cmd.param7);  // alt
+                break;
+
+            case MAV_CMD_NAV_RETURN_TO_LAUNCH:
+                writer_.write_command(GCSCommand::RTL);
+                break;
+
+            case MAV_CMD_NAV_LAND:
+                writer_.write_command(GCSCommand::LAND);
+                break;
+
+            case MAV_CMD_DO_PAUSE_CONTINUE:
+                if (cmd.param1 > 0.5f)
+                    writer_.write_command(GCSCommand::RESUME);
+                else
+                    writer_.write_command(GCSCommand::LOITER);
+                break;
+
+            case MAV_CMD_COMPONENT_ARM_DISARM + 1000:  // emergency stop
+                writer_.write_command(GCSCommand::EMERGENCY_STOP);
+                break;
+
+            default:
+                spdlog::debug("Unhandled COMMAND_LONG: {}", cmd.command);
+                break;
+        }
+    }
+
+    void handle_set_mode(const mavlink_message_t& msg);
+    void handle_mission_item(const mavlink_message_t& msg);
+    void handle_mission_count(const mavlink_message_t& msg);
+};

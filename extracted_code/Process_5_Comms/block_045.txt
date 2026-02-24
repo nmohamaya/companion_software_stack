@@ -1,0 +1,8 @@
+=== The Comms process is divided into six implementation phases spanning approximately 10 weeks. Each phase produces testable, incrementally useful functionality. ===
+
+• MessageRouter (pass-through/filter/inject)
+• HeartbeatMonitor thread
+• Full link-loss failsafe testing
+• systemd integration
+• SITL test with ArduPilot
+• Performance profiling on Jetson

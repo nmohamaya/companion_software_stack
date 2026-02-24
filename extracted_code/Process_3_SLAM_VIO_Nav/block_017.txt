@@ -1,0 +1,33 @@
+Context: 7.3 Pose Publishing (Zero-Copy Shared Memory)
+Source: code_paragraphs
+---
+// Shared-memory layout for pose publication
+struct alignas(64) ShmPoseSlot {
+    std::atomic<uint64_t> sequence;     // monotonic, odd = writing
+    double timestamp;
+    double translation[3];              // x, y, z in world frame
+    double quaternion[4];               // w, x, y, z
+    double covariance[36];              // 6×6 upper-triangle
+    uint8_t padding[64 - (8+8+24+32+288) % 64];
+};
+
+class PosePublisher {
+    ShmPoseSlot* slot_;  // mmap'd shared memory
+
+public:
+    void publish(double ts, const Sophus::SE3d& T, const Eigen::Matrix6d& cov) {
+        uint64_t seq = slot_->sequence.load(std::memory_order_relaxed);
+        slot_->sequence.store(seq + 1, std::memory_order_release);  // odd = writing
+
+        slot_->timestamp = ts;
+        Eigen::Map<Eigen::Vector3d>(slot_->translation) = T.translation();
+        Eigen::Quaterniond q(T.rotationMatrix());
+        slot_->quaternion[0] = q.w();
+        slot_->quaternion[1] = q.x();
+        slot_->quaternion[2] = q.y();
+        slot_->quaternion[3] = q.z();
+        Eigen::Map<Eigen::Matrix<double,6,6>>(slot_->covariance) = cov;
+
+        slot_->sequence.store(seq + 2, std::memory_order_release);  // even = valid
+    }
+};

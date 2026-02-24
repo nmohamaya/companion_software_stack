@@ -1,0 +1,4 @@
+=== The plugin architecture allows different payload hardware to be managed through a uniform interface. Each payload type (gimbal, camera, spotlight, drop mechanism) implements the PayloadPlugin interface. Plugins are registered at startup from configuration and the command dispatcher routes commands to the appropriate plugin. ===
+
+💡 C++ Concept: Template Method Pattern (GoF)
+The Template Method pattern defines the skeleton of an algorithm in a base class, deferring specific steps to subclasses. PayloadPlugin::init() calls do_init() (the customisation point), followed by base-class housekeeping (logging, state update). Subclasses override do_init() to perform hardware-specific setup. This ensures every plugin follows the same lifecycle (init → configure → update → shutdown) without duplicating the lifecycle management code. The 'non-virtual interface' (NVI) idiom makes init() non-virtual (controls the skeleton) while do_init() is virtual (varies).

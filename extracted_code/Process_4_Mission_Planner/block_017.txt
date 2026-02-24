@@ -1,0 +1,28 @@
+=== Listing 6-1: PlanningStrategy Interface ===
+
+// planning/planning_strategy.h
+#pragma once
+#include "planning/occupancy_grid.h"
+#include <Eigen/Core>
+#include <vector>
+#include <optional>
+
+struct PathResult {
+    std::vector<Eigen::Vector3d> waypoints;
+    double total_cost;     // metres
+    double compute_time_ms;
+    bool   is_partial;     // true if planner timed out
+};
+
+class PlanningStrategy {
+public:
+    virtual ~PlanningStrategy() = default;
+
+    virtual std::optional<PathResult> plan(
+        const Eigen::Vector3d& start,
+        const Eigen::Vector3d& goal,
+        const OccupancyGrid& grid,
+        double timeout_ms = 200.0) = 0;
+
+    virtual std::string name() const = 0;
+};

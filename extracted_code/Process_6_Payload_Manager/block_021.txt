@@ -1,0 +1,30 @@
+=== Listing 9-2: Command Dispatcher Thread (20 Hz) ===
+
+// dispatch/dispatcher_thread.cpp
+#include "dispatch/command_dispatcher.h"
+#include "ipc/payload_command_reader.h"
+#include "util/realtime.h"
+
+void command_dispatcher_thread(CommandDispatcher& dispatcher,
+                                PayloadCommandReader& cmd_reader,
+                                std::atomic<bool>& running) {
+    set_thread_params("PayCmdDisp", 2, SCHED_FIFO, 45);
+
+    const auto period = std::chrono::milliseconds(50);  // 20 Hz
+    uint64_t last_seq = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        PayloadCmd cmd;
+        if (cmd_reader.read(cmd)) {
+            // Only process NEW commands (check timestamp)
+            if (cmd.timestamp_ns > last_seq) {
+                last_seq = cmd.timestamp_ns;
+                dispatcher.dispatch(cmd);
+            }
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}

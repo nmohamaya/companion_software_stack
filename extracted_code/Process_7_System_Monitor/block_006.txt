@@ -1,0 +1,59 @@
+=== Listing 5-2: Memory Monitor (reads /proc/meminfo) ===
+
+// monitor/memory_monitor.h
+#pragma once
+#include <fstream>
+#include <string>
+#include <unordered_map>
+
+struct MemorySnapshot {
+    uint64_t total_kb       = 0;
+    uint64_t available_kb   = 0;
+    uint64_t free_kb        = 0;
+    uint64_t buffers_kb     = 0;
+    uint64_t cached_kb      = 0;
+    uint64_t swap_total_kb  = 0;
+    uint64_t swap_free_kb   = 0;
+
+    double usage_percent() const {
+        if (total_kb == 0) return 0.0;
+        return 100.0 * (1.0 - double(available_kb) / double(total_kb));
+    }
+
+    double swap_usage_percent() const {
+        if (swap_total_kb == 0) return 0.0;
+        return 100.0 * (1.0 - double(swap_free_kb) / double(swap_total_kb));
+    }
+};
+
+class MemoryMonitor {
+public:
+    MemorySnapshot update() {
+        MemorySnapshot snap;
+        std::ifstream f("/proc/meminfo");
+        std::string line;
+
+        while (std::getline(f, line)) {
+            auto kv = parse_meminfo_line(line);
+            if (kv.first == "MemTotal")       snap.total_kb = kv.second;
+            else if (kv.first == "MemAvailable") snap.available_kb = kv.second;
+            else if (kv.first == "MemFree")    snap.free_kb = kv.second;
+            else if (kv.first == "Buffers")    snap.buffers_kb = kv.second;
+            else if (kv.first == "Cached")     snap.cached_kb = kv.second;
+            else if (kv.first == "SwapTotal")  snap.swap_total_kb = kv.second;
+            else if (kv.first == "SwapFree")   snap.swap_free_kb = kv.second;
+        }
+        return snap;
+    }
+
+private:
+    std::pair<std::string, uint64_t> parse_meminfo_line(const std::string& line) {
+        auto colon = line.find(':');
+        if (colon == std::string::npos) return {"", 0};
+        std::string key = line.substr(0, colon);
+        uint64_t val = 0;
+        std::istringstream iss(line.substr(colon + 1));
+        iss >> val;
+        return {key, val};
+    }
+};

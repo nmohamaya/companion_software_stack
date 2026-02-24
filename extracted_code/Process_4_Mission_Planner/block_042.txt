@@ -1,0 +1,30 @@
+=== Listing 12-1: PlannerConfig — All Tuneable Parameters ===
+
+// config/planner_config.h
+#pragma once
+
+struct PlannerConfig {
+    // Vehicle dynamics
+    double max_velocity       = 5.0;    // m/s
+    double max_acceleration   = 2.0;    // m/s²
+    double max_yaw_rate       = 1.0;    // rad/s
+
+    // Planning
+    double replan_interval_s  = 0.5;    // seconds
+    double planning_timeout_ms = 200.0;
+    double grid_resolution    = 0.25;   // metres
+    double safety_margin      = 0.5;    // metres added to obstacles
+
+    // Waypoints
+    double default_acceptance_radius = 2.0;  // metres
+    double default_cruise_speed      = 5.0;  // m/s
+
+    // Geofence
+    double geofence_warning_margin = 10.0;   // metres before boundary
+    double max_altitude_agl        = 120.0;  // metres
+
+    // Battery
+    uint8_t battery_warning_pct   = 25;
+    uint8_t battery_critical_pct  = 15;
+    uint8_t battery_emergency_pct = 5;
+};

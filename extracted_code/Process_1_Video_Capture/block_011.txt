@@ -1,0 +1,175 @@
+Context: src/video/isp_thread.cpp — Full ISP pipeline implementation
+File path: // file: src/video/isp_thread.cpp
+Source: table_row0_col0
+---
+// file: src/video/isp_thread.cpp
+#include "video/frame.h"
+#include "video/spsc_ring.h"
+#include "video/shm_ring.h"
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/calib3d.hpp>
+#include <spdlog/spdlog.h>
+#include <atomic>
+
+namespace drone::video {
+
+/// ISP configuration — loaded from YAML config file at startup.
+struct ISPConfig {
+    // Lens calibration (from cv::calibrateCamera)
+    cv::Mat camera_matrix;       // 3×3 intrinsic matrix
+    cv::Mat dist_coeffs;         // distortion coefficients (k1,k2,p1,p2,k3)
+    cv::Mat rectify_map1;        // precomputed for cv::remap (faster than undistort)
+    cv::Mat rectify_map2;
+
+    // White balance gains
+    float wb_red   = 1.0f;
+    float wb_green = 1.0f;
+    float wb_blue  = 1.0f;
+
+    // Denoise strength (0 = off, 10 = aggressive)
+    int denoise_strength = 3;
+
+    // Whether to produce NV12 for encoder (vs RGB)
+    bool produce_nv12 = true;
+};
+
+/// Precompute undistortion remap tables (call once at startup).
+void init_undistort_maps(ISPConfig& cfg, int width, int height) {
+    cv::Mat new_camera_matrix = cv::getOptimalNewCameraMatrix(
+        cfg.camera_matrix, cfg.dist_coeffs,
+        cv::Size(width, height), 0.0  // alpha=0: crop to valid pixels only
+    );
+    cv::initUndistortRectifyMap(
+        cfg.camera_matrix, cfg.dist_coeffs,
+        cv::Mat(),  // R (identity — no stereo rectification for mission cam)
+        new_camera_matrix,
+        cv::Size(width, height),
+        CV_16SC2,   // fixed-point for speed
+        cfg.rectify_map1, cfg.rectify_map2
+    );
+    spdlog::info("ISP: undistortion maps precomputed for {}x{}", width, height);
+}
+
+/// Apply ISP pipeline to a single mission camera frame.
+cv::Mat process_mission_frame(const uint8_t* raw_data,
+                               uint32_t width, uint32_t height,
+                               uint32_t stride,
+                               const ISPConfig& cfg)
+{
+    // 1. Debayer (Bayer RGGB → RGB)
+    cv::Mat bayer(height, width, CV_8UC1, const_cast<uint8_t*>(raw_data), stride);
+    cv::Mat rgb;
+    cv::cvtColor(bayer, rgb, cv::COLOR_BayerRG2RGB);
+
+    // 2. White balance
+    if (cfg.wb_red != 1.0f || cfg.wb_blue != 1.0f) {
+        std::vector<cv::Mat> channels;
+        cv::split(rgb, channels);
+        channels[0] *= cfg.wb_blue;   // B
+        channels[2] *= cfg.wb_red;    // R
+        cv::merge(channels, rgb);
+    }
+
+    // 3. Denoise (bilateral filter — preserves edges)
+    if (cfg.denoise_strength > 0) {
+        cv::Mat denoised;
+        cv::bilateralFilter(rgb, denoised,
+                           cfg.denoise_strength,   // d (neighborhood diameter)
+                           cfg.denoise_strength * 10.0,  // sigmaColor
+                           cfg.denoise_strength * 10.0); // sigmaSpace
+        rgb = denoised;
+    }
+
+    // 4. Lens undistortion (using precomputed remap — ~2ms vs ~8ms for undistort)
+    cv::Mat undistorted;
+    cv::remap(rgb, undistorted, cfg.rectify_map1, cfg.rectify_map2,
+              cv::INTER_LINEAR);
+
+    return undistorted;
+}
+
+struct EncoderFrame {
+    cv::Mat image;          // NV12 or RGB
+    FrameMetadata meta;
+};
+
+/// ISP thread entry point — consumes from both camera queues,
+/// distributes to all four outputs.
+void isp_thread(
+    // Inputs
+    SPSCRing<V4L2Camera::CapturedFrame, 4>& mission_queue,
+    SPSCRing<StereoFrame, 4>& stereo_queue,
+    // Outputs — inter-process
+    ShmRingProducer& shm_perception,  // → Perception process
+    ShmRingProducer& shm_slam,        // → SLAM process
+    // Outputs — intra-process
+    SPSCRing<EncoderFrame, 4>& encoder_queue,  // → Thread 4
+    SPSCRing<EncoderFrame, 4>& recorder_queue, // → Thread 5
+    // Control
+    std::atomic<bool>& stop_flag,
+    const ISPConfig& cfg)
+{
+    spdlog::info("ISP thread started");
+
+    while (!stop_flag.load(std::memory_order_relaxed)) {
+
+        // ── Process mission camera frames ──
+        if (auto frame = mission_queue.try_pop()) {
+            auto rgb = process_mission_frame(
+                frame->data, 1920, 1080, 1920, cfg);
+
+            // Output 1: To Perception (via shared memory)
+            FrameMetadata meta{
+                frame->timestamp_ns, frame->sequence,
+                CameraId::MISSION, PixelFormat::RGB24,
+                static_cast<uint32_t>(rgb.cols),
+                static_cast<uint32_t>(rgb.rows),
+                static_cast<uint32_t>(rgb.step),
+                0, 0.0f, 0.0f
+            };
+            shm_perception.publish(meta, rgb.data);
+
+            // Output 3: To encoder
+            EncoderFrame ef;
+            if (cfg.produce_nv12) {
+                cv::cvtColor(rgb, ef.image, cv::COLOR_RGB2YUV_I420);
+            } else {
+                ef.image = rgb;
+            }
+            ef.meta = meta;
+            encoder_queue.try_push(ef);
+
+            // Output 4: To SSD recorder
+            EncoderFrame rf;
+            rf.image = rgb.clone();  // recorder may be slower — needs own copy
+            rf.meta  = meta;
+            recorder_queue.try_push(rf);
+        }
+
+        // ── Process stereo frames ──
+        if (auto stereo = stereo_queue.try_pop()) {
+            // For SLAM: rectify both images using stereo calibration
+            // (Stereo rectification aligns epipolar lines — required for
+            //  dense stereo matching and VIO)
+            // Simplified: just undistort each. Full stereo rectification
+            // needs R, T from stereo calibration.
+
+            // Output 2: To SLAM (left image via shared memory)
+            // SLAM typically only needs the left image + IMU data
+            FrameMetadata meta_l = stereo->meta_left;
+            meta_l.format = PixelFormat::GRAY8;
+            shm_slam.publish(meta_l, stereo->left_data);
+        }
+
+        // Prevent busy-spin if both queues are empty
+        // (In practice, at 30fps each camera produces a frame every 33ms
+        //  so we only spin briefly between frames)
+        if (mission_queue.available() == 0 && stereo_queue.available() == 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+    spdlog::info("ISP thread stopped");
+}
+
+} // namespace drone::video

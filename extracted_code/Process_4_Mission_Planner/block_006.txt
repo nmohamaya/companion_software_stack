@@ -1,0 +1,4 @@
+=== Listing 4-1: Lock-Free Pose Reader (SeqLock) ===
+
+💡 C++ Concept: SeqLock (Sequence Lock) Pattern
+A SeqLock allows a single writer and multiple readers with zero contention. The writer increments an atomic sequence number before and after writing (odd = write in progress). Readers check the sequence before and after copying — if the values differ or are odd, they retry. This is ideal for frequently-updated small structures like pose, because readers never block the writer and the data is always coherent. Unlike a mutex, the writer never waits, making it perfect for the real-time SLAM publisher.

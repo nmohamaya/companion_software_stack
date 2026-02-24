@@ -1,0 +1,45 @@
+=== Listing 8-1: Waypoint Types Using std::variant ===
+
+// waypoint/waypoint_types.h
+#pragma once
+#include <Eigen/Core>
+#include <variant>
+#include <vector>
+#include <string>
+
+struct PositionWaypoint {
+    Eigen::Vector3d position;      // NED metres
+    double acceptance_radius = 2.0; // metres
+    double speed = 5.0;            // m/s cruise speed at this waypoint
+};
+
+struct LoiterWaypoint {
+    Eigen::Vector3d center;
+    double radius    = 10.0;       // metres
+    double altitude  = 30.0;       // metres AGL
+    double duration  = 30.0;       // seconds (0 = indefinite)
+    bool   clockwise = true;
+};
+
+struct SurveyWaypoint {
+    std::vector<Eigen::Vector3d> polygon;  // boundary vertices
+    double altitude    = 30.0;
+    double line_spacing = 5.0;    // metres between survey lines
+    double speed       = 3.0;
+    double camera_fov  = 60.0;    // degrees — for overlap calculation
+};
+
+struct RallyPoint {
+    Eigen::Vector3d position;
+    bool is_land_point = false;
+};
+
+using WaypointData = std::variant<PositionWaypoint, LoiterWaypoint,
+                                   SurveyWaypoint, RallyPoint>;
+
+struct Waypoint {
+    uint32_t     id;
+    std::string  label;
+    WaypointData data;
+    bool         reached = false;
+};

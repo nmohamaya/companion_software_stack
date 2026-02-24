@@ -1,0 +1,109 @@
+Context: src/perception/main.cpp — Process entry point
+File path: // file: src/perception/main.cpp
+Source: table_row0_col0
+---
+// file: src/perception/main.cpp
+#include "perception/types.h"
+#include "video/shm_ring.h"
+#include "video/spsc_ring.h"
+#include <thread>
+#include <atomic>
+#include <signal.h>
+#include <spdlog/spdlog.h>
+#include <systemd/sd-daemon.h>
+
+// Forward declarations
+namespace drone::perception {
+void lidar_thread(SPSCRing<std::vector<LiDARCluster>, 4>&,
+                  std::atomic<bool>&, uint16_t);
+void radar_thread(SPSCRing<RadarDetectionList, 4>&,
+                  std::atomic<bool>&, const char*);
+void inference_thread(drone::video::ShmRingConsumer&,
+                      SPSCRing<Detection2DList, 4>&,
+                      std::atomic<bool>&, const std::string&);
+void tracker_thread(SPSCRing<Detection2DList, 4>&,
+                    SPSCRing<TrackedObjectList, 4>&,
+                    std::atomic<bool>&);
+void fusion_thread(SPSCRing<TrackedObjectList, 4>&,
+                   SPSCRing<std::vector<LiDARCluster>, 4>&,
+                   SPSCRing<RadarDetectionList, 4>&,
+                   std::atomic<bool>&, const CalibrationData&);
+}
+
+static std::atomic<bool> g_stop{false};
+void signal_handler(int) { g_stop.store(true); }
+
+int main() {
+    spdlog::set_level(spdlog::level::info);
+    spdlog::info("perception process starting (PID {})", getpid());
+
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+
+    using namespace drone::perception;
+    using namespace drone::video;
+
+    // ── Wait for video-capture process (retry until SHM exists) ──
+    std::unique_ptr<ShmRingConsumer> camera;
+    for (int i = 0; i < 50; ++i) {
+        try {
+            camera = std::make_unique<ShmRingConsumer>("/drone_mission_cam");
+            break;
+        } catch (...) {
+            spdlog::warn("Waiting for /drone_mission_cam ({}/50)...", i+1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    }
+    if (!camera) {
+        spdlog::error("FATAL: Cannot connect to video-capture process");
+        return 1;
+    }
+
+    // ── Create inter-thread queues ──
+    SPSCRing<Detection2DList, 4>             det_queue;
+    SPSCRing<TrackedObjectList, 4>           track_queue;
+    SPSCRing<std::vector<LiDARCluster>, 4>   lidar_queue;
+    SPSCRing<RadarDetectionList, 4>          radar_queue;
+
+    // ── Load calibration ──
+    CalibrationData calib;
+    // calib = load_calibration("/opt/drone/config/calibration.yaml");
+
+    // ── Launch threads (consumers first) ──
+    std::thread t_fusion(fusion_thread,
+        std::ref(track_queue), std::ref(lidar_queue),
+        std::ref(radar_queue), std::ref(g_stop), std::cref(calib));
+
+    std::thread t_tracker(tracker_thread,
+        std::ref(det_queue), std::ref(track_queue), std::ref(g_stop));
+
+    std::thread t_inference(inference_thread,
+        std::ref(*camera), std::ref(det_queue),
+        std::ref(g_stop), "/opt/drone/models/yolov8s.engine");
+
+    std::thread t_lidar(lidar_thread,
+        std::ref(lidar_queue), std::ref(g_stop), uint16_t(2368));
+
+    std::thread t_radar(radar_thread,
+        std::ref(radar_queue), std::ref(g_stop), "/dev/ttyUSB0");
+
+    // ── Notify systemd ──
+    sd_notify(0, "READY=1");
+
+    // ── Main thread: watchdog ──
+    while (!g_stop.load()) {
+        sd_notify(0, "WATCHDOG=1");
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
+    // ── Shutdown ──
+    sd_notify(0, "STOPPING=1");
+    t_lidar.join();
+    t_radar.join();
+    t_inference.join();
+    t_tracker.join();
+    t_fusion.join();
+
+    spdlog::info("perception process stopped cleanly");
+    return 0;
+}

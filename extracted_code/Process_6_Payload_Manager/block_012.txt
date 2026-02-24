@@ -1,0 +1,4 @@
+=== 7.1 Trigger Modes ===
+
+💡 C++ Concept: std::variant + std::visit for Trigger Mode Dispatch
+We model trigger modes as a std::variant<SingleShot, IntervalTime, IntervalDistance, Continuous>. Each mode struct holds its own state (timer, distance accumulator). The camera thread calls std::visit to dispatch the correct check_trigger() logic. This is exhaustive: if a new mode is added to the variant, the compiler errors if the visitor doesn't handle it. The variant is stack-allocated (no heap) and the visit uses a jump table — both cache-friendly and fast.

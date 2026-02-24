@@ -1,0 +1,26 @@
+Context: Complete file tree for Process 1
+Source: table_row0_col0
+---
+process1_video_capture/
+├── CMakeLists.txt
+├── config/
+│   └── isp.yaml                    # Camera calibration + ISP parameters
+├── include/
+│   └── video/
+│       ├── frame.h                 # FrameMetadata, PixelFormat, CameraId
+│       ├── spsc_ring.h             # Lock-free SPSC ring (intra-process)
+│       └── shm_ring.h             # Shared memory ring (inter-process)
+├── src/
+│   └── video/
+│       ├── main.cpp                # Process entry point, thread orchestration
+│       ├── mission_cam_thread.cpp  # Thread 1: Mission camera V4L2 capture
+│       ├── stereo_cam_thread.cpp   # Thread 2: Stereo camera V4L2 capture
+│       ├── isp_thread.cpp          # Thread 3: ISP (debayer, WB, undistort)
+│       ├── encoder_thread.cpp      # Thread 4: H.265 encode + RTP stream
+│       └── recorder_thread.cpp     # Thread 5: SSD recording (MKV)
+├── tests/
+│   ├── test_spsc_ring.cpp          # SPSC ring buffer unit tests
+│   ├── test_shm_ring.cpp           # Shared memory ring buffer tests
+│   └── test_isp_pipeline.cpp       # ISP pipeline visual verification
+└── scripts/
+    └── calibrate_camera.py         # OpenCV camera calibration script

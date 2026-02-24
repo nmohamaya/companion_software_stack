@@ -1,0 +1,50 @@
+=== Listing 4-2: Detected Object Reader ===
+
+// ipc/object_reader.h
+#pragma once
+#include <atomic>
+#include <vector>
+#include <Eigen/Core>
+
+struct DetectedObject {
+    uint32_t id;
+    uint8_t  class_id;          // 0=unknown, 1=person, 2=vehicle, 3=building...
+    float    confidence;
+    float    bbox_center[3];    // body-frame metres
+    float    bbox_extent[3];    // half-widths
+    float    velocity[3];       // estimated velocity (m/s)
+};
+
+struct ShmObjectList {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    uint32_t count;             // number of valid objects (max 64)
+    uint32_t padding;
+    DetectedObject objects[64];
+};
+
+class ObjectReader {
+public:
+    bool open(const char* name = "/detected_objects");
+
+    bool read(std::vector<DetectedObject>& out) const {
+        if (!ptr_) return false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
+            if (s1 & 1) continue;
+            uint32_t n = std::min(ptr_->count, 64u);
+            out.resize(n);
+            std::memcpy(out.data(), ptr_->objects, n * sizeof(DetectedObject));
+            std::atomic_thread_fence(std::memory_order_acquire);
+            uint64_t s2 = ptr_->seq.load(std::memory_order_relaxed);
+            if (s1 == s2) return true;
+        }
+        return false;
+    }
+
+    ~ObjectReader();  // munmap + close
+
+private:
+    int fd_ = -1;
+    ShmObjectList* ptr_ = nullptr;
+};

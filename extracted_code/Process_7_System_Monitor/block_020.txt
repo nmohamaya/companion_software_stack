@@ -1,0 +1,101 @@
+=== Listing 12-1: Central Health Store (Aggregate Root) ===
+
+// store/health_store.h
+#pragma once
+#include "monitor/cpu_monitor.h"
+#include "monitor/memory_monitor.h"
+#include "monitor/process_monitor.h"
+#include "thermal/thermal_manager.h"
+#include "watchdog/process_watchdog.h"
+#include "monitor/disk_monitor.h"
+#include "monitor/power_monitor.h"
+#include "monitor/network_monitor.h"
+#include <mutex>
+#include <chrono>
+
+struct HealthSnapshot {
+    uint64_t timestamp_ns;
+
+    // CPU / Memory
+    double cpu_usage_percent;
+    std::vector<double> per_core_usage;
+    MemorySnapshot memory;
+
+    // Per-process
+    std::vector<ProcessStats> process_stats;
+
+    // Thermal
+    ThermalSnapshot thermal;
+
+    // Watchdog
+    WatchdogReport watchdog;
+
+    // Disk
+    DiskSnapshot disk;
+
+    // Power
+    PowerSnapshot power;
+
+    // Network
+    NetworkSnapshot network;
+};
+
+class HealthStore {
+public:
+    void update_cpu(double usage, std::vector<double> per_core) {
+        std::lock_guard lock(mtx_);
+        snapshot_.cpu_usage_percent = usage;
+        snapshot_.per_core_usage = std::move(per_core);
+    }
+
+    void update_memory(const MemorySnapshot& mem) {
+        std::lock_guard lock(mtx_);
+        snapshot_.memory = mem;
+    }
+
+    void update_processes(std::vector<ProcessStats> stats) {
+        std::lock_guard lock(mtx_);
+        snapshot_.process_stats = std::move(stats);
+    }
+
+    void update_thermal(const ThermalSnapshot& thermal) {
+        std::lock_guard lock(mtx_);
+        snapshot_.thermal = thermal;
+    }
+
+    void update_watchdog(const WatchdogReport& report) {
+        std::lock_guard lock(mtx_);
+        snapshot_.watchdog = report;
+    }
+
+    void update_disk(const DiskSnapshot& disk) {
+        std::lock_guard lock(mtx_);
+        snapshot_.disk = disk;
+    }
+
+    void update_power(const PowerSnapshot& power) {
+        std::lock_guard lock(mtx_);
+        snapshot_.power = power;
+    }
+
+    void update_network(const NetworkSnapshot& net) {
+        std::lock_guard lock(mtx_);
+        snapshot_.network = net;
+    }
+
+    HealthSnapshot get_snapshot() const {
+        std::lock_guard lock(mtx_);
+        HealthSnapshot copy = snapshot_;
+        copy.timestamp_ns = current_time_ns();
+        return copy;
+    }
+
+private:
+    mutable std::mutex mtx_;
+    HealthSnapshot snapshot_{};
+
+    static uint64_t current_time_ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+};

@@ -1,0 +1,4 @@
+=== Threads within the Mission Planner communicate through the shared MissionContext object. Different data channels use different synchronisation primitives based on their access patterns and real-time requirements. ===
+
+💡 C++ Concept: Double-Buffering with std::swap for Path Hand-off
+When the PathPlanner produces a new path (a potentially large vector), we use the double-buffer pattern: the planner fills a local vector, then under a brief lock, swaps it with the shared vector. The consumer (TrajectoryExecutor) similarly swaps into a local copy under the same lock. This minimises the critical section to just a pointer swap (std::vector::swap is O(1) — just swapping three internal pointers). No data is copied while the lock is held, making the mutex hold time constant and predictable.

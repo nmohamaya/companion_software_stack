@@ -1,0 +1,41 @@
+Context: We use SORT as the base algorithm (upgraded to DeepSORT or ByteTrack for production). SORT has four steps per frame:
+Source: table_row0_col0
+---
+  Frame N detections (from DNN)        Existing tracks (from frame N-1)
+  ┌─────────────────────────┐          ┌──────────────────────────────┐
+  │ det_0: [x,y,w,h] 0.92  │          │ track_1: [x,y,w,h] age=15  │
+  │ det_1: [x,y,w,h] 0.85  │          │ track_2: [x,y,w,h] age=8   │
+  │ det_2: [x,y,w,h] 0.71  │          │ track_3: [x,y,w,h] age=22  │
+  └────────────┬────────────┘          └──────────────┬───────────────┘
+               │                                       │
+               ▼                                       ▼
+         ┌──────────────────────────────────────────────────┐
+  Step 1: │ KALMAN PREDICT                                   │
+         │ Move each track's state forward by dt             │
+         │ track_i.predict(dt)                               │
+         └──────────────────────────┬────────────────────────┘
+                                    ▼
+         ┌──────────────────────────────────────────────────┐
+  Step 2: │ COST MATRIX                                      │
+         │ Compute IoU between every detection-track pair    │
+         │                                                    │
+         │              track_1  track_2  track_3             │
+         │   det_0       0.82     0.05     0.01              │
+         │   det_1       0.03     0.78     0.10              │
+         │   det_2       0.00     0.02     0.65              │
+         └──────────────────────────┬────────────────────────┘
+                                    ▼
+         ┌──────────────────────────────────────────────────┐
+  Step 3: │ HUNGARIAN ALGORITHM                              │
+         │ Find optimal 1-to-1 assignment minimizing cost    │
+         │ Result: det_0→track_1, det_1→track_2, det_2→track_3│
+         └──────────────────────────┬────────────────────────┘
+                                    ▼
+         ┌──────────────────────────────────────────────────┐
+  Step 4: │ KALMAN UPDATE                                    │
+         │ For each matched pair:                            │
+         │   track_i.update(matched_detection)               │
+         │ For unmatched detections: create new track        │
+         │ For unmatched tracks: increment miss counter      │
+         │   → if miss_count > N: delete track               │
+         └──────────────────────────────────────────────────┘

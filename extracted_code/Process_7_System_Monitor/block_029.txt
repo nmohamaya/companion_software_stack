@@ -1,0 +1,4 @@
+=== 17. Error Handling & Self-Recovery ===
+
+💡 C++ Concept: Defensive Copy for Thread-Safe Snapshots
+The HealthStore::get_snapshot() returns a full copy (not a reference). This is intentional: the snapshot is used by the Telemetry Aggregator while collector threads continue updating the store. Returning a reference would require holding the mutex for the entire aggregation period, blocking collectors. A copy costs ~2 KB of memcpy but keeps the mutex held for microseconds. The trade-off: a tiny copy cost buys us lock-free consumption of stale-by-one-cycle data, which is acceptable for 1 Hz telemetry. This 'snapshot isolation' pattern is similar to database MVCC (Multi-Version Concurrency Control).

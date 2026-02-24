@@ -1,0 +1,4 @@
+=== CONCEPT: Listing 6-1: UART Serial Port Wrapper (Boost.Asio) ===
+
+💡 C++ Concept: Rule of Five — Non-Copyable, Movable Resources
+SerialPort wraps a system resource (file descriptor). Copying it would create two owners of the same FD — a bug. We delete the copy constructor and copy-assignment operator, but default the move constructor. This is the 'Rule of Five' (C++11): if you define any of the five special member functions (destructor, copy ctor, copy assign, move ctor, move assign), you should consider all five. For resource wrappers: delete copies, default moves, and let the moved-from object be in a valid but empty state.

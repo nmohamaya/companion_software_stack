@@ -1,0 +1,4 @@
+=== 5.2 Plugin Registry ===
+
+💡 C++ Concept: Factory Registry Pattern (Self-Registering Factories)
+A factory registry maps string names to factory functions: registry["gimbal"] → make_unique<GimbalPlugin>(). Each plugin registers itself with a static initialiser, so adding a new plugin only requires (1) writing the class and (2) adding one REGISTER_PLUGIN macro. The core code never mentions specific plugin types — full Open/Closed Principle compliance. The config file lists which plugins to load: [{"type": "gimbal", ...}, {"type": "camera", ...}], and the registry instantiates them.

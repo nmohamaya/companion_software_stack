@@ -1,0 +1,79 @@
+=== Listing 18-1: System Health SHM Writer ===
+
+// ipc/system_health_writer.h
+#pragma once
+#include "data/system_health.h"
+#include "store/health_store.h"
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
+
+class SystemHealthWriter {
+public:
+    bool create(const char* name = "/system_health") {
+        fd_ = shm_open(name, O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        ftruncate(fd_, sizeof(ShmSystemHealth));
+        ptr_ = static_cast<ShmSystemHealth*>(
+            mmap(nullptr, sizeof(ShmSystemHealth),
+                 PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) return false;
+        ptr_->seq.store(0);
+        return true;
+    }
+
+    void write(const HealthSnapshot& snap) {
+        if (!ptr_) return;
+
+        SystemHealthSummary& h = summary_;
+        h.cpu_usage_percent   = static_cast<float>(snap.cpu_usage_percent);
+        for (size_t i = 0; i < 6 && i < snap.per_core_usage.size(); ++i)
+            h.cpu_core_usage[i] = static_cast<float>(snap.per_core_usage[i]);
+
+        h.memory_usage_percent = static_cast<float>(snap.memory.usage_percent());
+        h.memory_used_mb  = (snap.memory.total_kb - snap.memory.available_kb) / 1024;
+        h.memory_total_mb = snap.memory.total_kb / 1024;
+
+        h.cpu_temp_c   = static_cast<float>(snap.thermal.cpu_temp_c);
+        h.gpu_temp_c   = static_cast<float>(snap.thermal.gpu_temp_c);
+        h.board_temp_c = static_cast<float>(snap.thermal.board_temp_c);
+        h.thermal_zone = static_cast<uint8_t>(snap.thermal.zone);
+        h.fan_duty     = static_cast<float>(snap.thermal.fan_duty);
+
+        h.processes_healthy  = snap.watchdog.total_healthy;
+        h.processes_degraded = snap.watchdog.total_degraded;
+        h.processes_dead     = snap.watchdog.total_dead;
+        h.watchdog_ok        = snap.watchdog.all_healthy ? 1 : 0;
+
+        h.disk_usage_percent = static_cast<float>(snap.disk.usage_percent);
+        h.disk_free_mb = snap.disk.available_bytes / (1024 * 1024);
+
+        h.voltage_v       = static_cast<float>(snap.power.voltage_v);
+        h.current_a       = static_cast<float>(snap.power.current_a);
+        h.power_w         = static_cast<float>(snap.power.power_w);
+        h.battery_percent = static_cast<float>(snap.power.battery_percent);
+
+        h.rx_rate_kbps = static_cast<float>(snap.network.rx_rate_bps / 1000.0);
+        h.tx_rate_kbps = static_cast<float>(snap.network.tx_rate_bps / 1000.0);
+        h.rx_errors    = snap.network.rx_errors;
+        h.link_up      = snap.network.link_up;
+
+        // SeqLock write
+        uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+        ptr_->seq.store(s + 1, std::memory_order_release);
+        ptr_->timestamp_ns = snap.timestamp_ns;
+        std::memcpy(&ptr_->health, &summary_, sizeof(SystemHealthSummary));
+        ptr_->seq.store(s + 2, std::memory_order_release);
+    }
+
+    ~SystemHealthWriter() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmSystemHealth));
+        if (fd_ >= 0) { shm_unlink("/system_health"); close(fd_); }
+    }
+
+private:
+    int fd_ = -1;
+    ShmSystemHealth* ptr_ = nullptr;
+    SystemHealthSummary summary_{};
+};

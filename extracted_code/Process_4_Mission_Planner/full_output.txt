@@ -1,0 +1,2539 @@
+[PARA|Normal] Process 4: Mission Planner
+[PARA|Normal] Autonomous Path Planning, Obstacle Avoidance & Mission Execution
+[PARA|Normal] NVIDIA Jetson Orin Nano — Drone Companion Computer
+[PARA|Normal] Generated: 2026-02-23
+[PARA|Heading 1] Table of Contents
+[PARA|List Number] 1. Executive Summary
+[PARA|List Number] 2. Process Architecture Overview
+[PARA|List Number] 3. Thread Architecture & Responsibilities
+[PARA|List Number] 4. Inter-Process Communication (IPC) — Inputs
+[PARA|List Number] 5. Mission State Machine Thread
+[PARA|List Number] 6. Path Planner Thread
+[PARA|List Number] 7. Obstacle Avoidance Thread
+[PARA|List Number] 8. Waypoint Manager Thread
+[PARA|List Number] 9. Trajectory Executor Thread
+[PARA|List Number] 10. Inter-Thread Communication
+[PARA|List Number] 11. Geofencing & Safety Subsystem
+[PARA|List Number] 12. Data Structures & Types
+[PARA|List Number] 13. Configuration Management
+[PARA|List Number] 14. Error Handling & Recovery
+[PARA|List Number] 15. IPC — Output: Mission Status & Commands
+[PARA|List Number] 16. systemd Service Configuration
+[PARA|List Number] 17. CMakeLists.txt
+[PARA|List Number] 18. Implementation Roadmap
+[PARA|Heading 1] 1. Executive Summary
+[PARA|Normal] Process 4 (Mission Planner) is the autonomous decision-making core of the drone companion computer software stack. It consumes the 6-DOF pose from Process 3 (SLAM/VIO Nav) and the detected-object list from Process 2 (Perception), then plans collision-free paths, manages waypoint sequences, and generates smooth trajectory commands for the flight controller.
+[PARA|Normal] The process implements a hierarchical planning architecture: a high-level mission state machine governs overall mission flow (take-off → cruise → loiter → RTL → land), a global path planner computes optimal routes using A*/RRT*, a local obstacle-avoidance layer ensures real-time safety using Vector Field Histogram+ (VFH+), and a trajectory executor converts waypoints into smooth velocity/acceleration profiles sent as MAVLink SET_POSITION_TARGET messages via Process 5 (Comms).
+[PARA|Normal] Key design goals: deterministic worst-case latency < 50 ms for obstacle avoidance, graceful degradation on sensor loss, geofence enforcement with configurable keep-in/keep-out zones, and full mission logging for post-flight review.
+[TABLE_CELL_0] Attribute
+[TABLE_CELL_1] Value
+[END_TABLE_ROW]
+[TABLE_CELL_0] Process name
+[TABLE_CELL_1] mission_planner
+[END_TABLE_ROW]
+[TABLE_CELL_0] Language / Standard
+[TABLE_CELL_1] C++17
+[END_TABLE_ROW]
+[TABLE_CELL_0] Target hardware
+[TABLE_CELL_1] NVIDIA Jetson Orin Nano (8 GB)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Thread count
+[TABLE_CELL_1] 5 (State Machine, Path Planner, Obstacle Avoidance, Waypoint Mgr, Trajectory Exec)
+[END_TABLE_ROW]
+[TABLE_CELL_0] IPC inputs
+[TABLE_CELL_1] /slam_pose (Process 3), /detected_objects (Process 2)
+[END_TABLE_ROW]
+[TABLE_CELL_0] IPC outputs
+[TABLE_CELL_1] /mission_status, /trajectory_cmd (to Process 5)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Planning algorithms
+[TABLE_CELL_1] A*, RRT*, VFH+, minimum-snap trajectory
+[END_TABLE_ROW]
+[TABLE_CELL_0] Update rate
+[TABLE_CELL_1] Path: 2 Hz, Obstacle avoidance: 20 Hz, Trajectory: 50 Hz
+[END_TABLE_ROW]
+[TABLE_CELL_0] Key dependencies
+[TABLE_CELL_1] Eigen3, MAVLink, nlohmann/json, spdlog, CGAL (optional)
+[END_TABLE_ROW]
+[PARA|Heading 1] 2. Process Architecture Overview
+[PARA|Normal] The Mission Planner follows a hierarchical planning paradigm common in modern autonomous systems. It separates concerns into deliberative planning (slow, optimal) and reactive avoidance (fast, local), bridged by a trajectory executor that smooths commands.
+[PARA|Normal] Figure 2-1: Mission Planner Architecture
+[TABLE_CELL_0] 
+┌─────────────────────────────────────────────────────────────────────┐
+│                     PROCESS 4: MISSION PLANNER                      │
+│                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐   │
+│  │  Mission      │───▶│  Waypoint     │───▶│  Path Planner        │   │
+│  │  State Machine│    │  Manager      │    │  (A* / RRT*)         │   │
+│  │  (FSM)        │◀───│              │◀───│                      │   │
+│  └──────┬───────┘    └──────────────┘    └──────────┬───────────┘   │
+│         │                                           │               │
+│         │ mission cmds                    global path│               │
+│         ▼                                           ▼               │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │              Obstacle Avoidance (VFH+)                       │   │
+│  │         local adjustments @ 20 Hz                            │   │
+│  └──────────────────────────────┬───────────────────────────────┘   │
+│                                 │ safe waypoints                    │
+│                                 ▼                                   │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │         Trajectory Executor (min-snap / trapezoidal)         │   │
+│  │         velocity + position commands @ 50 Hz                 │   │
+│  └──────────────────────────────┬───────────────────────────────┘   │
+│                                 │                                   │
+├─────────────────────────────────┼───────────────────────────────────┤
+│  IPC OUT                        ▼                                   │
+│  /mission_status ◀────  /trajectory_cmd ──▶ Process 5 (Comms)       │
+├─────────────────────────────────────────────────────────────────────┤
+│  IPC IN                                                             │
+│  /slam_pose ◀── Process 3      /detected_objects ◀── Process 2      │
+└─────────────────────────────────────────────────────────────────────┘
+
+[END_TABLE_ROW]
+[PARA|Normal] Data flows top-down: the FSM decides WHAT to do, the waypoint manager decides WHERE, the path planner finds HOW to get there, obstacle avoidance ensures SAFETY, and the trajectory executor controls the DYNAMICS of motion.
+[PARA|Heading 1] 3. Thread Architecture & Responsibilities
+[TABLE_CELL_0] Thread
+[TABLE_CELL_1] Core
+[TABLE_CELL_2] Priority
+[TABLE_CELL_3] Rate (Hz)
+[TABLE_CELL_4] Responsibility
+[END_TABLE_ROW]
+[TABLE_CELL_0] MissionStateMachine
+[TABLE_CELL_1] 4
+[TABLE_CELL_2] SCHED_FIFO 60
+[TABLE_CELL_3] 10
+[TABLE_CELL_4] Mission state transitions, mode management, abort logic
+[END_TABLE_ROW]
+[TABLE_CELL_0] PathPlanner
+[TABLE_CELL_1] 4
+[TABLE_CELL_2] SCHED_FIFO 40
+[TABLE_CELL_3] 2
+[TABLE_CELL_4] Global path computation (A*/RRT*), re-planning on map changes
+[END_TABLE_ROW]
+[TABLE_CELL_0] ObstacleAvoidance
+[TABLE_CELL_1] 5
+[TABLE_CELL_2] SCHED_FIFO 70
+[TABLE_CELL_3] 20
+[TABLE_CELL_4] Reactive obstacle avoidance (VFH+), emergency stop
+[END_TABLE_ROW]
+[TABLE_CELL_0] WaypointManager
+[TABLE_CELL_1] 4
+[TABLE_CELL_2] SCHED_FIFO 50
+[TABLE_CELL_3] 5
+[TABLE_CELL_4] Waypoint sequencing, geofence checks, rally points
+[END_TABLE_ROW]
+[TABLE_CELL_0] TrajectoryExecutor
+[TABLE_CELL_1] 5
+[TABLE_CELL_2] SCHED_FIFO 80
+[TABLE_CELL_3] 50
+[TABLE_CELL_4] Smooth trajectory generation, velocity commands to FC
+[END_TABLE_ROW]
+[PARA|Normal] Thread priority is assigned based on time-criticality: TrajectoryExecutor has the highest priority (80) because delayed commands cause jerky motion; ObstacleAvoidance is next (70) for safety; MissionStateMachine runs at priority 60 for timely state transitions; WaypointManager at 50; and PathPlanner at 40 since replanning can tolerate latency.
+[TABLE_CELL_0] 💡 C++ Concept: Thread Priority Inversion & Priority Inheritance
+When a high-priority thread (TrajectoryExecutor) blocks on a mutex held by a low-priority thread (PathPlanner), a medium-priority thread can preempt the low-priority thread, causing the high-priority thread to wait indefinitely. C++ std::mutex does not provide priority inheritance by default. We use pthread_mutexattr_setprotocol(PTHREAD_PRIO_INHERIT) on critical shared mutexes to ensure the kernel temporarily boosts the lock-holder's priority. This is essential in real-time drone control to prevent missed trajectory deadlines.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 3-1: Priority-Inheritance Mutex Wrapper
+[TABLE_CELL_0] // priority_mutex.h — Mutex with priority inheritance
+#pragma once
+#include <pthread.h>
+#include <stdexcept>
+
+class PriorityMutex {
+public:
+    PriorityMutex() {
+        pthread_mutexattr_t attr;
+        pthread_mutexattr_init(&attr);
+        pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT);
+        if (pthread_mutex_init(&mtx_, &attr) != 0) {
+            throw std::runtime_error("Failed to init priority-inherit mutex");
+        }
+        pthread_mutexattr_destroy(&attr);
+    }
+
+    ~PriorityMutex() { pthread_mutex_destroy(&mtx_); }
+
+    void lock()   { pthread_mutex_lock(&mtx_); }
+    void unlock() { pthread_mutex_unlock(&mtx_); }
+
+    // Compatible with std::lock_guard / std::unique_lock
+    bool try_lock() { return pthread_mutex_trylock(&mtx_) == 0; }
+
+private:
+    pthread_mutex_t mtx_;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 4. Inter-Process Communication (IPC) — Inputs
+[PARA|Normal] The Mission Planner reads two shared-memory regions published by upstream processes. Both use POSIX shared memory with lock-free SeqLock readers to avoid blocking the publisher.
+[PARA|Heading 2] 4.1 Pose Input (/slam_pose — Process 3)
+[PARA|Normal] The current 6-DOF vehicle pose is published by Process 3 at ~100 Hz. The Mission Planner reads the latest pose on demand (no queue — always latest). The data layout matches the PoseStamped structure defined in Process 3.
+[PARA|Normal] Listing 4-1: Lock-Free Pose Reader (SeqLock)
+[TABLE_CELL_0] // ipc/pose_reader.h
+#pragma once
+#include <cstring>
+#include <atomic>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+
+struct ShmPoseStamped {
+    std::atomic<uint64_t> seq;       // SeqLock sequence counter
+    uint64_t timestamp_ns;
+    double position[3];              // x, y, z  (NED frame, metres)
+    double quaternion[4];            // w, x, y, z
+    double velocity[3];              // vx, vy, vz (m/s)
+    float  covariance[6];            // diagonal of position covariance
+    uint8_t quality;                 // 0-100 pose confidence
+    uint8_t padding[7];
+};
+
+class PoseReader {
+public:
+    bool open(const char* name = "/slam_pose") {
+        fd_ = shm_open(name, O_RDONLY, 0);
+        if (fd_ < 0) return false;
+        ptr_ = static_cast<ShmPoseStamped*>(
+            mmap(nullptr, sizeof(ShmPoseStamped), PROT_READ, MAP_SHARED, fd_, 0));
+        return ptr_ != MAP_FAILED;
+    }
+
+    bool read(Eigen::Vector3d& pos, Eigen::Quaterniond& quat,
+              Eigen::Vector3d& vel, uint8_t& quality) const {
+        if (!ptr_) return false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
+            if (s1 & 1) continue;  // writer in progress
+            // Copy fields
+            pos = Eigen::Map<const Eigen::Vector3d>(ptr_->position);
+            quat = Eigen::Quaterniond(ptr_->quaternion[0], ptr_->quaternion[1],
+                                       ptr_->quaternion[2], ptr_->quaternion[3]);
+            vel   = Eigen::Map<const Eigen::Vector3d>(ptr_->velocity);
+            quality = ptr_->quality;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            uint64_t s2 = ptr_->seq.load(std::memory_order_relaxed);
+            if (s1 == s2) return true;  // consistent read
+        }
+        return false;  // torn read after 4 attempts
+    }
+
+    ~PoseReader() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmPoseStamped));
+        if (fd_ >= 0) close(fd_);
+    }
+
+private:
+    int fd_ = -1;
+    ShmPoseStamped* ptr_ = nullptr;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: SeqLock (Sequence Lock) Pattern
+A SeqLock allows a single writer and multiple readers with zero contention. The writer increments an atomic sequence number before and after writing (odd = write in progress). Readers check the sequence before and after copying — if the values differ or are odd, they retry. This is ideal for frequently-updated small structures like pose, because readers never block the writer and the data is always coherent. Unlike a mutex, the writer never waits, making it perfect for the real-time SLAM publisher.
+[END_TABLE_ROW]
+[PARA|Heading 2] 4.2 Detected Objects (/detected_objects — Process 2)
+[PARA|Normal] The perception pipeline publishes a list of detected obstacles (up to 64 objects) with 3-D bounding boxes in the vehicle body frame. The Mission Planner reads this for obstacle avoidance and path re-planning.
+[PARA|Normal] Listing 4-2: Detected Object Reader
+[TABLE_CELL_0] // ipc/object_reader.h
+#pragma once
+#include <atomic>
+#include <vector>
+#include <Eigen/Core>
+
+struct DetectedObject {
+    uint32_t id;
+    uint8_t  class_id;          // 0=unknown, 1=person, 2=vehicle, 3=building...
+    float    confidence;
+    float    bbox_center[3];    // body-frame metres
+    float    bbox_extent[3];    // half-widths
+    float    velocity[3];       // estimated velocity (m/s)
+};
+
+struct ShmObjectList {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    uint32_t count;             // number of valid objects (max 64)
+    uint32_t padding;
+    DetectedObject objects[64];
+};
+
+class ObjectReader {
+public:
+    bool open(const char* name = "/detected_objects");
+
+    bool read(std::vector<DetectedObject>& out) const {
+        if (!ptr_) return false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
+            if (s1 & 1) continue;
+            uint32_t n = std::min(ptr_->count, 64u);
+            out.resize(n);
+            std::memcpy(out.data(), ptr_->objects, n * sizeof(DetectedObject));
+            std::atomic_thread_fence(std::memory_order_acquire);
+            uint64_t s2 = ptr_->seq.load(std::memory_order_relaxed);
+            if (s1 == s2) return true;
+        }
+        return false;
+    }
+
+    ~ObjectReader();  // munmap + close
+
+private:
+    int fd_ = -1;
+    ShmObjectList* ptr_ = nullptr;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 5. Mission State Machine Thread
+[PARA|Normal] The Mission State Machine (MSM) is the top-level decision-maker. It models the mission lifecycle as a finite state machine (FSM) with well-defined transitions. Each state encapsulates entry/exit actions and a periodic update method.
+[PARA|Heading 2] 5.1 State Diagram
+[PARA|Normal] Figure 5-1: Mission State Diagram
+[TABLE_CELL_0] 
+    ┌─────────┐    arm + preflight OK    ┌──────────┐
+    │  IDLE   │─────────────────────────▶│ ARMED    │
+    └─────────┘                          └────┬─────┘
+                                              │ takeoff cmd
+                                              ▼
+                                         ┌──────────┐
+                                         │ TAKEOFF  │
+                                         └────┬─────┘
+                                              │ alt reached
+                  ┌───────────────────────────▼──────────────────────┐
+                  │                    CRUISE                         │
+                  │  (waypoint navigation — normal operation)         │
+                  └───┬────────────┬────────────┬───────────┬────────┘
+                      │            │            │           │
+                  loiter cmd   RTL cmd   low battery   geofence
+                      ▼            ▼            ▼         breach
+                 ┌─────────┐  ┌─────────┐  ┌─────────┐     │
+                 │ LOITER  │  │  RTL    │  │  RTL    │◀────┘
+                 └────┬────┘  └────┬────┘  └────┬────┘
+                      │            │            │
+                      │   resume   │  home pos  │
+                      ▼            ▼            ▼
+                 ┌─────────┐  ┌─────────┐  ┌─────────┐
+                 │ CRUISE  │  │ LANDING │  │ LANDING │
+                 └─────────┘  └────┬────┘  └─────────┘
+                                   │
+                                   ▼
+                              ┌─────────┐
+                              │ LANDED  │──▶ IDLE (disarm)
+                              └─────────┘
+
+    *** EMERGENCY STOP can be triggered from ANY state ***
+    *** → immediate motor cut / controlled descent      ***
+
+[END_TABLE_ROW]
+[PARA|Heading 2] 5.2 State Machine Implementation
+[TABLE_CELL_0] 💡 C++ Concept: State Pattern (GoF)
+The State pattern encapsulates state-specific behaviour in separate classes that share a common interface. Instead of a monolithic switch/case that grows with each new state, each state is a self-contained class with on_enter(), update(), and on_exit() methods. This makes the FSM extensible — adding a new state (e.g., SEARCH_PATTERN) requires only a new class, not modifying existing code (Open/Closed Principle). Each state class also owns its transition logic, making the FSM self-documenting.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 5-1: Abstract MissionState Interface
+[TABLE_CELL_0] // mission/mission_state.h
+#pragma once
+#include <memory>
+#include <string>
+
+class MissionContext;  // forward declaration
+
+// Abstract state interface
+class MissionState {
+public:
+    virtual ~MissionState() = default;
+
+    virtual void on_enter(MissionContext& ctx) = 0;
+    virtual void update(MissionContext& ctx)   = 0;  // called @ 10 Hz
+    virtual void on_exit(MissionContext& ctx)   = 0;
+
+    virtual std::string name() const = 0;
+
+    // Each state returns the next state (or nullptr to remain)
+    virtual std::unique_ptr<MissionState> transition(MissionContext& ctx) = 0;
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 5-2: CruiseState Implementation
+[TABLE_CELL_0] // mission/states/cruise_state.h
+#pragma once
+#include "mission/mission_state.h"
+#include "mission/mission_context.h"
+
+class CruiseState : public MissionState {
+public:
+    void on_enter(MissionContext& ctx) override {
+        spdlog::info("Entering CRUISE state");
+        ctx.set_planning_active(true);
+    }
+
+    void update(MissionContext& ctx) override {
+        // Check waypoint completion
+        if (ctx.waypoint_manager().current_reached()) {
+            if (ctx.waypoint_manager().advance()) {
+                spdlog::info("Advanced to waypoint {}",
+                             ctx.waypoint_manager().current_index());
+            }
+        }
+
+        // Monitor battery, geofence, operator commands
+        check_safety_conditions(ctx);
+    }
+
+    void on_exit(MissionContext& ctx) override {
+        ctx.set_planning_active(false);
+    }
+
+    std::string name() const override { return "CRUISE"; }
+
+    std::unique_ptr<MissionState> transition(MissionContext& ctx) override {
+        if (ctx.has_command(MissionCommand::RTL))
+            return std::make_unique<RTLState>();
+        if (ctx.has_command(MissionCommand::LOITER))
+            return std::make_unique<LoiterState>();
+        if (ctx.battery_critical())
+            return std::make_unique<RTLState>();
+        if (ctx.geofence_breached())
+            return std::make_unique<RTLState>();
+        if (ctx.waypoint_manager().mission_complete())
+            return std::make_unique<RTLState>();
+        return nullptr;  // remain in CRUISE
+    }
+
+private:
+    void check_safety_conditions(MissionContext& ctx);
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 5-3: FSM Runner with State Transitions
+[TABLE_CELL_0] // mission/mission_fsm.h — State machine runner
+#pragma once
+#include "mission/mission_state.h"
+#include "mission/mission_context.h"
+#include <spdlog/spdlog.h>
+
+class MissionFSM {
+public:
+    explicit MissionFSM(MissionContext& ctx)
+        : ctx_(ctx), state_(std::make_unique<IdleState>()) {
+        state_->on_enter(ctx_);
+    }
+
+    void tick() {
+        state_->update(ctx_);
+
+        auto next = state_->transition(ctx_);
+        if (next) {
+            spdlog::info("Mission transition: {} → {}",
+                         state_->name(), next->name());
+            state_->on_exit(ctx_);
+            state_ = std::move(next);
+            state_->on_enter(ctx_);
+        }
+    }
+
+    const std::string& current_state_name() const {
+        return state_->name();
+    }
+
+private:
+    MissionContext& ctx_;
+    std::unique_ptr<MissionState> state_;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::unique_ptr for Exclusive Ownership
+The FSM holds the current state via std::unique_ptr<MissionState>. This enforces single ownership — exactly one state object exists at a time. When transitioning, std::move transfers ownership of the new state, and the old state is automatically destroyed. This eliminates memory leaks and dangling pointers without manual new/delete. The transition() method returns unique_ptr to signal intent: returning nullptr means 'stay in current state', returning a new unique_ptr means 'switch to this state'. This is a natural and self-documenting API.
+[END_TABLE_ROW]
+[PARA|Heading 2] 5.3 Mission Context (Shared Data)
+[PARA|Normal] Listing 5-4: MissionContext — Shared Data for All States
+[TABLE_CELL_0] // mission/mission_context.h
+#pragma once
+#include "waypoint/waypoint_manager.h"
+#include "ipc/pose_reader.h"
+#include "ipc/object_reader.h"
+#include <Eigen/Core>
+#include <mutex>
+#include <atomic>
+#include <queue>
+
+enum class MissionCommand : uint8_t {
+    NONE, ARM, TAKEOFF, LOITER, RESUME, RTL, LAND, EMERGENCY_STOP
+};
+
+class MissionContext {
+public:
+    // ── Pose (read from SHM) ──
+    bool get_pose(Eigen::Vector3d& pos, Eigen::Quaterniond& quat,
+                  Eigen::Vector3d& vel) const {
+        uint8_t q;
+        return pose_reader_.read(pos, quat, vel, q);
+    }
+
+    // ── Operator commands (thread-safe queue) ──
+    void push_command(MissionCommand cmd) {
+        std::lock_guard lock(cmd_mtx_);
+        cmd_queue_.push(cmd);
+    }
+
+    bool has_command(MissionCommand cmd) {
+        std::lock_guard lock(cmd_mtx_);
+        if (!cmd_queue_.empty() && cmd_queue_.front() == cmd) {
+            cmd_queue_.pop();
+            return true;
+        }
+        return false;
+    }
+
+    // ── Safety ──
+    bool battery_critical() const { return battery_pct_.load() < 15; }
+    bool geofence_breached() const { return geofence_breach_.load(); }
+    void set_battery_pct(uint8_t pct) { battery_pct_.store(pct); }
+    void set_geofence_breach(bool b) { geofence_breach_.store(b); }
+
+    // ── Sub-systems ──
+    WaypointManager& waypoint_manager() { return wp_mgr_; }
+    void set_planning_active(bool v) { planning_active_.store(v); }
+    bool planning_active() const { return planning_active_.load(); }
+
+private:
+    PoseReader pose_reader_;
+    WaypointManager wp_mgr_;
+
+    std::mutex cmd_mtx_;
+    std::queue<MissionCommand> cmd_queue_;
+
+    std::atomic<uint8_t> battery_pct_{100};
+    std::atomic<bool> geofence_breach_{false};
+    std::atomic<bool> planning_active_{false};
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 5.4 MSM Thread Entry Point
+[PARA|Normal] Listing 5-5: Mission State Machine Thread Loop
+[TABLE_CELL_0] // mission/mission_thread.cpp
+#include "mission/mission_fsm.h"
+#include "util/realtime.h"
+#include <chrono>
+
+void mission_state_machine_thread(MissionContext& ctx,
+                                   std::atomic<bool>& running) {
+    set_thread_params("MSM", 4, SCHED_FIFO, 60);
+
+    MissionFSM fsm(ctx);
+    const auto period = std::chrono::milliseconds(100);  // 10 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+        fsm.tick();
+        auto elapsed = std::chrono::steady_clock::now() - start;
+
+        if (elapsed > std::chrono::milliseconds(80)) {
+            spdlog::warn("MSM tick took {:.1f} ms",
+                std::chrono::duration<double, std::milli>(elapsed).count());
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 6. Path Planner Thread
+[PARA|Normal] The Path Planner computes collision-free routes from the current position to the next waypoint. It maintains a 3-D occupancy grid updated from detected obstacles and terrain data. Two interchangeable algorithms are provided: A* for structured environments with known maps, and RRT* for exploration in unknown or cluttered spaces.
+[PARA|Heading 2] 6.1 Strategy Pattern for Algorithms
+[TABLE_CELL_0] 💡 C++ Concept: Strategy Pattern (GoF)
+The Strategy pattern defines a family of interchangeable algorithms behind a common interface. The Path Planner holds a pointer to a PlanningStrategy and can swap algorithms at runtime (e.g., switch from A* to RRT* when entering unknown terrain). This avoids a brittle if/else chain and lets you add new planners (e.g., PRM, Theta*) without touching the path planner thread code. Combined with std::unique_ptr, strategy ownership is clean and leak-free.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 6-1: PlanningStrategy Interface
+[TABLE_CELL_0] // planning/planning_strategy.h
+#pragma once
+#include "planning/occupancy_grid.h"
+#include <Eigen/Core>
+#include <vector>
+#include <optional>
+
+struct PathResult {
+    std::vector<Eigen::Vector3d> waypoints;
+    double total_cost;     // metres
+    double compute_time_ms;
+    bool   is_partial;     // true if planner timed out
+};
+
+class PlanningStrategy {
+public:
+    virtual ~PlanningStrategy() = default;
+
+    virtual std::optional<PathResult> plan(
+        const Eigen::Vector3d& start,
+        const Eigen::Vector3d& goal,
+        const OccupancyGrid& grid,
+        double timeout_ms = 200.0) = 0;
+
+    virtual std::string name() const = 0;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::optional for Nullable Results
+std::optional<T> (C++17) represents a value that may or may not be present. When plan() finds no feasible path, it returns std::nullopt instead of a magic 'empty' PathResult or throwing an exception. The caller checks with if (result) or result.has_value() before accessing. This is safer than returning a bool + out-parameter, and more efficient than exceptions for expected failure cases (path not found is normal, not exceptional).
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.2 A* Planner
+[PARA|Normal] Listing 6-2: A* Path Planner Implementation
+[TABLE_CELL_0] // planning/astar_planner.h
+#pragma once
+#include "planning/planning_strategy.h"
+#include <queue>
+#include <unordered_map>
+
+class AStarPlanner : public PlanningStrategy {
+public:
+    std::optional<PathResult> plan(
+        const Eigen::Vector3d& start,
+        const Eigen::Vector3d& goal,
+        const OccupancyGrid& grid,
+        double timeout_ms = 200.0) override
+    {
+        auto t0 = std::chrono::steady_clock::now();
+        PathResult result;
+
+        // Convert to grid coordinates
+        auto si = grid.to_index(start);
+        auto gi = grid.to_index(goal);
+        if (!si || !gi) return std::nullopt;
+
+        // Priority queue: (f-cost, node_index)
+        using Node = std::pair<double, GridIndex>;
+        std::priority_queue<Node, std::vector<Node>, std::greater<>> open;
+        std::unordered_map<GridIndex, double, GridIndexHash> g_cost;
+        std::unordered_map<GridIndex, GridIndex, GridIndexHash> came_from;
+
+        open.push({heuristic(*si, *gi), *si});
+        g_cost[*si] = 0.0;
+
+        while (!open.empty()) {
+            // Timeout check
+            auto elapsed = std::chrono::steady_clock::now() - t0;
+            if (std::chrono::duration<double, std::milli>(elapsed).count() > timeout_ms) {
+                result.is_partial = true;
+                break;
+            }
+
+            auto [f, current] = open.top();
+            open.pop();
+
+            if (current == *gi) {
+                result.waypoints = reconstruct_path(came_from, *gi, grid);
+                result.total_cost = g_cost[*gi];
+                result.is_partial = false;
+                result.compute_time_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0).count();
+                return result;
+            }
+
+            for (const auto& nb : grid.neighbors_26(current)) {
+                if (grid.is_occupied(nb)) continue;
+
+                double tentative_g = g_cost[current] + grid.edge_cost(current, nb);
+                if (g_cost.find(nb) == g_cost.end() || tentative_g < g_cost[nb]) {
+                    g_cost[nb] = tentative_g;
+                    came_from[nb] = current;
+                    open.push({tentative_g + heuristic(nb, *gi), nb});
+                }
+            }
+        }
+
+        return result.is_partial ? std::optional(result) : std::nullopt;
+    }
+
+    std::string name() const override { return "A*"; }
+
+private:
+    double heuristic(const GridIndex& a, const GridIndex& b) const {
+        // Octile distance (3D)
+        int dx = std::abs(a.x - b.x);
+        int dy = std::abs(a.y - b.y);
+        int dz = std::abs(a.z - b.z);
+        // Sort dx >= dy >= dz
+        if (dx < dy) std::swap(dx, dy);
+        if (dx < dz) std::swap(dx, dz);
+        if (dy < dz) std::swap(dy, dz);
+        return dx + (std::sqrt(2.0) - 1) * dy + (std::sqrt(3.0) - std::sqrt(2.0)) * dz;
+    }
+
+    std::vector<Eigen::Vector3d> reconstruct_path(
+        const std::unordered_map<GridIndex, GridIndex, GridIndexHash>& came_from,
+        GridIndex goal, const OccupancyGrid& grid);
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.3 RRT* Planner
+[PARA|Normal] Listing 6-3: RRT* Path Planner Implementation
+[TABLE_CELL_0] // planning/rrt_star_planner.h
+#pragma once
+#include "planning/planning_strategy.h"
+#include <random>
+
+struct RRTNode {
+    Eigen::Vector3d pos;
+    int parent = -1;
+    double cost = 0.0;
+};
+
+class RRTStarPlanner : public PlanningStrategy {
+public:
+    explicit RRTStarPlanner(double step_size = 0.5, double goal_bias = 0.1,
+                             double rewire_radius = 2.0)
+        : step_(step_size), goal_bias_(goal_bias), rewire_r_(rewire_radius) {}
+
+    std::optional<PathResult> plan(
+        const Eigen::Vector3d& start,
+        const Eigen::Vector3d& goal,
+        const OccupancyGrid& grid,
+        double timeout_ms = 200.0) override
+    {
+        auto t0 = std::chrono::steady_clock::now();
+        nodes_.clear();
+        nodes_.push_back({start, -1, 0.0});
+
+        std::mt19937 rng(std::random_device{}());
+        auto bounds = grid.bounds();
+
+        int best_goal = -1;
+        double best_cost = std::numeric_limits<double>::infinity();
+
+        while (true) {
+            auto elapsed = std::chrono::steady_clock::now() - t0;
+            double ms = std::chrono::duration<double, std::milli>(elapsed).count();
+            if (ms > timeout_ms) break;
+
+            // Sample random point (biased towards goal)
+            Eigen::Vector3d sample;
+            if (std::uniform_real_distribution<>(0, 1)(rng) < goal_bias_) {
+                sample = goal;
+            } else {
+                sample = random_point(bounds, rng);
+            }
+
+            // Find nearest node
+            int nearest_idx = find_nearest(sample);
+            Eigen::Vector3d dir = (sample - nodes_[nearest_idx].pos).normalized();
+            Eigen::Vector3d new_pos = nodes_[nearest_idx].pos + dir * step_;
+
+            if (!grid.is_free_line(nodes_[nearest_idx].pos, new_pos)) continue;
+
+            // RRT* rewiring
+            double new_cost = nodes_[nearest_idx].cost + step_;
+            auto near_indices = find_near(new_pos, rewire_r_);
+
+            int best_parent = nearest_idx;
+            for (int ni : near_indices) {
+                double c = nodes_[ni].cost + (new_pos - nodes_[ni].pos).norm();
+                if (c < new_cost && grid.is_free_line(nodes_[ni].pos, new_pos)) {
+                    best_parent = ni;
+                    new_cost = c;
+                }
+            }
+
+            int new_idx = nodes_.size();
+            nodes_.push_back({new_pos, best_parent, new_cost});
+
+            // Rewire neighbours
+            for (int ni : near_indices) {
+                double c = new_cost + (nodes_[ni].pos - new_pos).norm();
+                if (c < nodes_[ni].cost && grid.is_free_line(new_pos, nodes_[ni].pos)) {
+                    nodes_[ni].parent = new_idx;
+                    nodes_[ni].cost = c;
+                }
+            }
+
+            // Check goal reached
+            if ((new_pos - goal).norm() < step_ && new_cost < best_cost) {
+                best_goal = new_idx;
+                best_cost = new_cost;
+            }
+        }
+
+        if (best_goal < 0) return std::nullopt;
+
+        PathResult result;
+        result.total_cost = best_cost;
+        result.is_partial = false;
+        result.compute_time_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+
+        // Trace path back
+        for (int i = best_goal; i >= 0; i = nodes_[i].parent)
+            result.waypoints.push_back(nodes_[i].pos);
+        std::reverse(result.waypoints.begin(), result.waypoints.end());
+        return result;
+    }
+
+    std::string name() const override { return "RRT*"; }
+
+private:
+    double step_, goal_bias_, rewire_r_;
+    std::vector<RRTNode> nodes_;
+
+    int find_nearest(const Eigen::Vector3d& p) const;
+    std::vector<int> find_near(const Eigen::Vector3d& p, double r) const;
+    Eigen::Vector3d random_point(const auto& bounds, std::mt19937& rng) const;
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.4 Occupancy Grid
+[PARA|Normal] Listing 6-4: 3-D Occupancy Grid
+[TABLE_CELL_0] // planning/occupancy_grid.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+#include <optional>
+
+struct GridIndex {
+    int x, y, z;
+    bool operator==(const GridIndex& o) const {
+        return x == o.x && y == o.y && z == o.z;
+    }
+};
+
+struct GridIndexHash {
+    size_t operator()(const GridIndex& g) const {
+        // Combine with bit mixing (FNV-like)
+        size_t h = 2166136261u;
+        h ^= std::hash<int>{}(g.x); h *= 16777619u;
+        h ^= std::hash<int>{}(g.y); h *= 16777619u;
+        h ^= std::hash<int>{}(g.z); h *= 16777619u;
+        return h;
+    }
+};
+
+class OccupancyGrid {
+public:
+    OccupancyGrid(const Eigen::Vector3d& origin, const Eigen::Vector3d& extent,
+                  double resolution = 0.25)
+        : origin_(origin), resolution_(resolution)
+    {
+        dims_.x = static_cast<int>(extent.x() / resolution) + 1;
+        dims_.y = static_cast<int>(extent.y() / resolution) + 1;
+        dims_.z = static_cast<int>(extent.z() / resolution) + 1;
+        cells_.resize(dims_.x * dims_.y * dims_.z, 0);
+    }
+
+    void clear() { std::fill(cells_.begin(), cells_.end(), 0); }
+
+    // Mark a sphere of radius r as occupied
+    void insert_obstacle(const Eigen::Vector3d& center, double radius);
+
+    // Insert detected objects with safety margin
+    void update_from_objects(const std::vector<DetectedObject>& objects,
+                             double safety_margin = 0.5);
+
+    bool is_occupied(const GridIndex& idx) const {
+        int flat = idx.x + idx.y * dims_.x + idx.z * dims_.x * dims_.y;
+        return flat >= 0 && flat < (int)cells_.size() && cells_[flat] > 0;
+    }
+
+    bool is_free_line(const Eigen::Vector3d& a, const Eigen::Vector3d& b) const;
+
+    std::optional<GridIndex> to_index(const Eigen::Vector3d& p) const;
+    Eigen::Vector3d to_world(const GridIndex& idx) const;
+
+    std::vector<GridIndex> neighbors_26(const GridIndex& idx) const;
+    double edge_cost(const GridIndex& a, const GridIndex& b) const;
+
+private:
+    Eigen::Vector3d origin_;
+    double resolution_;
+    GridIndex dims_;
+    std::vector<uint8_t> cells_;  // 0=free, 255=occupied
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 6.5 Path Planner Thread
+[PARA|Normal] Listing 6-5: Path Planner Thread with Dynamic Strategy Switching
+[TABLE_CELL_0] // planning/path_planner_thread.cpp
+#include "planning/planning_strategy.h"
+#include "planning/astar_planner.h"
+#include "planning/rrt_star_planner.h"
+#include "planning/occupancy_grid.h"
+#include "mission/mission_context.h"
+#include "util/realtime.h"
+
+void path_planner_thread(MissionContext& ctx,
+                          std::shared_ptr<OccupancyGrid> grid,
+                          std::atomic<bool>& running) {
+    set_thread_params("PathPlan", 4, SCHED_FIFO, 40);
+
+    // Default to A*, can switch at runtime
+    std::unique_ptr<PlanningStrategy> planner = std::make_unique<AStarPlanner>();
+    const auto period = std::chrono::milliseconds(500);  // 2 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        if (!ctx.planning_active()) {
+            std::this_thread::sleep_for(period);
+            continue;
+        }
+
+        // Read current pose
+        Eigen::Vector3d pos;
+        Eigen::Quaterniond quat;
+        Eigen::Vector3d vel;
+        if (!ctx.get_pose(pos, quat, vel)) {
+            spdlog::warn("PathPlanner: pose unavailable");
+            std::this_thread::sleep_for(period);
+            continue;
+        }
+
+        // Update occupancy grid with latest detections
+        std::vector<DetectedObject> objects;
+        ctx.object_reader().read(objects);
+        grid->clear();
+        grid->update_from_objects(objects, /*safety_margin=*/0.5);
+
+        // Get next waypoint as goal
+        auto goal = ctx.waypoint_manager().current_target();
+        if (!goal) {
+            std::this_thread::sleep_for(period);
+            continue;
+        }
+
+        // Plan path
+        auto result = planner->plan(pos, *goal, *grid, /*timeout_ms=*/200.0);
+        if (result) {
+            ctx.set_planned_path(std::move(result->waypoints));
+            spdlog::debug("Path planned: {} pts, cost={:.1f}m, time={:.1f}ms",
+                          result->waypoints.size(), result->total_cost,
+                          result->compute_time_ms);
+        } else {
+            spdlog::warn("No feasible path to waypoint");
+            // Could switch to RRT* for exploration
+            if (planner->name() == "A*") {
+                spdlog::info("Switching to RRT* planner");
+                planner = std::make_unique<RRTStarPlanner>();
+            }
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 7. Obstacle Avoidance Thread
+[PARA|Normal] The Obstacle Avoidance thread provides reactive, real-time collision avoidance at 20 Hz. It uses the Vector Field Histogram+ (VFH+) algorithm, which creates a polar histogram of obstacle density around the vehicle and selects the best gap in free space that is closest to the desired heading.
+[PARA|Heading 2] 7.1 VFH+ Algorithm Overview
+[PARA|Normal] Figure 7-1: VFH+ Algorithm Overview
+[TABLE_CELL_0] 
+ VFH+ Obstacle Avoidance Pipeline:
+ ─────────────────────────────────
+ 1. Build polar obstacle histogram from 3D detections
+    - Project obstacles onto 2D azimuth/elevation bins
+    - Weight by distance (closer → higher density)
+
+ 2. Apply binary threshold to identify blocked/free sectors
+    ┌─────────────────────────────────────────────────┐
+    │  Polar Histogram (top-down, 5° bins)            │
+    │                                                  │
+    │  ████      ████████████            ███           │
+    │  ████      ████████████            ███           │
+    │  ████      ████████████            ███           │
+    │  0°   45°  90°  135° 180° 225° 270° 315° 360°  │
+    │       ▲              ▲         ▲                 │
+    │      gap1           gap2      gap3               │
+    └─────────────────────────────────────────────────┘
+
+ 3. Identify candidate gaps (contiguous free sectors)
+ 4. Score gaps: cost = α·|heading_error| + β·|prev_heading_change|
+ 5. Select best gap → compute steering direction
+ 6. Apply speed modulation based on closest obstacle distance
+
+[END_TABLE_ROW]
+[PARA|Normal] Listing 7-1: VFH+ Obstacle Avoidance Implementation
+[TABLE_CELL_0] // avoidance/vfh_plus.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+#include <cmath>
+
+struct VFHConfig {
+    int    num_sectors     = 72;       // 360° / 72 = 5° per sector
+    double active_radius   = 8.0;     // metres — ignore obstacles beyond this
+    double safety_radius   = 1.5;     // vehicle + margin (metres)
+    double threshold_low   = 0.3;     // binary threshold hysteresis
+    double threshold_high  = 0.6;
+    double alpha           = 1.0;     // heading error weight
+    double beta            = 0.5;     // smoothness weight
+    double min_gap_width   = 3;       // minimum gap sectors for passage
+};
+
+struct AvoidanceResult {
+    double  desired_heading;    // radians (NED yaw)
+    double  speed_factor;       // 0.0 (stop) to 1.0 (full speed)
+    bool    emergency_stop;
+    double  closest_obstacle_m;
+};
+
+class VFHPlus {
+public:
+    explicit VFHPlus(const VFHConfig& cfg = {}) : cfg_(cfg),
+        histogram_(cfg.num_sectors, 0.0), binary_(cfg.num_sectors, false) {}
+
+    AvoidanceResult compute(const Eigen::Vector3d& vehicle_pos,
+                             double current_heading,
+                             double desired_heading,
+                             const std::vector<DetectedObject>& objects) {
+        // Step 1: Build polar histogram
+        build_histogram(vehicle_pos, objects);
+
+        // Step 2: Binary threshold with hysteresis
+        apply_threshold();
+
+        // Step 3: Find gaps
+        auto gaps = find_gaps();
+
+        // Step 4: Emergency stop check
+        AvoidanceResult result;
+        result.closest_obstacle_m = closest_distance(vehicle_pos, objects);
+        result.emergency_stop = (result.closest_obstacle_m < cfg_.safety_radius);
+
+        if (result.emergency_stop) {
+            result.speed_factor = 0.0;
+            result.desired_heading = current_heading;
+            return result;
+        }
+
+        // Step 5: Score gaps — select best
+        if (gaps.empty()) {
+            // All blocked — slow down and turn 180°
+            result.desired_heading = current_heading + M_PI;
+            result.speed_factor = 0.2;
+            return result;
+        }
+
+        result.desired_heading = score_and_select(gaps, desired_heading,
+                                                    current_heading);
+
+        // Step 6: Speed modulation
+        result.speed_factor = std::clamp(
+            result.closest_obstacle_m / cfg_.active_radius, 0.3, 1.0);
+
+        return result;
+    }
+
+private:
+    VFHConfig cfg_;
+    std::vector<double> histogram_;
+    std::vector<bool> binary_;
+    double prev_heading_ = 0.0;
+
+    void build_histogram(const Eigen::Vector3d& pos,
+                          const std::vector<DetectedObject>& objects);
+    void apply_threshold();
+
+    struct Gap { int start; int end; int width; };
+    std::vector<Gap> find_gaps() const;
+    double score_and_select(const std::vector<Gap>& gaps,
+                             double desired, double current);
+    double closest_distance(const Eigen::Vector3d& pos,
+                             const std::vector<DetectedObject>& objects) const;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::clamp (C++17)
+std::clamp(value, lo, hi) constrains a value to a range [lo, hi] in a single, readable call. Without clamp, you'd write std::max(lo, std::min(value, hi)) — harder to read and easy to get the nesting wrong. In obstacle avoidance, we clamp the speed_factor to [0.3, 1.0] to ensure we never stop completely (unless emergency), and never exceed full speed. This is a small but important C++17 utility for safety-critical arithmetic.
+[END_TABLE_ROW]
+[PARA|Heading 2] 7.2 Obstacle Avoidance Thread Loop
+[PARA|Normal] Listing 7-2: Obstacle Avoidance Thread (20 Hz)
+[TABLE_CELL_0] // avoidance/avoidance_thread.cpp
+#include "avoidance/vfh_plus.h"
+#include "mission/mission_context.h"
+#include "util/realtime.h"
+
+void obstacle_avoidance_thread(MissionContext& ctx,
+                                std::atomic<bool>& running) {
+    set_thread_params("OAvoid", 5, SCHED_FIFO, 70);
+
+    VFHPlus vfh;
+    const auto period = std::chrono::milliseconds(50);  // 20 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
+        if (!ctx.planning_active()) {
+            std::this_thread::sleep_for(period);
+            continue;
+        }
+
+        // Get current pose
+        Eigen::Vector3d pos;
+        Eigen::Quaterniond quat;
+        Eigen::Vector3d vel;
+        if (!ctx.get_pose(pos, quat, vel)) {
+            std::this_thread::sleep_for(period);
+            continue;
+        }
+
+        // Get desired heading from planned path
+        double desired_heading = ctx.get_desired_heading();
+        double current_heading = yaw_from_quaternion(quat);
+
+        // Get detected objects
+        std::vector<DetectedObject> objects;
+        ctx.object_reader().read(objects);
+
+        // Run VFH+
+        auto result = vfh.compute(pos, current_heading, desired_heading, objects);
+
+        if (result.emergency_stop) {
+            spdlog::error("EMERGENCY STOP — obstacle at {:.1f}m",
+                           result.closest_obstacle_m);
+            ctx.push_command(MissionCommand::EMERGENCY_STOP);
+        }
+
+        // Publish safe heading and speed to trajectory executor
+        ctx.set_avoidance_output(result.desired_heading, result.speed_factor);
+
+        std::this_thread::sleep_until(start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 8. Waypoint Manager Thread
+[PARA|Normal] The Waypoint Manager owns the mission's waypoint list, handles waypoint sequencing, acceptance radius checks, and provides the current target waypoint to the path planner. It also manages special waypoints like loiter circles, rally points, and survey patterns.
+[PARA|Heading 2] 8.1 Waypoint Types
+[TABLE_CELL_0] 💡 C++ Concept: std::variant for Type-Safe Unions
+std::variant<T1, T2, ...> (C++17) is a type-safe union: it holds exactly one of the listed types at any time. Unlike a raw union, it prevents accessing the wrong type (throws std::bad_variant_access) and supports exhaustive visitation via std::visit. We use it for waypoint data — a waypoint might be a simple position, a loiter circle, or a survey pattern. std::variant is stack-allocated (no heap), making it cache-friendly for the small waypoint list.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 8-1: Waypoint Types Using std::variant
+[TABLE_CELL_0] // waypoint/waypoint_types.h
+#pragma once
+#include <Eigen/Core>
+#include <variant>
+#include <vector>
+#include <string>
+
+struct PositionWaypoint {
+    Eigen::Vector3d position;      // NED metres
+    double acceptance_radius = 2.0; // metres
+    double speed = 5.0;            // m/s cruise speed at this waypoint
+};
+
+struct LoiterWaypoint {
+    Eigen::Vector3d center;
+    double radius    = 10.0;       // metres
+    double altitude  = 30.0;       // metres AGL
+    double duration  = 30.0;       // seconds (0 = indefinite)
+    bool   clockwise = true;
+};
+
+struct SurveyWaypoint {
+    std::vector<Eigen::Vector3d> polygon;  // boundary vertices
+    double altitude    = 30.0;
+    double line_spacing = 5.0;    // metres between survey lines
+    double speed       = 3.0;
+    double camera_fov  = 60.0;    // degrees — for overlap calculation
+};
+
+struct RallyPoint {
+    Eigen::Vector3d position;
+    bool is_land_point = false;
+};
+
+using WaypointData = std::variant<PositionWaypoint, LoiterWaypoint,
+                                   SurveyWaypoint, RallyPoint>;
+
+struct Waypoint {
+    uint32_t     id;
+    std::string  label;
+    WaypointData data;
+    bool         reached = false;
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 8.2 Waypoint Manager
+[TABLE_CELL_0] 💡 C++ Concept: std::visit + Visitor Pattern
+std::visit applies a callable (often a lambda visitor) to the currently-held type in a std::variant. Combined with an overloaded{} helper (pattern matching), you get compile-time exhaustive handling of all variant alternatives. If you add a new waypoint type to the variant, the compiler forces you to add a handler for it — this eliminates the 'forgot to handle new case' bugs that plague switch/case code.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 8-2: WaypointManager with std::visit Pattern Matching
+[TABLE_CELL_0] // waypoint/waypoint_manager.h
+#pragma once
+#include "waypoint/waypoint_types.h"
+#include <optional>
+#include <vector>
+#include <mutex>
+
+// Overloaded helper for std::visit pattern matching
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+class WaypointManager {
+public:
+    void load_mission(std::vector<Waypoint> waypoints) {
+        std::lock_guard lock(mtx_);
+        waypoints_ = std::move(waypoints);
+        current_idx_ = 0;
+    }
+
+    std::optional<Eigen::Vector3d> current_target() const {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ >= waypoints_.size()) return std::nullopt;
+
+        return std::visit(overloaded{
+            [](const PositionWaypoint& wp) -> Eigen::Vector3d {
+                return wp.position;
+            },
+            [](const LoiterWaypoint& wp) -> Eigen::Vector3d {
+                return wp.center;
+            },
+            [](const SurveyWaypoint& wp) -> Eigen::Vector3d {
+                return wp.polygon.empty() ? Eigen::Vector3d::Zero()
+                                           : wp.polygon[0];
+            },
+            [](const RallyPoint& rp) -> Eigen::Vector3d {
+                return rp.position;
+            },
+        }, waypoints_[current_idx_].data);
+    }
+
+    bool current_reached() const {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ >= waypoints_.size()) return false;
+        return waypoints_[current_idx_].reached;
+    }
+
+    // Check if vehicle has reached current waypoint
+    void check_reached(const Eigen::Vector3d& vehicle_pos) {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ >= waypoints_.size()) return;
+
+        auto& wp = waypoints_[current_idx_];
+        std::visit(overloaded{
+            [&](const PositionWaypoint& pwp) {
+                if ((vehicle_pos - pwp.position).norm() < pwp.acceptance_radius)
+                    wp.reached = true;
+            },
+            [&](const LoiterWaypoint& lwp) {
+                // Mark reached after duration expires
+                // (handled by timer in update logic)
+            },
+            [&](const SurveyWaypoint& swp) {
+                // Survey is reached when all lines completed
+            },
+            [&](const RallyPoint& rp) {
+                if ((vehicle_pos - rp.position).norm() < 5.0)
+                    wp.reached = true;
+            },
+        }, wp.data);
+    }
+
+    bool advance() {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ + 1 < waypoints_.size()) {
+            ++current_idx_;
+            return true;
+        }
+        return false;
+    }
+
+    bool mission_complete() const {
+        std::lock_guard lock(mtx_);
+        return current_idx_ >= waypoints_.size() ||
+               (current_idx_ == waypoints_.size() - 1 &&
+                waypoints_.back().reached);
+    }
+
+    size_t current_index() const {
+        std::lock_guard lock(mtx_);
+        return current_idx_;
+    }
+
+    size_t total_waypoints() const {
+        std::lock_guard lock(mtx_);
+        return waypoints_.size();
+    }
+
+private:
+    mutable std::mutex mtx_;
+    std::vector<Waypoint> waypoints_;
+    size_t current_idx_ = 0;
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 8.3 Mission File Loading (JSON)
+[TABLE_CELL_0] 💡 C++ Concept: nlohmann::json — Structured Deserialization
+nlohmann/json is the de facto standard JSON library for C++. Its from_json/to_json free functions enable automatic serialisation of custom types. By defining these functions, you can read a mission JSON file into strongly-typed C++ structs with one line: auto mission = j.get<MissionFile>(). This is much safer than manual parsing and automatically validates types and required fields.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 8-3: Mission File JSON Loader
+[TABLE_CELL_0] // waypoint/mission_file.h
+#pragma once
+#include "waypoint/waypoint_types.h"
+#include <nlohmann/json.hpp>
+#include <fstream>
+
+using json = nlohmann::json;
+
+struct MissionFile {
+    std::string name;
+    std::string version;
+    std::vector<Waypoint> waypoints;
+};
+
+// ── JSON deserialization ──
+inline void from_json(const json& j, PositionWaypoint& wp) {
+    auto pos = j.at("position");
+    wp.position = {pos[0].get<double>(), pos[1].get<double>(), pos[2].get<double>()};
+    wp.acceptance_radius = j.value("acceptance_radius", 2.0);
+    wp.speed = j.value("speed", 5.0);
+}
+
+inline void from_json(const json& j, LoiterWaypoint& wp) {
+    auto c = j.at("center");
+    wp.center = {c[0].get<double>(), c[1].get<double>(), c[2].get<double>()};
+    wp.radius = j.value("radius", 10.0);
+    wp.duration = j.value("duration", 30.0);
+    wp.clockwise = j.value("clockwise", true);
+}
+
+inline Waypoint parse_waypoint(const json& j) {
+    Waypoint wp;
+    wp.id = j.at("id").get<uint32_t>();
+    wp.label = j.value("label", "");
+
+    std::string type = j.at("type").get<std::string>();
+    if (type == "position")
+        wp.data = j.get<PositionWaypoint>();
+    else if (type == "loiter")
+        wp.data = j.get<LoiterWaypoint>();
+    // ... survey, rally
+
+    return wp;
+}
+
+inline MissionFile load_mission(const std::string& path) {
+    std::ifstream ifs(path);
+    if (!ifs) throw std::runtime_error("Cannot open mission file: " + path);
+    json j = json::parse(ifs);
+
+    MissionFile mf;
+    mf.name = j.value("name", "Unnamed");
+    mf.version = j.value("version", "1.0");
+    for (const auto& wj : j.at("waypoints"))
+        mf.waypoints.push_back(parse_waypoint(wj));
+    return mf;
+}
+[END_TABLE_ROW]
+[PARA|Normal] Listing 8-4: Example mission.json File
+[TABLE_CELL_0] // Example mission.json:
+{
+  "name": "Survey Mission Alpha",
+  "version": "1.0",
+  "waypoints": [
+    {
+      "id": 1,
+      "type": "position",
+      "label": "Takeoff climb",
+      "position": [0.0, 0.0, -30.0],
+      "speed": 3.0
+    },
+    {
+      "id": 2,
+      "type": "position",
+      "label": "WP-A",
+      "position": [100.0, 50.0, -30.0],
+      "acceptance_radius": 3.0,
+      "speed": 5.0
+    },
+    {
+      "id": 3,
+      "type": "loiter",
+      "label": "Observation point",
+      "center": [200.0, 100.0, -25.0],
+      "radius": 15.0,
+      "duration": 60.0,
+      "clockwise": true
+    },
+    {
+      "id": 4,
+      "type": "position",
+      "label": "Return to home",
+      "position": [0.0, 0.0, -10.0],
+      "speed": 4.0
+    }
+  ]
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 9. Trajectory Executor Thread
+[PARA|Normal] The Trajectory Executor is the highest-priority thread (SCHED_FIFO 80) and runs at 50 Hz. It converts discrete waypoints from the path planner into smooth, dynamically feasible velocity and position setpoints using minimum-snap or trapezoidal velocity profiles. These setpoints are written to shared memory for Process 5 (Comms) to forward as MAVLink SET_POSITION_TARGET_LOCAL_NED messages.
+[PARA|Heading 2] 9.1 Trajectory Generation
+[TABLE_CELL_0] 💡 C++ Concept: CRTP (Curiously Recurring Template Pattern) for Static Polymorphism
+CRTP allows compile-time polymorphism without virtual function overhead. The base class is templated on the derived class: class Derived : public Base<Derived>. The base calls static_cast<Derived*>(this)->method() to invoke the derived implementation with zero vtable indirection. At 50 Hz on a resource-constrained Jetson, avoiding virtual call overhead in the innermost trajectory loop matters. CRTP gives us the extensibility of an interface (multiple trajectory generators) with the speed of direct function calls.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 9-1: CRTP Trajectory Generator Base
+[TABLE_CELL_0] // trajectory/trajectory_generator.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+
+struct TrajectoryPoint {
+    double     timestamp;       // seconds from segment start
+    Eigen::Vector3d position;   // NED metres
+    Eigen::Vector3d velocity;   // m/s
+    Eigen::Vector3d acceleration; // m/s²
+    double     yaw;             // radians
+    double     yaw_rate;        // rad/s
+};
+
+// CRTP base — no virtual overhead
+template <typename Derived>
+class TrajectoryGeneratorBase {
+public:
+    void generate(const std::vector<Eigen::Vector3d>& waypoints,
+                  double max_vel, double max_accel) {
+        static_cast<Derived*>(this)->do_generate(waypoints, max_vel, max_accel);
+    }
+
+    TrajectoryPoint evaluate(double t) const {
+        return static_cast<const Derived*>(this)->do_evaluate(t);
+    }
+
+    double duration() const {
+        return static_cast<const Derived*>(this)->do_duration();
+    }
+};
+[END_TABLE_ROW]
+[PARA|Normal] Listing 9-2: Trapezoidal Velocity Profile Generator
+[TABLE_CELL_0] // trajectory/trapezoidal_profile.h
+#pragma once
+#include "trajectory/trajectory_generator.h"
+
+class TrapezoidalProfile
+    : public TrajectoryGeneratorBase<TrapezoidalProfile> {
+public:
+    void do_generate(const std::vector<Eigen::Vector3d>& waypoints,
+                     double max_vel, double max_accel) {
+        segments_.clear();
+        total_time_ = 0.0;
+
+        for (size_t i = 0; i + 1 < waypoints.size(); ++i) {
+            Segment seg;
+            seg.start = waypoints[i];
+            seg.end   = waypoints[i + 1];
+            Eigen::Vector3d diff = seg.end - seg.start;
+            seg.distance = diff.norm();
+            seg.direction = diff.normalized();
+
+            // Trapezoidal velocity profile: accel → cruise → decel
+            double t_accel = max_vel / max_accel;       // time to accelerate
+            double d_accel = 0.5 * max_accel * t_accel * t_accel;
+
+            if (2 * d_accel >= seg.distance) {
+                // Triangular profile (never reaches max_vel)
+                t_accel = std::sqrt(seg.distance / max_accel);
+                seg.t_accel = t_accel;
+                seg.t_cruise = 0.0;
+                seg.t_decel = t_accel;
+                seg.peak_vel = max_accel * t_accel;
+            } else {
+                double d_cruise = seg.distance - 2 * d_accel;
+                double t_cruise = d_cruise / max_vel;
+                seg.t_accel = t_accel;
+                seg.t_cruise = t_cruise;
+                seg.t_decel = t_accel;
+                seg.peak_vel = max_vel;
+            }
+
+            seg.t_start = total_time_;
+            seg.total_time = seg.t_accel + seg.t_cruise + seg.t_decel;
+            total_time_ += seg.total_time;
+            segments_.push_back(seg);
+        }
+    }
+
+    TrajectoryPoint do_evaluate(double t) const {
+        TrajectoryPoint pt;
+        pt.timestamp = t;
+
+        // Find active segment
+        for (const auto& seg : segments_) {
+            double local_t = t - seg.t_start;
+            if (local_t < 0) continue;
+            if (local_t > seg.total_time && &seg != &segments_.back()) continue;
+
+            local_t = std::clamp(local_t, 0.0, seg.total_time);
+
+            double s, v, a;  // scalar position, velocity, acceleration
+            if (local_t < seg.t_accel) {
+                // Acceleration phase
+                a = seg.peak_vel / seg.t_accel;
+                v = a * local_t;
+                s = 0.5 * a * local_t * local_t;
+            } else if (local_t < seg.t_accel + seg.t_cruise) {
+                // Cruise phase
+                double dt = local_t - seg.t_accel;
+                a = 0.0;
+                v = seg.peak_vel;
+                s = 0.5 * seg.peak_vel * seg.t_accel + seg.peak_vel * dt;
+            } else {
+                // Deceleration phase
+                double dt = local_t - seg.t_accel - seg.t_cruise;
+                a = -seg.peak_vel / seg.t_decel;
+                v = seg.peak_vel + a * dt;
+                s = 0.5 * seg.peak_vel * seg.t_accel
+                  + seg.peak_vel * seg.t_cruise
+                  + seg.peak_vel * dt + 0.5 * a * dt * dt;
+            }
+
+            pt.position = seg.start + seg.direction * s;
+            pt.velocity = seg.direction * v;
+            pt.acceleration = seg.direction * a;
+            pt.yaw = std::atan2(seg.direction.y(), seg.direction.x());
+            pt.yaw_rate = 0.0;
+            return pt;
+        }
+
+        // Past end — hold last position
+        pt.position = segments_.back().end;
+        pt.velocity = Eigen::Vector3d::Zero();
+        pt.acceleration = Eigen::Vector3d::Zero();
+        return pt;
+    }
+
+    double do_duration() const { return total_time_; }
+
+private:
+    struct Segment {
+        Eigen::Vector3d start, end, direction;
+        double distance, peak_vel;
+        double t_accel, t_cruise, t_decel;
+        double t_start, total_time;
+    };
+    std::vector<Segment> segments_;
+    double total_time_ = 0.0;
+};
+[END_TABLE_ROW]
+[PARA|Heading 2] 9.2 Trajectory Executor Thread Loop
+[PARA|Normal] Listing 9-3: Trajectory Executor Thread (50 Hz)
+[TABLE_CELL_0] // trajectory/trajectory_thread.cpp
+#include "trajectory/trapezoidal_profile.h"
+#include "mission/mission_context.h"
+#include "util/realtime.h"
+
+void trajectory_executor_thread(MissionContext& ctx,
+                                 std::atomic<bool>& running) {
+    set_thread_params("TrajExec", 5, SCHED_FIFO, 80);
+
+    TrapezoidalProfile traj;
+    const auto period = std::chrono::milliseconds(20);  // 50 Hz
+    bool trajectory_valid = false;
+    double traj_start_time = 0.0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto loop_start = std::chrono::steady_clock::now();
+
+        if (!ctx.planning_active()) {
+            trajectory_valid = false;
+            std::this_thread::sleep_for(period);
+            continue;
+        }
+
+        // Check for new planned path
+        auto new_path = ctx.consume_planned_path();
+        if (new_path && new_path->size() >= 2) {
+            // Apply avoidance adjustments
+            double heading_adj, speed_factor;
+            ctx.get_avoidance_output(heading_adj, speed_factor);
+
+            double max_vel = ctx.config().max_velocity * speed_factor;
+            double max_acc = ctx.config().max_acceleration;
+
+            traj.generate(*new_path, max_vel, max_acc);
+            traj_start_time = now_seconds();
+            trajectory_valid = true;
+        }
+
+        if (trajectory_valid) {
+            double t = now_seconds() - traj_start_time;
+
+            if (t > traj.duration()) {
+                // Trajectory complete — notify waypoint manager
+                trajectory_valid = false;
+                ctx.waypoint_manager().check_reached(
+                    traj.evaluate(traj.duration()).position);
+                continue;
+            }
+
+            auto pt = traj.evaluate(t);
+
+            // Publish to SHM for Process 5
+            ctx.publish_trajectory_cmd(pt);
+        }
+
+        std::this_thread::sleep_until(loop_start + period);
+    }
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 10. Inter-Thread Communication
+[PARA|Normal] Threads within the Mission Planner communicate through the shared MissionContext object. Different data channels use different synchronisation primitives based on their access patterns and real-time requirements.
+[TABLE_CELL_0] Data Channel
+[TABLE_CELL_1] Producer
+[TABLE_CELL_2] Consumer
+[TABLE_CELL_3] Mechanism
+[TABLE_CELL_4] Rationale
+[END_TABLE_ROW]
+[TABLE_CELL_0] Planned path
+[TABLE_CELL_1] PathPlanner
+[TABLE_CELL_2] TrajectoryExec
+[TABLE_CELL_3] Mutex + swap
+[TABLE_CELL_4] Infrequent (2 Hz), variable-size vector
+[END_TABLE_ROW]
+[TABLE_CELL_0] Avoidance output
+[TABLE_CELL_1] ObstacleAvoid
+[TABLE_CELL_2] TrajectoryExec
+[TABLE_CELL_3] Atomic struct
+[TABLE_CELL_4] Frequent (20 Hz), small fixed-size
+[END_TABLE_ROW]
+[TABLE_CELL_0] Mission commands
+[TABLE_CELL_1] External/FSM
+[TABLE_CELL_2] StateMachine
+[TABLE_CELL_3] Mutex queue
+[TABLE_CELL_4] Infrequent, FIFO ordering required
+[END_TABLE_ROW]
+[TABLE_CELL_0] Current target WP
+[TABLE_CELL_1] WaypointMgr
+[TABLE_CELL_2] PathPlanner
+[TABLE_CELL_3] Mutex read
+[TABLE_CELL_4] Infrequent, simple point
+[END_TABLE_ROW]
+[TABLE_CELL_0] Trajectory cmd
+[TABLE_CELL_1] TrajectoryExec
+[TABLE_CELL_2] SHM (IPC)
+[TABLE_CELL_3] SeqLock write
+[TABLE_CELL_4] High-freq (50 Hz), fixed-size
+[END_TABLE_ROW]
+[TABLE_CELL_0] Pose data
+[TABLE_CELL_1] SHM (IPC)
+[TABLE_CELL_2] All threads
+[TABLE_CELL_3] SeqLock read
+[TABLE_CELL_4] Read-only, latest value
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Double-Buffering with std::swap for Path Hand-off
+When the PathPlanner produces a new path (a potentially large vector), we use the double-buffer pattern: the planner fills a local vector, then under a brief lock, swaps it with the shared vector. The consumer (TrajectoryExecutor) similarly swaps into a local copy under the same lock. This minimises the critical section to just a pointer swap (std::vector::swap is O(1) — just swapping three internal pointers). No data is copied while the lock is held, making the mutex hold time constant and predictable.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 10-1: Path Hand-off (std::swap) and Atomic Avoidance Data
+[TABLE_CELL_0] // Planned path hand-off in MissionContext:
+
+class MissionContext {
+    // ... (other members)
+
+    void set_planned_path(std::vector<Eigen::Vector3d> path) {
+        std::lock_guard lock(path_mtx_);
+        planned_path_ = std::move(path);
+        path_updated_ = true;
+    }
+
+    std::optional<std::vector<Eigen::Vector3d>> consume_planned_path() {
+        std::lock_guard lock(path_mtx_);
+        if (!path_updated_) return std::nullopt;
+        path_updated_ = false;
+        std::vector<Eigen::Vector3d> out;
+        out.swap(planned_path_);           // O(1) swap, no copy
+        return out;
+    }
+
+    // Avoidance output — small, use atomics
+    void set_avoidance_output(double heading, double speed_factor) {
+        avoidance_heading_.store(heading, std::memory_order_relaxed);
+        avoidance_speed_.store(speed_factor, std::memory_order_relaxed);
+    }
+
+    void get_avoidance_output(double& heading, double& speed_factor) const {
+        heading = avoidance_heading_.load(std::memory_order_relaxed);
+        speed_factor = avoidance_speed_.load(std::memory_order_relaxed);
+    }
+
+private:
+    std::mutex path_mtx_;
+    std::vector<Eigen::Vector3d> planned_path_;
+    bool path_updated_ = false;
+
+    std::atomic<double> avoidance_heading_{0.0};
+    std::atomic<double> avoidance_speed_{1.0};
+};
+[END_TABLE_ROW]
+[PARA|Normal] Figure 10-1: Inter-Thread Data Flow Summary
+[TABLE_CELL_0] 
+ ┌──────────────────── Inter-Thread Data Flow ─────────────────────┐
+ │                                                                  │
+ │  SHM /slam_pose ──────────────────────────┐                     │
+ │  SHM /detected_objects ──────────┐        │                     │
+ │                                  │        │                     │
+ │  ┌──────────────┐   target WP   │        │                     │
+ │  │ Waypoint     │──────────────▶┌┴────────┴──┐                  │
+ │  │ Manager      │               │ Path       │                  │
+ │  │              │◀──────────────│ Planner    │                  │
+ │  └──────┬───────┘  WP reached   └─────┬──────┘                  │
+ │         │                              │ planned path           │
+ │         │                              ▼ (mutex+swap)           │
+ │  ┌──────┴───────┐              ┌───────────────┐                │
+ │  │ Mission FSM  │   commands   │ Trajectory    │                │
+ │  │              │──────────────│ Executor      │──▶ SHM output  │
+ │  └──────────────┘              └───────┬───────┘                │
+ │                                        ▲                        │
+ │                          avoidance     │ (atomics)              │
+ │                  ┌─────────────────────┘                        │
+ │                  │                                              │
+ │           ┌──────┴──────────┐                                   │
+ │           │ Obstacle        │                                   │
+ │           │ Avoidance (VFH+)│                                   │
+ │           └─────────────────┘                                   │
+ └──────────────────────────────────────────────────────────────────┘
+
+[END_TABLE_ROW]
+[PARA|Heading 1] 11. Geofencing & Safety Subsystem
+[PARA|Normal] Geofencing enforces spatial boundaries that the drone must not violate. The subsystem supports keep-in zones (must stay inside), keep-out zones (must not enter), and altitude limits. Geofence breach triggers an automatic RTL or loiter.
+[PARA|Heading 2] 11.1 Geofence Geometry
+[PARA|Normal] Listing 11-1: Geofence Checker with Keep-In / Keep-Out Zones
+[TABLE_CELL_0] // geofence/geofence.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+#include <string>
+
+enum class GeofenceType { KEEP_IN, KEEP_OUT };
+enum class GeofenceAction { RTL, LOITER, LAND, WARN };
+
+struct GeofenceZone {
+    std::string name;
+    GeofenceType type;
+    GeofenceAction action;
+    std::vector<Eigen::Vector2d> polygon;  // 2D vertices (NE plane)
+    double alt_min = 0.0;    // metres AGL
+    double alt_max = 120.0;  // metres AGL (regulatory limit)
+};
+
+class GeofenceChecker {
+public:
+    void load_zones(const std::vector<GeofenceZone>& zones) {
+        zones_ = zones;
+    }
+
+    struct BreachInfo {
+        bool breached = false;
+        std::string zone_name;
+        GeofenceAction action;
+        double distance_to_boundary;  // metres (negative = inside breach)
+    };
+
+    BreachInfo check(const Eigen::Vector3d& pos_ned) const {
+        Eigen::Vector2d pos_2d(pos_ned.x(), pos_ned.y());
+        double alt = -pos_ned.z();  // NED to AGL
+
+        for (const auto& zone : zones_) {
+            bool inside = point_in_polygon(pos_2d, zone.polygon);
+            bool alt_ok = (alt >= zone.alt_min && alt <= zone.alt_max);
+
+            if (zone.type == GeofenceType::KEEP_IN) {
+                if (!inside || !alt_ok)
+                    return {true, zone.name, zone.action,
+                            distance_to_polygon(pos_2d, zone.polygon)};
+            } else {  // KEEP_OUT
+                if (inside && alt_ok)
+                    return {true, zone.name, zone.action,
+                            -distance_to_polygon(pos_2d, zone.polygon)};
+            }
+        }
+        return {};  // no breach
+    }
+
+    // Warning when approaching boundary
+    BreachInfo check_with_margin(const Eigen::Vector3d& pos_ned,
+                                  double margin_m = 10.0) const;
+
+private:
+    std::vector<GeofenceZone> zones_;
+
+    bool point_in_polygon(const Eigen::Vector2d& p,
+                           const std::vector<Eigen::Vector2d>& poly) const {
+        // Ray-casting algorithm
+        bool inside = false;
+        for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+            if (((poly[i].y() > p.y()) != (poly[j].y() > p.y())) &&
+                (p.x() < (poly[j].x() - poly[i].x()) *
+                          (p.y() - poly[i].y()) /
+                          (poly[j].y() - poly[i].y()) + poly[i].x()))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    double distance_to_polygon(const Eigen::Vector2d& p,
+                                const std::vector<Eigen::Vector2d>& poly) const;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Aggregate Initialisation & Designated Initialisers (C++20 preview)
+The BreachInfo struct uses aggregate initialisation: return {true, zone.name, zone.action, dist}. In C++17, structs without constructors, virtual functions, or base classes can be initialised with brace-enclosed lists. This is concise and eliminates boilerplate constructors for simple data-carrier types. C++20 adds designated initialisers (return {.breached=true, .zone_name=...}) for even clearer intent, but C++17 positional aggregate init is the portable baseline for our codebase.
+[END_TABLE_ROW]
+[PARA|Heading 1] 12. Data Structures & Types
+[PARA|Heading 2] 12.1 Configuration Structs
+[PARA|Normal] Listing 12-1: PlannerConfig — All Tuneable Parameters
+[TABLE_CELL_0] // config/planner_config.h
+#pragma once
+
+struct PlannerConfig {
+    // Vehicle dynamics
+    double max_velocity       = 5.0;    // m/s
+    double max_acceleration   = 2.0;    // m/s²
+    double max_yaw_rate       = 1.0;    // rad/s
+
+    // Planning
+    double replan_interval_s  = 0.5;    // seconds
+    double planning_timeout_ms = 200.0;
+    double grid_resolution    = 0.25;   // metres
+    double safety_margin      = 0.5;    // metres added to obstacles
+
+    // Waypoints
+    double default_acceptance_radius = 2.0;  // metres
+    double default_cruise_speed      = 5.0;  // m/s
+
+    // Geofence
+    double geofence_warning_margin = 10.0;   // metres before boundary
+    double max_altitude_agl        = 120.0;  // metres
+
+    // Battery
+    uint8_t battery_warning_pct   = 25;
+    uint8_t battery_critical_pct  = 15;
+    uint8_t battery_emergency_pct = 5;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: constexpr and In-Class Default Member Initialisers
+C++11 (and refined in C++17) allows default member initialisers directly in the struct definition: double max_velocity = 5.0. This means creating a PlannerConfig{} automatically has sensible defaults — no constructor needed. When loading from a JSON config file, you start with defaults and override only the fields present in the file. This pattern eliminates 'forgot to initialise' bugs (common with C-style uninitialised structs) and serves as self-documenting code — a new developer can read the defaults inline.
+[END_TABLE_ROW]
+[PARA|Heading 2] 12.2 Mission Status (Shared State)
+[PARA|Normal] Listing 12-2: MissionStatus Published to SHM
+[TABLE_CELL_0] // data/mission_status.h
+#pragma once
+#include <cstdint>
+#include <atomic>
+
+enum class MissionPhase : uint8_t {
+    IDLE, ARMED, TAKEOFF, CRUISE, LOITER, RTL, LANDING, LANDED, EMERGENCY
+};
+
+struct MissionStatus {
+    MissionPhase  phase;
+    uint32_t      current_wp_index;
+    uint32_t      total_wp_count;
+    float         distance_to_wp;       // metres
+    float         eta_seconds;          // estimated time of arrival
+    float         battery_pct;
+    float         ground_speed;         // m/s
+    float         altitude_agl;         // metres
+    uint64_t      mission_elapsed_ms;   // since takeoff
+    uint8_t       gps_fix;              // 0=none, 3=3D, 5=RTK
+    bool          geofence_ok;
+    bool          obstacle_detected;
+    float         closest_obstacle_m;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 13. Configuration Management
+[PARA|Normal] All tuneable parameters are loaded from a JSON configuration file at startup and can be hot-reloaded via SIGHUP. The configuration is immutable during operation to avoid race conditions — on reload, a new config struct is atomically swapped in.
+[PARA|Normal] Listing 13-1: Configuration Manager with Atomic Swap
+[TABLE_CELL_0] // config/config_loader.h
+#pragma once
+#include "config/planner_config.h"
+#include <nlohmann/json.hpp>
+#include <fstream>
+#include <memory>
+#include <atomic>
+
+class ConfigManager {
+public:
+    bool load(const std::string& path) {
+        try {
+            std::ifstream ifs(path);
+            if (!ifs) return false;
+            auto j = nlohmann::json::parse(ifs);
+
+            auto cfg = std::make_shared<PlannerConfig>();
+
+            cfg->max_velocity      = j.value("max_velocity", cfg->max_velocity);
+            cfg->max_acceleration  = j.value("max_acceleration", cfg->max_acceleration);
+            cfg->max_yaw_rate      = j.value("max_yaw_rate", cfg->max_yaw_rate);
+            cfg->grid_resolution   = j.value("grid_resolution", cfg->grid_resolution);
+            cfg->safety_margin     = j.value("safety_margin", cfg->safety_margin);
+            cfg->max_altitude_agl  = j.value("max_altitude_agl", cfg->max_altitude_agl);
+            cfg->battery_warning_pct = j.value("battery_warning_pct",
+                                                 cfg->battery_warning_pct);
+            cfg->battery_critical_pct = j.value("battery_critical_pct",
+                                                  cfg->battery_critical_pct);
+
+            std::atomic_store(&config_, cfg);
+            config_path_ = path;
+            return true;
+        } catch (const std::exception& e) {
+            spdlog::error("Config load failed: {}", e.what());
+            return false;
+        }
+    }
+
+    std::shared_ptr<const PlannerConfig> get() const {
+        return std::atomic_load(&config_);
+    }
+
+    void reload() { load(config_path_); }
+
+private:
+    std::shared_ptr<PlannerConfig> config_ = std::make_shared<PlannerConfig>();
+    std::string config_path_;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: std::shared_ptr Atomic Operations for Lock-Free Config Reload
+std::atomic_load/store on shared_ptr (C++11/14) provides thread-safe pointer swaps without a mutex. When config is reloaded, a new shared_ptr is atomically published. Readers that already hold a copy of the old shared_ptr continue using it safely — the old config is only destroyed when the last reader releases it. This is the Read-Copy-Update (RCU) pattern: readers never block, and writers only do a pointer swap. Note: C++20 adds std::atomic<std::shared_ptr<T>> as a cleaner API for this pattern.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 13-2: Example planner_config.json
+[TABLE_CELL_0] // Example planner_config.json:
+{
+  "max_velocity": 5.0,
+  "max_acceleration": 2.0,
+  "max_yaw_rate": 1.0,
+  "grid_resolution": 0.25,
+  "safety_margin": 0.5,
+  "max_altitude_agl": 120.0,
+  "battery_warning_pct": 25,
+  "battery_critical_pct": 15,
+  "geofence_zones": [
+    {
+      "name": "Operating Area",
+      "type": "keep_in",
+      "action": "rtl",
+      "polygon": [[0,0], [500,0], [500,500], [0,500]],
+      "alt_min": 5,
+      "alt_max": 120
+    }
+  ]
+}
+[END_TABLE_ROW]
+[PARA|Heading 1] 14. Error Handling & Recovery
+[PARA|Normal] The Mission Planner must handle sensor failures, communication loss, and planning failures gracefully. The design follows a fail-safe hierarchy: detect → warn → degrade → recover → abort.
+[TABLE_CELL_0] Failure Mode
+[TABLE_CELL_1] Detection
+[TABLE_CELL_2] Response
+[TABLE_CELL_3] Recovery
+[END_TABLE_ROW]
+[TABLE_CELL_0] Pose lost (SHM stale)
+[TABLE_CELL_1] SeqLock timestamp > 500ms old
+[TABLE_CELL_2] Hold position (loiter)
+[TABLE_CELL_3] Resume when fresh pose arrives
+[END_TABLE_ROW]
+[TABLE_CELL_0] No feasible path
+[TABLE_CELL_1] Planner returns nullopt
+[TABLE_CELL_2] Switch planner strategy; widen grid
+[TABLE_CELL_3] Retry 3x, then RTL
+[END_TABLE_ROW]
+[TABLE_CELL_0] Obstacle too close
+[TABLE_CELL_1] VFH+ emergency_stop
+[TABLE_CELL_2] Immediate stop command
+[TABLE_CELL_3] Back away, re-plan
+[END_TABLE_ROW]
+[TABLE_CELL_0] Geofence breach
+[TABLE_CELL_1] GeofenceChecker::check()
+[TABLE_CELL_2] RTL via safe corridor
+[TABLE_CELL_3] Automatic
+[END_TABLE_ROW]
+[TABLE_CELL_0] Battery critical
+[TABLE_CELL_1] battery_pct < 15%
+[TABLE_CELL_2] Immediate RTL
+[TABLE_CELL_3] Land at nearest rally point
+[END_TABLE_ROW]
+[TABLE_CELL_0] Comms lost (GCS)
+[TABLE_CELL_1] Heartbeat timeout > 5s
+[TABLE_CELL_2] Continue mission / RTL (configurable)
+[TABLE_CELL_3] Resume on reconnect
+[END_TABLE_ROW]
+[TABLE_CELL_0] Thread watchdog
+[TABLE_CELL_1] Heartbeat > 2× period
+[TABLE_CELL_2] Log error, attempt thread restart
+[TABLE_CELL_3] Signal Process 7 (System Monitor)
+[END_TABLE_ROW]
+[PARA|Heading 2] 14.1 Watchdog Timer per Thread
+[PARA|Normal] Listing 14-1: Per-Thread Watchdog Timer
+[TABLE_CELL_0] // util/watchdog.h
+#pragma once
+#include <atomic>
+#include <chrono>
+#include <string>
+#include <spdlog/spdlog.h>
+
+class ThreadWatchdog {
+public:
+    explicit ThreadWatchdog(std::string name, std::chrono::milliseconds timeout)
+        : name_(std::move(name)), timeout_(timeout) {
+        kick();  // initialise
+    }
+
+    // Called by the monitored thread each iteration
+    void kick() {
+        last_kick_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                         std::memory_order_release);
+    }
+
+    // Called by a supervisor thread to check health
+    bool is_alive() const {
+        auto last = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(
+                last_kick_.load(std::memory_order_acquire)));
+        auto elapsed = std::chrono::steady_clock::now() - last;
+        if (elapsed > timeout_) {
+            spdlog::error("Watchdog timeout: {} (elapsed={:.0f}ms, limit={:.0f}ms)",
+                          name_,
+                          std::chrono::duration<double, std::milli>(elapsed).count(),
+                          std::chrono::duration<double, std::milli>(timeout_).count());
+            return false;
+        }
+        return true;
+    }
+
+private:
+    std::string name_;
+    std::chrono::milliseconds timeout_;
+    std::atomic<int64_t> last_kick_{0};
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: RAII Scoped Timer for Performance Monitoring
+A ScopedTimer object starts a clock on construction and logs the elapsed time on destruction. This leverages RAII (Resource Acquisition Is Initialisation): you declare it at the top of a function, and it automatically logs timing when the function returns (even via exceptions). No manual stop_timer() call needed. This is invaluable for performance profiling in real-time loops — place ScopedTimer at the top of each thread's main loop body to continuously monitor execution time.
+[END_TABLE_ROW]
+[PARA|Normal] Listing 14-2: ScopedTimer — RAII Performance Monitor
+[TABLE_CELL_0] // util/scoped_timer.h
+#pragma once
+#include <chrono>
+#include <string>
+#include <spdlog/spdlog.h>
+
+class ScopedTimer {
+public:
+    explicit ScopedTimer(std::string label, double warn_ms = 0.0)
+        : label_(std::move(label)), warn_ms_(warn_ms),
+          start_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedTimer() {
+        auto elapsed = std::chrono::steady_clock::now() - start_;
+        double ms = std::chrono::duration<double, std::milli>(elapsed).count();
+        if (warn_ms_ > 0 && ms > warn_ms_) {
+            spdlog::warn("{}: {:.2f} ms (threshold: {:.1f} ms)", label_, ms, warn_ms_);
+        } else {
+            spdlog::trace("{}: {:.2f} ms", label_, ms);
+        }
+    }
+
+private:
+    std::string label_;
+    double warn_ms_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+// Usage in thread loop:
+// void my_thread_loop() {
+//     ScopedTimer timer("PathPlan tick", 200.0);  // warns if > 200ms
+//     ... computation ...
+// }  // auto-logs on scope exit
+[END_TABLE_ROW]
+[PARA|Heading 1] 15. IPC — Output: Mission Status & Trajectory Commands
+[PARA|Normal] The Mission Planner publishes two shared-memory regions consumed by downstream processes. /mission_status provides high-level mission telemetry (read by Process 5 Comms for GCS relay and Process 7 System Monitor). /trajectory_cmd provides position/velocity setpoints for the flight controller (read by Process 5 Comms to encode as MAVLink).
+[PARA|Heading 2] 15.1 Trajectory Command SHM Writer
+[PARA|Normal] Listing 15-1: Trajectory Command SHM Writer (SeqLock)
+[TABLE_CELL_0] // ipc/trajectory_writer.h
+#pragma once
+#include "trajectory/trajectory_generator.h"
+#include <atomic>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+struct ShmTrajectoryCmd {
+    std::atomic<uint64_t> seq;       // SeqLock
+    uint64_t timestamp_ns;
+    double position[3];              // NED metres
+    double velocity[3];              // m/s
+    double acceleration[3];          // m/s²
+    double yaw;                      // radians
+    double yaw_rate;                 // rad/s
+    uint16_t type_mask;              // MAVLink type_mask for SET_POSITION_TARGET
+    uint8_t  coordinate_frame;       // MAV_FRAME_LOCAL_NED
+    uint8_t  padding[5];
+};
+
+class TrajectoryWriter {
+public:
+    bool create(const char* name = "/trajectory_cmd") {
+        fd_ = shm_open(name, O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        ftruncate(fd_, sizeof(ShmTrajectoryCmd));
+        ptr_ = static_cast<ShmTrajectoryCmd*>(
+            mmap(nullptr, sizeof(ShmTrajectoryCmd),
+                 PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) return false;
+        ptr_->seq.store(0);
+        return true;
+    }
+
+    void write(const TrajectoryPoint& pt) {
+        if (!ptr_) return;
+        // SeqLock: increment to odd (write in progress)
+        uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+        ptr_->seq.store(s + 1, std::memory_order_release);
+
+        ptr_->timestamp_ns = current_time_ns();
+        Eigen::Map<Eigen::Vector3d>(ptr_->position) = pt.position;
+        Eigen::Map<Eigen::Vector3d>(ptr_->velocity) = pt.velocity;
+        Eigen::Map<Eigen::Vector3d>(ptr_->acceleration) = pt.acceleration;
+        ptr_->yaw = pt.yaw;
+        ptr_->yaw_rate = pt.yaw_rate;
+        ptr_->type_mask = 0b0000'0000'0000'0000;  // use all fields
+        ptr_->coordinate_frame = 1;  // MAV_FRAME_LOCAL_NED
+
+        // Increment to even (write complete)
+        ptr_->seq.store(s + 2, std::memory_order_release);
+    }
+
+    ~TrajectoryWriter() {
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(ptr_, sizeof(ShmTrajectoryCmd));
+        if (fd_ >= 0) { shm_unlink("/trajectory_cmd"); close(fd_); }
+    }
+
+private:
+    int fd_ = -1;
+    ShmTrajectoryCmd* ptr_ = nullptr;
+    uint64_t current_time_ns() const;
+};
+[END_TABLE_ROW]
+[TABLE_CELL_0] 💡 C++ Concept: Eigen::Map for Zero-Copy SHM Access
+Eigen::Map<Eigen::Vector3d>(ptr_->position) creates an Eigen vector that directly aliases the raw double[3] array in shared memory. Assignment through the Map writes directly to SHM with zero intermediate copies. This is critical for the 50 Hz trajectory publisher — you get the full Eigen API (arithmetic, norms, transforms) without any memcpy overhead. The Map does not own the memory; it's a lightweight view. Be careful with alignment: Eigen requires 16-byte alignment for SSE, so ensure SHM structs are aligned (double[3] is naturally 8-byte aligned, which is sufficient on ARM/Jetson).
+[END_TABLE_ROW]
+[PARA|Heading 2] 15.2 Mission Status SHM Writer
+[PARA|Normal] Listing 15-2: Mission Status SHM Writer
+[TABLE_CELL_0] // ipc/mission_status_writer.h
+#pragma once
+#include "data/mission_status.h"
+#include <atomic>
+#include <sys/mman.h>
+
+struct ShmMissionStatus {
+    std::atomic<uint64_t> seq;
+    uint64_t timestamp_ns;
+    MissionStatus status;
+};
+
+class MissionStatusWriter {
+public:
+    bool create(const char* name = "/mission_status");
+
+    void write(const MissionStatus& status) {
+        if (!ptr_) return;
+        uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+        ptr_->seq.store(s + 1, std::memory_order_release);
+
+        ptr_->timestamp_ns = current_time_ns();
+        ptr_->status = status;
+
+        ptr_->seq.store(s + 2, std::memory_order_release);
+    }
+
+    ~MissionStatusWriter();  // munmap + shm_unlink + close
+
+private:
+    int fd_ = -1;
+    ShmMissionStatus* ptr_ = nullptr;
+};
+[END_TABLE_ROW]
+[PARA|Heading 1] 16. systemd Service Configuration
+[PARA|Normal] The mission_planner process is managed by systemd as a Type=exec service. It depends on both Process 2 (Perception) and Process 3 (SLAM/VIO Nav) being active before starting, as it consumes their SHM outputs.
+[PARA|Normal] Listing 16-1: systemd Service Unit File
+[TABLE_CELL_0] # /etc/systemd/system/mission-planner.service
+[Unit]
+Description=Drone Mission Planner (Process 4)
+After=perception.service slam-vio-nav.service
+Requires=perception.service slam-vio-nav.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=drone
+Group=drone
+
+ExecStartPre=/usr/local/bin/check_shm.sh /slam_pose /detected_objects
+ExecStart=/opt/drone/bin/mission_planner \
+    --config /opt/drone/etc/planner_config.json \
+    --mission /opt/drone/missions/current_mission.json \
+    --log-level info
+
+Restart=on-failure
+RestartSec=2
+WatchdogSec=10
+
+# Real-time scheduling
+CPUAffinity=4 5
+Nice=-10
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+
+# Memory
+MemoryMax=256M
+MemoryHigh=192M
+
+# Sandboxing
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /opt/drone/logs /opt/drone/missions
+ProtectHome=yes
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_SYS_NICE CAP_IPC_LOCK
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mission_planner
+
+# Signal handling
+TimeoutStopSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Hot-reload config on SIGHUP
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=drone.target
+[END_TABLE_ROW]
+[PARA|Normal] Key systemd features used:
+[TABLE_CELL_0] Directive
+[TABLE_CELL_1] Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] After/Requires
+[TABLE_CELL_1] Ensures SLAM and Perception are running before we start
+[END_TABLE_ROW]
+[TABLE_CELL_0] CPUAffinity=4 5
+[TABLE_CELL_1] Pins threads to cores 4-5 (shared with our 5 threads)
+[END_TABLE_ROW]
+[TABLE_CELL_0] LimitRTPRIO=99
+[TABLE_CELL_1] Allows SCHED_FIFO real-time scheduling
+[END_TABLE_ROW]
+[TABLE_CELL_0] LimitMEMLOCK=infinity
+[TABLE_CELL_1] Required for SHM mlock
+[END_TABLE_ROW]
+[TABLE_CELL_0] WatchdogSec=10
+[TABLE_CELL_1] systemd kills & restarts if no sd_notify within 10s
+[END_TABLE_ROW]
+[TABLE_CELL_0] ExecReload
+[TABLE_CELL_1] Sends SIGHUP to reload config without restart
+[END_TABLE_ROW]
+[TABLE_CELL_0] MemoryMax=256M
+[TABLE_CELL_1] Hard limit prevents OOM on the Jetson's 8GB
+[END_TABLE_ROW]
+[TABLE_CELL_0] ReadWritePaths=/dev/shm
+[TABLE_CELL_1] Whitelist SHM access under ProtectSystem=strict
+[END_TABLE_ROW]
+[PARA|Heading 2] 16.1 SHM Pre-Check Script
+[PARA|Normal] Listing 16-2: SHM Availability Pre-Check Script
+[TABLE_CELL_0] #!/bin/bash
+# /usr/local/bin/check_shm.sh
+# Waits for required SHM segments to exist before starting
+
+TIMEOUT=30
+for shm in "$@"; do
+    elapsed=0
+    while [ ! -e "/dev/shm${shm}" ]; do
+        if [ $elapsed -ge $TIMEOUT ]; then
+            echo "ERROR: SHM segment ${shm} not available after ${TIMEOUT}s"
+            exit 1
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    echo "OK: ${shm} available"
+done
+[END_TABLE_ROW]
+[PARA|Heading 1] 17. CMakeLists.txt
+[PARA|Normal] Listing 17-1: Complete CMakeLists.txt
+[TABLE_CELL_0] # CMakeLists.txt — Process 4: Mission Planner
+cmake_minimum_required(VERSION 3.18)
+project(mission_planner VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ── Compiler flags ──────────────────────────────────────────────
+add_compile_options(
+    -Wall -Wextra -Wpedantic -Werror
+    -O2
+    -march=armv8.2-a+fp16   # Jetson Orin Nano is ARMv8.2
+    -ffast-math             # Allow fast floating-point optimisations
+)
+
+# ── Dependencies ────────────────────────────────────────────────
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(spdlog REQUIRED)
+find_package(nlohmann_json 3.11 REQUIRED)
+find_package(Threads REQUIRED)
+
+# ── Sources ─────────────────────────────────────────────────────
+set(MISSION_SOURCES
+    src/main.cpp
+    src/mission/mission_fsm.cpp
+    src/mission/mission_context.cpp
+    src/mission/mission_thread.cpp
+    src/mission/states/idle_state.cpp
+    src/mission/states/armed_state.cpp
+    src/mission/states/takeoff_state.cpp
+    src/mission/states/cruise_state.cpp
+    src/mission/states/loiter_state.cpp
+    src/mission/states/rtl_state.cpp
+    src/mission/states/landing_state.cpp
+    src/mission/states/landed_state.cpp
+    src/mission/states/emergency_state.cpp
+    src/planning/astar_planner.cpp
+    src/planning/rrt_star_planner.cpp
+    src/planning/occupancy_grid.cpp
+    src/planning/path_planner_thread.cpp
+    src/avoidance/vfh_plus.cpp
+    src/avoidance/avoidance_thread.cpp
+    src/trajectory/trapezoidal_profile.cpp
+    src/trajectory/trajectory_thread.cpp
+    src/waypoint/waypoint_manager.cpp
+    src/waypoint/mission_file.cpp
+    src/geofence/geofence.cpp
+    src/ipc/pose_reader.cpp
+    src/ipc/object_reader.cpp
+    src/ipc/trajectory_writer.cpp
+    src/ipc/mission_status_writer.cpp
+    src/config/config_loader.cpp
+    src/util/realtime.cpp
+)
+
+# ── Executable ──────────────────────────────────────────────────
+add_executable(mission_planner ${MISSION_SOURCES})
+
+target_include_directories(mission_planner PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(mission_planner PRIVATE
+    Eigen3::Eigen
+    spdlog::spdlog
+    nlohmann_json::nlohmann_json
+    Threads::Threads
+    rt          # POSIX shared memory (shm_open, shm_unlink)
+    pthread     # POSIX threads, priority inheritance mutexes
+)
+
+# ── Install ─────────────────────────────────────────────────────
+install(TARGETS mission_planner DESTINATION /opt/drone/bin)
+install(FILES
+    config/planner_config.json
+    DESTINATION /opt/drone/etc
+)
+install(DIRECTORY missions/
+    DESTINATION /opt/drone/missions
+    FILES_MATCHING PATTERN "*.json"
+)
+
+# ── Tests ───────────────────────────────────────────────────────
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(GTest REQUIRED)
+
+    add_executable(test_astar
+        tests/test_astar.cpp
+        src/planning/astar_planner.cpp
+        src/planning/occupancy_grid.cpp
+    )
+    target_include_directories(test_astar PRIVATE include)
+    target_link_libraries(test_astar GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME AStarTest COMMAND test_astar)
+
+    add_executable(test_vfh
+        tests/test_vfh.cpp
+        src/avoidance/vfh_plus.cpp
+    )
+    target_include_directories(test_vfh PRIVATE include)
+    target_link_libraries(test_vfh GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME VFHTest COMMAND test_vfh)
+
+    add_executable(test_geofence
+        tests/test_geofence.cpp
+        src/geofence/geofence.cpp
+    )
+    target_include_directories(test_geofence PRIVATE include)
+    target_link_libraries(test_geofence GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME GeofenceTest COMMAND test_geofence)
+
+    add_executable(test_trajectory
+        tests/test_trajectory.cpp
+        src/trajectory/trapezoidal_profile.cpp
+    )
+    target_include_directories(test_trajectory PRIVATE include)
+    target_link_libraries(test_trajectory GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME TrajectoryTest COMMAND test_trajectory)
+
+    add_executable(test_waypoint_manager
+        tests/test_waypoint_manager.cpp
+        src/waypoint/waypoint_manager.cpp
+    )
+    target_include_directories(test_waypoint_manager PRIVATE include)
+    target_link_libraries(test_waypoint_manager GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME WaypointManagerTest COMMAND test_waypoint_manager)
+endif()
+[END_TABLE_ROW]
+[PARA|Heading 1] 18. Implementation Roadmap
+[PARA|Normal] The Mission Planner is divided into six implementation phases spanning approximately 12 weeks. Each phase produces testable, incrementally useful functionality.
+[TABLE_CELL_0] Phase
+[TABLE_CELL_1] Duration
+[TABLE_CELL_2] Deliverables
+[TABLE_CELL_3] Dependencies
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 1: Core Framework
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • Project scaffolding & CMake setup
+• PoseReader & ObjectReader IPC
+• MissionContext shared state
+• Thread infrastructure (realtime.h, watchdog)
+• PlannerConfig & JSON loader
+[TABLE_CELL_3] Process 2, 3 SHM formats
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 2: Mission FSM
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • State base class & all 9 state implementations
+• MissionFSM runner
+• Command queue & operator interface
+• Unit tests for all state transitions
+• systemd service file
+[TABLE_CELL_3] Phase 1
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 3: Path Planning
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • OccupancyGrid (3D, 0.25m resolution)
+• A* planner with octile heuristic
+• RRT* planner with rewiring
+• Strategy pattern & dynamic switching
+• Path simplification (Douglas-Peucker)
+• GTest suite for planning algorithms
+[TABLE_CELL_3] Phase 1 (grid)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 4: Obstacle Avoidance
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • VFH+ polar histogram construction
+• Binary threshold with hysteresis
+• Gap finding & scoring
+• Emergency stop logic
+• Speed modulation
+• Integration with perception objects
+[TABLE_CELL_3] Phase 1 (IPC), Phase 3 (path)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 5: Waypoints & Geofencing
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • WaypointManager with std::variant types
+• JSON mission file loader
+• Acceptance radius checking
+• Loiter orbits & survey patterns
+• GeofenceChecker (keep-in/keep-out)
+• Rally point support
+[TABLE_CELL_3] Phase 2 (FSM)
+[END_TABLE_ROW]
+[TABLE_CELL_0] Phase 6: Trajectory & Integration
+[TABLE_CELL_1] 2 weeks
+[TABLE_CELL_2] • TrapezoidalProfile generator
+• Minimum-snap trajectory (stretch goal)
+• TrajectoryWriter SHM output
+• MissionStatusWriter SHM output
+• Full integration test (all 5 threads)
+• SITL testing with Process 3 replay data
+• Performance profiling on Jetson
+[TABLE_CELL_3] All phases
+[END_TABLE_ROW]
+[PARA|Heading 2] 18.1 Testing Strategy
+[TABLE_CELL_0] Test Type
+[TABLE_CELL_1] Scope
+[TABLE_CELL_2] Tools
+[END_TABLE_ROW]
+[TABLE_CELL_0] Unit tests
+[TABLE_CELL_1] Individual algorithms (A*, VFH+, trajectory, geofence)
+[TABLE_CELL_2] GTest, gmock
+[END_TABLE_ROW]
+[TABLE_CELL_0] Component tests
+[TABLE_CELL_1] Thread pairs (planner→executor, FSM→WP manager)
+[TABLE_CELL_2] GTest + mock IPC
+[END_TABLE_ROW]
+[TABLE_CELL_0] Integration tests
+[TABLE_CELL_1] All 5 threads running with recorded SHM data
+[TABLE_CELL_2] Replay tool + assertions
+[END_TABLE_ROW]
+[TABLE_CELL_0] SITL tests
+[TABLE_CELL_1] Full process against simulated flight controller
+[TABLE_CELL_2] ArduPilot SITL + MAVProxy
+[END_TABLE_ROW]
+[TABLE_CELL_0] Hardware-in-loop
+[TABLE_CELL_1] Jetson Orin with real sensors, tethered
+[TABLE_CELL_2] Live test range
+[END_TABLE_ROW]
+[PARA|Heading 2] 18.2 Performance Targets
+[TABLE_CELL_0] Metric
+[TABLE_CELL_1] Target
+[TABLE_CELL_2] Measurement Method
+[END_TABLE_ROW]
+[TABLE_CELL_0] Obstacle avoidance latency
+[TABLE_CELL_1] < 50 ms (worst-case)
+[TABLE_CELL_2] ScopedTimer + histogram logging
+[END_TABLE_ROW]
+[TABLE_CELL_0] Path planning time (A*)
+[TABLE_CELL_1] < 200 ms for 50m path
+[TABLE_CELL_2] ScopedTimer + GTest benchmarks
+[END_TABLE_ROW]
+[TABLE_CELL_0] Trajectory update jitter
+[TABLE_CELL_1] < 2 ms at 50 Hz
+[TABLE_CELL_2] timestamped SHM output analysis
+[END_TABLE_ROW]
+[TABLE_CELL_0] Memory usage
+[TABLE_CELL_1] < 200 MB RSS
+[TABLE_CELL_2] valgrind + /proc/pid/status
+[END_TABLE_ROW]
+[TABLE_CELL_0] CPU usage (all 5 threads)
+[TABLE_CELL_1] < 30% of 2 cores
+[TABLE_CELL_2] perf stat + htop
+[END_TABLE_ROW]
+[TABLE_CELL_0] Startup time
+[TABLE_CELL_1] < 3 seconds
+[TABLE_CELL_2] systemd-analyze
+[END_TABLE_ROW]
+[PARA|Heading 1] Appendix: C++ Concepts Reference
+[TABLE_CELL_0] C++ Concept
+[TABLE_CELL_1] Location & Purpose
+[END_TABLE_ROW]
+[TABLE_CELL_0] Priority Inheritance Mutex
+[TABLE_CELL_1] Section 3 — prevents priority inversion in real-time threads
+[END_TABLE_ROW]
+[TABLE_CELL_0] State Pattern (GoF)
+[TABLE_CELL_1] Section 5 — extensible FSM with per-state classes
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::unique_ptr Ownership
+[TABLE_CELL_1] Section 5 — exclusive ownership for state transitions
+[END_TABLE_ROW]
+[TABLE_CELL_0] SeqLock Pattern
+[TABLE_CELL_1] Section 4 — lock-free single-writer/multi-reader for SHM
+[END_TABLE_ROW]
+[TABLE_CELL_0] Strategy Pattern (GoF)
+[TABLE_CELL_1] Section 6 — interchangeable path planning algorithms
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::optional
+[TABLE_CELL_1] Section 6 — nullable results without exceptions
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::variant + std::visit
+[TABLE_CELL_1] Section 8 — type-safe waypoint union with pattern matching
+[END_TABLE_ROW]
+[TABLE_CELL_0] CRTP (Static Polymorphism)
+[TABLE_CELL_1] Section 9 — zero-overhead trajectory generator dispatch
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::clamp (C++17)
+[TABLE_CELL_1] Section 7 — safe range clamping for speed factors
+[END_TABLE_ROW]
+[TABLE_CELL_0] Aggregate Initialisation
+[TABLE_CELL_1] Section 11 — concise struct construction without constructors
+[END_TABLE_ROW]
+[TABLE_CELL_0] constexpr Default Members
+[TABLE_CELL_1] Section 12 — self-documenting default configuration values
+[END_TABLE_ROW]
+[TABLE_CELL_0] Eigen::Map Zero-Copy
+[TABLE_CELL_1] Section 15 — direct SHM access with Eigen vector API
+[END_TABLE_ROW]
+[TABLE_CELL_0] std::shared_ptr Atomic (RCU)
+[TABLE_CELL_1] Section 13 — lock-free hot configuration reload
+[END_TABLE_ROW]
+[TABLE_CELL_0] RAII ScopedTimer
+[TABLE_CELL_1] Section 14 — automatic performance measurement on scope exit
+[END_TABLE_ROW]
+[TABLE_CELL_0] Double-Buffer std::swap
+[TABLE_CELL_1] Section 10 — O(1) path hand-off between threads
+[END_TABLE_ROW]

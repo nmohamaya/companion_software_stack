@@ -1,0 +1,37 @@
+=== Figure 5-1: Mission State Diagram ===
+
+
+    ┌─────────┐    arm + preflight OK    ┌──────────┐
+    │  IDLE   │─────────────────────────▶│ ARMED    │
+    └─────────┘                          └────┬─────┘
+                                              │ takeoff cmd
+                                              ▼
+                                         ┌──────────┐
+                                         │ TAKEOFF  │
+                                         └────┬─────┘
+                                              │ alt reached
+                  ┌───────────────────────────▼──────────────────────┐
+                  │                    CRUISE                         │
+                  │  (waypoint navigation — normal operation)         │
+                  └───┬────────────┬────────────┬───────────┬────────┘
+                      │            │            │           │
+                  loiter cmd   RTL cmd   low battery   geofence
+                      ▼            ▼            ▼         breach
+                 ┌─────────┐  ┌─────────┐  ┌─────────┐     │
+                 │ LOITER  │  │  RTL    │  │  RTL    │◀────┘
+                 └────┬────┘  └────┬────┘  └────┬────┘
+                      │            │            │
+                      │   resume   │  home pos  │
+                      ▼            ▼            ▼
+                 ┌─────────┐  ┌─────────┐  ┌─────────┐
+                 │ CRUISE  │  │ LANDING │  │ LANDING │
+                 └─────────┘  └────┬────┘  └─────────┘
+                                   │
+                                   ▼
+                              ┌─────────┐
+                              │ LANDED  │──▶ IDLE (disarm)
+                              └─────────┘
+
+    *** EMERGENCY STOP can be triggered from ANY state ***
+    *** → immediate motor cut / controlled descent      ***
+

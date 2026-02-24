@@ -1,0 +1,4 @@
+=== Listing 15-1: Trajectory Command SHM Writer (SeqLock) ===
+
+💡 C++ Concept: Eigen::Map for Zero-Copy SHM Access
+Eigen::Map<Eigen::Vector3d>(ptr_->position) creates an Eigen vector that directly aliases the raw double[3] array in shared memory. Assignment through the Map writes directly to SHM with zero intermediate copies. This is critical for the 50 Hz trajectory publisher — you get the full Eigen API (arithmetic, norms, transforms) without any memcpy overhead. The Map does not own the memory; it's a lightweight view. Be careful with alignment: Eigen requires 16-byte alignment for SSE, so ensure SHM structs are aligned (double[3] is naturally 8-byte aligned, which is sufficient on ARM/Jetson).

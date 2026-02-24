@@ -1,0 +1,66 @@
+=== Listing 6-4: 3-D Occupancy Grid ===
+
+// planning/occupancy_grid.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+#include <optional>
+
+struct GridIndex {
+    int x, y, z;
+    bool operator==(const GridIndex& o) const {
+        return x == o.x && y == o.y && z == o.z;
+    }
+};
+
+struct GridIndexHash {
+    size_t operator()(const GridIndex& g) const {
+        // Combine with bit mixing (FNV-like)
+        size_t h = 2166136261u;
+        h ^= std::hash<int>{}(g.x); h *= 16777619u;
+        h ^= std::hash<int>{}(g.y); h *= 16777619u;
+        h ^= std::hash<int>{}(g.z); h *= 16777619u;
+        return h;
+    }
+};
+
+class OccupancyGrid {
+public:
+    OccupancyGrid(const Eigen::Vector3d& origin, const Eigen::Vector3d& extent,
+                  double resolution = 0.25)
+        : origin_(origin), resolution_(resolution)
+    {
+        dims_.x = static_cast<int>(extent.x() / resolution) + 1;
+        dims_.y = static_cast<int>(extent.y() / resolution) + 1;
+        dims_.z = static_cast<int>(extent.z() / resolution) + 1;
+        cells_.resize(dims_.x * dims_.y * dims_.z, 0);
+    }
+
+    void clear() { std::fill(cells_.begin(), cells_.end(), 0); }
+
+    // Mark a sphere of radius r as occupied
+    void insert_obstacle(const Eigen::Vector3d& center, double radius);
+
+    // Insert detected objects with safety margin
+    void update_from_objects(const std::vector<DetectedObject>& objects,
+                             double safety_margin = 0.5);
+
+    bool is_occupied(const GridIndex& idx) const {
+        int flat = idx.x + idx.y * dims_.x + idx.z * dims_.x * dims_.y;
+        return flat >= 0 && flat < (int)cells_.size() && cells_[flat] > 0;
+    }
+
+    bool is_free_line(const Eigen::Vector3d& a, const Eigen::Vector3d& b) const;
+
+    std::optional<GridIndex> to_index(const Eigen::Vector3d& p) const;
+    Eigen::Vector3d to_world(const GridIndex& idx) const;
+
+    std::vector<GridIndex> neighbors_26(const GridIndex& idx) const;
+    double edge_cost(const GridIndex& a, const GridIndex& b) const;
+
+private:
+    Eigen::Vector3d origin_;
+    double resolution_;
+    GridIndex dims_;
+    std::vector<uint8_t> cells_;  // 0=free, 255=occupied
+};

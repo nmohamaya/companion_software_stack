@@ -1,0 +1,132 @@
+=== Listing 17-1: Complete CMakeLists.txt ===
+
+# CMakeLists.txt — Process 4: Mission Planner
+cmake_minimum_required(VERSION 3.18)
+project(mission_planner VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ── Compiler flags ──────────────────────────────────────────────
+add_compile_options(
+    -Wall -Wextra -Wpedantic -Werror
+    -O2
+    -march=armv8.2-a+fp16   # Jetson Orin Nano is ARMv8.2
+    -ffast-math             # Allow fast floating-point optimisations
+)
+
+# ── Dependencies ────────────────────────────────────────────────
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(spdlog REQUIRED)
+find_package(nlohmann_json 3.11 REQUIRED)
+find_package(Threads REQUIRED)
+
+# ── Sources ─────────────────────────────────────────────────────
+set(MISSION_SOURCES
+    src/main.cpp
+    src/mission/mission_fsm.cpp
+    src/mission/mission_context.cpp
+    src/mission/mission_thread.cpp
+    src/mission/states/idle_state.cpp
+    src/mission/states/armed_state.cpp
+    src/mission/states/takeoff_state.cpp
+    src/mission/states/cruise_state.cpp
+    src/mission/states/loiter_state.cpp
+    src/mission/states/rtl_state.cpp
+    src/mission/states/landing_state.cpp
+    src/mission/states/landed_state.cpp
+    src/mission/states/emergency_state.cpp
+    src/planning/astar_planner.cpp
+    src/planning/rrt_star_planner.cpp
+    src/planning/occupancy_grid.cpp
+    src/planning/path_planner_thread.cpp
+    src/avoidance/vfh_plus.cpp
+    src/avoidance/avoidance_thread.cpp
+    src/trajectory/trapezoidal_profile.cpp
+    src/trajectory/trajectory_thread.cpp
+    src/waypoint/waypoint_manager.cpp
+    src/waypoint/mission_file.cpp
+    src/geofence/geofence.cpp
+    src/ipc/pose_reader.cpp
+    src/ipc/object_reader.cpp
+    src/ipc/trajectory_writer.cpp
+    src/ipc/mission_status_writer.cpp
+    src/config/config_loader.cpp
+    src/util/realtime.cpp
+)
+
+# ── Executable ──────────────────────────────────────────────────
+add_executable(mission_planner ${MISSION_SOURCES})
+
+target_include_directories(mission_planner PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(mission_planner PRIVATE
+    Eigen3::Eigen
+    spdlog::spdlog
+    nlohmann_json::nlohmann_json
+    Threads::Threads
+    rt          # POSIX shared memory (shm_open, shm_unlink)
+    pthread     # POSIX threads, priority inheritance mutexes
+)
+
+# ── Install ─────────────────────────────────────────────────────
+install(TARGETS mission_planner DESTINATION /opt/drone/bin)
+install(FILES
+    config/planner_config.json
+    DESTINATION /opt/drone/etc
+)
+install(DIRECTORY missions/
+    DESTINATION /opt/drone/missions
+    FILES_MATCHING PATTERN "*.json"
+)
+
+# ── Tests ───────────────────────────────────────────────────────
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(GTest REQUIRED)
+
+    add_executable(test_astar
+        tests/test_astar.cpp
+        src/planning/astar_planner.cpp
+        src/planning/occupancy_grid.cpp
+    )
+    target_include_directories(test_astar PRIVATE include)
+    target_link_libraries(test_astar GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME AStarTest COMMAND test_astar)
+
+    add_executable(test_vfh
+        tests/test_vfh.cpp
+        src/avoidance/vfh_plus.cpp
+    )
+    target_include_directories(test_vfh PRIVATE include)
+    target_link_libraries(test_vfh GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME VFHTest COMMAND test_vfh)
+
+    add_executable(test_geofence
+        tests/test_geofence.cpp
+        src/geofence/geofence.cpp
+    )
+    target_include_directories(test_geofence PRIVATE include)
+    target_link_libraries(test_geofence GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME GeofenceTest COMMAND test_geofence)
+
+    add_executable(test_trajectory
+        tests/test_trajectory.cpp
+        src/trajectory/trapezoidal_profile.cpp
+    )
+    target_include_directories(test_trajectory PRIVATE include)
+    target_link_libraries(test_trajectory GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME TrajectoryTest COMMAND test_trajectory)
+
+    add_executable(test_waypoint_manager
+        tests/test_waypoint_manager.cpp
+        src/waypoint/waypoint_manager.cpp
+    )
+    target_include_directories(test_waypoint_manager PRIVATE include)
+    target_link_libraries(test_waypoint_manager GTest::gtest_main Eigen3::Eigen)
+    add_test(NAME WaypointManagerTest COMMAND test_waypoint_manager)
+endif()

@@ -1,0 +1,33 @@
+=== Listing 9-1: CRTP Trajectory Generator Base ===
+
+// trajectory/trajectory_generator.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+
+struct TrajectoryPoint {
+    double     timestamp;       // seconds from segment start
+    Eigen::Vector3d position;   // NED metres
+    Eigen::Vector3d velocity;   // m/s
+    Eigen::Vector3d acceleration; // m/s²
+    double     yaw;             // radians
+    double     yaw_rate;        // rad/s
+};
+
+// CRTP base — no virtual overhead
+template <typename Derived>
+class TrajectoryGeneratorBase {
+public:
+    void generate(const std::vector<Eigen::Vector3d>& waypoints,
+                  double max_vel, double max_accel) {
+        static_cast<Derived*>(this)->do_generate(waypoints, max_vel, max_accel);
+    }
+
+    TrajectoryPoint evaluate(double t) const {
+        return static_cast<const Derived*>(this)->do_evaluate(t);
+    }
+
+    double duration() const {
+        return static_cast<const Derived*>(this)->do_duration();
+    }
+};

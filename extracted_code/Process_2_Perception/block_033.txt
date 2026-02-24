@@ -1,0 +1,37 @@
+Context: Complete file tree for Process 2
+Source: table_row0_col0
+---
+process2_perception/
+├── CMakeLists.txt
+├── config/
+│   ├── perception.yaml                # Runtime config (thresholds, model path)
+│   └── calibration.yaml               # Camera-LiDAR extrinsic calibration
+├── include/
+│   └── perception/
+│       ├── types.h                    # Detection2D, PointCloud, FusedObject, etc.
+│       ├── kalman_tracker.h            # Kalman filter for bounding box tracking
+│       ├── hungarian.h                 # Hungarian assignment algorithm
+│       └── detector_interface.h        # IDetector strategy interface
+├── models/
+│   ├── yolov8s.onnx                    # ONNX model (exported from Python)
+│   └── yolov8s.engine                  # TensorRT engine (built on target HW)
+├── src/
+│   └── perception/
+│       ├── main.cpp                    # Process entry, thread orchestration
+│       ├── lidar_thread.cpp            # Thread 1: LiDAR capture + clustering
+│       ├── radar_thread.cpp            # Thread 2: Radar capture
+│       ├── inference_thread.cpp        # Thread 3: TensorRT DNN inference
+│       ├── tracker_thread.cpp          # Thread 4: SORT multi-object tracker
+│       ├── fusion_thread.cpp           # Thread 5: LiDAR-camera-radar fusion
+│       └── hungarian.cpp               # Hungarian algorithm implementation
+├── tests/
+│   ├── test_kalman.cpp                 # Kalman filter unit tests
+│   ├── test_hungarian.cpp              # Assignment algorithm tests
+│   ├── test_fusion.cpp                 # Fusion pipeline tests
+│   └── test_data/
+│       ├── test_frame.png              # Test image for inference
+│       └── test_pointcloud.pcd         # Test point cloud for fusion
+└── scripts/
+    ├── export_model.py                 # Export YOLO to ONNX
+    ├── build_engine.sh                 # ONNX → TensorRT conversion
+    └── calibrate_extrinsic.py          # Camera-LiDAR calibration tool

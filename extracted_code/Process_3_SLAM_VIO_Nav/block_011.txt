@@ -1,0 +1,56 @@
+Context: GTSAM's iSAM2 performs incremental smoothing and mapping. Instead of re-solving the entire graph on each keyframe, it updates only the affected part of the Bayes tree – reducing per-keyframe optimisation time from O(n²) to near O(1) amortised.
+Source: code_paragraphs
+---
+#include <gtsam/navigation/CombinedImuFactor.h>
+#include <gtsam/slam/SmartProjectionPoseFactor.h>
+#include <gtsam/nonlinear/ISAM2.h>
+#include <gtsam/nonlinear/Values.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+
+class BackendOptimiser {
+    gtsam::ISAM2 isam2_;
+    gtsam::NonlinearFactorGraph new_factors_;
+    gtsam::Values new_values_;
+    uint64_t kf_id_ = 0;
+
+public:
+    BackendOptimiser() {
+        gtsam::ISAM2Params params;
+        params.relinearizeThreshold = 0.01;
+        params.relinearizeSkip = 1;
+        params.enableDetailedResults = false;
+        isam2_ = gtsam::ISAM2(params);
+    }
+
+    void add_keyframe(const KeyframeData& kf, const PreintegratedImuFactor& imu_factor) {
+        uint64_t prev = kf_id_;
+        kf_id_++;
+
+        // Pose initial estimate
+        gtsam::Pose3 pose_init = sophus_to_gtsam(kf.T_world_kf);
+        new_values_.insert(X(kf_id_), pose_init);
+        new_values_.insert(V(kf_id_), kf.velocity);
+        new_values_.insert(B(kf_id_), gtsam::imuBias::ConstantBias(
+            kf.bias_accel, kf.bias_gyro));
+
+        // IMU factor between prev and current keyframe
+        auto imu = boost::make_shared<gtsam::CombinedImuFactor>(
+            X(prev), V(prev), X(kf_id_), V(kf_id_),
+            B(prev), B(kf_id_), imu_factor.gtsam_pim);
+        new_factors_.add(imu);
+
+        // Visual re-projection factors (SmartFactor per landmark)
+        for (auto& [lm_id, obs] : kf.observations) {
+            smart_factors_[lm_id]->add(obs.uv, X(kf_id_));
+        }
+
+        // Incremental update
+        auto result = isam2_.update(new_factors_, new_values_);
+        new_factors_.resize(0);
+        new_values_.clear();
+
+        // Extract optimised pose
+        gtsam::Values estimate = isam2_.calculateEstimate();
+        publish_optimised_poses(estimate);
+    }
+};

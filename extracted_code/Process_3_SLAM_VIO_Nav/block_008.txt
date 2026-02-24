@@ -1,0 +1,31 @@
+Context: 4.4 Thread Loop
+Source: code_paragraphs
+---
+void ImuReaderThread::run() {
+    imu_driver_.configure(ImuConfig{
+        .sample_rate_hz = 200,
+        .accel_range    = AccelRange::PM_16G,
+        .gyro_range     = GyroRange::PM_2000DPS,
+        .dlpf_bandwidth = 92  // Hz
+    });
+
+    auto preint = std::make_unique<ContinuousNoiseModel>(
+        initial_bias_accel_, initial_bias_gyro_, noise_params_);
+
+    while (!stop_flag_.load(std::memory_order_relaxed)) {
+        ImuSample sample = imu_driver_.read_blocking();  // blocks ~5 ms
+
+        preint->integrate(sample);
+
+        // If the Visual Frontend signals a new keyframe, ship the factor
+        if (keyframe_event_.try_wait()) {
+            auto factor = preint->get_factor();
+            imu_factor_queue_.push(std::move(factor));   // SPSC → Thread 3
+
+            // Reset pre-integrator with latest bias from optimiser
+            auto latest_bias = bias_update_.load();      // atomic Bias struct
+            preint = std::make_unique<ContinuousNoiseModel>(
+                latest_bias.accel, latest_bias.gyro, noise_params_);
+        }
+    }
+}

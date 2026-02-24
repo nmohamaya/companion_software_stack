@@ -1,0 +1,27 @@
+=== Listing 5-5: Mission State Machine Thread Loop ===
+
+// mission/mission_thread.cpp
+#include "mission/mission_fsm.h"
+#include "util/realtime.h"
+#include <chrono>
+
+void mission_state_machine_thread(MissionContext& ctx,
+                                   std::atomic<bool>& running) {
+    set_thread_params("MSM", 4, SCHED_FIFO, 60);
+
+    MissionFSM fsm(ctx);
+    const auto period = std::chrono::milliseconds(100);  // 10 Hz
+
+    while (running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+        fsm.tick();
+        auto elapsed = std::chrono::steady_clock::now() - start;
+
+        if (elapsed > std::chrono::milliseconds(80)) {
+            spdlog::warn("MSM tick took {:.1f} ms",
+                std::chrono::duration<double, std::milli>(elapsed).count());
+        }
+
+        std::this_thread::sleep_until(start + period);
+    }
+}

@@ -1,0 +1,2514 @@
+Start testing: Feb 23 23:22 CET
+----------------------------------------------------------
+66/91 Testing: GCSLink.InitiallyDisconnected
+66/91 Test: GCSLink.InitiallyDisconnected
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=GCSLink.InitiallyDisconnected" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GCSLink.InitiallyDisconnected" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GCSLink.InitiallyDisconnected
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GCSLink
+[ RUN      ] GCSLink.InitiallyDisconnected
+[       OK ] GCSLink.InitiallyDisconnected (0 ms)
+[----------] 1 test from GCSLink (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"GCSLink.InitiallyDisconnected" end time: Feb 23 23:22 CET
+"GCSLink.InitiallyDisconnected" time elapsed: 00:00:00
+----------------------------------------------------------
+
+65/91 Testing: MavlinkSim.GroundSpeedReflectsTrajectory
+65/91 Test: MavlinkSim.GroundSpeedReflectsTrajectory
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.GroundSpeedReflectsTrajectory" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.GroundSpeedReflectsTrajectory" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.GroundSpeedReflectsTrajectory
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.GroundSpeedReflectsTrajectory
+[2026-02-23 23:22:46.617] [info] [MavlinkSim] Opened simulated link /dev/ttyTHS1@921600
+[       OK ] MavlinkSim.GroundSpeedReflectsTrajectory (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.GroundSpeedReflectsTrajectory" end time: Feb 23 23:22 CET
+"MavlinkSim.GroundSpeedReflectsTrajectory" time elapsed: 00:00:00
+----------------------------------------------------------
+
+67/91 Testing: GCSLink.OpenConnects
+67/91 Test: GCSLink.OpenConnects
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=GCSLink.OpenConnects" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GCSLink.OpenConnects" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GCSLink.OpenConnects
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GCSLink
+[ RUN      ] GCSLink.OpenConnects
+[2026-02-23 23:22:46.619] [info] [GCSLink] Simulated UDP link 0.0.0.0:14550
+[       OK ] GCSLink.OpenConnects (0 ms)
+[----------] 1 test from GCSLink (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"GCSLink.OpenConnects" end time: Feb 23 23:22 CET
+"GCSLink.OpenConnects" time elapsed: 00:00:00
+----------------------------------------------------------
+
+64/91 Testing: MavlinkSim.ModeChange
+64/91 Test: MavlinkSim.ModeChange
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.ModeChange" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.ModeChange" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.ModeChange
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.ModeChange
+[2026-02-23 23:22:46.619] [info] [MavlinkSim] Opened simulated link /dev/ttyTHS1@921600
+[2026-02-23 23:22:46.619] [info] [MavlinkSim] MODE change to 2
+[       OK ] MavlinkSim.ModeChange (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.ModeChange" end time: Feb 23 23:22 CET
+"MavlinkSim.ModeChange" time elapsed: 00:00:00
+----------------------------------------------------------
+
+63/91 Testing: MavlinkSim.ArmDisarm
+63/91 Test: MavlinkSim.ArmDisarm
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.ArmDisarm" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.ArmDisarm" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.ArmDisarm
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.ArmDisarm
+[2026-02-23 23:22:46.621] [info] [MavlinkSim] Opened simulated link /dev/ttyTHS1@921600
+[2026-02-23 23:22:46.621] [info] [MavlinkSim] ARM command sent
+[2026-02-23 23:22:46.621] [info] [MavlinkSim] DISARM command sent
+[       OK ] MavlinkSim.ArmDisarm (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.ArmDisarm" end time: Feb 23 23:22 CET
+"MavlinkSim.ArmDisarm" time elapsed: 00:00:00
+----------------------------------------------------------
+
+68/91 Testing: GCSLink.SendTelemetryRequiresConnection
+68/91 Test: GCSLink.SendTelemetryRequiresConnection
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=GCSLink.SendTelemetryRequiresConnection" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GCSLink.SendTelemetryRequiresConnection" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GCSLink.SendTelemetryRequiresConnection
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GCSLink
+[ RUN      ] GCSLink.SendTelemetryRequiresConnection
+[2026-02-23 23:22:46.623] [info] [GCSLink] Simulated UDP link 0.0.0.0:14550
+[       OK ] GCSLink.SendTelemetryRequiresConnection (0 ms)
+[----------] 1 test from GCSLink (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"GCSLink.SendTelemetryRequiresConnection" end time: Feb 23 23:22 CET
+"GCSLink.SendTelemetryRequiresConnection" time elapsed: 00:00:00
+----------------------------------------------------------
+
+62/91 Testing: MavlinkSim.HeartbeatBatteryDrains
+62/91 Test: MavlinkSim.HeartbeatBatteryDrains
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.HeartbeatBatteryDrains" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.HeartbeatBatteryDrains" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.HeartbeatBatteryDrains
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.HeartbeatBatteryDrains
+[2026-02-23 23:22:46.624] [info] [MavlinkSim] Opened simulated link /dev/ttyTHS1@921600
+[       OK ] MavlinkSim.HeartbeatBatteryDrains (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.HeartbeatBatteryDrains" end time: Feb 23 23:22 CET
+"MavlinkSim.HeartbeatBatteryDrains" time elapsed: 00:00:00
+----------------------------------------------------------
+
+69/91 Testing: GCSLink.PollCommandInitiallyEmpty
+69/91 Test: GCSLink.PollCommandInitiallyEmpty
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=GCSLink.PollCommandInitiallyEmpty" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GCSLink.PollCommandInitiallyEmpty" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GCSLink.PollCommandInitiallyEmpty
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GCSLink
+[ RUN      ] GCSLink.PollCommandInitiallyEmpty
+[2026-02-23 23:22:46.625] [info] [GCSLink] Simulated UDP link 0.0.0.0:14550
+[       OK ] GCSLink.PollCommandInitiallyEmpty (0 ms)
+[----------] 1 test from GCSLink (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"GCSLink.PollCommandInitiallyEmpty" end time: Feb 23 23:22 CET
+"GCSLink.PollCommandInitiallyEmpty" time elapsed: 00:00:00
+----------------------------------------------------------
+
+61/91 Testing: MavlinkSim.SendTrajectoryRequiresConnection
+61/91 Test: MavlinkSim.SendTrajectoryRequiresConnection
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.SendTrajectoryRequiresConnection" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.SendTrajectoryRequiresConnection" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.SendTrajectoryRequiresConnection
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.SendTrajectoryRequiresConnection
+[2026-02-23 23:22:46.626] [info] [MavlinkSim] Opened simulated link /dev/ttyTHS1@921600
+[       OK ] MavlinkSim.SendTrajectoryRequiresConnection (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.SendTrajectoryRequiresConnection" end time: Feb 23 23:22 CET
+"MavlinkSim.SendTrajectoryRequiresConnection" time elapsed: 00:00:00
+----------------------------------------------------------
+
+70/91 Testing: GCSLink.MessageTypes
+70/91 Test: GCSLink.MessageTypes
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=GCSLink.MessageTypes" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GCSLink.MessageTypes" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GCSLink.MessageTypes
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GCSLink
+[ RUN      ] GCSLink.MessageTypes
+[       OK ] GCSLink.MessageTypes (0 ms)
+[----------] 1 test from GCSLink (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"GCSLink.MessageTypes" end time: Feb 23 23:22 CET
+"GCSLink.MessageTypes" time elapsed: 00:00:00
+----------------------------------------------------------
+
+60/91 Testing: MavlinkSim.OpenConnects
+60/91 Test: MavlinkSim.OpenConnects
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.OpenConnects" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.OpenConnects" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.OpenConnects
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.OpenConnects
+[2026-02-23 23:22:46.628] [info] [MavlinkSim] Opened simulated link /dev/ttyTHS1@921600
+[       OK ] MavlinkSim.OpenConnects (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.OpenConnects" end time: Feb 23 23:22 CET
+"MavlinkSim.OpenConnects" time elapsed: 00:00:00
+----------------------------------------------------------
+
+59/91 Testing: MavlinkSim.InitiallyDisconnected
+59/91 Test: MavlinkSim.InitiallyDisconnected
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=MavlinkSim.InitiallyDisconnected" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MavlinkSim.InitiallyDisconnected" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MavlinkSim.InitiallyDisconnected
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MavlinkSim
+[ RUN      ] MavlinkSim.InitiallyDisconnected
+[       OK ] MavlinkSim.InitiallyDisconnected (0 ms)
+[----------] 1 test from MavlinkSim (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MavlinkSim.InitiallyDisconnected" end time: Feb 23 23:22 CET
+"MavlinkSim.InitiallyDisconnected" time elapsed: 00:00:00
+----------------------------------------------------------
+
+71/91 Testing: GCSLink.GCSMessageDefaults
+71/91 Test: GCSLink.GCSMessageDefaults
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_comms" "--gtest_filter=GCSLink.GCSMessageDefaults" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GCSLink.GCSMessageDefaults" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GCSLink.GCSMessageDefaults
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GCSLink
+[ RUN      ] GCSLink.GCSMessageDefaults
+[       OK ] GCSLink.GCSMessageDefaults (0 ms)
+[----------] 1 test from GCSLink (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GCSLink.GCSMessageDefaults" end time: Feb 23 23:22 CET
+"GCSLink.GCSMessageDefaults" time elapsed: 00:00:00
+----------------------------------------------------------
+
+72/91 Testing: GimbalController.InitialState
+72/91 Test: GimbalController.InitialState
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.InitialState" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.InitialState" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.InitialState
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.InitialState
+[       OK ] GimbalController.InitialState (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.InitialState" end time: Feb 23 23:22 CET
+"GimbalController.InitialState" time elapsed: 00:00:00
+----------------------------------------------------------
+
+73/91 Testing: GimbalController.Init
+73/91 Test: GimbalController.Init
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.Init" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.Init" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.Init
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.Init
+[2026-02-23 23:22:46.632] [info] [Gimbal] Initialised (simulated)
+[       OK ] GimbalController.Init (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.Init" end time: Feb 23 23:22 CET
+"GimbalController.Init" time elapsed: 00:00:00
+----------------------------------------------------------
+
+74/91 Testing: GimbalController.SetTargetClamping
+74/91 Test: GimbalController.SetTargetClamping
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.SetTargetClamping" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.SetTargetClamping" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.SetTargetClamping
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.SetTargetClamping
+[2026-02-23 23:22:46.633] [info] [Gimbal] Initialised (simulated)
+[       OK ] GimbalController.SetTargetClamping (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.SetTargetClamping" end time: Feb 23 23:22 CET
+"GimbalController.SetTargetClamping" time elapsed: 00:00:00
+----------------------------------------------------------
+
+80/91 Testing: GimbalController.ZeroDtNoMovement
+80/91 Test: GimbalController.ZeroDtNoMovement
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.ZeroDtNoMovement" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.ZeroDtNoMovement" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.ZeroDtNoMovement
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.ZeroDtNoMovement
+[2026-02-23 23:22:46.634] [info] [Gimbal] Initialised (simulated)
+[       OK ] GimbalController.ZeroDtNoMovement (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.ZeroDtNoMovement" end time: Feb 23 23:22 CET
+"GimbalController.ZeroDtNoMovement" time elapsed: 00:00:00
+----------------------------------------------------------
+
+75/91 Testing: GimbalController.SmoothMotion
+75/91 Test: GimbalController.SmoothMotion
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.SmoothMotion" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.SmoothMotion" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.SmoothMotion
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.SmoothMotion
+[2026-02-23 23:22:46.636] [info] [Gimbal] Initialised (simulated)
+[       OK ] GimbalController.SmoothMotion (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.SmoothMotion" end time: Feb 23 23:22 CET
+"GimbalController.SmoothMotion" time elapsed: 00:00:00
+----------------------------------------------------------
+
+79/91 Testing: GimbalController.MultipleCapturesIncrement
+79/91 Test: GimbalController.MultipleCapturesIncrement
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.MultipleCapturesIncrement" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.MultipleCapturesIncrement" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.MultipleCapturesIncrement
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.MultipleCapturesIncrement
+[2026-02-23 23:22:46.637] [info] [Gimbal] Initialised (simulated)
+[2026-02-23 23:22:46.637] [info] [Gimbal] Image captured #1 pitch=0.0 yaw=0.0
+[2026-02-23 23:22:46.637] [info] [Gimbal] Image captured #2 pitch=0.0 yaw=0.0
+[       OK ] GimbalController.MultipleCapturesIncrement (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.MultipleCapturesIncrement" end time: Feb 23 23:22 CET
+"GimbalController.MultipleCapturesIncrement" time elapsed: 00:00:00
+----------------------------------------------------------
+
+76/91 Testing: GimbalController.ConvergesToTarget
+76/91 Test: GimbalController.ConvergesToTarget
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.ConvergesToTarget" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.ConvergesToTarget" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.ConvergesToTarget
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.ConvergesToTarget
+[2026-02-23 23:22:46.639] [info] [Gimbal] Initialised (simulated)
+[       OK ] GimbalController.ConvergesToTarget (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.ConvergesToTarget" end time: Feb 23 23:22 CET
+"GimbalController.ConvergesToTarget" time elapsed: 00:00:00
+----------------------------------------------------------
+
+77/91 Testing: GimbalController.CaptureImage
+77/91 Test: GimbalController.CaptureImage
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.CaptureImage" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.CaptureImage" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.CaptureImage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.CaptureImage
+[2026-02-23 23:22:46.641] [info] [Gimbal] Initialised (simulated)
+[2026-02-23 23:22:46.641] [info] [Gimbal] Image captured #1 pitch=0.0 yaw=0.0
+[       OK ] GimbalController.CaptureImage (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.CaptureImage" end time: Feb 23 23:22 CET
+"GimbalController.CaptureImage" time elapsed: 00:00:00
+----------------------------------------------------------
+
+78/91 Testing: GimbalController.Recording
+78/91 Test: GimbalController.Recording
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_payload_manager" "--gtest_filter=GimbalController.Recording" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"GimbalController.Recording" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = GimbalController.Recording
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from GimbalController
+[ RUN      ] GimbalController.Recording
+[2026-02-23 23:22:46.643] [info] [Gimbal] Initialised (simulated)
+[2026-02-23 23:22:46.643] [info] [Gimbal] Recording started
+[2026-02-23 23:22:46.643] [info] [Gimbal] Recording stopped
+[       OK ] GimbalController.Recording (0 ms)
+[----------] 1 test from GimbalController (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"GimbalController.Recording" end time: Feb 23 23:22 CET
+"GimbalController.Recording" time elapsed: 00:00:00
+----------------------------------------------------------
+
+58/91 Testing: ConfigTest.LoadDefaultConfigFile
+58/91 Test: ConfigTest.LoadDefaultConfigFile
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.LoadDefaultConfigFile" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.LoadDefaultConfigFile" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.LoadDefaultConfigFile
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.LoadDefaultConfigFile
+[2026-02-23 23:22:46.645] [warning] Config file not found: config/default.json — using defaults
+[       OK ] ConfigTest.LoadDefaultConfigFile (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.LoadDefaultConfigFile" end time: Feb 23 23:22 CET
+"ConfigTest.LoadDefaultConfigFile" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/91 Testing: ShmIPCTest.ShmPoseRoundTrip
+8/91 Test: ShmIPCTest.ShmPoseRoundTrip
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.ShmPoseRoundTrip" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.ShmPoseRoundTrip" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.ShmPoseRoundTrip
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.ShmPoseRoundTrip
+[       OK ] ShmIPCTest.ShmPoseRoundTrip (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.ShmPoseRoundTrip" end time: Feb 23 23:22 CET
+"ShmIPCTest.ShmPoseRoundTrip" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/91 Testing: SPSCRingTest.Available
+13/91 Test: SPSCRingTest.Available
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.Available" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.Available" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.Available
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.Available
+[       OK ] SPSCRingTest.Available (0 ms)
+[----------] 1 test from SPSCRingTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.Available" end time: Feb 23 23:22 CET
+"SPSCRingTest.Available" time elapsed: 00:00:00
+----------------------------------------------------------
+
+55/91 Testing: ConfigTest.TypeMismatchReturnsDefault
+55/91 Test: ConfigTest.TypeMismatchReturnsDefault
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.TypeMismatchReturnsDefault" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.TypeMismatchReturnsDefault" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.TypeMismatchReturnsDefault
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.TypeMismatchReturnsDefault
+[2026-02-23 23:22:46.652] [info] Config loaded from: /tmp/drone_test_config_62186.json
+[       OK ] ConfigTest.TypeMismatchReturnsDefault (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.TypeMismatchReturnsDefault" end time: Feb 23 23:22 CET
+"ConfigTest.TypeMismatchReturnsDefault" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/91 Testing: ShmIPCTest.ConcurrentWriteRead
+7/91 Test: ShmIPCTest.ConcurrentWriteRead
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.ConcurrentWriteRead" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.ConcurrentWriteRead" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.ConcurrentWriteRead
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.ConcurrentWriteRead
+[       OK ] ShmIPCTest.ConcurrentWriteRead (1 ms)
+[----------] 1 test from ShmIPCTest (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.ConcurrentWriteRead" end time: Feb 23 23:22 CET
+"ShmIPCTest.ConcurrentWriteRead" time elapsed: 00:00:00
+----------------------------------------------------------
+
+54/91 Testing: ConfigTest.MissingSectionReturnsEmptyObject
+54/91 Test: ConfigTest.MissingSectionReturnsEmptyObject
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.MissingSectionReturnsEmptyObject" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.MissingSectionReturnsEmptyObject" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.MissingSectionReturnsEmptyObject
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.MissingSectionReturnsEmptyObject
+[2026-02-23 23:22:46.653] [info] Config loaded from: /tmp/drone_test_config_62188.json
+[       OK ] ConfigTest.MissingSectionReturnsEmptyObject (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.MissingSectionReturnsEmptyObject" end time: Feb 23 23:22 CET
+"ConfigTest.MissingSectionReturnsEmptyObject" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/91 Testing: ShmIPCTest.WriterMoveConstruct
+5/91 Test: ShmIPCTest.WriterMoveConstruct
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.WriterMoveConstruct" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.WriterMoveConstruct" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.WriterMoveConstruct
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.WriterMoveConstruct
+[       OK ] ShmIPCTest.WriterMoveConstruct (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.WriterMoveConstruct" end time: Feb 23 23:22 CET
+"ShmIPCTest.WriterMoveConstruct" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/91 Testing: ShmIPCTest.MultipleWrites
+2/91 Test: ShmIPCTest.MultipleWrites
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.MultipleWrites" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.MultipleWrites" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.MultipleWrites
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.MultipleWrites
+[       OK ] ShmIPCTest.MultipleWrites (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.MultipleWrites" end time: Feb 23 23:22 CET
+"ShmIPCTest.MultipleWrites" time elapsed: 00:00:00
+----------------------------------------------------------
+
+49/91 Testing: ConfigTest.GetDefaultOnMissingKey
+49/91 Test: ConfigTest.GetDefaultOnMissingKey
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.GetDefaultOnMissingKey" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.GetDefaultOnMissingKey" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.GetDefaultOnMissingKey
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.GetDefaultOnMissingKey
+[2026-02-23 23:22:46.662] [info] Config loaded from: /tmp/drone_test_config_62193.json
+[       OK ] ConfigTest.GetDefaultOnMissingKey (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.GetDefaultOnMissingKey" end time: Feb 23 23:22 CET
+"ConfigTest.GetDefaultOnMissingKey" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/91 Testing: SPSCRingTest.FullRingRejectsPush
+11/91 Test: SPSCRingTest.FullRingRejectsPush
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.FullRingRejectsPush" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.FullRingRejectsPush" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.FullRingRejectsPush
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.FullRingRejectsPush
+[       OK ] SPSCRingTest.FullRingRejectsPush (0 ms)
+[----------] 1 test from SPSCRingTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.FullRingRejectsPush" end time: Feb 23 23:22 CET
+"SPSCRingTest.FullRingRejectsPush" time elapsed: 00:00:00
+----------------------------------------------------------
+
+57/91 Testing: ConfigTest.BoolValues
+57/91 Test: ConfigTest.BoolValues
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.BoolValues" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.BoolValues" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.BoolValues
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.BoolValues
+[2026-02-23 23:22:46.664] [info] Config loaded from: /tmp/drone_test_config_62195.json
+[       OK ] ConfigTest.BoolValues (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.BoolValues" end time: Feb 23 23:22 CET
+"ConfigTest.BoolValues" time elapsed: 00:00:00
+----------------------------------------------------------
+
+17/91 Testing: KalmanBoxTrackerTest.PredictedBbox
+17/91 Test: KalmanBoxTrackerTest.PredictedBbox
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.PredictedBbox" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.PredictedBbox" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.PredictedBbox
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.PredictedBbox
+[       OK ] KalmanBoxTrackerTest.PredictedBbox (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.PredictedBbox" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.PredictedBbox" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/91 Testing: ShmIPCTest.ReadBeforeWrite
+4/91 Test: ShmIPCTest.ReadBeforeWrite
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.ReadBeforeWrite" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.ReadBeforeWrite" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.ReadBeforeWrite
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.ReadBeforeWrite
+[       OK ] ShmIPCTest.ReadBeforeWrite (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.ReadBeforeWrite" end time: Feb 23 23:22 CET
+"ShmIPCTest.ReadBeforeWrite" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/91 Testing: SPSCRingTest.ConcurrentProducerConsumer
+14/91 Test: SPSCRingTest.ConcurrentProducerConsumer
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.ConcurrentProducerConsumer" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.ConcurrentProducerConsumer" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.ConcurrentProducerConsumer
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.ConcurrentProducerConsumer
+[       OK ] SPSCRingTest.ConcurrentProducerConsumer (1 ms)
+[----------] 1 test from SPSCRingTest (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.ConcurrentProducerConsumer" end time: Feb 23 23:22 CET
+"SPSCRingTest.ConcurrentProducerConsumer" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/91 Testing: SPSCRingTest.PopEmptyReturnsNullopt
+10/91 Test: SPSCRingTest.PopEmptyReturnsNullopt
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.PopEmptyReturnsNullopt" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.PopEmptyReturnsNullopt" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.PopEmptyReturnsNullopt
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.PopEmptyReturnsNullopt
+[       OK ] SPSCRingTest.PopEmptyReturnsNullopt (0 ms)
+[----------] 1 test from SPSCRingTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.PopEmptyReturnsNullopt" end time: Feb 23 23:22 CET
+"SPSCRingTest.PopEmptyReturnsNullopt" time elapsed: 00:00:00
+----------------------------------------------------------
+
+37/91 Testing: MissionFSMTest.WaypointLoadAndAdvance
+37/91 Test: MissionFSMTest.WaypointLoadAndAdvance
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.WaypointLoadAndAdvance" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.WaypointLoadAndAdvance" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.WaypointLoadAndAdvance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.WaypointLoadAndAdvance
+[2026-02-23 23:22:46.672] [info] [FSM] Mission loaded: 3 waypoints
+[2026-02-23 23:22:46.672] [info] [FSM] Advanced to waypoint 2/3
+[2026-02-23 23:22:46.672] [info] [FSM] Advanced to waypoint 3/3
+[       OK ] MissionFSMTest.WaypointLoadAndAdvance (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.WaypointLoadAndAdvance" end time: Feb 23 23:22 CET
+"MissionFSMTest.WaypointLoadAndAdvance" time elapsed: 00:00:00
+----------------------------------------------------------
+
+48/91 Testing: ConfigTest.GetTopLevelString
+48/91 Test: ConfigTest.GetTopLevelString
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.GetTopLevelString" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.GetTopLevelString" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.GetTopLevelString
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.GetTopLevelString
+[2026-02-23 23:22:46.674] [info] Config loaded from: /tmp/drone_test_config_62203.json
+[       OK ] ConfigTest.GetTopLevelString (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.GetTopLevelString" end time: Feb 23 23:22 CET
+"ConfigTest.GetTopLevelString" time elapsed: 00:00:00
+----------------------------------------------------------
+
+36/91 Testing: MissionFSMTest.WaypointReached
+36/91 Test: MissionFSMTest.WaypointReached
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.WaypointReached" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.WaypointReached" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.WaypointReached
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.WaypointReached
+[       OK ] MissionFSMTest.WaypointReached (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.WaypointReached" end time: Feb 23 23:22 CET
+"MissionFSMTest.WaypointReached" time elapsed: 00:00:00
+----------------------------------------------------------
+
+51/91 Testing: ConfigTest.GetDeeplyNestedDefault
+51/91 Test: ConfigTest.GetDeeplyNestedDefault
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.GetDeeplyNestedDefault" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.GetDeeplyNestedDefault" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.GetDeeplyNestedDefault
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.GetDeeplyNestedDefault
+[2026-02-23 23:22:46.677] [info] Config loaded from: /tmp/drone_test_config_62205.json
+[       OK ] ConfigTest.GetDeeplyNestedDefault (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.GetDeeplyNestedDefault" end time: Feb 23 23:22 CET
+"ConfigTest.GetDeeplyNestedDefault" time elapsed: 00:00:00
+----------------------------------------------------------
+
+50/91 Testing: ConfigTest.GetNestedValue
+50/91 Test: ConfigTest.GetNestedValue
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.GetNestedValue" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.GetNestedValue" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.GetNestedValue
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.GetNestedValue
+[2026-02-23 23:22:46.680] [info] Config loaded from: /tmp/drone_test_config_62206.json
+[       OK ] ConfigTest.GetNestedValue (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.GetNestedValue" end time: Feb 23 23:22 CET
+"ConfigTest.GetNestedValue" time elapsed: 00:00:00
+----------------------------------------------------------
+
+52/91 Testing: ConfigTest.HasKey
+52/91 Test: ConfigTest.HasKey
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.HasKey" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.HasKey" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.HasKey
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.HasKey
+[2026-02-23 23:22:46.682] [info] Config loaded from: /tmp/drone_test_config_62207.json
+[       OK ] ConfigTest.HasKey (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.HasKey" end time: Feb 23 23:22 CET
+"ConfigTest.HasKey" time elapsed: 00:00:00
+----------------------------------------------------------
+
+46/91 Testing: ConfigTest.LoadNonExistentFile
+46/91 Test: ConfigTest.LoadNonExistentFile
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.LoadNonExistentFile" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.LoadNonExistentFile" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.LoadNonExistentFile
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.LoadNonExistentFile
+[2026-02-23 23:22:46.684] [warning] Config file not found: /nonexistent/path/config.json — using defaults
+[       OK ] ConfigTest.LoadNonExistentFile (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.LoadNonExistentFile" end time: Feb 23 23:22 CET
+"ConfigTest.LoadNonExistentFile" time elapsed: 00:00:00
+----------------------------------------------------------
+
+35/91 Testing: MissionFSMTest.EmergencyFromAnyState
+35/91 Test: MissionFSMTest.EmergencyFromAnyState
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.EmergencyFromAnyState" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.EmergencyFromAnyState" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.EmergencyFromAnyState
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.EmergencyFromAnyState
+[2026-02-23 23:22:46.685] [info] [FSM] IDLE → PREFLIGHT
+[2026-02-23 23:22:46.685] [info] [FSM] PREFLIGHT → TAKEOFF
+[2026-02-23 23:22:46.685] [info] [FSM] TAKEOFF → NAVIGATE
+[2026-02-23 23:22:46.685] [info] [FSM] NAVIGATE → EMERGENCY
+[       OK ] MissionFSMTest.EmergencyFromAnyState (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.EmergencyFromAnyState" end time: Feb 23 23:22 CET
+"MissionFSMTest.EmergencyFromAnyState" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/91 Testing: HungarianSolverTest.PerfectAssignment
+25/91 Test: HungarianSolverTest.PerfectAssignment
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.PerfectAssignment" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.PerfectAssignment" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.PerfectAssignment
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.PerfectAssignment
+[       OK ] HungarianSolverTest.PerfectAssignment (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.PerfectAssignment" end time: Feb 23 23:22 CET
+"HungarianSolverTest.PerfectAssignment" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/91 Testing: SPSCRingTest.WrapAround
+12/91 Test: SPSCRingTest.WrapAround
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.WrapAround" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.WrapAround" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.WrapAround
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.WrapAround
+[       OK ] SPSCRingTest.WrapAround (0 ms)
+[----------] 1 test from SPSCRingTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.WrapAround" end time: Feb 23 23:22 CET
+"SPSCRingTest.WrapAround" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/91 Testing: SPSCRingTest.PushAndPop
+9/91 Test: SPSCRingTest.PushAndPop
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.PushAndPop" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.PushAndPop" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.PushAndPop
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.PushAndPop
+[       OK ] SPSCRingTest.PushAndPop (0 ms)
+[----------] 1 test from SPSCRingTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.PushAndPop" end time: Feb 23 23:22 CET
+"SPSCRingTest.PushAndPop" time elapsed: 00:00:00
+----------------------------------------------------------
+
+56/91 Testing: ConfigTest.FloatValues
+56/91 Test: ConfigTest.FloatValues
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.FloatValues" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.FloatValues" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.FloatValues
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.FloatValues
+[2026-02-23 23:22:46.693] [info] Config loaded from: /tmp/drone_test_config_62213.json
+[       OK ] ConfigTest.FloatValues (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.FloatValues" end time: Feb 23 23:22 CET
+"ConfigTest.FloatValues" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/91 Testing: ShmIPCTest.ReaderFailsNonExistent
+3/91 Test: ShmIPCTest.ReaderFailsNonExistent
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.ReaderFailsNonExistent" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.ReaderFailsNonExistent" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.ReaderFailsNonExistent
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.ReaderFailsNonExistent
+[       OK ] ShmIPCTest.ReaderFailsNonExistent (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.ReaderFailsNonExistent" end time: Feb 23 23:22 CET
+"ShmIPCTest.ReaderFailsNonExistent" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/91 Testing: HungarianSolverTest.SingleMatch
+24/91 Test: HungarianSolverTest.SingleMatch
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.SingleMatch" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.SingleMatch" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.SingleMatch
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.SingleMatch
+[       OK ] HungarianSolverTest.SingleMatch (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.SingleMatch" end time: Feb 23 23:22 CET
+"HungarianSolverTest.SingleMatch" time elapsed: 00:00:00
+----------------------------------------------------------
+
+44/91 Testing: FusionEngineTest.RadarProvidesVelocity
+44/91 Test: FusionEngineTest.RadarProvidesVelocity
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_fusion_engine" "--gtest_filter=FusionEngineTest.RadarProvidesVelocity" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"FusionEngineTest.RadarProvidesVelocity" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FusionEngineTest.RadarProvidesVelocity
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FusionEngineTest
+[ RUN      ] FusionEngineTest.RadarProvidesVelocity
+[       OK ] FusionEngineTest.RadarProvidesVelocity (0 ms)
+[----------] 1 test from FusionEngineTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"FusionEngineTest.RadarProvidesVelocity" end time: Feb 23 23:22 CET
+"FusionEngineTest.RadarProvidesVelocity" time elapsed: 00:00:00
+----------------------------------------------------------
+
+33/91 Testing: MissionFSMTest.StartsInIdle
+33/91 Test: MissionFSMTest.StartsInIdle
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.StartsInIdle" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.StartsInIdle" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.StartsInIdle
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.StartsInIdle
+[       OK ] MissionFSMTest.StartsInIdle (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.StartsInIdle" end time: Feb 23 23:22 CET
+"MissionFSMTest.StartsInIdle" time elapsed: 00:00:00
+----------------------------------------------------------
+
+34/91 Testing: MissionFSMTest.NormalMissionLifecycle
+34/91 Test: MissionFSMTest.NormalMissionLifecycle
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.NormalMissionLifecycle" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.NormalMissionLifecycle" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.NormalMissionLifecycle
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.NormalMissionLifecycle
+[2026-02-23 23:22:46.700] [info] [FSM] IDLE → PREFLIGHT
+[2026-02-23 23:22:46.700] [info] [FSM] PREFLIGHT → TAKEOFF
+[2026-02-23 23:22:46.700] [info] [FSM] TAKEOFF → NAVIGATE
+[2026-02-23 23:22:46.700] [info] [FSM] NAVIGATE → LOITER
+[2026-02-23 23:22:46.700] [info] [FSM] LOITER → NAVIGATE
+[2026-02-23 23:22:46.700] [info] [FSM] NAVIGATE → RTL
+[2026-02-23 23:22:46.700] [info] [FSM] RTL → LAND
+[2026-02-23 23:22:46.700] [info] [FSM] LAND → IDLE
+[       OK ] MissionFSMTest.NormalMissionLifecycle (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.NormalMissionLifecycle" end time: Feb 23 23:22 CET
+"MissionFSMTest.NormalMissionLifecycle" time elapsed: 00:00:00
+----------------------------------------------------------
+
+29/91 Testing: HungarianSolverTest.TotalCostInitializedToZero
+29/91 Test: HungarianSolverTest.TotalCostInitializedToZero
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.TotalCostInitializedToZero" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.TotalCostInitializedToZero" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.TotalCostInitializedToZero
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.TotalCostInitializedToZero
+[       OK ] HungarianSolverTest.TotalCostInitializedToZero (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.TotalCostInitializedToZero" end time: Feb 23 23:22 CET
+"HungarianSolverTest.TotalCostInitializedToZero" time elapsed: 00:00:00
+----------------------------------------------------------
+
+16/91 Testing: KalmanBoxTrackerTest.InitFromDetection
+16/91 Test: KalmanBoxTrackerTest.InitFromDetection
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.InitFromDetection" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.InitFromDetection" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.InitFromDetection
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.InitFromDetection
+[       OK ] KalmanBoxTrackerTest.InitFromDetection (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.InitFromDetection" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.InitFromDetection" time elapsed: 00:00:00
+----------------------------------------------------------
+
+19/91 Testing: KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses
+19/91 Test: KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses
+[       OK ] KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.UpdateResetsConsecutiveMisses" time elapsed: 00:00:00
+----------------------------------------------------------
+
+38/91 Testing: MissionFSMTest.EmptyMissionNoWaypoint
+38/91 Test: MissionFSMTest.EmptyMissionNoWaypoint
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.EmptyMissionNoWaypoint" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.EmptyMissionNoWaypoint" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.EmptyMissionNoWaypoint
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.EmptyMissionNoWaypoint
+[       OK ] MissionFSMTest.EmptyMissionNoWaypoint (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.EmptyMissionNoWaypoint" end time: Feb 23 23:22 CET
+"MissionFSMTest.EmptyMissionNoWaypoint" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/91 Testing: HungarianSolverTest.MaxCostRejectsExpensivePair
+26/91 Test: HungarianSolverTest.MaxCostRejectsExpensivePair
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.MaxCostRejectsExpensivePair" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.MaxCostRejectsExpensivePair" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.MaxCostRejectsExpensivePair
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.MaxCostRejectsExpensivePair
+[       OK ] HungarianSolverTest.MaxCostRejectsExpensivePair (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.MaxCostRejectsExpensivePair" end time: Feb 23 23:22 CET
+"HungarianSolverTest.MaxCostRejectsExpensivePair" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/91 Testing: ConfigTest.LoadValidFile
+45/91 Test: ConfigTest.LoadValidFile
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.LoadValidFile" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.LoadValidFile" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.LoadValidFile
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.LoadValidFile
+[2026-02-23 23:22:46.709] [info] Config loaded from: /tmp/drone_test_config_62224.json
+[       OK ] ConfigTest.LoadValidFile (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.LoadValidFile" end time: Feb 23 23:22 CET
+"ConfigTest.LoadValidFile" time elapsed: 00:00:00
+----------------------------------------------------------
+
+47/91 Testing: ConfigTest.LoadInvalidJSON
+47/91 Test: ConfigTest.LoadInvalidJSON
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.LoadInvalidJSON" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.LoadInvalidJSON" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.LoadInvalidJSON
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.LoadInvalidJSON
+[2026-02-23 23:22:46.711] [error] Config parse error in /tmp/drone_test_config_62225.json: [json.exception.parse_error.101] parse error at line 1, column 3: syntax error while parsing object key - invalid literal; last read: '{ b'; expected string literal
+[       OK ] ConfigTest.LoadInvalidJSON (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.LoadInvalidJSON" end time: Feb 23 23:22 CET
+"ConfigTest.LoadInvalidJSON" time elapsed: 00:00:00
+----------------------------------------------------------
+
+1/91 Testing: ShmIPCTest.WriteAndRead
+1/91 Test: ShmIPCTest.WriteAndRead
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.WriteAndRead" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.WriteAndRead" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.WriteAndRead
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.WriteAndRead
+[       OK ] ShmIPCTest.WriteAndRead (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.WriteAndRead" end time: Feb 23 23:22 CET
+"ShmIPCTest.WriteAndRead" time elapsed: 00:00:00
+----------------------------------------------------------
+
+53/91 Testing: ConfigTest.Section
+53/91 Test: ConfigTest.Section
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_config" "--gtest_filter=ConfigTest.Section" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ConfigTest.Section" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ConfigTest.Section
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ConfigTest
+[ RUN      ] ConfigTest.Section
+[2026-02-23 23:22:46.713] [info] Config loaded from: /tmp/drone_test_config_62227.json
+[       OK ] ConfigTest.Section (0 ms)
+[----------] 1 test from ConfigTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ConfigTest.Section" end time: Feb 23 23:22 CET
+"ConfigTest.Section" time elapsed: 00:00:00
+----------------------------------------------------------
+
+31/91 Testing: MultiObjectTrackerTest.SingleDetectionBecomesTrack
+31/91 Test: MultiObjectTrackerTest.SingleDetectionBecomesTrack
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=MultiObjectTrackerTest.SingleDetectionBecomesTrack" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MultiObjectTrackerTest.SingleDetectionBecomesTrack" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MultiObjectTrackerTest.SingleDetectionBecomesTrack
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MultiObjectTrackerTest
+[ RUN      ] MultiObjectTrackerTest.SingleDetectionBecomesTrack
+[       OK ] MultiObjectTrackerTest.SingleDetectionBecomesTrack (0 ms)
+[----------] 1 test from MultiObjectTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MultiObjectTrackerTest.SingleDetectionBecomesTrack" end time: Feb 23 23:22 CET
+"MultiObjectTrackerTest.SingleDetectionBecomesTrack" time elapsed: 00:00:00
+----------------------------------------------------------
+
+18/91 Testing: KalmanBoxTrackerTest.PredictIncreasesAge
+18/91 Test: KalmanBoxTrackerTest.PredictIncreasesAge
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.PredictIncreasesAge" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.PredictIncreasesAge" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.PredictIncreasesAge
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.PredictIncreasesAge
+[       OK ] KalmanBoxTrackerTest.PredictIncreasesAge (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.PredictIncreasesAge" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.PredictIncreasesAge" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/91 Testing: ShmIPCTest.ReaderMoveConstruct
+6/91 Test: ShmIPCTest.ReaderMoveConstruct
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_shm_ipc" "--gtest_filter=ShmIPCTest.ReaderMoveConstruct" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"ShmIPCTest.ReaderMoveConstruct" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = ShmIPCTest.ReaderMoveConstruct
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from ShmIPCTest
+[ RUN      ] ShmIPCTest.ReaderMoveConstruct
+[       OK ] ShmIPCTest.ReaderMoveConstruct (0 ms)
+[----------] 1 test from ShmIPCTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"ShmIPCTest.ReaderMoveConstruct" end time: Feb 23 23:22 CET
+"ShmIPCTest.ReaderMoveConstruct" time elapsed: 00:00:00
+----------------------------------------------------------
+
+28/91 Testing: HungarianSolverTest.MoreRowsThanCols
+28/91 Test: HungarianSolverTest.MoreRowsThanCols
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.MoreRowsThanCols" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.MoreRowsThanCols" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.MoreRowsThanCols
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.MoreRowsThanCols
+[       OK ] HungarianSolverTest.MoreRowsThanCols (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.MoreRowsThanCols" end time: Feb 23 23:22 CET
+"HungarianSolverTest.MoreRowsThanCols" time elapsed: 00:00:00
+----------------------------------------------------------
+
+39/91 Testing: MissionFSMTest.StateNames
+39/91 Test: MissionFSMTest.StateNames
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_mission_fsm" "--gtest_filter=MissionFSMTest.StateNames" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MissionFSMTest.StateNames" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MissionFSMTest.StateNames
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MissionFSMTest
+[ RUN      ] MissionFSMTest.StateNames
+[       OK ] MissionFSMTest.StateNames (0 ms)
+[----------] 1 test from MissionFSMTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MissionFSMTest.StateNames" end time: Feb 23 23:22 CET
+"MissionFSMTest.StateNames" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/91 Testing: HungarianSolverTest.EmptyCostMatrix
+23/91 Test: HungarianSolverTest.EmptyCostMatrix
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.EmptyCostMatrix" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.EmptyCostMatrix" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.EmptyCostMatrix
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.EmptyCostMatrix
+[       OK ] HungarianSolverTest.EmptyCostMatrix (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.EmptyCostMatrix" end time: Feb 23 23:22 CET
+"HungarianSolverTest.EmptyCostMatrix" time elapsed: 00:00:00
+----------------------------------------------------------
+
+40/91 Testing: FusionEngineTest.EmptyInputsProduceEmptyOutput
+40/91 Test: FusionEngineTest.EmptyInputsProduceEmptyOutput
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_fusion_engine" "--gtest_filter=FusionEngineTest.EmptyInputsProduceEmptyOutput" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"FusionEngineTest.EmptyInputsProduceEmptyOutput" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FusionEngineTest.EmptyInputsProduceEmptyOutput
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FusionEngineTest
+[ RUN      ] FusionEngineTest.EmptyInputsProduceEmptyOutput
+[       OK ] FusionEngineTest.EmptyInputsProduceEmptyOutput (0 ms)
+[----------] 1 test from FusionEngineTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"FusionEngineTest.EmptyInputsProduceEmptyOutput" end time: Feb 23 23:22 CET
+"FusionEngineTest.EmptyInputsProduceEmptyOutput" time elapsed: 00:00:00
+----------------------------------------------------------
+
+42/91 Testing: FusionEngineTest.LiDARBoostsConfidence
+42/91 Test: FusionEngineTest.LiDARBoostsConfidence
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_fusion_engine" "--gtest_filter=FusionEngineTest.LiDARBoostsConfidence" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"FusionEngineTest.LiDARBoostsConfidence" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FusionEngineTest.LiDARBoostsConfidence
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FusionEngineTest
+[ RUN      ] FusionEngineTest.LiDARBoostsConfidence
+[       OK ] FusionEngineTest.LiDARBoostsConfidence (0 ms)
+[----------] 1 test from FusionEngineTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"FusionEngineTest.LiDARBoostsConfidence" end time: Feb 23 23:22 CET
+"FusionEngineTest.LiDARBoostsConfidence" time elapsed: 00:00:00
+----------------------------------------------------------
+
+30/91 Testing: MultiObjectTrackerTest.EmptyDetections
+30/91 Test: MultiObjectTrackerTest.EmptyDetections
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=MultiObjectTrackerTest.EmptyDetections" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MultiObjectTrackerTest.EmptyDetections" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MultiObjectTrackerTest.EmptyDetections
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MultiObjectTrackerTest
+[ RUN      ] MultiObjectTrackerTest.EmptyDetections
+[       OK ] MultiObjectTrackerTest.EmptyDetections (0 ms)
+[----------] 1 test from MultiObjectTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"MultiObjectTrackerTest.EmptyDetections" end time: Feb 23 23:22 CET
+"MultiObjectTrackerTest.EmptyDetections" time elapsed: 00:00:00
+----------------------------------------------------------
+
+27/91 Testing: HungarianSolverTest.AllTooExpensive
+27/91 Test: HungarianSolverTest.AllTooExpensive
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=HungarianSolverTest.AllTooExpensive" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"HungarianSolverTest.AllTooExpensive" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = HungarianSolverTest.AllTooExpensive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HungarianSolverTest
+[ RUN      ] HungarianSolverTest.AllTooExpensive
+[       OK ] HungarianSolverTest.AllTooExpensive (0 ms)
+[----------] 1 test from HungarianSolverTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"HungarianSolverTest.AllTooExpensive" end time: Feb 23 23:22 CET
+"HungarianSolverTest.AllTooExpensive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+32/91 Testing: MultiObjectTrackerTest.StaleTracksRemoved
+32/91 Test: MultiObjectTrackerTest.StaleTracksRemoved
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=MultiObjectTrackerTest.StaleTracksRemoved" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"MultiObjectTrackerTest.StaleTracksRemoved" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = MultiObjectTrackerTest.StaleTracksRemoved
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from MultiObjectTrackerTest
+[ RUN      ] MultiObjectTrackerTest.StaleTracksRemoved
+[       OK ] MultiObjectTrackerTest.StaleTracksRemoved (0 ms)
+[----------] 1 test from MultiObjectTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"MultiObjectTrackerTest.StaleTracksRemoved" end time: Feb 23 23:22 CET
+"MultiObjectTrackerTest.StaleTracksRemoved" time elapsed: 00:00:00
+----------------------------------------------------------
+
+41/91 Testing: FusionEngineTest.CameraOnlyFusion
+41/91 Test: FusionEngineTest.CameraOnlyFusion
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_fusion_engine" "--gtest_filter=FusionEngineTest.CameraOnlyFusion" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"FusionEngineTest.CameraOnlyFusion" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FusionEngineTest.CameraOnlyFusion
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FusionEngineTest
+[ RUN      ] FusionEngineTest.CameraOnlyFusion
+[       OK ] FusionEngineTest.CameraOnlyFusion (0 ms)
+[----------] 1 test from FusionEngineTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"FusionEngineTest.CameraOnlyFusion" end time: Feb 23 23:22 CET
+"FusionEngineTest.CameraOnlyFusion" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/91 Testing: SPSCRingTest.StructPayload
+15/91 Test: SPSCRingTest.StructPayload
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_spsc_ring" "--gtest_filter=SPSCRingTest.StructPayload" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SPSCRingTest.StructPayload" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SPSCRingTest.StructPayload
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SPSCRingTest
+[ RUN      ] SPSCRingTest.StructPayload
+[       OK ] SPSCRingTest.StructPayload (0 ms)
+[----------] 1 test from SPSCRingTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SPSCRingTest.StructPayload" end time: Feb 23 23:22 CET
+"SPSCRingTest.StructPayload" time elapsed: 00:00:00
+----------------------------------------------------------
+
+43/91 Testing: FusionEngineTest.UnmatchedLiDARBecomeUnknown
+43/91 Test: FusionEngineTest.UnmatchedLiDARBecomeUnknown
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_fusion_engine" "--gtest_filter=FusionEngineTest.UnmatchedLiDARBecomeUnknown" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"FusionEngineTest.UnmatchedLiDARBecomeUnknown" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FusionEngineTest.UnmatchedLiDARBecomeUnknown
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FusionEngineTest
+[ RUN      ] FusionEngineTest.UnmatchedLiDARBecomeUnknown
+[       OK ] FusionEngineTest.UnmatchedLiDARBecomeUnknown (0 ms)
+[----------] 1 test from FusionEngineTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"FusionEngineTest.UnmatchedLiDARBecomeUnknown" end time: Feb 23 23:22 CET
+"FusionEngineTest.UnmatchedLiDARBecomeUnknown" time elapsed: 00:00:00
+----------------------------------------------------------
+
+20/91 Testing: KalmanBoxTrackerTest.ConfirmedAfter3Hits
+20/91 Test: KalmanBoxTrackerTest.ConfirmedAfter3Hits
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.ConfirmedAfter3Hits" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.ConfirmedAfter3Hits" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.ConfirmedAfter3Hits
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.ConfirmedAfter3Hits
+[       OK ] KalmanBoxTrackerTest.ConfirmedAfter3Hits (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.ConfirmedAfter3Hits" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.ConfirmedAfter3Hits" time elapsed: 00:00:00
+----------------------------------------------------------
+
+21/91 Testing: KalmanBoxTrackerTest.StaleAfter10Misses
+21/91 Test: KalmanBoxTrackerTest.StaleAfter10Misses
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.StaleAfter10Misses" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.StaleAfter10Misses" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.StaleAfter10Misses
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.StaleAfter10Misses
+[       OK ] KalmanBoxTrackerTest.StaleAfter10Misses (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.StaleAfter10Misses" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.StaleAfter10Misses" time elapsed: 00:00:00
+----------------------------------------------------------
+
+22/91 Testing: KalmanBoxTrackerTest.VelocityInitiallyZero
+22/91 Test: KalmanBoxTrackerTest.VelocityInitiallyZero
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_kalman_tracker" "--gtest_filter=KalmanBoxTrackerTest.VelocityInitiallyZero" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"KalmanBoxTrackerTest.VelocityInitiallyZero" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = KalmanBoxTrackerTest.VelocityInitiallyZero
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from KalmanBoxTrackerTest
+[ RUN      ] KalmanBoxTrackerTest.VelocityInitiallyZero
+[       OK ] KalmanBoxTrackerTest.VelocityInitiallyZero (0 ms)
+[----------] 1 test from KalmanBoxTrackerTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"KalmanBoxTrackerTest.VelocityInitiallyZero" end time: Feb 23 23:22 CET
+"KalmanBoxTrackerTest.VelocityInitiallyZero" time elapsed: 00:00:00
+----------------------------------------------------------
+
+85/91 Testing: SysInfo.ComputeCpuUsageKnownValues
+85/91 Test: SysInfo.ComputeCpuUsageKnownValues
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.ComputeCpuUsageKnownValues" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.ComputeCpuUsageKnownValues" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.ComputeCpuUsageKnownValues
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.ComputeCpuUsageKnownValues
+[       OK ] SysInfo.ComputeCpuUsageKnownValues (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.ComputeCpuUsageKnownValues" end time: Feb 23 23:22 CET
+"SysInfo.ComputeCpuUsageKnownValues" time elapsed: 00:00:00
+----------------------------------------------------------
+
+88/91 Testing: SysInfo.ReadDiskUsage
+88/91 Test: SysInfo.ReadDiskUsage
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.ReadDiskUsage" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.ReadDiskUsage" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.ReadDiskUsage
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.ReadDiskUsage
+[       OK ] SysInfo.ReadDiskUsage (2 ms)
+[----------] 1 test from SysInfo (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.ReadDiskUsage" end time: Feb 23 23:22 CET
+"SysInfo.ReadDiskUsage" time elapsed: 00:00:00
+----------------------------------------------------------
+
+87/91 Testing: SysInfo.ReadCpuTempReasonable
+87/91 Test: SysInfo.ReadCpuTempReasonable
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.ReadCpuTempReasonable" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.ReadCpuTempReasonable" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.ReadCpuTempReasonable
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.ReadCpuTempReasonable
+[       OK ] SysInfo.ReadCpuTempReasonable (1 ms)
+[----------] 1 test from SysInfo (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.ReadCpuTempReasonable" end time: Feb 23 23:22 CET
+"SysInfo.ReadCpuTempReasonable" time elapsed: 00:00:00
+----------------------------------------------------------
+
+83/91 Testing: SysInfo.ReadCpuTimesReturnsNonZero
+83/91 Test: SysInfo.ReadCpuTimesReturnsNonZero
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.ReadCpuTimesReturnsNonZero" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.ReadCpuTimesReturnsNonZero" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.ReadCpuTimesReturnsNonZero
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.ReadCpuTimesReturnsNonZero
+[       OK ] SysInfo.ReadCpuTimesReturnsNonZero (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.ReadCpuTimesReturnsNonZero" end time: Feb 23 23:22 CET
+"SysInfo.ReadCpuTimesReturnsNonZero" time elapsed: 00:00:00
+----------------------------------------------------------
+
+89/91 Testing: SysInfo.CurrentProcessIsAlive
+89/91 Test: SysInfo.CurrentProcessIsAlive
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.CurrentProcessIsAlive" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.CurrentProcessIsAlive" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.CurrentProcessIsAlive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.CurrentProcessIsAlive
+[       OK ] SysInfo.CurrentProcessIsAlive (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.CurrentProcessIsAlive" end time: Feb 23 23:22 CET
+"SysInfo.CurrentProcessIsAlive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+84/91 Testing: SysInfo.ComputeCpuUsageZeroDelta
+84/91 Test: SysInfo.ComputeCpuUsageZeroDelta
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.ComputeCpuUsageZeroDelta" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.ComputeCpuUsageZeroDelta" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.ComputeCpuUsageZeroDelta
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.ComputeCpuUsageZeroDelta
+[       OK ] SysInfo.ComputeCpuUsageZeroDelta (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.ComputeCpuUsageZeroDelta" end time: Feb 23 23:22 CET
+"SysInfo.ComputeCpuUsageZeroDelta" time elapsed: 00:00:00
+----------------------------------------------------------
+
+82/91 Testing: SysInfo.CpuTimesTotalAndActive
+82/91 Test: SysInfo.CpuTimesTotalAndActive
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.CpuTimesTotalAndActive" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.CpuTimesTotalAndActive" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.CpuTimesTotalAndActive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.CpuTimesTotalAndActive
+[       OK ] SysInfo.CpuTimesTotalAndActive (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.CpuTimesTotalAndActive" end time: Feb 23 23:22 CET
+"SysInfo.CpuTimesTotalAndActive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+90/91 Testing: SysInfo.InvalidPidNotAlive
+90/91 Test: SysInfo.InvalidPidNotAlive
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.InvalidPidNotAlive" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.InvalidPidNotAlive" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.InvalidPidNotAlive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.InvalidPidNotAlive
+[       OK ] SysInfo.InvalidPidNotAlive (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.InvalidPidNotAlive" end time: Feb 23 23:22 CET
+"SysInfo.InvalidPidNotAlive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+81/91 Testing: SysInfo.CpuTimesDefaultsZero
+81/91 Test: SysInfo.CpuTimesDefaultsZero
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.CpuTimesDefaultsZero" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.CpuTimesDefaultsZero" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.CpuTimesDefaultsZero
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.CpuTimesDefaultsZero
+[       OK ] SysInfo.CpuTimesDefaultsZero (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.CpuTimesDefaultsZero" end time: Feb 23 23:22 CET
+"SysInfo.CpuTimesDefaultsZero" time elapsed: 00:00:00
+----------------------------------------------------------
+
+91/91 Testing: SysInfo.NonexistentPidNotAlive
+91/91 Test: SysInfo.NonexistentPidNotAlive
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.NonexistentPidNotAlive" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.NonexistentPidNotAlive" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.NonexistentPidNotAlive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.NonexistentPidNotAlive
+[       OK ] SysInfo.NonexistentPidNotAlive (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.NonexistentPidNotAlive" end time: Feb 23 23:22 CET
+"SysInfo.NonexistentPidNotAlive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+86/91 Testing: SysInfo.ReadMeminfoReturnsNonZero
+86/91 Test: SysInfo.ReadMeminfoReturnsNonZero
+Command: "/usr/bin/env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu" "/home/nmohanan31/NM/Projects/companion_software_stack/build/bin/test_system_monitor" "--gtest_filter=SysInfo.ReadMeminfoReturnsNonZero" "--gtest_also_run_disabled_tests"
+Directory: /home/nmohanan31/NM/Projects/companion_software_stack/build/tests
+"SysInfo.ReadMeminfoReturnsNonZero" start time: Feb 23 23:22 CET
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = SysInfo.ReadMeminfoReturnsNonZero
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from SysInfo
+[ RUN      ] SysInfo.ReadMeminfoReturnsNonZero
+[       OK ] SysInfo.ReadMeminfoReturnsNonZero (0 ms)
+[----------] 1 test from SysInfo (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"SysInfo.ReadMeminfoReturnsNonZero" end time: Feb 23 23:22 CET
+"SysInfo.ReadMeminfoReturnsNonZero" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Feb 23 23:22 CET

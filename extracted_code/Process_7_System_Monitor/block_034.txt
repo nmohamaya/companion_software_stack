@@ -1,0 +1,7 @@
+=== 21. Implementation Roadmap ===
+
+• AlertEngine with token bucket
+• TelemetryAggregator thread
+• SystemHealthWriter (SHM output)
+• Alert condition evaluation
+• Rate limiting & deduplication

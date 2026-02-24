@@ -1,0 +1,4 @@
+=== Listing 9-1: Trajectory Relay Thread (SHM → MAVLink → FC) ===
+
+💡 C++ Concept: Narrowing Conversions with static_cast
+The SHM trajectory data uses double precision (64-bit) for maximum internal accuracy, but MAVLink SET_POSITION_TARGET uses float (32-bit) to minimise packet size. We use explicit static_cast<float>() for each conversion. In C++, implicit narrowing (double→float) in brace initialisation is an error; in function calls it's a warning. Explicit casts: (1) silence warnings, (2) document that precision loss is intentional, (3) make the conversion grep-able for code review. Always prefer static_cast over C-style (float)x casts — static_cast is checked at compile time and won't accidentally reinterpret bits.

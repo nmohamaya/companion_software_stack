@@ -1,0 +1,41 @@
+Context: CRTP — compile-time polymorphism for Kalman filters
+Source: table_row0_col0
+---
+// CRTP base: the filter logic is generic, the motion model is specialized
+template <typename Derived, int StateSize>
+class KalmanFilterBase {
+public:
+    using StateVec = Eigen::Matrix<float, StateSize, 1>;
+    using StateMat = Eigen::Matrix<float, StateSize, StateSize>;
+
+    void predict(float dt) {
+        // Calls the derived class's motion model — resolved at COMPILE TIME
+        static_cast<Derived*>(this)->predict_impl(dt);
+        state_ = F_ * state_;
+        P_ = F_ * P_ * F_.transpose() + Q_;
+    }
+
+protected:
+    StateVec state_;
+    StateMat F_, P_, Q_;
+};
+
+// Derived: constant-velocity model (for people, slow vehicles)
+class CVKalmanFilter : public KalmanFilterBase<CVKalmanFilter, 4> {
+public:
+    void predict_impl(float dt) {
+        // State: [x, y, vx, vy]
+        F_ = StateMat::Identity();
+        F_(0, 2) = dt;  // x += vx * dt
+        F_(1, 3) = dt;  // y += vy * dt
+    }
+};
+
+// Derived: constant-turn-rate model (for vehicles, drones)
+class CTRVKalmanFilter : public KalmanFilterBase<CTRVKalmanFilter, 5> {
+public:
+    void predict_impl(float dt) {
+        // State: [x, y, v, theta, omega]
+        // Non-linear motion — but prediction is still inlined
+    }
+};

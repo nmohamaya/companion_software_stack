@@ -1,0 +1,4 @@
+=== 9.1 Trajectory Generation ===
+
+💡 C++ Concept: CRTP (Curiously Recurring Template Pattern) for Static Polymorphism
+CRTP allows compile-time polymorphism without virtual function overhead. The base class is templated on the derived class: class Derived : public Base<Derived>. The base calls static_cast<Derived*>(this)->method() to invoke the derived implementation with zero vtable indirection. At 50 Hz on a resource-constrained Jetson, avoiding virtual call overhead in the innermost trajectory loop matters. CRTP gives us the extensibility of an interface (multiple trajectory generators) with the speed of direct function calls.

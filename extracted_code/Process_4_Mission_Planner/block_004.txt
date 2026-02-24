@@ -1,0 +1,30 @@
+=== Listing 3-1: Priority-Inheritance Mutex Wrapper ===
+
+// priority_mutex.h — Mutex with priority inheritance
+#pragma once
+#include <pthread.h>
+#include <stdexcept>
+
+class PriorityMutex {
+public:
+    PriorityMutex() {
+        pthread_mutexattr_t attr;
+        pthread_mutexattr_init(&attr);
+        pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT);
+        if (pthread_mutex_init(&mtx_, &attr) != 0) {
+            throw std::runtime_error("Failed to init priority-inherit mutex");
+        }
+        pthread_mutexattr_destroy(&attr);
+    }
+
+    ~PriorityMutex() { pthread_mutex_destroy(&mtx_); }
+
+    void lock()   { pthread_mutex_lock(&mtx_); }
+    void unlock() { pthread_mutex_unlock(&mtx_); }
+
+    // Compatible with std::lock_guard / std::unique_lock
+    bool try_lock() { return pthread_mutex_trylock(&mtx_) == 0; }
+
+private:
+    pthread_mutex_t mtx_;
+};

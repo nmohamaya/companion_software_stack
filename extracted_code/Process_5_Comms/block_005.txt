@@ -1,0 +1,82 @@
+=== Listing 5-1: MAVLink Channel Wrapper ===
+
+// mavlink/mavlink_wrapper.h
+#pragma once
+
+// MAVLink configuration — must be set BEFORE including MAVLink headers
+#define MAVLINK_USE_MESSAGE_INFO
+#define MAVLINK_EXTERNAL_RX_STATUS   // we manage our own mavlink_status_t
+
+#include <mavlink/v2.0/ardupilotmega/mavlink.h>
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+#include <functional>
+
+// Our system/component IDs
+constexpr uint8_t COMPANION_SYS_ID  = 2;
+constexpr uint8_t COMPANION_COMP_ID = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
+
+class MAVLinkChannel {
+public:
+    explicit MAVLinkChannel(uint8_t chan_id = MAVLINK_COMM_0)
+        : chan_id_(chan_id) {
+        std::memset(&status_, 0, sizeof(status_));
+    }
+
+    // Parse incoming bytes — returns messages as they complete
+    std::optional<mavlink_message_t> parse_byte(uint8_t byte) {
+        mavlink_message_t msg;
+        if (mavlink_parse_char(chan_id_, byte, &msg, &status_)
+            == MAVLINK_FRAMING_OK) {
+            return msg;
+        }
+        return std::nullopt;
+    }
+
+    // Serialise a message to bytes
+    std::vector<uint8_t> serialise(const mavlink_message_t& msg) {
+        std::vector<uint8_t> buf(MAVLINK_MAX_PACKET_LEN);
+        uint16_t len = mavlink_msg_to_send_buffer(buf.data(), &msg);
+        buf.resize(len);
+        return buf;
+    }
+
+    // Convenience: pack a heartbeat message
+    mavlink_message_t pack_heartbeat() {
+        mavlink_message_t msg;
+        mavlink_msg_heartbeat_pack(
+            COMPANION_SYS_ID, COMPANION_COMP_ID, &msg,
+            MAV_TYPE_ONBOARD_CONTROLLER,    // type
+            MAV_AUTOPILOT_INVALID,          // autopilot (we're a companion)
+            0, 0, MAV_STATE_ACTIVE);        // modes, state
+        return msg;
+    }
+
+    // Pack SET_POSITION_TARGET_LOCAL_NED from trajectory data
+    mavlink_message_t pack_setpoint(
+        uint32_t time_boot_ms,
+        uint8_t target_sys, uint8_t target_comp,
+        uint8_t coord_frame, uint16_t type_mask,
+        float x, float y, float z,
+        float vx, float vy, float vz,
+        float afx, float afy, float afz,
+        float yaw, float yaw_rate)
+    {
+        mavlink_message_t msg;
+        mavlink_msg_set_position_target_local_ned_pack(
+            COMPANION_SYS_ID, COMPANION_COMP_ID, &msg,
+            time_boot_ms, target_sys, target_comp,
+            coord_frame, type_mask,
+            x, y, z, vx, vy, vz,
+            afx, afy, afz, yaw, yaw_rate);
+        return msg;
+    }
+
+    const mavlink_status_t& status() const { return status_; }
+
+private:
+    uint8_t chan_id_;
+    mavlink_status_t status_;
+};

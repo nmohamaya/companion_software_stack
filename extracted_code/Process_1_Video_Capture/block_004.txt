@@ -1,0 +1,167 @@
+Context: include/video/shm_ring.h — Shared memory ring buffer (inter-process)
+File path: // file: include/video/shm_ring.h
+Source: table_row0_col0
+---
+// file: include/video/shm_ring.h
+#pragma once
+#include "frame.h"
+#include <atomic>
+#include <cstddef>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
+#include <stdexcept>
+
+namespace drone::video {
+
+/// Layout of the shared memory region.
+/// This struct IS the shared memory — both producer and consumer map it.
+struct ShmRingHeader {
+    alignas(64) std::atomic<uint64_t> write_idx;   // producer increments
+    alignas(64) std::atomic<uint64_t> read_idx;    // consumer increments
+    uint32_t num_slots;
+    uint32_t slot_size;    // sizeof(ShmFrameSlot) + pixel_data_size
+    uint32_t pixel_data_size;
+    uint32_t magic;        // 0xDEADCAFE — validates correct mapping
+    // Slot data follows immediately after this header
+};
+
+struct ShmFrameSlot {
+    FrameMetadata meta;
+    uint8_t pixel_data[];  // flexible array — actual pixels live here
+};
+
+/// Producer side — creates and writes to shared memory ring.
+class ShmRingProducer {
+public:
+    ShmRingProducer(const char* name, uint32_t num_slots,
+                    uint32_t width, uint32_t height, uint32_t channels)
+    {
+        pixel_size_ = width * height * channels;
+        slot_size_  = sizeof(ShmFrameSlot) + pixel_size_;
+        size_t total = sizeof(ShmRingHeader) + num_slots * slot_size_;
+
+        // Create shared memory object
+        fd_ = shm_open(name, O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) throw std::runtime_error("shm_open failed");
+
+        if (ftruncate(fd_, total) < 0) throw std::runtime_error("ftruncate failed");
+
+        base_ = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+        if (base_ == MAP_FAILED) throw std::runtime_error("mmap failed");
+
+        total_size_ = total;
+
+        // Initialize header
+        auto* hdr = header();
+        hdr->write_idx.store(0);
+        hdr->read_idx.store(0);
+        hdr->num_slots = num_slots;
+        hdr->slot_size = slot_size_;
+        hdr->pixel_data_size = pixel_size_;
+        hdr->magic = 0xDEADCAFE;
+    }
+
+    ~ShmRingProducer() {
+        if (base_ != MAP_FAILED) munmap(base_, total_size_);
+        if (fd_ >= 0) close(fd_);
+    }
+
+    /// Write a frame into the next slot. Returns false if ring is full.
+    bool publish(const FrameMetadata& meta, const uint8_t* pixels) {
+        auto* hdr = header();
+        uint64_t w = hdr->write_idx.load(std::memory_order_relaxed);
+        uint64_t r = hdr->read_idx.load(std::memory_order_acquire);
+
+        if (w - r >= hdr->num_slots) {
+            return false;  // consumer too slow — drop frame
+        }
+
+        auto* slot = get_slot(w);
+        slot->meta = meta;
+        std::memcpy(slot->pixel_data, pixels, pixel_size_);
+
+        hdr->write_idx.store(w + 1, std::memory_order_release);
+        return true;
+    }
+
+private:
+    ShmRingHeader* header() { return static_cast<ShmRingHeader*>(base_); }
+
+    ShmFrameSlot* get_slot(uint64_t idx) {
+        auto* hdr = header();
+        char* data_start = static_cast<char*>(base_) + sizeof(ShmRingHeader);
+        return reinterpret_cast<ShmFrameSlot*>(
+            data_start + (idx % hdr->num_slots) * slot_size_
+        );
+    }
+
+    int fd_ = -1;
+    void* base_ = MAP_FAILED;
+    size_t total_size_ = 0;
+    uint32_t pixel_size_ = 0;
+    uint32_t slot_size_ = 0;
+};
+
+/// Consumer side — opens and reads from shared memory ring (read-only).
+class ShmRingConsumer {
+public:
+    explicit ShmRingConsumer(const char* name) {
+        fd_ = shm_open(name, O_RDONLY, 0);
+        if (fd_ < 0) throw std::runtime_error("shm_open failed");
+
+        struct stat st;
+        fstat(fd_, &st);
+        total_size_ = st.st_size;
+
+        base_ = mmap(nullptr, total_size_, PROT_READ, MAP_SHARED, fd_, 0);
+        if (base_ == MAP_FAILED) throw std::runtime_error("mmap failed");
+
+        if (header()->magic != 0xDEADCAFE)
+            throw std::runtime_error("Invalid shared memory — magic mismatch");
+    }
+
+    ~ShmRingConsumer() {
+        if (base_ != MAP_FAILED) munmap(base_, total_size_);
+        if (fd_ >= 0) close(fd_);
+    }
+
+    /// Returns pointer to latest unread frame, or nullptr if no new frame.
+    /// Caller must finish reading before calling advance().
+    const ShmFrameSlot* peek() const {
+        auto* hdr = header();
+        uint64_t r = hdr->read_idx.load(std::memory_order_relaxed);
+        uint64_t w = hdr->write_idx.load(std::memory_order_acquire);
+        if (r >= w) return nullptr;
+        return get_slot(r);
+    }
+
+    /// Advance read pointer after consuming a frame.
+    void advance() {
+        auto* hdr = const_cast<ShmRingHeader*>(header());
+        uint64_t r = hdr->read_idx.load(std::memory_order_relaxed);
+        hdr->read_idx.store(r + 1, std::memory_order_release);
+    }
+
+private:
+    const ShmRingHeader* header() const {
+        return static_cast<const ShmRingHeader*>(base_);
+    }
+
+    const ShmFrameSlot* get_slot(uint64_t idx) const {
+        auto* hdr = header();
+        const char* data_start = static_cast<const char*>(base_)
+                                 + sizeof(ShmRingHeader);
+        return reinterpret_cast<const ShmFrameSlot*>(
+            data_start + (idx % hdr->num_slots) * hdr->slot_size
+        );
+    }
+
+    int fd_ = -1;
+    void* base_ = MAP_FAILED;
+    size_t total_size_ = 0;
+};
+
+} // namespace drone::video

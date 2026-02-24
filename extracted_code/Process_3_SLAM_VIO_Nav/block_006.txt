@@ -1,0 +1,12 @@
+Context: Raw IMU readings contain bias (slowly drifting) and noise:
+Source: code_paragraphs
+---
+// Measurement model
+// ω_meas = ω_true + b_g + n_g        (gyroscope)
+// a_meas = R_bw * (a_true - g) + b_a + n_a   (accelerometer)
+//
+// Where:
+//   b_g, b_a = slowly varying biases (estimated by backend)
+//   n_g, n_a = white noise
+//   g        = gravity in world frame [0, 0, -9.81]
+//   R_bw     = rotation from world to body

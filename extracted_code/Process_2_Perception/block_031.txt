@@ -1,0 +1,44 @@
+Context: systemd service unit file
+File path: # /etc/systemd/system/perception.service
+Source: table_row0_col0
+---
+# /etc/systemd/system/perception.service
+
+[Unit]
+Description=Drone Perception Pipeline
+After=video-capture.service           # Must start after camera process
+Requires=video-capture.service        # If camera dies, perception also restarts
+
+[Service]
+Type=notify
+ExecStart=/opt/drone/bin/perception
+User=drone
+Group=video
+
+# Resource limits
+CPUAffinity=4 5
+MemoryMax=1024M
+MemoryHigh=768M
+CPUQuota=200%
+
+# GPU access (Jetson)
+Environment=CUDA_VISIBLE_DEVICES=0
+
+# Restart policy
+Restart=always
+RestartSec=200ms
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+# Watchdog
+WatchdogSec=5
+
+# Security
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=/data/perception       # For debug output / models
+NoNewPrivileges=true
+ReadWritePaths=/dev/shm               # For shared memory
+
+[Install]
+WantedBy=multi-user.target

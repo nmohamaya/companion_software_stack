@@ -1,0 +1,4 @@
+=== Listing 8-3: Telemetry Downlink Thread (50 Hz scheduler tick) ===
+
+💡 C++ Concept: Lambda Captures for Deferred Execution
+Each TelemetryStream stores a std::function<mavlink_message_t()> that packs the message on demand. The lambda [&]() { return pack_attitude_from_pose(ctx.pose_reader()); } captures ctx by reference and is called later when the scheduler decides it's time to send. This defers work: the message is only packed when it will actually be sent, avoiding wasted serialisation if the rate limiter blocks it. Lambda captures are the C++ way to create closures — functions bundled with their environment.

@@ -1,0 +1,90 @@
+=== Listing 7-1: VFH+ Obstacle Avoidance Implementation ===
+
+// avoidance/vfh_plus.h
+#pragma once
+#include <Eigen/Core>
+#include <vector>
+#include <cmath>
+
+struct VFHConfig {
+    int    num_sectors     = 72;       // 360° / 72 = 5° per sector
+    double active_radius   = 8.0;     // metres — ignore obstacles beyond this
+    double safety_radius   = 1.5;     // vehicle + margin (metres)
+    double threshold_low   = 0.3;     // binary threshold hysteresis
+    double threshold_high  = 0.6;
+    double alpha           = 1.0;     // heading error weight
+    double beta            = 0.5;     // smoothness weight
+    double min_gap_width   = 3;       // minimum gap sectors for passage
+};
+
+struct AvoidanceResult {
+    double  desired_heading;    // radians (NED yaw)
+    double  speed_factor;       // 0.0 (stop) to 1.0 (full speed)
+    bool    emergency_stop;
+    double  closest_obstacle_m;
+};
+
+class VFHPlus {
+public:
+    explicit VFHPlus(const VFHConfig& cfg = {}) : cfg_(cfg),
+        histogram_(cfg.num_sectors, 0.0), binary_(cfg.num_sectors, false) {}
+
+    AvoidanceResult compute(const Eigen::Vector3d& vehicle_pos,
+                             double current_heading,
+                             double desired_heading,
+                             const std::vector<DetectedObject>& objects) {
+        // Step 1: Build polar histogram
+        build_histogram(vehicle_pos, objects);
+
+        // Step 2: Binary threshold with hysteresis
+        apply_threshold();
+
+        // Step 3: Find gaps
+        auto gaps = find_gaps();
+
+        // Step 4: Emergency stop check
+        AvoidanceResult result;
+        result.closest_obstacle_m = closest_distance(vehicle_pos, objects);
+        result.emergency_stop = (result.closest_obstacle_m < cfg_.safety_radius);
+
+        if (result.emergency_stop) {
+            result.speed_factor = 0.0;
+            result.desired_heading = current_heading;
+            return result;
+        }
+
+        // Step 5: Score gaps — select best
+        if (gaps.empty()) {
+            // All blocked — slow down and turn 180°
+            result.desired_heading = current_heading + M_PI;
+            result.speed_factor = 0.2;
+            return result;
+        }
+
+        result.desired_heading = score_and_select(gaps, desired_heading,
+                                                    current_heading);
+
+        // Step 6: Speed modulation
+        result.speed_factor = std::clamp(
+            result.closest_obstacle_m / cfg_.active_radius, 0.3, 1.0);
+
+        return result;
+    }
+
+private:
+    VFHConfig cfg_;
+    std::vector<double> histogram_;
+    std::vector<bool> binary_;
+    double prev_heading_ = 0.0;
+
+    void build_histogram(const Eigen::Vector3d& pos,
+                          const std::vector<DetectedObject>& objects);
+    void apply_threshold();
+
+    struct Gap { int start; int end; int width; };
+    std::vector<Gap> find_gaps() const;
+    double score_and_select(const std::vector<Gap>& gaps,
+                             double desired, double current);
+    double closest_distance(const Eigen::Vector3d& pos,
+                             const std::vector<DetectedObject>& objects) const;
+};

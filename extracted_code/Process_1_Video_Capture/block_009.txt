@@ -1,0 +1,23 @@
+Context: Alternative using Intel RealSense SDK
+Source: table_row0_col0
+---
+// Alternative: Using Intel RealSense D435i
+// #include <librealsense2/rs.hpp>
+//
+// void stereo_cam_thread_realsense(SPSCRing<StereoFrame, 4>& q,
+//                                   std::atomic<bool>& stop) {
+//     rs2::pipeline pipe;
+//     rs2::config cfg;
+//     cfg.enable_stream(RS2_STREAM_INFRARED, 1, 640, 480, RS2_FORMAT_Y8, 30);
+//     cfg.enable_stream(RS2_STREAM_INFRARED, 2, 640, 480, RS2_FORMAT_Y8, 30);
+//     cfg.enable_stream(RS2_STREAM_ACCEL);  // for VIO
+//     cfg.enable_stream(RS2_STREAM_GYRO);
+//     pipe.start(cfg);
+//
+//     while (!stop.load()) {
+//         auto frameset = pipe.wait_for_frames();
+//         auto left  = frameset.get_infrared_frame(1);
+//         auto right = frameset.get_infrared_frame(2);
+//         // Both are hardware-synced — push to queue
+//     }
+// }

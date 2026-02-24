@@ -1,0 +1,3 @@
+=== Appendix: C++ Concepts Reference ===
+
+Section 11 — concise struct construction without constructors

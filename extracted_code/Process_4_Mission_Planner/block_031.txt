@@ -1,0 +1,59 @@
+=== Listing 8-3: Mission File JSON Loader ===
+
+// waypoint/mission_file.h
+#pragma once
+#include "waypoint/waypoint_types.h"
+#include <nlohmann/json.hpp>
+#include <fstream>
+
+using json = nlohmann::json;
+
+struct MissionFile {
+    std::string name;
+    std::string version;
+    std::vector<Waypoint> waypoints;
+};
+
+// ── JSON deserialization ──
+inline void from_json(const json& j, PositionWaypoint& wp) {
+    auto pos = j.at("position");
+    wp.position = {pos[0].get<double>(), pos[1].get<double>(), pos[2].get<double>()};
+    wp.acceptance_radius = j.value("acceptance_radius", 2.0);
+    wp.speed = j.value("speed", 5.0);
+}
+
+inline void from_json(const json& j, LoiterWaypoint& wp) {
+    auto c = j.at("center");
+    wp.center = {c[0].get<double>(), c[1].get<double>(), c[2].get<double>()};
+    wp.radius = j.value("radius", 10.0);
+    wp.duration = j.value("duration", 30.0);
+    wp.clockwise = j.value("clockwise", true);
+}
+
+inline Waypoint parse_waypoint(const json& j) {
+    Waypoint wp;
+    wp.id = j.at("id").get<uint32_t>();
+    wp.label = j.value("label", "");
+
+    std::string type = j.at("type").get<std::string>();
+    if (type == "position")
+        wp.data = j.get<PositionWaypoint>();
+    else if (type == "loiter")
+        wp.data = j.get<LoiterWaypoint>();
+    // ... survey, rally
+
+    return wp;
+}
+
+inline MissionFile load_mission(const std::string& path) {
+    std::ifstream ifs(path);
+    if (!ifs) throw std::runtime_error("Cannot open mission file: " + path);
+    json j = json::parse(ifs);
+
+    MissionFile mf;
+    mf.name = j.value("name", "Unnamed");
+    mf.version = j.value("version", "1.0");
+    for (const auto& wj : j.at("waypoints"))
+        mf.waypoints.push_back(parse_waypoint(wj));
+    return mf;
+}

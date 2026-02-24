@@ -1,0 +1,65 @@
+=== Listing 8-1: SpotlightPlugin with Brightness Ramping ===
+
+// aux/spotlight_plugin.h
+#pragma once
+#include "plugin/payload_plugin.h"
+#include "hardware/pwm_output.h"
+
+class SpotlightPlugin : public PayloadPlugin {
+public:
+    std::string name() const override { return "spotlight"; }
+    std::string type() const override { return "spotlight"; }
+
+    void update() override {
+        // Ramp brightness smoothly to target
+        if (std::abs(current_brightness_ - target_brightness_) > 0.01f) {
+            float step = (target_brightness_ > current_brightness_)
+                         ? ramp_rate_ : -ramp_rate_;
+            current_brightness_ += step;
+            current_brightness_ = std::clamp(current_brightness_, 0.0f, 1.0f);
+            pwm_.set_normalised(current_brightness_);
+        }
+    }
+
+    bool handle_command(const PayloadCmd& cmd) override {
+        switch (cmd.type) {
+            case PayloadCmdType::AUX_SPOTLIGHT_ON:
+                target_brightness_ = 1.0f;
+                return true;
+            case PayloadCmdType::AUX_SPOTLIGHT_OFF:
+                target_brightness_ = 0.0f;
+                return true;
+            case PayloadCmdType::AUX_SPOTLIGHT_BRIGHTNESS:
+                target_brightness_ = std::clamp(cmd.param1, 0.0f, 1.0f);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    nlohmann::json status() const override {
+        return {
+            {"type", "spotlight"},
+            {"brightness", current_brightness_},
+            {"target", target_brightness_},
+            {"state", static_cast<int>(state_)}
+        };
+    }
+
+protected:
+    bool do_init(const nlohmann::json& config) override {
+        auto channel = config.value("pwm_channel", 2);
+        if (!pwm_.init(channel)) return false;
+        ramp_rate_ = config.value("ramp_rate", 0.1f);
+        return true;
+    }
+    void do_shutdown() override { pwm_.set_normalised(0.0f); }
+
+private:
+    PWMOutput pwm_;
+    float target_brightness_ = 0.0f;
+    float current_brightness_ = 0.0f;
+    float ramp_rate_ = 0.1f;  // per update step (0.1 * 10 Hz = 1 sec ramp)
+};
+
+REGISTER_PLUGIN("spotlight", SpotlightPlugin);

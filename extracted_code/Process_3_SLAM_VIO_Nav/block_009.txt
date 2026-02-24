@@ -1,0 +1,35 @@
+Context: On Jetson Orin Nano, the IMU is typically connected via SPI for maximum throughput (up to 10 MHz). We use Linux spidev with a memory-mapped DMA transfer for jitter-free acquisition.
+Source: code_paragraphs
+---
+class SpiImuDriver {
+    int fd_;
+public:
+    explicit SpiImuDriver(const std::string& device = "/dev/spidev0.0",
+                          uint32_t speed_hz = 8'000'000)
+    {
+        fd_ = ::open(device.c_str(), O_RDWR);
+        if (fd_ < 0) throw std::system_error(errno, std::system_category(), "SPI open");
+        ::ioctl(fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed_hz);
+        uint8_t mode = SPI_MODE_3;
+        ::ioctl(fd_, SPI_IOC_WR_MODE, &mode);
+    }
+
+    ImuSample read_blocking() {
+        uint8_t tx[14] = {0x80 | REG_ACCEL_XOUT_H};  // read burst
+        uint8_t rx[14] = {};
+        spi_ioc_transfer xfer{};
+        xfer.tx_buf = reinterpret_cast<__u64>(tx);
+        xfer.rx_buf = reinterpret_cast<__u64>(rx);
+        xfer.len = sizeof(tx);
+        xfer.speed_hz = 8'000'000;
+        ::ioctl(fd_, SPI_IOC_MESSAGE(1), &xfer);
+
+        ImuSample s;
+        s.timestamp = steady_clock_now();
+        s.accel = parse_accel(&rx[1]);   // 3 × int16 → m/s²
+        s.gyro  = parse_gyro(&rx[7]);    // 3 × int16 → rad/s
+        return s;
+    }
+
+    ~SpiImuDriver() { if (fd_ >= 0) ::close(fd_); }
+};

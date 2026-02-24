@@ -1,0 +1,104 @@
+=== Listing 8-2: WaypointManager with std::visit Pattern Matching ===
+
+// waypoint/waypoint_manager.h
+#pragma once
+#include "waypoint/waypoint_types.h"
+#include <optional>
+#include <vector>
+#include <mutex>
+
+// Overloaded helper for std::visit pattern matching
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+class WaypointManager {
+public:
+    void load_mission(std::vector<Waypoint> waypoints) {
+        std::lock_guard lock(mtx_);
+        waypoints_ = std::move(waypoints);
+        current_idx_ = 0;
+    }
+
+    std::optional<Eigen::Vector3d> current_target() const {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ >= waypoints_.size()) return std::nullopt;
+
+        return std::visit(overloaded{
+            [](const PositionWaypoint& wp) -> Eigen::Vector3d {
+                return wp.position;
+            },
+            [](const LoiterWaypoint& wp) -> Eigen::Vector3d {
+                return wp.center;
+            },
+            [](const SurveyWaypoint& wp) -> Eigen::Vector3d {
+                return wp.polygon.empty() ? Eigen::Vector3d::Zero()
+                                           : wp.polygon[0];
+            },
+            [](const RallyPoint& rp) -> Eigen::Vector3d {
+                return rp.position;
+            },
+        }, waypoints_[current_idx_].data);
+    }
+
+    bool current_reached() const {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ >= waypoints_.size()) return false;
+        return waypoints_[current_idx_].reached;
+    }
+
+    // Check if vehicle has reached current waypoint
+    void check_reached(const Eigen::Vector3d& vehicle_pos) {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ >= waypoints_.size()) return;
+
+        auto& wp = waypoints_[current_idx_];
+        std::visit(overloaded{
+            [&](const PositionWaypoint& pwp) {
+                if ((vehicle_pos - pwp.position).norm() < pwp.acceptance_radius)
+                    wp.reached = true;
+            },
+            [&](const LoiterWaypoint& lwp) {
+                // Mark reached after duration expires
+                // (handled by timer in update logic)
+            },
+            [&](const SurveyWaypoint& swp) {
+                // Survey is reached when all lines completed
+            },
+            [&](const RallyPoint& rp) {
+                if ((vehicle_pos - rp.position).norm() < 5.0)
+                    wp.reached = true;
+            },
+        }, wp.data);
+    }
+
+    bool advance() {
+        std::lock_guard lock(mtx_);
+        if (current_idx_ + 1 < waypoints_.size()) {
+            ++current_idx_;
+            return true;
+        }
+        return false;
+    }
+
+    bool mission_complete() const {
+        std::lock_guard lock(mtx_);
+        return current_idx_ >= waypoints_.size() ||
+               (current_idx_ == waypoints_.size() - 1 &&
+                waypoints_.back().reached);
+    }
+
+    size_t current_index() const {
+        std::lock_guard lock(mtx_);
+        return current_idx_;
+    }
+
+    size_t total_waypoints() const {
+        std::lock_guard lock(mtx_);
+        return waypoints_.size();
+    }
+
+private:
+    mutable std::mutex mtx_;
+    std::vector<Waypoint> waypoints_;
+    size_t current_idx_ = 0;
+};

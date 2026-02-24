@@ -1,0 +1,4 @@
+=== Listing 14-2: Flight Controller State (published to SHM) ===
+
+💡 C++ Concept: POD (Plain Old Data) Types for SHM Compatibility
+FCState is a POD type: no constructors, no virtual functions, no complex members. This guarantees memcpy-safe layout — essential for SHM because shared memory is raw bytes. Non-POD types (std::string, std::vector) have internal pointers that would be invalid in another process's address space. The atomic<uint64_t> seq in the wrapper struct is the only non-trivial member, and std::atomic is explicitly designed for inter-thread/inter-process use. std::is_trivially_copyable_v<FCState> should be static_asserted to enforce this at compile time.

@@ -1,0 +1,36 @@
+=== Listing 5-3: FSM Runner with State Transitions ===
+
+// mission/mission_fsm.h — State machine runner
+#pragma once
+#include "mission/mission_state.h"
+#include "mission/mission_context.h"
+#include <spdlog/spdlog.h>
+
+class MissionFSM {
+public:
+    explicit MissionFSM(MissionContext& ctx)
+        : ctx_(ctx), state_(std::make_unique<IdleState>()) {
+        state_->on_enter(ctx_);
+    }
+
+    void tick() {
+        state_->update(ctx_);
+
+        auto next = state_->transition(ctx_);
+        if (next) {
+            spdlog::info("Mission transition: {} → {}",
+                         state_->name(), next->name());
+            state_->on_exit(ctx_);
+            state_ = std::move(next);
+            state_->on_enter(ctx_);
+        }
+    }
+
+    const std::string& current_state_name() const {
+        return state_->name();
+    }
+
+private:
+    MissionContext& ctx_;
+    std::unique_ptr<MissionState> state_;
+};

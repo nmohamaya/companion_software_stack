@@ -1,0 +1,19 @@
+Context: std::variant — type-safe union without virtual dispatch
+Source: table_row0_col0
+---
+// Type-safe union of sensor data — no heap allocation, no virtual dispatch
+using SensorData = std::variant<Detection2DList, PointCloud, RadarDetectionList>;
+
+// Pattern matching with std::visit
+void process_sensor_data(const SensorData& data) {
+    std::visit([](const auto& d) {
+        using T = std::decay_t<decltype(d)>;
+        if constexpr (std::is_same_v<T, Detection2DList>) {
+            // handle camera detections
+        } else if constexpr (std::is_same_v<T, PointCloud>) {
+            // handle LiDAR
+        } else if constexpr (std::is_same_v<T, RadarDetectionList>) {
+            // handle radar
+        }
+    }, data);
+}

@@ -1,0 +1,43 @@
+=== Listing 15-1: CommsConfig — All Tuneable Parameters ===
+
+// config/comms_config.h
+#pragma once
+#include <string>
+
+struct CommsConfig {
+    // FC serial link
+    std::string fc_device     = "/dev/ttyTHS1";
+    unsigned    fc_baud       = 921600;
+    double      fc_timeout_s  = 5.0;
+
+    // GCS link
+    std::string gcs_transport = "udp";       // "udp" or "serial"
+    uint16_t    gcs_udp_port  = 14550;
+    std::string gcs_device    = "/dev/ttyUSB0";  // for serial radio
+    unsigned    gcs_baud      = 57600;
+    double      gcs_timeout_s = 10.0;
+    std::string gcs_loss_action = "continue";  // "continue" or "rtl"
+
+    // Telemetry rates (Hz)
+    double telem_attitude_hz  = 10.0;
+    double telem_position_hz  = 5.0;
+    double telem_status_hz    = 2.0;
+    double telem_gps_hz       = 2.0;
+
+    // Bandwidth limit (bytes/sec) — 0 = unlimited
+    double link_bandwidth_bps = 125000.0;  // 1 Mbps / 8 (WiFi)
+    double burst_bytes        = 8192.0;
+
+    // MAVLink IDs
+    uint8_t companion_sys_id  = 2;
+    uint8_t companion_comp_id = 191;
+    uint8_t fc_sys_id         = 1;
+    uint8_t fc_comp_id        = 1;
+
+    // Trajectory relay
+    double  relay_rate_hz     = 50.0;
+    bool    relay_enabled     = true;
+
+    // Logging
+    std::string log_level     = "info";
+};

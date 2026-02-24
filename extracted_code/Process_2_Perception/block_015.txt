@@ -1,0 +1,34 @@
+Context: 5.2 LiDAR Data Flow
+Source: table_row0_col0
+---
+  LiDAR Sensor (e.g., Livox Mid-360, Velodyne VLP-16)
+       │
+       │ UDP packets (1206 bytes each for Velodyne)
+       │ ~754 packets per revolution (20Hz scan rate)
+       ▼
+  ┌───────────────────────┐
+  │ 1. PACKET ASSEMBLY    │  Accumulate packets until full scan complete
+  │    (ring buffer)      │  Detect scan boundary (azimuth wraps from 359°→0°)
+  └──────────┬────────────┘
+             ▼
+  ┌───────────────────────┐
+  │ 2. COORDINATE XFORM   │  Convert from spherical (r, θ, φ)
+  │                        │  to Cartesian (x, y, z) in sensor frame
+  └──────────┬────────────┘
+             ▼
+  ┌───────────────────────┐
+  │ 3. GROUND REMOVAL     │  Remove ground plane points
+  │                        │  Algorithm: RANSAC, height threshold, or cloth sim
+  └──────────┬────────────┘
+             ▼
+  ┌───────────────────────┐
+  │ 4. VOXEL DOWNSAMPLE   │  Reduce 100K → 20K points
+  │                        │  Grid filter: 0.1m voxel → one point per voxel
+  └──────────┬────────────┘
+             ▼
+  ┌───────────────────────┐
+  │ 5. EUCLIDEAN CLUSTER  │  Group nearby points into objects
+  │                        │  Algorithm: kd-tree radius search
+  └──────────┬────────────┘
+             ▼
+  Output: vector<LiDARCluster> → SPSC queue → Fusion thread

@@ -1,0 +1,47 @@
+Context: The IMU pre-integrator uses CRTP to provide a compile-time polymorphic interface for different IMU noise models (continuous vs. discrete-time) without virtual dispatch overhead. In a 200 Hz loop, eliminating vtable lookups matters. CRTP works by having the derived class pass itself as a template parameter to the base class, which then static_casts 'this' to the derived type to call the implementation.
+Source: code_paragraphs
+---
+template <typename Derived>
+class ImuPreintegratorBase {
+public:
+    void integrate(const ImuSample& sample) {
+        // Common bookkeeping
+        dt_total_ += sample.dt;
+        n_samples_++;
+
+        // Delegate noise model to derived (no virtual call!)
+        static_cast<Derived*>(this)->propagate_impl(sample);
+    }
+
+    PreintegratedImuFactor get_factor() const {
+        return {delta_R_, delta_v_, delta_p_,
+                jacobian_bias_gyro_, jacobian_bias_accel_,
+                covariance_, dt_total_};
+    }
+
+protected:
+    Sophus::SO3d delta_R_ = Sophus::SO3d{};
+    Eigen::Vector3d delta_v_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d delta_p_ = Eigen::Vector3d::Zero();
+    Eigen::Matrix<double,9,6> jacobian_bias_gyro_;
+    Eigen::Matrix<double,9,6> jacobian_bias_accel_;
+    Eigen::Matrix<double,9,9> covariance_ = Eigen::Matrix<double,9,9>::Zero();
+    double dt_total_ = 0.0;
+    int n_samples_ = 0;
+};
+
+class ContinuousNoiseModel
+    : public ImuPreintegratorBase<ContinuousNoiseModel> {
+    friend class ImuPreintegratorBase<ContinuousNoiseModel>;
+    void propagate_impl(const ImuSample& s) {
+        // Continuous-time noise propagation
+        Eigen::Vector3d a_corrected = s.accel - bias_accel_;
+        Eigen::Vector3d w_corrected = s.gyro  - bias_gyro_;
+        Sophus::SO3d dR = Sophus::SO3d::exp(w_corrected * s.dt);
+        delta_p_ += delta_v_ * s.dt + 0.5 * delta_R_ * a_corrected * s.dt * s.dt;
+        delta_v_ += delta_R_ * a_corrected * s.dt;
+        delta_R_ = delta_R_ * dR;
+        // Update Jacobians & covariance (omitted for brevity)
+    }
+    Eigen::Vector3d bias_accel_, bias_gyro_;
+};

@@ -1,0 +1,8 @@
+=== The Mission Planner is divided into six implementation phases spanning approximately 12 weeks. Each phase produces testable, incrementally useful functionality. ===
+
+• WaypointManager with std::variant types
+• JSON mission file loader
+• Acceptance radius checking
+• Loiter orbits & survey patterns
+• GeofenceChecker (keep-in/keep-out)
+• Rally point support
