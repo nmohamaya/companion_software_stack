@@ -3,10 +3,15 @@
 // Implements IFCLink — connects to PX4/ArduPilot over UDP/serial/TCP.
 // Guarded by HAVE_MAVSDK (set by CMake when MAVSDK is found).
 //
-// Connection URI examples (passed via config "uri" key):
+// This backend repurposes the IFCLink::open() "port" parameter to accept a
+// MAVSDK-style connection URI (not just a serial port name). Example URIs:
 //   "udp://:14540"        — PX4 SITL default
 //   "serial:///dev/ttyACM0:921600"
 //   "tcp://127.0.0.1:5760"
+//
+// Which configuration keys map to IFCLink::open(port, baud) (e.g. "uri",
+// "serial_port", "baud_rate") is decided by the calling code/process, not by
+// this backend implementation.
 //
 // Issue: #8
 #pragma once
@@ -227,6 +232,10 @@ public:
                 spdlog::info("[MavlinkFCLink] Mode → Offboard (GUIDED)");
                 return true;
             case 2:  // AUTO → Hold (mission requires plan; hold is safe default)
+                if (offboard_active_.load(std::memory_order_relaxed)) {
+                    offboard_->stop();
+                    offboard_active_.store(false, std::memory_order_relaxed);
+                }
                 result = action_->hold();
                 break;
             case 3:  // RTL
