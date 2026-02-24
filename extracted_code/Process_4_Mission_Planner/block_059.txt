@@ -1,3 +1,0 @@
-=== Appendix: C++ Concepts Reference ===
-
-Section 3 — prevents priority inversion in real-time threads

@@ -1,1 +1,0 @@
-/usr/bin/g++ CMakeFiles/slam_vio_nav.dir/src/main.cpp.o -o ../bin/slam_vio_nav  -Wl,-rpath,/home/nmohanan31/anaconda3/lib: -lrt -lpthread /usr/lib/x86_64-linux-gnu/libspdlog.so.1.12.0 /home/nmohanan31/anaconda3/lib/libfmt.so.9.1.0 

@@ -1,7 +1,0 @@
-=== The Comms process is divided into six implementation phases spanning approximately 10 weeks. Each phase produces testable, incrementally useful functionality. ===
-
-• TrajectoryReader (SHM)
-• TrajectoryRelay thread (50 Hz)
-• Staleness detection
-• Latency measurement
-• End-to-end test with Process 4 SHM

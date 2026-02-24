@@ -1,5 +1,0 @@
-if(EXISTS "/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_spsc_ring[1]_tests.cmake")
-  include("/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_spsc_ring[1]_tests.cmake")
-else()
-  add_test(test_spsc_ring_NOT_BUILT test_spsc_ring_NOT_BUILT)
-endif()

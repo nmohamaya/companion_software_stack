@@ -1,4 +1,0 @@
-=== The Black-Box Recorder continuously writes timestamped system state to a binary file on the SSD. Like an aircraft flight data recorder, this provides a complete history for post-incident analysis. It uses a memory-mapped ring buffer for zero-copy writes and survives process crashes (mmap persists to disk). ===
-
-💡 C++ Concept: Memory-Mapped File Ring Buffer (mmap + msync)
-The black-box uses mmap(MAP_SHARED) on a pre-allocated file. Writes go directly to the kernel page cache, which asynchronously flushes to SSD. This is faster than explicit write() syscalls because there's no kernel/user copy. The ring buffer wraps using a modular write index: write_pos_ % capacity_. Periodically, msync() forces dirty pages to SSD (fsync granularity). If the process crashes, the kernel will still flush dirty pages when the mmap is reclaimed — so the last few hundred ms of data might be lost, but everything before that is safe on disk.

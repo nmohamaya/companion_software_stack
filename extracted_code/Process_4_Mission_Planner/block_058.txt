@@ -1,9 +1,0 @@
-=== The Mission Planner is divided into six implementation phases spanning approximately 12 weeks. Each phase produces testable, incrementally useful functionality. ===
-
-• TrapezoidalProfile generator
-• Minimum-snap trajectory (stretch goal)
-• TrajectoryWriter SHM output
-• MissionStatusWriter SHM output
-• Full integration test (all 5 threads)
-• SITL testing with Process 3 replay data
-• Performance profiling on Jetson

@@ -1,4 +1,0 @@
-=== CONCEPT: Listing 6-1: Thermal Manager with Fan Control ===
-
-💡 C++ Concept: Hysteresis in Threshold Transitions
-The thermal zones shown use simple thresholds, but production code should add hysteresis to prevent rapid oscillation between zones (e.g., bouncing between WARNING and NORMAL at 65°C). With hysteresis, the entry threshold might be 65°C but the exit threshold is 60°C. This is implemented by tracking the previous zone and only transitioning back to NORMAL when temp drops below (threshold - hysteresis). This pattern appears throughout embedded systems — thermostats, battery monitors, and fault detection all benefit from hysteresis to suppress chattering alerts.

@@ -1,4 +1,0 @@
-=== All payload threads run on core 2, keeping time-critical cores free for perception (0-1), comms (3), and mission planning (4-5). The gimbal controller has the highest priority (65) because jittery servo commands cause visible camera shake in video. The camera trigger runs at 55 to minimise shutter-to-pose-sample latency. ===
-
-💡 C++ Concept: Thread Affinity & CPU Isolation for Determinism
-set_thread_params() calls pthread_setaffinity_np() to pin a thread to a specific core and sched_setscheduler() for SCHED_FIFO real-time priority. On the Jetson Orin Nano's 6-core ARM CPU, we isolate cores for different functions: cores 0-1 for perception, core 2 for payload, core 3 for comms, cores 4-5 for planning. This prevents unrelated work from preempting time-sensitive threads. The Linux kernel isolcpus= boot parameter can further prevent non-pinned kernel threads from using dedicated cores.

@@ -1,4 +1,0 @@
-=== 11.1 Lock-Free MPSC Queue for FC TX ===
-
-💡 C++ Concept: Lock-Free MPSC (Multi-Producer Single-Consumer) Queue
-Multiple threads (TrajectoryRelay, HeartbeatMonitor, TelemetryUplink forwarding) need to write MAVLink messages to the single FC serial port. A lock-free MPSC queue allows all producers to enqueue without mutex contention. The SerialTransport thread is the sole consumer that dequeues and writes to UART. We implement this with an atomic linked-list (Michael-Scott queue variant) or a bounded ring buffer with CAS. This eliminates priority inversion: the high-priority TrajectoryRelay never blocks waiting for the low-priority HeartbeatMonitor to release a mutex.

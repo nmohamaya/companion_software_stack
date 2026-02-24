@@ -1,4 +1,0 @@
-=== 6.2 PID Controller ===
-
-💡 C++ Concept: CRTP for Zero-Overhead PID Variants
-We define a PID controller base using CRTP (Curiously Recurring Template Pattern) so that different axis controllers (pitch, roll, yaw) can specialize output clamping, integral windup behaviour, or derivative filtering without virtual function overhead. At 200 Hz, the PID runs 200 times per second per axis (600 calls/sec total). Virtual dispatch would add ~5-10 ns per call; CRTP eliminates this entirely via compile-time binding. For a resource-constrained Jetson, every nanosecond in the inner loop matters.

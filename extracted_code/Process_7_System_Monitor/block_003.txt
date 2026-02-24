@@ -1,4 +1,0 @@
-=== CONCEPT: The System Monitor reads all SHM segments as a non-intrusive observer. It never writes to another process's SHM — it only checks sequence numbers and timestamps for freshness. If a SHM segment has not been updated within a configurable timeout, the producing process is considered stalled. ===
-
-💡 C++ Concept: Observer Pattern for Non-Intrusive Monitoring
-The System Monitor implements the Observer pattern at the process level. It passively reads published state from each process without requiring those processes to know they are being watched. Each process publishes its state to SHM for its own consumers (e.g., Process 3 publishes pose for Process 4); the System Monitor piggybacks on those existing publications. This keeps monitoring zero-cost for monitored processes: no additional code, no additional IPC, no hooks. The SHM seq/timestamp pattern already provides freshness semantics.

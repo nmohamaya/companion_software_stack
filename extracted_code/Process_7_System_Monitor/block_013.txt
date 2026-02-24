@@ -1,4 +1,0 @@
-=== Listing 7-2: Watchdog Thread (5 Hz, highest priority) ===
-
-💡 C++ Concept: sd_notify() for systemd Watchdog Integration
-sd_notify(0, "WATCHDOG=1") sends a heartbeat to systemd, telling it the process is alive. If the System Monitor itself becomes unresponsive (e.g., the watchdog thread hangs), systemd will restart it after WatchdogSec expires. This creates a two-level watchdog: our watchdog monitors processes 1-6, and systemd monitors our watchdog. 'Who watches the watchmen?' — systemd does. sd_notify is a simple AF_UNIX datagram socket write, costing < 5 μs per call.

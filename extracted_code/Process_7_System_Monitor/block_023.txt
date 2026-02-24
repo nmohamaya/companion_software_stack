@@ -1,4 +1,0 @@
-=== CONCEPT: Listing 13-1: Structured Logging Configuration ===
-
-💡 C++ Concept: Multi-Sink Logger Pattern (spdlog)
-spdlog supports multiple sinks per logger: a single log statement goes to both the console (captured by systemd journal) and a rotating file. The rotating_file_sink automatically rotates at 10 MB and keeps 5 old files, preventing unbounded disk use. flush_on(warn) ensures warnings and above are immediately persisted — important for crash investigation, as the OS buffer cache might lose data from a 'normal' flush. This pattern centralises log policy decisions in one place (LogConfig) rather than scattered across every source file.

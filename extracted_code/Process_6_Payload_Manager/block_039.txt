@@ -1,8 +1,0 @@
-=== 20. Implementation Roadmap ===
-
-• PID controller with CRTP
-• GimbalPlugin (all 5 modes)
-• Gimbal thread (200 Hz)
-• Complementary filter for IMU
-• PID tuning on physical gimbal
-• Stabilisation performance tests

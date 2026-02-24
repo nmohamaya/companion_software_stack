@@ -1,4 +1,0 @@
-=== Listing 7-1: VFH+ Obstacle Avoidance Implementation ===
-
-💡 C++ Concept: std::clamp (C++17)
-std::clamp(value, lo, hi) constrains a value to a range [lo, hi] in a single, readable call. Without clamp, you'd write std::max(lo, std::min(value, hi)) — harder to read and easy to get the nesting wrong. In obstacle avoidance, we clamp the speed_factor to [0.3, 1.0] to ensure we never stop completely (unless emergency), and never exceed full speed. This is a small but important C++17 utility for safety-critical arithmetic.

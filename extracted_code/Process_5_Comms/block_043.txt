@@ -1,7 +1,0 @@
-=== The Comms process is divided into six implementation phases spanning approximately 10 weeks. Each phase produces testable, incrementally useful functionality. ===
-
-• TokenBucketRateLimiter
-• TelemetryScheduler (priority-based)
-• Downlink thread (all streams)
-• SHM readers for pose & status
-• Bandwidth testing

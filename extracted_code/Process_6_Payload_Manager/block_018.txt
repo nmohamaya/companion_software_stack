@@ -1,4 +1,0 @@
-=== CONCEPT: Listing 8-2: DropPlugin with Safety Arming ===
-
-💡 C++ Concept: Safety Interlocks in Hardware Control
-The DropPlugin uses a two-step safety interlock: the mechanism must be armed_ before it accepts a release command, and it can only fire once (released_ flag). This is a defensive programming pattern for irreversible hardware actions. In safety-critical systems, you want as many gates as possible between software command and physical consequence. The arming state is typically controlled by Process 4's mission state machine — only armed when the drone is at the correct position and altitude.

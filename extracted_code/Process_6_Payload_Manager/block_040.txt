@@ -1,8 +1,0 @@
-=== 20. Implementation Roadmap ===
-
-• Full integration test (all threads)
-• PayloadStatusWriter (SHM output)
-• systemd service integration
-• End-to-end test with Process 4 commands
-• Flight test with physical gimbal + camera
-• Performance profiling on Jetson

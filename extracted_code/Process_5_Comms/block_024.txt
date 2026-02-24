@@ -1,4 +1,0 @@
-=== CONCEPT: Listing 10-2: Heartbeat Monitor Thread (1 Hz) ===
-
-💡 C++ Concept: Exponential Moving Average (EMA) for Link Quality
-avg_interval_s_ = 0.9 * avg_interval_s_ + 0.1 * dt smooths noisy heartbeat intervals. EMA is a single-line, O(1) memory filter: no ring buffer, no reallocation. The coefficient (α=0.1) controls responsiveness: low α smooths more (slow to react to changes), high α is more responsive but noisy. For link monitoring, α=0.1 means a sudden link degradation takes ~10 samples (~10 seconds) to fully reflect — acceptable for a non-safety path while the hard timeout (5/10 seconds) handles actual loss immediately.

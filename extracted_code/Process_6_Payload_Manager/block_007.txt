@@ -1,4 +1,0 @@
-=== Listing 5-2: Plugin Registry with Self-Registration Macro ===
-
-💡 C++ Concept: Meyers' Singleton (Static Local Variable)
-PluginRegistry::instance() uses the 'Meyers' Singleton' pattern: a function-local static variable. In C++11 and later, function-local statics are guaranteed to be initialised exactly once, even under concurrent access (the compiler inserts thread-safe guards). This avoids the classic 'static initialisation order fiasco' where global objects in different translation units might initialise in unpredictable order. The singleton is created on first use and destroyed at program exit.

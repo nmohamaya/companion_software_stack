@@ -1,8 +1,0 @@
-=== 21. Implementation Roadmap ===
-
-• ThermalManager + fan PWM control
-• Hysteresis for zone transitions
-• ProcessWatchdog (PID + SHM freshness)
-• Watchdog thread (5 Hz, SCHED_FIFO 80)
-• ShmFreshnessChecker (generic)
-• Integration with systemd watchdog

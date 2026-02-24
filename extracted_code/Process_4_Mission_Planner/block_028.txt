@@ -1,4 +1,0 @@
-=== 8.2 Waypoint Manager ===
-
-💡 C++ Concept: std::visit + Visitor Pattern
-std::visit applies a callable (often a lambda visitor) to the currently-held type in a std::variant. Combined with an overloaded{} helper (pattern matching), you get compile-time exhaustive handling of all variant alternatives. If you add a new waypoint type to the variant, the compiler forces you to add a handler for it — this eliminates the 'forgot to handle new case' bugs that plague switch/case code.

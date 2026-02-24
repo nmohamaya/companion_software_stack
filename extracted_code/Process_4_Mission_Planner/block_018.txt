@@ -1,4 +1,0 @@
-=== Listing 6-1: PlanningStrategy Interface ===
-
-💡 C++ Concept: std::optional for Nullable Results
-std::optional<T> (C++17) represents a value that may or may not be present. When plan() finds no feasible path, it returns std::nullopt instead of a magic 'empty' PathResult or throwing an exception. The caller checks with if (result) or result.has_value() before accessing. This is safer than returning a bool + out-parameter, and more efficient than exceptions for expected failure cases (path not found is normal, not exceptional).

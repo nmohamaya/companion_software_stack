@@ -1,4 +1,0 @@
-=== Listing 6-2: Async Serial Transport with Message Dispatch ===
-
-💡 C++ Concept: std::function for Type-Erased Callbacks
-std::function<void(const mavlink_message_t&)> can hold any callable with that signature: a lambda, a free function, a bound member function (via std::bind or lambda capture). This lets the SerialTransport accept message handlers without knowing who provides them. The on_message(msg_id, handler) API is the Observer pattern — register interest, get notified on arrival. The trade-off: std::function has a small overhead (~32 bytes + possible heap allocation for large captures). For our message-dispatch use case (<100 handler registrations, called max 1000×/sec), this is negligible.

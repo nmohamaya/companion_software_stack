@@ -1,4 +1,0 @@
-=== 16. Error Handling & Recovery ===
-
-💡 C++ Concept: Exception Safety in Plugin Update Loops
-Each plugin's update() call is wrapped in try/catch within the thread loop. A crashing plugin must not bring down the entire Payload Manager — other plugins must continue. This is the 'bulkhead' pattern: isolate failure to the smallest possible scope. The plugin is moved to PluginState::ERROR; the thread continues calling other plugins. After a cooldown period, the thread can attempt to re-initialise the failed plugin. This design is essential for drone safety — a spotlight failure must never prevent gimbal stabilisation from continuing.

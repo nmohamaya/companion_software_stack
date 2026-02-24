@@ -1,8 +1,0 @@
-=== 21. Implementation Roadmap ===
-
-• Project scaffolding & CMake
-• HealthStore (thread-safe aggregate)
-• Configuration loader
-• Logging infrastructure (spdlog setup)
-• Thread management & realtime.h
-• sd_notify integration

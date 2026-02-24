@@ -1,9 +1,0 @@
-Context: Use a checkerboard or AprilGrid pattern with OpenCV's calibrateCamera() or Kalibr. Store intrinsics in a YAML file:
-Source: code_paragraphs
----
-# camera_intrinsics.yaml
-camera_model: pinhole
-distortion_model: radtan
-resolution: [640, 480]
-intrinsics: [458.654, 457.296, 367.215, 248.375]  # fx, fy, cx, cy
-distortion_coefficients: [-0.28340, 0.07395, 0.00019, 0.00001]  # k1, k2, p1, p2

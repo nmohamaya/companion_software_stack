@@ -1,4 +1,0 @@
-=== Listing 12-1: PlannerConfig — All Tuneable Parameters ===
-
-💡 C++ Concept: constexpr and In-Class Default Member Initialisers
-C++11 (and refined in C++17) allows default member initialisers directly in the struct definition: double max_velocity = 5.0. This means creating a PlannerConfig{} automatically has sensible defaults — no constructor needed. When loading from a JSON config file, you start with defaults and override only the fields present in the file. This pattern eliminates 'forgot to initialise' bugs (common with C-style uninitialised structs) and serves as self-documenting code — a new developer can read the defaults inline.

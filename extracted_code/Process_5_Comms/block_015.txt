@@ -1,4 +1,0 @@
-=== CONCEPT: 8.1 Telemetry Rate Management ===
-
-💡 C++ Concept: Token Bucket Rate Limiter
-A token bucket algorithm controls the rate of message transmission. The bucket holds up to B tokens (representing bytes). Tokens are added at a fixed rate R (bytes/sec = link bandwidth). Before sending a message of N bytes, the sender checks: if bucket >= N, send and subtract N tokens; otherwise, defer. This allows bursts (up to B bytes) but enforces an average rate of R. Unlike a simple timer-per-message, token bucket handles variable-size messages correctly and allows high-priority messages to use burst capacity.

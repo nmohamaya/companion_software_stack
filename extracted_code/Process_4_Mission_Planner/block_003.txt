@@ -1,4 +1,0 @@
-=== Thread priority is assigned based on time-criticality: TrajectoryExecutor has the highest priority (80) because delayed commands cause jerky motion; ObstacleAvoidance is next (70) for safety; MissionStateMachine runs at priority 60 for timely state transitions; WaypointManager at 50; and PathPlanner at 40 since replanning can tolerate latency. ===
-
-💡 C++ Concept: Thread Priority Inversion & Priority Inheritance
-When a high-priority thread (TrajectoryExecutor) blocks on a mutex held by a low-priority thread (PathPlanner), a medium-priority thread can preempt the low-priority thread, causing the high-priority thread to wait indefinitely. C++ std::mutex does not provide priority inheritance by default. We use pthread_mutexattr_setprotocol(PTHREAD_PRIO_INHERIT) on critical shared mutexes to ensure the kernel temporarily boosts the lock-holder's priority. This is essential in real-time drone control to prevent missed trajectory deadlines.

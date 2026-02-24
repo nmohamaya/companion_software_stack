@@ -1,4 +1,0 @@
-=== Listing 11-1: Lock-Free MPSC Bounded Queue (CAS-based) ===
-
-💡 C++ Concept: False Sharing & Cache Line Padding (alignas(64))
-head_ and tail_ are accessed by different threads (consumer and producers). If they share a 64-byte cache line, modifying one invalidates the cache for the other — this is 'false sharing', causing 10-100× slowdown. alignas(64) ensures each atomic lives on its own cache line. C++17 provides std::hardware_destructive_interference_size for the portable cache line size, though 64 bytes is correct for all modern ARM and x86.

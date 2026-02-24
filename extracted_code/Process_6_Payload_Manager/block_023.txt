@@ -1,4 +1,0 @@
-=== CONCEPT: All hardware access is wrapped in RAII classes that acquire resources on construction and release them on destruction. This ensures GPIO pins are unexported and PWM channels disabled even if the process crashes or throws an exception. ===
-
-💡 C++ Concept: RAII for Hardware Resources (Deterministic Cleanup)
-RAII (Resource Acquisition Is Initialisation) ensures that hardware resources are released when the C++ object goes out of scope. For a GPIO pin: the constructor exports the pin and sets direction; the destructor unexports it. If the process throws an exception or a function returns early, the destructor still runs. Without RAII, a crash could leave GPIO pins in an undefined state (driving current into a motor, keeping a spotlight on). RAII makes hardware cleanup automatic and exception-safe. Combined with unique_ptr ownership, it extends to dynamically allocated hardware wrappers.

@@ -1,4 +1,0 @@
-=== 5.2 State Machine Implementation ===
-
-💡 C++ Concept: State Pattern (GoF)
-The State pattern encapsulates state-specific behaviour in separate classes that share a common interface. Instead of a monolithic switch/case that grows with each new state, each state is a self-contained class with on_enter(), update(), and on_exit() methods. This makes the FSM extensible — adding a new state (e.g., SEARCH_PATTERN) requires only a new class, not modifying existing code (Open/Closed Principle). Each state class also owns its transition logic, making the FSM self-documenting.

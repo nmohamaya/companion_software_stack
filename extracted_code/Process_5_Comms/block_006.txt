@@ -1,4 +1,0 @@
-=== Listing 5-1: MAVLink Channel Wrapper ===
-
-💡 C++ Concept: std::optional for Incremental Parsing
-MAVLink parsing is byte-by-byte: each incoming byte may or may not complete a message. parse_byte() returns std::optional<mavlink_message_t> — std::nullopt if the byte is part of an incomplete frame, or a fully-parsed message when the final CRC byte validates. This is a natural fit for optional: the return type documents that 'most calls produce nothing'. The caller writes: if (auto msg = channel.parse_byte(b)) { handle(*msg); } — clean, self-documenting, and no sentinel values.

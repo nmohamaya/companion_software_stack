@@ -1,4 +1,0 @@
-=== All threads share core 3, keeping cores 4-5 free for the Mission Planner and perception pipeline. TrajectoryRelay has the second-highest priority (70) because delayed setpoints cause flight instability. SerialTransport is highest (75) since it handles the raw FC serial line that all MAVLink traffic depends on. ===
-
-💡 C++ Concept: Event-Driven vs. Periodic Threads
-Some threads (SerialTransport, TelemetryUplink) are event-driven: they block on I/O (epoll/select on a file descriptor) and wake only when data arrives. This is more efficient than polling because the thread sleeps at zero CPU while waiting. Other threads (TrajectoryRelay, TelemetryDownlink, HeartbeatMonitor) are periodic: they wake at a fixed rate using std::this_thread::sleep_until. The choice depends on the data source: external I/O is event-driven, internal SHM processing is periodic. Boost.Asio provides a unified event loop (io_context) for both patterns.

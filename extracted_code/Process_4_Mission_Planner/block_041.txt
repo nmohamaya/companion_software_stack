@@ -1,4 +1,0 @@
-=== Listing 11-1: Geofence Checker with Keep-In / Keep-Out Zones ===
-
-💡 C++ Concept: Aggregate Initialisation & Designated Initialisers (C++20 preview)
-The BreachInfo struct uses aggregate initialisation: return {true, zone.name, zone.action, dist}. In C++17, structs without constructors, virtual functions, or base classes can be initialised with brace-enclosed lists. This is concise and eliminates boilerplate constructors for simple data-carrier types. C++20 adds designated initialisers (return {.breached=true, .zone_name=...}) for even clearer intent, but C++17 positional aggregate init is the portable baseline for our codebase.

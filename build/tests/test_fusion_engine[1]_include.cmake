@@ -1,5 +1,0 @@
-if(EXISTS "/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_fusion_engine[1]_tests.cmake")
-  include("/home/nmohanan31/NM/Projects/companion_software_stack/build/tests/test_fusion_engine[1]_tests.cmake")
-else()
-  add_test(test_fusion_engine_NOT_BUILT test_fusion_engine_NOT_BUILT)
-endif()
