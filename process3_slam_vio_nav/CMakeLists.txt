@@ -4,6 +4,6 @@ target_include_directories(slam_vio_nav PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(slam_vio_nav PRIVATE
-    drone_ipc drone_util Eigen3::Eigen
+    drone_ipc drone_util drone_hal Eigen3::Eigen
 )
 install(TARGETS slam_vio_nav DESTINATION bin)

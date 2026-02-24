@@ -11,6 +11,7 @@
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
+#include "hal/hal_factory.h"
 
 #include <thread>
 #include <atomic>
@@ -100,25 +101,18 @@ static void visual_frontend_thread(
     spdlog::info("[VisualFrontend] Thread stopped after {} frames", frame_count);
 }
 
-// ── Simulated IMU reader thread ─────────────────────────────
-static void imu_reader_thread(std::atomic<bool>& stop_flag, int imu_rate_hz) {
-    spdlog::info("[IMUReader] Thread started (simulation) at {} Hz", imu_rate_hz);
-    std::mt19937 rng(99);
-    std::normal_distribution<double> accel_noise(0.0, 0.05);
-    std::normal_distribution<double> gyro_noise(0.0, 0.002);
+// ── IMU reader thread (uses HAL IIMUSource) ─────────────────
+static void imu_reader_thread(drone::hal::IIMUSource& imu,
+                              std::atomic<bool>& stop_flag,
+                              int imu_rate_hz) {
+    spdlog::info("[IMUReader] Thread started using {} at {} Hz",
+                 imu.name(), imu_rate_hz);
     const int sleep_us = imu_rate_hz > 0 ? 1000000 / imu_rate_hz : 2500;
 
     uint64_t count = 0;
     while (!stop_flag.load(std::memory_order_relaxed)) {
-        ImuSample sample;
-        sample.timestamp = std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        sample.accel = Eigen::Vector3d(accel_noise(rng),
-                                        accel_noise(rng),
-                                        9.81 + accel_noise(rng));
-        sample.gyro = Eigen::Vector3d(gyro_noise(rng),
-                                       gyro_noise(rng),
-                                       0.5 + gyro_noise(rng));
+        auto sample = imu.read();
+        (void)sample;  // In real system: feed to VIO pre-integrator
         ++count;
         std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
     }
@@ -207,10 +201,14 @@ int main(int argc, char* argv[]) {
     const int imu_rate = cfg.get<int>("slam.imu_rate_hz", 400);
     const int vio_rate  = cfg.get<int>("slam.vio_rate_hz", 100);
 
+    // Create IMU via HAL factory
+    auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
+    imu->init(imu_rate);
+
     // Launch threads
     std::thread t_frontend(visual_frontend_thread,
         std::ref(stereo_reader), std::ref(pose_buffer), std::ref(g_running));
-    std::thread t_imu(imu_reader_thread, std::ref(g_running), imu_rate);
+    std::thread t_imu(imu_reader_thread, std::ref(*imu), std::ref(g_running), imu_rate);
     std::thread t_publisher(pose_publisher_thread,
         std::ref(pose_writer), std::ref(pose_buffer), std::ref(g_running),
         vio_rate);

@@ -1,6 +1,6 @@
 // process1_video_capture/src/main.cpp
-// Process 1 — Video Capture: simulated camera capture + SHM publish.
-// In simulation mode, generates synthetic frames instead of V4L2/CSI.
+// Process 1 — Video Capture: camera capture + SHM publish.
+// Uses HAL ICamera interface — backend selected via config ("simulated" or "v4l2").
 
 #include "video/frame.h"
 #include "ipc/shm_writer.h"
@@ -10,105 +10,105 @@
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
+#include "hal/hal_factory.h"
 
 #include <thread>
 #include <atomic>
 #include <chrono>
 #include <cstring>
-#include <random>
 #include <spdlog/spdlog.h>
 
 static std::atomic<bool> g_running{true};
 
-// ── Simulated mission camera thread ─────────────────────────
+// ── Mission camera thread ───────────────────────────────────
 static void mission_cam_thread(
+    drone::hal::ICamera& camera,
     ShmWriter<drone::ipc::ShmVideoFrame>& writer,
     std::atomic<bool>& stop_flag,
-    uint32_t width, uint32_t height, int fps)
+    int fps)
 {
-    spdlog::info("[MissionCam] Thread started (simulation mode) {}x{}@{}Hz",
-                 width, height, fps);
-    std::mt19937 rng(42);
-    std::uniform_int_distribution<uint8_t> pixel_dist(0, 255);
+    spdlog::info("[MissionCam] Thread started using {} @ {}Hz",
+                 camera.name(), fps);
 
     uint64_t seq = 0;
-    const uint32_t W = width, H = height, C = 3;
     const int sleep_ms = fps > 0 ? 1000 / fps : 33;
 
     while (!stop_flag.load(std::memory_order_relaxed)) {
         ScopedTimer timer("MissionCam", 50.0);
 
-        drone::ipc::ShmVideoFrame frame{};
-        frame.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        frame.sequence_number = seq++;
-        frame.width    = W;
-        frame.height   = H;
-        frame.channels = C;
-        frame.stride   = W * C;
+        auto frame = camera.capture();
+        if (!frame.valid) continue;
 
-        // Generate synthetic gradient pattern (faster than random per pixel)
-        for (uint32_t y = 0; y < H; y += 16) {   // sparse fill for speed
-            for (uint32_t x = 0; x < W; x += 16) {
-                size_t idx = (y * W + x) * C;
-                if (idx + 2 < sizeof(frame.pixel_data)) {
-                    frame.pixel_data[idx]     = static_cast<uint8_t>(x * 255 / W);
-                    frame.pixel_data[idx + 1] = static_cast<uint8_t>(y * 255 / H);
-                    frame.pixel_data[idx + 2] = static_cast<uint8_t>((seq * 10) % 256);
-                }
-            }
+        drone::ipc::ShmVideoFrame shm_frame{};
+        shm_frame.timestamp_ns    = frame.timestamp_ns;
+        shm_frame.sequence_number = frame.sequence;
+        shm_frame.width           = frame.width;
+        shm_frame.height          = frame.height;
+        shm_frame.channels        = frame.channels;
+        shm_frame.stride          = frame.stride;
+
+        // Copy pixel data into SHM frame
+        size_t copy_size = std::min(
+            static_cast<size_t>(frame.height) * frame.stride,
+            sizeof(shm_frame.pixel_data));
+        if (frame.data) {
+            std::memcpy(shm_frame.pixel_data, frame.data, copy_size);
         }
 
-        writer.write(frame);
+        writer.write(shm_frame);
 
+        ++seq;
         if (seq % 300 == 0) {
             spdlog::info("[MissionCam] Published frame #{}", seq);
         }
 
-        // 30 Hz target
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
     spdlog::info("[MissionCam] Thread stopped after {} frames", seq);
 }
 
-// ── Simulated stereo camera thread ──────────────────────────
+// ── Stereo camera thread ────────────────────────────────────
 static void stereo_cam_thread(
+    drone::hal::ICamera& left_cam,
+    drone::hal::ICamera& right_cam,
     ShmWriter<drone::ipc::ShmStereoFrame>& writer,
     std::atomic<bool>& stop_flag,
-    uint32_t width, uint32_t height, int fps)
+    int fps)
 {
-    spdlog::info("[StereoCam] Thread started (simulation mode) {}x{}@{}Hz",
-                 width, height, fps);
+    spdlog::info("[StereoCam] Thread started using {} @ {}Hz",
+                 left_cam.name(), fps);
 
     uint64_t seq = 0;
-    const uint32_t W = width, H = height;
     const int sleep_ms = fps > 0 ? 1000 / fps : 33;
 
     while (!stop_flag.load(std::memory_order_relaxed)) {
-        drone::ipc::ShmStereoFrame frame{};
-        frame.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        frame.sequence_number = seq++;
-        frame.width  = W;
-        frame.height = H;
+        auto left_frame  = left_cam.capture();
+        auto right_frame = right_cam.capture();
 
-        // Synthetic stereo pattern: left and right with slight offset
-        for (uint32_t y = 0; y < H; y += 8) {
-            for (uint32_t x = 0; x < W; x += 8) {
-                size_t idx = y * W + x;
-                frame.left_data[idx]  = static_cast<uint8_t>((x + y) % 256);
-                uint32_t x_shifted = (x + 5) % W;  // 5px stereo disparity
-                frame.right_data[idx] = static_cast<uint8_t>((x_shifted + y) % 256);
-            }
+        drone::ipc::ShmStereoFrame shm_frame{};
+        shm_frame.timestamp_ns    = left_frame.timestamp_ns;
+        shm_frame.sequence_number = left_frame.sequence;
+        shm_frame.width           = left_frame.width;
+        shm_frame.height          = left_frame.height;
+
+        // Copy left and right data
+        size_t copy_size = std::min(
+            static_cast<size_t>(left_frame.height) * left_frame.width,
+            sizeof(shm_frame.left_data));
+        if (left_frame.data) {
+            std::memcpy(shm_frame.left_data, left_frame.data, copy_size);
+        }
+        if (right_frame.data) {
+            std::memcpy(shm_frame.right_data, right_frame.data, copy_size);
         }
 
-        writer.write(frame);
+        writer.write(shm_frame);
 
+        ++seq;
         if (seq % 300 == 0) {
             spdlog::info("[StereoCam] Published stereo pair #{}", seq);
         }
 
-        // Target fps
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
     spdlog::info("[StereoCam] Thread stopped after {} frames", seq);
@@ -128,7 +128,24 @@ int main(int argc, char* argv[]) {
     cfg.load(args.config_path);
 
     spdlog::info("=== Video Capture process starting (PID {}) ===", getpid());
-    spdlog::info("Mode: SIMULATION (no hardware cameras)");
+
+    // ── Create cameras via HAL factory ──────────────────────
+    auto mission_cam = drone::hal::create_camera(cfg, "video_capture.mission_cam");
+    const auto m_w   = cfg.get<uint32_t>("video_capture.mission_cam.width",  1920);
+    const auto m_h   = cfg.get<uint32_t>("video_capture.mission_cam.height", 1080);
+    const auto m_fps = cfg.get<int>("video_capture.mission_cam.fps", 30);
+    mission_cam->open(m_w, m_h, m_fps);
+
+    auto stereo_left  = drone::hal::create_camera(cfg, "video_capture.stereo_cam");
+    auto stereo_right = drone::hal::create_camera(cfg, "video_capture.stereo_cam");
+    const auto s_w   = cfg.get<uint32_t>("video_capture.stereo_cam.width",  640);
+    const auto s_h   = cfg.get<uint32_t>("video_capture.stereo_cam.height", 480);
+    const auto s_fps = cfg.get<int>("video_capture.stereo_cam.fps", 30);
+    stereo_left->open(s_w, s_h, s_fps);
+    stereo_right->open(s_w, s_h, s_fps);
+
+    spdlog::info("Cameras: mission={}, stereo_l={}, stereo_r={}",
+                 mission_cam->name(), stereo_left->name(), stereo_right->name());
 
     // ── Create SHM writers ──────────────────────────────────
     ShmWriter<drone::ipc::ShmVideoFrame> mission_writer;
@@ -146,19 +163,12 @@ int main(int argc, char* argv[]) {
     spdlog::info("SHM created: {}", drone::ipc::shm_names::VIDEO_STEREO_CAM);
 
     // ── Launch threads ──────────────────────────────────────
-    const auto m_w = cfg.get<uint32_t>("video_capture.mission_cam.width",  1920);
-    const auto m_h = cfg.get<uint32_t>("video_capture.mission_cam.height", 1080);
-    const auto m_fps = cfg.get<int>("video_capture.mission_cam.fps", 30);
-    const auto s_w = cfg.get<uint32_t>("video_capture.stereo_cam.width",  640);
-    const auto s_h = cfg.get<uint32_t>("video_capture.stereo_cam.height", 480);
-    const auto s_fps = cfg.get<int>("video_capture.stereo_cam.fps", 30);
-
     std::thread t_mission(mission_cam_thread,
-                          std::ref(mission_writer), std::ref(g_running),
-                          m_w, m_h, m_fps);
+                          std::ref(*mission_cam), std::ref(mission_writer),
+                          std::ref(g_running), m_fps);
     std::thread t_stereo(stereo_cam_thread,
-                          std::ref(stereo_writer), std::ref(g_running),
-                          s_w, s_h, s_fps);
+                          std::ref(*stereo_left), std::ref(*stereo_right),
+                          std::ref(stereo_writer), std::ref(g_running), s_fps);
 
     spdlog::info("All threads started — video_capture is READY");
 
@@ -171,6 +181,10 @@ int main(int argc, char* argv[]) {
     spdlog::info("Shutting down...");
     if (t_mission.joinable()) t_mission.join();
     if (t_stereo.joinable())  t_stereo.join();
+
+    mission_cam->close();
+    stereo_left->close();
+    stereo_right->close();
 
     spdlog::info("=== Video Capture process stopped ===");
     return 0;

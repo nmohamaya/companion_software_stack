@@ -1,8 +1,8 @@
 // process6_payload_manager/src/main.cpp
 // Process 6 — Payload Manager: controls gimbal + camera.
+// Uses HAL IGimbal interface — backend selected via config.
 // Reads ShmPayloadCommand from Mission Planner, publishes ShmPayloadStatus.
 
-#include "payload/gimbal_controller.h"
 #include "ipc/shm_reader.h"
 #include "ipc/shm_writer.h"
 #include "ipc/shm_types.h"
@@ -11,6 +11,7 @@
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
+#include "hal/hal_factory.h"
 
 #include <thread>
 #include <atomic>
@@ -31,9 +32,10 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Payload Manager starting (PID {}) ===", getpid());
 
-    // ── Init gimbal ─────────────────────────────────────────
-    drone::payload::GimbalController gimbal;
-    gimbal.init();
+    // ── Init gimbal via HAL factory ─────────────────────────
+    auto gimbal = drone::hal::create_gimbal(cfg, "payload_manager.gimbal");
+    gimbal->init();
+    spdlog::info("Gimbal: {}", gimbal->name());
 
     // ── SHM ─────────────────────────────────────────────────
     ShmReader<drone::ipc::ShmPayloadCommand> cmd_reader;
@@ -68,17 +70,17 @@ int main(int argc, char* argv[]) {
             cmd.timestamp_ns != last_cmd_ts) {
             last_cmd_ts = cmd.timestamp_ns;
 
-            gimbal.set_target(cmd.gimbal_pitch, cmd.gimbal_yaw);
+            gimbal->set_target(cmd.gimbal_pitch, cmd.gimbal_yaw);
 
             switch (cmd.action) {
                 case drone::ipc::PayloadAction::CAMERA_CAPTURE:
-                    gimbal.capture_image();
+                    gimbal->capture_image();
                     break;
                 case drone::ipc::PayloadAction::CAMERA_START_VIDEO:
-                    gimbal.start_recording();
+                    gimbal->start_recording();
                     break;
                 case drone::ipc::PayloadAction::CAMERA_STOP_VIDEO:
-                    gimbal.stop_recording();
+                    gimbal->stop_recording();
                     break;
                 default:
                     break;
@@ -86,17 +88,18 @@ int main(int argc, char* argv[]) {
         }
 
         // Update gimbal motion
-        gimbal.update(dt);
+        gimbal->update(dt);
 
         // Publish status
+        auto g_state = gimbal->state();
         drone::ipc::ShmPayloadStatus status{};
         status.timestamp_ns = std::chrono::duration_cast<
             std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        status.gimbal_pitch      = gimbal.state().pitch;
-        status.gimbal_yaw        = gimbal.state().yaw;
-        status.gimbal_stabilized = gimbal.state().stabilised;
-        status.recording_video   = gimbal.is_recording();
+        status.gimbal_pitch      = g_state.pitch;
+        status.gimbal_yaw        = g_state.yaw;
+        status.gimbal_stabilized = g_state.stabilised;
+        status.recording_video   = gimbal->is_recording();
         status_writer.write(status);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));

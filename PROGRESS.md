@@ -149,13 +149,62 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 
 ---
 
+## Phase 3 — Hardware Abstraction Layer (HAL)
+
+### Improvement #7 — HAL Interfaces, Simulated Backends & Factory (Issue #2)
+
+**Date:** 2026-02-24  
+**Category:** Architecture / Abstraction  
+**Issue:** [#2 — Hardware Abstraction Layer](https://github.com/nmohamaya/companion_software_stack/issues/2)
+
+**Files Added:**
+- `common/hal/CMakeLists.txt` — Header-only HAL library
+- `common/hal/include/hal/icamera.h` — `ICamera` interface
+- `common/hal/include/hal/ifc_link.h` — `IFCLink` interface
+- `common/hal/include/hal/igcs_link.h` — `IGCSLink` interface
+- `common/hal/include/hal/igimbal.h` — `IGimbal` interface
+- `common/hal/include/hal/iimu_source.h` — `IIMUSource` interface
+- `common/hal/include/hal/simulated_camera.h` — `SimulatedCamera` backend
+- `common/hal/include/hal/simulated_fc_link.h` — `SimulatedFCLink` backend
+- `common/hal/include/hal/simulated_gcs_link.h` — `SimulatedGCSLink` backend
+- `common/hal/include/hal/simulated_gimbal.h` — `SimulatedGimbal` backend
+- `common/hal/include/hal/simulated_imu.h` — `SimulatedIMU` backend
+- `common/hal/include/hal/hal_factory.h` — Factory functions with config-driven backend selection
+- `tests/test_hal.cpp` — 30 HAL unit tests
+
+**Files Modified:**
+- `CMakeLists.txt` — Added `common/hal` subdirectory
+- `process1_video_capture/CMakeLists.txt` — Linked `drone_hal`
+- `process1_video_capture/src/main.cpp` — Uses `ICamera` via factory (mission + stereo)
+- `process3_slam_vio_nav/CMakeLists.txt` — Linked `drone_hal`
+- `process3_slam_vio_nav/src/main.cpp` — Uses `IIMUSource` via factory
+- `process5_comms/CMakeLists.txt` — Linked `drone_hal`
+- `process5_comms/src/main.cpp` — Uses `IFCLink` + `IGCSLink` via factory
+- `process6_payload_manager/CMakeLists.txt` — Linked `drone_hal`
+- `process6_payload_manager/src/main.cpp` — Uses `IGimbal` via factory
+- `config/default.json` — Added `"backend": "simulated"` to all HAL-managed sections
+- `tests/CMakeLists.txt` — Added `test_hal` target, linked `drone_hal` to all tests
+
+**What:** Introduced a complete Hardware Abstraction Layer with 5 interfaces (`ICamera`, `IFCLink`, `IGCSLink`, `IGimbal`, `IIMUSource`), 5 simulated backends, and a config-driven factory. Processes P1, P3, P5, P6 now use HAL instead of hardcoded concrete classes. Backend selection is controlled by the `"backend"` key in each config section (currently only `"simulated"` available; future backends like `v4l2`, `mavlink_v2`, `siyi`, `bmi088` can be added without modifying process code).
+
+**Impact:**
+- Hardware and simulation are now fully decoupled — switching backends requires only a config change
+- 30 new unit tests covering factory creation, interface contracts, and simulated behaviour
+- Total test count: 91 → 121 (10 suites)
+- Zero compile warnings, all 121 tests passing
+- Foundation for adding real hardware backends without touching process code
+
+---
+
 ## Summary
 
 | Metric | Before | After |
 |---|---|---|
 | Bug fixes | 0 | 6 (1 critical, 2 high, 2 medium, 1 found by tests) |
-| Unit tests | 0 | 91 (9 suites) |
-| Config system | None (all hardcoded) | JSON config with 40+ tunables |
+| Unit tests | 0 | 121 (10 suites) |
+| Config system | None (all hardcoded) | JSON config with 45+ tunables |
 | Processes using config | 0/7 | 7/7 |
+| Processes using HAL | 0/4 | 4/4 (P1, P3, P5, P6) |
+| HAL interfaces | 0 | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | CI pipeline | None | GitHub Actions (build + test) |
 | Compiler warnings | Several | 0 |
