@@ -1,18 +1,19 @@
 {
-    "_comment": "Gazebo SITL configuration — uses MAVLink FC link (MAVSDK) instead of simulated",
+    "_comment": "Gazebo SITL configuration — uses MAVLink FC link and Gazebo cameras",
     "log_level": "info",
 
     "video_capture": {
         "mission_cam": {
-            "backend": "simulated",
+            "backend": "gazebo",
+            "gz_topic": "/camera",
             "width": 640,
             "height": 480,
             "fps": 30,
-            "format": "RGB24",
-            "_note": "TODO(#9): switch to 'gazebo' backend after GazeboCamera is implemented"
+            "format": "RGB24"
         },
         "stereo_cam": {
-            "backend": "simulated",
+            "backend": "gazebo",
+            "gz_topic": "/stereo_left",
             "width": 640,
             "height": 480,
             "fps": 30,

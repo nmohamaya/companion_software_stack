@@ -65,6 +65,9 @@ add_drone_test(test_hal             test_hal.cpp)
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
 
+# ── GazeboCameraBackend tests ───────────────────────────────
+add_drone_test(test_gazebo_camera   test_gazebo_camera.cpp)
+
 # ── Message Bus / API Interface tests ────────────────────────
 add_drone_test(test_message_bus     test_message_bus.cpp)
 
