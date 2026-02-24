@@ -118,6 +118,22 @@ struct ShmPayloadCommand {
 };
 
 // ═══════════════════════════════════════════════════════════
+// FC Command SHM (Process 4 → Process 5)
+// ═══════════════════════════════════════════════════════════
+enum class FCCommandType : uint8_t {
+    NONE = 0, ARM = 1, DISARM = 2, TAKEOFF = 3,
+    SET_MODE = 4, RTL = 5, LAND = 6
+};
+
+struct ShmFCCommand {
+    uint64_t timestamp_ns;
+    FCCommandType command;
+    float param1;              // TAKEOFF: altitude_m; SET_MODE: mode_id
+    uint64_t sequence_id;      // monotonic, for dedup
+    bool valid;
+};
+
+// ═══════════════════════════════════════════════════════════
 // FC State SHM (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
 struct ShmFCState {
@@ -192,6 +208,7 @@ namespace shm_names {
     constexpr const char* MISSION_STATUS      = "/mission_status";
     constexpr const char* TRAJECTORY_CMD      = "/trajectory_cmd";
     constexpr const char* PAYLOAD_COMMANDS    = "/payload_commands";
+    constexpr const char* FC_COMMANDS         = "/fc_commands";
     constexpr const char* FC_STATE            = "/fc_state";
     constexpr const char* GCS_COMMANDS        = "/gcs_commands";
     constexpr const char* PAYLOAD_STATUS      = "/payload_status";

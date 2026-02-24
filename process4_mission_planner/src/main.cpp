@@ -1,6 +1,7 @@
 // process4_mission_planner/src/main.cpp
 // Process 4 — Mission Planner: FSM + path planning + obstacle avoidance.
 // Reads SLAM pose and detected objects, outputs trajectory + payload commands.
+// Sends FC commands (arm, takeoff, mode) to comms via ShmFCCommand.
 
 #include "planner/mission_fsm.h"
 #include "planner/ipath_planner.h"
@@ -22,6 +23,26 @@
 using namespace drone::planner;
 
 static std::atomic<bool> g_running{true};
+
+/// Monotonic sequence counter for FC commands (dedup in comms)
+static uint64_t fc_cmd_seq = 0;
+
+/// Publish an FC command to the FC command SHM channel.
+static void send_fc_command(
+    drone::ipc::IPublisher<drone::ipc::ShmFCCommand>& pub,
+    drone::ipc::FCCommandType cmd,
+    float param1 = 0.0f)
+{
+    drone::ipc::ShmFCCommand fc_cmd{};
+    fc_cmd.timestamp_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    fc_cmd.command = cmd;
+    fc_cmd.param1 = param1;
+    fc_cmd.sequence_id = ++fc_cmd_seq;
+    fc_cmd.valid = true;
+    pub.publish(fc_cmd);
+}
 
 // ═══════════════════════════════════════════════════════════
 // main()
@@ -59,6 +80,9 @@ int main(int argc, char* argv[]) {
     auto gcs_sub = bus.subscribe_lazy<drone::ipc::ShmGCSCommand>();
     gcs_sub->connect(drone::ipc::shm_names::GCS_COMMANDS);
 
+    auto fc_state_sub = bus.subscribe_lazy<drone::ipc::ShmFCState>();
+    fc_state_sub->connect(drone::ipc::shm_names::FC_STATE);
+
     // ── Create publishers ───────────────────────────────────
     auto status_pub = bus.advertise<drone::ipc::ShmMissionStatus>(
         drone::ipc::shm_names::MISSION_STATUS);
@@ -66,9 +90,11 @@ int main(int argc, char* argv[]) {
         drone::ipc::shm_names::TRAJECTORY_CMD);
     auto payload_pub = bus.advertise<drone::ipc::ShmPayloadCommand>(
         drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    auto fc_cmd_pub = bus.advertise<drone::ipc::ShmFCCommand>(
+        drone::ipc::shm_names::FC_COMMANDS);
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() ||
-        !payload_pub->is_ready()) {
+        !payload_pub->is_ready() || !fc_cmd_pub->is_ready()) {
         spdlog::error("Failed to create mission planner publishers");
         return 1;
     }
@@ -99,12 +125,13 @@ int main(int argc, char* argv[]) {
         });
     }
 
-    // Auto-start mission in simulation
-    fsm.on_arm();
-    fsm.on_takeoff();
-    fsm.on_navigate();
+    // Mission starts in IDLE → PREFLIGHT. Arm and takeoff are handled
+    // by the state machine below, sending FC commands via SHM to comms.
+    fsm.on_arm();   // IDLE → PREFLIGHT
 
     // ── Create path planner and obstacle avoider strategies ──
+    const float takeoff_alt = cfg.get<float>(
+        "mission_planner.takeoff_altitude_m", 10.0f);
     const float influence_radius = cfg.get<float>(
         "mission_planner.obstacle_avoidance.influence_radius_m", 5.0f);
     const float repulsive_gain = cfg.get<float>(
@@ -126,6 +153,12 @@ int main(int argc, char* argv[]) {
     spdlog::info("Mission Planner READY — {} waypoints loaded",
                  fsm.total_waypoints());
 
+    // Tracking variables for state machine
+    bool takeoff_sent = false;
+    uint64_t last_gcs_timestamp = 0;  // dedup GCS commands by timestamp
+    auto last_arm_time = std::chrono::steady_clock::now() -
+                         std::chrono::seconds(10);  // allow immediate first ARM
+
     // ── Main planning loop (10 Hz) ──────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
         ScopedTimer timer("PlannerLoop", 120.0);
@@ -137,16 +170,37 @@ int main(int argc, char* argv[]) {
         drone::ipc::ShmDetectedObjectList objects{};
         obj_sub->receive(objects);
 
-        // Check GCS commands
+        // Read FC state (for arm/altitude feedback)
+        drone::ipc::ShmFCState fc_state{};
+        if (fc_state_sub->is_connected()) {
+            fc_state_sub->receive(fc_state);
+        }
+
+        // Check GCS commands (dedup by timestamp to ignore stale SHM values)
         drone::ipc::ShmGCSCommand gcs_cmd{};
-        if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) && gcs_cmd.valid) {
+        if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) &&
+            gcs_cmd.valid && gcs_cmd.timestamp_ns > last_gcs_timestamp) {
+            last_gcs_timestamp = gcs_cmd.timestamp_ns;
             switch (gcs_cmd.command) {
                 case drone::ipc::GCSCommandType::RTL:
                     spdlog::info("[Planner] GCS command: RTL");
+                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
+                    // Publish invalid traj to stop comms forwarding stale velocity cmds
+                    { drone::ipc::ShmTrajectoryCmd stop{}; stop.valid = false;
+                      stop.timestamp_ns = static_cast<uint64_t>(
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count());
+                      traj_pub->publish(stop); }
                     fsm.on_rtl();
                     break;
                 case drone::ipc::GCSCommandType::LAND:
                     spdlog::info("[Planner] GCS command: LAND");
+                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
+                    { drone::ipc::ShmTrajectoryCmd stop{}; stop.valid = false;
+                      stop.timestamp_ns = static_cast<uint64_t>(
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count());
+                      traj_pub->publish(stop); }
                     fsm.on_land();
                     break;
                 default:
@@ -154,40 +208,94 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Navigate if we have a target
-        if (fsm.state() == MissionState::NAVIGATE) {
-            const Waypoint* wp = fsm.current_waypoint();
-            if (wp) {
-                // Plan trajectory via IPathPlanner
-                auto planned = path_planner->plan(pose, *wp);
-                // Apply obstacle avoidance via IObstacleAvoider
-                auto traj = avoider->avoid(planned, pose, objects);
-                traj_pub->publish(traj);
+        // ── State machine ───────────────────────────────────
+        switch (fsm.state()) {
+            case MissionState::PREFLIGHT: {
+                // Send ARM command periodically until FC confirms armed.
+                // PX4 may deny initial attempts until MAVSDK heartbeats
+                // establish a GCS link (requires ~3-5s after connection).
+                auto now_arm = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(
+                        now_arm - last_arm_time).count() >= 3) {
+                    spdlog::info("[Planner] Sending ARM command");
+                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::ARM);
+                    last_arm_time = now_arm;
+                }
+                if (fc_state.armed) {
+                    spdlog::info("[Planner] Vehicle armed — initiating takeoff");
+                    fsm.on_takeoff();
+                    takeoff_sent = false;
+                }
+                break;
+            }
 
-                // Check if waypoint reached
-                if (fsm.waypoint_reached(
-                        static_cast<float>(pose.translation[0]),
-                        static_cast<float>(pose.translation[1]),
-                        static_cast<float>(pose.translation[2]), *wp)) {
-                    spdlog::info("[Planner] Waypoint {} reached!",
-                                 fsm.current_wp_index() + 1);
+            case MissionState::TAKEOFF: {
+                // Send TAKEOFF command, wait for target altitude
+                if (!takeoff_sent) {
+                    spdlog::info("[Planner] Sending TAKEOFF to {:.1f}m", takeoff_alt);
+                    send_fc_command(*fc_cmd_pub,
+                                   drone::ipc::FCCommandType::TAKEOFF, takeoff_alt);
+                    takeoff_sent = true;
+                }
+                // Check if close to target altitude (90% threshold)
+                if (fc_state.rel_alt >= takeoff_alt * 0.9f) {
+                    spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE",
+                                 fc_state.rel_alt);
+                    fsm.on_navigate();
+                }
+                break;
+            }
 
-                    if (wp->trigger_payload) {
-                        drone::ipc::ShmPayloadCommand pay_cmd{};
-                        pay_cmd.timestamp_ns = traj.timestamp_ns;
-                        pay_cmd.action = drone::ipc::PayloadAction::CAMERA_CAPTURE;
-                        pay_cmd.gimbal_pitch = -90.0f;
-                        pay_cmd.gimbal_yaw = 0.0f;
-                        pay_cmd.valid = true;
-                        payload_pub->publish(pay_cmd);
-                    }
+            case MissionState::NAVIGATE: {
+                const Waypoint* wp = fsm.current_waypoint();
+                if (wp) {
+                    // Plan trajectory via IPathPlanner
+                    auto planned = path_planner->plan(pose, *wp);
+                    // Apply obstacle avoidance via IObstacleAvoider
+                    auto traj = avoider->avoid(planned, pose, objects);
+                    traj_pub->publish(traj);
 
-                    if (!fsm.advance_waypoint()) {
-                        spdlog::info("[Planner] Mission complete — RTL");
-                        fsm.on_rtl();
+                    // Check if waypoint reached
+                    if (fsm.waypoint_reached(
+                            static_cast<float>(pose.translation[0]),
+                            static_cast<float>(pose.translation[1]),
+                            static_cast<float>(pose.translation[2]), *wp)) {
+                        spdlog::info("[Planner] Waypoint {} reached!",
+                                     fsm.current_wp_index() + 1);
+
+                        if (wp->trigger_payload) {
+                            drone::ipc::ShmPayloadCommand pay_cmd{};
+                            pay_cmd.timestamp_ns = traj.timestamp_ns;
+                            pay_cmd.action = drone::ipc::PayloadAction::CAMERA_CAPTURE;
+                            pay_cmd.gimbal_pitch = -90.0f;
+                            pay_cmd.gimbal_yaw = 0.0f;
+                            pay_cmd.valid = true;
+                            payload_pub->publish(pay_cmd);
+                        }
+
+                        if (!fsm.advance_waypoint()) {
+                            spdlog::info("[Planner] Mission complete — RTL");
+                            send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
+                            // Stop trajectory commands so comms doesn't override RTL
+                            { drone::ipc::ShmTrajectoryCmd stop{}; stop.valid = false;
+                              stop.timestamp_ns = static_cast<uint64_t>(
+                                  std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch()).count());
+                              traj_pub->publish(stop); }
+                            fsm.on_rtl();
+                        }
                     }
                 }
+                break;
             }
+
+            case MissionState::RTL:
+            case MissionState::LAND:
+            case MissionState::IDLE:
+            case MissionState::EMERGENCY:
+            default:
+                // No trajectory commands — FC handles RTL/Land autonomously
+                break;
         }
 
         // Publish mission status

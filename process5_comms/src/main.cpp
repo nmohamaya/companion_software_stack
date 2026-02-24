@@ -37,7 +37,7 @@ static void fc_rx_thread(drone::hal::IFCLink& fc,
         state.timestamp_ns      = hb.timestamp_ns;
         state.battery_voltage   = hb.battery_voltage;
         state.battery_remaining = hb.battery_percent;
-        state.rel_alt           = hb.altitude_msl;
+        state.rel_alt           = hb.altitude_rel;
         state.vx                = hb.ground_speed;
         state.satellites_visible = hb.satellites;
         state.flight_mode       = hb.flight_mode;
@@ -50,14 +50,61 @@ static void fc_rx_thread(drone::hal::IFCLink& fc,
 }
 
 // ── FC transmit thread (20 Hz) ──────────────────────────────
+// Forwards trajectory commands AND FC commands (arm, takeoff, mode)
+// from the mission planner to the flight controller.
 static void fc_tx_thread(drone::hal::IFCLink& fc,
-                         drone::ipc::ISubscriber<drone::ipc::ShmTrajectoryCmd>& sub) {
+                         drone::ipc::ISubscriber<drone::ipc::ShmTrajectoryCmd>& traj_sub,
+                         drone::ipc::ISubscriber<drone::ipc::ShmFCCommand>& cmd_sub) {
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_tx thread started using {}", fc.name());
 
+    uint64_t last_cmd_seq = 0;  // dedup FC commands by sequence_id
+    uint64_t last_traj_ts = 0;  // dedup trajectory commands by timestamp
+
     while (g_running.load(std::memory_order_relaxed)) {
+        // ── Handle FC commands (arm, takeoff, mode) ─────────
+        drone::ipc::ShmFCCommand fc_cmd{};
+        if (cmd_sub.is_connected() && cmd_sub.receive(fc_cmd) &&
+            fc_cmd.valid && fc_cmd.sequence_id > last_cmd_seq) {
+            last_cmd_seq = fc_cmd.sequence_id;
+
+            switch (fc_cmd.command) {
+                case drone::ipc::FCCommandType::ARM:
+                    spdlog::info("[Comms] FC cmd: ARM");
+                    fc.send_arm(true);
+                    break;
+                case drone::ipc::FCCommandType::DISARM:
+                    spdlog::info("[Comms] FC cmd: DISARM");
+                    fc.send_arm(false);
+                    break;
+                case drone::ipc::FCCommandType::TAKEOFF:
+                    spdlog::info("[Comms] FC cmd: TAKEOFF to {:.1f}m",
+                                 fc_cmd.param1);
+                    fc.send_takeoff(fc_cmd.param1);
+                    break;
+                case drone::ipc::FCCommandType::SET_MODE:
+                    spdlog::info("[Comms] FC cmd: SET_MODE {}",
+                                 static_cast<int>(fc_cmd.param1));
+                    fc.send_mode(static_cast<uint8_t>(fc_cmd.param1));
+                    break;
+                case drone::ipc::FCCommandType::RTL:
+                    spdlog::info("[Comms] FC cmd: RTL");
+                    fc.send_mode(3);  // 3 = RTL
+                    break;
+                case drone::ipc::FCCommandType::LAND:
+                    spdlog::info("[Comms] FC cmd: LAND");
+                    fc.send_mode(2);  // 2 = AUTO (Hold/Land)
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // ── Forward trajectory velocity commands (dedup by timestamp) ──
         drone::ipc::ShmTrajectoryCmd cmd{};
-        if (sub.receive(cmd) && cmd.valid) {
+        if (traj_sub.receive(cmd) && cmd.valid &&
+            cmd.timestamp_ns > last_traj_ts) {
+            last_traj_ts = cmd.timestamp_ns;
             fc.send_trajectory(cmd.velocity_x, cmd.velocity_y,
                                cmd.velocity_z, cmd.target_yaw);
         }
@@ -178,6 +225,8 @@ int main(int argc, char* argv[]) {
     // ── Subscribers ─────────────────────────────────────────
     auto traj_sub = bus.subscribe<drone::ipc::ShmTrajectoryCmd>(
         drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto fc_cmd_sub = bus.subscribe<drone::ipc::ShmFCCommand>(
+        drone::ipc::shm_names::FC_COMMANDS);
     auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(
         drone::ipc::shm_names::SLAM_POSE);
     auto mission_sub = bus.subscribe<drone::ipc::ShmMissionStatus>(
@@ -189,7 +238,8 @@ int main(int argc, char* argv[]) {
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t1(fc_rx_thread,  std::ref(*fc_link),  std::ref(*fc_pub));
-    std::thread t2(fc_tx_thread,  std::ref(*fc_link),  std::ref(*traj_sub));
+    std::thread t2(fc_tx_thread,  std::ref(*fc_link),  std::ref(*traj_sub),
+                   std::ref(*fc_cmd_sub));
     std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(*gcs_cmd_pub));
     std::thread t4(gcs_tx_thread, std::ref(*gcs_link),
                    std::ref(*pose_sub),
