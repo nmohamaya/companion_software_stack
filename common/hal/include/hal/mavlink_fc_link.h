@@ -76,9 +76,11 @@ public:
         spdlog::info("[MavlinkFCLink] Connecting to '{}' (timeout {:.1f}s)…",
                      uri, timeout_s);
 
-        // Create MAVSDK instance (companion computer on the vehicle)
+        // Create MAVSDK instance.  Use GroundStation type so PX4 receives
+        // GCS heartbeats and passes its "GCS connected" preflight check.
+        // Without this, PX4 denies arming with "No connection to the GCS".
         mavsdk_ = std::make_unique<mavsdk::Mavsdk>(
-            mavsdk::Mavsdk::Configuration{mavsdk::Mavsdk::ComponentType::CompanionComputer});
+            mavsdk::Mavsdk::Configuration{mavsdk::Mavsdk::ComponentType::GroundStation});
 
         auto result = mavsdk_->add_any_connection(uri);
         if (result != mavsdk::ConnectionResult::Success) {
@@ -154,7 +156,7 @@ public:
         mavsdk::Offboard::VelocityNedYaw cmd{};
         cmd.north_m_s = vx;
         cmd.east_m_s  = vy;
-        cmd.down_m_s  = vz;
+        cmd.down_m_s  = -vz;  // Convert from +up (ENU) to +down (NED)
         cmd.yaw_deg   = yaw;
 
         // Must set an initial setpoint before starting offboard
@@ -196,6 +198,32 @@ public:
         return true;
     }
 
+    bool send_takeoff(float altitude_m) override {
+        std::lock_guard<std::mutex> lock(conn_mtx_);
+        if (!action_ || !system_ || !system_->is_connected()) return false;
+
+        auto set_result = action_->set_takeoff_altitude(altitude_m);
+        if (set_result != mavsdk::Action::Result::Success) {
+            spdlog::warn("[MavlinkFCLink] set_takeoff_altitude({:.1f}m) failed: {}",
+                         altitude_m, action_result_str(set_result));
+            return false;
+        }
+
+        auto result = action_->takeoff();
+        if (result != mavsdk::Action::Result::Success) {
+            spdlog::warn("[MavlinkFCLink] Takeoff failed: {}",
+                         action_result_str(result));
+            return false;
+        }
+        // Stop offboard if it was active — takeoff uses Auto mode
+        if (offboard_active_.load(std::memory_order_relaxed)) {
+            offboard_->stop();
+            offboard_active_.store(false, std::memory_order_relaxed);
+        }
+        spdlog::info("[MavlinkFCLink] Takeoff to {:.1f}m initiated", altitude_m);
+        return true;
+    }
+
     /// Map IFCLink mode codes to MAVSDK commands:
     ///   0 = Stabilized  → action->hold()  (closest safe mapping)
     ///   1 = Guided       → offboard start  (PX4 Offboard)
@@ -231,12 +259,12 @@ public:
                 offboard_active_.store(true, std::memory_order_relaxed);
                 spdlog::info("[MavlinkFCLink] Mode → Offboard (GUIDED)");
                 return true;
-            case 2:  // AUTO → Hold (mission requires plan; hold is safe default)
+            case 2:  // AUTO → Land
                 if (offboard_active_.load(std::memory_order_relaxed)) {
                     offboard_->stop();
                     offboard_active_.store(false, std::memory_order_relaxed);
                 }
-                result = action_->hold();
+                result = action_->land();
                 break;
             case 3:  // RTL
                 if (offboard_active_.load(std::memory_order_relaxed)) {
@@ -273,7 +301,7 @@ private:
         telemetry_->subscribe_position(
             [this](mavsdk::Telemetry::Position pos) {
                 std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.altitude_msl = pos.absolute_altitude_m;
+                cached_state_.altitude_rel = pos.relative_altitude_m;
             });
 
         // Battery

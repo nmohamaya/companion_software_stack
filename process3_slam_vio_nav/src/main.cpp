@@ -58,13 +58,13 @@ static void visual_frontend_thread(
     drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
     drone::slam::IVisualFrontend& frontend,
     PoseDoubleBuffer& pose_buffer,
-    std::atomic<bool>& stop_flag)
+    std::atomic<bool>& running)
 {
     spdlog::info("[VisualFrontend] Thread started using {}", frontend.name());
 
     uint64_t frame_count = 0;
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         drone::ipc::ShmStereoFrame frame;
         (void)stereo_sub.receive(frame);
 
@@ -88,14 +88,14 @@ static void visual_frontend_thread(
 
 // ── IMU reader thread (uses HAL IIMUSource) ─────────────────
 static void imu_reader_thread(drone::hal::IIMUSource& imu,
-                              std::atomic<bool>& stop_flag,
+                              std::atomic<bool>& running,
                               int imu_rate_hz) {
     spdlog::info("[IMUReader] Thread started using {} at {} Hz",
                  imu.name(), imu_rate_hz);
     const int sleep_us = imu_rate_hz > 0 ? 1000000 / imu_rate_hz : 2500;
 
     uint64_t count = 0;
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         auto sample = imu.read();
         (void)sample;  // In real system: feed to VIO pre-integrator
         ++count;
@@ -108,14 +108,14 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu,
 static void pose_publisher_thread(
     drone::ipc::IPublisher<drone::ipc::ShmPose>& pose_pub,
     PoseDoubleBuffer& pose_buffer,
-    std::atomic<bool>& stop_flag,
+    std::atomic<bool>& running,
     int publish_rate_hz)
 {
     spdlog::info("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
 
     const int sleep_ms = publish_rate_hz > 0 ? 1000 / publish_rate_hz : 10;
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         Pose p;
         if (pose_buffer.read(p)) {
             drone::ipc::ShmPose shm_pose{};

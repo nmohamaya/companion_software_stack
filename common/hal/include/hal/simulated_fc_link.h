@@ -56,6 +56,14 @@ public:
         return true;
     }
 
+    bool send_takeoff(float altitude_m) override {
+        std::lock_guard<std::mutex> lock(mtx_);
+        spdlog::info("[SimulatedFCLink] TAKEOFF to {:.1f}m", altitude_m);
+        state_.altitude_rel = altitude_m;  // Simulate instant takeoff
+        state_.flight_mode = 2;       // AUTO/Takeoff
+        return true;
+    }
+
     FCState receive_state() override {
         std::lock_guard<std::mutex> lock(mtx_);
         auto now = std::chrono::steady_clock::now();
@@ -68,7 +76,7 @@ public:
         state_.battery_percent = std::max(0.0f, 100.0f - static_cast<float>(elapsed) * 0.05f);
         state_.battery_voltage = 12.0f + state_.battery_percent * 0.048f;
         state_.ground_speed = std::sqrt(last_vx_ * last_vx_ + last_vy_ * last_vy_);
-        state_.altitude_msl = 100.0f + last_vz_ * 0.1f;
+        state_.altitude_rel = 100.0f + last_vz_ * 0.1f;
         state_.satellites = static_cast<uint8_t>(
             12 + static_cast<int>(std::sin(elapsed * 0.1) * 3));
 

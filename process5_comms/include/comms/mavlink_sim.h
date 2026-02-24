@@ -17,7 +17,7 @@ struct FCHeartbeat {
     float battery_voltage{16.4f};
     float battery_current{8.5f};
     float battery_percent{100.0f};
-    float altitude_msl{0.0f};
+    float altitude_rel{0.0f};
     float ground_speed{0.0f};
     uint8_t satellites{12};
     uint8_t flight_mode{0};  // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
@@ -74,7 +74,7 @@ public:
         heartbeat_.battery_voltage = 12.0f + heartbeat_.battery_percent * 0.048f;
         heartbeat_.ground_speed = std::sqrt(
             last_cmd_vx_*last_cmd_vx_ + last_cmd_vy_*last_cmd_vy_);
-        heartbeat_.altitude_msl = 100.0f + last_cmd_vz_ * 0.1f;
+        heartbeat_.altitude_rel = 100.0f + last_cmd_vz_ * 0.1f;
         heartbeat_.satellites = 12 + static_cast<uint8_t>(
             std::sin(elapsed * 0.1) * 3);
 

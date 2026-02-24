@@ -13,7 +13,7 @@ struct FCState {
     float battery_voltage{0.0f};
     float battery_current{0.0f};
     float battery_percent{0.0f};
-    float altitude_msl{0.0f};
+    float altitude_rel{0.0f};  // relative (AGL) altitude in meters
     float ground_speed{0.0f};
     uint8_t satellites{0};
     uint8_t flight_mode{0};   // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
@@ -42,6 +42,9 @@ public:
 
     /// Send flight mode change.
     virtual bool send_mode(uint8_t mode) = 0;
+
+    /// Command autonomous takeoff to a target altitude (m AGL).
+    virtual bool send_takeoff(float altitude_m) = 0;
 
     /// Receive the latest FC state (heartbeat).
     virtual FCState receive_state() = 0;
