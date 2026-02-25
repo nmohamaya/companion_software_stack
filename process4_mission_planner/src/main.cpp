@@ -259,8 +259,9 @@ int main(int argc, char* argv[]) {
                     takeoff_sent = true;
                 }
                 // Record home position (where we took off from)
-                if (!home_recorded && pose.translation[0] != 0.0 &&
-                    pose.translation[1] != 0.0) {
+                if (!home_recorded &&
+                    std::isfinite(pose.translation[0]) &&
+                    std::isfinite(pose.translation[1])) {
                     home_x = static_cast<float>(pose.translation[0]);
                     home_y = static_cast<float>(pose.translation[1]);
                     home_z = 0.0f;  // ground level
@@ -323,15 +324,19 @@ int main(int argc, char* argv[]) {
             case MissionState::RTL: {
                 // Monitor position — when near home, send LAND to bypass
                 // PX4's RTL loiter delay (RTL_LAND_DELAY).
-                float dx = static_cast<float>(pose.translation[0]) - home_x;
-                float dy = static_cast<float>(pose.translation[1]) - home_y;
-                float horiz_dist = std::sqrt(dx * dx + dy * dy);
-                if (horiz_dist < rtl_acceptance_m) {
-                    spdlog::info("[Planner] Near home ({:.1f}m away) — sending LAND",
-                                 horiz_dist);
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
-                    land_sent = true;
-                    fsm.on_land();
+                // Only override if we have a valid home fix; otherwise let
+                // PX4 handle RTL/landing autonomously.
+                if (home_recorded) {
+                    float dx = static_cast<float>(pose.translation[0]) - home_x;
+                    float dy = static_cast<float>(pose.translation[1]) - home_y;
+                    float horiz_dist = std::sqrt(dx * dx + dy * dy);
+                    if (horiz_dist < rtl_acceptance_m) {
+                        spdlog::info("[Planner] Near home ({:.1f}m away) — sending LAND",
+                                     horiz_dist);
+                        send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
+                        land_sent = true;
+                        fsm.on_land();
+                    }
                 }
                 break;
             }
