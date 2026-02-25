@@ -430,3 +430,78 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 | 5 | Comms | MAVLink (MAVSDK) | Yes — real PX4 link | High — controls PX4 |
 | 6 | Payload Manager | Simulated gimbal | No | Low (occasional triggers) |
 | 7 | System Monitor | Linux /proc | Host metrics only | Low (1 Hz) |
+
+---
+
+## Phase 7 — Real Perception Pipeline (Issue #19)
+
+### Improvement #7 — ColorContourDetector (HSV Segmentation + Connected-Component Labeling)
+
+**Date:** 2026-02-25
+**Category:** Perception / Computer Vision
+**Issue:** #19
+**Branch:** `feature/issue-19-real-perception`
+
+**Files Added:**
+- `process2_perception/include/perception/color_contour_detector.h` — Header-only real detector (~320 lines)
+- `tests/test_color_contour_detector.cpp` — 42 unit tests across 6 suites
+
+**Files Modified:**
+- `process2_perception/include/perception/detector_interface.h` — Added factory function `create_detector(backend, cfg)`
+- `process2_perception/src/main.cpp` — Wired factory into inference thread
+- `config/gazebo.json` — Backend `"color_contour"`, fixed camera intrinsics (cx=320, cy=240)
+- `sim/worlds/test_world.sdf` — Replaced 3 muted obstacles with 6 brightly colored ones along flight path
+- `tests/CMakeLists.txt` — Added `test_color_contour_detector` target
+
+**What:** Replaced `SimulatedDetector` (random fake bounding boxes) with `ColorContourDetector` that processes actual Gazebo RGB camera frames using a pure-C++ computer vision pipeline (no OpenCV dependency):
+
+1. **RGB → HSV Conversion** — Per-pixel inline conversion handling all edge cases
+2. **Binary Mask Generation** — For each of 6 configured color ranges (with hue wrap-around support for red)
+3. **Connected-Component Labeling** — Union-Find with path compression, 4-connectivity
+4. **Bounding Box Extraction** — Per-component min/max coordinates + pixel count
+5. **Confidence Scoring** — Area-ratio based, sorted descending, capped at `max_detections`
+
+**Color → Class Mapping:**
+
+| Color | Hue Range | Saturation | Object Class |
+|---|---|---|---|
+| Red | 340°–20° (wrap) | ≥ 0.3 | PERSON |
+| Blue | 200°–260° | ≥ 0.3 | VEHICLE_CAR |
+| Yellow | 40°–70° | ≥ 0.4 | VEHICLE_TRUCK |
+| Green | 80°–160° | ≥ 0.3 | DRONE |
+| Orange | 15°–40° | ≥ 0.5 | ANIMAL |
+| Magenta | 270°–330° | ≥ 0.3 | BUILDING |
+
+**Gazebo Obstacles (6 total along flight path):**
+
+| # | Color | Shape | Position (x,y) | Size | Flight Leg |
+|---|---|---|---|---|---|
+| 1 | Red | Box | (7, 1) | 1.5×1.5×5m | Origin → WP1 |
+| 2 | Blue | Cylinder | (13, 2) | r=0.8m, h=4m | Near WP1 |
+| 3 | Yellow | Box | (15, 7) | 2×1×4m | WP1 → WP2 |
+| 4 | Green | Cylinder | (8, 8) | r=1.0m, h=5m | WP2 → WP3 |
+| 5 | Orange | Box | (4, 4) | 1.5×1.5×3m | Return leg |
+| 6 | Magenta | Cylinder | (14, 13) | r=0.6m, h=6m | Near WP2 |
+
+**Design Decisions:**
+- **Header-only** — No new .cpp files, zero CMake changes for the detector itself
+- **No OpenCV** — Pure C++ avoids a heavy dependency; algorithm is straightforward for solid-color objects
+- **Config-driven** — Color ranges, min_contour_area, and max_detections all configurable via JSON
+- **Factory pattern** — `create_detector("color_contour", &cfg)` for clean backend switching
+- **Backward-compatible** — `config/default.json` still uses `"simulated"` backend
+
+**Test Coverage (42 new tests):**
+
+| Suite | Tests | Covers |
+|---|---|---|
+| RgbToHsvTest | 7 | Pure colors, white, black, yellow, grey |
+| HsvRangeTest | 3 | Normal range, hue wrap-around (red), boundaries |
+| UnionFindTest | 4 | Disjoint, unite, transitive, self-unite |
+| ComponentBBoxTest | 1 | Width/height/area calculations |
+| ColorContourDetectorTest | 22 | Null/zero/black/grey/white, solid colors, multi-rect, area filtering, confidence sort, config overrides, 4-channel, edge cases |
+| DetectorFactoryTest | 5 | Simulated, color_contour, config, empty string, unknown throws |
+
+**Metrics:**
+- Total tests: 196 → **238** (+42)
+- Build targets: 51 (all zero warnings with `-Werror -Wall -Wextra`)
+- Processes with real Gazebo data: 4/7 → **5/7** (Perception upgraded)

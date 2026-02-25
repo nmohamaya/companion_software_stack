@@ -30,11 +30,10 @@ static std::atomic<bool> g_running{true};
 static void inference_thread(
     drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>& video_sub,
     drone::SPSCRing<Detection2DList, 4>& output_queue,
-    std::atomic<bool>& stop_flag)
+    std::atomic<bool>& stop_flag,
+    IDetector& detector)
 {
-    spdlog::info("[Inference] Thread started");
-    auto detector = std::make_unique<SimulatedDetector>();
-    spdlog::info("[Inference] Using detector: {}", detector->name());
+    spdlog::info("[Inference] Thread started — using detector: {}", detector.name());
 
     uint64_t frame_count = 0;
     while (!stop_flag.load(std::memory_order_relaxed)) {
@@ -44,9 +43,9 @@ static void inference_thread(
         if (got_frame) {
             ScopedTimer timer("Inference", 33.0);
 
-            auto dets = detector->detect(frame.pixel_data,
-                                          frame.width, frame.height,
-                                          frame.channels);
+            auto dets = detector.detect(frame.pixel_data,
+                                         frame.width, frame.height,
+                                         frame.channels);
             Detection2DList det_list;
             det_list.detections = std::move(dets);
             det_list.timestamp_ns = frame.timestamp_ns;
@@ -269,6 +268,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // ── Create detector from config ────────────────────────────
+    std::string detector_backend = cfg.get<std::string>(
+        "perception.detector.backend", "simulated");
+    auto detector = create_detector(detector_backend, &cfg);
+    spdlog::info("[Perception] Detector backend: {} ({})",
+                 detector_backend, detector->name());
+
     // ── Internal SPSC queues ────────────────────────────────
     drone::SPSCRing<Detection2DList, 4> inference_to_tracker;
     drone::SPSCRing<TrackedObjectList, 4> tracker_to_fusion;
@@ -278,7 +284,7 @@ int main(int argc, char* argv[]) {
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread,
         std::ref(*video_sub), std::ref(inference_to_tracker),
-        std::ref(g_running));
+        std::ref(g_running), std::ref(*detector));
 
     std::thread t_tracker(tracker_thread,
         std::ref(inference_to_tracker), std::ref(tracker_to_fusion),

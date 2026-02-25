@@ -76,3 +76,8 @@ add_drone_test(test_message_bus     test_message_bus.cpp)
 
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)
+
+# ── ColorContourDetector tests ───────────────────────────────
+add_drone_test(test_color_contour_detector test_color_contour_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
+)

@@ -141,55 +141,121 @@
       </link>
     </model>
 
-    <!-- ═══ Obstacle 1: Box at (8, 3) ════════════════════════ -->
-    <model name="obstacle_box_1">
+    <!-- ═══ Obstacle 1: Bright RED box near WP1 leg ════════════ -->
+    <!-- Flight path: origin→(15,0,5). Place red box at (7,1) reaching up to 5m -->
+    <model name="obstacle_red_box">
       <static>true</static>
-      <pose>8 3 1 0 0 0</pose>
+      <pose>7 1 2.5 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><box><size>1 1 2</size></box></geometry>
+          <geometry><box><size>1.5 1.5 5</size></box></geometry>
         </collision>
         <visual name="visual">
-          <geometry><box><size>1 1 2</size></box></geometry>
+          <geometry><box><size>1.5 1.5 5</size></box></geometry>
           <material>
-            <ambient>0.7 0.4 0.2 1</ambient>
-            <diffuse>0.7 0.4 0.2 1</diffuse>
+            <ambient>0.9 0.1 0.1 1</ambient>
+            <diffuse>0.9 0.1 0.1 1</diffuse>
+            <specular>0.4 0.1 0.1 1</specular>
           </material>
         </visual>
       </link>
     </model>
 
-    <!-- ═══ Obstacle 2: Cylinder at (10, 5) ══════════════════ -->
-    <model name="obstacle_cylinder_1">
+    <!-- ═══ Obstacle 2: Bright BLUE cylinder near WP1 ════════ -->
+    <!-- Near WP1 (15,0,5). Place blue cylinder at (13,2) -->
+    <model name="obstacle_blue_cylinder">
       <static>true</static>
-      <pose>10 5 1.5 0 0 0</pose>
+      <pose>13 2 2.0 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><cylinder><radius>0.5</radius><length>3</length></cylinder></geometry>
+          <geometry><cylinder><radius>0.8</radius><length>4</length></cylinder></geometry>
         </collision>
         <visual name="visual">
-          <geometry><cylinder><radius>0.5</radius><length>3</length></cylinder></geometry>
+          <geometry><cylinder><radius>0.8</radius><length>4</length></cylinder></geometry>
           <material>
-            <ambient>0.3 0.3 0.7 1</ambient>
-            <diffuse>0.3 0.3 0.7 1</diffuse>
+            <ambient>0.1 0.1 0.9 1</ambient>
+            <diffuse>0.1 0.1 0.9 1</diffuse>
+            <specular>0.1 0.1 0.4 1</specular>
           </material>
         </visual>
       </link>
     </model>
 
-    <!-- ═══ Obstacle 3: Box at (5, 8) ════════════════════════ -->
-    <model name="obstacle_box_2">
+    <!-- ═══ Obstacle 3: Bright YELLOW box on WP1→WP2 leg ═════ -->
+    <!-- Flight path: (15,0,5)→(15,15,5). Place yellow box at (15,7) -->
+    <model name="obstacle_yellow_box">
       <static>true</static>
-      <pose>5 8 0.75 0 0 0</pose>
+      <pose>15 7 2.0 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><box><size>2 0.5 1.5</size></box></geometry>
+          <geometry><box><size>2 1 4</size></box></geometry>
         </collision>
         <visual name="visual">
-          <geometry><box><size>2 0.5 1.5</size></box></geometry>
+          <geometry><box><size>2 1 4</size></box></geometry>
           <material>
-            <ambient>0.6 0.6 0.2 1</ambient>
-            <diffuse>0.6 0.6 0.2 1</diffuse>
+            <ambient>0.95 0.9 0.1 1</ambient>
+            <diffuse>0.95 0.9 0.1 1</diffuse>
+            <specular>0.4 0.4 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══ Obstacle 4: Bright GREEN cylinder on WP2→WP3 leg ═ -->
+    <!-- Flight path: (15,15,5)→(0,0,5). Place green cylinder at (8,8) -->
+    <model name="obstacle_green_cylinder">
+      <static>true</static>
+      <pose>8 8 2.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>1.0</radius><length>5</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>1.0</radius><length>5</length></cylinder></geometry>
+          <material>
+            <ambient>0.1 0.85 0.1 1</ambient>
+            <diffuse>0.1 0.85 0.1 1</diffuse>
+            <specular>0.1 0.4 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══ Obstacle 5: ORANGE box on return leg ═════════════ -->
+    <!-- Flight path: (15,15,5)→(0,0,5). Place orange box at (4,4) -->
+    <model name="obstacle_orange_box">
+      <static>true</static>
+      <pose>4 4 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.5 1.5 3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.5 1.5 3</size></box></geometry>
+          <material>
+            <ambient>0.95 0.5 0.05 1</ambient>
+            <diffuse>0.95 0.5 0.05 1</diffuse>
+            <specular>0.4 0.2 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══ Obstacle 6: MAGENTA cylinder near WP2 ════════════ -->
+    <!-- Near WP2 (15,15,5). Place magenta cylinder at (14,13) -->
+    <model name="obstacle_magenta_cylinder">
+      <static>true</static>
+      <pose>14 13 3.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.6</radius><length>6</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.6</radius><length>6</length></cylinder></geometry>
+          <material>
+            <ambient>0.85 0.1 0.85 1</ambient>
+            <diffuse>0.85 0.1 0.85 1</diffuse>
+            <specular>0.4 0.1 0.4 1</specular>
           </material>
         </visual>
       </link>
