@@ -6,53 +6,90 @@ Multi-process C++17 software stack for an autonomous drone companion computer. 7
 
 ### System Overview
 
+```mermaid
+graph TB
+    subgraph HW["External Hardware / Sensors"]
+        MissionCam["Mission Camera<br/>1920×1080 @ 30 Hz"]
+        StereoCam["Stereo Camera<br/>640×480 @ 30 Hz"]
+        IMU["IMU<br/>400 Hz"]
+        ProcSys["/proc & /sys"]
+        FC["Flight Controller<br/>(MAVLink)"]
+        GCS["Ground Control Station<br/>(UDP)"]
+    end
+
+    subgraph CC["Companion Computer (Linux) — 7 Processes, 21 Threads"]
+
+        subgraph P1["P1 Video Capture (3 threads)"]
+            P1_main["Main<br/>5 s health"]
+            P1_mission["MissionCam<br/>30 Hz"]
+            P1_stereo["StereoCam<br/>30 Hz"]
+        end
+
+        subgraph P2["P2 Perception (6 threads)"]
+            P2_main["Main<br/>5 s health"]
+            P2_infer["Inference<br/>~30 Hz"]
+            P2_track["Tracker<br/>event"]
+            P2_lidar["LiDAR sim<br/>10 Hz"]
+            P2_radar["Radar sim<br/>20 Hz"]
+            P2_fuse["Fusion<br/>event"]
+        end
+
+        subgraph P3["P3 SLAM/VIO/Nav (4 threads)"]
+            P3_main["Main<br/>5 s health"]
+            P3_vfe["VisualFrontend<br/>30 Hz"]
+            P3_imu["IMUReader<br/>400 Hz"]
+            P3_pose["PosePublisher<br/>100 Hz"]
+        end
+
+        subgraph P4["P4 Mission Planner (1 thread)"]
+            P4_main["Main Loop<br/>10 Hz<br/>FSM + Planner + Avoider"]
+        end
+
+        subgraph P5["P5 Comms (5 threads)"]
+            P5_main["Main<br/>join"]
+            P5_fcrx["fc_rx<br/>10 Hz"]
+            P5_fctx["fc_tx<br/>20 Hz"]
+            P5_gcsrx["gcs_rx<br/>2 Hz"]
+            P5_gcstx["gcs_tx<br/>2 Hz"]
+        end
+
+        subgraph P6["P6 Payload Manager (1 thread)"]
+            P6_main["Main Loop<br/>50 Hz<br/>Gimbal + Camera"]
+        end
+
+        subgraph P7["P7 System Monitor (1 thread)"]
+            P7_main["Main Loop<br/>1 Hz<br/>CPU/Mem/Temp/Disk"]
+        end
+    end
+
+    MissionCam -->|HAL ICamera| P1_mission
+    StereoCam -->|HAL ICamera| P1_stereo
+    IMU -->|HAL IIMUSource| P3_imu
+    ProcSys --> P7_main
+    FC <-->|HAL IFCLink| P5_fcrx
+    FC <-->|HAL IFCLink| P5_fctx
+    GCS <-->|HAL IGCSLink| P5_gcsrx
+    GCS <-->|HAL IGCSLink| P5_gcstx
+
+    P1_mission -->|"/mission_cam"| P2_infer
+    P1_stereo -->|"/stereo_cam"| P3_vfe
+    P2_infer -->|SPSC| P2_track
+    P2_track -->|SPSC| P2_fuse
+    P2_lidar -->|SPSC| P2_fuse
+    P2_radar -->|SPSC| P2_fuse
+    P2_fuse -->|"/detected_objects"| P4_main
+    P3_pose -->|"/slam_pose"| P4_main
+    P5_fcrx -->|"/fc_state"| P4_main
+    P5_gcsrx -->|"/gcs_commands"| P4_main
+    P7_main -->|"/system_health"| P4_main
+    P4_main -->|"/trajectory_cmd"| P5_fctx
+    P4_main -->|"/fc_commands"| P5_fctx
+    P4_main -->|"/payload_commands"| P6_main
+    P4_main -->|"/mission_status"| P5_gcstx
+    P6_main -->|HAL IGimbal| P6_main
 ```
-                        ┌─────────────────────────────────────────────────────────────────────────┐
-                        │                       Companion Computer (Linux)                        │
-                        │                                                                         │
- ┌───────────────┐      │  ┌──────────────────┐      SHM          ┌──────────────────┐            │
- │  Mission Cam  │─HAL──│─▶│  P1  Video       │─── /mission_cam ─▶│  P2  Perception  │            │
- │  1920×1080    │      │  │     Capture       │─── /stereo_cam ──▶│   (Detect+Track  │            │
- │  @ 30 Hz      │      │  │     (2 threads)   │        │          │    +Fuse)        │            │
- └───────────────┘      │  └──────────────────┘        │          └────────┬─────────┘            │
- ┌───────────────┐      │                              │   /stereo_cam     │ /detected_objects     │
- │  Stereo Cam   │─HAL──│─┘                            │          ┌───────▼──────────┐            │
- │  640×480      │      │                              └────────▶│  P3  SLAM/VIO    │            │
- │  @ 30 Hz      │      │                                        │     /Nav         │            │
- └───────────────┘      │  ┌──────────────────┐                  │   (3 threads)    │            │
- ┌───────────────┐      │  │  P7  System      │                  └────────┬─────────┘            │
- │ /proc & /sys  │──────│─▶│     Monitor      │                    /slam_pose │                    │
- │               │      │  │     (1 Hz)       │                           │                       │
- └───────────────┘      │  └──────────────────┘          ┌────────────────┼────────────────┐      │
-                        │           │ /system_health      │                │                │      │
-                        │           ▼                     ▼                ▼                │      │
-                        │  ┌──────────────────────────────────────────────────────────┐     │      │
-                        │  │                    P4  Mission Planner                    │     │      │
-                        │  │              (FSM + Potential Field Planner)              │     │      │
-                        │  │  Reads: /slam_pose, /detected_objects, /fc_state,        │     │      │
-                        │  │         /gcs_commands, /system_health                    │     │      │
-                        │  │  Writes: /trajectory_cmd, /mission_status,              │     │      │
-                        │  │          /payload_commands                               │     │      │
-                        │  └────────────┬──────────────────────┬──────────────────────┘     │      │
-                        │    /trajectory_cmd  /payload_commands │  /mission_status           │      │
-                        │         │                │            │                            │      │
-                        │         ▼                ▼            │                            │      │
-                        │  ┌──────────────┐  ┌──────────────┐  │                            │      │
-                        │  │  P5  Comms   │  │  P6  Payload │  │                            │      │
-                        │  │  (MAVLink +  │  │  Manager     │  │                            │      │
-                        │  │   GCS UDP)   │  │  (Gimbal +   │  │                            │      │
-                        │  │  4 threads   │  │   Camera)    │  │                            │      │
-                        │  └──────┬───────┘  └──────────────┘  │                            │      │
-                        │   /fc_state  /gcs_commands            │                            │      │
-                        │         │         │                   │                            │      │
-                        │         └─────────┴───────────────────┘                            │      │
-                        └─────────────────────────────────────────────────────────────────────┘      │
-                                          │                                                         │
-                              ┌───────────▼───────────┐                                             │
-                              │   Flight Controller   │                                             │
-                              │   (via MAVLink UART)  │                                             │
-                              └───────────────────────┘                                             │
-```
+
+**Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses lock-free POSIX shared memory (SeqLock pattern). Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
 
 ### IPC Shared Memory Map
 
@@ -77,18 +114,43 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 | Interface | Purpose | Simulated Backend | Gazebo/SITL Backend | Planned Real Backend |
 |---|---|---|---|---|
 | `ICamera` | Frame capture | `SimulatedCamera` — synthetic gradient frames | `GazeboCamera` (gz-transport) | V4L2 / libargus (Jetson) |
+| `IDetector` | Object detection | `SimulatedDetector` — random bounding boxes | — | TensorRT YOLOv8 |
+| | | `ColorContourDetector` — HSV segmentation + union-find (pure C++) | — | |
+| | | `OpenCvYoloDetector` — YOLOv8-nano via OpenCV DNN (`HAS_OPENCV`) | — | |
 | `IFCLink` | Flight controller comms | `SimulatedFCLink` — synthetic battery drain, GPS | `MavlinkFCLink` (MAVSDK) | MAVLink 2 via serial UART |
 | `IGCSLink` | Ground station comms | `SimulatedGCSLink` — simulated RTL after 120 s | — | UDP / MAVLink GCS protocol |
 | `IGimbal` | Gimbal control | `SimulatedGimbal` — rate-limited slew model | — | UART / PWM gimbal protocol |
 | `IIMUSource` | Inertial measurement | `SimulatedIMU` — noisy synthetic accel + gyro | `GazeboIMU` (gz-transport) | SPI / I2C IMU driver |
+| `IVisualFrontend` | Pose estimation | `SimulatedVisualFrontend` — circular trajectory + noise | `GazeboVisualFrontend` (gz-transport odometry) | ORB-SLAM3 / VINS-Fusion |
+| `IPathPlanner` | Path planning | `PotentialFieldPlanner` — attractive force + EMA smoothing | — | RRT* / D* Lite |
+| `IObstacleAvoider` | Obstacle avoidance | `PotentialFieldAvoider` — repulsive force + clamping | — | VFH+ / 3D-VFH |
+| `IProcessMonitor` | System metrics | `LinuxProcessMonitor` — /proc, /sys | — | — |
 
 ---
 
 ## Algorithms & Implementation Details
 
-> **Important:** All algorithms in this stack are **written from scratch** in C++17. No external ML/CV/SLAM/control frameworks (e.g., OpenCV, TensorRT, GTSAM, PX4) are used at runtime. The only external libraries are spdlog (logging), Eigen3 (linear algebra), and nlohmann/json (config parsing).
+> **Note:** Core algorithms (tracking, fusion, path planning, obstacle avoidance, gimbal control, system monitoring) are **written from scratch** in C++17. The only external runtime libraries are spdlog (logging), Eigen3 (linear algebra), nlohmann/json (config parsing), and **optionally** OpenCV DNN (for YOLOv8 object detection) and MAVSDK (for PX4 MAVLink communication). The stack always builds and runs with simulated backends — no OpenCV, MAVSDK, or Gazebo required.
 
 ### Process 1 — Video Capture
+
+```mermaid
+graph LR
+    subgraph P1["Process 1 — Video Capture (3 threads)"]
+        direction TB
+        Main["Main Thread<br/>5 s health log"]
+
+        subgraph Workers["Worker Threads"]
+            MCam["MissionCam Thread<br/>30 Hz • 1920×1080 RGB24<br/>ScopedTimer 50 ms"]
+            SCam["StereoCam Thread<br/>30 Hz • 640×480 GRAY8<br/>L+R pair"]
+        end
+    end
+
+    CamHW1["ICamera<br/>(mission)"] -->|"HAL"| MCam
+    CamHW2["ICamera × 2<br/>(stereo L+R)"] -->|"HAL"| SCam
+    MCam -->|"SHM /mission_cam<br/>~6.2 MB"| P2["P2 Perception"]
+    SCam -->|"SHM /stereo_cam<br/>~614 KB"| P3["P3 SLAM"]
+```
 
 Two capture threads publish frames to shared memory.
 
@@ -98,43 +160,64 @@ Two capture threads publish frames to shared memory.
 | Color | RGB24 (3 channels) | GRAY8 (1 channel) |
 | Frame rate | 30 Hz | 30 Hz |
 | SHM buffer size | ~6.2 MB | ~307 KB per eye |
-| Backend | `SimulatedCamera` | `SimulatedCamera` |
+| Backends | `SimulatedCamera`, `GazeboCamera` | `SimulatedCamera`, `GazeboCamera` |
 
-The `SimulatedCamera` generates a deterministic gradient pattern (not random noise) so downstream algorithms receive structured input. Real backends would use V4L2 or NVIDIA libargus.
+The `SimulatedCamera` generates a deterministic gradient pattern (not random noise) so downstream algorithms receive structured input. The `GazeboCamera` subscribes to gz-transport image topics for SITL simulation. Real backends would use V4L2 or NVIDIA libargus.
 
 ---
 
 ### Process 2 — Perception
 
-Perception runs a multi-stage pipeline across 5 threads connected by lock-free SPSC queues:
+```mermaid
+graph LR
+    subgraph P2["Process 2 — Perception (6 threads)"]
+        direction TB
+        Main["Main Thread<br/>5 s health log"]
 
+        subgraph Pipeline["Detection → Tracking → Fusion Pipeline"]
+            direction LR
+            Infer["Inference Thread<br/>~30 Hz<br/>IDetector::detect()"]
+            Track["Tracker Thread<br/>event-driven<br/>SORT Kalman + Hungarian"]
+            Fuse["Fusion Thread<br/>event-driven<br/>Camera+LiDAR+Radar"]
+        end
+
+        subgraph SimSensors["Simulated Sensor Threads"]
+            LiDAR["LiDAR Thread<br/>10 Hz<br/>0–4 random clusters"]
+            Radar["Radar Thread<br/>20 Hz<br/>0–6 random targets"]
+        end
+
+        Infer -->|"SPSC(4)<br/>Detection2DList"| Track
+        Track -->|"SPSC(4)<br/>TrackedObjectList"| Fuse
+        LiDAR -->|"SPSC(4)<br/>LiDARClusters"| Fuse
+        Radar -->|"SPSC(4)<br/>RadarDetections"| Fuse
+    end
+
+    SHM_in["/mission_cam<br/>SHM"] --> Infer
+    Fuse -->|"SHM /detected_objects<br/>~5 KB"| P4["P4 Mission Planner"]
 ```
-  ┌────────────┐    SPSC(4)    ┌────────────┐    SPSC(4)    ┌──────────────┐
-  │  Inference  │────────────▶│   Tracker   │────────────▶│    Fusion     │──▶ SHM
-  │  Thread     │              │   Thread    │              │    Engine     │
-  └─────┬──────┘              └────────────┘              └──┬──────┬────┘
-        │                                                     │      │
-        │ reads SHM                              SPSC(4) ─────┘      │
-        ▼                                            ▲          SPSC(4)
-   /drone_mission_cam                           ┌────┴───┐      ▲
-                                                │  LiDAR │      │
-                                                │ Thread │  ┌───┴────┐
-                                                │  10 Hz │  │ Radar  │
-                                                └────────┘  │ Thread │
-                                                            │ 20 Hz  │
-                                                            └────────┘
-```
 
-#### 2.1 Detection — Simulated Detector (NOT YOLO)
+Perception runs a multi-stage pipeline across 5 worker threads connected by lock-free SPSC queues (depth 4 each).
 
-| Aspect | Detail |
-|---|---|
-| **Algorithm** | `SimulatedDetector` — generates 1–5 random bounding boxes per frame |
-| **NOT used** | YOLO, SSD, Faster R-CNN, or any neural network |
-| **Interface** | `IDetector` (strategy pattern) — drop-in replacable with a TensorRT/YOLO backend |
-| **Object classes** | `PERSON`, `VEHICLE_CAR`, `VEHICLE_TRUCK`, `DRONE`, `ANIMAL`, `BUILDING`, `TREE` |
-| **Config** | `confidence_threshold` = 0.5, `nms_threshold` = 0.4, `max_detections` = 64 |
-| **Written from scratch** | Yes |
+#### 2.1 Detection — `IDetector` Strategy Pattern
+
+Three detector backends are available via the factory (`create_detector()`):
+
+| Backend Config | Class | Compile Guard | Algorithm |
+|---|---|---|---|
+| `"simulated"` | `SimulatedDetector` | None | Generates 1–5 random bounding boxes per frame (testing only) |
+| `"color_contour"` | `ColorContourDetector` | None | **Pure C++** — RGB→HSV conversion, HSV range thresholding, connected-component labeling via union-find. No OpenCV. Config-driven color→class mapping. |
+| `"yolov8"` | `OpenCvYoloDetector` | `HAS_OPENCV` | **YOLOv8-nano** via OpenCV DNN module. Loads ONNX model (12.8 MB), 80-class COCO detection with NMS, maps subset to `ObjectClass`. ~7–13 FPS on CPU (640×480). |
+
+| Config key | Default | Description |
+|---|---|---|
+| `perception.backend` | `"simulated"` | Detector backend selection |
+| `confidence_threshold` | 0.5 | Min detection confidence |
+| `nms_threshold` | 0.4 | NMS IoU threshold (YOLOv8) |
+| `max_detections` | 64 | Max detections per frame |
+| `model_path` | `models/yolov8n.onnx` | ONNX model path (YOLOv8) |
+| `input_size` | 640 | Network input size (YOLOv8) |
+
+**Object classes:** `PERSON`, `VEHICLE_CAR`, `VEHICLE_TRUCK`, `DRONE`, `ANIMAL`, `BUILDING`, `TREE`
 
 #### 2.2 Tracking — Linear Kalman Filter (SORT-style)
 
@@ -177,15 +260,37 @@ Perception runs a multi-stage pipeline across 5 threads connected by lock-free S
 
 ### Process 3 — SLAM/VIO/Nav
 
-Three threads: visual frontend, IMU reader, and pose publisher.
+```mermaid
+graph LR
+    subgraph P3["Process 3 — SLAM/VIO/Nav (4 threads)"]
+        direction TB
+        Main3["Main Thread<br/>5 s health log"]
+
+        VF["Visual Frontend Thread<br/>~30 Hz<br/>IVisualFrontend::process()"]
+        IMU["IMU Reader Thread<br/>400 Hz<br/>IIMUSource::read()"]
+        PP["Pose Publisher Thread<br/>100 Hz<br/>PoseDoubleBuffer → SHM"]
+
+        VF -->|"PoseDoubleBuffer<br/>(lock-free atomic swap)"| PP
+    end
+
+    SHM_stereo["/drone_stereo_cam<br/>SHM"] --> VF
+    IMU_HAL["HAL IIMUSource"] --> IMU
+    PP -->|"SHM /slam_pose<br/>~352 B"| P4_5["P4, P5"]
+```
+
+Three worker threads + main health-check loop. The visual frontend produces `Pose` objects into a **lock-free double buffer** (`PoseDoubleBuffer` — atomic index swap), consumed by the pose publisher thread which writes to SHM.
+
+#### Visual Frontend — `IVisualFrontend` Strategy Pattern
+
+| Backend | Class | Compile Guard | Algorithm |
+|---|---|---|---|
+| `"simulated"` | `SimulatedVisualFrontend` | None | Circular trajectory with Gaussian noise: $x = 5\cos(0.5t),\; y = 5\sin(0.5t),\; z = 2 + 0.1\sin(t)$, noise $\mathcal{N}(0, 0.01)$ per axis. Quality = 2 (good). |
+| `"gazebo"` | `GazeboVisualFrontend` | `HAVE_GAZEBO` | Subscribes to gz-transport odometry topic (`/model/x500_companion_0/odometry`). Returns ground-truth pose with Gazebo→internal frame swap (N=GzY, E=GzX). Quality = 3 (excellent). |
 
 | Aspect | Detail |
 |---|---|
-| **Pose estimation** | **Simulated** — circular trajectory with Gaussian noise (NOT a real VIO/SLAM) |
-| **Trajectory** | $x = 5\cos(0.5t),\;\; y = 5\sin(0.5t),\;\; z = 2 + 0.1\sin(t)$ |
-| **Pose noise** | $\mathcal{N}(0,\; 0.01)$ on each axis |
 | **Covariance** | Fixed $6\times6$ identity $\times 0.01$ |
-| **IMU data** | Read via HAL `SimulatedIMU` at 400 Hz (placeholder — not integrated into pose estimate) |
+| **IMU data** | Read via HAL `IIMUSource` at 400 Hz (placeholder — not integrated into pose estimate) |
 | **Loop closure** | Not implemented |
 | **Optimization** | Not implemented (no graph optimization, bundle adjustment, or factor graph) |
 | **Thread-safe exchange** | Custom `PoseDoubleBuffer` — lock-free double buffer with atomic index |
@@ -204,6 +309,32 @@ Three threads: visual frontend, IMU reader, and pose publisher.
 
 ### Process 4 — Mission Planner
 
+```mermaid
+graph TD
+    subgraph P4["Process 4 — Mission Planner (1 thread, 10 Hz)"]
+        direction TB
+        FSM["MissionFSM<br/>State Machine"]
+        PP["IPathPlanner<br/>PotentialFieldPlanner<br/>+ EMA smoothing α=0.35"]
+        OA["IObstacleAvoider<br/>PotentialFieldAvoider<br/>+ staleness/confidence/clamp"]
+        CMD["FC Command Publisher<br/>monotonic sequence_id"]
+
+        FSM --> PP
+        PP --> OA
+        OA --> CMD
+    end
+
+    SHM_pose["/slam_pose"] --> FSM
+    SHM_det["/detected_objects"] --> OA
+    SHM_fc["/fc_state"] --> FSM
+    SHM_gcs["/gcs_commands<br/>(lazy)"] --> FSM
+    CMD -->|"/trajectory_cmd"| P5["P5 Comms"]
+    CMD -->|"/fc_commands"| P5
+    FSM -->|"/mission_status"| P5_7["P5, P7"]
+    FSM -->|"/payload_commands"| P6["P6 Payload"]
+```
+
+Single-threaded 10 Hz loop: FSM tick → path planning → obstacle avoidance → FC command dispatch. Subscribes mandatory to `FC_STATE` (armed check, altitude feedback) and lazy to `GCS_COMMANDS` (dedup by timestamp).
+
 #### FSM States
 
 ```
@@ -221,46 +352,115 @@ Three threads: visual frontend, IMU reader, and pose publisher.
                     └───────────┘
 ```
 
-#### Path Planning — Artificial Potential Field
+**Key state behaviors:**
+- **PREFLIGHT:** Re-sends ARM command every 3 s until `fc_state.armed == true`
+- **TAKEOFF:** Transitions to NAVIGATE when `fc_state.rel_alt >= takeoff_alt * 0.9`
+- **NAVIGATE → RTL:** On last waypoint, sends RTL FC command + publishes invalid trajectory (`valid=false`) to stop comms forwarding stale velocity commands
+- **GCS RTL/LAND:** Handles by (1) sending FC command, (2) publishing invalid trajectory, (3) transitioning FSM
+
+#### Path Planning — `IPathPlanner` (Artificial Potential Field)
 
 | Aspect | Detail |
 |---|---|
 | **Algorithm** | **Artificial Potential Field** (attractive + repulsive forces) |
 | **NOT used** | RRT, RRT*, A*, D*, PRM, or any sampling/graph-based planner |
 | **Attractive force** | Unit vector toward waypoint × $\min(\text{cruise\_speed},\; \|\mathbf{d}\|)$ |
-| **Repulsive force** | For each obstacle within $r_{influence}$: $\mathbf{F}_{rep} = \frac{k_{rep}}{d^2} \hat{\mathbf{n}}_{away}$ |
-| **Waypoint acceptance** | Euclidean distance < `acceptance_radius_m` (1.0 m) |
+| **EMA smoothing** | $\mathbf{v}_t = \alpha \cdot \mathbf{v}_{raw} + (1-\alpha) \cdot \mathbf{v}_{t-1}$, $\alpha = 0.35$ (config: `ema_alpha`, clamped [0.05, 1.0]). Prevents jitter from noisy pose input. |
+| **Speed ramping** | Linear ramp from `cruise_speed` to `min_speed` (1.0 m/s floor) within last 3 m of waypoint |
+| **Waypoint acceptance** | Euclidean distance < `acceptance_radius_m` (2.0 m in Gazebo config) |
 | **Velocity control** | Direct velocity commands — **no PID controller** |
-| **Config** | `influence_radius_m` = 5.0, `repulsive_gain` = 2.0, `cruise_speed_mps` = 2.0 |
-| **Written from scratch** | Yes — `compute_trajectory()` function |
+| **Written from scratch** | Yes — `PotentialFieldPlanner::compute_trajectory()` |
 
-**Default waypoints** (square pattern at 5 m altitude):
+#### Obstacle Avoidance — `IObstacleAvoider` (Potential Field)
 
-| WP | X | Y | Z | Yaw (rad) | Payload trigger |
-|---|---|---|---|---|---|
-| 1 | 10 | 0 | 5 | 0 | No |
-| 2 | 10 | 10 | 5 | 1.57 | Yes |
-| 3 | 0 | 10 | 5 | 3.14 | No |
-| 4 | 0 | 0 | 5 | -1.57 | Yes |
+| Aspect | Detail |
+|---|---|
+| **Repulsive force** | For each obstacle within $r_{influence}$: $\mathbf{F}_{rep} = \frac{k_{rep}}{d^2} \hat{\mathbf{n}}_{away}$ |
+| **Staleness filter** | Skips objects with timestamp > 500 ms old |
+| **Confidence filter** | Skips objects with confidence < 0.3 |
+| **Repulsion clamp** | Max repulsion capped at ±2.0 m/s per axis |
+| **Config** | `influence_radius_m` = 5.0, `repulsive_gain` = 2.0, `min_distance_m` = 2.0 |
+| **Written from scratch** | Yes — `PotentialFieldAvoider::adjust_trajectory()` |
+
+**Gazebo waypoints** (3 waypoints at 5 m altitude):
+
+| WP | X | Y | Z | Yaw (rad) | Speed | Payload trigger |
+|---|---|---|---|---|---|---|
+| 1 | 15 | 0 | 5 | 0 | 5.0 | No |
+| 2 | 15 | 15 | 5 | 1.57 | 5.0 | Yes |
+| 3 | 0 | 0 | 5 | 0 | 5.0 | No |
 
 ---
 
 ### Process 5 — Comms
 
-Four threads bridge the companion computer with the flight controller and ground station:
+```mermaid
+graph LR
+    subgraph P5["Process 5 — Comms (5 threads)"]
+        direction TB
+        Main5["Main Thread<br/>health check"]
+
+        subgraph FCBridge["FC Bridge"]
+            direction LR
+            FCRX["fc_rx Thread<br/>10 Hz<br/>IFCLink → SHM"]
+            FCTX["fc_tx Thread<br/>20 Hz<br/>SHM → IFCLink<br/>+ RTL guard"]
+        end
+
+        subgraph GCSBridge["GCS Bridge"]
+            direction LR
+            GCSRX["gcs_rx Thread<br/>2 Hz<br/>IGCSLink → SHM"]
+            GCSTX["gcs_tx Thread<br/>2 Hz<br/>SHM → IGCSLink"]
+        end
+    end
+
+    FCRX -->|"SHM /fc_state"| P4_7["P4, P7"]
+    SHM_traj["/trajectory_cmd"] --> FCTX
+    SHM_fccmd["/fc_commands"] --> FCTX
+    FCTX --> FC["Flight Controller<br/>(PX4 / Simulated)"]
+    FC --> FCRX
+    GCSRX -->|"SHM /gcs_commands"| P4b["P4"]
+    SHM_pose2["/slam_pose + /mission_status + /fc_state"] --> GCSTX
+    GCSTX --> GCS["Ground Station"]
+    GCS --> GCSRX
+```
+
+Five threads (main + 4 workers) bridge the companion computer with the flight controller and ground station.
 
 | Thread | HAL Interface | Protocol | Direction |
 |---|---|---|---|
-| `fc_rx` | `IFCLink` | MAVLink `HEARTBEAT` + `SYS_STATUS` | FC → Companion |
+| `fc_rx` | `IFCLink` | MAVLink heartbeat + sys_status | FC → Companion |
 | `fc_tx` | `IFCLink` | MAVLink `SET_POSITION_TARGET_LOCAL_NED` | Companion → FC |
 | `gcs_rx` | `IGCSLink` | UDP command polling | GCS → Companion |
 | `gcs_tx` | `IGCSLink` | UDP telemetry (pos + battery + state) | Companion → GCS |
 
-**Simulated FC link** models battery drain at 0.05%/s and GPS satellite count oscillating as $12 + 3\sin(0.1t)$. Thread-safe (`std::mutex` on all methods).
+#### FC Link — `IFCLink` Strategy Pattern
+
+| Backend Config | Class | Compile Guard | Detail |
+|---|---|---|---|
+| `"simulated"` | `SimulatedFCLink` | None | Models battery drain at 0.05%/s, GPS satellites oscillating as $12 + 3\sin(0.1t)$. Thread-safe (`std::mutex`). |
+| `"mavlink"` | `MavlinkFCLink` | `HAVE_MAVSDK` | MAVSDK `ComponentType::GroundStation` (passes PX4 GCS heartbeat preflight). Velocity in NED via `Offboard::set_velocity_ned()`, auto-starts offboard on first call. Sets RTL return altitude to 5 m. |
+
+#### Key Safety Mechanisms
+
+- **RTL stale-trajectory guard:** On RTL or LAND FC command, `fc_tx_thread` sets `last_traj_ts = UINT64_MAX`, permanently blocking all subsequent trajectory commands from being forwarded to the FC. Prevents stale velocity SHM values from re-entering offboard mode after RTL/LAND.
+- **FC command dedup:** Monotonic `sequence_id` (set by P4) — each command forwarded only once.
+- **Trajectory dedup:** By `timestamp_ns` — only forwards if timestamp > last sent.
 
 ---
 
 ### Process 6 — Payload Manager
+
+```mermaid
+graph LR
+    subgraph P6["Process 6 — Payload Manager (1 thread, 50 Hz)"]
+        direction TB
+        Loop6["Main Loop<br/>Read command → Gimbal update(dt) → Publish status"]
+    end
+
+    SHM_payload["/payload_commands"] --> Loop6
+    Loop6 -->|"SHM /payload_status"| Out6["P4, P7"]
+    Loop6 --> Gimbal["HAL IGimbal<br/>SimulatedGimbal"]
+```
 
 | Aspect | Detail |
 |---|---|
@@ -270,20 +470,39 @@ Four threads bridge the companion computer with the flight controller and ground
 | **Pitch limits** | -90° (nadir) to +30° |
 | **Yaw limits** | -180° to +180° |
 | **Actions** | `GIMBAL_POINT`, `CAMERA_CAPTURE`, `CAMERA_START_VIDEO`, `CAMERA_STOP_VIDEO` |
+| **Command dedup** | By `timestamp_ns` |
 | **Written from scratch** | Yes |
 
 ---
 
 ### Process 7 — System Monitor
 
+```mermaid
+graph LR
+    subgraph P7["Process 7 — System Monitor (1 thread, 1 Hz)"]
+        direction TB
+        Mon["IProcessMonitor<br/>LinuxProcessMonitor"]
+        Alert["Threshold Alerting<br/>normal / WARNING / CRITICAL"]
+        Mon --> Alert
+    end
+
+    Proc["/proc/stat<br/>/proc/meminfo"] --> Mon
+    Thermal["/sys/.../thermal_zone0/temp"] --> Mon
+    Disk["df -m / (every N ticks)"] --> Mon
+    SHM_fc7["/fc_state<br/>(lazy subscribe)"] -->|"battery %"| Mon
+    Alert -->|"SHM /system_health"| P4_out["P4"]
+```
+
 | Metric | Source | Method |
 |---|---|---|
 | CPU usage | `/proc/stat` | Two-sample delta: $\frac{\Delta\text{active}}{\Delta\text{total}} \times 100$ |
 | Memory | `/proc/meminfo` | $(total - available) / total \times 100$ |
 | CPU temperature | `/sys/class/thermal/thermal_zone0/temp` | Read millidegrees ÷ 1000 |
-| Disk usage | `df -m /` via `popen()` | Parsed % used (checked every 10 ticks) |
-| Battery | SHM `ShmFCState.battery_remaining` | Forwarded from P5 |
+| Disk usage | `df -m /` via `popen()` | Parsed % used (checked every N ticks to reduce popen overhead) |
+| Battery | SHM `FC_STATE` (lazy subscribe) | Forwarded from P5; defaults to 100% if unavailable |
 | Power estimate | `battery × 0.16` watts | Rough linear estimate |
+
+**Thermal zone states:** 0 = normal, 2 = WARNING (CPU/mem/temp above warn OR battery < warn), 3 = CRITICAL (temp > crit OR disk > crit OR battery < crit)
 
 **Alert thresholds** (configurable):
 
@@ -355,18 +574,19 @@ SysMon     ├──────────────────────
 | SHM Segment | Type | Size (approx) | Producer | Consumer(s) |
 |---|---|---|---|---|
 | `/drone_mission_cam` | `ShmVideoFrame` | ~6.2 MB | P1 | P2 |
-| `/drone_stereo_cam` | `ShmStereoFrame` | ~614 KB | P1 | P2, P3 |
+| `/drone_stereo_cam` | `ShmStereoFrame` | ~614 KB | P1 | P3 |
 | `/detected_objects` | `ShmDetectedObjectList` | ~5 KB | P2 | P4 |
-| `/slam_pose` | `ShmPose` | ~352 B | P3 | P4, P5, P6 |
-| `/mission_status` | `ShmMissionStatus` | ~48 B | P4 | P5, P7 |
+| `/slam_pose` | `ShmPose` | ~352 B | P3 | P4, P5 |
+| `/mission_status` | `ShmMissionStatus` | ~48 B | P4 | P5 |
 | `/trajectory_cmd` | `ShmTrajectoryCmd` | ~48 B | P4 | P5 |
 | `/payload_commands` | `ShmPayloadCommand` | ~32 B | P4 | P6 |
+| `/fc_commands` | `ShmFCCommand` | ~48 B | P4 | P5 |
 | `/fc_state` | `ShmFCState` | ~64 B | P5 | P4, P7 |
 | `/gcs_commands` | `ShmGCSCommand` | ~40 B | P5 | P4 |
-| `/payload_status` | `ShmPayloadStatus` | ~32 B | P6 | P4, P7 |
-| `/system_health` | `ShmSystemHealth` | ~56 B | P7 | P4 |
+| `/payload_status` | `ShmPayloadStatus` | ~32 B | P6 | — |
+| `/system_health` | `ShmSystemHealth` | ~56 B | P7 | — |
 
-Each segment is wrapped in `ShmBlock { atomic<uint64_t> seq, uint64_t timestamp_ns, T data }` adding 16 bytes. Total SHM footprint: **~7 MB**.
+Each segment is wrapped in `ShmBlock { atomic<uint64_t> seq, uint64_t timestamp_ns, T data }` adding 16 bytes. Total SHM footprint: **~7 MB** (12 segments).
 
 ---
 
@@ -426,9 +646,9 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| Object detection | 🔴 `SimulatedDetector` — random bounding boxes | **YOLOv8-Nano** via TensorRT (INT8 on Jetson Orin: ~2 ms/frame) | Alternative: **MobileNet-SSD v2** (~3 ms, lower accuracy). Keep `IDetector` interface. Publicly available: [ultralytics/yolov8](https://github.com/ultralytics/ultralytics) |
+| Object detection | � `SimulatedDetector`, `ColorContourDetector`, `OpenCvYoloDetector` (CPU, ~7–13 FPS) | **YOLOv8-Nano** via **TensorRT** (INT8 on Jetson Orin: ~2 ms/frame) | Current OpenCV DNN backend is functional but CPU-only. TensorRT gives 10-50× speedup on GPU. Keep `IDetector` interface. |
 | | | **RT-DETR** (transformer-based, no NMS needed) | Emerging option. Slower but no post-processing. Publicly available: [PaddleDetection](https://github.com/PaddlePaddle/PaddleDetection) |
-| NMS | 🟡 Config threshold only (detector doesn't run real NMS) | **Greedy NMS** or **Soft-NMS** (Bodla et al. 2017) | Standard implementation; build from scratch or use TensorRT's built-in NMS plugin |
+| NMS | 🟢 `OpenCvYoloDetector` runs full NMS (IoU-based) | Production-ready for current scale | For higher throughput: TensorRT's built-in NMS plugin |
 | Tracking — filter | 🟡 **Linear Kalman Filter** (8D constant-velocity) | **Extended Kalman Filter (EKF)** with constant-turn-rate model | Handles manoeuvring targets better. Publicly available reference: [rlabbe/Kalman-and-Bayesian-Filters](https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python) |
 | | | **Unscented Kalman Filter (UKF)** | Better nonlinear handling than EKF, no Jacobian derivation. Higher compute cost. |
 | | | **Interacting Multiple Model (IMM)** | Bank of 2–3 motion models (CV + CT + CA); best for targets that switch between straight-line and manoeuvring. Production-grade choice. |
@@ -445,7 +665,7 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| Pose estimation | 🔴 **Simulated circular trajectory** with Gaussian noise | **Visual-Inertial Odometry (VIO)** — tightly-coupled EKF or optimization | See options below |
+| Pose estimation | � **SimulatedVisualFrontend** (circular trajectory) + **GazeboVisualFrontend** (ground-truth odometry) | **Visual-Inertial Odometry (VIO)** — tightly-coupled EKF or optimization | Gazebo backend provides ground-truth for testing; need real VIO for production |
 | | | **MSCKF** (Multi-State Constraint Kalman Filter) | Efficient EKF-based VIO. Used in Google Tango. Publicly available: [KumarRobotics/msckf_vio](https://github.com/KumarRobotics/msckf_vio) |
 | | | **VINS-Mono / VINS-Fusion** | Optimization-based VIO with loop closure. Publicly available: [HKUST-Aerial-Robotics/VINS-Fusion](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion) |
 | | | **ORB-SLAM3** | Full visual-inertial SLAM with relocalization and map merging. Publicly available: [UZ-SLAMLab/ORB_SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3) (GPLv3) |
@@ -479,7 +699,7 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| FC link | 🔴 `SimulatedFCLink` — synthetic battery/GPS | **MAVLink 2** via serial UART (/dev/ttyTHS1) | Use [mavlink/c_library_v2](https://github.com/mavlink/c_library_v2) (MIT). Header-only C library — zero dependencies. |
+| FC link | � `SimulatedFCLink` + `MavlinkFCLink` (MAVSDK, Gazebo SITL tested) | **MAVLink 2** via serial UART (/dev/ttyTHS1) for real hardware | MAVSDK backend complete; needs serial transport for physical FC. Currently UDP only. |
 | GCS link | 🔴 `SimulatedGCSLink` — synthetic RTL at 120 s | **MAVLink UDP** or **custom protobuf-based protocol over TCP/TLS** | MAVLink is standard; protobuf is better for custom telemetry payloads. |
 | Telemetry compression | 🔴 Not implemented | **Delta encoding + LZ4** for video relay, raw for low-rate telemetry | [lz4/lz4](https://github.com/lz4/lz4) (BSD). |
 | Video streaming | 🔴 Not implemented | **H.265/HEVC** via NVIDIA hardware encoder + RTP/RTSP | GStreamer pipeline on Jetson: `nvv4l2h265enc` → `rtph265pay`. |
@@ -521,9 +741,9 @@ Based on the analysis above, here is the recommended implementation order:
 
 | Priority | Item | Effort | Impact | Dependency |
 |---|---|---|---|---|
-| **P0** | MAVLink 2 FC link (real `IFCLink` backend) | 1 week | Enables real flight | None |
+| **P0** | ~~MAVLink 2 FC link (real `IFCLink` backend)~~ | ~~1 week~~ | ✅ **DONE** — `MavlinkFCLink` via MAVSDK | None |
 | **P0** | V4L2 / libargus camera backend | 1 week | Enables real sensor input | None |
-| **P1** | YOLOv8-Nano via TensorRT detection | 2 weeks | Replaces simulated detector | V4L2 camera |
+| **P1** | ~~YOLOv8-Nano via TensorRT detection~~ | 2 weeks | 🟡 **Partial** — `OpenCvYoloDetector` (CPU DNN) done; TensorRT GPU upgrade remaining | V4L2 camera |
 | **P1** | VIO (MSCKF or VINS-Mono integration) | 3 weeks | Replaces simulated trajectory | V4L2 camera, IMU driver |
 | **P1** | Process supervisor / watchdog | 1 week | Crash recovery in flight | None |
 | **P2** | Hungarian algorithm (optimal association) | 2 days | Better tracking accuracy | None |
@@ -577,7 +797,7 @@ Services (external RPC):
 |---|---|---|---|
 | **P1** | `IPublisher<T>` / `ISubscriber<T>` + `ShmMessageBus` — abstract pub-sub over SHM | 3 days | Decouples all producers from consumers |
 | **P1** | `IServiceClient` / `IServiceServer` — request-response with correlation IDs | 2 days | Enables reliable command delivery |
-| **P2** | Internal process interfaces (`IVisualFrontend`, `IPathPlanner`, `IObstacleAvoider`, `IProcessMonitor`) | 1 week | Full strategy-pattern modularity |
+| **P2** | Internal process interfaces (`IVisualFrontend`, `IPathPlanner`, `IObstacleAvoider`, `IProcessMonitor`) — **DONE** | — | All strategy interfaces implemented with simulated + real backends |
 | **P3** | gRPC service layer for external comms | 2 weeks | Production GCS/fleet integration |
 
 ---
@@ -745,13 +965,15 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 .
 ├── CMakeLists.txt                    # Super-build
 ├── config/
-│   └── default.json                  # All tunables (rates, thresholds, backends)
+│   ├── default.json                  # All tunables (simulated backends)
+│   ├── gazebo_sitl.json              # Gazebo SITL config (mavlink FC, gazebo cameras)
+│   └── gazebo.json                   # Full Gazebo config (+ gazebo visual frontend)
 ├── common/
 │   ├── ipc/                          # Shared memory IPC library
 │   │   └── include/ipc/
 │   │       ├── shm_writer.h          # SeqLock writer template
 │   │       ├── shm_reader.h          # SeqLock reader template
-│   │       └── shm_types.h           # All IPC data structures
+│   │       └── shm_types.h           # All IPC data structures (12 SHM segment types)
 │   ├── hal/                          # Hardware Abstraction Layer
 │   │   └── include/hal/
 │   │       ├── icamera.h             # Camera interface
@@ -764,52 +986,97 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │   │       ├── simulated_fc_link.h   # Simulated MAVLink (thread-safe)
 │   │       ├── simulated_gcs_link.h  # Simulated GCS UDP (thread-safe)
 │   │       ├── simulated_gimbal.h    # Rate-limited slew model
-│   │       └── simulated_imu.h       # Noisy synthetic IMU data
+│   │       ├── simulated_imu.h       # Noisy synthetic IMU data
+│   │       ├── gazebo_camera.h       # Gazebo gz-transport camera (HAVE_GAZEBO)
+│   │       ├── gazebo_imu.h          # Gazebo gz-transport IMU (HAVE_GAZEBO)
+│   │       └── mavlink_fc_link.h     # MAVSDK MAVLink FC link (HAVE_MAVSDK)
 │   └── util/                         # Utility library
 │       └── include/util/
 │           ├── signal_handler.h      # Graceful SIGINT/SIGTERM
 │           ├── arg_parser.h          # CLI argument parsing
 │           ├── config.h              # JSON config (nlohmann/json)
-│           ├── log_config.h          # spdlog configuration
+│           ├── log_config.h          # spdlog config + resolve_log_dir()
 │           ├── realtime.h            # Thread naming/affinity/RT
 │           ├── scoped_timer.h        # RAII timing + budget warnings
 │           └── spsc_ring.h           # Lock-free SPSC ring buffer
-├── process1_video_capture/           # Mission + stereo camera capture
-├── process2_perception/              # Detection → tracking → fusion pipeline
+├── process1_video_capture/           # Mission + stereo camera capture (3 threads)
+├── process2_perception/              # Detection → tracking → fusion pipeline (6 threads)
 │   ├── include/perception/
 │   │   ├── detector_interface.h      # IDetector strategy interface
+│   │   ├── color_contour_detector.h  # Pure C++ HSV contour detector (no OpenCV)
+│   │   ├── opencv_yolo_detector.h    # YOLOv8 via OpenCV DNN (HAS_OPENCV)
+│   │   ├── types.h                   # Detection/tracking types + ObjectClass enum
 │   │   ├── fusion_engine.h           # Multi-sensor fusion
 │   │   └── kalman_tracker.h          # Linear Kalman filter tracker
 │   └── src/
-│       ├── main.cpp                  # 5-thread pipeline
+│       ├── main.cpp                  # 6-thread pipeline orchestration
+│       ├── detector_factory.cpp      # create_detector() — backend selection
+│       ├── simulated_detector.cpp    # Random bounding box generator
+│       ├── opencv_yolo_detector.cpp  # YOLOv8n ONNX inference + NMS
 │       ├── kalman_tracker.cpp        # SORT-style tracker + greedy association
 │       └── fusion_engine.cpp         # Camera+LiDAR+radar fusion
-├── process3_slam_vio_nav/            # Simulated VIO/pose estimation
-├── process4_mission_planner/         # FSM + potential field planner
-├── process5_comms/                   # MAVLink + GCS comms (4 threads)
-├── process6_payload_manager/         # Gimbal control + camera trigger
-├── process7_system_monitor/          # /proc + /sys health monitoring
-├── tests/                            # 121 Google Tests across 10 suites
+├── process3_slam_vio_nav/            # VIO/pose estimation (4 threads)
+│   └── include/slam/
+│       ├── ivisual_frontend.h        # IVisualFrontend strategy interface
+│       └── types.h                   # Pose, ImuSample, KeyframePolicy
+├── process4_mission_planner/         # FSM + potential field planner (1 thread)
+│   └── include/planner/
+│       ├── mission_fsm.h             # 8-state finite state machine
+│       ├── ipath_planner.h           # IPathPlanner + PotentialFieldPlanner (EMA)
+│       └── iobstacle_avoider.h       # IObstacleAvoider + PotentialFieldAvoider
+├── process5_comms/                   # MAVLink + GCS comms (5 threads)
+│   └── include/comms/
+│       ├── gcs_link.h                # GCS protocol helpers
+│       └── mavlink_sim.h             # MAVLink simulation helpers
+├── process6_payload_manager/         # Gimbal control + camera trigger (1 thread)
+├── process7_system_monitor/          # /proc + /sys health monitoring (1 thread)
+│   └── include/monitor/
+│       ├── iprocess_monitor.h        # IProcessMonitor + LinuxProcessMonitor
+│       └── sys_info.h                # CPU, memory, temperature utilities
+├── tests/                            # 262 Google Tests across 18 test files
+│   ├── test_shm_ipc.cpp
+│   ├── test_spsc_ring.cpp
+│   ├── test_config.cpp
+│   ├── test_hal.cpp
+│   ├── test_mission_fsm.cpp
+│   ├── test_kalman_tracker.cpp
+│   ├── test_fusion_engine.cpp
+│   ├── test_comms.cpp
+│   ├── test_payload_manager.cpp
+│   ├── test_system_monitor.cpp
+│   ├── test_message_bus.cpp
+│   ├── test_process_interfaces.cpp
+│   ├── test_color_contour_detector.cpp
+│   ├── test_opencv_yolo_detector.cpp
+│   ├── test_gazebo_camera.cpp
+│   ├── test_gazebo_imu.cpp
+│   ├── test_gazebo_integration.sh
+│   └── test_mavlink_fc_link.cpp
+├── models/
+│   └── yolov8n.onnx                 # YOLOv8-nano ONNX model (12.8 MB)
 └── deploy/
-    ├── build.sh                      # Build script
-    └── launch_all.sh                 # Launch all processes in order
+    ├── build.sh                      # Build script (Release/Debug)
+    └── launch_all.sh                 # Launch all 7 processes in order
 ```
 
 ## Simulation Mode
 
-All hardware dependencies (V4L2 cameras, TensorRT, CUDA, GTSAM, MAVLink serial, etc.) are replaced with **simulated HAL backends** that generate synthetic data. This allows the full stack to compile and run on any Linux system with only spdlog and Eigen3 installed.
+All hardware dependencies (V4L2 cameras, TensorRT, CUDA, GTSAM, MAVLink serial, etc.) are replaced with **simulated HAL backends** that generate synthetic data. This allows the full stack to compile and run on any Linux system with only spdlog, Eigen3, nlohmann/json, and GTest installed. Optional backends (OpenCV DNN, MAVSDK, Gazebo gz-transport) are auto-detected by CMake via compile guards (`HAS_OPENCV`, `HAVE_MAVSDK`, `HAVE_GAZEBO`).
 
 To switch a component to real hardware, change `"backend": "simulated"` to the real backend name in [config/default.json](config/default.json) and implement the corresponding HAL interface.
 
 ## Dependencies
 
-All dependencies are standard Ubuntu packages — no custom builds required.
+All dependencies are standard Ubuntu packages — no custom builds required for the base stack. Optional dependencies enable Gazebo simulation and YOLOv8 detection.
 
-| Library | Version | Purpose | Install |
-|---|---|---|---|
-| CMake | ≥ 3.16 | Build system | `apt install cmake` |
-| spdlog | ≥ 1.12 | Logging (console + file) | `apt install libspdlog-dev` |
-| Eigen3 | ≥ 3.4 | Linear algebra (Kalman, poses) | `apt install libeigen3-dev` |
-| nlohmann/json | ≥ 3.11 | JSON config parsing | `apt install nlohmann-json3-dev` |
-| Google Test | ≥ 1.14 | Unit testing | `apt install libgtest-dev` |
-| GCC | ≥ 11 | C++17 compiler | `apt install build-essential` |
+| Library | Version | Purpose | Install | Required |
+|---|---|---|---|---|
+| CMake | ≥ 3.16 | Build system | `apt install cmake` | Yes |
+| spdlog | ≥ 1.12 | Logging (console + file) | `apt install libspdlog-dev` | Yes |
+| Eigen3 | ≥ 3.4 | Linear algebra (Kalman, poses) | `apt install libeigen3-dev` | Yes |
+| nlohmann/json | ≥ 3.11 | JSON config parsing | `apt install nlohmann-json3-dev` | Yes |
+| Google Test | ≥ 1.14 | Unit testing | `apt install libgtest-dev` | Yes |
+| GCC | ≥ 11 | C++17 compiler | `apt install build-essential` | Yes |
+| OpenCV | ≥ 4.6 | YOLOv8 DNN inference (`OpenCvYoloDetector`) | Build from source or `apt install libopencv-dev` | Optional (`HAS_OPENCV`) |
+| MAVSDK | ≥ 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
+| Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
