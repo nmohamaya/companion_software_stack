@@ -321,9 +321,10 @@ if $INSTALL_MAVSDK; then
         cd "$MAVSDK_BUILD_DIR"
 
         info "Cloning MAVSDK (with submodules — this may take a few minutes)..."
-        git clone --recursive https://github.com/mavlink/MAVSDK.git
+        git clone https://github.com/mavlink/MAVSDK.git
         cd MAVSDK
         git checkout v2.12.12
+        git submodule update --init --recursive
 
         info "Configuring MAVSDK..."
         cmake -B build \
@@ -481,7 +482,7 @@ if $INSTALL_PX4; then
         }
 
         info "Building PX4 SITL target (using $(nproc) cores — this takes 20–40 minutes)..."
-        make px4_sitl_default -j"$(nproc)"
+        make -j"$(nproc)" px4_sitl_default
 
         if [[ -x "${PX4_DIR}/build/px4_sitl_default/bin/px4" ]]; then
             success "PX4 SITL built successfully"
@@ -499,6 +500,7 @@ if $INSTALL_PX4; then
 
         GZ_WORLDS_DIR="${PX4_DIR}/Tools/simulation/gz/worlds"
         GZ_MODELS_DIR="${PX4_DIR}/Tools/simulation/gz/models"
+        mkdir -p "$GZ_WORLDS_DIR" "$GZ_MODELS_DIR"
 
         if [[ -d "${PROJECT_DIR}/sim/worlds" ]] && [[ -d "$GZ_WORLDS_DIR" ]]; then
             ln -sf "${PROJECT_DIR}/sim/worlds/test_world.sdf" \
