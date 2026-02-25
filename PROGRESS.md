@@ -433,6 +433,142 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 
 ---
 
+## Phase 8 — Deployment Tooling & RTL Safety (PRs #21, #23)
+
+### Improvement #9 — Automated Dependency Installer (PR #21)
+
+**Date:** 2026-02-25  
+**Category:** Infrastructure / Deployment  
+**Branch:** `feature/install-script`
+
+**Files Added:**
+- `deploy/install_dependencies.sh` — One-command automated installer (~605 lines)
+
+**Files Modified:**
+- `process7_system_monitor/CMakeLists.txt` — Added missing `drone_hal` link
+- `common/ipc/include/ipc/shm_writer.h` — Fixed `NO_DISCARD` attribute typo
+- `common/ipc/include/ipc/shm_reader.h` — Fixed `msg` variable shadowing
+
+**What:** Created a comprehensive dependency installation script that sets up a fresh Ubuntu machine from scratch:
+- System packages (build-essential, cmake, spdlog, eigen3, nlohmann-json, gtest)
+- OpenCV 4.10.0 from source (core + imgproc + dnn modules)
+- MAVSDK 2.12.12 from source
+- PX4-Autopilot SITL
+- Gazebo Harmonic
+
+**Bug Fixes Found During Fresh-Machine Testing:**
+1. `process7_system_monitor` missing `drone_hal` link (linker error)
+2. ShmWriter `NO_DISCARD` → `[[nodiscard]]` attribute fix
+3. ShmReader `msg` variable shadowed outer scope
+
+**Review Comment Fixes (6 total):**
+- ShellCheck compliance improvements
+- Error handling for failed downloads
+- Idiomatic bash patterns
+
+---
+
+### Improvement #10 — Development Workflow Documentation
+
+**Date:** 2026-02-25  
+**Category:** Documentation / Process  
+
+**Files Modified:**
+- `README.md` — Added Development Workflow section
+
+**What:** Documented the project's development workflow in README.md:
+- **Branch naming:** `feature/issue-N-description`, `fix/issue-N-description`
+- **Commit format:** `feat(#N):`, `fix(#N):`, `docs(#N):`
+- **PR checklist:** Tests pass, zero warnings, descriptive title, linked issue
+- **Bug fix workflow:** File issue → branch → fix → test → PR → verify → close
+- **Post-merge lessons:** Lessons learned from PRs #12–#21
+
+---
+
+### Improvement #11 — RTL Landing Fix (PR #23)
+
+**Date:** 2026-02-25  
+**Category:** Flight Safety / Bug Fix  
+**Issue:** #22, #24  
+**Branch:** `fix/rtl-landing-delay`
+
+**Files Modified:**
+- `process4_mission_planner/src/main.cpp` — RTL logic rewrite
+- `tests/test_mission_fsm.cpp` — Updated RTL tests
+
+**What:** Fixed the drone not returning to the starting point before landing. Two PRs worth of fixes:
+
+**PR #23 — Review Comment Fixes:**
+
+| Fix | Problem | Solution |
+|-----|---------|----------|
+| Home position check | `!= 0.0` fails if home is at x=0 or y=0 | `std::isfinite()` gating |
+| RTL guard | `home_x/home_y` used without checking `home_recorded` | `if (home_recorded)` guard |
+
+**PR #23 — RTL Dwell Time Fix (found during simulation testing):**
+
+| Fix | Problem | Solution |
+|-----|---------|----------|
+| Premature LAND | LAND sent within 100 ms of RTL before PX4 could fly back | `rtl_min_dwell_seconds` (5 s default) |
+| Loose acceptance | 3.0 m acceptance radius too wide | Tightened to 1.5 m |
+| RTL timing | No minimum time in RTL state | `rtl_start_time` tracked on both mission-complete and GCS RTL paths |
+
+**Simulation Verification:**
+- Before fix: Drone landed 1.7 m from starting point
+- After fix: Drone returned to home (0.0 m distance, 52 s in RTL state), then landed at starting point
+
+**Issues Closed:** #22, #24
+
+---
+
+### Improvement #12 — Real Drone Deployment Roadmap (Epic #25)
+
+**Date:** 2026-02-25  
+**Category:** Project Management  
+
+**Files Added:**
+- `ROADMAP.md` — Unified roadmap combining completed phases + future deployment plan
+
+**GitHub Issues Created:**
+- **Epic #25** — [Real Drone Deployment — From Simulation to Flight](https://github.com/nmohamaya/companion_software_stack/issues/25)
+- **17 sub-issues** (#26–#42) across 4 planned phases:
+  - Phase 9 (First Safe Flight): #26–#31 — hardware config, battery RTL, heartbeat timeout, geofencing, pre-flight checks, systemd services
+  - Phase 10 (Real Cameras & Perception): #32–#36 — V4L2, TensorRT, UDPGCSLink, video streaming, cross-compilation
+  - Phase 11 (Autonomous Navigation): #37–#39 — VIO backend, stereo calibration, VIO/GPS fusion
+  - Phase 12 (Production Hardening): #40–#42 — flight data recorder, fault tree, gimbal driver
+
+---
+
+## Updated Summary
+
+| Metric | Phase 1–3 | Phase 6 | Phase 7 | Phase 8 |
+|---|---|---|---|---|
+| Bug fixes | 6 | 13 | 13 | **15** (+RTL fixes) |
+| Unit tests | 121 (10 suites) | 196 (14 suites) | 262 (18 suites) | **262** (18 suites) |
+| Config system | 45+ tunables | 70+ tunables | 75+ tunables | **75+** tunables |
+| Processes using real Gazebo data | 0/7 | 4/7 | 5/7 | **5/7** |
+| Detection backend | Simulated only | Simulated only | YOLOv8-nano (80 COCO classes) | **YOLOv8-nano** |
+| OpenCV | Not used | Not used | 4.10.0 | **4.10.0** |
+| Compiler warnings | 0 | 0 | 0 | **0** |
+| Deployment | Manual | Manual | Manual | **Automated** (`install_dependencies.sh`) |
+| RTL verified | — | — | — | **Yes** (0.0 m from home) |
+| GitHub issues | — | — | — | **Epic #25 + 17 sub-issues** |
+| Documentation | README + BUG_FIXES | + Gazebo docs | + Perception docs | **+ ROADMAP.md + Dev Workflow** |
+
+### Process Activity During Simulation (Updated)
+
+| # | Process | Backend | Real Gazebo Data | Activity |
+|---|---|---|---|---|
+| 1 | Video Capture | Gazebo camera | Yes — rendered frames at 30 Hz | High |
+| 2 | Perception | **YOLOv8-nano (OpenCV DNN)** | **Yes — real object detection on camera frames** | **High** |
+| 3 | SLAM/VIO/Nav | Gazebo odometry + IMU | Yes — ground-truth pose | High |
+| 4 | Mission Planner | Pure logic | Consumes real pose | High — orchestrates flight |
+| 5 | Comms | MAVLink (MAVSDK) | Yes — real PX4 link | High — controls PX4 |
+| 6 | Payload Manager | Simulated gimbal | No | Low (occasional triggers) |
+| 7 | System Monitor | Linux /proc | Host metrics only | Low (1 Hz) |
+
+---
+
 ## Phase 7 — Real Perception Pipeline (Issue #19)
 
 ### Improvement #7 — ColorContourDetector (HSV Segmentation + Connected-Component Labeling)
