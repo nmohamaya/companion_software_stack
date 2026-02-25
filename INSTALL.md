@@ -1,0 +1,467 @@
+# Installation Guide
+
+Step-by-step instructions for setting up the Drone Companion Software Stack on a fresh Ubuntu machine. The stack is designed so that **all optional dependencies are truly optional** — you can build and run the full stack with only the core libraries. Each optional dependency unlocks additional backends.
+
+| Dependency Level | Libraries | What It Enables |
+|---|---|---|
+| **Core (required)** | spdlog, Eigen3, nlohmann-json, GTest | Full stack with simulated backends; all tests pass |
+| **Optional: OpenCV** | OpenCV 4.x with DNN module | `OpenCvYoloDetector` — YOLOv8-nano object detection via ONNX |
+| **Optional: MAVSDK** | MAVSDK 2.x | `MavlinkFCLink` — real MAVLink communication with PX4 flight controller |
+| **Optional: Gazebo** | Gazebo Harmonic (gz-sim 8), gz-transport 13, gz-msgs 10 | `GazeboCamera`, `GazeboIMU`, `GazeboVisualFrontend` — SITL simulation with PX4 |
+
+---
+
+## 1. Prerequisites
+
+**Tested on:** Ubuntu 24.04 LTS (x86_64) with GCC 13.3 and CMake 3.28.
+
+```bash
+# Update package lists
+sudo apt-get update && sudo apt-get upgrade -y
+
+# Core build tools
+sudo apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    wget \
+    curl
+```
+
+---
+
+## 2. Core Dependencies (Required)
+
+These are needed for every build. The CI pipeline installs only these.
+
+```bash
+sudo apt-get install -y --no-install-recommends \
+    libspdlog-dev \
+    libeigen3-dev \
+    nlohmann-json3-dev \
+    libgtest-dev
+```
+
+| Library | Version (Ubuntu 24.04) | Purpose |
+|---|---|---|
+| spdlog | 1.12.0 | Structured logging (all 7 processes) |
+| Eigen3 | 3.4.0 | Linear algebra — Kalman filter, pose math, path planning |
+| nlohmann-json | 3.11.3 | JSON config parsing (`Config` class) |
+| GTest | 1.14.0 | Unit testing framework |
+
+### Minimal Build (No Optional Dependencies)
+
+```bash
+cd companion_software_stack
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
+ctest --output-on-failure -j$(nproc)
+```
+
+You should see all tests pass and 7 binaries in `build/bin/`. The stack runs with simulated backends — no hardware, OpenCV, MAVSDK, or Gazebo needed.
+
+---
+
+## 3. OpenCV 4.10 (Optional — YOLOv8 Detection)
+
+### Why OpenCV?
+
+The `OpenCvYoloDetector` backend uses OpenCV's DNN module to run a YOLOv8-nano ONNX model for 80-class object detection. This gives real object detection (people, vehicles, animals, etc.) instead of the random bounding boxes from the simulated detector or the color-only detection from `ColorContourDetector`.
+
+**What it enables:**
+- `"backend": "yolov8"` in config → `OpenCvYoloDetector`
+- Loads `models/yolov8n.onnx` (12.8 MB), runs inference at ~7–13 FPS on CPU
+- 80 COCO classes mapped to internal `ObjectClass` enum (PERSON, VEHICLE_CAR, etc.)
+
+**Without OpenCV:** The stack still builds and runs. The `ColorContourDetector` (pure C++ HSV segmentation) or `SimulatedDetector` are always available.
+
+### Option A: Build from Source (Recommended)
+
+The Ubuntu 24.04 `libopencv-dev` package (4.6.0) works but is older. Building from source gets you 4.10.0 with optimized DNN support:
+
+```bash
+# Install build dependencies
+sudo apt-get install -y \
+    libgtk-3-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libtbb-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev
+
+# Clone OpenCV 4.10.0
+cd /tmp
+git clone --depth 1 --branch 4.10.0 https://github.com/opencv/opencv.git
+git clone --depth 1 --branch 4.10.0 https://github.com/opencv/opencv_contrib.git
+
+# Build with DNN module enabled
+mkdir -p opencv/build && cd opencv/build
+cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DOPENCV_EXTRA_MODULES_PATH=/tmp/opencv_contrib/modules \
+    -DBUILD_LIST=core,imgproc,dnn,imgcodecs,highgui \
+    -DBUILD_TESTS=OFF \
+    -DBUILD_PERF_TESTS=OFF \
+    -DBUILD_EXAMPLES=OFF \
+    -DBUILD_opencv_python3=OFF \
+    -DWITH_PROTOBUF=ON \
+    -DBUILD_PROTOBUF=ON \
+    -DOPENCV_DNN_OPENCL=OFF \
+    ..
+
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+```
+
+**Build time:** ~10–20 minutes depending on CPU cores.
+
+### Option B: Ubuntu Package (Simpler, Older Version)
+
+```bash
+sudo apt-get install -y libopencv-dev
+```
+
+This installs OpenCV 4.6.0 on Ubuntu 24.04. It works but may lack some DNN optimizations present in 4.10.0.
+
+### Verify OpenCV Installation
+
+```bash
+pkg-config --modversion opencv4
+# Should print 4.10.0 (from source) or 4.6.0 (from apt)
+```
+
+Then rebuild the stack — CMake will auto-detect OpenCV:
+
+```bash
+cd companion_software_stack/build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+# Look for: "OpenCV : 4.10.0 — YOLOv8 detector available"
+make -j$(nproc)
+```
+
+### Known Issues — OpenCV
+
+| Issue | Symptom | Fix |
+|---|---|---|
+| **pkg-config finds apt version instead of source build** | CMake picks up 4.6.0 when 4.10.0 is installed to `/usr/local` | Set `OpenCV_DIR=/usr/local/lib/cmake/opencv4` or uninstall `libopencv-dev` |
+| **Missing protobuf for DNN** | `cv::dnn::readNetFromONNX()` fails at build time | Add `-DWITH_PROTOBUF=ON -DBUILD_PROTOBUF=ON` to the OpenCV CMake flags |
+| **Anaconda/Conda conflicts** | Linker picks up Conda's older `libstdc++.so` | `export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"` before building |
+| **ONNX model not found** | Runtime error: "Failed to load model" | Download `yolov8n.onnx` from [Ultralytics](https://github.com/ultralytics/assets/releases) into `models/` |
+| **`swapRB` confusion** | Wrong colors in detection (model expects RGB) | Our code uses `swapRB=false` because input frames are already RGB from SHM |
+
+### Downloading the YOLOv8n Model
+
+```bash
+mkdir -p models
+wget -O models/yolov8n.onnx \
+    https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx
+```
+
+---
+
+## 4. MAVSDK 2.x (Optional — PX4 MAVLink Communication)
+
+### Why MAVSDK?
+
+MAVSDK provides a high-level C++ API for MAVLink communication with the PX4 flight controller. It enables the `MavlinkFCLink` HAL backend, which sends/receives real commands (arm, takeoff, position setpoints, telemetry) over UDP to PX4 SITL or a physical flight controller over serial UART.
+
+**What it enables:**
+- `"backend": "mavlink"` in comms config → `MavlinkFCLink`
+- Real arming, takeoff, landing, position commands via MAVLink 2
+- Telemetry: battery, GPS, attitude, flight mode, armed state
+
+**Without MAVSDK:** The stack uses `SimulatedFCLink`, which generates synthetic telemetry (battery drain, fixed GPS, mode state machine). No real flight controller communication.
+
+### Installation (Build from Source)
+
+MAVSDK is not available as an Ubuntu apt package. Build from source:
+
+```bash
+# Install dependencies
+sudo apt-get install -y \
+    libcurl4-openssl-dev \
+    libjsoncpp-dev \
+    libtinyxml2-dev
+
+# Clone and build MAVSDK v2.12.x
+cd /tmp
+git clone --recursive https://github.com/mavlink/MAVSDK.git
+cd MAVSDK
+git checkout v2.12.12  # or latest v2.x tag
+
+cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DBUILD_SHARED_LIBS=ON
+
+cmake --build build -j$(nproc)
+sudo cmake --install build
+sudo ldconfig
+```
+
+**Build time:** ~15–30 minutes (downloads MAVLink definitions during build).
+
+### Verify MAVSDK Installation
+
+```bash
+ls /usr/local/lib/libmavsdk.so
+# Should exist
+
+# Rebuild the stack
+cd companion_software_stack/build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+# Look for: "MAVSDK : 2.12.12 — MavlinkFCLink backend available"
+make -j$(nproc)
+```
+
+### Known Issues — MAVSDK
+
+| Issue | Symptom | Fix |
+|---|---|---|
+| **Missing `--recursive` during clone** | Build fails with missing submodule errors | `git submodule update --init --recursive` |
+| **CMake can't find MAVSDK** | "MAVSDK : NOT FOUND" despite installation | Set `CMAKE_PREFIX_PATH=/usr/local` or check `ldconfig -p \| grep mavsdk` |
+| **Version mismatch** | Linking errors with MAVSDK v1.x | Make sure you use MAVSDK v2.x (API changed significantly from v1) |
+| **Connection refused to PX4** | `MavlinkFCLink` fails to connect | PX4 SITL must be running first; default UDP port is `udp://:14540` |
+| **Stale TCP/UDP sockets** | "Address already in use" on restart | `ss -ulnp \| grep 14540` — kill leftover PX4 process |
+
+---
+
+## 5. Gazebo Harmonic + PX4 SITL (Optional — Full Simulation)
+
+### Why Gazebo?
+
+Gazebo Harmonic (gz-sim 8) provides a physics-based 3D simulation environment. Combined with PX4 SITL (Software-In-The-Loop), it gives you a complete simulated drone with realistic camera, IMU, and GPS data — no physical hardware needed.
+
+**What it enables:**
+- `GazeboCamera` — subscribes to gz-transport image topics for real rendered frames
+- `GazeboIMU` — subscribes to gz-transport IMU data (accelerometer + gyroscope)
+- `GazeboVisualFrontend` — subscribes to gz-transport odometry for ground-truth pose
+- Full SITL loop: PX4 flight controller + physics + companion stack in one machine
+
+**Without Gazebo:** The stack uses simulated backends (synthetic gradient images, circular trajectory pose, random IMU noise). Everything works, just not with physics or rendered visuals.
+
+### Step 5.1: Install Gazebo Harmonic
+
+Follow the [official installation guide](https://gazebosim.org/docs/harmonic/install_ubuntu):
+
+```bash
+# Add Gazebo package repository
+sudo wget https://packages.osrfoundation.org/gazebo.gpg \
+    -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
+http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
+    | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y gz-harmonic
+
+# Also install development headers for C++ integration
+sudo apt-get install -y \
+    libgz-transport13-dev \
+    libgz-msgs10-dev
+```
+
+### Step 5.2: Install PX4-Autopilot
+
+```bash
+cd ~
+git clone --recursive https://github.com/PX4/PX4-Autopilot.git
+cd PX4-Autopilot
+
+# Install PX4 build dependencies (script installs many packages)
+bash Tools/setup/ubuntu.sh
+
+# Build SITL target
+make px4_sitl_default
+```
+
+**Build time:** ~20–40 minutes on first build.
+
+### Step 5.3: Set Up Simulation Assets
+
+The companion stack includes custom Gazebo world and drone model files that need to be linked into PX4's resource directories:
+
+```bash
+cd companion_software_stack
+
+# Create symlinks for custom world and model
+PX4_DIR="${HOME}/PX4-Autopilot"
+
+# World file
+ln -sf "$(pwd)/sim/worlds/test_world.sdf" \
+    "${PX4_DIR}/Tools/simulation/gz/worlds/test_world.sdf"
+
+# Drone model (x500 with companion computer sensors)
+ln -sf "$(pwd)/sim/models/x500_companion" \
+    "${PX4_DIR}/Tools/simulation/gz/models/x500_companion"
+```
+
+### Step 5.4: Rebuild Stack with Gazebo Support
+
+```bash
+cd companion_software_stack/build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+# Should show:
+#   MAVSDK       : 2.12.12 — MavlinkFCLink backend available
+#   OpenCV       : 4.10.0 — YOLOv8 detector available
+#   Gazebo libs  : gz-transport 13.x, gz-msgs 10.x — Gazebo backends available
+make -j$(nproc)
+```
+
+### Step 5.5: Run the Full SITL Stack
+
+```bash
+# Headless (no GUI)
+bash deploy/launch_gazebo.sh
+
+# With Gazebo GUI (renders the 3D scene)
+bash deploy/launch_gazebo.sh --gui
+```
+
+The launch script:
+1. Starts PX4 SITL with Gazebo physics server
+2. Waits for MAVLink heartbeat on UDP port 14540
+3. Optionally starts the Gazebo GUI client
+4. Launches all 7 companion stack processes with `config/gazebo.json`
+5. Catches Ctrl+C and cleanly shuts everything down
+
+### Known Issues — Gazebo + PX4
+
+| Issue | Symptom | Fix |
+|---|---|---|
+| **Gazebo GUI won't start** | `gz sim -g` crashes or shows black screen | Often caused by Snap-installed Gazebo conflicting with apt. Remove Snap version: `sudo snap remove gz-harmonic` |
+| **Anaconda `libstdc++` conflict** | Runtime crash with `GLIBCXX_3.4.30 not found` | Deactivate Conda: `conda deactivate`, or set `LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"`. The launch script does this automatically. |
+| **PX4 can't find world/model** | "World file not found" or model doesn't spawn | Ensure the symlinks from Step 5.3 are correct. Check `GZ_SIM_RESOURCE_PATH` includes both `sim/models/` and PX4's model directory. |
+| **GUI detaches/lags** | GUI renders but doesn't show the drone | Give PX4 ~5–8 seconds to spawn the model before launching GUI. The launch script handles this with `sleep 3`. |
+| **"Address already in use" on port 14540** | Stale PX4 instance from a previous run | `pkill -f px4; sleep 2` before relaunching |
+| **Protobuf version mismatch** | Link errors about `google::protobuf` when building with both Gazebo and OpenCV | Build OpenCV with `-DBUILD_PROTOBUF=ON` to use its bundled protobuf, or ensure system protobuf version matches what Gazebo was built against |
+| **Camera follow doesn't work in GUI** | Drone flies but camera stays at origin | The launch script sends `gz service` commands after an 8-second delay. If PX4 takes longer to initialize, increase the sleep in the GUI follow section. |
+
+---
+
+## 6. Complete Installation (All Dependencies)
+
+For the full experience with all backends enabled:
+
+```bash
+# 1. Core (required)
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential cmake git pkg-config wget curl \
+    libspdlog-dev libeigen3-dev nlohmann-json3-dev libgtest-dev
+
+# 2. OpenCV 4.10 from source (see Section 3 for full commands)
+#    ...or quick: sudo apt-get install -y libopencv-dev
+
+# 3. MAVSDK 2.x from source (see Section 4)
+#    No apt package available
+
+# 4. Gazebo Harmonic (see Section 5)
+sudo apt-get install -y gz-harmonic libgz-transport13-dev libgz-msgs10-dev
+
+# 5. PX4 SITL (see Section 5.2)
+cd ~ && git clone --recursive https://github.com/PX4/PX4-Autopilot.git
+cd PX4-Autopilot && bash Tools/setup/ubuntu.sh && make px4_sitl_default
+
+# 6. Build the companion stack
+cd companion_software_stack
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
+ctest --output-on-failure -j$(nproc)
+```
+
+---
+
+## 7. Build System Reference
+
+### CMake Configure Summary
+
+After running `cmake`, look at the summary printed at the end:
+
+```
+════════════════════════════════════════════
+  Drone Companion Stack v1.0.0
+  C++ Standard : C++17
+  Build Type   : Release
+  MAVSDK       : 1         (or empty = not found)
+  Gazebo       : TRUE      (or FALSE)
+  OpenCV       : TRUE      (or FALSE)
+════════════════════════════════════════════
+```
+
+### Compile Definitions
+
+| Define | Set When | Effect |
+|---|---|---|
+| `HAS_OPENCV` | `find_package(OpenCV)` succeeds | Enables `OpenCvYoloDetector` class and YOLOv8 test suite |
+| `HAVE_MAVSDK` | `find_package(MAVSDK)` succeeds | Enables `MavlinkFCLink` backend in HAL |
+| `HAVE_GAZEBO` | `find_package(gz-transport13)` + `find_package(gz-msgs10)` both succeed | Enables `GazeboCamera`, `GazeboIMU`, `GazeboVisualFrontend` backends |
+
+### Graceful Degradation
+
+The build system is designed so that missing optional dependencies never break the build:
+
+- If OpenCV is missing: `OpenCvYoloDetector` is compiled as a stub that logs a warning. The detector factory falls back to `ColorContourDetector` if `"yolov8"` is requested without OpenCV.
+- If MAVSDK is missing: `MavlinkFCLink` is not compiled. The comms process uses `SimulatedFCLink`.
+- If Gazebo is missing: `GazeboCamera`, `GazeboIMU`, and `GazeboVisualFrontend` are not compiled. Simulated backends are used instead.
+
+---
+
+## 8. Troubleshooting
+
+### General
+
+```bash
+# Clean rebuild (fixes most CMake cache issues)
+rm -rf build
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
+```
+
+### Check What CMake Detected
+
+```bash
+cd build
+grep -E "OPENCV_FOUND|MAVSDK_FOUND|GAZEBO_FOUND" CMakeCache.txt
+```
+
+### Verify Shared Libraries
+
+```bash
+# Check that all linked .so files are found
+ldd build/bin/perception | grep "not found"
+ldd build/bin/comms | grep "not found"
+ldd build/bin/slam_vio_nav | grep "not found"
+```
+
+If any show "not found", run `sudo ldconfig` or check `LD_LIBRARY_PATH`.
+
+### Clean SHM Segments After Crash
+
+If a process crashes, stale shared memory segments may remain:
+
+```bash
+rm -f /dev/shm/drone_* /dev/shm/detected_* /dev/shm/slam_* \
+      /dev/shm/mission_* /dev/shm/trajectory_* /dev/shm/payload_* \
+      /dev/shm/fc_* /dev/shm/gcs_* /dev/shm/system_*
+```
+
+### Run Tests
+
+```bash
+cd build
+ctest --output-on-failure -j$(nproc)
+```
+
+Expected test counts:
+- **Core only (no optional deps):** ~221 tests
+- **With OpenCV:** ~262 tests (adds YOLOv8 + ColorContourDetector live tests)
+- All should pass with 0 failures.
