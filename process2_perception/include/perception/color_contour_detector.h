@@ -170,7 +170,8 @@ public:
 
         std::vector<Detection2D> all_detections;
         auto now_ns = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
 
         // For each color range, create binary mask → find components → extract bboxes
         for (const auto& color : color_ranges_) {
@@ -219,10 +220,15 @@ private:
     int min_contour_area_ = 80;
     int max_detections_ = 20;
 
+    // Reusable per-frame buffers (avoid heap churn on every detect() call)
+    mutable std::vector<uint8_t> mask_buf_;
+    mutable std::vector<int> parent_buf_;
+    mutable std::vector<int> rank_buf_;
+
     void init_default_colors() {
         color_ranges_.clear();
-        // Red (hue wraps around 0/360)
-        color_ranges_.push_back({340.0f, 20.0f, 0.3f, 1.0f, 0.3f, 1.0f,
+        // Red (hue wraps around 0/360) — ends at 15 to avoid overlap with orange
+        color_ranges_.push_back({340.0f, 15.0f, 0.3f, 1.0f, 0.3f, 1.0f,
                                  ObjectClass::PERSON, "red"});
         // Blue
         color_ranges_.push_back({200.0f, 260.0f, 0.3f, 1.0f, 0.2f, 1.0f,
@@ -242,6 +248,8 @@ private:
     }
 
     /// Detect all connected components of a given color in the frame.
+    /// Uses pre-allocated buffers (mask_buf_, parent_buf_, rank_buf_) to
+    /// avoid heap churn on each call.
     std::vector<ComponentBBox> detect_color(
         const uint8_t* frame_data,
         uint32_t width, uint32_t height, uint32_t channels,
@@ -250,12 +258,18 @@ private:
         const int w = static_cast<int>(width);
         const int h = static_cast<int>(height);
         const int stride = static_cast<int>(channels);
+        const size_t npix = static_cast<size_t>(w) * static_cast<size_t>(h);
+
+        // Resize reusable buffers (no-op if already correct size)
+        mask_buf_.resize(npix);
+        std::fill(mask_buf_.begin(), mask_buf_.end(), 0);
+
+        parent_buf_.resize(npix);
+        std::iota(parent_buf_.begin(), parent_buf_.end(), 0);
+
+        rank_buf_.assign(npix, 0);
 
         // Step 1: Build binary mask (1 = pixel matches color)
-        std::vector<uint8_t> mask(w * h, 0);
-
-        // Process with stride-2 downsampling for speed, then refine
-        // Actually, for correctness and simplicity, process every pixel
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
                 int idx = (y * w + x) * stride;
@@ -263,24 +277,36 @@ private:
                                        frame_data[idx + 1],
                                        frame_data[idx + 2]);
                 if (color.contains(hsv.h, hsv.s, hsv.v)) {
-                    mask[y * w + x] = 1;
+                    mask_buf_[y * w + x] = 1;
                 }
             }
         }
 
-        // Step 2: Connected-component labeling (4-connectivity, union-find)
-        UnionFind uf(w * h);
+        // Step 2: Connected-component labeling (4-connectivity, inline union-find
+        //         on parent_buf_/rank_buf_ to avoid allocating UnionFind object)
+        auto uf_find = [this](int x) -> int {
+            while (parent_buf_[x] != x) {
+                parent_buf_[x] = parent_buf_[parent_buf_[x]]; // path compression
+                x = parent_buf_[x];
+            }
+            return x;
+        };
+        auto uf_unite = [&](int a, int b) {
+            a = uf_find(a);
+            b = uf_find(b);
+            if (a == b) return;
+            if (rank_buf_[a] < rank_buf_[b]) std::swap(a, b);
+            parent_buf_[b] = a;
+            if (rank_buf_[a] == rank_buf_[b]) ++rank_buf_[a];
+        };
+
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                if (!mask[y * w + x]) continue;
-                // Check left neighbor
-                if (x > 0 && mask[y * w + (x - 1)]) {
-                    uf.unite(y * w + x, y * w + (x - 1));
-                }
-                // Check upper neighbor
-                if (y > 0 && mask[(y - 1) * w + x]) {
-                    uf.unite(y * w + x, (y - 1) * w + x);
-                }
+                if (!mask_buf_[y * w + x]) continue;
+                if (x > 0 && mask_buf_[y * w + (x - 1)])
+                    uf_unite(y * w + x, y * w + (x - 1));
+                if (y > 0 && mask_buf_[(y - 1) * w + x])
+                    uf_unite(y * w + x, (y - 1) * w + x);
             }
         }
 
@@ -288,8 +314,8 @@ private:
         std::unordered_map<int, ComponentBBox> components;
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                if (!mask[y * w + x]) continue;
-                int root = uf.find(y * w + x);
+                if (!mask_buf_[y * w + x]) continue;
+                int root = uf_find(y * w + x);
                 auto it = components.find(root);
                 if (it == components.end()) {
                     components[root] = {x, y, x, y, 1};

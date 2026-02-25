@@ -23,11 +23,13 @@
 
     "perception": {
         "detector": {
-            "backend": "yolov8",
+            "backend": "color_contour",
+            "_comment": "Use 'yolov8' with model_path below if OpenCV is available",
             "model_path": "models/yolov8n.onnx",
             "confidence_threshold": 0.25,
             "nms_threshold": 0.45,
-            "input_size": 640
+            "input_size": 640,
+            "min_contour_area": 80
         },
         "tracker": {
             "max_age": 10,

@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 using namespace drone::perception;

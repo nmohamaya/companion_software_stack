@@ -3,6 +3,7 @@
 
 #include "perception/opencv_yolo_detector.h"
 
+#include <atomic>
 #include <chrono>
 #include <spdlog/spdlog.h>
 
@@ -75,7 +76,9 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(
     }
 
     auto t0 = std::chrono::steady_clock::now();
-    auto now_ns = static_cast<uint64_t>(t0.time_since_epoch().count());
+    auto now_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            t0.time_since_epoch()).count());
 
     // ── Step 1: Wrap raw pixel data as cv::Mat ──────────────
     // frame_data is RGB, OpenCV expects BGR for most operations,
@@ -99,13 +102,22 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(
                             1.0 / 255.0,                // scale
                             cv::Size(input_size_, input_size_), // target size
                             cv::Scalar(0, 0, 0),        // mean subtraction
-                            true,                        // swapRB (RGB→BGR)
+                            false,                       // swapRB (input already RGB)
                             false);                      // crop
 
     // ── Step 3: Forward pass ────────────────────────────────
     net_.setInput(blob);
     std::vector<cv::Mat> outputs;
-    net_.forward(outputs, net_.getUnconnectedOutLayersNames());
+    try {
+        net_.forward(outputs, net_.getUnconnectedOutLayersNames());
+    } catch (const cv::Exception& e) {
+        spdlog::error("[OpenCvYoloDetector] forward() failed: {}", e.what());
+        return {};
+    }
+    if (outputs.empty()) {
+        spdlog::error("[OpenCvYoloDetector] forward() produced no outputs");
+        return {};
+    }
 
     // ── Step 4: Parse YOLOv8 output ─────────────────────────
     // YOLOv8 output shape: [1, 84, 8400] for 80 classes
@@ -191,7 +203,7 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(
     auto t1 = std::chrono::steady_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-    static uint64_t call_count = 0;
+    static std::atomic<uint64_t> call_count{0};
     if (++call_count % 30 == 0) {
         spdlog::info("[OpenCvYoloDetector] {} detections in {}ms "
                      "(frame {}x{}, {} proposals after NMS)",

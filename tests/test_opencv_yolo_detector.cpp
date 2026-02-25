@@ -3,68 +3,23 @@
 // Tests run with and without the ONNX model file.
 #include <gtest/gtest.h>
 #include "perception/detector_interface.h"
+#include "perception/opencv_yolo_detector.h"
 #include "util/config.h"
 
 #ifdef HAS_OPENCV
-#include "perception/opencv_yolo_detector.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #endif
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 using namespace drone::perception;
-
-// ═══════════════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════════════
-
-static std::vector<std::string> g_temp_files;
-
-static std::string create_temp_config(const std::string& json_content) {
-    std::string path = "/tmp/test_yolo_" + std::to_string(getpid()) + "_" +
-                       std::to_string(g_temp_files.size()) + ".json";
-    std::ofstream ofs(path);
-    ofs << json_content;
-    ofs.close();
-    g_temp_files.push_back(path);
-    return path;
-}
-
-struct TempCleanup {
-    ~TempCleanup() {
-        for (const auto& f : g_temp_files) std::remove(f.c_str());
-    }
-};
-static TempCleanup g_cleanup;
-
-/// Create a solid-color RGB image.
-static std::vector<uint8_t> make_solid_image(uint32_t w, uint32_t h,
-                                              uint8_t r, uint8_t g, uint8_t b) {
-    std::vector<uint8_t> img(w * h * 3);
-    for (uint32_t i = 0; i < w * h; ++i) {
-        img[i * 3 + 0] = r;
-        img[i * 3 + 1] = g;
-        img[i * 3 + 2] = b;
-    }
-    return img;
-}
-
-/// Check if the YOLOv8n model file exists.
-#ifdef YOLO_MODEL_PATH
-static const char* g_model_path = YOLO_MODEL_PATH;
-#else
-static const char* g_model_path = "models/yolov8n.onnx";
-#endif
-
-static bool model_exists() {
-    std::ifstream f(g_model_path);
-    return f.good();
-}
 
 // ═══════════════════════════════════════════════════════════
 // COCO mapping tests (always run, no OpenCV needed)
@@ -110,6 +65,52 @@ TEST(CocoMappingTest, ClassNames) {
 // OpenCV-dependent tests
 // ═══════════════════════════════════════════════════════════
 #ifdef HAS_OPENCV
+
+// ── Helpers (OpenCV-only) ──────────────────────────────────
+static std::vector<std::string> g_temp_files;
+
+static std::string create_temp_config(const std::string& json_content) {
+    std::string path = "/tmp/test_yolo_" + std::to_string(getpid()) + "_" +
+                       std::to_string(g_temp_files.size()) + ".json";
+    std::ofstream ofs(path);
+    ofs << json_content;
+    ofs.close();
+    g_temp_files.push_back(path);
+    return path;
+}
+
+struct TempCleanup {
+    ~TempCleanup() {
+        for (const auto& f : g_temp_files) std::remove(f.c_str());
+    }
+};
+static TempCleanup g_cleanup;
+
+/// Create a solid-color RGB image.
+static std::vector<uint8_t> make_solid_image(uint32_t w, uint32_t h,
+                                              uint8_t r, uint8_t g, uint8_t b) {
+    std::vector<uint8_t> img(w * h * 3);
+    for (uint32_t i = 0; i < w * h; ++i) {
+        img[i * 3 + 0] = r;
+        img[i * 3 + 1] = g;
+        img[i * 3 + 2] = b;
+    }
+    return img;
+}
+
+/// Check if the YOLOv8n model file exists.
+#ifdef YOLO_MODEL_PATH
+static const char* g_model_path = YOLO_MODEL_PATH;
+#else
+static const char* g_model_path = "models/yolov8n.onnx";
+#endif
+
+static bool model_exists() {
+    std::ifstream f(g_model_path);
+    return f.good();
+}
+
+// ── Tests ──────────────────────────────────────────────────
 
 TEST(OpenCvYoloDetectorTest, ConstructWithMissingModelGraceful) {
     // Should not crash — just sets model_loaded_ to false
