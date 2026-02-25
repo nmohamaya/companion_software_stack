@@ -26,7 +26,7 @@ static std::atomic<bool> g_running{true};
 static void mission_cam_thread(
     drone::hal::ICamera& camera,
     drone::ipc::IPublisher<drone::ipc::ShmVideoFrame>& publisher,
-    std::atomic<bool>& stop_flag,
+    std::atomic<bool>& running,
     int fps)
 {
     spdlog::info("[MissionCam] Thread started using {} @ {}Hz",
@@ -35,7 +35,7 @@ static void mission_cam_thread(
     uint64_t seq = 0;
     const int sleep_ms = fps > 0 ? 1000 / fps : 33;
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         ScopedTimer timer("MissionCam", 50.0);
 
         auto frame = camera.capture();
@@ -77,7 +77,7 @@ static void stereo_cam_thread(
     drone::hal::ICamera& left_cam,
     drone::hal::ICamera& right_cam,
     drone::ipc::IPublisher<drone::ipc::ShmStereoFrame>& publisher,
-    std::atomic<bool>& stop_flag,
+    std::atomic<bool>& running,
     int fps)
 {
     spdlog::info("[StereoCam] Thread started using {} @ {}Hz",
@@ -86,7 +86,7 @@ static void stereo_cam_thread(
     uint64_t seq = 0;
     const int sleep_ms = fps > 0 ? 1000 / fps : 33;
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         auto left_frame  = left_cam.capture();
         auto right_frame = right_cam.capture();
 

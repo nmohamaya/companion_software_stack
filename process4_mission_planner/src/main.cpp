@@ -77,11 +77,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // GCS commands are optional (may never be published), use lazy subscribe
     auto gcs_sub = bus.subscribe_lazy<drone::ipc::ShmGCSCommand>();
     gcs_sub->connect(drone::ipc::shm_names::GCS_COMMANDS);
 
-    auto fc_state_sub = bus.subscribe_lazy<drone::ipc::ShmFCState>();
-    fc_state_sub->connect(drone::ipc::shm_names::FC_STATE);
+    // FC state is *critical* for the FSM (armed check, altitude feedback).
+    // Use subscribe() with retries so we wait for comms to create the segment.
+    auto fc_state_sub = bus.subscribe<drone::ipc::ShmFCState>(
+        drone::ipc::shm_names::FC_STATE);
+    if (!fc_state_sub->is_connected()) {
+        spdlog::error("Cannot connect to FC state SHM — comms may not be running");
+        return 1;
+    }
 
     // ── Create publishers ───────────────────────────────────
     auto status_pub = bus.advertise<drone::ipc::ShmMissionStatus>(
@@ -177,6 +184,10 @@ int main(int argc, char* argv[]) {
         }
 
         // Check GCS commands (dedup by timestamp to ignore stale SHM values)
+        // Retry lazy GCS connection if not yet established
+        if (!gcs_sub->is_connected()) {
+            gcs_sub->connect(drone::ipc::shm_names::GCS_COMMANDS);
+        }
         drone::ipc::ShmGCSCommand gcs_cmd{};
         if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) &&
             gcs_cmd.valid && gcs_cmd.timestamp_ns > last_gcs_timestamp) {
