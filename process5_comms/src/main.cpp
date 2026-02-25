@@ -90,10 +90,12 @@ static void fc_tx_thread(drone::hal::IFCLink& fc,
                 case drone::ipc::FCCommandType::RTL:
                     spdlog::info("[Comms] FC cmd: RTL");
                     fc.send_mode(3);  // 3 = RTL
+                    last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
                 case drone::ipc::FCCommandType::LAND:
                     spdlog::info("[Comms] FC cmd: LAND");
                     fc.send_mode(2);  // 2 = AUTO (Hold/Land)
+                    last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
                 default:
                     break;
@@ -182,7 +184,7 @@ int main(int argc, char* argv[]) {
     if (args.help) return 0;
 
     SignalHandler::install(g_running);
-    LogConfig::init("comms", "/tmp/drone_logs", args.log_level);
+    LogConfig::init("comms", LogConfig::resolve_log_dir(), args.log_level);
 
     drone::Config cfg;
     cfg.load(args.config_path);

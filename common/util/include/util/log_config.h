@@ -1,12 +1,19 @@
 // common/util/include/util/log_config.h
 // Logging initialisation using spdlog.
 #pragma once
+#include <cstdlib>
 #include <string>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 
 namespace LogConfig {
+
+/// Return the log directory: $DRONE_LOG_DIR if set, otherwise `fallback`.
+inline std::string resolve_log_dir(const std::string& fallback = "drone_logs") {
+    const char* env = std::getenv("DRONE_LOG_DIR");
+    return (env && env[0]) ? std::string(env) : fallback;
+}
 
 inline void init(const std::string& process_name,
                  const std::string& log_dir,

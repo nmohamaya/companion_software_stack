@@ -5,6 +5,10 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <stdexcept>
+
+// Forward-declare Config to avoid circular include
+namespace drone { class Config; }
 
 namespace drone::perception {
 
@@ -25,5 +29,11 @@ public:
                                      uint32_t channels) override;
     std::string name() const override { return "SimulatedDetector"; }
 };
+
+/// Factory: create detector from config backend string.
+/// Supported backends: "simulated", "color_contour", "yolov8"
+/// Defined in detector_factory.cpp to avoid circular includes.
+std::unique_ptr<IDetector> create_detector(const std::string& backend,
+                                            const drone::Config* cfg = nullptr);
 
 } // namespace drone::perception

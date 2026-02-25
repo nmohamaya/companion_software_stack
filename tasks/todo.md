@@ -1,52 +1,75 @@
-# Issue #4 — API-Driven Development: IMessageBus, ITopic, IServiceChannel + Internal Process Interfaces
+# Real Perception Pipeline — Color/Contour-Based Object Detection from Gazebo Camera
+
+## Context
+Currently `SimulatedDetector` generates random fake bounding boxes — the Gazebo-rendered camera frames are captured but never processed. The entire detect→track→avoid pipeline runs on meaningless data. This issue replaces the simulated detector with a real color-segmentation + contour detector that processes actual Gazebo RGB frames, and adds more visually distinct obstacles to the world so there's something meaningful to detect.
 
 ## Plan
 
-### Phase 1: Setup
-- [x] Add Messaging Patterns Architecture section to README roadmap
-- [x] Create GitHub issue #4
-- [x] Create feature branch `feature/issue-4-api-interfaces`
+### Phase 0: Setup
+- [x] Create GitHub issue #19 for real perception pipeline
+- [x] Create feature branch `feature/issue-19-real-perception`
+- [x] Update this todo with issue number
 
-### Phase 2: IPC Interfaces
-- [x] Create `IPublisher<T>` abstract interface (`common/ipc/include/ipc/ipublisher.h`)
-- [x] Create `ISubscriber<T>` abstract interface (`common/ipc/include/ipc/isubscriber.h`)
-- [x] Create `ShmPublisher<T>` — SHM-backed publisher (`common/ipc/include/ipc/shm_publisher.h`)
-- [x] Verify `ShmSubscriber<T>` — SHM-backed subscriber (already existed)
-- [x] Create `ShmMessageBus` — factory for SHM pub/sub (`common/ipc/include/ipc/shm_message_bus.h`)
-- [x] Create `IServiceClient/IServiceServer` — request-response (`common/ipc/include/ipc/iservice_channel.h`)
-- [x] Create `ShmServiceClient/ShmServiceServer` — SHM-backed service channel (`common/ipc/include/ipc/shm_service_channel.h`)
+### Phase 1: Add Visually Distinct Obstacles to Gazebo World
+- [x] Add 6 brightly colored obstacles to `sim/worlds/test_world.sdf` along the flight path
+- [x] Use distinct, saturated colors (red, blue, yellow, green, orange, magenta) that contrast with the ground
+- [x] Place obstacles at different heights near waypoints
+- [x] Removed 3 old muted obstacles, replaced with 6 new vivid ones
 
-### Phase 3: Internal Process Interfaces
-- [x] `IVisualFrontend` + `SimulatedVisualFrontend` + factory (`process3_slam_vio_nav/include/slam/ivisual_frontend.h`)
-- [x] `IPathPlanner` + `PotentialFieldPlanner` + factory (`process4_mission_planner/include/planner/ipath_planner.h`)
-- [x] `IObstacleAvoider` + `PotentialFieldAvoider` + factory (`process4_mission_planner/include/planner/iobstacle_avoider.h`)
-- [x] `IProcessMonitor` + `LinuxProcessMonitor` + factory (`process7_system_monitor/include/monitor/iprocess_monitor.h`)
+### Phase 2: Implement ColorContourDetector
+- [x] Created header-only `process2_perception/include/perception/color_contour_detector.h` (~320 lines)
+- [x] Algorithm: RGB→HSV → binary mask per color → union-find connected-component labeling → bounding box extraction
+- [x] No OpenCV dependency — pure C++ (rgb_to_hsv, UnionFind, ComponentBBox)
+- [x] 6 default color ranges with hue wrap-around support (red spans 340-20°)
+- [x] All tunable via `drone::Config` (HSV ranges, min_contour_area, max_detections)
 
-### Phase 4: Wire Processes Through Interfaces
-- [x] P1 (video_capture): ShmWriter → ShmMessageBus → IPublisher
-- [x] P2 (perception): ShmReader/ShmWriter → ISubscriber/IPublisher
-- [x] P3 (slam_vio_nav): + IVisualFrontend strategy
-- [x] P4 (mission_planner): + IPathPlanner + IObstacleAvoider strategies
-- [x] P5 (comms): ShmReader/ShmWriter → ISubscriber/IPublisher
-- [x] P6 (payload_manager): ShmReader/ShmWriter → ISubscriber/IPublisher
-- [x] P7 (system_monitor): + IProcessMonitor strategy
-- [x] Build passes clean (all targets)
-- [x] All 121 existing tests pass
+### Phase 3: Detector Factory & Config Integration
+- [x] Added `"color_contour"` backend to factory in `detector_interface.h`
+- [x] Updated `config/gazebo.json`: `"backend": "color_contour"`, fixed cx=320/cy=240
+- [x] `config/default.json` unchanged — still uses `"simulated"` (no regression)
 
-### Phase 5: New Tests
-- [x] `test_message_bus.cpp` — IPublisher, ISubscriber, ShmMessageBus, ShmServiceChannel (23 tests)
-- [x] `test_process_interfaces.cpp` — IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor (19 tests)
-- [x] Register both in `tests/CMakeLists.txt`
-- [x] Fix build errors in test files (namespace + field name mismatches)
-- [x] Build passes clean with new tests
-- [x] All 163 tests pass (121 existing + 42 new)
+### Phase 4: Wire Into Perception Main Loop
+- [x] Updated `process2_perception/src/main.cpp` inference thread to use factory-created detector
+- [x] Detector receives real frame_data from ShmVideoFrame
 
-### Phase 6: Documentation & Delivery
-- [x] Create `interface_api.md` documenting all interfaces
-- [x] Commit all changes (26 files, +2184/-280)
-- [x] Push to `feature/issue-4-api-interfaces`
-- [x] Create PR #5 referencing issue #4
-- [x] Update this file with review section
+### Phase 5: Unit Tests
+- [x] Created `tests/test_color_contour_detector.cpp` — 42 tests across 6 suites
+- [x] Updated `tests/CMakeLists.txt`
+- [x] All 238 tests pass (196 existing + 42 new)
+
+### Phase 6: Integration Verification
+- [x] Build clean: 51 targets, zero warnings
+- [x] All 238 tests pass
+- [ ] Gazebo SITL flight verification (manual step — requires PX4 + Gazebo running)
+
+### Phase 7: Documentation & Delivery
+- [x] Updated PROGRESS.md with Improvement #7
+- [ ] Commit with proper message
+- [ ] Push to feature branch
+- [ ] Create PR referencing issue #19
+
+## Design Decisions
+
+### Why Color Segmentation (not ML)?
+- **Zero external dependencies** — project principle is "written from scratch, no external ML/CV frameworks"
+- HSV thresholding is simple, fast, deterministic, and testable
+- Gazebo objects have perfectly uniform colors — ideal for color-based detection
+- Algorithm is ~200 lines of pure C++ with no library dependencies
+
+### Why Not OpenCV?
+- Project explicitly avoids external CV frameworks
+- HSV conversion is trivial (~10 lines)
+- Contour finding via flood-fill connected components is straightforward
+- Keeps the build simple and dependency-free
+
+### Contour Detection Approach
+- Binary mask per color → connected-component labeling (union-find or flood-fill)
+- Bounding box from component pixel extents
+- Area = pixel count of component
+- This is simpler than Suzuki-Abe border tracing but sufficient for blocky Gazebo objects
+
+## Review
+_(To be filled after PR review)_
 
 ## Review
 

@@ -157,7 +157,7 @@ private:
 /// Factory — creates the appropriate frontend based on config.
 inline std::unique_ptr<IVisualFrontend> create_visual_frontend(
     const std::string& backend = "simulated",
-    const std::string& gz_topic = "/model/x500_companion_0/odometry")
+    [[maybe_unused]] const std::string& gz_topic = "/model/x500_companion_0/odometry")
 {
     if (backend == "simulated") {
         return std::make_unique<SimulatedVisualFrontend>();

@@ -54,7 +54,7 @@ if [[ -n "$GUI_FLAG" ]]; then
 else
     echo "  Mode: Headless"
 fi
-echo "  Logs: /tmp/drone_logs/"
+echo "  Logs: drone_logs/"
 echo "  Press Ctrl+C to stop."
 echo ""
 

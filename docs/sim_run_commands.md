@@ -56,10 +56,10 @@ In a separate terminal:
 
 ```bash
 # Watch the mission planner log in real time
-tail -f /tmp/drone_logs/mission_planner.log
+tail -f drone_logs/mission_planner.log
 
 # Or check key events after the flight
-grep -iE "arm|takeoff|waypoint|rtl|land|disarm" /tmp/drone_logs/mission_planner.log
+grep -iE "arm|takeoff|waypoint|rtl|land|disarm" drone_logs/mission_planner.log
 ```
 
 ## 6. Stop Everything

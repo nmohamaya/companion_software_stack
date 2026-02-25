@@ -30,23 +30,22 @@ static std::atomic<bool> g_running{true};
 static void inference_thread(
     drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>& video_sub,
     drone::SPSCRing<Detection2DList, 4>& output_queue,
-    std::atomic<bool>& stop_flag)
+    std::atomic<bool>& running,
+    IDetector& detector)
 {
-    spdlog::info("[Inference] Thread started");
-    auto detector = std::make_unique<SimulatedDetector>();
-    spdlog::info("[Inference] Using detector: {}", detector->name());
+    spdlog::info("[Inference] Thread started — using detector: {}", detector.name());
 
     uint64_t frame_count = 0;
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         drone::ipc::ShmVideoFrame frame;
         bool got_frame = video_sub.receive(frame);
 
         if (got_frame) {
             ScopedTimer timer("Inference", 33.0);
 
-            auto dets = detector->detect(frame.pixel_data,
-                                          frame.width, frame.height,
-                                          frame.channels);
+            auto dets = detector.detect(frame.pixel_data,
+                                         frame.width, frame.height,
+                                         frame.channels);
             Detection2DList det_list;
             det_list.detections = std::move(dets);
             det_list.timestamp_ns = frame.timestamp_ns;
@@ -70,12 +69,12 @@ static void inference_thread(
 static void tracker_thread(
     drone::SPSCRing<Detection2DList, 4>& input_queue,
     drone::SPSCRing<TrackedObjectList, 4>& output_queue,
-    std::atomic<bool>& stop_flag)
+    std::atomic<bool>& running)
 {
     spdlog::info("[Tracker] Thread started (SORT algorithm)");
     MultiObjectTracker tracker;
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         auto det_opt = input_queue.try_pop();
         if (det_opt) {
             ScopedTimer timer("Tracker", 10.0);
@@ -94,7 +93,7 @@ static void tracker_thread(
 // ── Simulated LiDAR thread ──────────────────────────────────
 static void lidar_thread(
     drone::SPSCRing<std::vector<LiDARCluster>, 4>& output_queue,
-    std::atomic<bool>& stop_flag,
+    std::atomic<bool>& running,
     const drone::Config& cfg)
 {
     spdlog::info("[LiDAR] Simulated LiDAR thread started");
@@ -103,7 +102,7 @@ static void lidar_thread(
     std::uniform_real_distribution<float> z_dist(0.0f, 3.0f);
     std::uniform_int_distribution<int> n_dist(0, 4);
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         int n = n_dist(rng);
         std::vector<LiDARCluster> clusters;
         for (int i = 0; i < n; ++i) {
@@ -124,7 +123,7 @@ static void lidar_thread(
 // ── Simulated Radar thread ──────────────────────────────────
 static void radar_thread(
     drone::SPSCRing<RadarDetectionList, 4>& output_queue,
-    std::atomic<bool>& stop_flag,
+    std::atomic<bool>& running,
     const drone::Config& cfg)
 {
     spdlog::info("[Radar] Simulated radar thread started");
@@ -134,7 +133,7 @@ static void radar_thread(
     std::uniform_real_distribution<float> vel_dist(-20.0f, 20.0f);
     std::uniform_int_distribution<int> n_dist(0, 6);
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         RadarDetectionList rdl;
         rdl.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -162,7 +161,7 @@ static void fusion_thread(
     drone::SPSCRing<std::vector<LiDARCluster>, 4>& lidar_queue,
     drone::SPSCRing<RadarDetectionList, 4>& radar_queue,
     drone::ipc::IPublisher<drone::ipc::ShmDetectedObjectList>& det_pub,
-    std::atomic<bool>& stop_flag,
+    std::atomic<bool>& running,
     const drone::Config& cfg)
 {
     spdlog::info("[Fusion] Thread started");
@@ -184,7 +183,7 @@ static void fusion_thread(
 
     uint64_t fusion_count = 0;
 
-    while (!stop_flag.load(std::memory_order_relaxed)) {
+    while (running.load(std::memory_order_relaxed)) {
         // Consume latest LiDAR & radar
         if (auto lopt = lidar_queue.try_pop()) latest_lidar = std::move(*lopt);
         if (auto ropt = radar_queue.try_pop()) latest_radar = std::move(*ropt);
@@ -242,7 +241,7 @@ int main(int argc, char* argv[]) {
     if (args.help) return 0;
 
     SignalHandler::install(g_running);
-    LogConfig::init("perception", "/tmp/drone_logs", args.log_level);
+    LogConfig::init("perception", LogConfig::resolve_log_dir(), args.log_level);
 
     drone::Config cfg;
     cfg.load(args.config_path);
@@ -269,6 +268,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // ── Create detector from config ────────────────────────────
+    std::string detector_backend = cfg.get<std::string>(
+        "perception.detector.backend", "simulated");
+    auto detector = create_detector(detector_backend, &cfg);
+    spdlog::info("[Perception] Detector backend: {} ({})",
+                 detector_backend, detector->name());
+
     // ── Internal SPSC queues ────────────────────────────────
     drone::SPSCRing<Detection2DList, 4> inference_to_tracker;
     drone::SPSCRing<TrackedObjectList, 4> tracker_to_fusion;
@@ -278,7 +284,7 @@ int main(int argc, char* argv[]) {
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread,
         std::ref(*video_sub), std::ref(inference_to_tracker),
-        std::ref(g_running));
+        std::ref(g_running), std::ref(*detector));
 
     std::thread t_tracker(tracker_thread,
         std::ref(inference_to_tracker), std::ref(tracker_to_fusion),

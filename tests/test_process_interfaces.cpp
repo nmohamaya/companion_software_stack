@@ -9,6 +9,7 @@
 #include "monitor/iprocess_monitor.h"
 
 #include <cmath>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -172,8 +173,12 @@ TEST(ObstacleAvoiderTest, ObstacleDeflectsTrajectory) {
     // Place obstacle 2m ahead
     ShmDetectedObjectList objects{};
     objects.num_objects = 1;
+    objects.timestamp_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
     objects.objects[0].position_x = 2.0f;
     objects.objects[0].position_y = 0.0f;
+    objects.objects[0].confidence = 0.9f;
 
     auto result = oa->avoid(planned, pose, objects);
     // Repulsive force should reduce forward velocity
@@ -192,8 +197,12 @@ TEST(ObstacleAvoiderTest, FarObstacleNoEffect) {
     // Obstacle very far away
     ShmDetectedObjectList objects{};
     objects.num_objects = 1;
+    objects.timestamp_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
     objects.objects[0].position_x = 100.0f;
     objects.objects[0].position_y = 100.0f;
+    objects.objects[0].confidence = 0.9f;
 
     auto result = oa->avoid(planned, pose, objects);
     EXPECT_FLOAT_EQ(result.velocity_x, planned.velocity_x);

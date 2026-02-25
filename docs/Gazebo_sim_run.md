@@ -251,7 +251,7 @@ Press **Ctrl+C** to gracefully stop everything (PX4 + Gazebo + all 7 processes).
 ### What the launch script does (step by step)
 
 1. Cleans stale POSIX shared memory segments (`/dev/shm/drone_*`, etc.)
-2. Creates the log directory (`/tmp/drone_logs/`)
+2. Creates the log directory (`drone_logs/`)
 3. Starts PX4 SITL, which in turn launches Gazebo Harmonic as a server
 4. Waits up to 30 s for the MAVLink UDP port (`14540`) to become available
 5. **(If `--gui`)** Launches the Gazebo GUI client with a chase-cam configuration and auto-follows the drone
@@ -266,7 +266,7 @@ Press **Ctrl+C** to gracefully stop everything (PX4 + Gazebo + all 7 processes).
 | `PX4_DIR` | `~/PX4-Autopilot` | Path to PX4-Autopilot checkout |
 | `GZ_WORLD` | `sim/worlds/test_world.sdf` | World SDF file |
 | `CONFIG_FILE` | `config/gazebo.json` | JSON config for the companion stack |
-| `LOG_DIR` | `/tmp/drone_logs` | Where process logs are written |
+| `LOG_DIR` | `<project>/drone_logs` | Where process logs are written |
 
 Example with overrides:
 
@@ -535,14 +535,14 @@ Add a `<model>` block inside the `<world>` element in `sim/worlds/test_world.sdf
 
 ## 13. Viewing Logs
 
-All process logs are written to `/tmp/drone_logs/` (or the `LOG_DIR` you specify):
+All process logs are written to `drone_logs/` (or the `LOG_DIR` you specify):
 
 ```bash
 # Real-time log streaming
-tail -f /tmp/drone_logs/mission_planner.log
+tail -f drone_logs/mission_planner.log
 
 # All logs
-ls -la /tmp/drone_logs/
+ls -la drone_logs/
 #   comms.log
 #   gz_gui.log
 #   mission_planner.log
@@ -558,13 +558,13 @@ ls -la /tmp/drone_logs/
 
 ```bash
 # ARM + takeoff sequence
-grep -i "arm\|takeoff\|navigate\|waypoint\|rtl\|land" /tmp/drone_logs/mission_planner.log
+grep -i "arm\|takeoff\|navigate\|waypoint\|rtl\|land" drone_logs/mission_planner.log
 
 # MAVLink connection status
-grep -i "connected\|heartbeat\|armed\|altitude" /tmp/drone_logs/comms.log
+grep -i "connected\|heartbeat\|armed\|altitude" drone_logs/comms.log
 
 # PX4 boot progress
-grep -i "ready\|home\|armed\|takeoff" /tmp/drone_logs/px4_sitl.log
+grep -i "ready\|home\|armed\|takeoff" drone_logs/px4_sitl.log
 ```
 
 ---
@@ -576,7 +576,7 @@ grep -i "ready\|home\|armed\|takeoff" /tmp/drone_logs/px4_sitl.log
 | `ERROR: Build directory not found` | Stack not built | Run `./deploy/build.sh` |
 | `ERROR: PX4-Autopilot not found` | Wrong PX4 path | Set `PX4_DIR=/path/to/PX4-Autopilot` |
 | `ERROR: PX4 SITL binary not found` | PX4 not built for SITL | Run `cd ~/PX4-Autopilot && make px4_sitl_default` |
-| MAVLink port not detected after 30 s | PX4 boot failed | Check `/tmp/drone_logs/px4_sitl.log` for errors |
+| MAVLink port not detected after 30 s | PX4 boot failed | Check `drone_logs/px4_sitl.log` for errors |
 | Gazebo GUI crashes with `libpthread` error | Conda/Snap `LD_LIBRARY_PATH` conflict | The launch script uses `env -i` to avoid this. If running `gz` manually, prefix with `env -i HOME=$HOME DISPLAY=$DISPLAY PATH=/usr/bin:/usr/local/bin:/bin` |
 | Drone doesn't arm | MAVSDK heartbeat needs time | ARM retries every 3 s automatically. Wait ~10 s |
 | Drone arms but doesn't take off | Takeoff command not sent | Check `mission_planner.log` for `Sending TAKEOFF` |

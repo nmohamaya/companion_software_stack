@@ -15,17 +15,24 @@ cmake-build-*/
 *.so
 *.dylib
 
+# ML models (download via models/download_yolov8n.sh)
+*.onnx
+*.pt
+
+# Python virtual environment
+.venv/
+
 # Extracted code (generated)
 extracted_code/
 
 # Logs
 *.log
-/tmp/drone_logs/
+drone_logs/
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Prompt instructions
-prompt_instructions.md
+work_instructions.md
 tasks/
