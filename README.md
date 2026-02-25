@@ -1080,3 +1080,54 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | OpenCV | ≥ 4.6 | YOLOv8 DNN inference (`OpenCvYoloDetector`) | Build from source or `apt install libopencv-dev` | Optional (`HAS_OPENCV`) |
 | MAVSDK | ≥ 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
+## Development Workflow
+
+### Branching & PR Process
+
+```
+main ← feature/issue-<N>-<short-description>
+```
+
+1. **Create an issue** for every change (feature, bug fix, or chore).
+2. **Branch from `main`:** `git checkout -b feature/issue-<N>-<short-description> main`
+3. **Develop, commit, push** to the feature branch.
+4. **Open a PR** targeting `main`. Reference the issue (`Closes #<N>`) in the PR body.
+5. **CI must pass** — all tests green, `-Werror -Wall -Wextra` clean.
+6. **Get review approval**, address all comments.
+7. **Merge the PR** (squash or merge commit).
+
+### Pre-Merge Checklist
+
+Before merging any PR, verify:
+
+- [ ] All commits intended for `main` are **on the branch at merge time** (not pushed after merge)
+- [ ] CI passes on the final commit SHA
+- [ ] `ctest --test-dir build` passes locally (262+ tests)
+- [ ] No untracked source files (`git status --short | grep "^??"` should be empty)
+- [ ] Deploy/install scripts tested end-to-end if modified
+
+### Post-Merge Commits — Lessons Learned
+
+> **Incident (PR #20 → Issue #22):** Two commits (`install_dependencies.sh` and its bug fixes) were pushed to the feature branch *after* the PR was already merged. This left critical install script fixes out of `main`, requiring a follow-up PR (#21) to cherry-pick them in.
+
+**Rules to prevent this:**
+
+1. **Never push to a feature branch after its PR is merged.** The branch is dead once merged.
+2. **If you discover something needs fixing after merge**, create a new issue + branch + PR from `main`.
+3. **Verify the merge SHA matches your latest commit** before deleting the branch:
+   ```bash
+   # After merge, confirm main has your latest work
+   git fetch origin main
+   git log origin/main --oneline -5   # should include your final commit
+   ```
+4. **Use `Closes #<N>` in the PR body** so the issue auto-closes only when the fix actually lands in `main`.
+
+### Quick Reference
+
+| Action | Command |
+|---|---|
+| New feature branch | `git checkout -b feature/issue-<N>-desc main` |
+| Run all tests | `cd build && ctest --output-on-failure` |
+| CI-equivalent build | `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)` |
+| Check for missed commits | `git log origin/main..HEAD --oneline` (should be empty after merge) |
+| Clean simulation state | `pkill -f "px4\|gz sim" && rm -f /dev/shm/drone_*` |
