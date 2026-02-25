@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
     if (args.help) return 0;
 
     SignalHandler::install(g_running);
-    LogConfig::init("payload_manager", "/tmp/drone_logs", args.log_level);
+    LogConfig::init("payload_manager", LogConfig::resolve_log_dir(), args.log_level);
 
     drone::Config cfg;
     cfg.load(args.config_path);

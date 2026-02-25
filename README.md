@@ -673,7 +673,7 @@ sudo ./deploy/launch_all.sh --log-level debug
 
 ### Logs
 
-Logs are written to `/tmp/drone_logs/` with automatic rotation (5 MB per file, 3 rotated files). Console output uses colored spdlog formatting.
+Logs are written to `drone_logs/` (inside the project root) with automatic rotation (5 MB per file, 3 rotated files). Console output uses colored spdlog formatting.
 
 ## Troubleshooting
 

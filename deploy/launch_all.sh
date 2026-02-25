@@ -12,7 +12,7 @@ if [[ ! -d "$BIN_DIR" ]]; then
 fi
 
 EXTRA_ARGS="${*}"
-LOG_DIR="/tmp/drone_logs"
+LOG_DIR="${PROJECT_DIR}/drone_logs"
 
 # Ensure system libstdc++ is used instead of Anaconda's older version
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -24,6 +24,7 @@ rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
       /dev/shm/system_health 2>/dev/null || true
 
 mkdir -p "$LOG_DIR"
+export DRONE_LOG_DIR="$LOG_DIR"
 
 echo "══════════════════════════════════════════"
 echo "  Drone Companion Stack — Launching"

@@ -10,7 +10,7 @@
 #   PX4_DIR          Path to PX4-Autopilot   (default: ~/PX4-Autopilot)
 #   GZ_WORLD         SDF world file          (default: sim/worlds/test_world.sdf)
 #   CONFIG_FILE      JSON config             (default: config/gazebo.json)
-#   LOG_DIR          Log output directory    (default: /tmp/drone_logs)
+#   LOG_DIR          Log output directory    (default: <project>/drone_logs)
 #
 # Prerequisites:
 #   - PX4-Autopilot built for SITL (make px4_sitl_default)
@@ -27,7 +27,7 @@ BIN_DIR="${PROJECT_DIR}/build/bin"
 PX4_DIR="${PX4_DIR:-${HOME}/PX4-Autopilot}"
 GZ_WORLD="${GZ_WORLD:-${PROJECT_DIR}/sim/worlds/test_world.sdf}"
 CONFIG_FILE="${CONFIG_FILE:-${PROJECT_DIR}/config/gazebo.json}"
-LOG_DIR="${LOG_DIR:-/tmp/drone_logs}"
+LOG_DIR="${LOG_DIR:-${PROJECT_DIR}/drone_logs}"
 PX4_MODEL="x500_companion"
 HEADLESS=1
 EXTRA_ARGS=""
@@ -100,6 +100,7 @@ clean_shm() {
 # Clean stale SHM on startup
 clean_shm
 mkdir -p "$LOG_DIR"
+export DRONE_LOG_DIR="$LOG_DIR"
 
 echo "════════════════════════════════════════════════════════"
 echo "  Drone Companion Stack — Gazebo SITL Launch"

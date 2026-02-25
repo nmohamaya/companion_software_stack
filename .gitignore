@@ -27,7 +27,7 @@ extracted_code/
 
 # Logs
 *.log
-/tmp/drone_logs/
+drone_logs/
 
 # OS
 .DS_Store

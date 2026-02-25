@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
     if (args.help) return 0;
 
     SignalHandler::install(g_running);
-    LogConfig::init("mission_planner", "/tmp/drone_logs", args.log_level);
+    LogConfig::init("mission_planner", LogConfig::resolve_log_dir(), args.log_level);
 
     drone::Config cfg;
     cfg.load(args.config_path);
