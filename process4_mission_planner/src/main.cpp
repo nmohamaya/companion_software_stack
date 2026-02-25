@@ -159,9 +159,11 @@ int main(int argc, char* argv[]) {
 
     // RTL/landing tuning
     const float rtl_acceptance_m = cfg.get<float>(
-        "mission_planner.rtl_acceptance_radius_m", 3.0f);
+        "mission_planner.rtl_acceptance_radius_m", 1.5f);
     const float landed_alt_m = cfg.get<float>(
         "mission_planner.landed_altitude_m", 0.5f);
+    const int rtl_min_dwell_s = cfg.get<int>(
+        "mission_planner.rtl_min_dwell_seconds", 5);
 
     spdlog::info("Mission Planner READY — {} waypoints loaded",
                  fsm.total_waypoints());
@@ -171,6 +173,7 @@ int main(int argc, char* argv[]) {
     bool land_sent = false;
     float home_x = 0.0f, home_y = 0.0f, home_z = 0.0f;
     bool home_recorded = false;
+    std::chrono::steady_clock::time_point rtl_start_time{};
     uint64_t last_gcs_timestamp = 0;  // dedup GCS commands by timestamp
     auto last_arm_time = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
@@ -211,6 +214,7 @@ int main(int argc, char* argv[]) {
                           std::chrono::duration_cast<std::chrono::nanoseconds>(
                               std::chrono::steady_clock::now().time_since_epoch()).count());
                       traj_pub->publish(stop); }
+                    rtl_start_time = std::chrono::steady_clock::now();
                     fsm.on_rtl();
                     break;
                 case drone::ipc::GCSCommandType::LAND:
@@ -314,6 +318,7 @@ int main(int argc, char* argv[]) {
                                   std::chrono::duration_cast<std::chrono::nanoseconds>(
                                       std::chrono::steady_clock::now().time_since_epoch()).count());
                               traj_pub->publish(stop); }
+                            rtl_start_time = std::chrono::steady_clock::now();
                             fsm.on_rtl();
                         }
                     }
@@ -326,13 +331,18 @@ int main(int argc, char* argv[]) {
                 // PX4's RTL loiter delay (RTL_LAND_DELAY).
                 // Only override if we have a valid home fix; otherwise let
                 // PX4 handle RTL/landing autonomously.
+                // Wait at least rtl_min_dwell_s seconds so PX4 has time
+                // to actually fly the drone back to the home position
+                // before we intercept with LAND.
                 if (home_recorded) {
+                    auto rtl_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now() - rtl_start_time).count();
                     float dx = static_cast<float>(pose.translation[0]) - home_x;
                     float dy = static_cast<float>(pose.translation[1]) - home_y;
                     float horiz_dist = std::sqrt(dx * dx + dy * dy);
-                    if (horiz_dist < rtl_acceptance_m) {
-                        spdlog::info("[Planner] Near home ({:.1f}m away) — sending LAND",
-                                     horiz_dist);
+                    if (rtl_elapsed >= rtl_min_dwell_s && horiz_dist < rtl_acceptance_m) {
+                        spdlog::info("[Planner] Near home ({:.1f}m, {}s in RTL) — sending LAND",
+                                     horiz_dist, rtl_elapsed);
                         send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
                         land_sent = true;
                         fsm.on_land();
