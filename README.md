@@ -1085,16 +1085,30 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 ### Branching & PR Process
 
 ```
-main ← feature/issue-<N>-<short-description>
+main ← feature/issue-<N>-<short-description>   # new features
+main ← fix/<short-description>                  # bug fixes
 ```
 
 1. **Create an issue** for every change (feature, bug fix, or chore).
-2. **Branch from `main`:** `git checkout -b feature/issue-<N>-<short-description> main`
-3. **Develop, commit, push** to the feature branch.
-4. **Open a PR** targeting `main`. Reference the issue (`Closes #<N>`) in the PR body.
+2. **Branch from `main`:**
+   - Features: `git checkout -b feature/issue-<N>-<short-description> main`
+   - Bug fixes: `git checkout -b fix/<short-description> main`
+3. **Develop, commit, push** to the branch.
+4. **Open a PR** targeting `main`. Reference the issue (`Fixes #<N>` for bugs, `Closes #<N>` for features) in the PR body.
 5. **CI must pass** — all tests green, `-Werror -Wall -Wextra` clean.
 6. **Get review approval**, address all comments.
 7. **Merge the PR** (squash or merge commit).
+
+### Bug Fix Workflow
+
+> **Example (Issue #24 → PR #23):** Drone hovered for ~30-60s during RTL instead of landing promptly. Caused by empty RTL/LAND FSM state handlers that relied on PX4's built-in loiter delay.
+
+Bug fixes follow the same process as features, with these conventions:
+
+1. **Create a bug issue first** — describe the observed behavior, expected behavior, and root cause if known. Label it `bug`.
+2. **Branch with `fix/` prefix**: `git checkout -b fix/<short-description> main`
+3. **Reference with `Fixes #<N>`** in the PR body (not `Closes`) — GitHub convention for bug fixes.
+4. **Include before/after comparison** in the PR description when behavior changes are visible.
 
 ### Pre-Merge Checklist
 
@@ -1127,6 +1141,7 @@ Before merging any PR, verify:
 | Action | Command |
 |---|---|
 | New feature branch | `git checkout -b feature/issue-<N>-desc main` |
+| New bug fix branch | `git checkout -b fix/<desc> main` |
 | Run all tests | `cd build && ctest --output-on-failure` |
 | CI-equivalent build | `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)` |
 | Check for missed commits | `git log origin/main..HEAD --oneline` (should be empty after merge) |
