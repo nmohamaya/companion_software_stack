@@ -86,6 +86,16 @@ ask_yes_no() {
     [[ "$yn" =~ ^[Yy] ]]
 }
 
+# ── Sudo helper: skip sudo when already root ─────────────────
+if [[ "$(id -u)" -eq 0 ]]; then
+    sudo() { "$@"; }          # already root — run commands directly
+else
+    if ! command -v sudo &>/dev/null; then
+        fail "This script requires 'sudo' when not run as root. Please install sudo or re-run as root."
+        exit 1
+    fi
+fi
+
 # ── Pre-flight checks ────────────────────────────────────────
 header "Drone Companion Stack — Dependency Installer"
 
@@ -381,7 +391,7 @@ if $INSTALL_GAZEBO; then
         else
             success "Keeping existing Gazebo installation."
             # Still install dev headers if missing
-            if ! dpkg -l libgz-transport13-dev &>/dev/null 2>&1; then
+            if ! dpkg -s libgz-transport13-dev &>/dev/null 2>&1; then
                 info "Installing missing development headers..."
                 sudo apt-get install -y libgz-transport13-dev libgz-msgs10-dev
             fi
@@ -397,9 +407,9 @@ if $INSTALL_GAZEBO; then
         sudo wget -q https://packages.osrfoundation.org/gazebo.gpg \
             -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
 
-        # Add repo
+        # Add repo (HTTPS to reduce MITM/downgrade risk)
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
-http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
+https://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
 
         sudo apt-get update -qq
@@ -439,12 +449,32 @@ echo ""
 INSTALL_PX4=false
 PX4_DIR="${PX4_DIR:-${HOME}/PX4-Autopilot}"
 
+# Detect whether Gazebo and MAVSDK are available (installed now or previously)
+HAS_GAZEBO_NOW=false
+HAS_MAVSDK_NOW=false
 if $INSTALL_GAZEBO || [[ -n "${INSTALLED[*]}" && "${INSTALLED[*]}" == *"Gazebo"* ]]; then
+    HAS_GAZEBO_NOW=true
+fi
+if ${INSTALL_MAVSDK:-false} || [[ -n "${INSTALLED[*]}" && "${INSTALLED[*]}" == *"MAVSDK"* ]]; then
+    HAS_MAVSDK_NOW=true
+fi
+
+if $HAS_GAZEBO_NOW && $HAS_MAVSDK_NOW; then
     if ask_yes_no "Install/build PX4 SITL at ${PX4_DIR}?" "y"; then
         INSTALL_PX4=true
     fi
-else
+elif ! $HAS_GAZEBO_NOW && ! $HAS_MAVSDK_NOW; then
+    info "Gazebo and MAVSDK were not installed — PX4 SITL is only useful with both."
+    if ask_yes_no "Install PX4 SITL anyway?" "n"; then
+        INSTALL_PX4=true
+    fi
+elif ! $HAS_GAZEBO_NOW; then
     info "Gazebo was not installed — PX4 SITL is only useful with Gazebo."
+    if ask_yes_no "Install PX4 SITL anyway?" "n"; then
+        INSTALL_PX4=true
+    fi
+else
+    info "MAVSDK was not installed — PX4 SITL is only useful with MAVSDK."
     if ask_yes_no "Install PX4 SITL anyway?" "n"; then
         INSTALL_PX4=true
     fi
@@ -531,7 +561,7 @@ cd "$PROJECT_DIR"
 info "Configuring with CMake..."
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tail -20
+cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tee cmake_configure.log
 
 echo ""
 info "Building (using $(nproc) cores)..."
@@ -539,7 +569,7 @@ make -j"$(nproc)"
 
 echo ""
 info "Running tests..."
-ctest --output-on-failure -j"$(nproc)" 2>&1 | tail -5
+ctest --output-on-failure -j"$(nproc)" 2>&1 | tee ctest.log
 
 cd "$PROJECT_DIR"
 
