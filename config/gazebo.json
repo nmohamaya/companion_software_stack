@@ -23,11 +23,11 @@
 
     "perception": {
         "detector": {
-            "backend": "color_contour",
-            "min_contour_area": 80,
-            "max_detections": 20,
-            "confidence_threshold": 0.5,
-            "nms_threshold": 0.4
+            "backend": "yolov8",
+            "model_path": "models/yolov8n.onnx",
+            "confidence_threshold": 0.25,
+            "nms_threshold": 0.45,
+            "input_size": 640
         },
         "tracker": {
             "max_age": 10,

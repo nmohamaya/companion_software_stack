@@ -505,3 +505,102 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 - Total tests: 196 → **238** (+42)
 - Build targets: 51 (all zero warnings with `-Werror -Wall -Wextra`)
 - Processes with real Gazebo data: 4/7 → **5/7** (Perception upgraded)
+
+---
+
+### Improvement #8 — OpenCV 4.10 + YOLOv8-nano DNN Detection Pipeline
+
+**Date:** 2026-02-25
+**Category:** Perception / Computer Vision / Deep Learning
+**Issue:** #19
+**Branch:** `feature/issue-19-real-perception`
+
+**Files Added:**
+- `process2_perception/include/perception/opencv_yolo_detector.h` — YOLOv8 detector class declaration
+- `process2_perception/src/opencv_yolo_detector.cpp` — Full inference implementation (~200 lines)
+- `process2_perception/src/detector_factory.cpp` — Extracted factory (avoids circular includes)
+- `tests/test_opencv_yolo_detector.cpp` — 24 unit tests across 4 suites
+- `models/download_yolov8n.sh` — Model download/export script
+- `models/yolov8n.onnx` — YOLOv8-nano ONNX model (12.8 MB, 80 COCO classes)
+
+**Files Modified:**
+- `CMakeLists.txt` — Added `find_package(OpenCV QUIET COMPONENTS core imgproc dnn)`
+- `process2_perception/CMakeLists.txt` — Added new sources, conditional OpenCV linking, `HAS_OPENCV` definition
+- `process2_perception/include/perception/detector_interface.h` — Factory moved to declaration-only (non-inline)
+- `config/gazebo.json` — Backend changed to `"yolov8"`, added `model_path`, `input_size`, thresholds
+- `tests/CMakeLists.txt` — Added `test_opencv_yolo_detector` target with `YOLO_MODEL_PATH`
+- `tests/test_color_contour_detector.cpp` — Explicit include of `color_contour_detector.h`
+- `.gitignore` — Added `*.onnx`, `*.pt`, `.venv/`
+
+**What:** Added a production-grade YOLOv8-nano object detection pipeline using OpenCV DNN, providing real 80-class COCO detection on Gazebo camera frames:
+
+**OpenCV Upgrade (4.6.0 → 4.10.0):**
+- System OpenCV 4.6.0 could not parse YOLOv8 ONNX model (`parseBias` assertion on `Add` node)
+- Built OpenCV 4.10.0 from source with minimal modules (core, imgproc, dnn) → `/usr/local`
+- CMake configured with `-DOpenCV_DIR=/usr/local/lib/cmake/opencv4`
+
+**YOLOv8-nano Inference Pipeline:**
+1. **Input Preprocessing** — Raw pixel buffer → `cv::Mat` (RGBA→RGB if needed) → `cv::dnn::blobFromImage` (640×640, 1/255 scale, swapRB)
+2. **DNN Forward Pass** — `cv::dnn::readNetFromONNX("yolov8n.onnx")` → `net.forward()` → output shape [1, 84, 8400]
+3. **Output Parsing** — Transpose to [8400, 84], extract 4 bbox coords + 80 class scores per proposal
+4. **NMS** — `cv::dnn::NMSBoxes()` with configurable confidence (0.25) and NMS (0.45) thresholds
+5. **Result Mapping** — Scale boxes back to original frame, map COCO class → `ObjectClass` enum
+
+**COCO → ObjectClass Mapping (key classes):**
+
+| COCO Class | ObjectClass |
+|---|---|
+| person (0) | PERSON |
+| car (2), bus (5), truck (7) | VEHICLE_CAR / VEHICLE_TRUCK |
+| bicycle (1), motorcycle (3) | VEHICLE_CAR |
+| airplane (4) | DRONE |
+| bird (14), cat (15), dog (16) | ANIMAL |
+| boat (8), train (6) | VEHICLE_CAR |
+| All others | UNKNOWN |
+
+**Architecture Decisions:**
+- **Factory refactored** — Moved from inline header to `detector_factory.cpp` to resolve circular include between `detector_interface.h` ↔ `opencv_yolo_detector.h`
+- **`HAS_OPENCV` guard** — All OpenCV code conditionally compiled; graceful fallback to color_contour or simulated when OpenCV unavailable
+- **`YOLO_MODEL_PATH`** — Compile-time absolute path definition for test targets ensures ctest finds the model regardless of working directory
+- **Three backends coexist** — `"yolov8"` (OpenCV DNN), `"color_contour"` (pure C++), `"simulated"` (random) — selected via config
+
+**Test Coverage (24 new tests):**
+
+| Suite | Tests | Covers |
+|---|---|---|
+| CocoMappingTest | 7 | COCO ID → ObjectClass for person, car, truck, airplane, animal, unknown, out-of-range |
+| OpenCvYoloDetectorTest | 6 | Construction, default params, config construction, detect-without-load, detect-null-data, zero-dimension |
+| YoloModelTest | 6 | Model loading, inference on black/color images, empty-on-tiny, confidence threshold, nonexistent model |
+| YoloFactoryTest | 5 | Factory creates yolov8 backend, config-based creation, is-loaded check, fallback backends |
+
+**Metrics:**
+- Total tests: 238 → **262** (+24)
+- Build: 0 warnings with `-Werror -Wall -Wextra -Wpedantic`
+- OpenCV: 4.6.0 → **4.10.0** (built from source, dnn module)
+- Model: YOLOv8-nano (6.2M params, 12.8 MB ONNX, 80 COCO classes)
+
+---
+
+## Updated Summary
+
+| Metric | Phase 1–3 | Phase 6 | Phase 7 |
+|---|---|---|---|
+| Bug fixes | 6 | 13 | 13 |
+| Unit tests | 121 (10 suites) | 196 (14 suites) | **262** (18 suites) |
+| Config system | 45+ tunables | 70+ tunables | 75+ tunables (+ YOLO params) |
+| Processes using real Gazebo data | 0/7 | 4/7 | **5/7** (+ Perception) |
+| Detection backend | Simulated only | Simulated only | **YOLOv8-nano (80 COCO classes)** |
+| OpenCV | Not used | Not used | **4.10.0 (core + imgproc + dnn)** |
+| Compiler warnings | 0 | 0 | **0** |
+
+### Process Activity During Simulation (Updated)
+
+| # | Process | Backend | Real Gazebo Data | Activity |
+|---|---|---|---|---|
+| 1 | Video Capture | Gazebo camera | Yes — rendered frames at 30 Hz | High |
+| 2 | Perception | **YOLOv8-nano (OpenCV DNN)** | **Yes — real object detection on camera frames** | **High** |
+| 3 | SLAM/VIO/Nav | Gazebo odometry + IMU | Yes — ground-truth pose | High |
+| 4 | Mission Planner | Pure logic | Consumes real pose | High — orchestrates flight |
+| 5 | Comms | MAVLink (MAVSDK) | Yes — real PX4 link | High — controls PX4 |
+| 6 | Payload Manager | Simulated gimbal | No | Low (occasional triggers) |
+| 7 | System Monitor | Linux /proc | Host metrics only | Low (1 Hz) |

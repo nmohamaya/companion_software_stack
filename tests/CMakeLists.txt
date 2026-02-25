@@ -80,4 +80,19 @@ add_drone_test(test_process_interfaces test_process_interfaces.cpp)
 # ── ColorContourDetector tests ───────────────────────────────
 add_drone_test(test_color_contour_detector test_color_contour_detector.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/detector_factory.cpp
 )
+
+# ── OpenCV YOLOv8 detector tests ────────────────────────────
+add_drone_test(test_opencv_yolo_detector test_opencv_yolo_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/detector_factory.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/opencv_yolo_detector.cpp
+)
+target_compile_definitions(test_opencv_yolo_detector PRIVATE
+    YOLO_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/yolov8n.onnx"
+)
+if(OPENCV_FOUND)
+    target_link_libraries(test_opencv_yolo_detector PRIVATE ${OpenCV_LIBS})
+    target_compile_definitions(test_opencv_yolo_detector PRIVATE HAS_OPENCV=1)
+endif()

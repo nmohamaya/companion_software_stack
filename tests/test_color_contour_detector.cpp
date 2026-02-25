@@ -2,6 +2,7 @@
 // Unit tests for ColorContourDetector: HSV segmentation + connected-component labeling.
 #include <gtest/gtest.h>
 #include "perception/detector_interface.h"
+#include "perception/color_contour_detector.h"
 #include "util/config.h"
 
 #include <algorithm>

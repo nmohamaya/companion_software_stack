@@ -31,29 +31,9 @@ public:
 };
 
 /// Factory: create detector from config backend string.
-/// Supported backends: "simulated", "color_contour"
-inline std::unique_ptr<IDetector> create_detector(const std::string& backend,
-                                                   const drone::Config* cfg = nullptr);
-
-} // namespace drone::perception
-
-// Include concrete detectors after interface is fully declared
-#include "perception/color_contour_detector.h"
-
-namespace drone::perception {
-
-inline std::unique_ptr<IDetector> create_detector(const std::string& backend,
-                                                   const drone::Config* cfg) {
-    if (backend == "color_contour") {
-        if (cfg) {
-            return std::make_unique<ColorContourDetector>(*cfg);
-        }
-        return std::make_unique<ColorContourDetector>();
-    }
-    if (backend == "simulated" || backend.empty()) {
-        return std::make_unique<SimulatedDetector>();
-    }
-    throw std::runtime_error("Unknown detector backend: " + backend);
-}
+/// Supported backends: "simulated", "color_contour", "yolov8"
+/// Defined in detector_factory.cpp to avoid circular includes.
+std::unique_ptr<IDetector> create_detector(const std::string& backend,
+                                            const drone::Config* cfg = nullptr);
 
 } // namespace drone::perception

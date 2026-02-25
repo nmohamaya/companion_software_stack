@@ -15,6 +15,13 @@ cmake-build-*/
 *.so
 *.dylib
 
+# ML models (download via models/download_yolov8n.sh)
+*.onnx
+*.pt
+
+# Python virtual environment
+.venv/
+
 # Extracted code (generated)
 extracted_code/
 
