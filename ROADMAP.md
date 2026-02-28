@@ -7,23 +7,31 @@
 
 ## Table of Contents
 
-- [Current State at a Glance](#current-state-at-a-glance)
-- [Completed Phases](#completed-phases)
-  - [Phase 1 — Foundation](#phase-1--foundation-bug-fixes-testing-config-system)
-  - [Phase 2 — Near-Term Improvements](#phase-2--near-term-improvements)
-  - [Phase 3 — Hardware Abstraction Layer](#phase-3--hardware-abstraction-layer-hal)
-  - [Phase 4 — Gazebo SITL Integration](#phase-4--gazebo-sitl-integration)
-  - [Phase 5 — End-to-End Flight Fixes](#phase-5--end-to-end-flight-fixes)
-  - [Phase 6 — Simulation Visualization & Tuning](#phase-6--simulation-visualization--flight-tuning)
-  - [Phase 7 — Real Perception Pipeline](#phase-7--real-perception-pipeline)
-  - [Phase 8 — Deployment Tooling & RTL Safety](#phase-8--deployment-tooling--rtl-safety)
-- [Planned Phases (Real Drone Deployment)](#planned-phases-real-drone-deployment)
-  - [Phase 9 — First Safe Flight](#phase-9--first-safe-flight-safety--hardware-config)
-  - [Phase 10 — Real Cameras & Perception](#phase-10--real-cameras--perception)
-  - [Phase 11 — Autonomous Navigation (Real VIO/SLAM)](#phase-11--autonomous-navigation-real-vioslam)
-  - [Phase 12 — Production Hardening](#phase-12--production-hardening)
-- [Issue Tracking](#issue-tracking)
-- [Metrics History](#metrics-history)
+- [Roadmap — Drone Companion Software Stack](#roadmap--drone-companion-software-stack)
+  - [Table of Contents](#table-of-contents)
+  - [Current State at a Glance](#current-state-at-a-glance)
+  - [Completed Phases](#completed-phases)
+    - [Phase 1 — Foundation (Bug Fixes, Testing, Config System)](#phase-1--foundation-bug-fixes-testing-config-system)
+    - [Phase 2 — Near-Term Improvements](#phase-2--near-term-improvements)
+    - [Phase 3 — Hardware Abstraction Layer (HAL)](#phase-3--hardware-abstraction-layer-hal)
+    - [Phase 4 — Gazebo SITL Integration](#phase-4--gazebo-sitl-integration)
+    - [Phase 5 — End-to-End Flight Fixes](#phase-5--end-to-end-flight-fixes)
+    - [Phase 6 — Simulation Visualization \& Flight Tuning](#phase-6--simulation-visualization--flight-tuning)
+    - [Phase 7 — Real Perception Pipeline](#phase-7--real-perception-pipeline)
+    - [Phase 8 — Deployment Tooling \& RTL Safety](#phase-8--deployment-tooling--rtl-safety)
+  - [Planned Phases (Real Drone Deployment)](#planned-phases-real-drone-deployment)
+    - [Phase 9 — First Safe Flight (Safety + Hardware Config)](#phase-9--first-safe-flight-safety--hardware-config)
+    - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception)
+    - [Phase 11 — Autonomous Navigation (Real VIO/SLAM)](#phase-11--autonomous-navigation-real-vioslam)
+    - [Phase 12 — Production Hardening](#phase-12--production-hardening)
+  - [Issue Tracking](#issue-tracking)
+    - [Epic](#epic)
+    - [Phase 9 — First Safe Flight](#phase-9--first-safe-flight)
+    - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception-1)
+    - [Phase 11 — Autonomous Navigation](#phase-11--autonomous-navigation)
+    - [Phase 12 — Production Hardening](#phase-12--production-hardening-1)
+  - [Metrics History](#metrics-history)
+    - [Process Activity During Simulation](#process-activity-during-simulation)
 
 ---
 
@@ -188,7 +196,7 @@
 
 | Issue | Task | Priority | Description |
 |-------|------|----------|-------------|
-| [#26](https://github.com/nmohamaya/companion_software_stack/issues/26) | Hardware config + launch script | P0 | `config/hardware.json` for serial ports, baud rates, device paths; `deploy/launch_hardware.sh` |
+| ~~[#26](https://github.com/nmohamaya/companion_software_stack/issues/26)~~ | ~~Hardware config + launch script~~ | ~~P0~~ | ✅ Done (PR #43) — `config/hardware.json` + `deploy/launch_hardware.sh` |
 | [#27](https://github.com/nmohamaya/companion_software_stack/issues/27) | Battery-critical auto-RTL + temp failsafe | P0 | Voltage/percentage thresholds trigger RTL; SoC thermal throttle monitoring |
 | [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) | FC heartbeat timeout + link-loss contingency | P0 | Detect MAVLink heartbeat loss → hold / RTL after timeout; reconnection logic |
 | [#29](https://github.com/nmohamaya/companion_software_stack/issues/29) | Geofencing (polygon + altitude ceiling) | P1 | Config-defined polygon + altitude ceiling; auto-RTL on breach |
@@ -255,7 +263,7 @@
 
 | # | Title | State |
 |---|-------|-------|
-| [#26](https://github.com/nmohamaya/companion_software_stack/issues/26) | Hardware config + launch script | Open |
+| [#26](https://github.com/nmohamaya/companion_software_stack/issues/26) | Hardware config + launch script | **Closed** (PR #43) |
 | [#27](https://github.com/nmohamaya/companion_software_stack/issues/27) | Battery-critical auto-RTL + temperature failsafe | Open |
 | [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) | FC heartbeat timeout + link-loss contingency | Open |
 | [#29](https://github.com/nmohamaya/companion_software_stack/issues/29) | Geofencing (polygon + altitude ceiling) | Open |
@@ -292,19 +300,20 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 (Current) |
-|--------|---------|---------|---------|---------|-------------------|
-| Unit tests | 58 | 121 | 196 | 262 | **262** |
-| Test suites | 6 | 10 | 14 | 18 | **18** |
-| Bug fixes | 6 | 6 | 13 | 13 | **15** (+RTL fixes) |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | **75+** |
-| HAL backends | 0 | 5 | 8 | 8 | **8** |
-| Perception backends | 0 | 0 | 1 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | **0** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | **5/7** |
-| OpenCV | — | — | — | 4.10.0 | **4.10.0** |
-| MAVSDK | — | — | 2.12.12 | 2.12.12 | **2.12.12** |
-| Autonomous flight | No | No | Yes | Yes | **Yes** (RTL verified) |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 (Current) |
+|--------|---------|---------|---------|---------|---------|-------------------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | **262** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | **18** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | **15** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | **80+** (+ hardware) |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | **8** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | **5/7** |
+| OpenCV | — | — | — | 4.10.0 | 4.10.0 | **4.10.0** |
+| MAVSDK | — | — | 2.12.12 | 2.12.12 | 2.12.12 | **2.12.12** |
+| Autonomous flight | No | No | Yes | Yes | Yes | **Yes** |
+| Hardware deploy | No | No | No | No | No | **Yes** (PR #43) |
 
 ### Process Activity During Simulation
 
@@ -320,4 +329,4 @@
 
 ---
 
-*Last updated after Phase 8 — PR #23 merged, 262 tests, Epic #25 created with 17 sub-issues (#26–#42).*
+*Last updated after Phase 9 start — PR #43 (#26 hardware config), 262 tests, 1/6 Phase 9 issues complete.*

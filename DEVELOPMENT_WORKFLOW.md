@@ -101,7 +101,24 @@ For changes that interact with external simulators or hardware:
 - Re-run local build + tests after fixes
 - Mark conversations as resolved
 
-#### Step 7: Merge to Main
+#### Step 7: Update Documentation
+Before merging, update the project's tracking documents:
+
+1. **`PROGRESS.md`** — Add an entry under the current Phase section:
+   - Improvement number, title, date, category
+   - Files added/modified
+   - What was done and why
+   - Test coverage additions (if any)
+   - Updated summary metrics table
+
+2. **`ROADMAP.md`** — Update the relevant sections:
+   - Mark completed issues as done in the phase tables (strikethrough + ✅)
+   - Update the issue tracking table (change state from "Open" to "Closed")
+   - Update the metrics history table with the new column
+
+3. **When to update:** Include doc updates in the same PR branch, committed before merge.
+
+#### Step 8: Merge to Main
 Once CI passes and review is approved:
 
 ```bash
@@ -116,7 +133,7 @@ git commit -m "feat(#XX): description"
 git push origin main
 ```
 
-#### Step 8: Post-Merge Cleanup
+#### Step 9: Post-Merge Cleanup
 ```bash
 git checkout main && git pull
 git branch -d feature/issue-XX-description
