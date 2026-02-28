@@ -1,35 +1,41 @@
 # Interface API Reference
 
 > **Issue:** #4 — API-Driven Development  
-> **Branch:** `feature/issue-4-api-interfaces`  
-> **Status:** All 7 processes wired through abstract interfaces; 163 tests pass
+> **Status:** All 7 processes wired through abstract interfaces; 262 tests pass  
+> **IPC Migration:** Zenoh migration planned — [ADR-001](adr/ADR-001-ipc-framework-selection.md), Epic [#45](https://github.com/nmohamaya/companion_software_stack/issues/45)
 
 ---
 
 ## Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      ShmMessageBus                           │
-│    advertise<T>(topic)  →  IPublisher<T>                     │
-│    subscribe<T>(topic)  →  ISubscriber<T>                    │
-└─────────┬───────────────────────────┬────────────────────────┘
-          │  SHM-backed (SeqLock)     │
-     ShmPublisher<T>           ShmSubscriber<T>
+┌──────────────────────────────────────────────────────────────────┐
+│              MessageBus (config-driven backend)                   │
+│    advertise<T>(topic)  →  IPublisher<T>                         │
+│    subscribe<T>(topic)  →  ISubscriber<T>                        │
+├───────────────────────────┬──────────────────────────────────────┤
+│  Backend: "shm" (current) │  Backend: "zenoh" (planned #45)      │
+│  ShmPublisher<T>          │  ZenohPublisher<T>                   │
+│  ShmSubscriber<T>         │  ZenohSubscriber<T>                  │
+│  SeqLock POSIX SHM        │  Zenoh SHM (zero-copy) + network     │
+│  Local-only               │  SHM local + UDP/TCP to GCS          │
+└───────────────────────────┴──────────────────────────────────────┘
           │                          │
-┌─────────▼──────────────────────────▼────────────────────────┐
-│                   Process Internals                          │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
-│  │IVisualFrontend│ │ IPathPlanner │ │ IObstacleAvoider     │ │
-│  │ (P3: SLAM)   │ │ (P4: Mission)│ │ (P4: Mission)        │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────┘ │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ IProcessMonitor  (P7: System Monitor)                │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────▼──────────────────────────▼────────────────────────────┐
+│                   Process Internals                              │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
+│  │IVisualFrontend│ │ IPathPlanner │ │ IObstacleAvoider         │ │
+│  │ (P3: SLAM)   │ │ (P4: Mission)│ │ (P4: Mission)            │ │
+│  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ IProcessMonitor  (P7: System Monitor)                    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 All interfaces follow the **Strategy pattern**: abstract base class + concrete implementation + factory function. Swap implementations at construction time via config string.
+
+The IPC backend is selected via `"ipc_backend"` in config (`"shm"` or `"zenoh"`). Process code depends only on `IPublisher<T>` / `ISubscriber<T>` — transport is invisible. See [ADR-001](adr/ADR-001-ipc-framework-selection.md) for the decision record.
 
 ---
 
@@ -87,7 +93,7 @@ ShmSubscriber<ShmVideoFrame> sub;
 sub.connect("/drone_mission_cam");
 ```
 
-### `ShmMessageBus` — Factory
+### `ShmMessageBus` — Factory (Current Backend)
 
 **Header:** `common/ipc/include/ipc/shm_message_bus.h`
 
@@ -108,6 +114,56 @@ pub->publish(frame);
 ShmVideoFrame out;
 sub->receive(out);
 ```
+
+### `ZenohMessageBus` — Factory (Planned — [#46](https://github.com/nmohamaya/companion_software_stack/issues/46))
+
+**Header:** `common/ipc/include/ipc/zenoh_message_bus.h` *(to be created)*  
+**Compile guard:** `#ifdef HAVE_ZENOH`
+
+Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()` API, backed by Eclipse Zenoh. Provides zero-copy SHM for local IPC and network transparency (UDP/TCP) for GCS communication.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `advertise` | `unique_ptr<IPublisher<T>> advertise<T>(topic)` | Create a `ZenohPublisher<T>` |
+| `subscribe` | `unique_ptr<ISubscriber<T>> subscribe<T>(topic)` | Create a `ZenohSubscriber<T>` |
+| `subscribe_lazy` | `unique_ptr<ISubscriber<T>> subscribe_lazy<T>(topic)` | Create lazily-connected subscriber |
+| `create_client` | `unique_ptr<IServiceClient<Req,Resp>> create_client<Req,Resp>(svc)` | Create service client (Zenoh queryable) |
+| `create_server` | `unique_ptr<IServiceServer<Req,Resp>> create_server<Req,Resp>(svc)` | Create service server (Zenoh queryable) |
+
+**Key-expression mapping** (SHM segment names → Zenoh topics):
+
+| SHM Name | Zenoh Key Expression |
+|----------|---------------------|
+| `/drone_slam_pose` | `drone/slam/pose` |
+| `/drone_perception_objects` | `drone/perception/detections` |
+| `/drone_video_frame` | `drone/video/frame` |
+| `/drone_stereo_frame` | `drone/video/stereo_frame` |
+| `/drone_fc_state` | `drone/comms/fc_state` |
+| `/drone_fc_command` | `drone/comms/fc_command` |
+| `/drone_gcs_command` | `drone/comms/gcs_command` |
+| `/drone_mission_status` | `drone/mission/status` |
+| `/drone_trajectory_cmd` | `drone/mission/trajectory` |
+| `/drone_payload_command` | `drone/payload/command` |
+| `/drone_payload_status` | `drone/payload/status` |
+| `/drone_system_health` | `drone/monitor/health` |
+
+```cpp
+// Usage is identical to ShmMessageBus — processes don't know the backend:
+auto bus = create_message_bus(cfg);  // Returns ZenohMessageBus if ipc_backend="zenoh"
+auto pub = bus->advertise<ShmPose>("drone/slam/pose");
+auto sub = bus->subscribe<ShmPose>("drone/slam/pose");
+
+pub->publish(pose);
+ShmPose out;
+sub->receive(out);
+```
+
+**Zenoh-specific features (not available with SHM backend):**
+- Zero-copy SHM via loan-based API (no `memcpy` for 6 MB video frames)
+- Network-transparent — same pub/sub reachable from GCS over TCP/UDP
+- Wildcard subscriptions: `drone/**` captures all channels
+- Liveliness tokens for process death detection
+- Configurable QoS (reliable/best-effort, history depth)
 
 ---
 
@@ -270,18 +326,39 @@ Pose p = fe->process_frame(stereo_frame);
 
 ## 4. How Processes Use These Interfaces
 
-Every process creates a `ShmMessageBus` and obtains typed publishers/subscribers:
+Every process creates a message bus via the config-driven factory and obtains typed publishers/subscribers:
 
 ```cpp
 // Example: Process 1 (Video Capture)
-ShmMessageBus bus;
-auto mission_pub = bus.advertise<ShmVideoFrame>(shm_names::VIDEO_MISSION_CAM);
-auto stereo_pub  = bus.advertise<ShmStereoFrame>(shm_names::VIDEO_STEREO_CAM);
+auto bus = create_message_bus(cfg);  // ShmMessageBus or ZenohMessageBus
+auto mission_pub = bus->advertise<ShmVideoFrame>("drone/video/frame");
+auto stereo_pub  = bus->advertise<ShmStereoFrame>("drone/video/stereo_frame");
 
 // Thread function takes IPublisher<T>& — testable with mocks
 void capture_thread(IPublisher<ShmVideoFrame>& pub) {
     ShmVideoFrame frame = capture();
     pub.publish(frame);
+}
+```
+
+### IPC Backend Selection
+
+```json
+// config/default.json
+{
+    "ipc_backend": "shm"     // Current default — POSIX SHM (SeqLock)
+    // "ipc_backend": "zenoh" // Planned — zero-copy SHM + network transport
+}
+```
+
+```cpp
+// Shared factory helper (in a common header)
+auto create_message_bus(const drone::Config& cfg) {
+    auto backend = cfg.get<std::string>("ipc_backend", "shm");
+#ifdef HAVE_ZENOH
+    if (backend == "zenoh") return std::make_unique<drone::ipc::ZenohMessageBus>();
+#endif
+    return std::make_unique<drone::ipc::ShmMessageBus>();
 }
 ```
 
@@ -314,5 +391,66 @@ No process code changes needed — only the factory + new implementation file.
 |-----------|-------|----------------|
 | `test_message_bus.cpp` | 23 | IPublisher, ISubscriber, ShmMessageBus, ShmServiceChannel |
 | `test_process_interfaces.cpp` | 19 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
+| `test_shm_ipc.cpp` | 25 | SeqLock ShmWriter/ShmReader, SPSC ring |
+| `test_zenoh_ipc.cpp` | *(planned)* | ZenohPublisher, ZenohSubscriber, ZenohMessageBus ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46)) |
+| `test_zenoh_service.cpp` | *(planned)* | ZenohServiceClient, ZenohServiceServer ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) |
+| `test_zenoh_liveliness.cpp` | *(planned)* | LivelinessToken, LivelinessMonitor ([#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) |
+| `bench_zenoh_video.cpp` | *(planned)* | Video frame zero-copy benchmarks ([#48](https://github.com/nmohamaya/companion_software_stack/issues/48)) |
 
-Total: **42 new tests** (163 total with existing 121).
+Total: **262 tests** (18 suites).
+
+---
+
+## 7. Planned: Zenoh IPC Migration
+
+> **Epic:** [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) — Zenoh IPC Migration  
+> **Decision:** [ADR-001](adr/ADR-001-ipc-framework-selection.md)  
+> **Target Hardware:** NVIDIA Jetson Orin (aarch64, JetPack 6.x)
+
+The IPC layer will be migrated from POSIX SHM (SeqLock) to **Eclipse Zenoh** in 6 phases:
+
+| Phase | Issue | Title | Key Changes |
+|-------|-------|-------|-------------|
+| **A** | [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Foundation | CMake `find_package(zenohc)`, `HAVE_ZENOH` guard, `ZenohMessageBus`, CI dual-build |
+| **B** | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Low-bandwidth migration | 10 control/status channels → Zenoh pub/sub |
+| **C** | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | High-bandwidth migration | `ShmVideoFrame`/`ShmStereoFrame` → Zenoh SHM provider (zero-copy) |
+| **D** | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Service channels | `ShmServiceChannel` → Zenoh queryable; delete legacy SHM files |
+| **E** | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Network transport | Same pub/sub reachable from GCS over UDP/TCP — enables #34, #35 |
+| **F** | [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Liveliness tokens | Process death detection — enables #28, #41 |
+
+### Why Zenoh?
+
+- **Zero-copy SHM** — eliminates 6 MB `memcpy` per video frame (~180 MB/s saved)
+- **Network transparency** — same API works locally (SHM) and to GCS (UDP/TCP)
+- **Liveliness tokens** — automatic process death detection (no custom heartbeat)
+- **Wildcard subscriptions** — `drone/**` captures all channels for flight data recording (#40)
+- **Pre-built aarch64 packages** — no Rust toolchain needed on Jetson Orin
+
+### New Zenoh Types (Planned)
+
+| Type | Header | Implements | Description |
+|------|--------|------------|-------------|
+| `ZenohSession` | `zenoh_session.h` | — | Singleton Zenoh session per process |
+| `ZenohPublisher<T>` | `zenoh_publisher.h` | `IPublisher<T>` | Zenoh-backed publisher (SHM zero-copy for large msgs) |
+| `ZenohSubscriber<T>` | `zenoh_subscriber.h` | `ISubscriber<T>` | Zenoh-backed subscriber with callback → latest-value |
+| `ZenohMessageBus` | `zenoh_message_bus.h` | — | Factory: `advertise<T>()`, `subscribe<T>()`, `create_client<>()` |
+| `ZenohServiceClient<Req,Resp>` | `zenoh_service_client.h` | `IServiceClient<Req,Resp>` | Zenoh query-based service client |
+| `ZenohServiceServer<Req,Resp>` | `zenoh_service_server.h` | `IServiceServer<Req,Resp>` | Zenoh queryable-based service server |
+| `LivelinessToken` | `zenoh_liveliness.h` | — | Per-process health token |
+| `LivelinessMonitor` | `zenoh_liveliness.h` | — | Watches `drone/alive/**` for process death |
+
+### Process Code Impact
+
+Process code changes are **minimal** — only the bus creation line changes:
+
+```cpp
+// BEFORE:
+drone::ipc::ShmMessageBus bus;
+auto sub = bus.subscribe<drone::ipc::ShmPose>("/drone_slam_pose");
+
+// AFTER:
+auto bus = create_message_bus(cfg);  // ZenohMessageBus if ipc_backend=zenoh
+auto sub = bus->subscribe<drone::ipc::ShmPose>("drone/slam/pose");
+```
+
+All `IPublisher<T>` and `ISubscriber<T>` usage remains identical.
