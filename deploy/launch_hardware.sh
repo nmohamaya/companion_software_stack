@@ -79,7 +79,7 @@ fi
 
 # ── Validate JSON syntax ─────────────────────────────────────
 if command -v python3 &>/dev/null; then
-    if ! python3 -c "import json; json.load(open('${CONFIG_FILE}'))" 2>/dev/null; then
+    if ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$CONFIG_FILE" 2>/dev/null; then
         echo "ERROR: Invalid JSON in ${CONFIG_FILE}"
         exit 1
     fi
@@ -143,13 +143,39 @@ check_serial_perms() {
     dev_group=$(stat -c '%G' "$dev" 2>/dev/null || echo "unknown")
     echo "ERROR: Cannot read/write ${dev} (group: ${dev_group})"
     echo "       Fix: sudo usermod -aG ${dev_group} \$USER && logout/login"
-    echo "       Or:  sudo chmod 666 ${dev}"
+    echo "       For more advanced setups, configure persistent serial access via udev rules or system-specific device access controls."
     return 1
 }
 
 SERIAL_DEV="${FC_DEVICE:-${DETECTED_DEV:-}}"
 if [[ -n "$SERIAL_DEV" ]]; then
     check_serial_perms "$SERIAL_DEV" || exit 1
+
+    # If a serial FC device is set/detected, try to override comms.mavlink.uri
+    # in the config so that MAVSDK connects to the correct device.
+    if command -v jq >/dev/null 2>&1; then
+        # Read existing URI (may be empty or non-serial).
+        CURRENT_URI="$(jq -r '.comms.mavlink.uri // empty' "${CONFIG_FILE}" 2>/dev/null || echo "")"
+        if [[ -n "${CURRENT_URI}" && "${CURRENT_URI}" == serial://* ]]; then
+            # Preserve baud rate suffix (e.g. :921600).
+            BAUD="${CURRENT_URI##*:}"
+            NEW_URI="serial://${SERIAL_DEV}:${BAUD}"
+
+            TEMP_CONFIG="$(mktemp --suffix=.hardware.json)"
+            if jq --arg uri "${NEW_URI}" '.comms.mavlink.uri = $uri' "${CONFIG_FILE}" > "${TEMP_CONFIG}"; then
+                CONFIG_FILE="${TEMP_CONFIG}"
+                echo "[OK] Overriding comms.mavlink.uri to: ${NEW_URI}"
+                echo "     Using temporary config: ${CONFIG_FILE}"
+            else
+                echo "[WARN] Failed to write temporary config for MAVLink URI override; using original ${CONFIG_FILE}"
+                rm -f "${TEMP_CONFIG}" || true
+            fi
+        else
+            echo "[WARN] FC device set (${SERIAL_DEV}) but config comms.mavlink.uri is not serial://*; leaving URI unchanged."
+        fi
+    else
+        echo "[WARN] jq not found; cannot override comms.mavlink.uri based on FC_DEVICE/SERIAL_DEV."
+    fi
 fi
 
 # ── Check MAVSDK availability ─────────────────────────────────
@@ -164,10 +190,11 @@ fi
 echo ""
 echo "── System Check ──────────────────────────────────"
 
-# Disk space (warn if < 500 MB free on log partition)
-AVAIL_KB=$(df --output=avail "${LOG_DIR}" 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
+# Disk space (warn if < 500 MB free on log/project partition)
+# Use PROJECT_DIR for the check since LOG_DIR may not exist yet.
+AVAIL_KB=$(df --output=avail "${PROJECT_DIR}" 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
 if [[ "$AVAIL_KB" -lt 512000 ]]; then
-    echo "[WARN] Low disk space: $(( AVAIL_KB / 1024 )) MB free in ${LOG_DIR}"
+    echo "[WARN] Low disk space: $(( AVAIL_KB / 1024 )) MB free"
 else
     echo "[OK] Disk space: $(( AVAIL_KB / 1024 )) MB free"
 fi
@@ -212,12 +239,30 @@ if [[ -d "/usr/lib/aarch64-linux-gnu" ]]; then
     export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
 fi
 
-# ── Clean stale SHM ──────────────────────────────────────────
-rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
-      /dev/shm/mission_status /dev/shm/trajectory_cmd /dev/shm/payload_commands \
-      /dev/shm/fc_state /dev/shm/fc_commands /dev/shm/gcs_commands \
-      /dev/shm/payload_status /dev/shm/system_health \
-      /dev/shm/sem.drone_* 2>/dev/null || true
+# ── SHM helpers ───────────────────────────────────────────────
+# Names match common/ipc/include/ipc/shm_types.h::shm_names
+clean_shm() {
+    local shm_names=(
+        drone_mission_cam
+        drone_stereo_cam
+        detected_objects
+        slam_pose
+        mission_status
+        trajectory_cmd
+        payload_commands
+        fc_commands
+        fc_state
+        gcs_commands
+        payload_status
+        system_health
+    )
+    for name in "${shm_names[@]}"; do
+        rm -f "/dev/shm/${name}" "/dev/shm/sem.${name}" 2>/dev/null || true
+    done
+}
+
+# Clean stale SHM on startup
+clean_shm
 
 mkdir -p "$LOG_DIR"
 export DRONE_LOG_DIR="$LOG_DIR"
@@ -232,12 +277,22 @@ echo "  Binaries : ${BIN_DIR}"
 echo "  Logs     : ${LOG_DIR}"
 echo "════════════════════════════════════════════════════════"
 
-CONFIG_ARG="--config ${CONFIG_FILE}"
+CONFIG_ARGS=(--config "${CONFIG_FILE}")
+EXTRA_ARGS_ARR=()
+if [[ -n "${EXTRA_ARGS}" ]]; then
+    # shellcheck disable=SC2206  # intentional word-splitting of user-supplied flags
+    EXTRA_ARGS_ARR=(${EXTRA_ARGS})
+fi
 COMPANION_PIDS=()
+MONITOR_PID=""
 
 cleanup() {
     echo ""
     echo "[Shutdown] Stopping all processes..."
+    # Stop monitor first to avoid log noise during shutdown
+    if [[ -n "${MONITOR_PID}" ]]; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+    fi
     # Send SIGINT first for graceful shutdown
     for pid in "${COMPANION_PIDS[@]}"; do
         kill -SIGINT "$pid" 2>/dev/null || true
@@ -250,11 +305,7 @@ cleanup() {
         fi
     done
     # Clean SHM
-    rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
-          /dev/shm/mission_status /dev/shm/trajectory_cmd /dev/shm/payload_commands \
-          /dev/shm/fc_state /dev/shm/fc_commands /dev/shm/gcs_commands \
-          /dev/shm/payload_status /dev/shm/system_health \
-          /dev/shm/sem.drone_* 2>/dev/null || true
+    clean_shm
     echo "[Shutdown] All processes stopped."
 }
 trap cleanup EXIT INT TERM
@@ -273,25 +324,26 @@ echo ""
 echo "[Stack] Launching 7 companion processes..."
 
 echo "  [1/7] system_monitor"
-"${BIN_DIR}/system_monitor" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/system_monitor" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/system_monitor.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [2/7] video_capture"
-"${BIN_DIR}/video_capture" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/video_capture" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/video_capture.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [3/7] comms (connecting to FC...)"
-"${BIN_DIR}/comms" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/comms" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/comms.log" 2>&1 &
 COMPANION_PIDS+=($!)
 # Give comms extra time to establish MAVLink connection
 sleep 3
 
-# Verify comms is still running (connection to FC may fail)
+# Verify comms actually connected to FC (not just alive)
+COMMS_CONNECTED=0
 if ! kill -0 "${COMPANION_PIDS[2]}" 2>/dev/null; then
     echo "ERROR: comms process died — check ${LOG_DIR}/comms.log"
     echo "       Common causes:"
@@ -301,28 +353,45 @@ if ! kill -0 "${COMPANION_PIDS[2]}" 2>/dev/null; then
     tail -5 "${LOG_DIR}/comms.log" 2>/dev/null || true
     exit 1
 fi
-echo "  [3/7] comms connected"
+# Check log for definitive connection status (up to 10s total)
+for i in $(seq 1 7); do
+    if grep -qi "connected to autopilot\|system discovered\|mavlink.*connected" "${LOG_DIR}/comms.log" 2>/dev/null; then
+        COMMS_CONNECTED=1
+        break
+    fi
+    if grep -qi "connection.*failed\|error.*connect\|timeout" "${LOG_DIR}/comms.log" 2>/dev/null; then
+        echo "ERROR: comms reported connection failure — check ${LOG_DIR}/comms.log"
+        tail -10 "${LOG_DIR}/comms.log" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+if [[ "$COMMS_CONNECTED" -eq 1 ]]; then
+    echo "  [3/7] comms connected to FC"
+else
+    echo "  [3/7] comms alive (connection status not confirmed in log — continuing)"
+fi
 
 echo "  [4/7] perception"
-"${BIN_DIR}/perception" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/perception" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/perception.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [5/7] slam_vio_nav"
-"${BIN_DIR}/slam_vio_nav" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/slam_vio_nav" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/slam_vio_nav.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [6/7] mission_planner"
-"${BIN_DIR}/mission_planner" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/mission_planner" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/mission_planner.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [7/7] payload_manager"
-"${BIN_DIR}/payload_manager" ${CONFIG_ARG} ${EXTRA_ARGS} \
+"${BIN_DIR}/payload_manager" "${CONFIG_ARGS[@]}" "${EXTRA_ARGS_ARR[@]}" \
     > "${LOG_DIR}/payload_manager.log" 2>&1 &
 COMPANION_PIDS+=($!)
 
