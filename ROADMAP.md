@@ -40,7 +40,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | **295** (19 suites, 0 failures) |
+| Unit tests | **308** (19 suites, 0 failures) |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
@@ -52,7 +52,7 @@
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
-| IPC framework | **POSIX SHM (default) + Zenoh 1.7.2** — Phase A done ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PR #52) |
+| IPC framework | **POSIX SHM (default) + Zenoh 1.7.2** — Phase A+B done ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52, #53) |
 
 ---
 
@@ -317,7 +317,7 @@
 |---|-------|-------|
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration | Open |
 | [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Phase A — Foundation (CMake, ZenohMessageBus, CI) | **Closed** (PR #52) |
-| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Phase B — Low-bandwidth channel migration | Open |
+| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Phase B — Low-bandwidth channel migration | **In Review** (PR #53) |
 | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Phase C — High-bandwidth video migration (zero-copy) | Open |
 | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Phase D — Service channel migration + SHM removal | Open |
 | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Phase E — Network transport (drone↔GCS) | Open |
@@ -327,22 +327,23 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A (Current) |
-|--------|---------|---------|---------|---------|---------|---------|-------------------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | **295** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | **19** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | **17** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | **80+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | **8** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | **SHM + Zenoh** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| OpenCV | — | — | — | 4.10.0 | 4.10.0 | 4.10.0 | **4.10.0** |
-| MAVSDK | — | — | 2.12.12 | 2.12.12 | 2.12.12 | 2.12.12 | **2.12.12** |
-| Autonomous flight | No | No | Yes | Yes | Yes | Yes | **Yes** |
-| Hardware deploy | No | No | No | No | No | Yes | **Yes** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | **2 (shm, zenoh)** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B (Current) |
+|--------|---------|---------|---------|---------|---------|---------|---------|-------------------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | **308** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | **19** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | **17** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | **80+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | **8** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| OpenCV | — | — | — | 4.10.0 | 4.10.0 | 4.10.0 | 4.10.0 | **4.10.0** |
+| MAVSDK | — | — | 2.12.12 | 2.12.12 | 2.12.12 | 2.12.12 | 2.12.12 | **2.12.12** |
+| Autonomous flight | No | No | Yes | Yes | Yes | Yes | Yes | **Yes** |
+| Hardware deploy | No | No | No | No | No | Yes | Yes | **Yes** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | **2 (shm, zenoh)** |
 
 ### Process Activity During Simulation
 
@@ -358,4 +359,4 @@
 
 ---
 
-*Last updated after Zenoh Phase A — PR #52 (#46 foundation), 295 tests, SHM + Zenoh IPC, 2-leg CI matrix.*
+*Last updated after Zenoh Phase B — PR #53 (#47 low-bandwidth migration), 308 tests, all 7 processes on MessageBusFactory.*

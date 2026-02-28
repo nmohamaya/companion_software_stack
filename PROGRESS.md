@@ -876,16 +876,91 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 
 ---
 
-## Updated Summary (Post Zenoh Phase A)
+## Zenoh IPC Migration — Phase B (Issue #47, PR #53)
 
-| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh Phase A |
-|---|---|---|---|---|
-| Bug fixes | 13 | 15 | 15 | **17** |
-| Unit tests | 262 | 262 | 262 | **295** |
-| Test suites | 18 | 18 | 18 | **19** |
-| Config tunables | 75+ | 75+ | 80+ | **80+** |
-| Compiler warnings | 0 | 0 | 0 | **0** |
-| IPC backends | SHM only | SHM only | SHM only | **SHM + Zenoh** |
-| CI matrix | 1 build | 1 build | 1 build | **2 builds (shm, zenoh)** |
+### Improvement — Zenoh Phase B: Low-Bandwidth Channel Migration
 
-*Last updated after Zenoh Phase A — PR #52 (#46 foundation), 295 tests, SHM + Zenoh IPC backends.*
+**Date:** 2026-02-28
+**Category:** IPC / Architecture
+**Issue:** [#47](https://github.com/nmohamaya/companion_software_stack/issues/47)
+**PR:** [#53](https://github.com/nmohamaya/companion_software_stack/pull/53)
+**Epic:** [#45 — Zenoh IPC Migration](https://github.com/nmohamaya/companion_software_stack/issues/45)
+
+**Files Added:**
+- `docs/ipc-key-expressions.md` — Naming convention, full channel table, wildcard examples, backend selection guide
+
+**Files Modified:**
+- `common/ipc/include/ipc/message_bus_factory.h` — Added `bus_subscribe_optional<T>()` helper (single attempt, no retries)
+- `process2_perception/src/main.cpp` — Migrated from `ShmMessageBus` to `MessageBusFactory`
+- `process4_mission_planner/src/main.cpp` — Migrated from `ShmMessageBus` to `MessageBusFactory`; replaced `subscribe_lazy` with `bus_subscribe_optional`
+- `process5_comms/src/main.cpp` — Migrated from `ShmMessageBus` to `MessageBusFactory`
+- `process6_payload_manager/src/main.cpp` — Migrated from `ShmMessageBus` to `MessageBusFactory`
+- `process7_system_monitor/src/main.cpp` — Migrated from `ShmMessageBus` to `MessageBusFactory`
+- `tests/test_zenoh_ipc.cpp` — Added 13 new ZenohMigration tests
+
+**What:** Migrated all 10 low-bandwidth IPC channels (control & status) from direct `ShmMessageBus` usage to the config-driven `MessageBusFactory`. Process code now calls `create_message_bus(cfg)` + `bus_advertise<T>()` / `bus_subscribe<T>()` — the IPC backend is selected at runtime from `config/default.json`.
+
+**Channels Migrated (10):**
+
+| Channel | Type | Producer | Consumer | Hz |
+|---------|------|----------|----------|----|
+| `ShmPose` | pose | P3 SLAM | P4 Mission, P5 Comms | 200 |
+| `ShmFCState` | status | P5 Comms | P4 Mission | 50 |
+| `ShmFCCommand` | command | P4 Mission | P5 Comms | 50 |
+| `ShmMissionStatus` | status | P4 Mission | P5 Comms, P7 Monitor | 10 |
+| `ShmTrajectoryCmd` | command | P4 Mission | P5 Comms | 50 |
+| `ShmGCSCommand` | command | P5 Comms | P4 Mission | ~1 |
+| `ShmDetectedObjectList` | data | P2 Perception | P4 Mission | 10 |
+| `ShmPayloadCommand` | command | P4 Mission | P6 Payload | ~1 |
+| `ShmPayloadStatus` | status | P6 Payload | P4 Mission | 1 |
+| `ShmSystemHealth` | status | P7 Monitor | P5 Comms | 1 |
+
+**New Factory Helper:**
+```cpp
+/// bus_subscribe_optional<T>(bus, topic)
+/// Single attempt, no retries. For SHM: is_connected() false if segment
+/// doesn't exist. For Zenoh: is_connected() always true (async discovery).
+```
+
+**PR Review Fixes (7):** See [BUG_FIXES.md](BUG_FIXES.md) for details.
+- R1: Backend-agnostic error message in P2
+- R2: GCS subscribe reordered after FC-state blocking subscribe
+- R3: Expanded `bus_subscribe_optional` doc comment
+- R4: Fixed infinite loop in HighRate_Pose test (non-consuming receive)
+- R5: PID-unique key in FactorySubscribeOptional test
+- R6: Added explicit `#include <algorithm>`
+- R7: Fixed invalid duplicate JSON in docs
+
+**Test Coverage:**
+
+| Category | Tests | Guard |
+|---|---|---|
+| Per-channel round-trips | 10 | `HAVE_ZENOH` |
+| Multi-channel simultaneous | 1 | `HAVE_ZENOH` |
+| High-rate pose (200 Hz × 2s) | 1 | `HAVE_ZENOH` |
+| Factory subscribe_optional | 1 | `HAVE_ZENOH` |
+| **Total new** | **13** | |
+
+**Metrics:**
+- Tests: 295 → **308** (+13)
+- Processes using MessageBusFactory: 2 → **7** (all processes)
+- SHM-only build: 267/267 tests pass (no regression)
+- Zenoh build: 308/308 tests pass
+- Build: 0 warnings (`-Werror -Wall -Wextra`)
+
+---
+
+## Updated Summary (Post Zenoh Phase B)
+
+| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B |
+|---|---|---|---|---|---|
+| Bug fixes | 13 | 15 | 15 | 17 | **17** |
+| Unit tests | 262 | 262 | 262 | 295 | **308** |
+| Test suites | 18 | 18 | 18 | 19 | **19** |
+| Config tunables | 75+ | 75+ | 80+ | 80+ | **80+** |
+| Compiler warnings | 0 | 0 | 0 | 0 | **0** |
+| IPC backends | SHM only | SHM only | SHM only | SHM + Zenoh | **SHM + Zenoh** |
+| CI matrix | 1 build | 1 build | 1 build | 2 builds | **2 builds (shm, zenoh)** |
+| Processes on factory | — | — | — | 2/7 | **7/7** |
+
+*Last updated after Zenoh Phase B — PR #53 (#47 low-bandwidth migration), 308 tests, all 7 processes on MessageBusFactory.*

@@ -6,7 +6,7 @@
 #include "planner/mission_fsm.h"
 #include "planner/ipath_planner.h"
 #include "planner/iobstacle_avoider.h"
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -59,46 +59,50 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
 
-    // ── Create message bus ──────────────────────────────────
-    drone::ipc::ShmMessageBus bus;
+    // ── Create message bus (config-driven: shm or zenoh) ───
+    auto bus = drone::ipc::create_message_bus(
+        cfg.get<std::string>("ipc_backend", "shm"));
 
     // ── Subscribe to inputs ─────────────────────────────────
-    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(
-        drone::ipc::shm_names::SLAM_POSE);
+    auto pose_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPose>(
+        bus, drone::ipc::shm_names::SLAM_POSE);
     if (!pose_sub->is_connected()) {
-        spdlog::error("Cannot connect to SLAM pose SHM");
+        spdlog::error("Cannot connect to SLAM pose");
         return 1;
     }
 
-    auto obj_sub = bus.subscribe<drone::ipc::ShmDetectedObjectList>(
-        drone::ipc::shm_names::DETECTED_OBJECTS);
+    auto obj_sub = drone::ipc::bus_subscribe<drone::ipc::ShmDetectedObjectList>(
+        bus, drone::ipc::shm_names::DETECTED_OBJECTS);
     if (!obj_sub->is_connected()) {
-        spdlog::error("Cannot connect to detected objects SHM");
+        spdlog::error("Cannot connect to detected objects");
         return 1;
     }
-
-    // GCS commands are optional (may never be published), use lazy subscribe
-    auto gcs_sub = bus.subscribe_lazy<drone::ipc::ShmGCSCommand>();
-    gcs_sub->connect(drone::ipc::shm_names::GCS_COMMANDS);
 
     // FC state is *critical* for the FSM (armed check, altitude feedback).
-    // Use subscribe() with retries so we wait for comms to create the segment.
-    auto fc_state_sub = bus.subscribe<drone::ipc::ShmFCState>(
-        drone::ipc::shm_names::FC_STATE);
+    // Subscribe with retries first so we wait for comms to create the segment,
+    // ensuring the SHM backend has the segment available before we proceed.
+    auto fc_state_sub = drone::ipc::bus_subscribe<drone::ipc::ShmFCState>(
+        bus, drone::ipc::shm_names::FC_STATE);
     if (!fc_state_sub->is_connected()) {
-        spdlog::error("Cannot connect to FC state SHM — comms may not be running");
+        spdlog::error("Cannot connect to FC state — comms may not be running");
         return 1;
     }
 
+    // GCS commands are optional (may never be published).
+    // Placed after FC-state so that the SHM backend's blocking retry above
+    // gives comms time to initialise, improving GCS segment availability.
+    auto gcs_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmGCSCommand>(
+        bus, drone::ipc::shm_names::GCS_COMMANDS);
+
     // ── Create publishers ───────────────────────────────────
-    auto status_pub = bus.advertise<drone::ipc::ShmMissionStatus>(
-        drone::ipc::shm_names::MISSION_STATUS);
-    auto traj_pub = bus.advertise<drone::ipc::ShmTrajectoryCmd>(
-        drone::ipc::shm_names::TRAJECTORY_CMD);
-    auto payload_pub = bus.advertise<drone::ipc::ShmPayloadCommand>(
-        drone::ipc::shm_names::PAYLOAD_COMMANDS);
-    auto fc_cmd_pub = bus.advertise<drone::ipc::ShmFCCommand>(
-        drone::ipc::shm_names::FC_COMMANDS);
+    auto status_pub = drone::ipc::bus_advertise<drone::ipc::ShmMissionStatus>(
+        bus, drone::ipc::shm_names::MISSION_STATUS);
+    auto traj_pub = drone::ipc::bus_advertise<drone::ipc::ShmTrajectoryCmd>(
+        bus, drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto payload_pub = drone::ipc::bus_advertise<drone::ipc::ShmPayloadCommand>(
+        bus, drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    auto fc_cmd_pub = drone::ipc::bus_advertise<drone::ipc::ShmFCCommand>(
+        bus, drone::ipc::shm_names::FC_COMMANDS);
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() ||
         !payload_pub->is_ready() || !fc_cmd_pub->is_ready()) {
@@ -195,11 +199,7 @@ int main(int argc, char* argv[]) {
             fc_state_sub->receive(fc_state);
         }
 
-        // Check GCS commands (dedup by timestamp to ignore stale SHM values)
-        // Retry lazy GCS connection if not yet established
-        if (!gcs_sub->is_connected()) {
-            gcs_sub->connect(drone::ipc::shm_names::GCS_COMMANDS);
-        }
+        // Check GCS commands (dedup by timestamp to ignore stale values)
         drone::ipc::ShmGCSCommand gcs_cmd{};
         if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) &&
             gcs_cmd.valid && gcs_cmd.timestamp_ns > last_gcs_timestamp) {

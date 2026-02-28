@@ -3,7 +3,7 @@
 // Uses HAL IGimbal interface — backend selected via config.
 // Reads ShmPayloadCommand from Mission Planner, publishes ShmPayloadStatus.
 
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -36,18 +36,19 @@ int main(int argc, char* argv[]) {
     gimbal->init();
     spdlog::info("Gimbal: {}", gimbal->name());
 
-    // ── Create message bus ────────────────────────────────────
-    drone::ipc::ShmMessageBus bus;
+    // ── Create message bus (config-driven: shm or zenoh) ───
+    auto bus = drone::ipc::create_message_bus(
+        cfg.get<std::string>("ipc_backend", "shm"));
 
-    auto cmd_sub = bus.subscribe<drone::ipc::ShmPayloadCommand>(
-        drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    auto cmd_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPayloadCommand>(
+        bus, drone::ipc::shm_names::PAYLOAD_COMMANDS);
     if (!cmd_sub->is_connected()) {
-        spdlog::error("Cannot open payload commands SHM");
+        spdlog::error("Cannot open payload commands channel");
         return 1;
     }
 
-    auto status_pub = bus.advertise<drone::ipc::ShmPayloadStatus>(
-        drone::ipc::shm_names::PAYLOAD_STATUS);
+    auto status_pub = drone::ipc::bus_advertise<drone::ipc::ShmPayloadStatus>(
+        bus, drone::ipc::shm_names::PAYLOAD_STATUS);
     if (!status_pub->is_ready()) {
         spdlog::error("Failed to create payload status publisher");
         return 1;
