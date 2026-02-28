@@ -256,7 +256,7 @@ int main(int argc, char* argv[]) {
     auto video_sub = drone::ipc::bus_subscribe<drone::ipc::ShmVideoFrame>(
         bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);
     if (!video_sub->is_connected()) {
-        spdlog::error("Cannot connect to video SHM — is video_capture running?");
+        spdlog::error("Cannot connect to video channel — is video_capture running?");
         return 1;
     }
 

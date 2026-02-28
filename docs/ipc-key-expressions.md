@@ -118,8 +118,7 @@ Set `ipc_backend` in `config/default.json`:
 
 ```json
 {
-    "ipc_backend": "shm",     // POSIX shared memory (default)
-    "ipc_backend": "zenoh"    // Zenoh pub/sub (requires -DENABLE_ZENOH=ON)
+    "ipc_backend": "shm"      // or "zenoh" (requires -DENABLE_ZENOH=ON)
 }
 ```
 

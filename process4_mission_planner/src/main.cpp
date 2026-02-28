@@ -78,18 +78,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // GCS commands are optional (may never be published)
-    auto gcs_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmGCSCommand>(
-        bus, drone::ipc::shm_names::GCS_COMMANDS);
-
     // FC state is *critical* for the FSM (armed check, altitude feedback).
-    // Use subscribe() with retries so we wait for comms to create the segment.
+    // Subscribe with retries first so we wait for comms to create the segment,
+    // ensuring the SHM backend has the segment available before we proceed.
     auto fc_state_sub = drone::ipc::bus_subscribe<drone::ipc::ShmFCState>(
         bus, drone::ipc::shm_names::FC_STATE);
     if (!fc_state_sub->is_connected()) {
         spdlog::error("Cannot connect to FC state — comms may not be running");
         return 1;
     }
+
+    // GCS commands are optional (may never be published).
+    // Placed after FC-state so that the SHM backend's blocking retry above
+    // gives comms time to initialise, improving GCS segment availability.
+    auto gcs_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmGCSCommand>(
+        bus, drone::ipc::shm_names::GCS_COMMANDS);
 
     // ── Create publishers ───────────────────────────────────
     auto status_pub = drone::ipc::bus_advertise<drone::ipc::ShmMissionStatus>(

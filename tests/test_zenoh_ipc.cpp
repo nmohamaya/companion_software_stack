@@ -22,6 +22,7 @@
 #include "ipc/zenoh_session.h"
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <memory>
@@ -821,25 +822,36 @@ TEST(ZenohMigration, HighRate_Pose) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    // Give a moment for last messages to arrive
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // Read the latest — it should be one of the recent messages
+    // Poll until the subscriber holds the final published message.
+    // ZenohSubscriber keeps the latest value (non-consuming receive),
+    // so we poll repeatedly until the final message (ts == total_msgs)
+    // appears or a generous timeout expires.
     ShmPose last{};
-    ASSERT_TRUE(sub.receive(last));
-    // The latest message should have a timestamp near `total_msgs`
-    // (Zenoh keeps latest value, so we verify it received something recent)
-    EXPECT_GT(last.timestamp_ns, 0u);
+    bool got_final = false;
+    auto poll_deadline = std::chrono::steady_clock::now()
+                       + std::chrono::milliseconds(3000);
+    while (std::chrono::steady_clock::now() < poll_deadline) {
+        if (sub.receive(last) &&
+            last.timestamp_ns == static_cast<uint64_t>(total_msgs)) {
+            got_final = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(got_final)
+        << "Timed out waiting for final message (ts=" << total_msgs
+        << "); last seen ts=" << last.timestamp_ns;
     EXPECT_EQ(last.quality, 2u);
-    // Verify we got a recent message (within last 50)
-    EXPECT_GE(last.timestamp_ns, static_cast<uint64_t>(total_msgs - 50));
 }
 
 // --- Factory integration: bus_subscribe_optional ---------------
 
 TEST(ZenohMigration, FactorySubscribeOptional) {
+    // Use a unique key so this test is isolated from any other test that
+    // may publish on GCS_COMMANDS.
+    std::string unique_key = std::string("/factory_opt_test_") + std::to_string(::getpid());
     auto bus = create_message_bus("zenoh");
-    auto sub = bus_subscribe_optional<ShmGCSCommand>(bus, shm_names::GCS_COMMANDS);
+    auto sub = bus_subscribe_optional<ShmGCSCommand>(bus, unique_key);
     ASSERT_NE(sub, nullptr);
     // No publisher exists — receive should return false but not crash
     ShmGCSCommand cmd{};
