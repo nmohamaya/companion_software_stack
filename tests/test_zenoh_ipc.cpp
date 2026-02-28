@@ -864,6 +864,13 @@ TEST(ZenohMigration, FactorySubscribeOptional) {
 // Category 4: Phase C — SHM provider zero-copy tests
 // ═══════════════════════════════════════════════════════════
 
+// Helper: returns true when PosixShmProvider is functional.
+// Pre-built zenohc release packages omit the shared-memory cargo feature,
+// so shm_provider() returns nullptr on those builds.
+static bool shm_available() {
+    return ZenohSession::instance().shm_provider() != nullptr;
+}
+
 // --- SHM Provider tests -----------------------------------------------
 // Note: PosixShmProvider requires zenohc built with the shared-memory
 // cargo feature.  Pre-built release packages omit it, so these tests
@@ -931,6 +938,11 @@ TEST(ZenohShmPublish, SmallMessageUsesBytes) {
 }
 
 TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
+    if (!shm_available()) {
+        GTEST_SKIP() << "SHM provider unavailable — SHM path assertions "
+                        "cannot be verified";
+    }
+
     // ShmVideoFrame is ~6.2 MB — should use SHM provider path
     static_assert(sizeof(ShmVideoFrame) > kShmPublishThreshold,
                   "ShmVideoFrame should be above SHM threshold");
@@ -975,6 +987,11 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
 }
 
 TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
+    if (!shm_available()) {
+        GTEST_SKIP() << "SHM provider unavailable — SHM path assertions "
+                        "cannot be verified";
+    }
+
     // ShmStereoFrame is ~614 KB — should use SHM provider path
     static_assert(sizeof(ShmStereoFrame) > kShmPublishThreshold,
                   "ShmStereoFrame should be above SHM threshold");
@@ -1086,6 +1103,11 @@ TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
 // --- Sustained video publish test (simulates 30 Hz camera) -----------
 
 TEST(ZenohShmPublish, SustainedVideoPublish) {
+    if (!shm_available()) {
+        GTEST_SKIP() << "SHM provider unavailable — SHM path assertions "
+                        "cannot be verified";
+    }
+
     ZenohPublisher<ShmVideoFrame> pub("drone/test/shm_sustained_video");
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_sustained_video");
 

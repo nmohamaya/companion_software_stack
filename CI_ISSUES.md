@@ -65,20 +65,29 @@ nm -D /usr/lib/libzenohc.so | grep -i shm | wc -l
 
 ### Fix Applied
 
-**Commit:** `f0f402a` + `55abafb`
+**Commit:** `f0f402a` (initial attempt) → reverted in CI-003
 
-1. **CI workflow** (`.github/workflows/ci.yml`):
-   - Replaced pre-built deb install with source build using `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON`
-   - Added `dtolnay/rust-toolchain@stable` to provide Rust/Cargo for the source build
-   - Added `actions/cache@v4` to cache the built artifacts across CI runs (keyed on zenoh version + OS + arch), so the Rust build only happens once per version bump
+1. **Tests** (`tests/test_zenoh_ipc.cpp`):
+   - Added `GTEST_SKIP()` guards: if `shm_provider()` returns `nullptr`, affected tests skip gracefully instead of hard-failing.
 
-2. **Tests** (`tests/test_zenoh_ipc.cpp`):
-   - Added `GTEST_SKIP()` as defence-in-depth: if `shm_provider()` returns `nullptr`, the test skips gracefully instead of hard-failing. This makes the tests resilient to environments without SHM support.
+2. **CI workflow** — initially switched to building zenohc from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON`, but this failed due to opaque-type size mismatches (see CI-003). Reverted to pre-built debs.
+
+### Current Status
+
+**SHM tests are SKIPPED on CI.** The following 7 tests skip when the SHM provider is unavailable:
+- `ZenohShmProvider.ProviderCreatesSuccessfully`
+- `ZenohShmProvider.AllocAndWriteBuffer`
+- `ZenohShmProvider.AllocLargeVideoFrameBuffer`
+- `ZenohShmProvider.PoolSizeConfiguration`
+- `ZenohShmPublish.LargeVideoFrameUsesShmPath`
+- `ZenohShmPublish.StereoFrameUsesShmPath`
+- `ZenohShmPublish.SustainedVideoPublish`
+
+The remaining Zenoh tests still run (pub/sub falls back to the bytes path).
 
 ### Prevention
 
 - When adding features that depend on **opt-in** capabilities of a third-party library, always check whether CI installs a version that includes that capability.
-- Prefer building dependencies from source in CI when specific build flags are required. Use GitHub Actions caching (`actions/cache`) to avoid rebuilding on every run.
 - Add `GTEST_SKIP()` guards for tests that depend on runtime-optional capabilities (SHM, GPU, hardware) so they degrade gracefully.
 
 ---
@@ -123,6 +132,91 @@ Added `(void)shm_pool_mb;` cast at the top of the function body to suppress the 
   cmake -B build-zenoh -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
     -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON && cmake --build build-zenoh
   ```
+
+---
+
+## CI-003: zenoh-c source build fails with opaque-type size mismatches
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-02-28 |
+| **Branch** | `feat/48-zenoh-phase-c` |
+| **PR** | #54 |
+| **Affected step** | "Build Zenoh from source" CI step |
+| **CI matrix** | `zenoh` backend only |
+| **Urgency** | **Medium** — SHM zero-copy is not tested in CI until this is resolved |
+| **Status** | **OPEN** — workaround in place (tests skip), but SHM coverage gap exists |
+
+### Symptoms
+
+```
+error[E0080]: evaluation of constant value failed
+  --> src/lib.rs:57:1
+   |
+57 | get_opaque_type_data!(ZBytes, z_owned_bytes_t);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the evaluated program panicked at
+   | 'type: z_owned_bytes_t, align: 8, size: 40'
+
+error: could not compile `opaque-types` (lib) due to 66 previous errors
+gmake[2]: *** [CMakeFiles/cargo.dir/build.make:149:
+  /tmp/zenoh-c/target/release/libzenohc.so] Error 101
+```
+
+66 `get_opaque_type_data!` macro invocations fail with size/alignment mismatches.
+
+### Root Cause
+
+zenoh-c uses a build-time Rust macro (`get_opaque_type_data!`) that verifies the C header struct sizes match the compiled Rust type sizes. When building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON`:
+
+1. The `shared-memory` cargo feature changes internal Rust type layouts (additional fields for SHM metadata).
+2. The **pre-generated C headers** shipped in the zenoh-c repo were generated for the **default** feature set (no SHM).
+3. The size assertions panic because the compiled Rust structs are larger than what the headers declare.
+
+This is a **zenoh-c upstream issue**: their release process generates headers only for the default feature combination. Building with non-default features requires regenerating headers via `cbindgen`, which in turn requires matching the exact Rust toolchain version pinned in `rust-toolchain.toml`.
+
+The `dtolnay/rust-toolchain@stable` on CI may install a different Rust version than what zenoh-c 1.7.2 was built with, compounding the mismatch.
+
+### Current Workaround
+
+Reverted CI to use **pre-built debian packages** (which lack SHM support). All SHM-dependent tests use `GTEST_SKIP()` so CI passes, but **7 tests are skipped** — zero-copy publishing is not validated in CI.
+
+### Impact
+
+| What works on CI | What does NOT work on CI |
+|---|---|
+| Zenoh pub/sub (bytes path) | PosixShmProvider creation |
+| Topic mapping | SHM buffer allocation |
+| Factory pattern | Zero-copy publish path |
+| Small-message round-trips | SHM publish counter assertions |
+| Fallback from SHM → bytes | Sustained video SHM delivery |
+
+The SHM code path is validated **locally** (where zenohc is built from source with SHM), but not in CI. This creates a risk of SHM regressions going undetected.
+
+### When to Fix
+
+| Priority | Trigger | Action |
+|---|---|---|
+| **P2 — Medium** | Before Phase D (Epic #45) | Must be resolved before adding more SHM-dependent features |
+| **Ideal** | When zenoh-c 1.8+ releases | Check if SHM is included in default features or if pre-built packages include it |
+| **Alternative** | If blocked on upstream | Build zenohc with exact pinned Rust toolchain + regenerate headers in CI |
+
+**Recommended timeline:** Resolve before starting Phase D (#49). Without CI SHM coverage, any regression in the zero-copy path would only be caught by manual local testing.
+
+### Possible Solutions (in order of preference)
+
+1. **Wait for zenoh-c upstream fix** — check each new zenoh-c release to see if `shared-memory` is added to default features or if pre-built packages include it. This is the lowest-effort fix.
+
+2. **Pin exact Rust toolchain in CI** — read `rust-toolchain.toml` from the zenoh-c repo, install that exact version, and build from source. This should avoid the opaque-type mismatch.
+   ```yaml
+   # Extract pinned version from zenoh-c's rust-toolchain.toml
+   RUST_VERSION=$(grep channel /tmp/zenoh-c/rust-toolchain.toml | cut -d'"' -f2)
+   rustup install "$RUST_VERSION"
+   rustup default "$RUST_VERSION"
+   ```
+
+3. **Use zenoh-c's Docker build image** — the zenoh project may provide CI images with the correct toolchain pre-installed.
+
+4. **Pre-build and host our own deb** — build zenohc+SHM once locally, package as a `.deb`, host on GitHub Releases in our repo, and install from there in CI.
 
 ---
 
