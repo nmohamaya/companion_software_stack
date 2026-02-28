@@ -33,17 +33,26 @@ jobs:
           nlohmann-json3-dev \
           libgtest-dev
 
+    - name: Install Rust (for zenoh-c source build)
+      if: matrix.ipc_backend == 'zenoh'
+      uses: dtolnay/rust-toolchain@stable
+
     - name: Install Zenoh (zenoh backend only)
       if: matrix.ipc_backend == 'zenoh'
       run: |
-        sudo apt-get install -y --no-install-recommends unzip
-
-        # Install zenohc 1.7.2 pre-built debian packages
         ZENOH_VERSION="1.7.2"
-        wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip" \
-          -O /tmp/zenohc.zip
-        unzip -o /tmp/zenohc.zip -d /tmp/zenohc-debs
-        sudo dpkg -i /tmp/zenohc-debs/*.deb
+
+        # Build and install zenohc from source with shared-memory support.
+        # The pre-built debian packages omit the shared-memory cargo feature,
+        # which is required for PosixShmProvider (Phase C zero-copy video).
+        git clone --depth 1 --branch "${ZENOH_VERSION}" \
+          https://github.com/eclipse-zenoh/zenoh-c.git /tmp/zenoh-c
+        cd /tmp/zenoh-c
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DZENOHC_BUILD_WITH_SHARED_MEMORY=ON
+        cmake --build build -j$(nproc)
+        sudo cmake --install build/
 
         # Install zenoh-cpp (header-only, matching version)
         git clone --depth 1 --branch "${ZENOH_VERSION}" \
