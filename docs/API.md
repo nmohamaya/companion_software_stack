@@ -1,7 +1,7 @@
 # Interface API Reference
 
 > **Issue:** #4 — API-Driven Development  
-> **Status:** All 7 processes wired through abstract interfaces; 294 tests pass (including 30 Zenoh IPC tests)  
+> **Status:** All 7 processes wired through abstract interfaces; 295 tests pass (including 31 Zenoh IPC tests)  
 > **IPC Migration:** Zenoh migration planned — [ADR-001](adr/ADR-001-ipc-framework-selection.md), Epic [#45](https://github.com/nmohamaya/companion_software_stack/issues/45)
 
 ---
@@ -171,7 +171,8 @@ Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()
 |--------|-----------|-------------|
 | `advertise` | `unique_ptr<IPublisher<T>> advertise<T>(topic)` | Create a `ZenohPublisher<T>` |
 | `subscribe` | `unique_ptr<ISubscriber<T>> subscribe<T>(topic)` | Create a `ZenohSubscriber<T>` |
-| `to_key_expr` | `static std::string to_key_expr(const std::string& shm_name)` | Map SHM name → Zenoh key expression |
+| `subscribe_lazy` | `unique_ptr<ZenohSubscriber<T>> subscribe_lazy<T>(topic)` | Equivalent to `subscribe()` — Zenoh connections are always async |
+| `to_key_expr` | `static std::string to_key_expr(const std::string& shm_name)` | Map SHM name → Zenoh key expression (guards empty input) |
 
 **Why a wrapper?** Maps the existing 12 SHM segment names to Zenoh hierarchical key expressions, so process code can use either naming convention. Provides the same factory interface as `ShmMessageBus` for seamless backend swapping.
 
@@ -451,12 +452,12 @@ No process code changes needed — only the factory + new implementation file.
 | `test_message_bus.cpp` | 23 | IPublisher, ISubscriber, ShmMessageBus, ShmServiceChannel |
 | `test_process_interfaces.cpp` | 19 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | `test_shm_ipc.cpp` | 25 | SeqLock ShmWriter/ShmReader, SPSC ring |
-| `test_zenoh_ipc.cpp` | 30 | ZenohTopicMapping (15), ZenohSession/Publisher/Subscriber (3), ZenohPubSub round-trips (7), ZenohMessageBus (3), MessageBusFactory (5) |
+| `test_zenoh_ipc.cpp` | 31 | MessageBusFactory (5), ZenohTopicMapping (15), ZenohSession/Publisher/Subscriber (3), ZenohPubSub round-trips (5), ZenohMessageBus (4: advertise, subscribe, subscribe_lazy, roundtrip) |
 | `test_zenoh_service.cpp` | *(planned)* | ZenohServiceClient, ZenohServiceServer ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) |
 | `test_zenoh_liveliness.cpp` | *(planned)* | LivelinessToken, LivelinessMonitor ([#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) |
 | `bench_zenoh_video.cpp` | *(planned)* | Video frame zero-copy benchmarks ([#48](https://github.com/nmohamaya/companion_software_stack/issues/48)) |
 
-Total: **294 tests** (22 suites).
+Total: **295 tests** (19 suites).
 
 ---
 

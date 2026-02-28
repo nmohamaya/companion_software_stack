@@ -119,3 +119,81 @@ Tracking all bug fixes applied to the Drone Companion Software Stack.
 **Fix:** Changed the test to heap-allocate both `sent` and `received` frames using `std::make_unique<ShmVideoFrame>()`.
 
 **Found by:** CTest reporting SEGFAULT on `ZenohPubSub.LargeVideoFrameRoundTrip`.
+
+---
+
+## Review Fixes (PR #52) — 9 Issues Addressed
+
+**Date:** 2026-02-28
+**Context:** Copilot pull-request reviewer flagged 9 issues on PR #52 (Zenoh Phase A). All addressed in commit `8099843`.
+
+### R1 — `subscribe_lazy()` Returned nullptr (Potential Null Dereference)
+
+**File:** `zenoh_message_bus.h`
+**Severity:** High
+**Bug:** `subscribe_lazy()` logged a warning and returned `nullptr`. Any caller switching from `ShmMessageBus` (where `subscribe_lazy()` returns a valid object) to `ZenohMessageBus` would dereference null.
+**Fix:** `subscribe_lazy()` now accepts a `topic` parameter, maps it via `to_key_expr()`, and returns a functional `ZenohSubscriber<T>`. For Zenoh, lazy and eager subscription are identical since connections are always asynchronous.
+
+### R2 — `to_key_expr()` Crashed on Empty String
+
+**File:** `zenoh_message_bus.h`
+**Severity:** Medium
+**Bug:** `to_key_expr()` called `name.substr(1)` without checking if the string was empty. An empty string would throw `std::out_of_range`.
+**Fix:** Added empty input guard — returns `""` with a `spdlog::warn()` instead of crashing.
+
+### R3 — Misleading `message_bus_factory.h` Header Comment
+
+**File:** `message_bus_factory.h`
+**Severity:** Low (documentation)
+**Bug:** Header comment described the API as taking `drone::Config` and returning a pair (`auto [shm_bus, zenoh_bus]`). The actual API takes a `std::string` and returns a `MessageBusVariant`.
+**Fix:** Rewrote the header comment to accurately describe the `create_message_bus(string)` → `MessageBusVariant` API with correct usage examples.
+
+### R4 — Missing `#include <unistd.h>` in Tests
+
+**File:** `test_zenoh_ipc.cpp`
+**Severity:** Low (portability)
+**Bug:** `getpid()` was used without `#include <unistd.h>`, relying on a transitive include that could break on different compilers/platforms.
+**Fix:** Added explicit `#include <unistd.h>`.
+
+### R5 — Inaccurate Comment About Test Compilation Guards
+
+**File:** `test_zenoh_ipc.cpp`
+**Severity:** Low (documentation)
+**Bug:** Header comment said "Topic mapping + factory (always compiled)" but topic mapping tests are inside `#ifdef HAVE_ZENOH`, so they're not always compiled.
+**Fix:** Updated comment to accurately categorize the three test groups: (1) factory tests — always compiled, (2) topic mapping — HAVE_ZENOH, (3) pub/sub round-trips — HAVE_ZENOH.
+
+### R6 — Flaky Fixed-Delay Tests (CI Risk)
+
+**File:** `test_zenoh_ipc.cpp`
+**Severity:** High (CI reliability)
+**Bug:** All round-trip tests used fixed `sleep_for(100ms)` / `sleep_for(200ms)` delays for Zenoh discovery and message delivery. Under CI load, these could be insufficient, causing false failures.
+**Fix:** Replaced all fixed delays with two polling helpers:
+- `poll_receive()` — polls subscriber with 5 ms intervals, bounded by a 5 s timeout
+- `publish_until_received()` — retransmits every 50 ms until the subscriber receives, bounded by a 5 s timeout (handles discovery window during which messages are dropped)
+
+### R7 — Missing `#include <memory>` in `zenoh_publisher.h` (Not Applicable)
+
+**File:** `zenoh_publisher.h`
+**Severity:** N/A
+**Review suggestion:** Add `#include <memory>` for `std::unique_ptr` / `std::make_unique`.
+**Resolution:** Verified not needed — the file uses `std::optional` (not `unique_ptr`). The related `zenoh_message_bus.h` already includes `<memory>`.
+
+### R8 — Missing `#include <chrono>` in `zenoh_subscriber.h`
+
+**File:** `zenoh_subscriber.h`
+**Severity:** Low (portability)
+**Bug:** `std::chrono::steady_clock` and `std::chrono::duration_cast` were used in `on_sample()` without `#include <chrono>`, relying on transitive include.
+**Fix:** Added explicit `#include <chrono>`.
+
+### R9 — Unauthenticated Zenoh Sessions (Security Risk)
+
+**File:** `CMakeLists.txt`
+**Severity:** Critical (security)
+**Bug:** `ENABLE_ZENOH` created a Zenoh session with `Config::create_default()` — no TLS, no authentication. `fc_commands` and `gcs_commands` would be exposed unencrypted over the network.
+**Fix:** Added two CMake options:
+- `ZENOH_CONFIG_PATH` — path to a secure Zenoh configuration file (TLS + mutual auth)
+- `ALLOW_INSECURE_ZENOH` — explicitly opt in to insecure builds (dev/test only)
+
+Builds fail with `FATAL_ERROR` unless one of these is provided. CI uses `-DALLOW_INSECURE_ZENOH=ON`.
+
+When `ZENOH_CONFIG_PATH` is set, it's compiled in as `ZENOH_CONFIG_PATH="/path/to/config"` — `ZenohSession` can use it to load the config at runtime.

@@ -778,3 +778,114 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 | 5 | Comms | MAVLink (MAVSDK) | Yes — real PX4 link | High — controls PX4 |
 | 6 | Payload Manager | Simulated gimbal | No | Low (occasional triggers) |
 | 7 | System Monitor | Linux /proc | Host metrics only | Low (1 Hz) |
+
+---
+
+## Zenoh IPC Migration — Phase A (Issue #46, PR #52)
+
+### Improvement — Zenoh Phase A Foundation: CMake, ZenohMessageBus, Factory, Tests, CI
+
+**Date:** 2026-02-28
+**Category:** IPC / Architecture
+**Issue:** [#46](https://github.com/nmohamaya/companion_software_stack/issues/46)
+**PR:** [#52](https://github.com/nmohamaya/companion_software_stack/pull/52)
+**Epic:** [#45 — Zenoh IPC Migration](https://github.com/nmohamaya/companion_software_stack/issues/45)
+**ADR:** [ADR-001 — IPC Framework Selection](docs/adr/ADR-001-ipc-framework-selection.md)
+
+**Files Added:**
+- `common/ipc/include/ipc/zenoh_session.h` — Singleton Zenoh session manager (intentionally-leaked, peer mode)
+- `common/ipc/include/ipc/zenoh_publisher.h` — `IPublisher<T>` backed by `zenoh::Publisher`
+- `common/ipc/include/ipc/zenoh_subscriber.h` — `ISubscriber<T>` with latest-value cache (callback + mutex)
+- `common/ipc/include/ipc/zenoh_message_bus.h` — Factory with 12-segment SHM→Zenoh topic mapping
+- `common/ipc/include/ipc/message_bus_factory.h` — Config-driven `create_message_bus("shm"|"zenoh")` + variant helpers
+- `tests/test_zenoh_ipc.cpp` — 31 tests (5 factory + 15 topic mapping + 11 Zenoh pub/sub)
+
+**Files Modified:**
+- `CMakeLists.txt` — `ENABLE_ZENOH`, `ZENOH_CONFIG_PATH`, `ALLOW_INSECURE_ZENOH` options
+- `common/ipc/CMakeLists.txt` — Conditional `zenohc::lib` link, `ZENOHCXX_ZENOHC` define
+- `.github/workflows/ci.yml` — Build matrix `{shm, zenoh}`, zenohc/zenoh-cpp 1.7.2 install
+- `config/default.json` — Added `"ipc_backend": "shm"`
+- `docs/API.md` — Updated with all Zenoh wrapper class documentation
+- `BUG_FIXES.md` — Added Fix #7 (atexit panic) and Fix #8 (stack overflow)
+- `DEVELOPMENT_WORKFLOW.md` — Added API.md and BUG_FIXES.md to documentation checklists
+
+**What:** Implemented the Zenoh IPC backend behind a `HAVE_ZENOH` compile guard:
+
+1. **CMake Integration** — `ENABLE_ZENOH` option (OFF by default) with security gate: builds require either `ZENOH_CONFIG_PATH` (TLS + auth config) or `-DALLOW_INSECURE_ZENOH=ON` (dev/test only)
+2. **ZenohSession** — Process-wide singleton. Peer mode, no daemon needed. Intentionally leaked to avoid zenohc Rust 1.85 atexit() panic (Bug #7)
+3. **ZenohPublisher<T>** — Serializes trivially-copyable T to `zenoh::Bytes` via `vector<uint8_t>`. Enforces `static_assert(is_trivially_copyable_v<T>)`
+4. **ZenohSubscriber<T>** — Callback-based with latest-value cache. Thread-safe via mutex + atomic flag
+5. **ZenohMessageBus** — Factory with `advertise<T>()`, `subscribe<T>()`, `subscribe_lazy<T>()` + 12-segment SHM→Zenoh key-expression mapping
+6. **MessageBusFactory** — `create_message_bus("shm"|"zenoh")` returns `std::variant<ShmMessageBus, ZenohMessageBus>` with type-erased `bus_advertise<T>()` / `bus_subscribe<T>()` helpers
+7. **CI Dual Build** — Build matrix with `{shm, zenoh}` legs; Zenoh leg installs zenohc + zenoh-cpp 1.7.2 from GitHub releases
+
+**Topic Mapping (all 12 SHM segments):**
+
+| SHM Segment | Zenoh Key Expression |
+|---|---|
+| `/drone_mission_cam` | `drone/video/frame` |
+| `/drone_stereo_cam` | `drone/video/stereo_frame` |
+| `/detected_objects` | `drone/perception/detections` |
+| `/slam_pose` | `drone/slam/pose` |
+| `/mission_status` | `drone/mission/status` |
+| `/trajectory_cmd` | `drone/mission/trajectory` |
+| `/payload_commands` | `drone/mission/payload_command` |
+| `/fc_commands` | `drone/comms/fc_command` |
+| `/fc_state` | `drone/comms/fc_state` |
+| `/gcs_commands` | `drone/comms/gcs_command` |
+| `/payload_status` | `drone/payload/status` |
+| `/system_health` | `drone/monitor/health` |
+
+**Bug Fixes (2):**
+- **Fix #7 (Critical):** zenohc Rust 1.85 atexit() panic — fixed with intentionally-leaked singleton
+- **Fix #8 (High):** ~6 MB ShmVideoFrame stack overflow in test — fixed with heap allocation
+
+**PR Review Fixes (9):**
+- R1: `subscribe_lazy()` now accepts topic parameter and returns functional subscriber (was returning nullptr)
+- R2: `to_key_expr()` guards against empty string input (was calling `substr(1)` on empty → `out_of_range`)
+- R3: `message_bus_factory.h` header comment updated to match actual API (was documenting wrong signature)
+- R4: Added `#include <unistd.h>` for `getpid()` (was relying on transitive include)
+- R5: Fixed test header comment: topic mapping tests are HAVE_ZENOH-guarded, not "always compiled"
+- R6: Replaced all fixed `sleep_for()` delays with `publish_until_received()` / `poll_receive()` polling loops (5 s bounded timeout)
+- R7: Verified `zenoh_publisher.h` doesn't need `<memory>` (uses `optional`, not `unique_ptr`)
+- R8: Added `#include <chrono>` to `zenoh_subscriber.h` for `steady_clock`/`duration_cast`
+- R9: Added `ZENOH_CONFIG_PATH` + `ALLOW_INSECURE_ZENOH` CMake security options — builds fail without secure config or explicit opt-in
+
+**CI Fix:**
+- Updated zenohc from 1.1.0 → 1.7.2 with correct GitHub release URL (`libzenohc-VERSION-x86_64-unknown-linux-gnu-debian.zip`)
+- Pinned zenoh-cpp to matching 1.7.2 tag
+- Build zenoh-cpp with `ZENOHCXX_ZENOHC=ON`
+- Pass `-DALLOW_INSECURE_ZENOH=ON` in CI configure step
+
+**Test Coverage:**
+
+| Category | Tests | Guard |
+|---|---|---|
+| MessageBusFactory | 5 | Always compiled |
+| ZenohTopicMapping | 15 | `HAVE_ZENOH` |
+| Zenoh pub/sub round-trips | 11 | `HAVE_ZENOH` |
+| **Total new** | **33** | |
+
+**Metrics:**
+- Tests: 262 → **295** (+33)
+- Test suites: 18 → **19** (+1: `test_zenoh_ipc`)
+- Bug fixes: 15 → **17** (+2)
+- Build: 0 warnings (`-Werror -Wall -Wextra`)
+- zenohc: **1.7.2** (installed from GitHub releases)
+- zenoh-cpp: **1.7.2** (installed from source)
+
+---
+
+## Updated Summary (Post Zenoh Phase A)
+
+| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh Phase A |
+|---|---|---|---|---|
+| Bug fixes | 13 | 15 | 15 | **17** |
+| Unit tests | 262 | 262 | 262 | **295** |
+| Test suites | 18 | 18 | 18 | **19** |
+| Config tunables | 75+ | 75+ | 80+ | **80+** |
+| Compiler warnings | 0 | 0 | 0 | **0** |
+| IPC backends | SHM only | SHM only | SHM only | **SHM + Zenoh** |
+| CI matrix | 1 build | 1 build | 1 build | **2 builds (shm, zenoh)** |
+
+*Last updated after Zenoh Phase A — PR #52 (#46 foundation), 295 tests, SHM + Zenoh IPC backends.*

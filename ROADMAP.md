@@ -25,7 +25,7 @@
     - [Phase 11 — Autonomous Navigation (Real VIO/SLAM)](#phase-11--autonomous-navigation-real-vioslam)
     - [Phase 12 — Production Hardening](#phase-12--production-hardening)
   - [Issue Tracking](#issue-tracking)
-    - [Epic](#epic)
+    - [Epics](#epics)
     - [Phase 9 — First Safe Flight](#phase-9--first-safe-flight)
     - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception-1)
     - [Phase 11 — Autonomous Navigation](#phase-11--autonomous-navigation)
@@ -40,19 +40,19 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | **262** (18 suites, 0 failures) |
+| Unit tests | **295** (19 suites, 0 failures) |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL |
 | Autonomous flight | ARM → Takeoff → Navigate 3 WPs → RTL → Land → Disarm |
-| CI | GitHub Actions (build + 262 tests on every push/PR) |
-| Config tunables | 75+ (JSON, dot-path access) |
+| CI | GitHub Actions — 2-leg matrix `{shm, zenoh}` (295 tests on every push/PR) |
+| Config tunables | 80+ (JSON, dot-path access) |
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
-| IPC framework | POSIX SHM (SeqLock) — migration to **Zenoh** planned ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
+| IPC framework | **POSIX SHM (default) + Zenoh 1.7.2** — Phase A done ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PR #52) |
 
 ---
 
@@ -252,7 +252,7 @@
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | Comm-loss, GPS-loss, SLAM divergence, motor failure detection → safe action matrix |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | **[Epic] Zenoh IPC Migration** | P1 | Replace POSIX SHM with Zenoh zero-copy SHM + network transport ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
-| [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Zenoh Phase A — Foundation | P0 | CMake integration, `ZenohMessageBus`, compile guards, CI dual-build |
+| ~~[#46](https://github.com/nmohamaya/companion_software_stack/issues/46)~~ | ~~Zenoh Phase A — Foundation~~ | ~~P0~~ | ✅ Done (PR #52) — CMake, ZenohMessageBus, security options, 33 tests, CI dual-build |
 | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Zenoh Phase B — Low-bandwidth channels | P1 | Migrate 10 control/status channels to Zenoh pub/sub |
 | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Zenoh Phase C — High-bandwidth video | P1 | Migrate video frames with Zenoh SHM provider (zero-copy) |
 | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Zenoh Phase D — Service channels + cleanup | P1 | Replace `ShmServiceChannel` with Zenoh queryable; remove old SHM primitives |
@@ -316,7 +316,7 @@
 | # | Title | State |
 |---|-------|-------|
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration | Open |
-| [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Phase A — Foundation (CMake, ZenohMessageBus, CI) | Open |
+| [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Phase A — Foundation (CMake, ZenohMessageBus, CI) | **Closed** (PR #52) |
 | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Phase B — Low-bandwidth channel migration | Open |
 | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Phase C — High-bandwidth video migration (zero-copy) | Open |
 | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Phase D — Service channel migration + SHM removal | Open |
@@ -327,20 +327,22 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 (Current) |
-|--------|---------|---------|---------|---------|---------|-------------------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | **262** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | **18** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | **15** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | **80+** (+ hardware) |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | **8** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | **5/7** |
-| OpenCV | — | — | — | 4.10.0 | 4.10.0 | **4.10.0** |
-| MAVSDK | — | — | 2.12.12 | 2.12.12 | 2.12.12 | **2.12.12** |
-| Autonomous flight | No | No | Yes | Yes | Yes | **Yes** |
-| Hardware deploy | No | No | No | No | No | **Yes** (PR #43) |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A (Current) |
+|--------|---------|---------|---------|---------|---------|---------|-------------------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | **295** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | **19** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | **17** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | **80+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | **8** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| OpenCV | — | — | — | 4.10.0 | 4.10.0 | 4.10.0 | **4.10.0** |
+| MAVSDK | — | — | 2.12.12 | 2.12.12 | 2.12.12 | 2.12.12 | **2.12.12** |
+| Autonomous flight | No | No | Yes | Yes | Yes | Yes | **Yes** |
+| Hardware deploy | No | No | No | No | No | Yes | **Yes** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | **2 (shm, zenoh)** |
 
 ### Process Activity During Simulation
 
@@ -356,4 +358,4 @@
 
 ---
 
-*Last updated after Phase 9 start — PR #43 (#26 hardware config), 262 tests, 1/6 Phase 9 issues complete.*
+*Last updated after Zenoh Phase A — PR #52 (#46 foundation), 295 tests, SHM + Zenoh IPC, 2-leg CI matrix.*
