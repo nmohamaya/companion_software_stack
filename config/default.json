@@ -1,6 +1,7 @@
 {
     "_comment": "Default configuration for Drone Companion Stack",
     "log_level": "info",
+    "ipc_backend": "shm",
 
     "video_capture": {
         "mission_cam": {
