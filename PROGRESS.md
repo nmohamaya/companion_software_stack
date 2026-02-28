@@ -539,21 +539,59 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 
 ---
 
+## Phase 9 — First Safe Flight (Epic #25)
+
+### Improvement #13 — Hardware Config & Launch Script (Issue #26, PR #43)
+
+**Date:** 2026-02-28  
+**Category:** Deployment / Hardware  
+**Issue:** [#26](https://github.com/nmohamaya/companion_software_stack/issues/26)  
+**Branch:** `feature/issue-26-hardware-config`
+
+**Files Added:**
+- `config/hardware.json` — Real drone configuration targeting Pixhawk FC over serial
+- `deploy/launch_hardware.sh` — Hardware launch script with pre-flight checks
+
+**What:** First deliverable of Phase 9 (First Safe Flight). Created the hardware configuration and launch infrastructure for deploying the companion stack on a real drone.
+
+**config/hardware.json:**
+- FC connection via `serial:///dev/ttyACM0:921600` (MavlinkFCLink / MAVSDK)
+- Conservative first-flight waypoints: 5 m triangle at 3 m AGL, 1.5 m/s cruise
+- Tighter safety thresholds: battery warn 25% / crit 15%, temp warn 75°C / crit 90°C
+- URI examples for USB, Jetson UART, RPi UART, UDP
+- Future backend placeholders with issue references (V4L2 #32, TensorRT #33, UDPGCSLink #34, VIO #37, gimbal #42)
+
+**deploy/launch_hardware.sh:**
+- Pre-flight checks: JSON syntax validation, serial device auto-detection, permissions check, disk/temp/memory
+- `--dry-run` mode: run all checks without starting processes
+- `--config` override: use any JSON config file
+- `FC_DEVICE` env override: override serial device from config
+- aarch64 (Jetson) `LD_LIBRARY_PATH` support
+- Process health monitor: periodic alive-check of all 7 processes
+- Comms startup verification: early detection of FC connection failure with diagnostics
+- Clean shutdown: SIGINT → wait → SIGKILL + SHM cleanup
+
+**Metrics:**
+- All 262 tests pass, 0 compiler warnings
+- `--dry-run` validates correctly on dev machine
+
+---
+
 ## Updated Summary
 
-| Metric | Phase 1–3 | Phase 6 | Phase 7 | Phase 8 |
-|---|---|---|---|---|
-| Bug fixes | 6 | 13 | 13 | **15** (+RTL fixes) |
-| Unit tests | 121 (10 suites) | 196 (14 suites) | 262 (18 suites) | **262** (18 suites) |
-| Config system | 45+ tunables | 70+ tunables | 75+ tunables | **75+** tunables |
-| Processes using real Gazebo data | 0/7 | 4/7 | 5/7 | **5/7** |
-| Detection backend | Simulated only | Simulated only | YOLOv8-nano (80 COCO classes) | **YOLOv8-nano** |
-| OpenCV | Not used | Not used | 4.10.0 | **4.10.0** |
-| Compiler warnings | 0 | 0 | 0 | **0** |
-| Deployment | Manual | Manual | Manual | **Automated** (`install_dependencies.sh`) |
-| RTL verified | — | — | — | **Yes** (0.0 m from home) |
-| GitHub issues | — | — | — | **Epic #25 + 17 sub-issues** |
-| Documentation | README + BUG_FIXES | + Gazebo docs | + Perception docs | **+ ROADMAP.md + Dev Workflow** |
+| Metric | Phase 1–3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 |
+|---|---|---|---|---|---|
+| Bug fixes | 6 | 13 | 13 | 15 | **15** |
+| Unit tests | 121 (10 suites) | 196 (14 suites) | 262 (18 suites) | 262 (18 suites) | **262** (18 suites) |
+| Config system | 45+ tunables | 70+ tunables | 75+ tunables | 75+ tunables | **80+** (+ hardware config) |
+| Processes using real Gazebo data | 0/7 | 4/7 | 5/7 | 5/7 | **5/7** |
+| Detection backend | Simulated only | Simulated only | YOLOv8-nano (80 COCO classes) | YOLOv8-nano | **YOLOv8-nano** |
+| OpenCV | Not used | Not used | 4.10.0 | 4.10.0 | **4.10.0** |
+| Compiler warnings | 0 | 0 | 0 | 0 | **0** |
+| Deployment | Manual | Manual | Manual | Automated (install script) | **+ Hardware launch script** |
+| RTL verified | — | — | — | Yes (0.0 m from home) | **Yes** |
+| GitHub issues | — | — | — | Epic #25 + 17 sub-issues | **#26 complete (PR #43)** |
+| Documentation | README + BUG_FIXES | + Gazebo docs | + Perception docs | + ROADMAP.md + Dev Workflow | **+ hardware.json** |
 
 ### Process Activity During Simulation (Updated)
 
