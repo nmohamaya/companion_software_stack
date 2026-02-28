@@ -1082,11 +1082,11 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
 ## Development Workflow
 
-See [docs/development_workflow.md](docs/development_workflow.md) for the full development workflow including:
+See [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) for the full development workflow including:
 
-- Branching & PR process
+- Branching & PR process (Steps 1–9)
 - Bug fix workflow
 - Documentation update requirements (`PROGRESS.md` / `ROADMAP.md`)
+- Multi-phase feature development
 - Pre-merge checklist
-- Post-merge lessons learned
 - Quick reference commands
