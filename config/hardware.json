@@ -1,0 +1,144 @@
+{
+    "_comment": "Hardware config — real drone with Pixhawk FC over serial",
+    "_comment2": "Copy this to config/my_drone.json and edit for your setup",
+    "log_level": "info",
+
+    "video_capture": {
+        "mission_cam": {
+            "backend": "simulated",
+            "_comment": "Switch to 'v4l2' once V4L2Camera backend is implemented (Issue #32)",
+            "device": "/dev/video0",
+            "width": 1920,
+            "height": 1080,
+            "fps": 30,
+            "format": "MJPEG"
+        },
+        "stereo_cam": {
+            "backend": "simulated",
+            "_comment": "Switch to 'v4l2' once V4L2Camera backend is implemented (Issue #32)",
+            "device": "/dev/video2",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "format": "GRAY8"
+        }
+    },
+
+    "perception": {
+        "detector": {
+            "backend": "color_contour",
+            "_comment": "Use 'yolov8' with model_path for real detection (requires OpenCV DNN)",
+            "model_path": "models/yolov8n.onnx",
+            "confidence_threshold": 0.35,
+            "nms_threshold": 0.45,
+            "input_size": 640,
+            "min_contour_area": 100
+        },
+        "tracker": {
+            "max_age": 15,
+            "min_hits": 3,
+            "max_association_cost": 80.0
+        },
+        "fusion": {
+            "lidar_weight": 0.8,
+            "camera_weight": 0.2,
+            "max_lidar_association_dist": 5.0,
+            "max_radar_association_dist": 3.0,
+            "camera_height_m": 0.15,
+            "fx": 600.0,
+            "fy": 600.0,
+            "cx": 960.0,
+            "cy": 540.0
+        }
+    },
+
+    "slam": {
+        "vio_rate_hz": 100,
+        "visual_frontend_rate_hz": 30,
+        "imu_rate_hz": 200,
+        "imu": {
+            "backend": "simulated",
+            "_comment": "Switch to 'bmi088' or real IMU backend once implemented (Issue #37)"
+        },
+        "visual_frontend": {
+            "backend": "simulated",
+            "_comment": "Switch to 'orbslam3' or 'vins_fusion' once implemented (Issue #37)"
+        },
+        "keyframe": {
+            "min_parallax_px": 15.0,
+            "min_tracked_ratio": 0.6,
+            "max_time_sec": 0.5
+        }
+    },
+
+    "mission_planner": {
+        "update_rate_hz": 10,
+        "takeoff_altitude_m": 3.0,
+        "acceptance_radius_m": 1.5,
+        "cruise_speed_mps": 2.0,
+        "rtl_acceptance_radius_m": 1.5,
+        "landed_altitude_m": 0.3,
+        "rtl_min_dwell_seconds": 5,
+        "obstacle_avoidance": {
+            "min_distance_m": 3.0,
+            "influence_radius_m": 6.0,
+            "repulsive_gain": 3.0
+        },
+        "_comment": "Conservative first-flight waypoints: small triangle, low altitude",
+        "waypoints": [
+            {"x":  5, "y": 0, "z": 3, "yaw": 0,    "speed": 1.5, "payload_trigger": false},
+            {"x":  5, "y": 5, "z": 3, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false},
+            {"x":  0, "y": 0, "z": 3, "yaw": 0,     "speed": 1.5, "payload_trigger": false}
+        ]
+    },
+
+    "comms": {
+        "mavlink": {
+            "backend": "mavlink",
+            "uri": "serial:///dev/ttyACM0:921600",
+            "_comment_uri_examples": [
+                "serial:///dev/ttyACM0:921600  — USB (Pixhawk Micro-USB)",
+                "serial:///dev/ttyTHS1:921600  — UART (Jetson Orin Nano UART1)",
+                "serial:///dev/ttyAMA0:921600  — UART (Raspberry Pi)",
+                "udp://:14540                  — UDP (SITL or network bridge)"
+            ],
+            "timeout_ms": 10000,
+            "heartbeat_rate_hz": 1,
+            "tx_rate_hz": 20,
+            "rx_rate_hz": 10
+        },
+        "gcs": {
+            "backend": "simulated",
+            "_comment": "Switch to 'udp' once UDPGCSLink is implemented (Issue #34)",
+            "udp_port": 14550,
+            "telemetry_rate_hz": 2
+        }
+    },
+
+    "payload_manager": {
+        "update_rate_hz": 50,
+        "gimbal": {
+            "backend": "simulated",
+            "_comment": "Switch to 'siyi' or 'pwm' once gimbal driver is implemented (Issue #42)",
+            "max_slew_rate_dps": 60.0,
+            "pitch_min_deg": -90.0,
+            "pitch_max_deg": 30.0,
+            "yaw_min_deg": -180.0,
+            "yaw_max_deg": 180.0
+        }
+    },
+
+    "system_monitor": {
+        "update_rate_hz": 1,
+        "disk_check_interval_s": 10,
+        "thresholds": {
+            "cpu_warn_percent": 85.0,
+            "mem_warn_percent": 85.0,
+            "temp_warn_c": 75.0,
+            "temp_crit_c": 90.0,
+            "battery_warn_percent": 25.0,
+            "battery_crit_percent": 15.0,
+            "disk_crit_percent": 95.0
+        }
+    }
+}
