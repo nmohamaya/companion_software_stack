@@ -1,10 +1,11 @@
 // process3_slam_vio_nav/src/main.cpp
 // Process 3 — SLAM/VIO/Nav: visual-inertial odometry + pose estimation.
-// Simulated: generates fake VIO pose estimates from stereo camera SHM.
+// Simulated: generates fake VIO pose estimates from stereo camera input.
+// Uses MessageBusFactory — backend selected at runtime via config.
 
 #include "slam/types.h"
 #include "slam/ivisual_frontend.h"
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -157,19 +158,28 @@ int main(int argc, char* argv[]) {
     spdlog::info("=== SLAM/VIO/Nav process starting (PID {}) ===", getpid());
 
     // ── Create message bus ──────────────────────────────────
-    drone::ipc::ShmMessageBus bus;
+    const auto backend = cfg.get<std::string>("ipc_backend", "shm");
+    const auto shm_pool_mb = cfg.get<std::size_t>("zenoh.shm_pool_size_mb", 0);
+    auto bus = drone::ipc::create_message_bus(backend, shm_pool_mb);
 
-    // Subscribe to stereo camera SHM from Process 1
-    auto stereo_sub = bus.subscribe<drone::ipc::ShmStereoFrame>(
-        drone::ipc::shm_names::VIDEO_STEREO_CAM);
-    if (!stereo_sub->is_connected()) {
-        spdlog::error("Cannot connect to stereo SHM — is video_capture running?");
+    // Subscribe to stereo camera from Process 1
+    auto stereo_sub = drone::ipc::bus_subscribe<drone::ipc::ShmStereoFrame>(
+        bus, drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    // For SHM: is_connected() means the segment exists (publisher running).
+    // For Zenoh: is_connected() only becomes true after first sample, so we
+    // can't use it as a startup gate. Log a warning instead of exiting.
+    if (backend == "shm" && !stereo_sub->is_connected()) {
+        spdlog::error("Cannot connect to stereo channel — is video_capture running?");
         return 1;
+    }
+    if (!stereo_sub->is_connected()) {
+        spdlog::warn("Stereo subscriber not yet connected "
+                     "(normal for Zenoh — data will arrive when publisher starts)");
     }
 
     // Create pose output publisher
-    auto pose_pub = bus.advertise<drone::ipc::ShmPose>(
-        drone::ipc::shm_names::SLAM_POSE);
+    auto pose_pub = drone::ipc::bus_advertise<drone::ipc::ShmPose>(
+        bus, drone::ipc::shm_names::SLAM_POSE);
     if (!pose_pub->is_ready()) {
         spdlog::error("Failed to create pose publisher");
         return 1;

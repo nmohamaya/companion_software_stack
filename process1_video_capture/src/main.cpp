@@ -1,10 +1,10 @@
 // process1_video_capture/src/main.cpp
-// Process 1 — Video Capture: camera capture + SHM publish.
+// Process 1 — Video Capture: camera capture + publish.
 // Uses HAL ICamera interface — backend selected via config ("simulated" today; "v4l2" planned).
-// Uses IMessageBus for publishing — transport selected at compile time (SHM today).
+// Uses MessageBusFactory for publishing — backend selected at runtime via config.
 
 #include "video/frame.h"
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -161,19 +161,21 @@ int main(int argc, char* argv[]) {
     spdlog::info("Cameras: mission={}, stereo_l={}, stereo_r={}",
                  mission_cam->name(), stereo_left->name(), stereo_right->name());
 
-    // ── Create publishers via message bus ───────────────────
-    drone::ipc::ShmMessageBus bus;
+    // ── Create publishers via message bus factory ───────────
+    const auto backend = cfg.get<std::string>("ipc_backend", "shm");
+    const auto shm_pool_mb = cfg.get<std::size_t>("zenoh.shm_pool_size_mb", 0);
+    auto bus = drone::ipc::create_message_bus(backend, shm_pool_mb);
 
-    auto mission_pub = bus.advertise<drone::ipc::ShmVideoFrame>(
-        drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    auto mission_pub = drone::ipc::bus_advertise<drone::ipc::ShmVideoFrame>(
+        bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);
     if (!mission_pub->is_ready()) {
         spdlog::error("Failed to create publisher: {}",
                       drone::ipc::shm_names::VIDEO_MISSION_CAM);
         return 1;
     }
 
-    auto stereo_pub = bus.advertise<drone::ipc::ShmStereoFrame>(
-        drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    auto stereo_pub = drone::ipc::bus_advertise<drone::ipc::ShmStereoFrame>(
+        bus, drone::ipc::shm_names::VIDEO_STEREO_CAM);
     if (!stereo_pub->is_ready()) {
         spdlog::error("Failed to create publisher: {}",
                       drone::ipc::shm_names::VIDEO_STEREO_CAM);

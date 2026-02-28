@@ -129,7 +129,14 @@ Before merging, update the project's tracking documents:
    - Fix description and approach
    - "Found by" field (test name, CI failure, manual testing, etc.)
 
-5. **When to update:** Include doc updates in the same PR branch, committed before merge.
+5. **`CI_ISSUES.md`** — Add an entry for every CI-specific failure:
+   - Symptoms (exact error message from CI logs)
+   - Root cause analysis (why CI differs from local)
+   - Fix applied (commits, files changed)
+   - Prevention strategy (how to avoid this class of issue)
+   - Use the template at the bottom of the file for consistent formatting
+
+6. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 Once CI passes and review is approved:
@@ -190,6 +197,53 @@ Phase 0 (Environment Setup)
 - Phases without arrows between them can be developed in parallel
 - Mark blocking dependencies explicitly in sub-issue descriptions
 - Update the graph as phases complete or new dependencies emerge
+
+### Sequential Phase Branching Strategy
+
+When phases are **sequential** (Phase N depends on Phase N-1), choosing the right branching point avoids merge conflicts:
+
+| Strategy | When to Use | Trade-off |
+|----------|-------------|-----------|
+| **Wait for merge** | Default — Phase N-1 review is quick | Zero conflicts, cleanest history |
+| **Branch from predecessor** | Phase N-1 is in review, you want to start early | Works well, but requires rebase after N-1 merges |
+| **Branch from stale main** | ❌ Avoid this | Both phases modify the same files → painful conflicts |
+
+**Preferred workflow (wait for merge):**
+```bash
+# Phase A merged to main via PR
+git checkout main && git pull
+git checkout -b feat/48-phase-b         # Branch from up-to-date main
+# ... implement Phase B, create PR, merge ...
+
+git checkout main && git pull
+git checkout -b feat/49-phase-c         # Branch from main that includes Phase B
+# ... no conflicts with Phase B code
+```
+
+**Early-start workflow (branch from predecessor):**
+```bash
+# Phase B PR is open, review in progress — you want to start Phase C now
+git checkout feat/47-phase-b
+git checkout -b feat/48-phase-c         # Branch FROM Phase B, not main
+# ... implement Phase C ...
+
+# After Phase B merges to main:
+git checkout feat/48-phase-c
+git fetch origin
+git rebase origin/main                  # Rebase onto main (which now has Phase B)
+# Conflicts are minimal because your base already had Phase B's code
+git push --force-with-lease origin feat/48-phase-c
+```
+
+**Why this matters — a real example:**
+
+In the Zenoh migration (Epic #45), Phase B added 10 per-channel round-trip tests to `tests/test_zenoh_ipc.cpp`, and Phase C added 10 SHM zero-copy tests to the same file. Phase C was branched from `main` *before* Phase B merged. When Phase B merged and Phase C tried to rebase, git found 3 conflict regions because both phases inserted code after the same anchor point (`RoundTripViaFactory` test).
+
+The fix was straightforward (keep both sets of tests), but the conflict could have been avoided entirely by either:
+1. Waiting for Phase B's PR to merge before branching Phase C, or
+2. Branching Phase C from Phase B's branch
+
+**Rule of thumb:** If two phases touch the same files (especially test files or shared headers), *never branch the later phase from a main that doesn't include the earlier phase*.
 
 ### Steps
 
@@ -375,6 +429,7 @@ chore(#25): upgrade spdlog to 1.13.0
 | [docs/API.md](docs/API.md) | Interface & IPC API reference | When interfaces or IPC classes change |
 | [config/default.json](config/default.json) | Default configuration | When adding new tunables |
 | [README.md](README.md) | Project overview & build instructions | As architecture changes |
+| [CI_ISSUES.md](CI_ISSUES.md) | CI failure log & root cause analysis | After every CI-specific failure |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
 
 > **Living Document:** This workflow document is meant to evolve with the project.

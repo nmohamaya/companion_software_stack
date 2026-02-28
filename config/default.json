@@ -3,6 +3,11 @@
     "log_level": "info",
     "ipc_backend": "shm",
 
+    "zenoh": {
+        "_comment": "Zenoh IPC settings (only used when ipc_backend=zenoh)",
+        "shm_pool_size_mb": 32
+    },
+
     "video_capture": {
         "mission_cam": {
             "backend": "simulated",

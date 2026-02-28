@@ -25,6 +25,7 @@
 
 #ifdef HAVE_ZENOH
 #include "ipc/zenoh_message_bus.h"
+#include "ipc/zenoh_session.h"
 #endif
 
 #include <memory>
@@ -44,12 +45,19 @@ using MessageBusVariant = std::variant<
 #endif
 >;
 
-/// Create the IPC message bus based on config.
+/// Create the IPC message bus, optionally applying config.
 /// @param backend  "shm" (default) or "zenoh".
-/// @return A variant holding the selected message bus.
-inline MessageBusVariant create_message_bus(const std::string& backend = "shm") {
+/// @param shm_pool_mb  Zenoh SHM pool size in MB (0 = use default 32 MB).
+///                     Parsed from config/default.json "zenoh.shm_pool_size_mb".
+inline MessageBusVariant create_message_bus(const std::string& backend = "shm",
+                                           std::size_t shm_pool_mb = 0) {
+    (void)shm_pool_mb;  // used only when HAVE_ZENOH is defined
 #ifdef HAVE_ZENOH
     if (backend == "zenoh") {
+        if (shm_pool_mb > 0) {
+            drone::ipc::ZenohSession::instance().configure_shm(
+                shm_pool_mb * 1024 * 1024);
+        }
         spdlog::info("[MessageBusFactory] Selected backend: Zenoh");
         return std::make_unique<ZenohMessageBus>();
     }

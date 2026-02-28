@@ -38,7 +38,13 @@ jobs:
       run: |
         sudo apt-get install -y --no-install-recommends unzip
 
-        # Install zenohc 1.7.2 pre-built debian packages
+        # Install zenohc 1.7.2 pre-built debian packages.
+        # Note: these are built WITHOUT the shared-memory cargo feature,
+        # so PosixShmProvider will return nullptr at runtime.  SHM-specific
+        # tests use GTEST_SKIP() to handle this gracefully.
+        # Building from source with -DZENOHC_BUILD_WITH_SHARED_MEMORY=ON
+        # was attempted but produces opaque-type size mismatches on CI
+        # (see CI_ISSUES.md CI-003).
         ZENOH_VERSION="1.7.2"
         wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip" \
           -O /tmp/zenohc.zip
