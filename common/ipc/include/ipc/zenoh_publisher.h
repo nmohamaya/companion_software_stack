@@ -17,8 +17,10 @@
 #include <zenoh.hxx>
 
 #include <cstring>
+#include <optional>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -37,9 +39,8 @@ public:
     {
         try {
             auto& session = ZenohSession::instance().session();
-            publisher_ = std::make_unique<zenoh::Publisher>(
-                session.declare_publisher(
-                    zenoh::KeyExpr(key_expr)));
+            publisher_.emplace(
+                session.declare_publisher(zenoh::KeyExpr(key_expr)));
             ready_ = true;
             spdlog::info("[ZenohPublisher] Declared on '{}'", key_expr);
         } catch (const std::exception& e) {
@@ -50,12 +51,11 @@ public:
     }
 
     void publish(const T& msg) override {
-        if (!ready_ || !publisher_) return;
+        if (!ready_ || !publisher_.has_value()) return;
         // Serialize as raw bytes — trivially_copyable guarantee
-        publisher_->put(
-            zenoh::Bytes(
-                reinterpret_cast<const uint8_t*>(&msg),
-                sizeof(T)));
+        const auto* ptr = reinterpret_cast<const uint8_t*>(&msg);
+        std::vector<uint8_t> buf(ptr, ptr + sizeof(T));
+        publisher_->put(zenoh::Bytes(std::move(buf)));
     }
 
     const std::string& topic_name() const override { return key_expr_; }
@@ -64,7 +64,7 @@ public:
 
 private:
     std::string key_expr_;
-    std::unique_ptr<zenoh::Publisher> publisher_;
+    std::optional<zenoh::Publisher> publisher_;
     bool ready_ = false;
 };
 

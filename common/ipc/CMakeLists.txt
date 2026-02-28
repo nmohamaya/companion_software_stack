@@ -9,4 +9,5 @@ target_link_libraries(drone_ipc INTERFACE rt pthread)
 # Zenoh backend: link zenohc when enabled
 if(ENABLE_ZENOH)
     target_link_libraries(drone_ipc INTERFACE zenohc::lib)
+    target_compile_definitions(drone_ipc INTERFACE ZENOHCXX_ZENOHC)
 endif()

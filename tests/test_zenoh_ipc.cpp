@@ -263,29 +263,29 @@ TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/video_rt");
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    ShmVideoFrame sent{};
-    sent.timestamp_ns = 999;
-    sent.width = 1920;
-    sent.height = 1080;
-    sent.channels = 3;
-    sent.sequence_number = 7;
-    // Fill first few bytes of pixel data
-    sent.pixel_data[0] = 0xAA;
-    sent.pixel_data[1] = 0xBB;
-    sent.pixel_data[sizeof(sent.pixel_data) - 1] = 0xFF;
-    pub.publish(sent);
+    // Heap-allocate — ShmVideoFrame is ~6 MB, too large for the stack.
+    auto sent = std::make_unique<ShmVideoFrame>();
+    sent->timestamp_ns = 999;
+    sent->width = 1920;
+    sent->height = 1080;
+    sent->channels = 3;
+    sent->sequence_number = 7;
+    sent->pixel_data[0] = 0xAA;
+    sent->pixel_data[1] = 0xBB;
+    sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xFF;
+    pub.publish(*sent);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-    ShmVideoFrame received{};
-    ASSERT_TRUE(sub.receive(received));
-    EXPECT_EQ(received.width, 1920u);
-    EXPECT_EQ(received.height, 1080u);
-    EXPECT_EQ(received.channels, 3u);
-    EXPECT_EQ(received.sequence_number, 7u);
-    EXPECT_EQ(received.pixel_data[0], 0xAA);
-    EXPECT_EQ(received.pixel_data[1], 0xBB);
-    EXPECT_EQ(received.pixel_data[sizeof(received.pixel_data) - 1], 0xFF);
+    auto received = std::make_unique<ShmVideoFrame>();
+    ASSERT_TRUE(sub.receive(*received));
+    EXPECT_EQ(received->width, 1920u);
+    EXPECT_EQ(received->height, 1080u);
+    EXPECT_EQ(received->channels, 3u);
+    EXPECT_EQ(received->sequence_number, 7u);
+    EXPECT_EQ(received->pixel_data[0], 0xAA);
+    EXPECT_EQ(received->pixel_data[1], 0xBB);
+    EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) - 1], 0xFF);
 }
 
 TEST(ZenohPubSub, MultipleTopics) {

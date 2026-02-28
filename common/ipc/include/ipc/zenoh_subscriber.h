@@ -17,8 +17,8 @@
 
 #include <atomic>
 #include <cstring>
-#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -40,12 +40,13 @@ public:
     {
         try {
             auto& session = ZenohSession::instance().session();
-            subscriber_ = std::make_unique<zenoh::Subscriber>(
+            subscriber_.emplace(
                 session.declare_subscriber(
                     zenoh::KeyExpr(key_expr),
-                    [this](const zenoh::Sample& sample) {
+                    [this](zenoh::Sample& sample) {
                         on_sample(sample);
-                    }));
+                    },
+                    []() { /* on_drop — no-op */ }));
             spdlog::info("[ZenohSubscriber] Subscribed to '{}'", key_expr);
         } catch (const std::exception& e) {
             spdlog::error("[ZenohSubscriber] Failed to subscribe to '{}': {}",
@@ -78,8 +79,8 @@ public:
 
 private:
     /// Zenoh callback — runs on Zenoh internal thread.
-    void on_sample(const zenoh::Sample& sample) {
-        auto payload = sample.get_payload();
+    void on_sample(zenoh::Sample& sample) {
+        const auto& payload = sample.get_payload();
         auto bytes = payload.as_vector();
         if (bytes.size() != sizeof(T)) {
             spdlog::warn("[ZenohSubscriber] Size mismatch on '{}': "
@@ -99,7 +100,7 @@ private:
     }
 
     std::string key_expr_;
-    std::unique_ptr<zenoh::Subscriber> subscriber_;
+    std::optional<zenoh::Subscriber<void>> subscriber_;
 
     // Latest-value cache (protected by data_mutex_ + atomics)
     mutable std::mutex data_mutex_;

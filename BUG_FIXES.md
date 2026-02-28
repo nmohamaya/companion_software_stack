@@ -87,3 +87,35 @@ Tracking all bug fixes applied to the Drone Companion Software Stack.
 **Root Cause:** Struct members with non-trivial types (`Eigen::Vector3f`) not given default values.
 
 **Fix:** Added `= Eigen::Vector3f::Zero()` default initializers to `centroid`, `bbox_min`, and `bbox_max`, and `= 0.0f` to `distance`.
+
+---
+
+## Fix #7 — zenohc Rust 1.85 atexit() Panic on Session Teardown
+
+**Date:** 2026-02-28  
+**Severity:** Critical  
+**File:** `common/ipc/include/ipc/zenoh_session.h`
+
+**Bug:** All 12 Zenoh tests passed internally (`[  PASSED  ]`) but the test process aborted during C++ static destructor teardown. The `ZenohSession` singleton used a Meyers singleton pattern (`static ZenohSession inst;`), which is destroyed during `atexit()`. The zenohc library (Rust FFI) panics when its `Session::close()` runs during `atexit()` because thread-local storage is unavailable — a known Rust 1.85 issue ([rust-lang/rust#138696](https://github.com/rust-lang/rust/issues/138696)).
+
+**Root Cause:** Static local variable in `instance()` triggers destructor during `atexit()`, but zenohc's Rust runtime requires thread-local storage that is already torn down at that point.
+
+**Fix:** Changed the singleton from stack-allocated (`static ZenohSession inst;`) to heap-allocated and intentionally leaked (`static ZenohSession* inst = new ZenohSession();`). The session is never destroyed during process teardown; the OS reclaims all resources on exit. This is a standard pattern for singletons wrapping FFI libraries with complex teardown requirements.
+
+**Found by:** CTest reporting "Subprocess aborted" on all 12 Zenoh tests despite `[  PASSED  ]` output.
+
+---
+
+## Fix #8 — Stack Overflow in LargeVideoFrameRoundTrip Test
+
+**Date:** 2026-02-28  
+**Severity:** High  
+**File:** `tests/test_zenoh_ipc.cpp`
+
+**Bug:** The `ZenohPubSub.LargeVideoFrameRoundTrip` test segfaulted. The test stack-allocated two `ShmVideoFrame` structs (~6.2 MB each: `1920 × 1080 × 3` bytes of `pixel_data`). Combined with the `ZenohSubscriber<ShmVideoFrame>` internal `latest_msg_` cache (another ~6.2 MB) and the `std::vector<uint8_t>` copy inside `publish()`, total stack usage exceeded the default 8 MB stack limit.
+
+**Root Cause:** `ShmVideoFrame` is ~6,220,800 bytes. Stack-allocating two of them plus test framework overhead exceeds the default Linux stack size (typically 8 MB).
+
+**Fix:** Changed the test to heap-allocate both `sent` and `received` frames using `std::make_unique<ShmVideoFrame>()`.
+
+**Found by:** CTest reporting SEGFAULT on `ZenohPubSub.LargeVideoFrameRoundTrip`.

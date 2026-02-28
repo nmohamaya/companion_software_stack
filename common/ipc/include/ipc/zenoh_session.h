@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <stdexcept>
 
@@ -22,13 +23,18 @@
 namespace drone::ipc {
 
 /// Process-wide Zenoh session.  Thread-safe singleton.
-/// Configure before first use via configure(); defaults to peer mode + SHM.
+/// Configure before first use via configure(); defaults to peer mode.
+///
+/// NOTE: The singleton is heap-allocated and intentionally leaked.
+/// zenohc (Rust FFI) panics if its Session destructor runs during
+/// atexit() — a known Rust 1.85 issue (rust-lang/rust#138696).
+/// Leaking avoids the crash; the OS reclaims resources on exit.
 class ZenohSession {
 public:
-    /// Access the singleton instance.
+    /// Access the singleton instance (intentionally leaked — never destroyed).
     static ZenohSession& instance() {
-        static ZenohSession inst;
-        return inst;
+        static ZenohSession* inst = new ZenohSession();
+        return *inst;
     }
 
     /// Configure the session before first use.
@@ -37,7 +43,7 @@ public:
     /// Must be called BEFORE session() is first invoked.
     void configure(const std::string& config_json = "") {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (session_) {
+        if (session_.has_value()) {
             spdlog::warn("[ZenohSession] configure() called after session "
                          "already opened — ignoring");
             return;
@@ -51,16 +57,16 @@ public:
     /// Get the underlying Zenoh session.  Opens lazily on first call.
     zenoh::Session& session() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!session_) {
+        if (!session_.has_value()) {
             open_session();
         }
-        return *session_;
+        return session_.value();
     }
 
     /// Returns true if the session has been opened.
     bool is_open() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return session_ != nullptr;
+        return session_.has_value();
     }
 
     // Non-copyable, non-movable
@@ -73,20 +79,18 @@ private:
     ZenohSession() = default;
 
     void open_session() {
-        zenoh::Config config;
         if (!config_json_.empty()) {
-            // Apply custom JSON config
-            config = zenoh::Config::from_str(config_json_);
+            auto config = zenoh::Config::from_str(config_json_);
+            session_.emplace(zenoh::Session::open(std::move(config)));
+        } else {
+            auto config = zenoh::Config::create_default();
+            session_.emplace(zenoh::Session::open(std::move(config)));
         }
-        // Enable SHM provider for zero-copy local IPC
-        // (Zenoh will fall back to network for remote peers)
-        session_ = std::make_unique<zenoh::Session>(
-            zenoh::Session::open(std::move(config)));
-        spdlog::info("[ZenohSession] Session opened (peer mode, SHM enabled)");
+        spdlog::info("[ZenohSession] Session opened (peer mode)");
     }
 
     mutable std::mutex mutex_;
-    std::unique_ptr<zenoh::Session> session_;
+    std::optional<zenoh::Session> session_;
     std::string config_json_;
     bool configured_ = false;
 };
