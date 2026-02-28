@@ -129,7 +129,14 @@ Before merging, update the project's tracking documents:
    - Fix description and approach
    - "Found by" field (test name, CI failure, manual testing, etc.)
 
-5. **When to update:** Include doc updates in the same PR branch, committed before merge.
+5. **`CI_ISSUES.md`** — Add an entry for every CI-specific failure:
+   - Symptoms (exact error message from CI logs)
+   - Root cause analysis (why CI differs from local)
+   - Fix applied (commits, files changed)
+   - Prevention strategy (how to avoid this class of issue)
+   - Use the template at the bottom of the file for consistent formatting
+
+6. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 Once CI passes and review is approved:
@@ -422,6 +429,7 @@ chore(#25): upgrade spdlog to 1.13.0
 | [docs/API.md](docs/API.md) | Interface & IPC API reference | When interfaces or IPC classes change |
 | [config/default.json](config/default.json) | Default configuration | When adding new tunables |
 | [README.md](README.md) | Project overview & build instructions | As architecture changes |
+| [CI_ISSUES.md](CI_ISSUES.md) | CI failure log & root cause analysis | After every CI-specific failure |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
 
 > **Living Document:** This workflow document is meant to evolve with the project.
