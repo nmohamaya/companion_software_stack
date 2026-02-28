@@ -33,16 +33,24 @@ jobs:
           nlohmann-json3-dev \
           libgtest-dev
 
-    - name: Install Rust (for zenoh-c source build)
+    - name: Cache Zenoh libraries
       if: matrix.ipc_backend == 'zenoh'
+      id: cache-zenoh
+      uses: actions/cache@v4
+      with:
+        path: /tmp/zenoh-install
+        key: zenoh-1.7.2-shm-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install Rust (for zenoh-c source build)
+      if: matrix.ipc_backend == 'zenoh' && steps.cache-zenoh.outputs.cache-hit != 'true'
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Install Zenoh (zenoh backend only)
-      if: matrix.ipc_backend == 'zenoh'
+    - name: Build Zenoh from source
+      if: matrix.ipc_backend == 'zenoh' && steps.cache-zenoh.outputs.cache-hit != 'true'
       run: |
         ZENOH_VERSION="1.7.2"
 
-        # Build and install zenohc from source with shared-memory support.
+        # Build zenohc from source with shared-memory support.
         # The pre-built debian packages omit the shared-memory cargo feature,
         # which is required for PosixShmProvider (Phase C zero-copy video).
         git clone --depth 1 --branch "${ZENOH_VERSION}" \
@@ -50,16 +58,23 @@ jobs:
         cd /tmp/zenoh-c
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=/tmp/zenoh-install \
           -DZENOHC_BUILD_WITH_SHARED_MEMORY=ON
         cmake --build build -j$(nproc)
-        sudo cmake --install build/
+        cmake --install build
 
-        # Install zenoh-cpp (header-only, matching version)
+        # Build zenoh-cpp (header-only, matching version)
         git clone --depth 1 --branch "${ZENOH_VERSION}" \
           https://github.com/eclipse-zenoh/zenoh-cpp.git /tmp/zenoh-cpp
         cd /tmp/zenoh-cpp
-        cmake -B build -DZENOHCXX_ZENOHC=ON -DZENOHCXX_ZENOHPICO=OFF
-        sudo cmake --install build/
+        cmake -B build \
+          -DCMAKE_INSTALL_PREFIX=/tmp/zenoh-install \
+          -DZENOHCXX_ZENOHC=ON -DZENOHCXX_ZENOHPICO=OFF
+        cmake --install build
+
+    - name: Install Zenoh from cache
+      if: matrix.ipc_backend == 'zenoh'
+      run: sudo cp -a /tmp/zenoh-install/* /usr/local/
 
     - name: Configure CMake
       run: |
