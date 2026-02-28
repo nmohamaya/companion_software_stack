@@ -191,6 +191,53 @@ Phase 0 (Environment Setup)
 - Mark blocking dependencies explicitly in sub-issue descriptions
 - Update the graph as phases complete or new dependencies emerge
 
+### Sequential Phase Branching Strategy
+
+When phases are **sequential** (Phase N depends on Phase N-1), choosing the right branching point avoids merge conflicts:
+
+| Strategy | When to Use | Trade-off |
+|----------|-------------|-----------|
+| **Wait for merge** | Default — Phase N-1 review is quick | Zero conflicts, cleanest history |
+| **Branch from predecessor** | Phase N-1 is in review, you want to start early | Works well, but requires rebase after N-1 merges |
+| **Branch from stale main** | ❌ Avoid this | Both phases modify the same files → painful conflicts |
+
+**Preferred workflow (wait for merge):**
+```bash
+# Phase A merged to main via PR
+git checkout main && git pull
+git checkout -b feat/48-phase-b         # Branch from up-to-date main
+# ... implement Phase B, create PR, merge ...
+
+git checkout main && git pull
+git checkout -b feat/49-phase-c         # Branch from main that includes Phase B
+# ... no conflicts with Phase B code
+```
+
+**Early-start workflow (branch from predecessor):**
+```bash
+# Phase B PR is open, review in progress — you want to start Phase C now
+git checkout feat/47-phase-b
+git checkout -b feat/48-phase-c         # Branch FROM Phase B, not main
+# ... implement Phase C ...
+
+# After Phase B merges to main:
+git checkout feat/48-phase-c
+git fetch origin
+git rebase origin/main                  # Rebase onto main (which now has Phase B)
+# Conflicts are minimal because your base already had Phase B's code
+git push --force-with-lease origin feat/48-phase-c
+```
+
+**Why this matters — a real example:**
+
+In the Zenoh migration (Epic #45), Phase B added 10 per-channel round-trip tests to `tests/test_zenoh_ipc.cpp`, and Phase C added 10 SHM zero-copy tests to the same file. Phase C was branched from `main` *before* Phase B merged. When Phase B merged and Phase C tried to rebase, git found 3 conflict regions because both phases inserted code after the same anchor point (`RoundTripViaFactory` test).
+
+The fix was straightforward (keep both sets of tests), but the conflict could have been avoided entirely by either:
+1. Waiting for Phase B's PR to merge before branching Phase C, or
+2. Branching Phase C from Phase B's branch
+
+**Rule of thumb:** If two phases touch the same files (especially test files or shared headers), *never branch the later phase from a main that doesn't include the earlier phase*.
+
 ### Steps
 
 1. **Create Sub-Issues for Each Phase**
