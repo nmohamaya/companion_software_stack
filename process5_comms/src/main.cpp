@@ -8,7 +8,7 @@
 //   gcs_rx   — polls GCS for commands, publishes ShmGCSCommand
 //   gcs_tx   — reads mission status + pose, sends telemetry to GCS
 
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -211,30 +211,31 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
-    // ── Create message bus ──────────────────────────────────
-    drone::ipc::ShmMessageBus bus;
+    // ── Create message bus (config-driven: shm or zenoh) ───
+    auto bus = drone::ipc::create_message_bus(
+        cfg.get<std::string>("ipc_backend", "shm"));
 
     // ── Publishers ──────────────────────────────────────────
-    auto fc_pub = bus.advertise<drone::ipc::ShmFCState>(
-        drone::ipc::shm_names::FC_STATE);
-    auto gcs_cmd_pub = bus.advertise<drone::ipc::ShmGCSCommand>(
-        drone::ipc::shm_names::GCS_COMMANDS);
+    auto fc_pub = drone::ipc::bus_advertise<drone::ipc::ShmFCState>(
+        bus, drone::ipc::shm_names::FC_STATE);
+    auto gcs_cmd_pub = drone::ipc::bus_advertise<drone::ipc::ShmGCSCommand>(
+        bus, drone::ipc::shm_names::GCS_COMMANDS);
     if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready()) {
         spdlog::error("Failed to create Comms publishers");
         return 1;
     }
 
     // ── Subscribers ─────────────────────────────────────────
-    auto traj_sub = bus.subscribe<drone::ipc::ShmTrajectoryCmd>(
-        drone::ipc::shm_names::TRAJECTORY_CMD);
-    auto fc_cmd_sub = bus.subscribe<drone::ipc::ShmFCCommand>(
-        drone::ipc::shm_names::FC_COMMANDS);
-    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(
-        drone::ipc::shm_names::SLAM_POSE);
-    auto mission_sub = bus.subscribe<drone::ipc::ShmMissionStatus>(
-        drone::ipc::shm_names::MISSION_STATUS);
-    auto fc_sub = bus.subscribe<drone::ipc::ShmFCState>(
-        drone::ipc::shm_names::FC_STATE);
+    auto traj_sub = drone::ipc::bus_subscribe<drone::ipc::ShmTrajectoryCmd>(
+        bus, drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto fc_cmd_sub = drone::ipc::bus_subscribe<drone::ipc::ShmFCCommand>(
+        bus, drone::ipc::shm_names::FC_COMMANDS);
+    auto pose_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPose>(
+        bus, drone::ipc::shm_names::SLAM_POSE);
+    auto mission_sub = drone::ipc::bus_subscribe<drone::ipc::ShmMissionStatus>(
+        bus, drone::ipc::shm_names::MISSION_STATUS);
+    auto fc_sub = drone::ipc::bus_subscribe<drone::ipc::ShmFCState>(
+        bus, drone::ipc::shm_names::FC_STATE);
 
     spdlog::info("Comms READY");
 

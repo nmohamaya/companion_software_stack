@@ -4,7 +4,7 @@
 
 #include "monitor/sys_info.h"
 #include "monitor/iprocess_monitor.h"
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -31,19 +31,20 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== System Monitor starting (PID {}) ===", getpid());
 
-    // ── Create message bus ──────────────────────────────────
-    drone::ipc::ShmMessageBus bus;
+    // ── Create message bus (config-driven: shm or zenoh) ───
+    auto bus = drone::ipc::create_message_bus(
+        cfg.get<std::string>("ipc_backend", "shm"));
 
-    auto health_pub = bus.advertise<drone::ipc::ShmSystemHealth>(
-        drone::ipc::shm_names::SYSTEM_HEALTH);
+    auto health_pub = drone::ipc::bus_advertise<drone::ipc::ShmSystemHealth>(
+        bus, drone::ipc::shm_names::SYSTEM_HEALTH);
     if (!health_pub->is_ready()) {
         spdlog::error("Failed to create system health publisher");
         return 1;
     }
 
     // ── Optional: subscribe to FC state for battery info ────
-    auto fc_sub = bus.subscribe_lazy<drone::ipc::ShmFCState>();
-    fc_sub->connect(drone::ipc::shm_names::FC_STATE);
+    auto fc_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmFCState>(
+        bus, drone::ipc::shm_names::FC_STATE);
 
     spdlog::info("System Monitor READY");
 

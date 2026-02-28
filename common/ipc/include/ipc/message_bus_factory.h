@@ -88,4 +88,16 @@ std::unique_ptr<ISubscriber<T>> bus_subscribe(
     }, bus);
 }
 
+/// Create an optional/lazy subscriber (single attempt, no retries).
+/// Equivalent to subscribe() with max_retries=0.
+/// For SHM: tries once to open the segment — may not connect.
+/// For Zenoh: always connects (subscriptions are asynchronous).
+/// Use for optional channels where it's OK if no publisher exists yet.
+template <typename T>
+std::unique_ptr<ISubscriber<T>> bus_subscribe_optional(
+    MessageBusVariant& bus, const std::string& topic)
+{
+    return bus_subscribe<T>(bus, topic, 0, 0);
+}
+
 }  // namespace drone::ipc

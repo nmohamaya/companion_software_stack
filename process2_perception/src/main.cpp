@@ -7,7 +7,7 @@
 #include "perception/detector_interface.h"
 #include "perception/kalman_tracker.h"
 #include "perception/fusion_engine.h"
-#include "ipc/shm_message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -248,20 +248,21 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Perception process starting (PID {}) ===", getpid());
 
-    // ── Create message bus ──────────────────────────────────
-    drone::ipc::ShmMessageBus bus;
+    // ── Create message bus (config-driven: shm or zenoh) ───
+    auto bus = drone::ipc::create_message_bus(
+        cfg.get<std::string>("ipc_backend", "shm"));
 
     // ── Subscribe to video frames from Process 1 ────────────
-    auto video_sub = bus.subscribe<drone::ipc::ShmVideoFrame>(
-        drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    auto video_sub = drone::ipc::bus_subscribe<drone::ipc::ShmVideoFrame>(
+        bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);
     if (!video_sub->is_connected()) {
         spdlog::error("Cannot connect to video SHM — is video_capture running?");
         return 1;
     }
 
     // ── Create publisher for detected objects → Process 4 ───
-    auto det_pub = bus.advertise<drone::ipc::ShmDetectedObjectList>(
-        drone::ipc::shm_names::DETECTED_OBJECTS);
+    auto det_pub = drone::ipc::bus_advertise<drone::ipc::ShmDetectedObjectList>(
+        bus, drone::ipc::shm_names::DETECTED_OBJECTS);
     if (!det_pub->is_ready()) {
         spdlog::error("Failed to create publisher: {}",
                        drone::ipc::shm_names::DETECTED_OBJECTS);
