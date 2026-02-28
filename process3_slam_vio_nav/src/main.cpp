@@ -159,14 +159,22 @@ int main(int argc, char* argv[]) {
 
     // ── Create message bus ──────────────────────────────────
     const auto backend = cfg.get<std::string>("ipc_backend", "shm");
-    auto bus = drone::ipc::create_message_bus(backend);
+    const auto shm_pool_mb = cfg.get<std::size_t>("zenoh.shm_pool_size_mb", 0);
+    auto bus = drone::ipc::create_message_bus(backend, shm_pool_mb);
 
     // Subscribe to stereo camera from Process 1
     auto stereo_sub = drone::ipc::bus_subscribe<drone::ipc::ShmStereoFrame>(
         bus, drone::ipc::shm_names::VIDEO_STEREO_CAM);
-    if (!stereo_sub->is_connected()) {
+    // For SHM: is_connected() means the segment exists (publisher running).
+    // For Zenoh: is_connected() only becomes true after first sample, so we
+    // can't use it as a startup gate. Log a warning instead of exiting.
+    if (backend == "shm" && !stereo_sub->is_connected()) {
         spdlog::error("Cannot connect to stereo channel — is video_capture running?");
         return 1;
+    }
+    if (!stereo_sub->is_connected()) {
+        spdlog::warn("Stereo subscriber not yet connected "
+                     "(normal for Zenoh — data will arrive when publisher starts)");
     }
 
     // Create pose output publisher

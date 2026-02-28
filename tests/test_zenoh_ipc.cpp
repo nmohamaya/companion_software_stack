@@ -927,6 +927,10 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
     ZenohPublisher<ShmVideoFrame> pub("drone/test/shm_video_path");
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_video_path");
 
+    // Record baseline counters before publish
+    const auto shm_before = pub.shm_publish_count();
+    const auto bytes_before = pub.bytes_publish_count();
+
     // Heap-allocate — too large for the stack
     auto sent = std::make_unique<ShmVideoFrame>();
     sent->timestamp_ns = 12345;
@@ -951,6 +955,12 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
     EXPECT_EQ(received->pixel_data[1], 0xAD);
     EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) / 2], 0xBE);
     EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) - 1], 0xEF);
+
+    // Verify SHM path was actually used (not the bytes fallback)
+    EXPECT_GT(pub.shm_publish_count(), shm_before)
+        << "Expected SHM publish path for ShmVideoFrame";
+    EXPECT_EQ(pub.bytes_publish_count(), bytes_before)
+        << "Bytes path should not be used for ShmVideoFrame";
 }
 
 TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
@@ -960,6 +970,9 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
 
     ZenohPublisher<ShmStereoFrame> pub("drone/test/shm_stereo_path");
     ZenohSubscriber<ShmStereoFrame> sub("drone/test/shm_stereo_path");
+
+    const auto shm_before = pub.shm_publish_count();
+    const auto bytes_before = pub.bytes_publish_count();
 
     auto sent = std::make_unique<ShmStereoFrame>();
     sent->timestamp_ns = 77777;
@@ -980,6 +993,12 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
     EXPECT_EQ(received->right_data[0], 0xBB);
     EXPECT_EQ(received->left_data[sizeof(received->left_data) - 1], 0xCC);
     EXPECT_EQ(received->right_data[sizeof(received->right_data) - 1], 0xDD);
+
+    // Verify SHM path was actually used
+    EXPECT_GT(pub.shm_publish_count(), shm_before)
+        << "Expected SHM publish path for ShmStereoFrame";
+    EXPECT_EQ(pub.bytes_publish_count(), bytes_before)
+        << "Bytes path should not be used for ShmStereoFrame";
 }
 
 // --- Factory integration with video channels --------------------------
@@ -1072,6 +1091,10 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
         ASSERT_TRUE(publish_until_received(pub, *frame, sub, *received));
     }
 
+    // Track distinct frames received via polling during publish window
+    std::atomic<int> frames_seen{0};
+    uint64_t last_seen_ts = 0;
+
     // Publish 30 frames (simulating 1 second at 30 Hz)
     constexpr int total_frames = 30;
     for (int i = 1; i <= total_frames; ++i) {
@@ -1079,6 +1102,14 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
         frame->sequence_number = static_cast<uint64_t>(i);
         frame->pixel_data[0] = static_cast<uint8_t>(i & 0xFF);
         pub.publish(*frame);
+
+        // Poll between publishes to count distinct frames
+        if (sub.receive(*received) &&
+            received->timestamp_ns != last_seen_ts) {
+            last_seen_ts = received->timestamp_ns;
+            frames_seen.fetch_add(1, std::memory_order_relaxed);
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
@@ -1087,10 +1118,15 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
                   + std::chrono::milliseconds(3000);
     bool got_final = false;
     while (std::chrono::steady_clock::now() < deadline) {
-        if (sub.receive(*received) &&
-            received->timestamp_ns == static_cast<uint64_t>(total_frames)) {
-            got_final = true;
-            break;
+        if (sub.receive(*received)) {
+            if (received->timestamp_ns != last_seen_ts) {
+                last_seen_ts = received->timestamp_ns;
+                frames_seen.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (received->timestamp_ns == static_cast<uint64_t>(total_frames)) {
+                got_final = true;
+                break;
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -1099,6 +1135,19 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
         << "); last seen ts=" << received->timestamp_ns;
     EXPECT_EQ(received->sequence_number,
               static_cast<uint64_t>(total_frames));
+
+    // Verify we saw a meaningful number of distinct frames (not just the last)
+    // With 33ms publish interval and 10ms poll interval, we should see
+    // at least half the frames. This validates sustained delivery, not just
+    // final-frame arrival.
+    EXPECT_GE(frames_seen.load(), total_frames / 2)
+        << "Expected to observe at least " << total_frames / 2
+        << " distinct frames, but only saw " << frames_seen.load();
+
+    // Verify SHM path was used for all publishes
+    EXPECT_GE(pub.shm_publish_count(),
+              static_cast<uint64_t>(total_frames))
+        << "Expected at least " << total_frames << " SHM publishes";
 }
 
 // --- SHM pool configuration test --------------------------------------

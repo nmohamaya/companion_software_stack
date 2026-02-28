@@ -163,7 +163,8 @@ int main(int argc, char* argv[]) {
 
     // ── Create publishers via message bus factory ───────────
     const auto backend = cfg.get<std::string>("ipc_backend", "shm");
-    auto bus = drone::ipc::create_message_bus(backend);
+    const auto shm_pool_mb = cfg.get<std::size_t>("zenoh.shm_pool_size_mb", 0);
+    auto bus = drone::ipc::create_message_bus(backend, shm_pool_mb);
 
     auto mission_pub = drone::ipc::bus_advertise<drone::ipc::ShmVideoFrame>(
         bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);

@@ -16,6 +16,7 @@
 
 #include <zenoh.hxx>
 
+#include <atomic>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -59,9 +60,21 @@ public:
 
         if constexpr (sizeof(T) > kShmPublishThreshold) {
             publish_shm(msg);
+            shm_publishes_.fetch_add(1, std::memory_order_relaxed);
         } else {
             publish_bytes(msg);
+            bytes_publishes_.fetch_add(1, std::memory_order_relaxed);
         }
+    }
+
+    /// Number of publishes that used the SHM zero-copy path.
+    uint64_t shm_publish_count() const {
+        return shm_publishes_.load(std::memory_order_relaxed);
+    }
+
+    /// Number of publishes that used the standard bytes path.
+    uint64_t bytes_publish_count() const {
+        return bytes_publishes_.load(std::memory_order_relaxed);
     }
 
     const std::string& topic_name() const override { return key_expr_; }
@@ -106,6 +119,8 @@ private:
     std::string key_expr_;
     std::optional<zenoh::Publisher> publisher_;
     bool ready_ = false;
+    std::atomic<uint64_t> shm_publishes_{0};
+    std::atomic<uint64_t> bytes_publishes_{0};
 };
 
 }  // namespace drone::ipc
