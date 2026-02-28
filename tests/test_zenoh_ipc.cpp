@@ -1,14 +1,15 @@
 // tests/test_zenoh_ipc.cpp
 // Unit tests for the Zenoh IPC backend and message bus factory.
 //
-// Three categories:
+// Four categories:
 //   1. MessageBusFactory tests (always compiled — no Zenoh dependency)
 //   2. Zenoh topic mapping tests (HAVE_ZENOH — ZenohMessageBus header required)
 //   3. Zenoh pub/sub round-trip tests (HAVE_ZENOH — requires running Zenoh session)
+//   4. Phase C — SHM provider zero-copy tests (HAVE_ZENOH)
 //
 // Build:
 //   cmake -B build                          → runs category 1 only
-//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1 + 2 + 3
+//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1 + 2 + 3 + 4
 #include <gtest/gtest.h>
 
 #include "ipc/shm_message_bus.h"
@@ -857,5 +858,260 @@ TEST(ZenohMigration, FactorySubscribeOptional) {
     ShmGCSCommand cmd{};
     EXPECT_FALSE(sub->receive(cmd));
 }
+
+
+// ═══════════════════════════════════════════════════════════
+// Category 4: Phase C — SHM provider zero-copy tests
+// ═══════════════════════════════════════════════════════════
+
+// --- SHM Provider tests -----------------------------------------------
+
+TEST(ZenohShmProvider, ProviderCreatesSuccessfully) {
+    auto* provider = ZenohSession::instance().shm_provider();
+    ASSERT_NE(provider, nullptr);
+}
+
+TEST(ZenohShmProvider, AllocAndWriteBuffer) {
+    auto* provider = ZenohSession::instance().shm_provider();
+    ASSERT_NE(provider, nullptr);
+
+    constexpr std::size_t buf_size = 4096;
+    auto result = provider->alloc_gc_defrag_blocking(buf_size);
+    auto* buf = std::get_if<zenoh::ZShmMut>(&result);
+    ASSERT_NE(buf, nullptr);
+    EXPECT_EQ(buf->len(), buf_size);
+
+    // Write a pattern and verify
+    std::memset(buf->data(), 0xCD, buf_size);
+    EXPECT_EQ(buf->data()[0], 0xCD);
+    EXPECT_EQ(buf->data()[buf_size - 1], 0xCD);
+}
+
+TEST(ZenohShmProvider, AllocLargeVideoFrameBuffer) {
+    auto* provider = ZenohSession::instance().shm_provider();
+    ASSERT_NE(provider, nullptr);
+
+    // Allocate a buffer the size of ShmVideoFrame (~6.2 MB)
+    auto result = provider->alloc_gc_defrag_blocking(sizeof(ShmVideoFrame));
+    auto* buf = std::get_if<zenoh::ZShmMut>(&result);
+    ASSERT_NE(buf, nullptr)
+        << "Failed to allocate " << sizeof(ShmVideoFrame) << " bytes from SHM pool";
+    EXPECT_EQ(buf->len(), sizeof(ShmVideoFrame));
+}
+
+// --- Size-aware publish path tests ------------------------------------
+
+TEST(ZenohShmPublish, SmallMessageUsesBytes) {
+    // ShmPose is small (~400 bytes) — should use bytes path, not SHM
+    static_assert(sizeof(ShmPose) <= kShmPublishThreshold,
+                  "ShmPose should be below SHM threshold");
+
+    ZenohPublisher<ShmPose> pub("drone/test/shm_small_path");
+    ZenohSubscriber<ShmPose> sub("drone/test/shm_small_path");
+
+    ShmPose sent{};
+    sent.timestamp_ns = 42;
+    sent.quality = 2;
+
+    ShmPose received{};
+    ASSERT_TRUE(publish_until_received(pub, sent, sub, received));
+    EXPECT_EQ(received.timestamp_ns, 42u);
+    EXPECT_EQ(received.quality, 2u);
+}
+
+TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
+    // ShmVideoFrame is ~6.2 MB — should use SHM provider path
+    static_assert(sizeof(ShmVideoFrame) > kShmPublishThreshold,
+                  "ShmVideoFrame should be above SHM threshold");
+
+    ZenohPublisher<ShmVideoFrame> pub("drone/test/shm_video_path");
+    ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_video_path");
+
+    // Heap-allocate — too large for the stack
+    auto sent = std::make_unique<ShmVideoFrame>();
+    sent->timestamp_ns = 12345;
+    sent->width = 1920;
+    sent->height = 1080;
+    sent->channels = 3;
+    sent->sequence_number = 99;
+    // Write sentinel bytes at key positions
+    sent->pixel_data[0] = 0xDE;
+    sent->pixel_data[1] = 0xAD;
+    sent->pixel_data[sizeof(sent->pixel_data) / 2] = 0xBE;
+    sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xEF;
+
+    auto received = std::make_unique<ShmVideoFrame>();
+    ASSERT_TRUE(publish_until_received(pub, *sent, sub, *received));
+    EXPECT_EQ(received->timestamp_ns, 12345u);
+    EXPECT_EQ(received->width, 1920u);
+    EXPECT_EQ(received->height, 1080u);
+    EXPECT_EQ(received->channels, 3u);
+    EXPECT_EQ(received->sequence_number, 99u);
+    EXPECT_EQ(received->pixel_data[0], 0xDE);
+    EXPECT_EQ(received->pixel_data[1], 0xAD);
+    EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) / 2], 0xBE);
+    EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) - 1], 0xEF);
+}
+
+TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
+    // ShmStereoFrame is ~614 KB — should use SHM provider path
+    static_assert(sizeof(ShmStereoFrame) > kShmPublishThreshold,
+                  "ShmStereoFrame should be above SHM threshold");
+
+    ZenohPublisher<ShmStereoFrame> pub("drone/test/shm_stereo_path");
+    ZenohSubscriber<ShmStereoFrame> sub("drone/test/shm_stereo_path");
+
+    auto sent = std::make_unique<ShmStereoFrame>();
+    sent->timestamp_ns = 77777;
+    sent->width = 640;
+    sent->height = 480;
+    sent->sequence_number = 42;
+    sent->left_data[0] = 0xAA;
+    sent->right_data[0] = 0xBB;
+    sent->left_data[sizeof(sent->left_data) - 1] = 0xCC;
+    sent->right_data[sizeof(sent->right_data) - 1] = 0xDD;
+
+    auto received = std::make_unique<ShmStereoFrame>();
+    ASSERT_TRUE(publish_until_received(pub, *sent, sub, *received));
+    EXPECT_EQ(received->timestamp_ns, 77777u);
+    EXPECT_EQ(received->width, 640u);
+    EXPECT_EQ(received->height, 480u);
+    EXPECT_EQ(received->left_data[0], 0xAA);
+    EXPECT_EQ(received->right_data[0], 0xBB);
+    EXPECT_EQ(received->left_data[sizeof(received->left_data) - 1], 0xCC);
+    EXPECT_EQ(received->right_data[sizeof(received->right_data) - 1], 0xDD);
+}
+
+// --- Factory integration with video channels --------------------------
+
+TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
+    // End-to-end: factory → advertise ShmVideoFrame → subscribe → roundtrip
+    auto bus = create_message_bus("zenoh");
+    auto pub = bus_advertise<ShmVideoFrame>(bus, shm_names::VIDEO_MISSION_CAM);
+    auto sub = bus_subscribe<ShmVideoFrame>(bus, shm_names::VIDEO_MISSION_CAM);
+    ASSERT_NE(pub, nullptr);
+    ASSERT_NE(sub, nullptr);
+
+    auto sent = std::make_unique<ShmVideoFrame>();
+    sent->timestamp_ns = 555;
+    sent->width = 1920;
+    sent->height = 1080;
+    sent->channels = 3;
+    sent->pixel_data[100] = 0x42;
+
+    auto received = std::make_unique<ShmVideoFrame>();
+    bool ok = false;
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(5000);
+    while (std::chrono::steady_clock::now() < deadline) {
+        pub->publish(*sent);
+        auto batch = std::min(
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+            deadline);
+        while (std::chrono::steady_clock::now() < batch) {
+            if (sub->receive(*received)) { ok = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (ok) break;
+    }
+    ASSERT_TRUE(ok) << "Factory video round-trip timed out";
+    EXPECT_EQ(received->timestamp_ns, 555u);
+    EXPECT_EQ(received->width, 1920u);
+    EXPECT_EQ(received->pixel_data[100], 0x42);
+}
+
+TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
+    auto bus = create_message_bus("zenoh");
+    auto pub = bus_advertise<ShmStereoFrame>(bus, shm_names::VIDEO_STEREO_CAM);
+    auto sub = bus_subscribe<ShmStereoFrame>(bus, shm_names::VIDEO_STEREO_CAM);
+    ASSERT_NE(pub, nullptr);
+    ASSERT_NE(sub, nullptr);
+
+    auto sent = std::make_unique<ShmStereoFrame>();
+    sent->timestamp_ns = 888;
+    sent->width = 640;
+    sent->height = 480;
+    sent->left_data[42] = 0x99;
+
+    auto received = std::make_unique<ShmStereoFrame>();
+    bool ok = false;
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(5000);
+    while (std::chrono::steady_clock::now() < deadline) {
+        pub->publish(*sent);
+        auto batch = std::min(
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+            deadline);
+        while (std::chrono::steady_clock::now() < batch) {
+            if (sub->receive(*received)) { ok = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (ok) break;
+    }
+    ASSERT_TRUE(ok) << "Factory stereo round-trip timed out";
+    EXPECT_EQ(received->timestamp_ns, 888u);
+    EXPECT_EQ(received->left_data[42], 0x99);
+}
+
+// --- Sustained video publish test (simulates 30 Hz camera) -----------
+
+TEST(ZenohShmPublish, SustainedVideoPublish) {
+    ZenohPublisher<ShmVideoFrame> pub("drone/test/shm_sustained_video");
+    ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_sustained_video");
+
+    auto frame = std::make_unique<ShmVideoFrame>();
+    frame->width = 1920;
+    frame->height = 1080;
+    frame->channels = 3;
+
+    auto received = std::make_unique<ShmVideoFrame>();
+
+    // Warm up discovery
+    {
+        frame->timestamp_ns = 0;
+        ASSERT_TRUE(publish_until_received(pub, *frame, sub, *received));
+    }
+
+    // Publish 30 frames (simulating 1 second at 30 Hz)
+    constexpr int total_frames = 30;
+    for (int i = 1; i <= total_frames; ++i) {
+        frame->timestamp_ns = static_cast<uint64_t>(i);
+        frame->sequence_number = static_cast<uint64_t>(i);
+        frame->pixel_data[0] = static_cast<uint8_t>(i & 0xFF);
+        pub.publish(*frame);
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+
+    // Wait for final frame to arrive
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(3000);
+    bool got_final = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (sub.receive(*received) &&
+            received->timestamp_ns == static_cast<uint64_t>(total_frames)) {
+            got_final = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(got_final)
+        << "Did not receive final video frame (ts=" << total_frames
+        << "); last seen ts=" << received->timestamp_ns;
+    EXPECT_EQ(received->sequence_number,
+              static_cast<uint64_t>(total_frames));
+}
+
+// --- SHM pool configuration test --------------------------------------
+
+TEST(ZenohShmProvider, PoolSizeConfiguration) {
+    // Verify default pool size constant
+    EXPECT_EQ(kDefaultShmPoolBytes, 32u * 1024 * 1024);
+    EXPECT_EQ(kShmPublishThreshold, 64u * 1024);
+
+    // Provider should exist with default pool
+    EXPECT_NE(ZenohSession::instance().shm_provider(), nullptr);
+    EXPECT_GT(ZenohSession::instance().shm_pool_bytes(), 0u);
+}
+
 
 #endif  // HAVE_ZENOH

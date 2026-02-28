@@ -2,8 +2,8 @@
 // Singleton Zenoh session manager — shared by all publishers/subscribers.
 //
 // All ZenohPublisher/ZenohSubscriber instances share a single Zenoh session
-// in "peer" mode (no daemon required). SHM provider is enabled by default
-// for zero-copy local IPC.
+// in "peer" mode (no daemon required). A PosixShmProvider is lazily created
+// alongside the session for zero-copy high-bandwidth IPC (video frames).
 //
 // Guarded by HAVE_ZENOH — this file is a no-op when Zenoh is not available.
 #pragma once
@@ -12,15 +12,26 @@
 
 #include <zenoh.hxx>
 
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <stdexcept>
+#include <variant>
 
 #include <spdlog/spdlog.h>
 
 namespace drone::ipc {
+
+/// Default Zenoh SHM pool size: 32 MB.
+/// Must hold at least 2× the largest message in flight (ShmVideoFrame ≈ 6 MB).
+/// Configurable via configure_shm().
+static constexpr std::size_t kDefaultShmPoolBytes = 32 * 1024 * 1024;
+
+/// Messages larger than this threshold are published via the SHM provider
+/// (zero-copy path).  Smaller messages use the regular Bytes path.
+static constexpr std::size_t kShmPublishThreshold = 64 * 1024;  // 64 KB
 
 /// Process-wide Zenoh session.  Thread-safe singleton.
 /// Configure before first use via configure(); defaults to peer mode.
@@ -54,6 +65,21 @@ public:
                      config_json.empty() ? "defaults" : "custom");
     }
 
+    /// Configure SHM pool size before first use.
+    /// @param pool_bytes  Size of the POSIX SHM pool in bytes.
+    ///                    0 = disable SHM provider (use regular Bytes path).
+    void configure_shm(std::size_t pool_bytes) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (shm_provider_) {
+            spdlog::warn("[ZenohSession] configure_shm() called after SHM "
+                         "provider already created — ignoring");
+            return;
+        }
+        shm_pool_bytes_ = pool_bytes;
+        spdlog::info("[ZenohSession] SHM pool configured: {} bytes",
+                     pool_bytes);
+    }
+
     /// Get the underlying Zenoh session.  Opens lazily on first call.
     zenoh::Session& session() {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -63,10 +89,26 @@ public:
         return session_.value();
     }
 
+    /// Get the POSIX SHM provider.  Created lazily on first call.
+    /// Returns nullptr if SHM is disabled (pool_bytes == 0).
+    zenoh::PosixShmProvider* shm_provider() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!shm_provider_ && shm_pool_bytes_ > 0) {
+            create_shm_provider();
+        }
+        return shm_provider_.get();
+    }
+
     /// Returns true if the session has been opened.
     bool is_open() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return session_.has_value();
+    }
+
+    /// Returns configured SHM pool size (bytes).  0 = disabled.
+    std::size_t shm_pool_bytes() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return shm_pool_bytes_;
     }
 
     // Non-copyable, non-movable
@@ -89,10 +131,27 @@ private:
         spdlog::info("[ZenohSession] Session opened (peer mode)");
     }
 
+    void create_shm_provider() {
+        try {
+            shm_provider_ = std::make_unique<zenoh::PosixShmProvider>(
+                shm_pool_bytes_);
+            spdlog::info("[ZenohSession] SHM provider created "
+                         "(pool={} MB)",
+                         shm_pool_bytes_ / (1024 * 1024));
+        } catch (const std::exception& e) {
+            spdlog::error("[ZenohSession] Failed to create SHM provider: {}",
+                          e.what());
+        }
+    }
+
     mutable std::mutex mutex_;
     std::optional<zenoh::Session> session_;
     std::string config_json_;
     bool configured_ = false;
+
+    // SHM provider for zero-copy large-message publishing
+    std::size_t shm_pool_bytes_ = kDefaultShmPoolBytes;
+    std::unique_ptr<zenoh::PosixShmProvider> shm_provider_;
 };
 
 }  // namespace drone::ipc
