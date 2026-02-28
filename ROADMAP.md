@@ -50,6 +50,8 @@
 | Config tunables | 75+ (JSON, dot-path access) |
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
+| Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
+| IPC framework | POSIX SHM (SeqLock) — migration to **Zenoh** planned ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
 
 ---
 
@@ -217,9 +219,11 @@
 | [#33](https://github.com/nmohamaya/companion_software_stack/issues/33) | TensorRT YOLOv8 detector backend | P1 | ONNX → TensorRT engine; FP16 inference on Jetson; `IDetector` backend |
 | [#34](https://github.com/nmohamaya/companion_software_stack/issues/34) | UDPGCSLink — ground station telemetry | P1 | `IGCSLink` implementation with UDP socket; telemetry out + command in; protobuf framing |
 | [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) | Video streaming (H.265 → RTP/RTSP) | P2 | Hardware H.265 encode on Jetson; GStreamer RTP/RTSP pipeline; bitrate adaptation |
-| [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | P2 | CMake cross-compile toolchain for aarch64-linux-gnu; Jetson Orin Nano native build |
+| [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | P1 | Native aarch64 build on **NVIDIA Jetson Orin** (JetPack 6.x); CMake cross-compile toolchain |
 
-**Exit Criteria:** Real camera producing detected objects; ground station receives telemetry.
+**Target Hardware:** NVIDIA Jetson Orin (Nano 8 GB / NX 16 GB / AGX 32–64 GB), JetPack 6.x, CUDA 12.x
+
+**Exit Criteria:** Real camera producing detected objects on Jetson Orin; ground station receives telemetry.
 
 ---
 
@@ -246,8 +250,9 @@
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | Comm-loss, GPS-loss, SLAM divergence, motor failure detection → safe action matrix |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
+| TBD | Zenoh IPC migration | P1 | Replace POSIX SHM (SeqLock) with Zenoh zero-copy SHM + network transport ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
 
-**Exit Criteria:** Repeated outdoor missions with full telemetry logging; graceful degradation on sensor failures.
+**Exit Criteria:** Repeated outdoor missions on Jetson Orin with full telemetry logging; graceful degradation on sensor failures; Zenoh-based IPC with drone↔GCS network transport.
 
 ---
 
