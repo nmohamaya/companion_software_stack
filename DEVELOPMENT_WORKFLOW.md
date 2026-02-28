@@ -116,7 +116,20 @@ Before merging, update the project's tracking documents:
    - Update the issue tracking table (change state from "Open" to "Closed")
    - Update the metrics history table with the new column
 
-3. **When to update:** Include doc updates in the same PR branch, committed before merge.
+3. **`API.md`** — Update when interfaces or IPC classes change:
+   - Add/update API tables for new or modified interfaces
+   - Update wrapper class documentation (purpose, "Why a wrapper?" rationale)
+   - Update topic mapping tables if IPC channels change
+   - Update test coverage table with new test counts and suites
+   - Mark planned items as implemented when delivered
+
+4. **`BUG_FIXES.md`** — Add an entry for every bug fix:
+   - Fix number, date, severity, affected file(s)
+   - Bug description with root cause analysis
+   - Fix description and approach
+   - "Found by" field (test name, CI failure, manual testing, etc.)
+
+5. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 Once CI passes and review is approved:
@@ -359,6 +372,7 @@ chore(#25): upgrade spdlog to 1.13.0
 |---|---|---|
 | [PROGRESS.md](PROGRESS.md) | Track all improvements & features | After each improvement |
 | [BUG_FIXES.md](BUG_FIXES.md) | Document all bug fixes | After each bug fix |
+| [docs/API.md](docs/API.md) | Interface & IPC API reference | When interfaces or IPC classes change |
 | [config/default.json](config/default.json) | Default configuration | When adding new tunables |
 | [README.md](README.md) | Project overview & build instructions | As architecture changes |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
