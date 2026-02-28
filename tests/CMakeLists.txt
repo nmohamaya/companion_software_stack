@@ -74,6 +74,9 @@ add_drone_test(test_gazebo_imu      test_gazebo_imu.cpp)
 # ── Message Bus / API Interface tests ────────────────────────
 add_drone_test(test_message_bus     test_message_bus.cpp)
 
+# ── Zenoh IPC + MessageBusFactory tests ──────────────────────
+add_drone_test(test_zenoh_ipc       test_zenoh_ipc.cpp)
+
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)
 

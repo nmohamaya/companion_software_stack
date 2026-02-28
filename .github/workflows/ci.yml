@@ -12,6 +12,12 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ipc_backend: [shm, zenoh]
+
+    name: build (${{ matrix.ipc_backend }})
 
     steps:
     - name: Checkout
@@ -27,11 +33,26 @@ jobs:
           nlohmann-json3-dev \
           libgtest-dev
 
+    - name: Install Zenoh (zenoh backend only)
+      if: matrix.ipc_backend == 'zenoh'
+      run: |
+        # Install zenohc pre-built library
+        ZENOH_VERSION="1.1.0"
+        wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/zenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu.deb" \
+          -O /tmp/zenohc.deb
+        sudo dpkg -i /tmp/zenohc.deb
+        # Install zenoh-cpp (header-only)
+        git clone --depth 1 https://github.com/eclipse-zenoh/zenoh-cpp.git /tmp/zenoh-cpp
+        cd /tmp/zenoh-cpp
+        cmake -B build -DZENOHCXX_ZENOHC=OFF
+        sudo cmake --install build/
+
     - name: Configure CMake
       run: |
         cmake -B build \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-          -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra"
+          -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+          ${{ matrix.ipc_backend == 'zenoh' && '-DENABLE_ZENOH=ON' || '' }}
 
     - name: Build
       run: cmake --build build -j$(nproc)

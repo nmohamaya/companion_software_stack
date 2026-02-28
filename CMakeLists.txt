@@ -35,6 +35,16 @@ find_package(spdlog        REQUIRED)
 find_package(Eigen3        REQUIRED NO_MODULE)
 find_package(nlohmann_json REQUIRED)
 
+# ── Optional: Zenoh IPC backend ─────────────────────────────
+option(ENABLE_ZENOH "Build with Zenoh IPC backend (requires zenohc + zenoh-cpp)" OFF)
+if(ENABLE_ZENOH)
+    find_package(zenohc REQUIRED)
+    add_compile_definitions(HAVE_ZENOH=1)
+    message(STATUS "  Zenoh        : ENABLED (zenohc found) — ZenohMessageBus available")
+else()
+    message(STATUS "  Zenoh        : DISABLED (using POSIX SHM backend)")
+endif()
+
 # ── Optional dependencies (simulator / real-hardware backends) ──
 find_package(MAVSDK QUIET)
 if(MAVSDK_FOUND)
@@ -90,4 +100,5 @@ message(STATUS "  Binaries     : ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "  MAVSDK       : ${MAVSDK_FOUND}")
 message(STATUS "  Gazebo       : ${GAZEBO_FOUND}")
 message(STATUS "  OpenCV       : ${OPENCV_FOUND}")
+message(STATUS "  Zenoh        : ${ENABLE_ZENOH}")
 message(STATUS "════════════════════════════════════════════")

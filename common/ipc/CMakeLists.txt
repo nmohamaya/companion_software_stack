@@ -5,3 +5,8 @@ target_include_directories(drone_ipc INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(drone_ipc INTERFACE rt pthread)
+
+# Zenoh backend: link zenohc when enabled
+if(ENABLE_ZENOH)
+    target_link_libraries(drone_ipc INTERFACE zenohc::lib)
+endif()
