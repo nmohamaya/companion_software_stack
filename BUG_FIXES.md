@@ -197,3 +197,59 @@ Tracking all bug fixes applied to the Drone Companion Software Stack.
 Builds fail with `FATAL_ERROR` unless one of these is provided. CI uses `-DALLOW_INSECURE_ZENOH=ON`.
 
 When `ZENOH_CONFIG_PATH` is set, it's compiled in as `ZENOH_CONFIG_PATH="/path/to/config"` — `ZenohSession` can use it to load the config at runtime.
+
+---
+
+## PR #53 Review Fixes — Zenoh Phase B (Issue #47)
+
+**Date:** 2026-02-28
+**PR:** [#53](https://github.com/nmohamaya/companion_software_stack/pull/53)
+
+### R1 — Backend-Specific Error Message in Perception
+
+**File:** `process2_perception/src/main.cpp`
+**Severity:** Low (UX)
+**Bug:** Error message said "Cannot connect to video SHM" — misleading when using the Zenoh backend.
+**Fix:** Changed to backend-agnostic wording: "Cannot connect to video channel".
+
+### R2 — GCS Subscribe Ordering Causes SHM Regression
+
+**File:** `process4_mission_planner/src/main.cpp`
+**Severity:** Medium (SHM regression)
+**Bug:** `bus_subscribe_optional` for GCS was placed before the blocking `bus_subscribe` for FC state. On the SHM backend, the blocking subscribe's retry window (~10 s) gives `comms` time to create all segments. Doing the optional GCS subscribe first meant it was attempted before `comms` had started, always failing to connect.
+**Fix:** Reordered: FC-state blocking subscribe first (provides the wait window), then GCS optional subscribe (benefits from the delay).
+
+### R3 — Misleading `bus_subscribe_optional` Comment
+
+**File:** `common/ipc/include/ipc/message_bus_factory.h`
+**Severity:** Low (documentation)
+**Bug:** Doc comment said "For Zenoh: always connects" — misleading. It implies the function actively does something special for Zenoh.
+**Fix:** Expanded to explain per-backend `is_connected()` semantics: SHM returns false if segment doesn't exist yet; Zenoh always returns true because subscriptions are asynchronous.
+
+### R4 — HighRate_Pose Test Infinite Loop
+
+**File:** `tests/test_zenoh_ipc.cpp`
+**Severity:** High (test correctness)
+**Bug:** The assertion used `while (sub.receive(last))` to drain buffered messages. But `ZenohSubscriber::receive()` is non-consuming — it returns the latest value without clearing it, so `has_data_` stays true. This created an infinite loop.
+**Fix:** Changed to poll once and track the highest timestamp seen across all received messages. Asserts that the final published message (ts=400) was delivered.
+
+### R5 — Cross-Test Coupling in FactorySubscribeOptional
+
+**File:** `tests/test_zenoh_ipc.cpp`
+**Severity:** Medium (test isolation)
+**Bug:** Test used `shm_names::GCS_COMMANDS` as the key expression. If an earlier test in the same process published on that topic, the subscriber could receive stale data, making the test order-dependent.
+**Fix:** Use a PID-unique key expression (`/factory_opt_test_<pid>`) to guarantee isolation.
+
+### R6 — Missing `#include <algorithm>`
+
+**File:** `tests/test_zenoh_ipc.cpp`
+**Severity:** Low (portability)
+**Bug:** `std::min` was used without `#include <algorithm>`, relying on a transitive include.
+**Fix:** Added explicit `#include <algorithm>`.
+
+### R7 — Invalid Duplicate JSON Key in Documentation
+
+**File:** `docs/ipc-key-expressions.md`
+**Severity:** Low (documentation)
+**Bug:** JSON example defined `ipc_backend` twice — invalid JSON syntax.
+**Fix:** Collapsed to a single key with a comment showing both options.

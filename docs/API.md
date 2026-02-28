@@ -1,8 +1,8 @@
 # Interface API Reference
 
 > **Issue:** #4 — API-Driven Development  
-> **Status:** All 7 processes wired through abstract interfaces; 295 tests pass (including 31 Zenoh IPC tests)  
-> **IPC Migration:** Zenoh migration planned — [ADR-001](adr/ADR-001-ipc-framework-selection.md), Epic [#45](https://github.com/nmohamaya/companion_software_stack/issues/45)
+> **Status:** All 7 processes wired through abstract interfaces; 308 tests pass (including 44 Zenoh IPC tests)  
+> **IPC Migration:** Zenoh Phase A+B done — [ADR-001](adr/ADR-001-ipc-framework-selection.md), Epic [#45](https://github.com/nmohamaya/companion_software_stack/issues/45), PRs [#52](https://github.com/nmohamaya/companion_software_stack/pull/52) + [#53](https://github.com/nmohamaya/companion_software_stack/pull/53)
 
 ---
 
@@ -204,6 +204,7 @@ Returns the appropriate message bus backend based on config. Uses `std::variant<
 | `create_message_bus` | `MessageBusVariant create_message_bus(const std::string& backend = "shm")` | Create bus by backend name |
 | `bus_advertise<T>` | `unique_ptr<IPublisher<T>> bus_advertise<T>(MessageBusVariant&, topic)` | Advertise via variant |
 | `bus_subscribe<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe<T>(MessageBusVariant&, topic, ...)` | Subscribe via variant |
+| `bus_subscribe_optional<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe_optional<T>(MessageBusVariant&, topic)` | Subscribe with no retries (single attempt). For SHM: `is_connected()` returns false if segment doesn't exist. For Zenoh: `is_connected()` always true (async discovery). |
 
 **Why a wrapper?** Enables runtime backend selection from config (`"ipc_backend": "shm"` or `"zenoh"`). Process code uses `bus_advertise<T>()` / `bus_subscribe<T>()` — completely agnostic to the transport.
 
@@ -452,12 +453,12 @@ No process code changes needed — only the factory + new implementation file.
 | `test_message_bus.cpp` | 23 | IPublisher, ISubscriber, ShmMessageBus, ShmServiceChannel |
 | `test_process_interfaces.cpp` | 19 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | `test_shm_ipc.cpp` | 25 | SeqLock ShmWriter/ShmReader, SPSC ring |
-| `test_zenoh_ipc.cpp` | 31 | MessageBusFactory (5), ZenohTopicMapping (15), ZenohSession/Publisher/Subscriber (3), ZenohPubSub round-trips (5), ZenohMessageBus (4: advertise, subscribe, subscribe_lazy, roundtrip) |
+| `test_zenoh_ipc.cpp` | 44 | MessageBusFactory (5), ZenohTopicMapping (15), ZenohSession/Publisher/Subscriber (3), ZenohPubSub round-trips (5), ZenohMessageBus (4), ZenohMigration (13: 10 per-channel round-trips, multi-channel, high-rate pose, factory subscribe_optional) |
 | `test_zenoh_service.cpp` | *(planned)* | ZenohServiceClient, ZenohServiceServer ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) |
 | `test_zenoh_liveliness.cpp` | *(planned)* | LivelinessToken, LivelinessMonitor ([#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) |
 | `bench_zenoh_video.cpp` | *(planned)* | Video frame zero-copy benchmarks ([#48](https://github.com/nmohamaya/companion_software_stack/issues/48)) |
 
-Total: **295 tests** (19 suites).
+Total: **308 tests** (19 suites).
 
 ---
 
@@ -472,7 +473,7 @@ The IPC layer will be migrated from POSIX SHM (SeqLock) to **Eclipse Zenoh** in 
 | Phase | Issue | Title | Status | Key Changes |
 |-------|-------|-------|--------|-------------|
 | **A** | [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Foundation | **Done** (PR #52) | CMake `find_package(zenohc)`, `HAVE_ZENOH` guard, `ZenohMessageBus`, `MessageBusFactory`, CI dual-build, 30 tests |
-| **B** | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Low-bandwidth migration | Planned | 10 control/status channels → Zenoh pub/sub |
+| **B** | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Low-bandwidth migration | **In Review** (PR #53) | All 7 processes → `MessageBusFactory`, `bus_subscribe_optional<T>()`, 13 new tests, [ipc-key-expressions.md](ipc-key-expressions.md) |
 | **C** | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | High-bandwidth migration | Planned | `ShmVideoFrame`/`ShmStereoFrame` → Zenoh SHM provider (zero-copy) |
 | **D** | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Service channels | Planned | `ShmServiceChannel` → Zenoh queryable; delete legacy SHM files |
 | **E** | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Network transport | Planned | Same pub/sub reachable from GCS over UDP/TCP — enables #34, #35 |
