@@ -37,9 +37,34 @@ find_package(nlohmann_json REQUIRED)
 
 # ── Optional: Zenoh IPC backend ─────────────────────────────
 option(ENABLE_ZENOH "Build with Zenoh IPC backend (requires zenohc + zenoh-cpp)" OFF)
+
+# Security: require a Zenoh config with TLS/auth for production builds.
+# Pass -DZENOH_CONFIG_PATH=/path/to/zenoh.json5 for a secure config.
+# Pass -DALLOW_INSECURE_ZENOH=ON to bypass (development/testing only).
+set(ZENOH_CONFIG_PATH "" CACHE STRING
+    "Path to a secure Zenoh configuration file (TLS + mutual auth recommended)")
+option(ALLOW_INSECURE_ZENOH
+    "Allow building Zenoh IPC backend without a secure config (NOT RECOMMENDED)" OFF)
+
 if(ENABLE_ZENOH)
+    if(NOT ZENOH_CONFIG_PATH AND NOT ALLOW_INSECURE_ZENOH)
+        message(FATAL_ERROR
+            "ENABLE_ZENOH is ON but no secure Zenoh configuration was provided.\n"
+            "Set ZENOH_CONFIG_PATH to a config that enables transport encryption "
+            "and authentication (e.g. TLS + mutual auth), or re-run CMake with "
+            "-DALLOW_INSECURE_ZENOH=ON if you accept the risks (dev/test only).")
+    elseif(NOT ZENOH_CONFIG_PATH AND ALLOW_INSECURE_ZENOH)
+        message(WARNING
+            "Building Zenoh IPC WITHOUT a secure configuration "
+            "(ALLOW_INSECURE_ZENOH=ON). Traffic may be unencrypted/unauthenticated.")
+    endif()
+
     find_package(zenohc REQUIRED)
-    add_compile_definitions(HAVE_ZENOH=1)
+    if(ZENOH_CONFIG_PATH)
+        add_compile_definitions(HAVE_ZENOH=1 ZENOH_CONFIG_PATH="${ZENOH_CONFIG_PATH}")
+    else()
+        add_compile_definitions(HAVE_ZENOH=1)
+    endif()
     message(STATUS "  Zenoh        : ENABLED (zenohc found) — ZenohMessageBus available")
 else()
     message(STATUS "  Zenoh        : DISABLED (using POSIX SHM backend)")

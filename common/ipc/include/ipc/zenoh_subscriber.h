@@ -16,6 +16,7 @@
 #include <zenoh.hxx>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <optional>

@@ -1,19 +1,24 @@
 // common/ipc/include/ipc/message_bus_factory.h
-// Config-driven IPC backend selection.
+// IPC backend selection helper.
 //
-// Reads "ipc_backend" from the drone::Config and creates the
-// appropriate message bus:
+// Selects and constructs the appropriate message bus backend based on a
+// simple string parameter:
 //   - "shm"   → ShmMessageBus   (POSIX shared memory, always available)
 //   - "zenoh" → ZenohMessageBus (requires -DENABLE_ZENOH=ON at build time)
 //
 // Usage:
 //   #include "ipc/message_bus_factory.h"
-//   auto [shm_bus, zenoh_bus] = drone::ipc::create_message_bus(config);
-//   // Use whichever is non-null — the other is nullptr.
+//
+//   // Create a bus variant using the desired backend (defaults to "shm"):
+//   auto bus = drone::ipc::create_message_bus("shm");
+//
+//   // Example: advertise/subscribe through whichever backend is active.
+//   auto pub = drone::ipc::bus_advertise<MyMsg>(bus, "telemetry");
+//   auto sub = drone::ipc::bus_subscribe<MyMsg>(bus, "telemetry");
 //
 // Since ShmMessageBus and ZenohMessageBus are concrete (non-virtual)
 // template factories, we can't return a single polymorphic pointer.
-// Instead we provide a variant-based helper.
+// Instead we return a std::variant<...> (MessageBusVariant) plus helpers.
 #pragma once
 
 #include "ipc/shm_message_bus.h"

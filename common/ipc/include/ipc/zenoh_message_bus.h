@@ -59,15 +59,16 @@ public:
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
-    /// Create a lazy subscriber (same as subscribe for Zenoh — connection
-    /// is always asynchronous).
+    /// Create a subscriber for the given topic (lazy variant).
+    /// For Zenoh, this is equivalent to subscribe() — connections are
+    /// always asynchronous, so there is no distinction between eager
+    /// and lazy subscription.
+    /// @param topic  SHM segment name or Zenoh key expression.
     template <typename T>
-    std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy() {
-        // Zenoh subscribers need a key expression at construction time.
-        // Return nullptr — caller should use subscribe() instead.
-        spdlog::warn("[ZenohMessageBus] subscribe_lazy() not supported "
-                     "for Zenoh — use subscribe() instead");
-        return nullptr;
+    std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(
+        const std::string& topic)
+    {
+        return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
     /// Convert a legacy SHM segment name to a Zenoh key expression.
@@ -77,6 +78,11 @@ public:
     /// If the name is not in the mapping table, it's passed through
     /// with the leading '/' stripped and '_' replaced by '/'.
     static std::string to_key_expr(const std::string& name) {
+        if (name.empty()) {
+            spdlog::warn("[ZenohMessageBus] to_key_expr() called with empty name");
+            return "";
+        }
+
         // Lookup table: legacy SHM name → Zenoh key expression
         static const std::unordered_map<std::string, std::string> mapping = {
             {"/drone_mission_cam",  "drone/video/frame"},

@@ -1,13 +1,14 @@
 // tests/test_zenoh_ipc.cpp
 // Unit tests for the Zenoh IPC backend and message bus factory.
 //
-// Two categories:
-//   1. Topic mapping + factory (always compiled — no Zenoh dependency)
-//   2. Zenoh pub/sub round-trip (compiled only with HAVE_ZENOH)
+// Three categories:
+//   1. MessageBusFactory tests (always compiled — no Zenoh dependency)
+//   2. Zenoh topic mapping tests (HAVE_ZENOH — ZenohMessageBus header required)
+//   3. Zenoh pub/sub round-trip tests (HAVE_ZENOH — requires running Zenoh session)
 //
 // Build:
 //   cmake -B build                          → runs category 1 only
-//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1 + 2
+//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1 + 2 + 3
 #include <gtest/gtest.h>
 
 #include "ipc/shm_message_bus.h"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 using namespace drone::ipc;
 
@@ -209,23 +211,63 @@ TEST(ZenohSubscriber, Constructs) {
     EXPECT_FALSE(sub.is_connected());
 }
 
+// ---------------------------------------------------------------------------
+// Polling helpers — replace fixed sleep_for() with bounded retry loops
+// so tests are not flaky under CI load.
+// ---------------------------------------------------------------------------
+
+/// Poll subscriber until a message is received or timeout is reached.
+template <typename T>
+bool poll_receive(drone::ipc::ZenohSubscriber<T>& sub, T& out,
+                  uint64_t* ts = nullptr,
+                  std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+    constexpr auto kInterval = std::chrono::milliseconds(5);
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (sub.receive(out, ts)) return true;
+        std::this_thread::sleep_for(kInterval);
+    }
+    return false;
+}
+
+/// Publish (with retries) until the subscriber receives a message.
+/// Handles the Zenoh discovery window during which messages are dropped
+/// because the publisher and subscriber have not yet matched.
+template <typename T>
+bool publish_until_received(
+        drone::ipc::ZenohPublisher<T>& pub, const T& msg,
+        drone::ipc::ZenohSubscriber<T>& sub, T& out,
+        uint64_t* ts = nullptr,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+    constexpr auto kPollInterval  = std::chrono::milliseconds(5);
+    constexpr auto kRetryInterval = std::chrono::milliseconds(50);
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        pub.publish(msg);
+        auto batch_end = std::min(
+            std::chrono::steady_clock::now() + kRetryInterval, deadline);
+        while (std::chrono::steady_clock::now() < batch_end) {
+            if (sub.receive(out, ts)) return true;
+            std::this_thread::sleep_for(kPollInterval);
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Round-trip tests
+// ---------------------------------------------------------------------------
+
 TEST(ZenohPubSub, SmallMessageRoundTrip) {
     ZenohPublisher<ZenohTestPayload> pub("drone/test/small_rt");
     ZenohSubscriber<ZenohTestPayload> sub("drone/test/small_rt");
 
-    // Give Zenoh time to match publisher ↔ subscriber
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
     ZenohTestPayload sent{42, 3.14f, {}};
     std::strncpy(sent.tag, "hello", sizeof(sent.tag));
-    pub.publish(sent);
-
-    // Wait for delivery
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     ZenohTestPayload received;
     uint64_t ts = 0;
-    ASSERT_TRUE(sub.receive(received, &ts));
+    ASSERT_TRUE(publish_until_received(pub, sent, sub, received, &ts));
     EXPECT_EQ(received.id, 42u);
     EXPECT_FLOAT_EQ(received.value, 3.14f);
     EXPECT_STREQ(received.tag, "hello");
@@ -236,7 +278,6 @@ TEST(ZenohPubSub, SmallMessageRoundTrip) {
 TEST(ZenohPubSub, ShmPoseRoundTrip) {
     ZenohPublisher<ShmPose> pub("drone/test/pose_rt");
     ZenohSubscriber<ShmPose> sub("drone/test/pose_rt");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     ShmPose sent{};
     sent.timestamp_ns = 123456789;
@@ -245,12 +286,9 @@ TEST(ZenohPubSub, ShmPoseRoundTrip) {
     sent.translation[2] = 3.0;
     sent.quaternion[0] = 1.0;  // w
     sent.quality = 2;
-    pub.publish(sent);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     ShmPose received{};
-    ASSERT_TRUE(sub.receive(received));
+    ASSERT_TRUE(publish_until_received(pub, sent, sub, received));
     EXPECT_EQ(received.timestamp_ns, 123456789u);
     EXPECT_DOUBLE_EQ(received.translation[0], 1.0);
     EXPECT_DOUBLE_EQ(received.translation[1], 2.0);
@@ -261,7 +299,6 @@ TEST(ZenohPubSub, ShmPoseRoundTrip) {
 TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
     ZenohPublisher<ShmVideoFrame> pub("drone/test/video_rt");
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/video_rt");
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // Heap-allocate — ShmVideoFrame is ~6 MB, too large for the stack.
     auto sent = std::make_unique<ShmVideoFrame>();
@@ -273,12 +310,9 @@ TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
     sent->pixel_data[0] = 0xAA;
     sent->pixel_data[1] = 0xBB;
     sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xFF;
-    pub.publish(*sent);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     auto received = std::make_unique<ShmVideoFrame>();
-    ASSERT_TRUE(sub.receive(*received));
+    ASSERT_TRUE(publish_until_received(pub, *sent, sub, *received));
     EXPECT_EQ(received->width, 1920u);
     EXPECT_EQ(received->height, 1080u);
     EXPECT_EQ(received->channels, 3u);
@@ -295,20 +329,16 @@ TEST(ZenohPubSub, MultipleTopics) {
     ZenohSubscriber<ZenohTestPayload> sub1("drone/test/multi/a");
     ZenohSubscriber<ZenohTestPayload> sub2("drone/test/multi/b");
     ZenohSubscriber<ZenohTestPayload> sub3("drone/test/multi/c");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     ZenohTestPayload m1{1, 1.0f, {}};
     ZenohTestPayload m2{2, 2.0f, {}};
     ZenohTestPayload m3{3, 3.0f, {}};
-    pub1.publish(m1);
-    pub2.publish(m2);
-    pub3.publish(m3);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ZenohTestPayload r1{}, r2{}, r3{};
 
-    ZenohTestPayload r1, r2, r3;
-    ASSERT_TRUE(sub1.receive(r1));
-    ASSERT_TRUE(sub2.receive(r2));
-    ASSERT_TRUE(sub3.receive(r3));
+    // Poll each topic pair with publish retries to handle discovery latency.
+    ASSERT_TRUE(publish_until_received(pub1, m1, sub1, r1));
+    ASSERT_TRUE(publish_until_received(pub2, m2, sub2, r2));
+    ASSERT_TRUE(publish_until_received(pub3, m3, sub3, r3));
     EXPECT_EQ(r1.id, 1u);
     EXPECT_EQ(r2.id, 2u);
     EXPECT_EQ(r3.id, 3u);
@@ -324,24 +354,20 @@ TEST(ZenohPubSub, NoData) {
 TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
     ZenohPublisher<ZenohTestPayload> pub("drone/test/seq");
     ZenohSubscriber<ZenohTestPayload> sub("drone/test/seq");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+    // First message — handles discovery latency via retry loop.
     ZenohTestPayload m1{10, 0.0f, {}};
-    pub.publish(m1);
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
     ZenohTestPayload r1;
     uint64_t ts1 = 0;
-    ASSERT_TRUE(sub.receive(r1, &ts1));
+    ASSERT_TRUE(publish_until_received(pub, m1, sub, r1, &ts1));
     EXPECT_EQ(r1.id, 10u);
 
+    // Second message — discovery already done, poll-receive is sufficient.
     ZenohTestPayload m2{20, 0.0f, {}};
     pub.publish(m2);
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
     ZenohTestPayload r2;
     uint64_t ts2 = 0;
-    ASSERT_TRUE(sub.receive(r2, &ts2));
+    ASSERT_TRUE(poll_receive(sub, r2, &ts2));
     EXPECT_EQ(r2.id, 20u);
     EXPECT_GE(ts2, ts1);
 }
@@ -362,20 +388,38 @@ TEST(ZenohMessageBus, SubscribeCreatesSubscriber) {
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
 
+TEST(ZenohMessageBus, SubscribeLazyCreatesSubscriber) {
+    ZenohMessageBus bus;
+    auto sub = bus.subscribe_lazy<ShmPose>("/slam_pose");
+    ASSERT_NE(sub, nullptr);
+    EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
+}
+
 TEST(ZenohMessageBus, RoundTripViaFactory) {
     ZenohMessageBus bus;
     auto pub = bus.advertise<ZenohTestPayload>("/detected_objects");
     auto sub = bus.subscribe<ZenohTestPayload>("/detected_objects");
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     ZenohTestPayload sent{99, 2.71f, {}};
-    pub->publish(sent);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
     ZenohTestPayload received;
-    ASSERT_TRUE(sub->receive(received));
+    // Manual publish-and-poll loop (IPublisher/ISubscriber interfaces).
+    bool ok = false;
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds(5000);
+    while (std::chrono::steady_clock::now() < deadline) {
+        pub->publish(sent);
+        auto batch = std::min(
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+            deadline);
+        while (std::chrono::steady_clock::now() < batch) {
+            if (sub->receive(received)) { ok = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (ok) break;
+    }
+    ASSERT_TRUE(ok);
     EXPECT_EQ(received.id, 99u);
     EXPECT_FLOAT_EQ(received.value, 2.71f);
 }
