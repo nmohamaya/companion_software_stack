@@ -1,6 +1,8 @@
 # Drone Companion Computer Software Stack
 
-Multi-process C++17 software stack for an autonomous drone companion computer. 7 independent Linux processes communicate via POSIX shared memory (SeqLock pattern). All algorithms are **written from scratch** — no external ML/CV/SLAM frameworks are used. Hardware is abstracted behind a HAL layer; the default `simulated` backends generate synthetic data so the full stack runs on any Linux box.
+Multi-process C++17 software stack for an autonomous drone companion computer. 7 independent Linux processes communicate via a **config-driven IPC layer** — currently POSIX shared memory (SeqLock pattern), with a planned migration to **Eclipse Zenoh** for zero-copy SHM + network-transparent pub/sub ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45)). All algorithms are **written from scratch** — no external ML/CV/SLAM frameworks are used. Hardware is abstracted behind a HAL layer; the default `simulated` backends generate synthetic data so the full stack runs on any Linux box.
+
+**Target hardware:** NVIDIA Jetson Orin (Nano/NX/AGX, aarch64, JetPack 6.x, CUDA 12.x)
 
 ## Architecture
 
@@ -87,24 +89,30 @@ graph TB
     P4_main -->|"/payload_commands"| P6_main
     P4_main -->|"/mission_status"| P5_gcstx
     P6_main -->|HAL IGimbal| P6_main
+
+    style CC fill:#1a1a2e,color:#e0e0e0
+    classDef ipcNote fill:#2d4a22,stroke:#4caf50,color:#fff
+    IPC_NOTE["IPC Layer: ShmMessageBus (current) → ZenohMessageBus (planned)<br/>All /channel edges use IPublisher/ISubscriber abstraction"]:::ipcNote
 ```
 
-**Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses lock-free POSIX shared memory (SeqLock pattern). Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
+**Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction — currently backed by lock-free POSIX shared memory (SeqLock pattern), with a planned migration to **Zenoh** zero-copy SHM + network transport ([#45](https://github.com/nmohamaya/companion_software_stack/issues/45)). Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
 
-### IPC Shared Memory Map
+### IPC Channel Map
+
+All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The current POSIX SHM segment names will migrate to Zenoh key expressions ([#47](https://github.com/nmohamaya/companion_software_stack/issues/47), [#48](https://github.com/nmohamaya/companion_software_stack/issues/48)).
 
 ```
- P1 ──▶ /drone_mission_cam ──────▶ P2
- P1 ──▶ /drone_stereo_cam ──────▶ P2, P3
- P2 ──▶ /detected_objects ──────▶ P4
- P3 ──▶ /slam_pose ─────────────▶ P4, P5, P6
- P4 ──▶ /trajectory_cmd ────────▶ P5
- P4 ──▶ /mission_status ────────▶ P5, P7
- P4 ──▶ /payload_commands ──────▶ P6
- P5 ──▶ /fc_state ──────────────▶ P4, P7
- P5 ──▶ /gcs_commands ──────────▶ P4
- P6 ──▶ /payload_status ────────▶ P4, P7
- P7 ──▶ /system_health ─────────▶ P4
+ P1 ──▶ /drone_mission_cam ──────▶ P2           (Zenoh: drone/video/frame)
+ P1 ──▶ /drone_stereo_cam ──────▶ P2, P3        (Zenoh: drone/video/stereo_frame)
+ P2 ──▶ /detected_objects ──────▶ P4             (Zenoh: drone/perception/detections)
+ P3 ──▶ /slam_pose ─────────────▶ P4, P5, P6    (Zenoh: drone/slam/pose)
+ P4 ──▶ /trajectory_cmd ────────▶ P5            (Zenoh: drone/mission/trajectory)
+ P4 ──▶ /mission_status ────────▶ P5, P7         (Zenoh: drone/mission/status)
+ P4 ──▶ /payload_commands ──────▶ P6              (Zenoh: drone/mission/payload_command)
+ P5 ──▶ /fc_state ──────────────▶ P4, P7          (Zenoh: drone/comms/fc_state)
+ P5 ──▶ /gcs_commands ──────────▶ P4              (Zenoh: drone/comms/gcs_command)
+ P6 ──▶ /payload_status ────────▶ P4, P7          (Zenoh: drone/payload/status)
+ P7 ──▶ /system_health ─────────▶ P4              (Zenoh: drone/monitor/health)
 ```
 
 ### Hardware Abstraction Layer (HAL)
@@ -594,12 +602,14 @@ Each segment is wrapped in `ShmBlock { atomic<uint64_t> seq, uint64_t timestamp_
 
 All common libraries are **header-only** and written from scratch.
 
-### SeqLock IPC (`ShmWriter<T>` / `ShmReader<T>`)
+### SeqLock IPC (`ShmWriter<T>` / `ShmReader<T>`) — Current Backend
 
 - **Mechanism:** Optimistic sequence-counter concurrency (SeqLock). Writer increments sequence to odd (writing), copies `T`, increments to even (done). Reader retries up to 4 times if sequence is odd or torn.
 - **Memory:** POSIX `shm_open()` + `mmap()`. Each segment holds one `ShmBlock<T>`.
 - **Constraint:** `T` must be `trivially_copyable` (enforced via `static_assert`).
 - **Cleanup:** Writer calls `shm_unlink()` in destructor (RAII).
+
+> **Planned replacement:** [Eclipse Zenoh](https://zenoh.io/) — zero-copy SHM (loan-based, no `memcpy`) + network-transparent pub/sub. Eliminates manual `/dev/shm` lifecycle, adds process crash detection via liveliness tokens, and enables drone↔GCS communication over the same API. See [ADR-001](docs/adr/ADR-001-ipc-framework-selection.md) and [#45](https://github.com/nmohamaya/companion_software_stack/issues/45).
 
 ### SPSC Ring Buffer (`SPSCRing<T, N>`)
 
@@ -730,8 +740,10 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| IPC | 🟢 **SeqLock** over POSIX SHM — lock-free, ~100 ns latency | Production-ready for single-writer/single-reader | For multi-reader: consider **shared-memory broadcast** (1-writer, N-reader via separate sequence counters) |
-| Serialization | 🟢 Trivially-copyable structs via `memcpy` | Production-ready for fixed-schema data | If schema evolution needed: **FlatBuffers** (zero-copy) or **Cap'n Proto** |
+| IPC | � **SeqLock** over POSIX SHM — lock-free, ~100 ns latency | **Eclipse Zenoh** — zero-copy SHM (loan-based) + network transport | [ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45). 6 phases: [#46](https://github.com/nmohamaya/companion_software_stack/issues/46)–[#51](https://github.com/nmohamaya/companion_software_stack/issues/51) |
+| IPC — network | 🔴 Local-only (no drone↔GCS transport) | **Zenoh network transport** — same pub/sub API over UDP/TCP/QUIC | [Phase E #50](https://github.com/nmohamaya/companion_software_stack/issues/50). Enables [#34](https://github.com/nmohamaya/companion_software_stack/issues/34) (GCS telemetry) + [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) (video streaming) |
+| Process health | 🔴 No crash detection | **Zenoh liveliness tokens** — automatic process death callbacks | [Phase F #51](https://github.com/nmohamaya/companion_software_stack/issues/51). Enables [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) (heartbeat) + [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) (fault tree) |
+| Serialization | 🟢 Trivially-copyable structs via `memcpy` | Production-ready for SHM; add wire format header for network path | If schema evolution needed: **FlatBuffers** (zero-copy) or **Cap'n Proto** |
 | Config | 🟢 nlohmann/json | Production-ready | Consider **TOML** for human-edited configs (less error-prone syntax) |
 | Build system | 🟢 CMake 3.16+ | Add **Conan** or **vcpkg** for dependency management | Simplifies cross-compilation for Jetson (aarch64) |
 
@@ -763,11 +775,12 @@ The current IPC layer uses a **shared-register (SeqLock)** model — every reade
 
 #### Pattern Comparison
 
-| Pattern | Semantics | Current State | Production Target | Transport |
+| Pattern | Semantics | Current State | Production Target (Zenoh) | Transport |
 |---|---|---|---|---|
-| **Pub-Sub** | 1-to-N, latest-value or queued | `IPublisher` / `ISubscriber` on `ShmMessageBus` (latest-value only) | Extend `ShmMessageBus` with optional per-subscriber SPSC queuing | SHM (intra-host) |
-| **Request-Response** | 1-to-1, with ACK/timeout | `IServiceClient` / `IServiceServer` over `ShmService*` with correlation IDs + timeouts | Hardened service layer with richer error handling and backpressure | Paired SPSC rings |
-| **Services (RPC)** | External N-to-1, schema-defined | Simulated GCS link (polled SHM) | gRPC / MAVLink microservices | TCP/UDP (external) |
+| **Pub-Sub** | 1-to-N, latest-value or queued | `IPublisher` / `ISubscriber` on `ShmMessageBus` (latest-value only) | `ZenohMessageBus` — zero-copy SHM + network pub/sub, configurable history depth ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46)–[#48](https://github.com/nmohamaya/companion_software_stack/issues/48)) | SHM (local) + UDP/TCP (GCS) |
+| **Request-Response** | 1-to-1, with ACK/timeout | `IServiceClient` / `IServiceServer` over `ShmService*` with correlation IDs + timeouts | Zenoh queryable pattern — `ZenohServiceClient` / `ZenohServiceServer` ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) | SHM (local) + network |
+| **Services (RPC)** | External N-to-1, schema-defined | Simulated GCS link (polled SHM) | Zenoh network transport — GCS subscribes to `drone/**` over TCP/UDP ([#50](https://github.com/nmohamaya/companion_software_stack/issues/50)) | TCP/UDP/QUIC |
+| **Health / Liveness** | 1-to-N, presence-based | None | Zenoh liveliness tokens — `drone/alive/{process}`, automatic death callbacks ([#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) | SHM + network |
 
 #### Where Each Pattern Applies
 
@@ -795,10 +808,11 @@ Services (external RPC):
 
 | Priority | Item | Effort | Impact |
 |---|---|---|---|
-| **P1** | `IPublisher<T>` / `ISubscriber<T>` + `ShmMessageBus` — abstract pub-sub over SHM | 3 days | Decouples all producers from consumers |
-| **P1** | `IServiceClient` / `IServiceServer` — request-response with correlation IDs | 2 days | Enables reliable command delivery |
+| **P1** | ~~`IPublisher<T>` / `ISubscriber<T>` + `ShmMessageBus`~~ | ~~3 days~~ | ✅ **DONE** — `ShmMessageBus`, `ShmPublisher/Subscriber`, `ShmServiceChannel` |
+| **P1** | ~~`IServiceClient` / `IServiceServer` — request-response~~ | ~~2 days~~ | ✅ **DONE** — correlation IDs, timeouts, `ServiceEnvelope<T>` |
+| **P1** | **Zenoh IPC migration** — `ZenohMessageBus` + zero-copy SHM + network | ~14–19 days | [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45): 6 phases ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46)–[#51](https://github.com/nmohamaya/companion_software_stack/issues/51)). Replaces POSIX SHM, adds drone↔GCS network transport |
 | **P2** | Internal process interfaces (`IVisualFrontend`, `IPathPlanner`, `IObstacleAvoider`, `IProcessMonitor`) — **DONE** | — | All strategy interfaces implemented with simulated + real backends |
-| **P3** | gRPC service layer for external comms | 2 weeks | Production GCS/fleet integration |
+| **P3** | ~~gRPC service layer for external comms~~ | ~~2 weeks~~ | Superseded by Zenoh network transport ([#50](https://github.com/nmohamaya/companion_software_stack/issues/50)) — same pub/sub API over TCP/UDP |
 
 ---
 
@@ -935,6 +949,8 @@ sudo rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
 ```
 
 The launch script does this automatically on every start. If you switch between running as root and as a normal user, you may need to clean them manually since root-owned segments can't be overwritten by a normal user.
+
+> **Note:** The planned Zenoh migration ([#45](https://github.com/nmohamaya/companion_software_stack/issues/45)) eliminates this problem entirely — Zenoh manages SHM lifecycle automatically and cleans up on process crash.
 
 ### Thread affinity / RT scheduling warnings
 
@@ -1077,6 +1093,8 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | nlohmann/json | ≥ 3.11 | JSON config parsing | `apt install nlohmann-json3-dev` | Yes |
 | Google Test | ≥ 1.14 | Unit testing | `apt install libgtest-dev` | Yes |
 | GCC | ≥ 11 | C++17 compiler | `apt install build-essential` | Yes |
+| zenohc | ≥ 1.0 | Zenoh IPC backend (`ZenohMessageBus`) | [Pre-built `.deb`](https://github.com/eclipse-zenoh/zenoh-c/releases) or build from source | Planned (`HAVE_ZENOH`) |
+| zenoh-cpp | ≥ 1.0 | Header-only C++17 Zenoh bindings | [zenoh-cpp](https://github.com/eclipse-zenoh/zenoh-cpp) | Planned (with `HAVE_ZENOH`) |
 | OpenCV | ≥ 4.6 | YOLOv8 DNN inference (`OpenCvYoloDetector`) | Build from source or `apt install libopencv-dev` | Optional (`HAS_OPENCV`) |
 | MAVSDK | ≥ 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |

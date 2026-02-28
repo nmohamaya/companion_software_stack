@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted |
 | **Date** | 2026-02-28 |
 | **Author** | Team |
 | **Deciders** | Project leads |
@@ -118,7 +118,7 @@ Ranked by priority for this project:
 | Aspect | Assessment |
 |--------|------------|
 | **Language** | Rust core, `zenoh-cpp` C++17 bindings (header-only wrapper around C API) |
-| **Zero-copy model** | SHM plugin: publisher allocates from a shared memory pool, writes in-place, publishes. Subscriber receives SHM reference for local peers. For remote peers, Zenoh serializes/deserializes automatically. |
+| **Zero-copy model** | SHM plugin: publisher allocates from a shared memory pool, writes in-place, publishes. Subscriber receives SHM reference for local peers. For remote peers, Zenoh transparently transports byte buffers over the network (transport framing only); application-level (de)serialization of payloads into typed messages remains the user's responsibility. |
 | **Pub/Sub** | Native, key-expression based topics (e.g., `drone/slam/pose`), wildcard subscriptions |
 | **Request/Response** | Native "queryable" pattern — client sends query, server responds. Supports get/put semantics. |
 | **Process death** | Liveliness tokens — a subscriber can watch for publisher death via `liveliness().declare_token()`. Automatic SHM cleanup on process exit. |
@@ -127,7 +127,7 @@ Ranked by priority for this project:
 | **Daemon** | Optional `zenohd` router for complex topologies. For local-only SHM, no daemon needed ("peer" mode). |
 | **Memory model** | SHM provider with configurable pool sizes. Non-SHM path uses heap allocation with efficient internal buffers. |
 | **Build dependency** | Rust toolchain for building from source. **However**, pre-built `libzenohc` binaries available for aarch64 — can use without Rust if consuming pre-built packages. `zenoh-cpp` is header-only C++17. |
-| **Maturity** | Eclipse Foundation project. Backed by ZettaScale (same team that built Cyclone DDS and iceoryx). Used in production by: Autoware (autonomous driving), ROS 2 rmw_zenoh (default in Jazzy), multiple drone platforms. |
+| **Maturity** | Eclipse Foundation project. Backed by ZettaScale (same team that built Cyclone DDS and iceoryx). Used in production by: Autoware (autonomous driving), ROS 2 rmw_zenoh (used with ROS 2 Iron/Jazzy), multiple drone platforms. |
 | **License** | Apache 2.0 / EPL 2.0 dual |
 | **Footprint** | Moderate — `libzenohc.so` is ~5 MB. Larger than iceoryx2 but smaller than DDS. Runtime memory: ~2–4 MB baseline for router process; zero daemon mode uses ~500 KB. |
 | **QoS** | Reliability (best-effort / reliable), congestion control, priority, bandwidth limiting |
@@ -139,7 +139,7 @@ Ranked by priority for this project:
 - **Liveliness tokens** — built-in process health monitoring. When a publisher dies, subscribers get a callback. Directly addresses #28 and #41.
 - Wildcard subscriptions (`drone/*/status`) — the flight data recorder (#40) can subscribe to `drone/**` and capture all channels without knowing them at compile time
 - **Pre-built aarch64 packages** — no Rust toolchain needed on the Jetson itself; consume `libzenohc` as a pre-built `.deb` or `.so`
-- **ROS 2 alignment** — `rmw_zenoh` is the default RMW in ROS 2 Jazzy. If the project ever integrates with ROS 2 nodes, Zenoh is already the transport.
+- **ROS 2 alignment** — `rmw_zenoh` is a supported RMW for ROS 2 Jazzy. If the project ever integrates with ROS 2 nodes, Zenoh can be used as the transport.
 - Active community — ZettaScale team (same people behind Cyclone DDS and iceoryx) provides commercial support and rapid issue response
 
 **Weaknesses for this project:**
@@ -208,7 +208,7 @@ Our existing `IPublisher<T>` / `ISubscriber<T>` / `IServiceClient` / `IServiceSe
 | Publisher impl | `Iceoryx2Publisher<T>` wrapping `iox2::Publisher` | `ZenohPublisher<T>` wrapping `zenoh::Publisher` |
 | Subscriber impl | `Iceoryx2Subscriber<T>` wrapping `iox2::Subscriber` | `ZenohSubscriber<T>` wrapping `zenoh::Subscriber` |
 | Service channel | `Iceoryx2ServiceChannel` wrapping `iox2::Server/Client` | `ZenohServiceChannel` wrapping `zenoh::Queryable/Query` |
-| Topic naming | Map `/drone_*` SHM names to iceoryx2 service names | Map `/drone_*` to Zenoh key expressions: `drone/slam/pose` |
+| Topic naming | Map current SHM names (e.g., `/slam_pose`) to iceoryx2 service names | Map current SHM names (e.g., `/slam_pose`) to Zenoh key expressions (e.g., `drone/slam/pose`) |
 | Type constraint | Still trivially-copyable (SHM requirement) | Trivially-copyable for SHM; serializable for network |
 | Test migration | ~60 IPC tests to update | ~60 IPC tests to update |
 | Process `main.cpp` changes | Bus type swap only (4 processes use `ShmMessageBus`) | Bus type swap only |
