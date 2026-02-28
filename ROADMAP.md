@@ -30,6 +30,7 @@
     - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception-1)
     - [Phase 11 — Autonomous Navigation](#phase-11--autonomous-navigation)
     - [Phase 12 — Production Hardening](#phase-12--production-hardening-1)
+    - [Zenoh IPC Migration (Phase 12)](#zenoh-ipc-migration-phase-12)
   - [Metrics History](#metrics-history)
     - [Process Activity During Simulation](#process-activity-during-simulation)
 
@@ -50,6 +51,8 @@
 | Config tunables | 75+ (JSON, dot-path access) |
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
+| Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
+| IPC framework | POSIX SHM (SeqLock) — migration to **Zenoh** planned ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
 
 ---
 
@@ -217,9 +220,11 @@
 | [#33](https://github.com/nmohamaya/companion_software_stack/issues/33) | TensorRT YOLOv8 detector backend | P1 | ONNX → TensorRT engine; FP16 inference on Jetson; `IDetector` backend |
 | [#34](https://github.com/nmohamaya/companion_software_stack/issues/34) | UDPGCSLink — ground station telemetry | P1 | `IGCSLink` implementation with UDP socket; telemetry out + command in; protobuf framing |
 | [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) | Video streaming (H.265 → RTP/RTSP) | P2 | Hardware H.265 encode on Jetson; GStreamer RTP/RTSP pipeline; bitrate adaptation |
-| [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | P2 | CMake cross-compile toolchain for aarch64-linux-gnu; Jetson Orin Nano native build |
+| [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | P1 | Native aarch64 build on **NVIDIA Jetson Orin** (JetPack 6.x); CMake cross-compile toolchain |
 
-**Exit Criteria:** Real camera producing detected objects; ground station receives telemetry.
+**Target Hardware:** NVIDIA Jetson Orin (Nano 8 GB / NX 16 GB / AGX 32–64 GB), JetPack 6.x, CUDA 12.x
+
+**Exit Criteria:** Real camera producing detected objects on Jetson Orin; ground station receives telemetry.
 
 ---
 
@@ -246,18 +251,28 @@
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | Comm-loss, GPS-loss, SLAM divergence, motor failure detection → safe action matrix |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
+| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | **[Epic] Zenoh IPC Migration** | P1 | Replace POSIX SHM with Zenoh zero-copy SHM + network transport ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
+| [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Zenoh Phase A — Foundation | P0 | CMake integration, `ZenohMessageBus`, compile guards, CI dual-build |
+| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Zenoh Phase B — Low-bandwidth channels | P1 | Migrate 10 control/status channels to Zenoh pub/sub |
+| [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Zenoh Phase C — High-bandwidth video | P1 | Migrate video frames with Zenoh SHM provider (zero-copy) |
+| [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Zenoh Phase D — Service channels + cleanup | P1 | Replace `ShmServiceChannel` with Zenoh queryable; remove old SHM primitives |
+| [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Zenoh Phase E — Network transport | P1 | Enable drone↔GCS communication over same pub/sub API |
+| [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Zenoh Phase F — Liveliness tokens | P1 | Process health monitoring via Zenoh liveliness tokens |
 
-**Exit Criteria:** Repeated outdoor missions with full telemetry logging; graceful degradation on sensor failures.
+**Exit Criteria:** Repeated outdoor missions on Jetson Orin with full telemetry logging; graceful degradation on sensor failures; Zenoh-based IPC with drone↔GCS network transport.
+
+**Zenoh Migration Sub-Issues:** [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) — Phase A (#46) → B (#47) → C (#48) + D (#49) → E (#50), F (#51) in parallel.
 
 ---
 
 ## Issue Tracking
 
-### Epic
+### Epics
 
 | # | Title | State |
 |---|-------|-------|
 | [#25](https://github.com/nmohamaya/companion_software_stack/issues/25) | [Epic] Real Drone Deployment — From Simulation to Flight | Open |
+| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | Open |
 
 ### Phase 9 — First Safe Flight
 
@@ -295,6 +310,18 @@
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | Open |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | Open |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
+
+### Zenoh IPC Migration (Phase 12)
+
+| # | Title | State |
+|---|-------|-------|
+| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration | Open |
+| [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Phase A — Foundation (CMake, ZenohMessageBus, CI) | Open |
+| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Phase B — Low-bandwidth channel migration | Open |
+| [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Phase C — High-bandwidth video migration (zero-copy) | Open |
+| [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Phase D — Service channel migration + SHM removal | Open |
+| [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Phase E — Network transport (drone↔GCS) | Open |
+| [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Phase F — Liveliness tokens (process health) | Open |
 
 ---
 
