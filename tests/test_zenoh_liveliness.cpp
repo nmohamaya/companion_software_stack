@@ -13,8 +13,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 using namespace drone::ipc;
@@ -162,6 +164,18 @@ TEST(ShmSystemHealth, ProcessHealthEntryTriviallyCopyable) {
 
 #ifdef HAVE_ZENOH
 
+/// Poll predicate every 10ms, return true if it succeeds within timeout.
+template <typename Pred>
+bool wait_for(Pred pred,
+              std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return pred();
+}
+
 TEST(LivelinessToken, DeclareAndUndeclare) {
     LivelinessToken token("test_process");
     EXPECT_TRUE(token.is_valid());
@@ -193,15 +207,12 @@ TEST(LivelinessMonitor, DetectsAliveToken) {
     // Declare token — monitor should receive PUT
     LivelinessToken token("test_detect_alive");
 
-    // Wait for callback
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    std::lock_guard<std::mutex> lock(mtx);
-    EXPECT_FALSE(alive_names.empty());
-    auto it = std::find(alive_names.begin(), alive_names.end(),
-                       "test_detect_alive");
-    EXPECT_NE(it, alive_names.end())
-        << "Monitor should have detected 'test_detect_alive' as alive";
+    // Poll until callback fires
+    ASSERT_TRUE(wait_for([&] {
+        std::lock_guard<std::mutex> lock(mtx);
+        return std::find(alive_names.begin(), alive_names.end(),
+                         "test_detect_alive") != alive_names.end();
+    })) << "Monitor should have detected 'test_detect_alive' as alive";
 }
 
 TEST(LivelinessMonitor, DetectsTokenDeath) {
@@ -226,12 +237,11 @@ TEST(LivelinessMonitor, DetectsTokenDeath) {
     }
     // Token destroyed here — monitor should receive DELETE
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    std::lock_guard<std::mutex> lock(mtx);
-    auto it = std::find(dead_names.begin(), dead_names.end(), "test_death");
-    EXPECT_NE(it, dead_names.end())
-        << "Monitor should have detected 'test_death' as died";
+    ASSERT_TRUE(wait_for([&] {
+        std::lock_guard<std::mutex> lock(mtx);
+        return std::find(dead_names.begin(), dead_names.end(),
+                         "test_death") != dead_names.end();
+    })) << "Monitor should have detected 'test_death' as died";
 }
 
 TEST(LivelinessMonitor, MultipleTokens) {
@@ -252,11 +262,12 @@ TEST(LivelinessMonitor, MultipleTokens) {
     LivelinessToken t2("proc_b");
     LivelinessToken t3("proc_c");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_TRUE(wait_for([&] {
+        std::lock_guard<std::mutex> lock(mtx);
+        return alive_names.size() >= 3u;
+    }));
 
     std::lock_guard<std::mutex> lock(mtx);
-    EXPECT_GE(alive_names.size(), 3u);
-
     for (const auto& name : {"proc_a", "proc_b", "proc_c"}) {
         auto it = std::find(alive_names.begin(), alive_names.end(), name);
         EXPECT_NE(it, alive_names.end()) << "Missing: " << name;
@@ -274,14 +285,11 @@ TEST(LivelinessMonitor, GetAliveProcesses) {
     LivelinessToken t1("get_alive_a");
     LivelinessToken t2("get_alive_b");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    auto alive = monitor.get_alive_processes();
-    // Should contain at least our two tokens
-    auto has_a = std::find(alive.begin(), alive.end(), "get_alive_a") != alive.end();
-    auto has_b = std::find(alive.begin(), alive.end(), "get_alive_b") != alive.end();
-    EXPECT_TRUE(has_a) << "get_alive_a should be in alive list";
-    EXPECT_TRUE(has_b) << "get_alive_b should be in alive list";
+    ASSERT_TRUE(wait_for([&] {
+        auto alive = monitor.get_alive_processes();
+        return std::find(alive.begin(), alive.end(), "get_alive_a") != alive.end()
+            && std::find(alive.begin(), alive.end(), "get_alive_b") != alive.end();
+    }));
 }
 
 TEST(LivelinessMonitor, IsAlive) {
@@ -294,9 +302,9 @@ TEST(LivelinessMonitor, IsAlive) {
 
     LivelinessToken token("is_alive_test");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    EXPECT_TRUE(monitor.is_alive("is_alive_test"));
+    ASSERT_TRUE(wait_for([&] {
+        return monitor.is_alive("is_alive_test");
+    }));
     EXPECT_FALSE(monitor.is_alive("nonexistent_process"));
 }
 
@@ -310,13 +318,15 @@ TEST(LivelinessMonitor, TokenDropRemovesFromAlive) {
 
     {
         LivelinessToken token("drop_test");
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        EXPECT_TRUE(monitor.is_alive("drop_test"));
+        ASSERT_TRUE(wait_for([&] {
+            return monitor.is_alive("drop_test");
+        }));
     }
     // Token destroyed
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    EXPECT_FALSE(monitor.is_alive("drop_test"));
+    ASSERT_TRUE(wait_for([&] {
+        return !monitor.is_alive("drop_test");
+    }));
 }
 
 #else  // !HAVE_ZENOH

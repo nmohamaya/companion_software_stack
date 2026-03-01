@@ -63,25 +63,40 @@ int main(int argc, char* argv[]) {
     // Shared state for liveliness events (updated from callbacks)
     struct ProcessLiveness {
         std::mutex mutex;
-        std::vector<std::pair<std::string, bool>> events;  // (name, alive)
+        struct Event {
+            std::string name;
+            bool alive;
+            uint64_t timestamp_ns;
+        };
+        std::vector<Event> events;
     };
     auto liveness = std::make_shared<ProcessLiveness>();
 
     drone::ipc::LivelinessMonitor liveliness_monitor(
         [liveness](const std::string& proc) {
             spdlog::info("[SysMon] Process ALIVE: {}", proc);
+            auto now_ns = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             std::lock_guard<std::mutex> lock(liveness->mutex);
-            liveness->events.emplace_back(proc, true);
+            liveness->events.push_back({proc, true, now_ns});
         },
         [liveness](const std::string& proc) {
             spdlog::error("[SysMon] Process DIED: {}", proc);
+            auto now_ns = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             std::lock_guard<std::mutex> lock(liveness->mutex);
-            liveness->events.emplace_back(proc, false);
+            liveness->events.push_back({proc, false, now_ns});
         }
     );
 
-    // Local map: process name → alive
-    std::unordered_map<std::string, bool> process_alive_map;
+    // Local map: process name → (alive, last_seen_ns)
+    struct ProcessState {
+        bool alive = false;
+        uint64_t last_seen_ns = 0;
+    };
+    std::unordered_map<std::string, ProcessState> process_alive_map;
 
     spdlog::info("System Monitor READY");
 
@@ -129,8 +144,8 @@ int main(int argc, char* argv[]) {
         // ── Merge liveliness events into health struct ──────
         {
             std::lock_guard<std::mutex> lock(liveness->mutex);
-            for (auto& [name, alive] : liveness->events) {
-                process_alive_map[name] = alive;
+            for (auto& evt : liveness->events) {
+                process_alive_map[evt.name] = {evt.alive, evt.timestamp_ns};
             }
             liveness->events.clear();
         }
@@ -138,17 +153,17 @@ int main(int argc, char* argv[]) {
         // Populate ProcessHealthEntry array
         health.num_processes = 0;
         health.critical_failure = false;
-        for (auto& [name, alive] : process_alive_map) {
+        for (auto& [name, state] : process_alive_map) {
             if (health.num_processes < drone::ipc::kMaxTrackedProcesses) {
                 auto& entry = health.processes[health.num_processes];
                 std::memset(entry.name, 0, sizeof(entry.name));
                 std::strncpy(entry.name, name.c_str(),
                              sizeof(entry.name) - 1);
-                entry.alive = alive;
-                entry.last_seen_ns = health.timestamp_ns;
+                entry.alive = state.alive;
+                entry.last_seen_ns = state.last_seen_ns;
                 health.num_processes++;
             }
-            if (!alive) {
+            if (!state.alive) {
                 auto it = std::find(critical_processes.begin(),
                                     critical_processes.end(), name);
                 if (it != critical_processes.end()) {

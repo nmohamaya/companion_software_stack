@@ -19,9 +19,12 @@
 // unconditionally.
 #pragma once
 
+#include <algorithm>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef HAVE_ZENOH
@@ -77,7 +80,7 @@ public:
     ~LivelinessToken() {
         if (valid_ && token_.has_value()) {
             try {
-                std::move(token_.value()).undeclare();
+                token_.reset();  // RAII — destructor undeclares the token
                 spdlog::info("[Liveliness] Token undeclared: {}", key_expr_);
             } catch (const std::exception& e) {
                 spdlog::warn("[Liveliness] Error undeclaring token: {}",
@@ -95,7 +98,7 @@ public:
     /// Extract the process name from a liveliness key expression.
     /// "drone/alive/video_capture" → "video_capture"
     static std::string extract_process_name(const std::string& key) {
-        constexpr auto prefix_len = 12;  // strlen("drone/alive/")
+        const auto prefix_len = std::string_view(kLivelinessPrefix).size();
         if (key.size() >= prefix_len && key.substr(0, prefix_len) == kLivelinessPrefix) {
             return key.substr(prefix_len);
         }
@@ -162,11 +165,16 @@ public:
                         std::string(sample.get_keyexpr().as_string_view()));
 
                     if (sample.get_kind() == Z_SAMPLE_KIND_PUT) {
+                        bool is_new = false;
                         {
                             std::lock_guard<std::mutex> lock(mutex_);
-                            alive_set_.push_back(name);
+                            if (std::find(alive_set_.begin(), alive_set_.end(),
+                                          name) == alive_set_.end()) {
+                                alive_set_.push_back(name);
+                                is_new = true;
+                            }
                         }
-                        if (on_alive_) on_alive_(name);
+                        if (is_new && on_alive_) on_alive_(name);
                     } else if (sample.get_kind() == Z_SAMPLE_KIND_DELETE) {
                         {
                             std::lock_guard<std::mutex> lock(mutex_);
@@ -239,7 +247,13 @@ public:
     explicit LivelinessToken(const std::string& /*process_name*/) {}
     const std::string& key_expr() const { return key_expr_; }
     bool is_valid() const { return false; }
-    static std::string extract_process_name(const std::string& key) { return key; }
+    static std::string extract_process_name(const std::string& key) {
+        const auto prefix_len = std::string_view(kLivelinessPrefix).size();
+        if (key.size() >= prefix_len && key.substr(0, prefix_len) == kLivelinessPrefix) {
+            return key.substr(prefix_len);
+        }
+        return key;
+    }
 private:
     std::string key_expr_;
 };
