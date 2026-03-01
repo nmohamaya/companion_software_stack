@@ -180,6 +180,17 @@ struct ShmPayloadStatus {
 };
 
 // ═══════════════════════════════════════════════════════════
+// Process Health Entry — per-process liveness state
+// ═══════════════════════════════════════════════════════════
+static constexpr uint8_t kMaxTrackedProcesses = 8;  // 7 processes + 1 FC link
+
+struct ProcessHealthEntry {
+    char     name[32]       = {};       // Process name (e.g. "video_capture")
+    bool     alive          = false;    // Last known liveness state
+    uint64_t last_seen_ns   = 0;       // Timestamp of last liveliness event
+};
+
+// ═══════════════════════════════════════════════════════════
 // System Health SHM (Process 7 → all)
 // ═══════════════════════════════════════════════════════════
 struct ShmSystemHealth {
@@ -195,6 +206,11 @@ struct ShmSystemHealth {
     uint32_t total_dead;
     float power_watts;
     uint8_t thermal_zone;  // 0=normal, 1=warm, 2=hot, 3=critical
+
+    // ── Process health (populated by LivelinessMonitor) ─────
+    ProcessHealthEntry processes[kMaxTrackedProcesses] = {};
+    uint8_t  num_processes    = 0;      // Number of tracked processes
+    bool     critical_failure = false;  // True if a critical process died
 };
 
 // ═══════════════════════════════════════════════════════════
