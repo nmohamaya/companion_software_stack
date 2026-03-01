@@ -1,5 +1,9 @@
 // tests/test_message_bus.cpp
-// Tests for IPublisher/ISubscriber/ShmMessageBus/ShmServiceChannel interfaces.
+// Tests for IPublisher/ISubscriber/ShmMessageBus interfaces and
+// IServiceChannel interface types (enums, structs).
+//
+// Note: SHM service channel tests were removed in Phase D (#49).
+//       Zenoh service channel tests are in test_zenoh_ipc.cpp (Category 5).
 #include <gtest/gtest.h>
 
 #include "ipc/ipublisher.h"
@@ -8,7 +12,6 @@
 #include "ipc/shm_subscriber.h"
 #include "ipc/shm_message_bus.h"
 #include "ipc/iservice_channel.h"
-#include "ipc/shm_service_channel.h"
 #include "ipc/shm_types.h"
 
 #include <cstring>
@@ -205,7 +208,7 @@ TEST(ShmMessageBusTest, WithShmTypes) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// IServiceChannel tests
+// IServiceChannel interface tests (no SHM backend needed)
 // ═══════════════════════════════════════════════════════════
 
 struct TestRequest {
@@ -218,142 +221,45 @@ struct TestResponse {
     bool success{false};
 };
 
-TEST(ShmServiceChannelTest, ClientSendServerReceive) {
-    auto req_name = unique_name("/test_svc_req");
-    auto resp_name = unique_name("/test_svc_resp");
-
-    // Create server first (creates resp SHM)
-    ShmServiceServer<TestRequest, TestResponse> server(req_name, resp_name);
-
-    // Then create client (creates req SHM, connects to resp SHM)
-    ShmServiceClient<TestRequest, TestResponse> client(req_name, resp_name);
-
-    // Send a request
-    TestRequest req{42, 3.14f};
-    auto correlation_id = client.send_request(req);
-    EXPECT_GE(correlation_id, 1u);
-
-    // Server should receive it
-    auto received = server.poll_request();
-    ASSERT_TRUE(received.has_value());
-    EXPECT_EQ(received->correlation_id, correlation_id);
-    EXPECT_EQ(received->payload.command, 42u);
-    EXPECT_FLOAT_EQ(received->payload.param, 3.14f);
-}
-
-TEST(ShmServiceChannelTest, ServerRespondClientReceive) {
-    auto req_name = unique_name("/test_svc_rr_req");
-    auto resp_name = unique_name("/test_svc_rr_resp");
-
-    ShmServiceServer<TestRequest, TestResponse> server(req_name, resp_name);
-    ShmServiceClient<TestRequest, TestResponse> client(req_name, resp_name);
-
-    TestRequest req{1, 0.0f};
-    auto id = client.send_request(req);
-
-    auto srv_req = server.poll_request();
-    ASSERT_TRUE(srv_req.has_value());
-
-    // Server sends response
-    TestResponse resp{100, true};
-    server.send_response(id, ServiceStatus::OK, resp);
-
-    // Client should receive it
-    auto cli_resp = client.poll_response(id);
-    ASSERT_TRUE(cli_resp.has_value());
-    EXPECT_EQ(cli_resp->correlation_id, id);
-    EXPECT_EQ(cli_resp->status, ServiceStatus::OK);
-    EXPECT_EQ(cli_resp->payload.result, 100u);
-    EXPECT_TRUE(cli_resp->payload.success);
-}
-
-TEST(ShmServiceChannelTest, WrongCorrelationIdReturnsNull) {
-    auto req_name = unique_name("/test_svc_wid_req");
-    auto resp_name = unique_name("/test_svc_wid_resp");
-
-    ShmServiceServer<TestRequest, TestResponse> server(req_name, resp_name);
-    ShmServiceClient<TestRequest, TestResponse> client(req_name, resp_name);
-
-    TestRequest req{1, 0.0f};
-    auto id = client.send_request(req);
-
-    server.poll_request();
-    TestResponse resp{1, true};
-    server.send_response(id, ServiceStatus::OK, resp);
-
-    // Poll with wrong ID
-    auto wrong = client.poll_response(id + 999);
-    EXPECT_FALSE(wrong.has_value());
-}
-
-TEST(ShmServiceChannelTest, AwaitResponseTimeout) {
-    auto req_name = unique_name("/test_svc_to_req");
-    auto resp_name = unique_name("/test_svc_to_resp");
-
-    ShmServiceServer<TestRequest, TestResponse> server(req_name, resp_name);
-    ShmServiceClient<TestRequest, TestResponse> client(req_name, resp_name);
-
-    TestRequest req{1, 0.0f};
-    auto id = client.send_request(req);
-    // Don't send any response — should timeout
-    auto result = client.await_response(id, std::chrono::milliseconds(50));
-    ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->status, ServiceStatus::TIMEOUT);
-}
-
-TEST(ShmServiceChannelTest, ServiceStatusEnum) {
+TEST(ServiceChannelInterface, ServiceStatusEnum) {
     EXPECT_EQ(static_cast<uint8_t>(ServiceStatus::OK), 0);
     EXPECT_EQ(static_cast<uint8_t>(ServiceStatus::REJECTED), 1);
     EXPECT_EQ(static_cast<uint8_t>(ServiceStatus::TIMEOUT), 2);
     EXPECT_EQ(static_cast<uint8_t>(ServiceStatus::ERROR), 3);
 }
 
-TEST(ShmServiceChannelTest, ImplementsIServiceClient) {
-    auto req_name = unique_name("/test_svc_cli_iface_req");
-    auto resp_name = unique_name("/test_svc_cli_iface_resp");
+TEST(ServiceChannelInterface, ServiceEnvelopeLayout) {
+    ServiceEnvelope<TestRequest> env;
+    env.correlation_id = 42;
+    env.timestamp_ns = 123456;
+    env.valid = true;
+    env.payload.command = 7;
+    env.payload.param = 1.5f;
 
-    ShmServiceServer<TestRequest, TestResponse> server(req_name, resp_name);
-    auto client = std::make_unique<ShmServiceClient<TestRequest, TestResponse>>(
-        req_name, resp_name);
-    IServiceClient<TestRequest, TestResponse>* iface = client.get();
-    auto id = iface->send_request(TestRequest{1, 0.0f});
-    EXPECT_GE(id, 1u);
+    EXPECT_EQ(env.correlation_id, 42u);
+    EXPECT_EQ(env.timestamp_ns, 123456u);
+    EXPECT_TRUE(env.valid);
+    EXPECT_EQ(env.payload.command, 7u);
+    EXPECT_FLOAT_EQ(env.payload.param, 1.5f);
 }
 
-TEST(ShmServiceChannelTest, ImplementsIServiceServer) {
-    auto req_name = unique_name("/test_svc_srv_iface_req");
-    auto resp_name = unique_name("/test_svc_srv_iface_resp");
+TEST(ServiceChannelInterface, ServiceResponseLayout) {
+    ServiceResponse<TestResponse> resp;
+    resp.correlation_id = 99;
+    resp.timestamp_ns = 789;
+    resp.status = ServiceStatus::OK;
+    resp.valid = true;
+    resp.payload.result = 100;
+    resp.payload.success = true;
 
-    // Client creates req SHM; we need it to exist for server
-    ShmServiceClient<TestRequest, TestResponse> client(req_name, resp_name);
-    auto server = std::make_unique<ShmServiceServer<TestRequest, TestResponse>>(
-        req_name, resp_name);
-    IServiceServer<TestRequest, TestResponse>* iface = server.get();
-    auto req = iface->poll_request();
-    // No request sent yet, so should be empty
-    EXPECT_FALSE(req.has_value());
+    EXPECT_EQ(resp.correlation_id, 99u);
+    EXPECT_EQ(resp.status, ServiceStatus::OK);
+    EXPECT_TRUE(resp.valid);
+    EXPECT_EQ(resp.payload.result, 100u);
+    EXPECT_TRUE(resp.payload.success);
 }
 
-TEST(ShmServiceChannelTest, MultipleRequestsSequential) {
-    auto req_name = unique_name("/test_svc_multi_req");
-    auto resp_name = unique_name("/test_svc_multi_resp");
-
-    ShmServiceServer<TestRequest, TestResponse> server(req_name, resp_name);
-    ShmServiceClient<TestRequest, TestResponse> client(req_name, resp_name);
-
-    for (int i = 0; i < 5; ++i) {
-        TestRequest req{static_cast<uint32_t>(i), 0.0f};
-        auto id = client.send_request(req);
-
-        auto srv_req = server.poll_request();
-        ASSERT_TRUE(srv_req.has_value());
-        EXPECT_EQ(srv_req->payload.command, static_cast<uint32_t>(i));
-
-        TestResponse resp{static_cast<uint32_t>(i * 10), true};
-        server.send_response(id, ServiceStatus::OK, resp);
-
-        auto cli_resp = client.poll_response(id);
-        ASSERT_TRUE(cli_resp.has_value());
-        EXPECT_EQ(cli_resp->payload.result, static_cast<uint32_t>(i * 10));
-    }
+TEST(ServiceChannelInterface, TriviallyCopyable) {
+    EXPECT_TRUE(std::is_trivially_copyable_v<ServiceEnvelope<TestRequest>>);
+    EXPECT_TRUE(std::is_trivially_copyable_v<ServiceResponse<TestResponse>>);
 }

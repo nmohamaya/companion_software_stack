@@ -1,13 +1,18 @@
 // common/ipc/include/ipc/zenoh_message_bus.h
-// ZenohMessageBus — factory for Zenoh-backed publishers and subscribers.
+// ZenohMessageBus — factory for Zenoh-backed publishers, subscribers,
+// service clients, and service servers.
 //
 // Drop-in replacement for ShmMessageBus.  Same API surface:
-//   - advertise<T>(topic)  → IPublisher<T>
-//   - subscribe<T>(topic)  → ISubscriber<T>
+//   - advertise<T>(topic)              → IPublisher<T>
+//   - subscribe<T>(topic)              → ISubscriber<T>
+//   - create_client<Req,Resp>(service) → IServiceClient<Req,Resp>
+//   - create_server<Req,Resp>(service) → IServiceServer<Req,Resp>
 //
-// Topic name mapping:
+// Topic / service name mapping:
 //   Old SHM segment names (e.g. "/slam_pose") are automatically
 //   converted to Zenoh key expressions (e.g. "drone/slam/pose").
+//   Service names are prefixed with "drone/service/" if not already
+//   a Zenoh key expression.
 //   Callers can also pass Zenoh key expressions directly.
 //
 // Guarded by HAVE_ZENOH.
@@ -17,8 +22,11 @@
 
 #include "ipc/ipublisher.h"
 #include "ipc/isubscriber.h"
+#include "ipc/iservice_channel.h"
 #include "ipc/zenoh_publisher.h"
 #include "ipc/zenoh_subscriber.h"
+#include "ipc/zenoh_service_client.h"
+#include "ipc/zenoh_service_server.h"
 
 #include <memory>
 #include <string>
@@ -71,6 +79,27 @@ public:
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
+    /// Create a service client for the given service name.
+    /// @param service     Service name (e.g. "trajectory") or full key expression.
+    /// @param timeout_ms  Timeout for each GET operation in milliseconds.
+    template <typename Req, typename Resp>
+    std::unique_ptr<IServiceClient<Req, Resp>> create_client(
+        const std::string& service, uint64_t timeout_ms = 5000)
+    {
+        return std::make_unique<ZenohServiceClient<Req, Resp>>(
+            to_service_key(service), timeout_ms);
+    }
+
+    /// Create a service server for the given service name.
+    /// @param service  Service name (e.g. "trajectory") or full key expression.
+    template <typename Req, typename Resp>
+    std::unique_ptr<IServiceServer<Req, Resp>> create_server(
+        const std::string& service)
+    {
+        return std::make_unique<ZenohServiceServer<Req, Resp>>(
+            to_service_key(service));
+    }
+
     /// Convert a legacy SHM segment name to a Zenoh key expression.
     /// @param shm_name  E.g. "/drone_mission_cam" or "/slam_pose".
     /// @return          Zenoh key expression, e.g. "drone/video/frame".
@@ -117,6 +146,37 @@ public:
         spdlog::debug("[ZenohMessageBus] Unmapped topic '{}' → '{}'",
                       name, key);
         return key;
+    }
+
+    /// Convert a service name to a Zenoh key expression.
+    /// @param name  E.g. "trajectory", "/svc_traj", or "drone/service/traj".
+    /// @return      Zenoh key expression, e.g. "drone/service/trajectory".
+    ///
+    /// If the name already contains '/' and doesn't start with '/',
+    /// it's treated as a full key expression.  Otherwise, a leading '/'
+    /// and "/svc_" prefix are stripped, and "drone/service/" is prepended.
+    static std::string to_service_key(const std::string& name) {
+        if (name.empty()) return "";
+
+        // Already a full Zenoh key expression
+        if (name[0] != '/' && name.find('/') != std::string::npos) {
+            return name;
+        }
+
+        // Strip leading '/'
+        std::string stripped = (name[0] == '/') ? name.substr(1) : name;
+
+        // Strip "svc_" prefix if present
+        if (stripped.substr(0, 4) == "svc_") {
+            stripped = stripped.substr(4);
+        }
+
+        // Replace '_' with '/'
+        for (auto& c : stripped) {
+            if (c == '_') c = '/';
+        }
+
+        return "drone/service/" + stripped;
     }
 };
 

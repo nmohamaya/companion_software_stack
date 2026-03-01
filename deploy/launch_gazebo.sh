@@ -87,6 +87,8 @@ export GZ_SIM_RESOURCE_PATH="${PROJECT_DIR}/sim/models:${PX4_DIR}/Tools/simulati
 
 # ── SHM helpers ───────────────────────────────────────────────
 # Names match common/ipc/include/ipc/shm_types.h::shm_names
+# Only relevant when using the POSIX SHM IPC backend (ipc_backend=shm).
+# When using Zenoh (ipc_backend=zenoh), no /dev/shm segments are created.
 clean_shm() {
     rm -f /dev/shm/drone_mission_cam /dev/shm/drone_stereo_cam \
           /dev/shm/detected_objects /dev/shm/slam_pose \
