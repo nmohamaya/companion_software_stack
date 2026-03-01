@@ -203,8 +203,8 @@ TEST(WireFormat, KeyToWireTypeMapping) {
     EXPECT_EQ(key_to_wire_type("drone/perception/detections"), WireMessageType::DETECTIONS);
     EXPECT_EQ(key_to_wire_type("drone/slam/pose"), WireMessageType::SLAM_POSE);
     EXPECT_EQ(key_to_wire_type("drone/mission/status"), WireMessageType::MISSION_STATUS);
-    EXPECT_EQ(key_to_wire_type("drone/mission/trajectory_cmd"), WireMessageType::TRAJECTORY_CMD);
-    EXPECT_EQ(key_to_wire_type("drone/payload/commands"), WireMessageType::PAYLOAD_COMMAND);
+    EXPECT_EQ(key_to_wire_type("drone/mission/trajectory"), WireMessageType::TRAJECTORY_CMD);
+    EXPECT_EQ(key_to_wire_type("drone/mission/payload_command"), WireMessageType::PAYLOAD_COMMAND);
     EXPECT_EQ(key_to_wire_type("drone/comms/fc_command"), WireMessageType::FC_COMMAND);
     EXPECT_EQ(key_to_wire_type("drone/comms/fc_state"), WireMessageType::FC_STATE);
     EXPECT_EQ(key_to_wire_type("drone/comms/gcs_command"), WireMessageType::GCS_COMMAND);

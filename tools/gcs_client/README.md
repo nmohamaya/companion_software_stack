@@ -28,6 +28,12 @@ python3 gcs_client.py --drone-ip 10.0.0.2 --stats-interval 5
 | `--key` | `drone/**` | Zenoh key expression filter |
 | `--stats-interval` | 0 | Print stats every N seconds (0 = off) |
 
+> **Security note:** The default `tcp` protocol uses plaintext with no
+> authentication — suitable for development only. For production, use
+> `--protocol tls` with proper certificates configured in the Zenoh
+> session. See [PRODUCTION_READINESS.md](../../PRODUCTION_READINESS.md)
+> items 2.1 and 2.6.
+
 ## Wire Format
 
 Messages are prefixed with a 24-byte packed header:

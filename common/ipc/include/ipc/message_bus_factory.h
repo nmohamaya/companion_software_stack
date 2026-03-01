@@ -68,6 +68,7 @@ inline MessageBusVariant create_message_bus(const std::string& backend = "shm",
     if (backend == "zenoh") {
         if (!zenoh_config_json.empty()) {
             drone::ipc::ZenohSession::instance().configure(zenoh_config_json);
+            drone::ipc::ZenohSession::instance().set_network_enabled(true);
         }
         if (shm_pool_mb > 0) {
             drone::ipc::ZenohSession::instance().configure_shm(

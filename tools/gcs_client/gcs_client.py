@@ -41,7 +41,7 @@ except ImportError:
 WIRE_MAGIC = 0x4E4F5244  # "DRON" little-endian
 WIRE_VERSION = 1
 WIRE_HEADER_SIZE = 24
-WIRE_HEADER_FMT = "<IBBHIQ"  # magic(4) ver(1) flags(1) type(2) size(4) ts(8) seq(4) = 24
+WIRE_HEADER_FMT = "<IBBHIQI"  # magic(4) ver(1) flags(1) type(2) size(4) ts(8) seq(4) = 24
 
 # Message type names (matches WireMessageType enum in wire_format.h)
 MSG_TYPE_NAMES = {

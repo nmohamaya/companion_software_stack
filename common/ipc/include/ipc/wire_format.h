@@ -18,6 +18,7 @@
 // This header is backend-agnostic — included unconditionally.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
@@ -110,6 +111,11 @@ std::vector<uint8_t> wire_serialize(
     static_assert(std::is_trivially_copyable_v<T>,
                   "wire_serialize requires trivially copyable T");
 
+    if (ts_ns == 0) {
+        ts_ns = static_cast<uint64_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+    }
+
     WireHeader hdr;
     hdr.msg_type     = msg_type;
     hdr.payload_size = static_cast<uint32_t>(sizeof(T));
@@ -179,8 +185,8 @@ inline WireMessageType key_to_wire_type(const std::string& key) {
     if (key == "drone/perception/detections")      return WireMessageType::DETECTIONS;
     if (key == "drone/slam/pose")                  return WireMessageType::SLAM_POSE;
     if (key == "drone/mission/status")             return WireMessageType::MISSION_STATUS;
-    if (key == "drone/mission/trajectory_cmd")     return WireMessageType::TRAJECTORY_CMD;
-    if (key == "drone/payload/commands")           return WireMessageType::PAYLOAD_COMMAND;
+    if (key == "drone/mission/trajectory")         return WireMessageType::TRAJECTORY_CMD;
+    if (key == "drone/mission/payload_command")    return WireMessageType::PAYLOAD_COMMAND;
     if (key == "drone/comms/fc_command")           return WireMessageType::FC_COMMAND;
     if (key == "drone/comms/fc_state")             return WireMessageType::FC_STATE;
     if (key == "drone/comms/gcs_command")          return WireMessageType::GCS_COMMAND;

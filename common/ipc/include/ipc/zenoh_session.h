@@ -145,6 +145,13 @@ public:
         return network_enabled_;
     }
 
+    /// Set network-enabled flag (used when configure() is called directly
+    /// with a network JSON config instead of via configure_network()).
+    void set_network_enabled(bool enabled) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        network_enabled_ = enabled;
+    }
+
     // Non-copyable, non-movable
     ZenohSession(const ZenohSession&) = delete;
     ZenohSession& operator=(const ZenohSession&) = delete;

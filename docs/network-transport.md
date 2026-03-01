@@ -1,6 +1,6 @@
 # Network Transport — Drone ↔ GCS
 
-> **Phase E** of the Zenoh IPC Migration ([Issue #50](../../issues/50))
+> **Phase E** of the Zenoh IPC Migration (Issue #50)
 
 ## Overview
 
@@ -54,6 +54,12 @@ Network transport is configured in the application config JSON:
 When `zenoh.network.enabled` is `false` (the default), the Zenoh session
 runs in local peer mode with no network listeners — identical behaviour
 to Phase D.
+
+> **Security warning:** The example above uses plaintext TCP with no
+> authentication. This is acceptable for development and bench testing.
+> For production / flight hardware, use `"protocol": "tls"` with mutual
+> TLS certificates and configure Zenoh authentication. See
+> [PRODUCTION_READINESS.md](../PRODUCTION_READINESS.md) items 2.1 and 2.6.
 
 ### Wire Format
 
