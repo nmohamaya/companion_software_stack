@@ -952,15 +952,236 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 
 ## Updated Summary (Post Zenoh Phase B)
 
-| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B |
-|---|---|---|---|---|---|
-| Bug fixes | 13 | 15 | 15 | 17 | **17** |
-| Unit tests | 262 | 262 | 262 | 295 | **308** |
-| Test suites | 18 | 18 | 18 | 19 | **19** |
-| Config tunables | 75+ | 75+ | 80+ | 80+ | **80+** |
-| Compiler warnings | 0 | 0 | 0 | 0 | **0** |
-| IPC backends | SHM only | SHM only | SHM only | SHM + Zenoh | **SHM + Zenoh** |
-| CI matrix | 1 build | 1 build | 1 build | 2 builds | **2 builds (shm, zenoh)** |
-| Processes on factory | — | — | — | 2/7 | **7/7** |
+*See [Updated Summary (Post Zenoh Migration Complete)](#updated-summary-post-zenoh-migration-complete) at end of document for latest metrics (377 tests, Zenoh Epic #45 complete).*
 
-*Last updated after Zenoh Phase B — PR #53 (#47 low-bandwidth migration), 308 tests, all 7 processes on MessageBusFactory.*
+---
+
+## Zenoh IPC Migration — Phase C (Issue #48, PR #54)
+
+### Improvement — Zenoh Phase C: Zero-Copy SHM Video Publishing
+
+**Date:** 2026-03-01
+**Category:** IPC / Performance
+**Issue:** [#48](https://github.com/nmohamaya/companion_software_stack/issues/48)
+**PR:** [#54](https://github.com/nmohamaya/companion_software_stack/pull/54)
+**Epic:** [#45 — Zenoh IPC Migration](https://github.com/nmohamaya/companion_software_stack/issues/45)
+
+**Files Added:**
+- `CI_ISSUES.md` — CI issues log (248 lines, CI-001 through CI-003)
+
+**Files Modified:**
+- `common/ipc/include/ipc/zenoh_publisher.h` — Added SHM publish path via `PosixShmProvider` for large messages
+- `common/ipc/include/ipc/zenoh_session.h` — Added `shm_provider()` accessor, configurable SHM pool size
+- `common/ipc/include/ipc/message_bus_factory.h` — Added `shm_pool_mb` parameter, `(void)` cast for SHM-only builds
+- `process1_video_capture/src/main.cpp` — Migrated video frame publishing to MessageBusFactory
+- `process3_slam_vio_nav/src/main.cpp` — Migrated stereo frame + pose publishing to MessageBusFactory
+- `config/default.json` — Added `zenoh.shm_pool_size_mb` config
+- `tests/test_zenoh_ipc.cpp` — Added 21 SHM zero-copy tests
+- `.github/workflows/ci.yml` — CI cache for zenohc build
+
+**What:** Migrated the 2 high-bandwidth video channels (mission camera ~185 MB/s, stereo camera ~5 MB/s) to Zenoh with zero-copy SHM publishing:
+
+1. **PosixShmProvider** — Creates a shared memory pool (default 64 MB) for zero-copy buffer allocation
+2. **SHM publish path** — When SHM provider is available and buffer > threshold, allocates from SHM pool; receiver gets direct pointer (no serialise/deserialise)
+3. **Bytes fallback** — If SHM unavailable (CI) or alloc fails, falls back to byte-copy publish
+4. **Configurable** — `zenoh.shm_pool_size_mb` in JSON config
+
+**CI Issues Discovered:**
+- **CI-001:** Pre-built zenohc debs lack `shared-memory` cargo feature → 4 SHM tests failed → added `GTEST_SKIP()` guards
+- **CI-002:** Unused `shm_pool_mb` parameter in SHM-only build → `-Werror` failure → added `(void)` cast
+- **CI-003:** Building zenohc from source with SHM feature causes opaque-type size mismatches → reverted to pre-built debs, SHM tests skip on CI
+
+**Metrics:**
+- Tests: 308 → **329** (+21)
+- Channels migrated: 10 → **12** (all channels on Zenoh)
+- Video publish: byte-copy → **zero-copy SHM** (when provider available)
+
+---
+
+## Zenoh IPC Migration — Phase D (Issue #49, PR #55)
+
+### Improvement — Zenoh Phase D: Service Channels + Legacy SHM Cleanup
+
+**Date:** 2026-03-01
+**Category:** IPC / Architecture
+**Issue:** [#49](https://github.com/nmohamaya/companion_software_stack/issues/49)
+**PR:** [#55](https://github.com/nmohamaya/companion_software_stack/pull/55)
+**Epic:** [#45 — Zenoh IPC Migration](https://github.com/nmohamaya/companion_software_stack/issues/45)
+
+**Files Added:**
+- `common/ipc/include/ipc/zenoh_service_client.h` — `IServiceClient` implementation using Zenoh queryable
+- `common/ipc/include/ipc/zenoh_service_server.h` — `IServiceServer` implementation using Zenoh queryable
+- `docs/adr/ADR-002-modular-ipc-backend-architecture.md` — Architecture decision record for dual-backend IPC
+
+**Files Removed:**
+- `common/ipc/include/ipc/shm_service_channel.h` — Legacy SHM-based service channel (176 lines)
+
+**Files Modified:**
+- `common/ipc/include/ipc/message_bus_factory.h` — Added `bus_create_client<Req,Resp>()` and `bus_create_server<Req,Resp>()` factory helpers
+- `common/ipc/include/ipc/zenoh_message_bus.h` — Added `create_client()` and `create_server()` methods
+- `deploy/launch_all.sh`, `deploy/launch_gazebo.sh`, `deploy/launch_hardware.sh` — Updated for service channel changes
+- `tests/test_message_bus.cpp` — Simplified (removed 133 lines of legacy SHM service tests)
+- `tests/test_zenoh_ipc.cpp` — Added 19 Zenoh service channel tests
+
+**What:** Replaced the legacy `ShmServiceChannel` (polling-based shared memory request/response) with Zenoh queryable-based service channels:
+
+1. **ZenohServiceServer** — Registers a Zenoh queryable; receives requests as queries, sends responses as replies
+2. **ZenohServiceClient** — Sends a query to the service key expression, waits for reply with configurable timeout
+3. **Factory integration** — `bus_create_client<Req,Resp>()` / `bus_create_server<Req,Resp>()` in `message_bus_factory.h`
+4. **ADR-002** — Documented the dual-backend architecture: SHM pub/sub retained for backward compatibility, Zenoh provides pub/sub + services + network transport
+
+**Metrics:**
+- Tests: 329 → **348** (+19 new, -133 legacy removed)
+- Legacy code removed: 176 lines (`shm_service_channel.h`)
+
+---
+
+## Zenoh IPC Migration — Phase E (Issue #50, PR #56)
+
+### Improvement — Zenoh Phase E: Network Transport (Drone↔GCS)
+
+**Date:** 2026-03-01
+**Category:** IPC / Networking
+**Issue:** [#50](https://github.com/nmohamaya/companion_software_stack/issues/50)
+**PR:** [#56](https://github.com/nmohamaya/companion_software_stack/pull/56)
+**Epic:** [#45 — Zenoh IPC Migration](https://github.com/nmohamaya/companion_software_stack/issues/45)
+
+**Files Added:**
+- `common/ipc/include/ipc/wire_format.h` — Platform-independent serialisation (little-endian, CRC32 integrity)
+- `common/ipc/include/ipc/zenoh_network_config.h` — Network configuration builder (peer/client/router modes, TLS, endpoints)
+- `docs/network-transport.md` — Network transport architecture and deployment guide
+- `PRODUCTION_READINESS.md` — Production deployment checklist
+- `tests/test_zenoh_network.cpp` — 11 network transport tests
+- `tools/gcs_client/gcs_client.py` — Python GCS client for receiving telemetry and sending commands
+- `tools/gcs_client/requirements.txt` — Python dependencies (eclipse-zenoh, protobuf)
+- `tools/gcs_client/README.md` — GCS client usage guide
+
+**Files Modified:**
+- `common/ipc/include/ipc/zenoh_session.h` — Router/peer/client mode support, custom endpoints
+- `common/ipc/include/ipc/message_bus_factory.h` — Network config integration
+- `config/default.json` — Added `zenoh.network` config section (mode, connect endpoints, listen endpoints)
+- `config/hardware.json` — Added network config with GCS endpoint
+- All 7 process mains — Updated to pass network config to session initialisation
+
+**What:** Extended Zenoh pub/sub to work across the network, enabling drone↔GCS communication:
+
+1. **Wire Format** — `WireFormat<T>` wraps messages with little-endian header + CRC32 for cross-platform integrity
+2. **Network Configuration** — `ZenohNetworkConfig` builder supports peer/client/router modes, TCP/UDP endpoints, TLS mutual auth
+3. **Session Modes** — `ZenohSession` now supports `peer` (default, local), `client` (connect to router), `router` (GCS side)
+4. **GCS Client** — Python tool subscribes to all drone topics, displays telemetry, sends commands
+5. **Key Expression Filtering** — Network-exposed topics filtered via `allow_key_exprs` to prevent leaking internal high-bandwidth channels
+
+**Metrics:**
+- Tests: 348 → **359** (+11)
+- New docs: `network-transport.md`, `PRODUCTION_READINESS.md`, GCS client README
+
+---
+
+## Zenoh IPC Migration — Phase F (Issue #51, PR #57)
+
+### Improvement — Zenoh Phase F: Process Health via Liveliness Tokens
+
+**Date:** 2026-03-01
+**Category:** IPC / Health Monitoring
+**Issue:** [#51](https://github.com/nmohamaya/companion_software_stack/issues/51)
+**PR:** [#57](https://github.com/nmohamaya/companion_software_stack/pull/57)
+**Epic:** [#45 — Zenoh IPC Migration](https://github.com/nmohamaya/companion_software_stack/issues/45)
+
+**Files Added:**
+- `common/ipc/include/ipc/zenoh_liveliness.h` — `LivelinessToken` (RAII) + `LivelinessMonitor` (subscriber)
+- `docs/process-health-monitoring.md` — Architecture doc for liveliness-based health monitoring
+- `tests/test_zenoh_liveliness.cpp` — 11 liveliness token tests
+
+**Files Modified:**
+- `common/ipc/include/ipc/shm_types.h` — Added `ProcessHealth` to `ShmSystemHealth` for per-process status
+- `process1_video_capture/src/main.cpp` through `process6_payload_manager/src/main.cpp` — Each process declares a liveliness token on startup
+- `process7_system_monitor/src/main.cpp` — Added `LivelinessMonitor` that subscribes to `drone/alive/**`, detects process joins/leaves, publishes per-process status in `ShmSystemHealth`
+
+**What:** Implemented automatic process health monitoring using Zenoh's liveliness protocol:
+
+1. **LivelinessToken** — RAII wrapper around `zenoh::Session::liveliness_declare_token()`. Each process declares `drone/alive/{process_name}` on startup; token is automatically undeclared on process exit/crash
+2. **LivelinessMonitor** — Subscribes to `drone/alive/**` with `LIVELINESS_GET` + `LIVELINESS_SUB`. Detects process joins (token declared) and leaves (token undeclared). Reports per-process health status
+3. **P7 Integration** — System monitor now includes per-process alive/dead status in `ShmSystemHealth`, enabling downstream consumers (comms → GCS) to report process failures
+
+**Key Features:**
+- **Zero-config** — No heartbeat intervals to tune; Zenoh's built-in liveliness protocol handles timing
+- **Crash detection** — Process crash automatically undeclares token (session drops)
+- **No polling** — Event-driven callbacks on join/leave
+
+**PR Review Fixes (8):**
+- Token naming collision guards, RAII move semantics, subscriber error handling, documentation improvements, test isolation, monitor thread safety, graceful shutdown ordering, log level adjustments
+
+**Metrics:**
+- Tests: 359 → **370** (+11)
+- Liveliness tokens: 7 (one per process)
+
+---
+
+## E2E Zenoh Smoke Test + is_connected() Bug Fix (PR #58)
+
+### Improvement — End-to-End Zenoh Smoke Test
+
+**Date:** 2026-03-01
+**Category:** Testing / Integration / Bug Fix
+**PR:** [#58](https://github.com/nmohamaya/companion_software_stack/pull/58)
+
+**Files Added:**
+- `tests/test_zenoh_e2e.sh` — 8-phase E2E smoke test (42 checks)
+- `config/zenoh_e2e.json` — Dedicated E2E config (`ipc_backend: "zenoh"`, all simulated backends)
+
+**Files Modified:**
+- `common/ipc/include/ipc/zenoh_subscriber.h` — Fixed `is_connected()` to return `subscriber_.has_value()` instead of `has_data_`
+- `common/ipc/include/ipc/zenoh_message_bus.h` — Updated docs for subscribe retry params
+- `tests/test_zenoh_ipc.cpp` — Updated 2 unit tests for corrected `is_connected()` semantics
+- `BUG_FIXES.md` — Added Fix #9
+
+**What:** Created a comprehensive end-to-end smoke test that launches all 7 processes with the Zenoh backend and validates the full stack:
+
+**E2E Test Phases (42 checks):**
+
+| Phase | Description | Checks |
+|-------|-------------|--------|
+| 1 | Launch all 7 processes (staggered 0.5s) | — |
+| 2 | Verify window (configurable, default 15s) | — |
+| 3 | Process liveness — all 7 still running | 7 |
+| 4 | Zenoh backend selection (log markers) | 7 |
+| 5 | Liveliness tokens declared + monitor active | 8 |
+| 6 | Data flow verification (log markers per process) | 7 |
+| 7 | Death detection — kill payload_manager → P7 detects, others survive | 7 |
+| 8 | Graceful shutdown via SIGINT (exit code 0 or 130) | 6 |
+
+**Bug Fix — `ZenohSubscriber::is_connected()` (Fix #9, Critical):**
+
+The E2E test exposed a real integration bug: processes 2, 4, and 6 crashed immediately on Zenoh because `is_connected()` returned `has_data_` (false until first message), but process mains treat false as a fatal error.
+
+- **Root Cause:** SHM vs Zenoh semantics mismatch — SHM checks "does segment exist?" but Zenoh subscriptions are always valid immediately
+- **Failed Fix:** Retry polling in `subscribe()` caused circular deadlock (comms ↔ mission_planner)
+- **Correct Fix:** `is_connected()` → `subscriber_.has_value()` (true once subscription declared)
+
+See [BUG_FIXES.md](BUG_FIXES.md) Fix #9 for full details.
+
+**Metrics:**
+- Tests: 370 → **377** (+7: 2 updated unit tests + E2E script)
+- E2E checks: **42/42** passing
+- Bug fixes: 17 → **19** (+2: Fix #9 is_connected semantics, Fix #8 was stack overflow from Phase A)
+
+---
+
+## Updated Summary (Post Zenoh Migration Complete)
+
+| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Bug fixes | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | **19** |
+| Unit tests | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | **377** |
+| Test suites | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | **22** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| IPC backends | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| Zenoh channels | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Processes on factory | — | — | — | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| CI matrix | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | **2** |
+| Service channels | SHM | SHM | SHM | SHM | SHM | SHM | **Zenoh** | Zenoh | Zenoh | **Zenoh** |
+| Network transport | — | — | — | — | — | — | — | **Yes** | Yes | **Yes** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | **7** | **7** |
+| E2E checks | — | — | — | — | — | — | — | — | — | **42/42** |
+
+*Last updated after Zenoh E2E smoke test — PR #58: 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete.*

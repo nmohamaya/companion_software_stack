@@ -40,19 +40,20 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | **308** (19 suites, 0 failures) |
+| Unit tests | **377** (22 suites, 0 failures) |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL |
 | Autonomous flight | ARM → Takeoff → Navigate 3 WPs → RTL → Land → Disarm |
-| CI | GitHub Actions — 2-leg matrix `{shm, zenoh}` (295 tests on every push/PR) |
+| CI | GitHub Actions — 2-leg matrix `{shm, zenoh}` (377 tests on every push/PR) |
 | Config tunables | 80+ (JSON, dot-path access) |
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
-| IPC framework | **POSIX SHM (default) + Zenoh 1.7.2** — Phase A+B done ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52, #53) |
+| IPC framework | **POSIX SHM + Zenoh 1.7.2** — All 6 phases complete ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52–#57) |
+| E2E testing | **42/42** Zenoh smoke-test checks passing (`tests/test_zenoh_e2e.sh`) |
 
 ---
 
@@ -251,17 +252,17 @@
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | Comm-loss, GPS-loss, SLAM divergence, motor failure detection → safe action matrix |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
-| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | **[Epic] Zenoh IPC Migration** | P1 | Replace POSIX SHM with Zenoh zero-copy SHM + network transport ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md)) |
+| ~~[#45](https://github.com/nmohamaya/companion_software_stack/issues/45)~~ | ~~**[Epic] Zenoh IPC Migration**~~ | ~~P1~~ | ✅ **Complete** — All 6 phases done (PRs #52–#57), Epic closed |
 | ~~[#46](https://github.com/nmohamaya/companion_software_stack/issues/46)~~ | ~~Zenoh Phase A — Foundation~~ | ~~P0~~ | ✅ Done (PR #52) — CMake, ZenohMessageBus, security options, 33 tests, CI dual-build |
-| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Zenoh Phase B — Low-bandwidth channels | P1 | Migrate 10 control/status channels to Zenoh pub/sub |
-| [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Zenoh Phase C — High-bandwidth video | P1 | Migrate video frames with Zenoh SHM provider (zero-copy) |
-| [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Zenoh Phase D — Service channels + cleanup | P1 | Replace `ShmServiceChannel` with Zenoh queryable; remove old SHM primitives |
-| [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Zenoh Phase E — Network transport | P1 | Enable drone↔GCS communication over same pub/sub API |
-| [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Zenoh Phase F — Liveliness tokens | P1 | Process health monitoring via Zenoh liveliness tokens |
+| ~~[#47](https://github.com/nmohamaya/companion_software_stack/issues/47)~~ | ~~Zenoh Phase B — Low-bandwidth channels~~ | ~~P1~~ | ✅ Done (PR #53) — 10 control/status channels migrated, all 7 processes on factory |
+| ~~[#48](https://github.com/nmohamaya/companion_software_stack/issues/48)~~ | ~~Zenoh Phase C — High-bandwidth video~~ | ~~P1~~ | ✅ Done (PR #54) — Zero-copy SHM video publishing via PosixShmProvider |
+| ~~[#49](https://github.com/nmohamaya/companion_software_stack/issues/49)~~ | ~~Zenoh Phase D — Service channels + cleanup~~ | ~~P1~~ | ✅ Done (PR #55) — Zenoh queryable services, legacy `ShmServiceChannel` removed |
+| ~~[#50](https://github.com/nmohamaya/companion_software_stack/issues/50)~~ | ~~Zenoh Phase E — Network transport~~ | ~~P1~~ | ✅ Done (PR #56) — Drone↔GCS network transport, wire format, GCS client tool |
+| ~~[#51](https://github.com/nmohamaya/companion_software_stack/issues/51)~~ | ~~Zenoh Phase F — Liveliness tokens~~ | ~~P1~~ | ✅ Done (PR #57) — Process health via liveliness tokens, P7 death detection |
 
-**Exit Criteria:** Repeated outdoor missions on Jetson Orin with full telemetry logging; graceful degradation on sensor failures; Zenoh-based IPC with drone↔GCS network transport.
+**Exit Criteria:** Repeated outdoor missions on Jetson Orin with full telemetry logging; graceful degradation on sensor failures.
 
-**Zenoh Migration Sub-Issues:** [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) — Phase A (#46) → B (#47) → C (#48) + D (#49) → E (#50), F (#51) in parallel.
+**Zenoh IPC Migration:** ✅ **Complete** — [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) closed. All 6 phases delivered (PRs #52–#57). E2E smoke test validates all 7 processes running on Zenoh (PR #58).
 
 ---
 
@@ -272,7 +273,7 @@
 | # | Title | State |
 |---|-------|-------|
 | [#25](https://github.com/nmohamaya/companion_software_stack/issues/25) | [Epic] Real Drone Deployment — From Simulation to Flight | Open |
-| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | Open |
+| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | **Closed** ✅ |
 
 ### Phase 9 — First Safe Flight
 
@@ -311,39 +312,39 @@
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | Open |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
 
-### Zenoh IPC Migration (Phase 12)
+### Zenoh IPC Migration (Phase 12) — ✅ COMPLETE
 
 | # | Title | State |
 |---|-------|-------|
-| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration | Open |
+| [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration | **Closed** ✅ |
 | [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Phase A — Foundation (CMake, ZenohMessageBus, CI) | **Closed** (PR #52) |
-| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Phase B — Low-bandwidth channel migration | **In Review** (PR #53) |
-| [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Phase C — High-bandwidth video migration (zero-copy) | Open |
-| [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Phase D — Service channel migration + SHM removal | Open |
-| [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Phase E — Network transport (drone↔GCS) | Open |
-| [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Phase F — Liveliness tokens (process health) | Open |
+| [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Phase B — Low-bandwidth channel migration | **Closed** (PR #53) |
+| [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | Phase C — High-bandwidth video migration (zero-copy) | **Closed** (PR #54) |
+| [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Phase D — Service channel migration + SHM removal | **Closed** (PR #55) |
+| [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Phase E — Network transport (drone↔GCS) | **Closed** (PR #56) |
+| [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Phase F — Liveliness tokens (process health) | **Closed** (PR #57) |
 
 ---
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B (Current) |
-|--------|---------|---------|---------|---------|---------|---------|---------|-------------------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | **308** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | **19** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | **17** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | **80+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | **8** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | **SHM + Zenoh** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| OpenCV | — | — | — | 4.10.0 | 4.10.0 | 4.10.0 | 4.10.0 | **4.10.0** |
-| MAVSDK | — | — | 2.12.12 | 2.12.12 | 2.12.12 | 2.12.12 | 2.12.12 | **2.12.12** |
-| Autonomous flight | No | No | Yes | Yes | Yes | Yes | Yes | **Yes** |
-| Hardware deploy | No | No | No | No | No | Yes | Yes | **Yes** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | **2 (shm, zenoh)** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E (Current) |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | **377** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | **22** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | **19** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | **90+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | **2 (shm, zenoh)** |
 
 ### Process Activity During Simulation
 
@@ -359,4 +360,4 @@
 
 ---
 
-*Last updated after Zenoh Phase B — PR #53 (#47 low-bandwidth migration), 308 tests, all 7 processes on MessageBusFactory.*
+*Last updated after Zenoh E2E smoke test (PR #58) — 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete (all 6 phases merged, PRs #52–#57).*
