@@ -129,12 +129,13 @@ std::unique_ptr<IServiceClient<Req, Resp>> bus_create_client(
     uint64_t timeout_ms = 5000)
 {
     return std::visit([&](auto& b) -> std::unique_ptr<IServiceClient<Req, Resp>> {
-        using BusType = std::decay_t<decltype(*b)>;
 #ifdef HAVE_ZENOH
+        using BusType = std::decay_t<decltype(*b)>;
         if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
             return b->template create_client<Req, Resp>(service, timeout_ms);
         }
 #endif
+        (void)b;
         (void)service;
         (void)timeout_ms;
         spdlog::warn("[MessageBusFactory] Service channels are not available "
@@ -151,12 +152,13 @@ std::unique_ptr<IServiceServer<Req, Resp>> bus_create_server(
     MessageBusVariant& bus, const std::string& service)
 {
     return std::visit([&](auto& b) -> std::unique_ptr<IServiceServer<Req, Resp>> {
-        using BusType = std::decay_t<decltype(*b)>;
 #ifdef HAVE_ZENOH
+        using BusType = std::decay_t<decltype(*b)>;
         if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
             return b->template create_server<Req, Resp>(service);
         }
 #endif
+        (void)b;
         (void)service;
         spdlog::warn("[MessageBusFactory] Service channels are not available "
                      "on the SHM backend");
