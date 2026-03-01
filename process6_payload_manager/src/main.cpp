@@ -37,8 +37,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("Gimbal: {}", gimbal->name());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(
-        cfg.get<std::string>("ipc_backend", "shm"));
+    auto bus = drone::ipc::create_message_bus(cfg);
 
     auto cmd_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPayloadCommand>(
         bus, drone::ipc::shm_names::PAYLOAD_COMMANDS);

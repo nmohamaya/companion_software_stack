@@ -1,14 +1,21 @@
 // common/ipc/include/ipc/zenoh_session.h
 // Singleton Zenoh session manager — shared by all publishers/subscribers.
 //
-// All ZenohPublisher/ZenohSubscriber instances share a single Zenoh session
-// in "peer" mode (no daemon required). A PosixShmProvider is lazily created
-// alongside the session for zero-copy high-bandwidth IPC (video frames).
+// All ZenohPublisher/ZenohSubscriber instances share a single Zenoh session.
+// The session mode depends on configuration:
+//   - Local (default): peer mode, no network listeners
+//   - Drone:           peer mode + TCP/UDP listener for GCS connections
+//   - GCS:             client mode, connects to drone endpoint
+//
+// A PosixShmProvider is lazily created alongside the session for zero-copy
+// high-bandwidth IPC (video frames).
 //
 // Guarded by HAVE_ZENOH — this file is a no-op when Zenoh is not available.
 #pragma once
 
 #ifdef HAVE_ZENOH
+
+#include "ipc/zenoh_network_config.h"
 
 #include <zenoh.hxx>
 
@@ -65,6 +72,27 @@ public:
                      config_json.empty() ? "defaults" : "custom");
     }
 
+    /// Configure network transport before first use.
+    /// @param net_config  Network configuration (endpoints, mode, scouting).
+    /// Calls configure() with the generated JSON string.
+    /// Must be called BEFORE session() is first invoked.
+    void configure_network(const ZenohNetworkConfig& net_config) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (session_.has_value()) {
+            spdlog::warn("[ZenohSession] configure_network() called after "
+                         "session already opened — ignoring");
+            return;
+        }
+        config_json_ = net_config.to_json();
+        network_enabled_ = true;
+        configured_ = true;
+        spdlog::info("[ZenohSession] Network configured: mode={}, "
+                     "listen_eps={}, connect_eps={}",
+                     net_config.mode,
+                     net_config.listen_endpoints.size(),
+                     net_config.connect_endpoints.size());
+    }
+
     /// Configure SHM pool size before first use.
     /// @param pool_bytes  Size of the POSIX SHM pool in bytes.
     ///                    0 = disable SHM provider (use regular Bytes path).
@@ -111,6 +139,12 @@ public:
         return shm_pool_bytes_;
     }
 
+    /// Returns true if network transport is enabled.
+    bool is_network_enabled() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return network_enabled_;
+    }
+
     // Non-copyable, non-movable
     ZenohSession(const ZenohSession&) = delete;
     ZenohSession& operator=(const ZenohSession&) = delete;
@@ -128,7 +162,8 @@ private:
             auto config = zenoh::Config::create_default();
             session_.emplace(zenoh::Session::open(std::move(config)));
         }
-        spdlog::info("[ZenohSession] Session opened (peer mode)");
+        spdlog::info("[ZenohSession] Session opened ({})",
+                     network_enabled_ ? "network-enabled" : "peer mode");
     }
 
     void create_shm_provider() {
@@ -148,6 +183,7 @@ private:
     std::optional<zenoh::Session> session_;
     std::string config_json_;
     bool configured_ = false;
+    bool network_enabled_ = false;
 
     // SHM provider for zero-copy large-message publishing
     std::size_t shm_pool_bytes_ = kDefaultShmPoolBytes;

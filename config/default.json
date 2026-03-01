@@ -5,7 +5,18 @@
 
     "zenoh": {
         "_comment": "Zenoh IPC settings (only used when ipc_backend=zenoh)",
-        "shm_pool_size_mb": 32
+        "shm_pool_size_mb": 32,
+        "network": {
+            "_comment": "Network transport: enables drone↔GCS communication over TCP/UDP",
+            "enabled": false,
+            "mode": "peer",
+            "listen_port": 7447,
+            "listen_address": "0.0.0.0",
+            "protocol": "tcp",
+            "connect_endpoints": [],
+            "multicast_scouting": true,
+            "gossip_scouting": true
+        }
     },
 
     "video_capture": {

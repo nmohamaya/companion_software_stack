@@ -32,8 +32,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("=== System Monitor starting (PID {}) ===", getpid());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(
-        cfg.get<std::string>("ipc_backend", "shm"));
+    auto bus = drone::ipc::create_message_bus(cfg);
 
     auto health_pub = drone::ipc::bus_advertise<drone::ipc::ShmSystemHealth>(
         bus, drone::ipc::shm_names::SYSTEM_HEALTH);
