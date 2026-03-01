@@ -4,6 +4,7 @@
 // Reads ShmPayloadCommand from Mission Planner, publishes ShmPayloadStatus.
 
 #include "ipc/message_bus_factory.h"
+#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -38,6 +39,9 @@ int main(int argc, char* argv[]) {
 
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
+
+    // ── Declare liveliness token (auto-dropped on exit/crash) ──
+    drone::ipc::LivelinessToken liveliness_token("payload_manager");
 
     auto cmd_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPayloadCommand>(
         bus, drone::ipc::shm_names::PAYLOAD_COMMANDS);

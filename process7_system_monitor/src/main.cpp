@@ -5,15 +5,21 @@
 #include "monitor/sys_info.h"
 #include "monitor/iprocess_monitor.h"
 #include "ipc/message_bus_factory.h"
+#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/log_config.h"
 
-#include <thread>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 #include <unistd.h>
 #include <spdlog/spdlog.h>
 
@@ -34,6 +40,9 @@ int main(int argc, char* argv[]) {
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
 
+    // ── Declare liveliness token (auto-dropped on exit/crash) ──
+    drone::ipc::LivelinessToken liveliness_token("system_monitor");
+
     auto health_pub = drone::ipc::bus_advertise<drone::ipc::ShmSystemHealth>(
         bus, drone::ipc::shm_names::SYSTEM_HEALTH);
     if (!health_pub->is_ready()) {
@@ -44,6 +53,35 @@ int main(int argc, char* argv[]) {
     // ── Optional: subscribe to FC state for battery info ────
     auto fc_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmFCState>(
         bus, drone::ipc::shm_names::FC_STATE);
+
+    // ── Process health monitoring via liveliness tokens ─────
+    // Critical processes: if these die, flag critical_failure.
+    static const std::vector<std::string> critical_processes = {
+        "comms", "slam_vio_nav"
+    };
+
+    // Shared state for liveliness events (updated from callbacks)
+    struct ProcessLiveness {
+        std::mutex mutex;
+        std::vector<std::pair<std::string, bool>> events;  // (name, alive)
+    };
+    auto liveness = std::make_shared<ProcessLiveness>();
+
+    drone::ipc::LivelinessMonitor liveliness_monitor(
+        [liveness](const std::string& proc) {
+            spdlog::info("[SysMon] Process ALIVE: {}", proc);
+            std::lock_guard<std::mutex> lock(liveness->mutex);
+            liveness->events.emplace_back(proc, true);
+        },
+        [liveness](const std::string& proc) {
+            spdlog::error("[SysMon] Process DIED: {}", proc);
+            std::lock_guard<std::mutex> lock(liveness->mutex);
+            liveness->events.emplace_back(proc, false);
+        }
+    );
+
+    // Local map: process name → alive
+    std::unordered_map<std::string, bool> process_alive_map;
 
     spdlog::info("System Monitor READY");
 
@@ -87,6 +125,37 @@ int main(int argc, char* argv[]) {
         // Collect health via IProcessMonitor strategy
         // (battery thresholds are applied inside the strategy)
         auto health = monitor->collect();
+
+        // ── Merge liveliness events into health struct ──────
+        {
+            std::lock_guard<std::mutex> lock(liveness->mutex);
+            for (auto& [name, alive] : liveness->events) {
+                process_alive_map[name] = alive;
+            }
+            liveness->events.clear();
+        }
+
+        // Populate ProcessHealthEntry array
+        health.num_processes = 0;
+        health.critical_failure = false;
+        for (auto& [name, alive] : process_alive_map) {
+            if (health.num_processes < drone::ipc::kMaxTrackedProcesses) {
+                auto& entry = health.processes[health.num_processes];
+                std::memset(entry.name, 0, sizeof(entry.name));
+                std::strncpy(entry.name, name.c_str(),
+                             sizeof(entry.name) - 1);
+                entry.alive = alive;
+                entry.last_seen_ns = health.timestamp_ns;
+                health.num_processes++;
+            }
+            if (!alive) {
+                auto it = std::find(critical_processes.begin(),
+                                    critical_processes.end(), name);
+                if (it != critical_processes.end()) {
+                    health.critical_failure = true;
+                }
+            }
+        }
 
         health_pub->publish(health);
 

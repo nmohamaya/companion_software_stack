@@ -5,6 +5,7 @@
 
 #include "video/frame.h"
 #include "ipc/message_bus_factory.h"
+#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -163,6 +164,9 @@ int main(int argc, char* argv[]) {
 
     // ── Create publishers via message bus factory ───────────
     auto bus = drone::ipc::create_message_bus(cfg);
+
+    // ── Declare liveliness token (auto-dropped on exit/crash) ──
+    drone::ipc::LivelinessToken liveliness_token("video_capture");
 
     auto mission_pub = drone::ipc::bus_advertise<drone::ipc::ShmVideoFrame>(
         bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);

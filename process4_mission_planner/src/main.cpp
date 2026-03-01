@@ -7,6 +7,7 @@
 #include "planner/ipath_planner.h"
 #include "planner/iobstacle_avoider.h"
 #include "ipc/message_bus_factory.h"
+#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -61,6 +62,9 @@ int main(int argc, char* argv[]) {
 
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
+
+    // ── Declare liveliness token (auto-dropped on exit/crash) ──
+    drone::ipc::LivelinessToken liveliness_token("mission_planner");
 
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPose>(

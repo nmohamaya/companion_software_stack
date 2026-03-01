@@ -6,6 +6,7 @@
 #include "slam/types.h"
 #include "slam/ivisual_frontend.h"
 #include "ipc/message_bus_factory.h"
+#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
 #include "util/signal_handler.h"
 #include "util/arg_parser.h"
@@ -159,6 +160,9 @@ int main(int argc, char* argv[]) {
 
     // ── Create message bus ──────────────────────────────────
     auto bus = drone::ipc::create_message_bus(cfg);
+
+    // ── Declare liveliness token (auto-dropped on exit/crash) ──
+    drone::ipc::LivelinessToken liveliness_token("slam_vio_nav");
 
     // Subscribe to stereo camera from Process 1
     auto stereo_sub = drone::ipc::bus_subscribe<drone::ipc::ShmStereoFrame>(

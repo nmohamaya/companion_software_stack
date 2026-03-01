@@ -80,6 +80,9 @@ add_drone_test(test_zenoh_ipc       test_zenoh_ipc.cpp)
 # ── Phase E: Network transport tests ─────────────────────────
 add_drone_test(test_zenoh_network   test_zenoh_network.cpp)
 
+# ── Phase F: Liveliness token tests ──────────────────────────
+add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp)
+
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)
 
