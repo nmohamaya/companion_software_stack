@@ -162,9 +162,7 @@ int main(int argc, char* argv[]) {
                  mission_cam->name(), stereo_left->name(), stereo_right->name());
 
     // ── Create publishers via message bus factory ───────────
-    const auto backend = cfg.get<std::string>("ipc_backend", "shm");
-    const auto shm_pool_mb = cfg.get<std::size_t>("zenoh.shm_pool_size_mb", 0);
-    auto bus = drone::ipc::create_message_bus(backend, shm_pool_mb);
+    auto bus = drone::ipc::create_message_bus(cfg);
 
     auto mission_pub = drone::ipc::bus_advertise<drone::ipc::ShmVideoFrame>(
         bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);

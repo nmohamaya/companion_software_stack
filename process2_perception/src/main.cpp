@@ -249,8 +249,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("=== Perception process starting (PID {}) ===", getpid());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(
-        cfg.get<std::string>("ipc_backend", "shm"));
+    auto bus = drone::ipc::create_message_bus(cfg);
 
     // ── Subscribe to video frames from Process 1 ────────────
     auto video_sub = drone::ipc::bus_subscribe<drone::ipc::ShmVideoFrame>(

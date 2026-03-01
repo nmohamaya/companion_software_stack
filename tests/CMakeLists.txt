@@ -77,6 +77,9 @@ add_drone_test(test_message_bus     test_message_bus.cpp)
 # ── Zenoh IPC + MessageBusFactory tests ──────────────────────
 add_drone_test(test_zenoh_ipc       test_zenoh_ipc.cpp)
 
+# ── Phase E: Network transport tests ─────────────────────────
+add_drone_test(test_zenoh_network   test_zenoh_network.cpp)
+
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)
 

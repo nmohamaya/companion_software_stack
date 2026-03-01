@@ -212,8 +212,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(
-        cfg.get<std::string>("ipc_backend", "shm"));
+    auto bus = drone::ipc::create_message_bus(cfg);
 
     // ── Publishers ──────────────────────────────────────────
     auto fc_pub = drone::ipc::bus_advertise<drone::ipc::ShmFCState>(

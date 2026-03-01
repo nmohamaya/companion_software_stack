@@ -2,6 +2,21 @@
     "_comment": "Hardware config — real drone with Pixhawk FC over serial",
     "_comment2": "Copy this to config/my_drone.json and edit for your setup",
     "log_level": "info",
+    "ipc_backend": "zenoh",
+
+    "zenoh": {
+        "shm_pool_size_mb": 64,
+        "network": {
+            "enabled": true,
+            "mode": "peer",
+            "listen_port": 7447,
+            "listen_address": "0.0.0.0",
+            "protocol": "tcp",
+            "connect_endpoints": [],
+            "multicast_scouting": true,
+            "gossip_scouting": true
+        }
+    },
 
     "video_capture": {
         "mission_cam": {
