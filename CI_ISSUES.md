@@ -246,3 +246,44 @@ What changes were made?
 How to avoid this class of issue in the future?
 
 -->
+
+---
+
+## CI-004: Unused typedef / parameter in SHM build (`bus_create_client` / `bus_create_server`)
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-03-01 |
+| **Branch** | `feat/49-zenoh-phase-d` |
+| **PR** | #55 |
+| **Affected file** | `common/ipc/include/ipc/message_bus_factory.h` |
+| **CI matrix** | `shm` backend only (Zenoh backend unaffected) |
+
+### Symptoms
+
+```
+error: typedef 'using BusType = ...' locally defined but not used [-Werror=unused-local-typedefs]
+error: unused parameter 'b' [-Werror=unused-parameter]
+```
+
+Both `bus_create_client()` and `bus_create_server()` failed to compile in the SHM-only CI build.
+
+### Root Cause
+
+The `using BusType` typedef and the lambda parameter `b` were declared outside the `#ifdef HAVE_ZENOH` guard but only referenced inside it. In non-Zenoh builds, both were unreferenced, triggering `-Wunused-local-typedefs` and `-Wunused-parameter` (promoted to errors by `-Werror`).
+
+Same class of issue as CI-002 — conditional compilation with strict warnings.
+
+### Fix Applied
+
+1. Moved `using BusType = ...` inside `#ifdef HAVE_ZENOH`.
+2. Added `(void)b;` cast in the fallback path.
+
+### Prevention
+
+See CI-002. Always test both build configurations with `-Werror -Wall -Wextra` before pushing:
+```bash
+cmake -B build-shm -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" && cmake --build build-shm
+cmake -B build-zenoh -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+  -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON && cmake --build build-zenoh
+```

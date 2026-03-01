@@ -1,15 +1,16 @@
 // tests/test_zenoh_ipc.cpp
 // Unit tests for the Zenoh IPC backend and message bus factory.
 //
-// Four categories:
+// Five categories:
 //   1. MessageBusFactory tests (always compiled — no Zenoh dependency)
 //   2. Zenoh topic mapping tests (HAVE_ZENOH — ZenohMessageBus header required)
 //   3. Zenoh pub/sub round-trip tests (HAVE_ZENOH — requires running Zenoh session)
 //   4. Phase C — SHM provider zero-copy tests (HAVE_ZENOH)
+//   5. Phase D — Zenoh service channel tests (HAVE_ZENOH — queryable pattern)
 //
 // Build:
 //   cmake -B build                          → runs category 1 only
-//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1 + 2 + 3 + 4
+//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1–5
 #include <gtest/gtest.h>
 
 #include "ipc/shm_message_bus.h"
@@ -21,6 +22,9 @@
 #include "ipc/zenoh_publisher.h"
 #include "ipc/zenoh_subscriber.h"
 #include "ipc/zenoh_session.h"
+#include "ipc/zenoh_service_client.h"
+#include "ipc/zenoh_service_server.h"
+#include "ipc/iservice_channel.h"
 #endif
 
 #include <algorithm>
@@ -1198,5 +1202,338 @@ TEST(ZenohShmProvider, PoolSizeConfiguration) {
     EXPECT_GT(ZenohSession::instance().shm_pool_bytes(), 0u);
 }
 
+// ═══════════════════════════════════════════════════════════
+// Category 5: Phase D — Zenoh service channel tests
+// ═══════════════════════════════════════════════════════════
+
+// Service test payload types
+struct SvcTestRequest {
+    uint32_t command{0};
+    float param{0.0f};
+};
+
+struct SvcTestResponse {
+    uint32_t result{0};
+    bool success{false};
+};
+
+// ---------------------------------------------------------------------------
+// Polling helper — waits for the server to receive a request.
+// ---------------------------------------------------------------------------
+template <typename Req, typename Resp>
+std::optional<ServiceEnvelope<Req>> poll_server_request(
+    IServiceServer<Req, Resp>& server,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
+{
+    constexpr auto kInterval = std::chrono::milliseconds(5);
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto req = server.poll_request();
+        if (req.has_value()) return req;
+        std::this_thread::sleep_for(kInterval);
+    }
+    return std::nullopt;
+}
+
+// ---------------------------------------------------------------------------
+// 5.1 — Server constructs and declares queryable
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ServerConstructs) {
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
+        "drone/service/test_construct");
+    // Should not crash; queryable declared internally
+}
+
+// ---------------------------------------------------------------------------
+// 5.2 — Client constructs
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ClientConstructs) {
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
+        "drone/service/test_client_construct");
+    // Should not crash
+}
+
+// ---------------------------------------------------------------------------
+// 5.3 — Client sends request, server receives it
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ClientSendServerReceive) {
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
+        "drone/service/test_cs_recv");
+
+    // Brief delay for queryable declaration to propagate
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
+        "drone/service/test_cs_recv");
+
+    SvcTestRequest req{42, 3.14f};
+    auto cid = client.send_request(req);
+    EXPECT_GE(cid, 1u);
+
+    // Server should receive the request
+    auto received = poll_server_request<SvcTestRequest, SvcTestResponse>(server);
+    ASSERT_TRUE(received.has_value())
+        << "Server did not receive request within timeout";
+    EXPECT_EQ(received->correlation_id, cid);
+    EXPECT_EQ(received->payload.command, 42u);
+    EXPECT_FLOAT_EQ(received->payload.param, 3.14f);
+    EXPECT_TRUE(received->valid);
+}
+
+// ---------------------------------------------------------------------------
+// 5.4 — Full round-trip: client → server → client
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, FullRoundTrip) {
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
+        "drone/service/test_roundtrip");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
+        "drone/service/test_roundtrip");
+
+    SvcTestRequest req{1, 2.5f};
+    auto cid = client.send_request(req);
+
+    // Server side: receive request and send response
+    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(server);
+    ASSERT_TRUE(srv_req.has_value());
+
+    SvcTestResponse resp{100, true};
+    server.send_response(cid, ServiceStatus::OK, resp);
+
+    // Client side: await response
+    auto cli_resp = client.await_response(cid, std::chrono::milliseconds(5000));
+    ASSERT_TRUE(cli_resp.has_value());
+    EXPECT_EQ(cli_resp->correlation_id, cid);
+    EXPECT_EQ(cli_resp->status, ServiceStatus::OK);
+    EXPECT_EQ(cli_resp->payload.result, 100u);
+    EXPECT_TRUE(cli_resp->payload.success);
+    EXPECT_TRUE(cli_resp->valid);
+}
+
+// ---------------------------------------------------------------------------
+// 5.5 — Wrong correlation ID returns nullopt
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, WrongCorrelationIdReturnsNull) {
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
+        "drone/service/test_wrong_cid");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
+        "drone/service/test_wrong_cid");
+
+    auto cid = client.send_request(SvcTestRequest{1, 0.0f});
+
+    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(server);
+    ASSERT_TRUE(srv_req.has_value());
+
+    SvcTestResponse resp{1, true};
+    server.send_response(cid, ServiceStatus::OK, resp);
+
+    // Wait for the actual response to arrive
+    auto correct = client.await_response(cid, std::chrono::milliseconds(5000));
+    ASSERT_TRUE(correct.has_value());
+
+    // Now polling for a different CID should return nothing
+    auto wrong = client.poll_response(cid + 999);
+    EXPECT_FALSE(wrong.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// 5.6 — Await response timeout
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, AwaitResponseTimeout) {
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
+        "drone/service/test_timeout");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
+        "drone/service/test_timeout", 200 /* short GET timeout */);
+
+    auto cid = client.send_request(SvcTestRequest{1, 0.0f});
+    // Don't send a server response — should timeout
+    auto result = client.await_response(cid, std::chrono::milliseconds(300));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->status, ServiceStatus::TIMEOUT);
+}
+
+// ---------------------------------------------------------------------------
+// 5.7 — Implements IServiceClient / IServiceServer interfaces
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ImplementsIServiceClient) {
+    auto client = std::make_unique<
+        ZenohServiceClient<SvcTestRequest, SvcTestResponse>>(
+        "drone/service/test_iface_client");
+    IServiceClient<SvcTestRequest, SvcTestResponse>* iface = client.get();
+    (void)iface;  // Just verify the cast compiles
+}
+
+TEST(ZenohServiceChannel, ImplementsIServiceServer) {
+    auto server = std::make_unique<
+        ZenohServiceServer<SvcTestRequest, SvcTestResponse>>(
+        "drone/service/test_iface_server");
+    IServiceServer<SvcTestRequest, SvcTestResponse>* iface = server.get();
+    (void)iface;  // Just verify the cast compiles
+}
+
+// ---------------------------------------------------------------------------
+// 5.8 — Multiple sequential requests
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, MultipleRequestsSequential) {
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
+        "drone/service/test_multi_seq");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
+        "drone/service/test_multi_seq");
+
+    for (int i = 0; i < 5; ++i) {
+        SvcTestRequest req{static_cast<uint32_t>(i), 0.0f};
+        auto cid = client.send_request(req);
+
+        auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(
+            server);
+        ASSERT_TRUE(srv_req.has_value())
+            << "Server did not receive request " << i;
+        EXPECT_EQ(srv_req->payload.command, static_cast<uint32_t>(i));
+
+        SvcTestResponse resp{static_cast<uint32_t>(i * 10), true};
+        server.send_response(cid, ServiceStatus::OK, resp);
+
+        auto cli_resp = client.await_response(
+            cid, std::chrono::milliseconds(5000));
+        ASSERT_TRUE(cli_resp.has_value())
+            << "Client did not receive response for request " << i;
+        EXPECT_EQ(cli_resp->payload.result, static_cast<uint32_t>(i * 10));
+        EXPECT_EQ(cli_resp->status, ServiceStatus::OK);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5.9 — Service via ZenohMessageBus factory
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ViaMessageBusFactory) {
+    ZenohMessageBus bus;
+
+    auto server = bus.create_server<SvcTestRequest, SvcTestResponse>(
+        "test_factory_svc");
+    ASSERT_NE(server, nullptr);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    auto client = bus.create_client<SvcTestRequest, SvcTestResponse>(
+        "test_factory_svc");
+    ASSERT_NE(client, nullptr);
+
+    auto cid = client->send_request(SvcTestRequest{7, 1.0f});
+    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(
+        *server);
+    ASSERT_TRUE(srv_req.has_value());
+
+    server->send_response(cid, ServiceStatus::OK,
+                          SvcTestResponse{77, true});
+
+    auto resp = client->await_response(cid, std::chrono::milliseconds(5000));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, ServiceStatus::OK);
+    EXPECT_EQ(resp->payload.result, 77u);
+}
+
+// ---------------------------------------------------------------------------
+// 5.10 — Service key expression mapping
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ServiceKeyMapping) {
+    // Short name → prefixed
+    EXPECT_EQ(ZenohMessageBus::to_service_key("trajectory"),
+              "drone/service/trajectory");
+
+    // SHM-style name → prefix stripped, converted
+    EXPECT_EQ(ZenohMessageBus::to_service_key("/svc_traj_cmd"),
+              "drone/service/traj/cmd");
+
+    // Already a full key expression → pass-through
+    EXPECT_EQ(ZenohMessageBus::to_service_key("drone/service/custom"),
+              "drone/service/custom");
+
+    // Empty → empty
+    EXPECT_EQ(ZenohMessageBus::to_service_key(""), "");
+}
+
+// ---------------------------------------------------------------------------
+// 5.11 — bus_create_client / bus_create_server via variant factory
+// ---------------------------------------------------------------------------
+
+TEST(ZenohServiceChannel, ViaBusVariantFactory) {
+    auto bus = create_message_bus("zenoh");
+
+    auto server = bus_create_server<SvcTestRequest, SvcTestResponse>(
+        bus, "drone/service/test_variant_svc");
+    ASSERT_NE(server, nullptr);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    auto client = bus_create_client<SvcTestRequest, SvcTestResponse>(
+        bus, "drone/service/test_variant_svc");
+    ASSERT_NE(client, nullptr);
+
+    auto cid = client->send_request(SvcTestRequest{99, 0.0f});
+    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(
+        *server);
+    ASSERT_TRUE(srv_req.has_value());
+    EXPECT_EQ(srv_req->payload.command, 99u);
+
+    server->send_response(cid, ServiceStatus::OK,
+                          SvcTestResponse{999, true});
+
+    auto resp = client->await_response(cid, std::chrono::milliseconds(5000));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->payload.result, 999u);
+}
+
+// ---------------------------------------------------------------------------
+// 5.12 — SHM bus returns nullptr for service channels
+// ---------------------------------------------------------------------------
 
 #endif  // HAVE_ZENOH
+
+// Service test types (outside HAVE_ZENOH guard for factory tests)
+#ifndef HAVE_ZENOH
+struct SvcTestRequest {
+    uint32_t command{0};
+    float param{0.0f};
+};
+
+struct SvcTestResponse {
+    uint32_t result{0};
+    bool success{false};
+};
+#endif
+
+TEST(MessageBusFactory, ShmBusServiceClientReturnsNull) {
+    auto bus = create_message_bus("shm");
+    auto client = bus_create_client<SvcTestRequest, SvcTestResponse>(
+        bus, "test_no_svc");
+#ifdef HAVE_ZENOH
+    // Under HAVE_ZENOH the variant has both alternatives, but we selected SHM
+    EXPECT_EQ(client, nullptr);
+#else
+    EXPECT_EQ(client, nullptr);
+#endif
+}
+
+TEST(MessageBusFactory, ShmBusServiceServerReturnsNull) {
+    auto bus = create_message_bus("shm");
+    auto server = bus_create_server<SvcTestRequest, SvcTestResponse>(
+        bus, "test_no_svc");
+    EXPECT_EQ(server, nullptr);
+}

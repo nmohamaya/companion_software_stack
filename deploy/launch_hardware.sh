@@ -241,6 +241,10 @@ fi
 
 # ── SHM helpers ───────────────────────────────────────────────
 # Names match common/ipc/include/ipc/shm_types.h::shm_names
+# Only relevant when using the POSIX SHM IPC backend (ipc_backend=shm).
+# When using Zenoh (ipc_backend=zenoh), these legacy drone_* /dev/shm segments
+# are not created, though Zenoh may still allocate its own SHM pool segments
+# under /dev/shm.
 clean_shm() {
     local shm_names=(
         drone_mission_cam

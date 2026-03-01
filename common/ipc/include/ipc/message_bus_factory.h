@@ -16,12 +16,17 @@
 //   auto pub = drone::ipc::bus_advertise<MyMsg>(bus, "telemetry");
 //   auto sub = drone::ipc::bus_subscribe<MyMsg>(bus, "telemetry");
 //
+//   // Service channels (Zenoh only):
+//   auto client = drone::ipc::bus_create_client<Req, Resp>(bus, "my_service");
+//   auto server = drone::ipc::bus_create_server<Req, Resp>(bus, "my_service");
+//
 // Since ShmMessageBus and ZenohMessageBus are concrete (non-virtual)
 // template factories, we can't return a single polymorphic pointer.
 // Instead we return a std::variant<...> (MessageBusVariant) plus helpers.
 #pragma once
 
 #include "ipc/shm_message_bus.h"
+#include "ipc/iservice_channel.h"
 
 #ifdef HAVE_ZENOH
 #include "ipc/zenoh_message_bus.h"
@@ -109,6 +114,56 @@ std::unique_ptr<ISubscriber<T>> bus_subscribe_optional(
     MessageBusVariant& bus, const std::string& topic)
 {
     return bus_subscribe<T>(bus, topic, 0, 0);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helper: service client / server through the variant
+// ─────────────────────────────────────────────────────────────
+
+/// Create a service client through whichever bus is active.
+/// @note Service channels are only available on the Zenoh backend.
+///       SHM backend returns nullptr with a warning.
+template <typename Req, typename Resp>
+std::unique_ptr<IServiceClient<Req, Resp>> bus_create_client(
+    MessageBusVariant& bus, const std::string& service,
+    uint64_t timeout_ms = 5000)
+{
+    return std::visit([&](auto& b) -> std::unique_ptr<IServiceClient<Req, Resp>> {
+#ifdef HAVE_ZENOH
+        using BusType = std::decay_t<decltype(*b)>;
+        if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
+            return b->template create_client<Req, Resp>(service, timeout_ms);
+        }
+#endif
+        (void)b;
+        (void)service;
+        (void)timeout_ms;
+        spdlog::warn("[MessageBusFactory] Service channels are not available "
+                     "on the SHM backend");
+        return nullptr;
+    }, bus);
+}
+
+/// Create a service server through whichever bus is active.
+/// @note Service channels are only available on the Zenoh backend.
+///       SHM backend returns nullptr with a warning.
+template <typename Req, typename Resp>
+std::unique_ptr<IServiceServer<Req, Resp>> bus_create_server(
+    MessageBusVariant& bus, const std::string& service)
+{
+    return std::visit([&](auto& b) -> std::unique_ptr<IServiceServer<Req, Resp>> {
+#ifdef HAVE_ZENOH
+        using BusType = std::decay_t<decltype(*b)>;
+        if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
+            return b->template create_server<Req, Resp>(service);
+        }
+#endif
+        (void)b;
+        (void)service;
+        spdlog::warn("[MessageBusFactory] Service channels are not available "
+                     "on the SHM backend");
+        return nullptr;
+    }, bus);
 }
 
 }  // namespace drone::ipc
