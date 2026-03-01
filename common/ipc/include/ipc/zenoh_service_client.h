@@ -26,6 +26,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -58,7 +59,7 @@ public:
     }
 
     uint64_t send_request(const Req& request) override {
-        uint64_t id = next_id_.fetch_add(1, std::memory_order_relaxed);
+        uint64_t id = id_prefix_ | next_seq_.fetch_add(1, std::memory_order_relaxed);
 
         // Serialise the request into raw bytes
         const auto* ptr = reinterpret_cast<const uint8_t*>(&request);
@@ -141,9 +142,17 @@ private:
         std::deque<ServiceResponse<Resp>> queue;
     };
 
+    /// Generate a random 32-bit prefix so correlation IDs are unique
+    /// across multiple client instances targeting the same service.
+    static uint64_t make_id_prefix() {
+        std::random_device rd;
+        return static_cast<uint64_t>(rd()) << 32;
+    }
+
     std::string key_expr_;
     uint64_t timeout_ms_;
-    std::atomic<uint64_t> next_id_{1};
+    uint64_t id_prefix_ = make_id_prefix();
+    std::atomic<uint64_t> next_seq_{1};
     std::shared_ptr<ResponseQueue> responses_ =
         std::make_shared<ResponseQueue>();
 };
