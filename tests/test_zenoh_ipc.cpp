@@ -211,10 +211,11 @@ TEST(ZenohPublisher, Constructs) {
 TEST(ZenohSubscriber, Constructs) {
     ZenohSubscriber<ZenohTestPayload> sub("drone/test/construct_sub");
     EXPECT_EQ(sub.topic_name(), "drone/test/construct_sub");
+    // Zenoh subscription is immediately valid (data arrives asynchronously)
+    EXPECT_TRUE(sub.is_connected());
     // No data yet
     ZenohTestPayload msg;
     EXPECT_FALSE(sub.receive(msg));
-    EXPECT_FALSE(sub.is_connected());
 }
 
 // ---------------------------------------------------------------------------
@@ -352,9 +353,10 @@ TEST(ZenohPubSub, MultipleTopics) {
 
 TEST(ZenohPubSub, NoData) {
     ZenohSubscriber<ZenohTestPayload> sub("drone/test/no_data");
+    // Zenoh subscription is immediately valid (data arrives asynchronously)
+    EXPECT_TRUE(sub.is_connected());
     ZenohTestPayload msg;
     EXPECT_FALSE(sub.receive(msg));
-    EXPECT_FALSE(sub.is_connected());
 }
 
 TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
