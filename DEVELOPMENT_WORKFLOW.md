@@ -66,7 +66,7 @@ cmake --build build -j$(nproc)
 ```bash
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 377 across 47 suites)
+- All tests must pass (currently 400 across 23 suites with `ENABLE_ZENOH=ON`; 323 with Zenoh OFF)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh and SHM test binaries use `RESOURCE_LOCK` to avoid parallel collisions under `ctest -j`

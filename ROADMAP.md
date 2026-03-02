@@ -250,7 +250,7 @@
 | Issue | Task | Priority | Description |
 |-------|------|----------|-------------|
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
-| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | Comm-loss, GPS-loss, SLAM divergence, motor failure detection → safe action matrix |
+| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | 🟡 **Partial** — FaultManager ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61), PR #63) handles 8 fault conditions with graduated response. Remaining: geofencing, motor failure, SLAM divergence detection |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
 | ~~[#45](https://github.com/nmohamaya/companion_software_stack/issues/45)~~ | ~~**[Epic] Zenoh IPC Migration**~~ | ~~P1~~ | ✅ **Complete** — All 6 phases done (PRs #52–#57), Epic closed |
 | ~~[#46](https://github.com/nmohamaya/companion_software_stack/issues/46)~~ | ~~Zenoh Phase A — Foundation~~ | ~~P0~~ | ✅ Done (PR #52) — CMake, ZenohMessageBus, security options, 33 tests, CI dual-build |
@@ -309,7 +309,8 @@
 | # | Title | State |
 |---|-------|-------|
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | Open |
-| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | Open |
+| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Partial** ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61) PR #63) |
+| [#61](https://github.com/nmohamaya/companion_software_stack/issues/61) | FaultManager — graceful degradation | **Closed** (PR #63) |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
 
 ### Zenoh IPC Migration (Phase 12) — ✅ COMPLETE
@@ -328,23 +329,24 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E (Current) |
-|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | **377** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | **22** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | **19** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | **90+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | **7** |
-| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | **Yes** |
-| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | **2 (shm, zenoh)** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr (Current) |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|-------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | **400** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | **23** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | **19** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | **95+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **2 (shm, zenoh)** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | **8** |
 
 ### Process Activity During Simulation
 
@@ -353,11 +355,11 @@
 | 1 | Video Capture | Gazebo camera | Yes — rendered frames at 30 Hz | High |
 | 2 | Perception | YOLOv8-nano (OpenCV DNN) | Yes — real object detection | High |
 | 3 | SLAM/VIO/Nav | Gazebo odometry + IMU | Yes — ground-truth pose | High |
-| 4 | Mission Planner | Pure logic | Consumes real pose | High — orchestrates flight |
+| 4 | Mission Planner | Pure logic + FaultManager | Consumes real pose + system health | High — orchestrates flight + fault response |
 | 5 | Comms | MAVLink (MAVSDK) | Yes — real PX4 link | High — controls PX4 |
 | 6 | Payload Manager | Simulated gimbal | No | Low |
 | 7 | System Monitor | Linux /proc | Host metrics only | Low (1 Hz) |
 
 ---
 
-*Last updated after Zenoh E2E smoke test (PR #58) — 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete (all 6 phases merged, PRs #52–#57).*
+*Last updated after FaultManager (PR #63) — 400 tests, 23 suites, 8 fault conditions, 42/42 E2E checks.*

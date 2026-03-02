@@ -44,7 +44,7 @@ graph TB
         end
 
         subgraph P4["P4 Mission Planner (1 thread)"]
-            P4_main["Main Loop<br/>10 Hz<br/>FSM + Planner + Avoider"]
+            P4_main["Main Loop<br/>10 Hz<br/>FSM + FaultMgr + Planner + Avoider"]
         end
 
         subgraph P5["P5 Comms (5 threads)"]
@@ -341,7 +341,26 @@ graph TD
     FSM -->|"/payload_commands"| P6["P6 Payload"]
 ```
 
-Single-threaded 10 Hz loop: FSM tick → path planning → obstacle avoidance → FC command dispatch. Subscribes mandatory to `FC_STATE` (armed check, altitude feedback) and lazy to `GCS_COMMANDS` (dedup by timestamp).
+Single-threaded 10 Hz loop: FSM tick → **fault evaluation** → path planning → obstacle avoidance → FC command dispatch. Subscribes mandatory to `FC_STATE` (armed check, altitude feedback), lazy to `GCS_COMMANDS` (dedup by timestamp), and optional to `SYSTEM_HEALTH` (for fault detection).
+
+#### FaultManager — Graceful Degradation ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61))
+
+A config-driven **FaultManager** library evaluates system health each loop tick and returns graduated response actions. Escalation-only policy — once raised, actions never downgrade within a flight.
+
+**Response Severity Ladder:** `NONE → WARN → LOITER → RTL → EMERGENCY_LAND`
+
+| # | Fault Condition | Trigger | Action |
+|---|-----------------|---------|--------|
+| 1 | Critical process death | comms/SLAM died | LOITER |
+| 2 | Pose data stale | No update >500 ms | LOITER |
+| 3 | Battery low | <20% remaining | RTL |
+| 4 | Battery critical | <10% remaining | EMERGENCY_LAND |
+| 5 | Thermal warning | Zone 2 (hot) | WARN |
+| 6 | Thermal critical | Zone 3 (critical) | RTL |
+| 7 | Perception dead | Process died | WARN |
+| 8 | FC link lost | Disconnected >3 s | LOITER |
+
+**Key design:** FaultManager is a library in P4 (not a separate process) — zero IPC latency, P4 already owns FSM + FC command authority, PX4 failsafe covers P4 death. All thresholds are config-driven via `fault_manager.*` JSON keys. Loiter auto-escalates to RTL after configurable timeout (default 30 s).
 
 #### FSM States
 
@@ -1185,9 +1204,10 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │   └── include/slam/
 │       ├── ivisual_frontend.h        # IVisualFrontend strategy interface
 │       └── types.h                   # Pose, ImuSample, KeyframePolicy
-├── process4_mission_planner/         # FSM + potential field planner (1 thread)
+├── process4_mission_planner/         # FSM + fault manager + potential field planner (1 thread)
 │   └── include/planner/
 │       ├── mission_fsm.h             # 8-state finite state machine
+│       ├── fault_manager.h           # FaultManager — graceful degradation engine (#61)
 │       ├── ipath_planner.h           # IPathPlanner + PotentialFieldPlanner (EMA)
 │       └── iobstacle_avoider.h       # IObstacleAvoider + PotentialFieldAvoider
 ├── process5_comms/                   # MAVLink + GCS comms (5 threads)
@@ -1199,12 +1219,13 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │   └── include/monitor/
 │       ├── iprocess_monitor.h        # IProcessMonitor + LinuxProcessMonitor
 │       └── sys_info.h                # CPU, memory, temperature utilities
-├── tests/                            # 262 Google Tests across 18 test files
+├── tests/                            # 400 Google Tests across 23 test files
 │   ├── test_shm_ipc.cpp
 │   ├── test_spsc_ring.cpp
 │   ├── test_config.cpp
 │   ├── test_hal.cpp
 │   ├── test_mission_fsm.cpp
+│   ├── test_fault_manager.cpp
 │   ├── test_kalman_tracker.cpp
 │   ├── test_fusion_engine.cpp
 │   ├── test_comms.cpp

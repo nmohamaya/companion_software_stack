@@ -354,6 +354,45 @@ Pose p = fe->process_frame(stereo_frame);
 
 ---
 
+### `FaultManager` — `drone::planner`
+
+**Header:** `process4_mission_planner/include/planner/fault_manager.h`  
+**Used by:** Process 4 (Mission Planner)  
+**Issue:** [#61](https://github.com/nmohamaya/companion_software_stack/issues/61)
+
+Config-driven graceful degradation engine. Evaluates system health each loop tick and returns the highest-priority response action. Escalation-only policy — once raised, actions never downgrade within a flight.
+
+| Type | Description |
+|------|-------------|
+| `FaultAction` | Enum: `NONE(0)` < `WARN(1)` < `LOITER(2)` < `RTL(3)` < `EMERGENCY_LAND(4)` |
+| `FaultType` | Bitmask enum: 8 fault conditions (critical process, pose stale, battery low/critical, thermal warn/critical, perception dead, FC link lost) |
+| `FaultState` | Return type: `recommended_action`, `active_faults` bitmask, `reason` string |
+| `FaultConfig` | Thresholds: `pose_stale_timeout_ns`, `battery_warn_percent`, `battery_crit_percent`, `fc_link_lost_timeout_ns`, `loiter_escalation_timeout_ns` |
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `evaluate` | `FaultState evaluate(const ShmSystemHealth&, const ShmFCState&, uint64_t pose_ts, uint64_t now_ns)` | Evaluate all fault conditions, return graduated action |
+| `reset` | `void reset()` | Clear high-water mark (after landing / new mission) |
+| `high_water_mark` | `FaultAction high_water_mark() const` | Highest action ever returned |
+| `config` | `const FaultConfig& config() const` | Current config thresholds |
+
+**Constructors:**
+```cpp
+FaultManager(const Config& cfg);        // Config-driven (reads fault_manager.* keys)
+FaultManager(const FaultConfig& cfg);   // Direct config (unit tests)
+```
+
+**Config keys** (JSON `fault_manager` section):
+| Key | Default | Description |
+|-----|---------|-------------|
+| `pose_stale_timeout_ms` | 500 | Max pose age before LOITER |
+| `battery_warn_percent` | 20.0 | Battery % → RTL |
+| `battery_crit_percent` | 10.0 | Battery % → EMERGENCY_LAND |
+| `fc_link_lost_timeout_ms` | 3000 | FC disconnect duration → LOITER |
+| `loiter_escalation_timeout_s` | 30 | Loiter duration before auto-RTL |
+
+---
+
 ### `IProcessMonitor` — `drone::monitor`
 
 **Header:** `process7_system_monitor/include/monitor/iprocess_monitor.h`  
@@ -454,11 +493,13 @@ No process code changes needed — only the factory + new implementation file.
 | `test_process_interfaces.cpp` | 19 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | `test_shm_ipc.cpp` | 25 | SeqLock ShmWriter/ShmReader, SPSC ring |
 | `test_zenoh_ipc.cpp` | 44 | MessageBusFactory (5), ZenohTopicMapping (15), ZenohSession/Publisher/Subscriber (3), ZenohPubSub round-trips (5), ZenohMessageBus (4), ZenohMigration (13: 10 per-channel round-trips, multi-channel, high-rate pose, factory subscribe_optional) |
+| `test_mission_fsm.cpp` | 7 | MissionFSM state transitions, waypoint loading, state names |
+| `test_fault_manager.cpp` | 23 | FaultManager: nominal, 8 fault conditions, escalation-only, loiter timeout, reset, simultaneous faults, edge cases ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61)) |
 | `test_zenoh_service.cpp` | *(planned)* | ZenohServiceClient, ZenohServiceServer ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) |
 | `test_zenoh_liveliness.cpp` | *(planned)* | LivelinessToken, LivelinessMonitor ([#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) |
 | `bench_zenoh_video.cpp` | *(planned)* | Video frame zero-copy benchmarks ([#48](https://github.com/nmohamaya/companion_software_stack/issues/48)) |
 
-Total: **308 tests** (19 suites).
+Total: **400 tests** (23 suites).
 
 ---
 

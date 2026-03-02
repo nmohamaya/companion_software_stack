@@ -1167,21 +1167,51 @@ See [BUG_FIXES.md](BUG_FIXES.md) Fix #9 for full details.
 
 ---
 
-## Updated Summary (Post Zenoh Migration Complete)
+### Improvement #20 — FaultManager: Graceful Degradation (Issue #61, PR #63)
 
-| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Bug fixes | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | **19** |
-| Unit tests | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | **377** |
-| Test suites | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | **22** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| IPC backends | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
-| Zenoh channels | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Processes on factory | — | — | — | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| CI matrix | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | **2** |
-| Service channels | SHM | SHM | SHM | SHM | SHM | SHM | **Zenoh** | Zenoh | Zenoh | **Zenoh** |
-| Network transport | — | — | — | — | — | — | — | **Yes** | Yes | **Yes** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | **7** | **7** |
-| E2E checks | — | — | — | — | — | — | — | — | — | **42/42** |
+**Date:** 2026-03-02  
+**Category:** Feature — Safety / Fault Tolerance  
+**Issue:** [#61](https://github.com/nmohamaya/companion_software_stack/issues/61)  
+**PR:** [#63](https://github.com/nmohamaya/companion_software_stack/pull/63)
+
+**Files Added:**
+- `process4_mission_planner/include/planner/fault_manager.h` — FaultManager class, FaultAction/FaultType enums, FaultConfig
+- `tests/test_fault_manager.cpp` — 23 unit tests
+
+**Files Modified:**
+- `process4_mission_planner/include/planner/mission_fsm.h` — Added `is_in_fault_state()`, `set_fault_triggered()`, `fault_triggered_` member
+- `process4_mission_planner/src/main.cpp` — Wired health subscription + fault evaluation loop (reads `ShmSystemHealth`, calls `evaluate()`, triggers FSM transitions + FC commands)
+- `common/ipc/include/ipc/shm_types.h` — Added `active_faults` (uint32_t bitmask) and `fault_action` (uint8_t) to `ShmMissionStatus`
+- `config/gazebo.json`, `config/gazebo_zenoh.json`, `config/hardware.json`, `config/default.json`, `config/gazebo_sitl.json`, `config/zenoh_e2e.json` — Added `fault_manager` config section
+- `tests/CMakeLists.txt` — Registered `test_fault_manager`
+
+**What:** Implemented a config-driven FaultManager library in Process 4 that evaluates system health each loop tick and returns graduated response actions (NONE < WARN < LOITER < RTL < EMERGENCY_LAND). Key design: library in P4 (not separate process) for zero IPC latency. Escalation-only policy ensures actions never downgrade within a flight. Loiter auto-escalates to RTL after configurable timeout.
+
+**8 fault conditions monitored:** critical process death, pose staleness, battery low/critical, thermal warning/critical, perception death, FC link lost.
+
+**Metrics:**
+- Tests: 377 → **400** (+23 FaultManager tests)
+- Test suites: 22 → **23**
+- Config tunables: 90+ → **95+** (+5 fault_manager thresholds)
+
+---
+
+## Updated Summary (Post FaultManager)
+
+| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Bug fixes | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | **19** | **19** |
+| Unit tests | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | **400** |
+| Test suites | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | **23** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| IPC backends | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** | **SHM + Zenoh** |
+| Zenoh channels | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** | **12/12** |
+| Processes on factory | — | — | — | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** | **7/7** |
+| CI matrix | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | **2** | **2** |
+| Service channels | SHM | SHM | SHM | SHM | SHM | SHM | **Zenoh** | Zenoh | Zenoh | **Zenoh** | **Zenoh** |
+| Network transport | — | — | — | — | — | — | — | **Yes** | Yes | **Yes** | **Yes** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | **7** | **7** | **7** |
+| E2E checks | — | — | — | — | — | — | — | — | — | **42/42** | **42/42** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | **8** |
 
 *Last updated after Zenoh E2E smoke test — PR #58: 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete.*
