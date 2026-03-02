@@ -2,7 +2,7 @@
 
 > A practical guide to the C++ design patterns, multithreading constructs, and
 > modern language features used in this codebase.  Each concept is explained with
-> the *why*, followed by the actual code from this repository.
+> the *why*, followed by code excerpts adapted from this repository (often simplified for clarity).
 >
 > **Audience:** C++ learners and new contributors.
 > **Standard:** C++17 (`-std=c++17`)
@@ -325,7 +325,9 @@ public:
           start_(std::chrono::steady_clock::now()) {}
 
     ~ScopedTimer() {
-        double ms = /* elapsed time */;
+        const auto end = std::chrono::steady_clock::now();
+        const double ms =
+            std::chrono::duration<double, std::milli>(end - start_).count();
         if (warn_ms_ > 0.0 && ms > warn_ms_)
             spdlog::warn("{}: {:.2f} ms (limit: {:.1f} ms)", label_, ms, warn_ms_);
     }
@@ -509,9 +511,7 @@ might not be visible to another core for an arbitrary amount of time.
 
 ```cpp
 static std::atomic<bool> g_running{true};
-
-// Signal handler (runs on signal delivery, any thread):
-s_running_->store(false, std::memory_order_relaxed);
+SignalHandler::install(g_running);  // registers g_running with the signal handler
 
 // Worker thread (loops until shutdown):
 while (g_running.load(std::memory_order_relaxed)) {
@@ -647,6 +647,7 @@ public:
         int idx = write_idx_.load(std::memory_order_relaxed) ^ 1;  // inactive slot
         buffers_[idx] = pose;                                       // write to it
         write_idx_.store(idx, std::memory_order_release);           // swap
+        initialized_.store(true, std::memory_order_release);        // mark ready
     }
 
     bool read(Pose& out) const {
@@ -703,8 +704,8 @@ private:
         // ONLY async-signal-safe operations allowed here!
         if (s_running_)
             s_running_->store(false, std::memory_order_relaxed);
-        const char* msg = "Signal received, shutting down...\n";
-        [[maybe_unused]] auto r = write(STDOUT_FILENO, msg, 35);
+        static constexpr char msg[] = "Signal received, shutting down...\n";
+        [[maybe_unused]] auto r = write(STDOUT_FILENO, msg, sizeof(msg) - 1);
         (void)sig;
     }
 };
@@ -1137,9 +1138,11 @@ struct __attribute__((packed)) WireHeader {
 static_assert(sizeof(WireHeader) == 24, "WireHeader must be exactly 24 bytes");
 ```
 
-**Without `packed`:** The compiler would insert 4 bytes of padding after
-`sequence` to align the struct to 8 bytes (for the `uint64_t`), making it 32
-bytes.  The struct received over the network would then be misinterpreted.
+**Without `packed`:** A typical ABI will insert 4 bytes of padding before
+`timestamp_ns` to align the `uint64_t` to an 8-byte boundary, and then add
+tail padding after `sequence` so that the struct's size is a multiple of its
+alignment, making it 32 bytes.  The struct received over the network would then
+be misinterpreted.
 
 **Tradeoff:** Packed structs can cause slower unaligned memory access on some
 architectures (ARM).  This is acceptable for header parsing (done once per
@@ -1188,6 +1191,13 @@ bool create(const std::string& name) {
 Both processes see the same physical memory.  No serialization, no copies,
 no system calls to read/write — just `memcpy` to/from the mapped pointer.
 
+> **Security note:** The example above uses mode `0666` (world-readable and
+> world-writable).  On a multi-user system this allows any local process to
+> open the SHM segment by its predictable name and read or tamper with
+> flight-critical data.  In production, tighten permissions (e.g., `0600`) and
+> run all drone processes under a dedicated user so that only authorized
+> processes can access these segments.
+
 ---
 
 ### 4.2 Binary Wire Format
@@ -1226,6 +1236,15 @@ std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, ...)
     return buf;
 }
 ```
+
+> **Security note:** The binary wire format uses `wire_validate` to check the
+> magic bytes, version, and payload size, but provides no cryptographic
+> integrity or authenticity guarantees.  On an untrusted network, an on-path
+> attacker can forge valid-looking `WireHeader` values and arbitrary payloads.
+> For deployments where the transport is not inherently secured (e.g., a
+> public or shared network), consider adding a message authentication code
+> (MAC) over the header and payload, or using a transport layer with
+> per-topic authentication, and verify it before calling `wire_deserialize`.
 
 ---
 

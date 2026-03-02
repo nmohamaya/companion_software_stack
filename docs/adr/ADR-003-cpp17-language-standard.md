@@ -97,11 +97,7 @@ for detailed examples):
 | `if constexpr` | `ZenohPublisher` SHM/bytes routing, service channel type dispatch |
 | `static_assert` with message | `ShmWriter`, `ShmReader`, `wire_serialize` (trivially-copyable checks) |
 | `std::string_view` | `LivelinessToken` key parsing, Zenoh key expressions |
-| Structured bindings | Config parsing, test assertions |
-| `std::filesystem` | Log directory creation, config file resolution |
-| Fold expressions | Variadic logging helpers |
 | `[[maybe_unused]]`, `[[nodiscard]]` | Signal handler, factory functions |
-| Class template argument deduction (CTAD) | `std::lock_guard lock(mutex_)` |
 | Inline variables | `SignalHandler::s_running_` static inline member |
 
 ---
@@ -156,8 +152,7 @@ toolchain risk on the Jetson outweighs the convenience.
 
 **Cons:**
 - Missing `std::variant`, `std::optional`, `if constexpr`, `std::string_view`,
-  structured bindings, inline variables, CTAD, and fold expressions — all of
-  which are heavily used in the codebase.
+  and inline variables — all of which are heavily used in the codebase.
 - Would require significant refactoring or Boost polyfills.
 
 **Decision:** Rejected.  C++14 lacks too many features the codebase depends on.
