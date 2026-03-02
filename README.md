@@ -1,6 +1,6 @@
 # Drone Companion Computer Software Stack
 
-Multi-process C++17 software stack for an autonomous drone companion computer. 7 independent Linux processes communicate via a **config-driven IPC layer** — currently POSIX shared memory (SeqLock pattern), with a planned migration to **Eclipse Zenoh** for zero-copy SHM + network-transparent pub/sub ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45)). All algorithms are **written from scratch** — no external ML/CV/SLAM frameworks are used. Hardware is abstracted behind a HAL layer; the default `simulated` backends generate synthetic data so the full stack runs on any Linux box.
+Multi-process C++17 software stack for an autonomous drone companion computer. 7 independent Linux processes communicate via a **config-driven IPC layer** — POSIX shared memory (default) or **Eclipse Zenoh** zero-copy SHM + network-transparent pub/sub, selectable at build time ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) — completed). All algorithms are **written from scratch** — no external ML/CV/SLAM frameworks are used. Hardware is abstracted behind a HAL layer; the default `simulated` backends generate synthetic data so the full stack runs on any Linux box.
 
 **Target hardware:** NVIDIA Jetson Orin (Nano/NX/AGX, aarch64, JetPack 6.x, CUDA 12.x)
 
@@ -92,14 +92,14 @@ graph TB
 
     style CC fill:#1a1a2e,color:#e0e0e0
     classDef ipcNote fill:#2d4a22,stroke:#4caf50,color:#fff
-    IPC_NOTE["IPC Layer: ShmMessageBus (current) → ZenohMessageBus (planned)<br/>All /channel edges use IPublisher/ISubscriber abstraction"]:::ipcNote
+    IPC_NOTE["IPC Layer: ShmMessageBus (default) or ZenohMessageBus (config-driven)<br/>All /channel edges use IPublisher/ISubscriber abstraction"]:::ipcNote
 ```
 
-**Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction — currently backed by lock-free POSIX shared memory (SeqLock pattern), with a planned migration to **Zenoh** zero-copy SHM + network transport ([#45](https://github.com/nmohamaya/companion_software_stack/issues/45)). Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
+**Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction — backed by lock-free POSIX shared memory (SeqLock, default) or **Zenoh** zero-copy SHM + network transport (`-DENABLE_ZENOH=ON`, [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45)). The backend is selected via `ipc_backend` in the JSON config. Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
 
 ### IPC Channel Map
 
-All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The current POSIX SHM segment names will migrate to Zenoh key expressions ([#47](https://github.com/nmohamaya/companion_software_stack/issues/47), [#48](https://github.com/nmohamaya/companion_software_stack/issues/48)).
+All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The backend is selected via `ipc_backend` in the JSON config (`"shm"` or `"zenoh"`). SHM uses POSIX segment names; Zenoh uses key expressions.
 
 ```
  P1 ──▶ /drone_mission_cam ──────▶ P2           (Zenoh: drone/video/frame)
@@ -602,14 +602,100 @@ Each segment is wrapped in `ShmBlock { atomic<uint64_t> seq, uint64_t timestamp_
 
 All common libraries are **header-only** and written from scratch.
 
-### SeqLock IPC (`ShmWriter<T>` / `ShmReader<T>`) — Current Backend
+### SeqLock IPC (`ShmWriter<T>` / `ShmReader<T>`) — Default Backend
 
 - **Mechanism:** Optimistic sequence-counter concurrency (SeqLock). Writer increments sequence to odd (writing), copies `T`, increments to even (done). Reader retries up to 4 times if sequence is odd or torn.
 - **Memory:** POSIX `shm_open()` + `mmap()`. Each segment holds one `ShmBlock<T>`.
 - **Constraint:** `T` must be `trivially_copyable` (enforced via `static_assert`).
 - **Cleanup:** Writer calls `shm_unlink()` in destructor (RAII).
 
-> **Planned replacement:** [Eclipse Zenoh](https://zenoh.io/) — zero-copy SHM (loan-based, no `memcpy`) + network-transparent pub/sub. Eliminates manual `/dev/shm` lifecycle, adds process crash detection via liveliness tokens, and enables drone↔GCS communication over the same API. See [ADR-001](docs/adr/ADR-001-ipc-framework-selection.md) and [#45](https://github.com/nmohamaya/companion_software_stack/issues/45).
+### Zenoh IPC (`ZenohPublisher<T>` / `ZenohSubscriber<T>`) — Optional Backend
+
+- **Build:** `-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON` (or provide `-DZENOH_CONFIG_PATH` for TLS)
+- **Mechanism:** Zenoh pub/sub with SHM zero-copy for large messages (> threshold) and serialized bytes for small messages.
+- **Session:** Singleton `ZenohSession` — heap-allocated, intentionally leaked (avoids Rust atexit panic).
+- **Network:** Same pub/sub API works across processes (SHM) and across machines (TCP/UDP/QUIC) — enables drone↔GCS communication.
+- **Health:** Liveliness tokens (`drone/alive/{process}`) with automatic death callbacks for process crash detection.
+- **Service:** `ZenohServiceClient` / `ZenohServiceServer` for request-response patterns (correlation IDs + timeouts).
+
+### IPC Backend Class Hierarchy
+
+```mermaid
+classDiagram
+    class IPublisher~T~ {
+        <<interface>>
+        +publish(msg: T) void
+    }
+    class ISubscriber~T~ {
+        <<interface>>
+        +receive(out: T) bool
+        +is_connected() bool
+    }
+    class IMessageBus {
+        <<interface>>
+        +advertise~T~(topic) IPublisher~T~
+        +subscribe~T~(topic) ISubscriber~T~
+    }
+
+    class ShmWriter~T~ {
+        -fd_: int
+        -ptr_: void*
+        -name_: string
+        +publish(msg: T) void
+        +is_connected() bool
+    }
+    class ShmReader~T~ {
+        -fd_: int
+        -ptr_: void*
+        -name_: string
+        +receive(out: T) bool
+        +is_connected() bool
+    }
+    class ShmMessageBus {
+        +advertise~T~(topic) ShmWriter~T~
+        +subscribe~T~(topic) ShmReader~T~
+    }
+
+    class ZenohPublisher~T~ {
+        -publisher_: zenoh Publisher
+        -shm_provider_: ShmProvider
+        +publish(msg: T) void
+    }
+    class ZenohSubscriber~T~ {
+        -subscriber_: zenoh Subscriber
+        -has_data_: atomic bool
+        +receive(out: T) bool
+        +is_connected() bool
+    }
+    class ZenohMessageBus {
+        -session_: ZenohSession
+        +advertise~T~(topic) ZenohPublisher~T~
+        +subscribe~T~(topic) ZenohSubscriber~T~
+    }
+    class ZenohSession {
+        -session_: zenoh Session
+        +instance()$ ZenohSession
+        +get() zenoh Session
+    }
+
+    class MessageBusFactory {
+        +create_message_bus(backend: string)$ MessageBusVariant
+    }
+
+    IPublisher~T~ <|.. ShmWriter~T~
+    IPublisher~T~ <|.. ZenohPublisher~T~
+    ISubscriber~T~ <|.. ShmReader~T~
+    ISubscriber~T~ <|.. ZenohSubscriber~T~
+    IMessageBus <|.. ShmMessageBus
+    IMessageBus <|.. ZenohMessageBus
+    ShmMessageBus *-- ShmWriter~T~
+    ShmMessageBus *-- ShmReader~T~
+    ZenohMessageBus *-- ZenohPublisher~T~
+    ZenohMessageBus *-- ZenohSubscriber~T~
+    ZenohMessageBus --> ZenohSession
+    MessageBusFactory ..> ShmMessageBus : creates
+    MessageBusFactory ..> ZenohMessageBus : creates
+```
 
 ### SPSC Ring Buffer (`SPSCRing<T, N>`)
 
@@ -810,7 +896,7 @@ Services (external RPC):
 |---|---|---|---|
 | **P1** | ~~`IPublisher<T>` / `ISubscriber<T>` + `ShmMessageBus`~~ | ~~3 days~~ | ✅ **DONE** — `ShmMessageBus`, `ShmPublisher/Subscriber`, `ShmServiceChannel` |
 | **P1** | ~~`IServiceClient` / `IServiceServer` — request-response~~ | ~~2 days~~ | ✅ **DONE** — correlation IDs, timeouts, `ServiceEnvelope<T>` |
-| **P1** | **Zenoh IPC migration** — `ZenohMessageBus` + zero-copy SHM + network | ~14–19 days | [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45): 6 phases ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46)–[#51](https://github.com/nmohamaya/companion_software_stack/issues/51)). Replaces POSIX SHM, adds drone↔GCS network transport |
+| **P1** | ~~Zenoh IPC migration~~ | ~~14–19 days~~ | ✅ **DONE** — [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) completed (6 phases, PRs #52–#57 merged). `ZenohMessageBus` + SHM zero-copy + network transport + liveliness tokens + service channels. Config-driven backend selection (`ipc_backend: "shm"` or `"zenoh"`) |
 | **P2** | Internal process interfaces (`IVisualFrontend`, `IPathPlanner`, `IObstacleAvoider`, `IProcessMonitor`) — **DONE** | — | All strategy interfaces implemented with simulated + real backends |
 | **P3** | ~~gRPC service layer for external comms~~ | ~~2 weeks~~ | Superseded by Zenoh network transport ([#50](https://github.com/nmohamaya/companion_software_stack/issues/50)) — same pub/sub API over TCP/UDP |
 
@@ -1014,7 +1100,7 @@ sudo rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
 
 The launch script does this automatically on every start. If you switch between running as root and as a normal user, you may need to clean them manually since root-owned segments can't be overwritten by a normal user.
 
-> **Note:** The planned Zenoh migration ([#45](https://github.com/nmohamaya/companion_software_stack/issues/45)) eliminates this problem entirely — Zenoh manages SHM lifecycle automatically and cleans up on process crash.
+> **Note:** When using the Zenoh backend (`ipc_backend: "zenoh"`), SHM segment cleanup is handled automatically by Zenoh — no manual `/dev/shm` cleanup is needed, and process crash scenarios are handled via liveliness tokens.
 
 ### Thread affinity / RT scheduling warnings
 
