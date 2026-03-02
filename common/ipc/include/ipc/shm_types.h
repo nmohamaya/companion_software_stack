@@ -86,6 +86,8 @@ struct ShmMissionStatus {
     float target_x, target_y, target_z;
     float battery_percent;
     bool  mission_active;
+    uint32_t active_faults;     // bitmask of FaultType (0 = nominal)
+    uint8_t  fault_action;      // current FaultAction severity (0 = NONE)
 };
 
 // ═══════════════════════════════════════════════════════════
