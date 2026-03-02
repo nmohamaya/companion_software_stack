@@ -1,0 +1,1336 @@
+# C++ Patterns & Concepts — Companion Software Stack
+
+> A practical guide to the C++ design patterns, multithreading constructs, and
+> modern language features used in this codebase.  Each concept is explained with
+> the *why*, followed by the actual code from this repository.
+>
+> **Audience:** C++ learners and new contributors.
+> **Standard:** C++17 (`-std=c++17`)
+
+---
+
+## Table of Contents
+
+1. [Design Patterns](#1-design-patterns)
+   - [1.1 Strategy Pattern (Polymorphic Interfaces)](#11-strategy-pattern-polymorphic-interfaces)
+   - [1.2 Factory Pattern](#12-factory-pattern)
+   - [1.3 Singleton Pattern](#13-singleton-pattern)
+   - [1.4 State Machine Pattern](#14-state-machine-pattern)
+   - [1.5 Observer / Publish-Subscribe Pattern](#15-observer--publish-subscribe-pattern)
+   - [1.6 RAII (Resource Acquisition Is Initialization)](#16-raii-resource-acquisition-is-initialization)
+   - [1.7 Adapter Pattern](#17-adapter-pattern)
+2. [Multithreading & Concurrency](#2-multithreading--concurrency)
+   - [2.1 `std::thread` and Thread Lifecycle](#21-stdthread-and-thread-lifecycle)
+   - [2.2 `std::mutex` and `std::lock_guard`](#22-stdmutex-and-stdlock_guard)
+   - [2.3 `std::condition_variable`](#23-stdcondition_variable)
+   - [2.4 `std::atomic` and Memory Ordering](#24-stdatomic-and-memory-ordering)
+   - [2.5 SeqLock — A Custom Lock-Free Protocol](#25-seqlock--a-custom-lock-free-protocol)
+   - [2.6 Lock-Free SPSC Ring Buffer](#26-lock-free-spsc-ring-buffer)
+   - [2.7 Double Buffering](#27-double-buffering)
+   - [2.8 Signal-Safe Shutdown](#28-signal-safe-shutdown)
+   - [2.9 Thread Naming, CPU Pinning & RT Scheduling](#29-thread-naming-cpu-pinning--rt-scheduling)
+3. [Modern C++ Techniques](#3-modern-c-techniques)
+   - [3.1 `std::variant` and `std::visit`](#31-stdvariant-and-stdvisit)
+   - [3.2 `std::optional`](#32-stdoptional)
+   - [3.3 `if constexpr` — Compile-Time Branching](#33-if-constexpr--compile-time-branching)
+   - [3.4 `static_assert` — Compile-Time Contracts](#34-static_assert--compile-time-contracts)
+   - [3.5 Smart Pointers (`unique_ptr`, `shared_ptr`)](#35-smart-pointers-unique_ptr-shared_ptr)
+   - [3.6 Move Semantics](#36-move-semantics)
+   - [3.7 Lambda Expressions](#37-lambda-expressions)
+   - [3.8 `constexpr` — Compile-Time Constants](#38-constexpr--compile-time-constants)
+   - [3.9 `std::string_view`](#39-stdstring_view)
+   - [3.10 `enum class` — Scoped Enumerations](#310-enum-class--scoped-enumerations)
+   - [3.11 `alignas` — Cache-Line Alignment](#311-alignas--cache-line-alignment)
+   - [3.12 Structured `__attribute__((packed))`](#312-structured-__attribute__packed)
+4. [Systems Programming Concepts](#4-systems-programming-concepts)
+   - [4.1 POSIX Shared Memory (`shm_open` / `mmap`)](#41-posix-shared-memory-shm_open--mmap)
+   - [4.2 Binary Wire Format](#42-binary-wire-format)
+   - [4.3 Conditional Compilation (`#ifdef`)](#43-conditional-compilation-ifdef)
+5. [Concept Map — Where Patterns Intersect](#5-concept-map--where-patterns-intersect)
+6. [Glossary](#6-glossary)
+
+---
+
+## 1. Design Patterns
+
+### 1.1 Strategy Pattern (Polymorphic Interfaces)
+
+**What:** Define a family of algorithms behind a common interface.  The caller
+codes to the interface; the concrete implementation is selected at runtime.
+
+**Why:** The drone stack needs to run with different hardware — a simulated
+camera during testing vs. a Gazebo camera in SITL vs. a real V4L2 camera on
+hardware.  The Strategy pattern lets every process work identically regardless
+of which backend is plugged in.
+
+**Where in the codebase:**
+
+| Interface | File | Concrete Implementations |
+|-----------|------|--------------------------|
+| `ICamera` | `common/hal/include/hal/icamera.h` | `SimulatedCamera`, `GazeboCameraBackend` |
+| `IFCLink` | `common/hal/include/hal/ifc_link.h` | `SimulatedFCLink`, `MavlinkFCLink` |
+| `IDetector` | `process2_perception/include/perception/detector_interface.h` | `SimulatedDetector`, `OpenCvYoloDetector`, `ColorContourDetector` |
+| `IPublisher<T>` | `common/ipc/include/ipc/ipublisher.h` | `ShmPublisher<T>`, `ZenohPublisher<T>` |
+| `ISubscriber<T>` | `common/ipc/include/ipc/isubscriber.h` | `ShmSubscriber<T>`, `ZenohSubscriber<T>` |
+| `IPathPlanner` | `process4_mission_planner/include/planner/ipath_planner.h` | `PotentialFieldPlanner` |
+| `IVisualFrontend` | `process3_slam_vio_nav/include/slam/ivisual_frontend.h` | `SimulatedVisualFrontend`, `GazeboVisualFrontend` |
+| `IProcessMonitor` | `process7_system_monitor/include/monitor/iprocess_monitor.h` | `LinuxProcessMonitor` |
+
+**Example — `ICamera` interface** (`common/hal/include/hal/icamera.h`):
+
+```cpp
+class ICamera {
+public:
+    virtual ~ICamera() = default;
+
+    virtual bool open(uint32_t width, uint32_t height, int fps) = 0;
+    virtual void close() = 0;
+    virtual CapturedFrame capture() = 0;   // blocks until frame ready
+    virtual bool is_open() const = 0;
+    virtual std::string name() const = 0;
+};
+```
+
+**Key C++ features used:**
+- **Pure virtual functions** (`= 0`): Forces every concrete class to implement the method.
+- **Virtual destructor** (`virtual ~ICamera() = default`): Ensures proper cleanup when deleting through a base pointer.
+- **`= default`**: Tells the compiler to generate the default destructor body (no custom cleanup in the base).
+
+**Usage** — the process doesn't know or care which camera it's using:
+
+```cpp
+// Caller code works with ANY ICamera implementation
+std::unique_ptr<ICamera> cam = hal::create_camera(cfg, "video_capture.mission_cam");
+cam->open(1280, 720, 30);
+auto frame = cam->capture();  // Could be simulated, Gazebo, or V4L2
+```
+
+---
+
+### 1.2 Factory Pattern
+
+**What:** A function that creates and returns objects without the caller knowing
+the exact concrete type.
+
+**Why:** The correct backend implementation depends on runtime configuration
+(a JSON file).  A factory centralises the `if/else` selection logic in one
+place — every other file just calls the factory.
+
+**Where:** `common/hal/include/hal/hal_factory.h`, `common/ipc/include/ipc/message_bus_factory.h`
+
+**Example — HAL Camera Factory** (`common/hal/include/hal/hal_factory.h`):
+
+```cpp
+inline std::unique_ptr<ICamera> create_camera(
+    const drone::Config& cfg, const std::string& section)
+{
+    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedCamera>();
+    }
+#ifdef HAVE_GAZEBO
+    if (backend == "gazebo") {
+        auto gz_topic = cfg.get<std::string>(section + ".gz_topic", "/camera");
+        return std::make_unique<GazeboCameraBackend>(gz_topic);
+    }
+#endif
+    throw std::runtime_error("[HAL] Unknown camera backend: " + backend);
+}
+```
+
+**Key C++ features used:**
+- **`std::unique_ptr`**: The factory returns ownership via a smart pointer — no manual `delete` needed.
+- **`std::make_unique<T>(args...)`**: Constructs the object directly on the heap, exception-safe.
+- **`#ifdef` guards**: Only compile Gazebo code if the dependency is available at build time.
+
+---
+
+### 1.3 Singleton Pattern
+
+**What:** Ensure a class has exactly one instance, accessible globally.
+
+**Why:** All Zenoh publishers and subscribers in a process must share the same
+underlying Zenoh session.  Creating multiple sessions would waste resources and
+break SHM buffer sharing.
+
+**Where:** `common/ipc/include/ipc/zenoh_session.h`
+
+```cpp
+class ZenohSession {
+public:
+    // Access the singleton — constructed once, on first call
+    static ZenohSession& instance() {
+        static ZenohSession* inst = new ZenohSession();  // intentionally leaked
+        return *inst;
+    }
+
+    zenoh::Session& session() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!session_.has_value()) {
+            open_session();   // lazy initialization
+        }
+        return session_.value();
+    }
+
+    // Non-copyable, non-movable — there can be only one
+    ZenohSession(const ZenohSession&)            = delete;
+    ZenohSession& operator=(const ZenohSession&) = delete;
+    ZenohSession(ZenohSession&&)                 = delete;
+    ZenohSession& operator=(ZenohSession&&)      = delete;
+
+private:
+    ZenohSession() = default;       // private constructor
+    mutable std::mutex mutex_;
+    std::optional<zenoh::Session> session_;
+};
+```
+
+**Why is it leaked?**  The Zenoh C library (Rust FFI) panics if its session
+destructor runs during `atexit()`.  Heap-allocating with `new` and never
+`delete`-ing avoids the crash.  The OS reclaims all process memory on exit.
+
+**Key C++ features used:**
+- **`static` local variable**: C++11 guarantees thread-safe initialization of function-local statics (the "Meyers singleton").
+- **Deleted copy/move**: The four `= delete` lines make it impossible to accidentally create a second instance.
+- **`mutable std::mutex`**: Allows locking in `const` methods.
+- **`std::optional`**: Allows lazy initialization — the session isn't created until first use.
+
+> **Alternative considered:** `static ZenohSession inst;` (stack-based singleton).
+> Rejected because Zenoh's destructor runs during `atexit()` and panics.
+
+---
+
+### 1.4 State Machine Pattern
+
+**What:** Model an entity's lifecycle as a set of states with explicit
+transitions.
+
+**Why:** A drone mission has a clear lifecycle: IDLE → PREFLIGHT → TAKEOFF →
+NAVIGATE → ... → LAND → IDLE.  An explicit FSM makes the legal transitions
+visible and prevents invalid state combinations.
+
+**Where:** `process4_mission_planner/include/planner/mission_fsm.h`
+
+```cpp
+// States are a scoped enum — no implicit conversion to int
+enum class MissionState : uint8_t {
+    IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, LOITER, RTL, LAND, EMERGENCY
+};
+
+class MissionFSM {
+public:
+    MissionFSM() : state_(MissionState::IDLE) {}
+
+    MissionState state() const { return state_; }
+
+    // Each event triggers a state transition
+    void on_arm()       { transition(MissionState::PREFLIGHT); }
+    void on_takeoff()   { transition(MissionState::TAKEOFF); }
+    void on_navigate()  { transition(MissionState::NAVIGATE); }
+    void on_rtl()       { transition(MissionState::RTL); }
+    void on_landed()    { transition(MissionState::IDLE); }
+    void on_emergency() { transition(MissionState::EMERGENCY); }
+
+private:
+    MissionState state_;
+
+    void transition(MissionState new_state) {
+        spdlog::info("[FSM] {} → {}", state_name(state_), state_name(new_state));
+        state_ = new_state;
+    }
+};
+```
+
+**Usage** (in the mission planner main loop):
+
+```cpp
+switch (fsm.state()) {
+    case MissionState::IDLE:      /* wait for arm command */  break;
+    case MissionState::TAKEOFF:   /* command climb to 10m */  break;
+    case MissionState::NAVIGATE:  /* follow waypoints */      break;
+    case MissionState::RTL:       /* return to launch */      break;
+    // ...
+}
+```
+
+---
+
+### 1.5 Observer / Publish-Subscribe Pattern
+
+**What:** One component publishes data; zero or more components receive it
+asynchronously, without the publisher knowing who (or how many) subscribers
+exist.
+
+**Why:** Process 1 (Video Capture) publishes camera frames.  Process 2
+(Perception) and Process 3 (SLAM) both read them.  Neither publisher nor
+subscribers need to know about each other — total decoupling.
+
+**Where:** The entire `common/ipc/` layer implements this:
+
+```
+                ┌──────────────┐
+                │  IPublisher  │ ◄── ShmPublisher or ZenohPublisher
+                └──────┬───────┘
+                       │ publish(msg)
+              ┌────────┴─────────┐
+              ▼                  ▼
+       ┌─────────────┐   ┌─────────────┐
+       │ ISubscriber  │   │ ISubscriber  │  ◄── ShmSubscriber or ZenohSubscriber
+       └─────────────┘   └─────────────┘
+         Process 2           Process 3
+```
+
+**Liveliness monitoring** is another observer pattern — processes declare
+"I'm alive" tokens, and the System Monitor observes births/deaths:
+
+```cpp
+// Process 1 declares: "I'm alive"
+drone::ipc::LivelinessToken token("video_capture");  // RAII — auto-undeclare on exit
+
+// Process 7 observes all processes:
+drone::ipc::LivelinessMonitor monitor(
+    [](const std::string& name) { spdlog::info("{} came alive", name); },
+    [](const std::string& name) { spdlog::warn("{} died!", name); }
+);
+```
+
+---
+
+### 1.6 RAII (Resource Acquisition Is Initialization)
+
+**What:** Tie a resource's lifetime to an object's lifetime.  The constructor
+acquires; the destructor releases.  No manual cleanup needed.
+
+**Why:** In systems programming, forgetting to `munmap()`, `close()`, or
+`shm_unlink()` causes resource leaks.  RAII makes it impossible to forget.
+
+**Where in the codebase:**
+
+| Class | Resource Managed | File |
+|-------|-----------------|------|
+| `ShmWriter<T>` | POSIX SHM segment (`shm_open` → `munmap` → `shm_unlink`) | `common/ipc/include/ipc/shm_writer.h` |
+| `ShmReader<T>` | POSIX SHM mapping (`mmap` → `munmap` → `close`) | `common/ipc/include/ipc/shm_reader.h` |
+| `LivelinessToken` | Zenoh liveliness key (declare → undeclare) | `common/ipc/include/ipc/zenoh_liveliness.h` |
+| `ScopedTimer` | Wall-clock measurement (start → log on destroy) | `common/util/include/util/scoped_timer.h` |
+| `std::lock_guard<std::mutex>` | Mutex lock (lock → unlock) | Used throughout |
+
+**Example — `ScopedTimer`** (`common/util/include/util/scoped_timer.h`):
+
+```cpp
+class ScopedTimer {
+public:
+    ScopedTimer(const char* label, double warn_ms = 0.0)
+        : label_(label), warn_ms_(warn_ms),
+          start_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedTimer() {
+        double ms = /* elapsed time */;
+        if (warn_ms_ > 0.0 && ms > warn_ms_)
+            spdlog::warn("{}: {:.2f} ms (limit: {:.1f} ms)", label_, ms, warn_ms_);
+    }
+private:
+    const char* label_;
+    double warn_ms_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+// Usage — just declare it; timing is automatic:
+{
+    ScopedTimer t("YOLOv8 inference", 33.0);   // warn if >33ms (30 FPS budget)
+    detector->detect(frame, detections);
+}   // ~ScopedTimer() logs elapsed time here
+```
+
+**Example — `ShmWriter<T>` destructor** (`common/ipc/include/ipc/shm_writer.h`):
+
+```cpp
+~ShmWriter() {
+    if (ptr_) munmap(ptr_, sizeof(ShmBlock));   // unmap shared memory
+    if (fd_ >= 0) {
+        shm_unlink(name_.c_str());              // remove the /dev/shm entry
+        close(fd_);                             // close the file descriptor
+    }
+}
+```
+
+No matter how the function exits — normal return, exception, early return — the
+destructor runs and resources are released.
+
+---
+
+### 1.7 Adapter Pattern
+
+**What:** Wrap a foreign API behind a local interface so it can be used
+interchangeably with other implementations.
+
+**Where:** `GazeboCameraBackend` wraps the gz-transport subscription API
+behind `ICamera`.  `MavlinkFCLink` wraps the MAVSDK API behind `IFCLink`.
+`ZenohMessageBus` maps SHM-style topic names to Zenoh key expressions.
+
+```
+   ICamera (our interface)          GazeboCameraBackend (adapter)
+   ┌──────────────────┐            ┌────────────────────────────┐
+   │ open()           │────────────│ subscribes to gz-transport │
+   │ capture()        │────────────│ waits on condition_variable│
+   │ close()          │────────────│ unsubscribes               │
+   └──────────────────┘            └────────────────────────────┘
+```
+
+---
+
+## 2. Multithreading & Concurrency
+
+### 2.1 `std::thread` and Thread Lifecycle
+
+**What:** `std::thread` represents a single thread of execution.  You construct
+it with a callable (function pointer, lambda, functor), and it starts
+immediately.
+
+**Key rule:** You must either `.join()` (wait for completion) or `.detach()`
+(fire-and-forget) before the `std::thread` object is destroyed.  Otherwise, the
+program calls `std::terminate()`.
+
+**Where:** Every process's `main.cpp` spawns dedicated threads:
+
+```cpp
+// Process 2 — Perception (process2_perception/src/main.cpp)
+std::thread t_inference(inference_thread, ...);
+std::thread t_tracker(tracker_thread, ...);
+std::thread t_lidar(lidar_sim_thread, ...);
+std::thread t_radar(radar_sim_thread, ...);
+std::thread t_fusion(fusion_thread, ...);
+
+// ... main loop runs ...
+
+g_running.store(false);       // signal all threads to stop
+t_inference.join();           // wait for each thread to finish
+t_tracker.join();
+t_lidar.join();
+t_radar.join();
+t_fusion.join();
+```
+
+**Why not `std::jthread`?** `std::jthread` (C++20) auto-joins in its
+destructor and supports cooperative cancellation via `std::stop_token`.  This
+codebase targets C++17, so it uses `std::thread` + `std::atomic<bool>` for
+shutdown signaling.
+
+---
+
+### 2.2 `std::mutex` and `std::lock_guard`
+
+**What:** A mutex (mutual exclusion) prevents two threads from accessing
+shared state simultaneously.  `std::lock_guard` is an RAII wrapper that
+locks in its constructor and unlocks in its destructor.
+
+**Where:** `ZenohSession`, `ZenohSubscriber`, `SimulatedFCLink`, `MavlinkFCLink`, and more.
+
+```cpp
+// ZenohSession — every method that touches session_ acquires the mutex
+class ZenohSession {
+    mutable std::mutex mutex_;
+    std::optional<zenoh::Session> session_;
+
+public:
+    zenoh::Session& session() {
+        std::lock_guard<std::mutex> lock(mutex_);  // locked here
+        if (!session_.has_value())
+            open_session();
+        return session_.value();
+    }   // lock released here — even if an exception is thrown
+};
+```
+
+**Why `mutable`?** The mutex needs to be locked even in `const` methods
+(e.g. `is_open() const`).  Without `mutable`, the compiler won't let
+you lock a mutex inside a `const` function.
+
+**Key pitfall: Deadlock.**  If you hold mutex A and then try to lock mutex B,
+while another thread holds B and tries to lock A, both threads block forever.
+This codebase avoids deadlock by:
+1. Using `std::lock_guard` (never manually unlocking).
+2. Each class has at most one mutex.
+3. No nested locking across classes in a single call chain.
+
+---
+
+### 2.3 `std::condition_variable`
+
+**What:** Allows a thread to sleep until another thread signals that some
+condition is true.  More efficient than busy-waiting (spin loops).
+
+**Where:** `GazeboCameraBackend` — the `capture()` method blocks until a
+gz-transport callback delivers a new frame:
+
+```cpp
+CapturedFrame capture() override {
+    std::unique_lock<std::mutex> lock(mtx_);
+    // Wait until frame_ready_ is true OR camera was closed (timeout 100ms)
+    cv_.wait_for(lock, 100ms, [this] { return frame_ready_ || !open_; });
+    if (!frame_ready_) return {};
+    frame_ready_ = false;
+    return front_frame_;
+}
+
+// Called by gz-transport on a different thread:
+void on_gz_image(const gz::msgs::Image& msg) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    // Copy image data into back buffer
+    frame_ready_ = true;
+    cv_.notify_one();   // wake up capture() thread
+}
+```
+
+**Why `unique_lock` not `lock_guard`?**  `condition_variable::wait()` needs to
+temporarily unlock the mutex while the thread sleeps and re-lock it when waking
+up.  `std::lock_guard` doesn't support unlock/re-lock — `std::unique_lock` does.
+
+---
+
+### 2.4 `std::atomic` and Memory Ordering
+
+**What:** `std::atomic<T>` provides lock-free operations on primitive types
+with guaranteed visibility across CPU cores.
+
+**Why raw loads/stores aren't enough:** Modern CPUs reorder instructions and
+cache memory independently per core.  Without atomics, one core's write
+might not be visible to another core for an arbitrary amount of time.
+
+**Memory ordering in this codebase:**
+
+| Ordering | Meaning | Where Used |
+|----------|---------|------------|
+| `memory_order_relaxed` | No ordering guarantees — just atomicity | `g_running` shutdown flag, statistics counters |
+| `memory_order_acquire` | All memory writes before the *paired release* are visible to this thread | SeqLock reader, SPSC ring consumer |
+| `memory_order_release` | All memory writes before this store are visible to threads that *acquire* | SeqLock writer, SPSC ring producer |
+
+**Example — shutdown flag** (every process):
+
+```cpp
+static std::atomic<bool> g_running{true};
+
+// Signal handler (runs on signal delivery, any thread):
+s_running_->store(false, std::memory_order_relaxed);
+
+// Worker thread (loops until shutdown):
+while (g_running.load(std::memory_order_relaxed)) {
+    // ... do work ...
+}
+```
+
+`relaxed` is fine here because we don't need to synchronize any *other* data
+with the flag — we just need every thread to eventually see `false`.
+
+---
+
+### 2.5 SeqLock — A Custom Lock-Free Protocol
+
+**What:** A SeqLock (sequence lock) is a read-write synchronization mechanism
+where the writer never blocks and readers retry if they detect a concurrent
+write.
+
+**Why:** In the POSIX SHM IPC path, one process writes sensor data (e.g.
+camera frames at 30 Hz) and multiple processes read it.  A mutex would make
+the writer block if a reader is slow — unacceptable for real-time.  SeqLock
+gives us:
+- **Writer never blocks** — always O(1)
+- **Readers are wait-free** (optimistic retry)
+- **Zero system calls** — everything happens in user-space via atomics
+
+**How it works:**
+
+```
+seq=0 (even → stable)
+              Writer                    Reader
+              ──────                    ──────
+              seq → 1 (odd = writing)   reads seq=1 → odd, RETRY
+              memcpy(data)
+              seq → 2 (even = done)     reads seq=2 → even
+                                        memcpy(data)
+                                        fence(acquire)
+                                        reads seq=2 → matches → SUCCESS
+```
+
+**Where:** `common/ipc/include/ipc/shm_writer.h` and `shm_reader.h`
+
+```cpp
+// Writer — never blocks, always succeeds
+void write(const T& data) {
+    uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
+    ptr_->seq.store(s + 1, std::memory_order_release);   // odd = writing
+    std::memcpy(&ptr_->data, &data, sizeof(T));
+    ptr_->seq.store(s + 2, std::memory_order_release);   // even = done
+}
+
+// Reader — retries up to 4 times on torn reads
+bool read(T& out) const {
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
+        if (s1 & 1) continue;                             // writer mid-write
+        std::memcpy(&out, &ptr_->data, sizeof(T));
+        std::atomic_thread_fence(std::memory_order_acquire);
+        uint64_t s2 = ptr_->seq.load(std::memory_order_relaxed);
+        if (s1 == s2) return true;                        // consistent read
+    }
+    return false;   // torn read after 4 attempts
+}
+```
+
+**Why the fence?** The `acquire` fence *after* the `memcpy` ensures the CPU
+doesn't reorder the `memcpy` after the second `seq` load.  Without it, the
+compiler or CPU could load `s2` before finishing the data copy, making the
+consistency check useless.
+
+---
+
+### 2.6 Lock-Free SPSC Ring Buffer
+
+**What:** A single-producer single-consumer (SPSC) queue that requires no
+locks or atomic read-modify-write operations — only atomic loads and stores.
+
+**Why:** Within Process 2 (Perception), the inference thread produces
+detections and the tracker thread consumes them.  A lock would cause
+priority inversion if the tracker stalls.  SPSC ring buffers give O(1)
+push/pop with zero contention.
+
+**Where:** `common/util/include/util/spsc_ring.h`
+
+```cpp
+template <typename T, size_t N>
+class SPSCRing {
+    static_assert((N & (N - 1)) == 0, "N must be power of 2");
+public:
+    bool try_push(const T& item) {
+        const uint64_t w = write_idx_.load(std::memory_order_relaxed);
+        const uint64_t r = read_idx_.load(std::memory_order_acquire);
+        if (w - r >= N) return false;                  // full
+        slots_[w & (N - 1)] = item;                    // power-of-2 mask
+        write_idx_.store(w + 1, std::memory_order_release);
+        return true;
+    }
+
+    std::optional<T> try_pop() {
+        const uint64_t r = read_idx_.load(std::memory_order_relaxed);
+        const uint64_t w = write_idx_.load(std::memory_order_acquire);
+        if (r >= w) return std::nullopt;               // empty
+        T item = slots_[r & (N - 1)];
+        read_idx_.store(r + 1, std::memory_order_release);
+        return item;
+    }
+
+private:
+    alignas(64) std::atomic<uint64_t> write_idx_{0};   // producer's variable
+    alignas(64) std::atomic<uint64_t> read_idx_{0};    // consumer's variable
+    std::array<T, N> slots_{};
+};
+```
+
+**Key design decisions:**
+- **Power-of-2 size**: `w & (N-1)` is a fast modulo (bit mask, single CPU instruction) compared to `w % N` (integer division).
+- **`alignas(64)`**: See [§3.11](#311-alignas--cache-line-alignment) — prevents false sharing.
+- **`std::optional` return**: No exceptions, no out-parameters — the caller checks `has_value()`.
+
+---
+
+### 2.7 Double Buffering
+
+**What:** Maintain two copies of data; the writer updates the inactive copy
+while the reader accesses the active copy, then atomically swap.
+
+**Where:** `process3_slam_vio_nav/src/main.cpp` — SLAM pose exchange:
+
+```cpp
+class PoseDoubleBuffer {
+public:
+    void write(const Pose& pose) {
+        int idx = write_idx_.load(std::memory_order_relaxed) ^ 1;  // inactive slot
+        buffers_[idx] = pose;                                       // write to it
+        write_idx_.store(idx, std::memory_order_release);           // swap
+    }
+
+    bool read(Pose& out) const {
+        int idx = write_idx_.load(std::memory_order_acquire);       // active slot
+        if (!initialized_.load(std::memory_order_acquire)) return false;
+        out = buffers_[idx];
+        return true;
+    }
+
+private:
+    Pose buffers_[2];
+    std::atomic<int> write_idx_{0};
+    std::atomic<bool> initialized_{false};
+};
+```
+
+**Why not a mutex?** The SLAM pose is updated at 100+ Hz and read by the
+navigation thread at the same rate.  A mutex would cause unnecessary blocking.
+The atomic XOR swap is a single instruction.
+
+---
+
+### 2.8 Signal-Safe Shutdown
+
+**What:** Handle Unix signals (SIGINT, SIGTERM) safely to trigger graceful
+process shutdown.
+
+**Where:** `common/util/include/util/signal_handler.h`
+
+```cpp
+class SignalHandler {
+public:
+    static void install(std::atomic<bool>& running_flag) {
+        s_running_ = &running_flag;
+
+        struct sigaction sa{};
+        sa.sa_handler = handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;   // don't restart blocking calls
+
+        sigaction(SIGTERM, &sa, nullptr);
+        sigaction(SIGINT,  &sa, nullptr);
+
+        // Ignore SIGPIPE (broken pipe from serial/UDP)
+        struct sigaction sa_ignore{};
+        sa_ignore.sa_handler = SIG_IGN;
+        sigaction(SIGPIPE, &sa_ignore, nullptr);
+    }
+
+private:
+    static inline std::atomic<bool>* s_running_ = nullptr;
+
+    static void handler(int sig) {
+        // ONLY async-signal-safe operations allowed here!
+        if (s_running_)
+            s_running_->store(false, std::memory_order_relaxed);
+        const char* msg = "Signal received, shutting down...\n";
+        [[maybe_unused]] auto r = write(STDOUT_FILENO, msg, 35);
+        (void)sig;
+    }
+};
+```
+
+**Why `write()` and not `std::cout` or `spdlog`?** Inside a signal handler,
+only *async-signal-safe* functions are allowed.  `write(2)` is safe;
+`printf`, `malloc`, `new`, mutex operations, and most of the C++ standard
+library are NOT.  Calling them can deadlock or corrupt memory.
+
+**Why `sa.sa_flags = 0`?** Without `SA_RESTART`, blocking calls like `read()`,
+`sleep()`, and `wait()` return with `errno = EINTR` when a signal is delivered.
+This ensures threads wake up promptly from blocking I/O after a signal.
+
+---
+
+### 2.9 Thread Naming, CPU Pinning & RT Scheduling
+
+**What:** On Linux, you can name threads (visible in `htop`/`top`), pin them
+to specific CPU cores, and set real-time scheduling priority.
+
+**Where:** `common/util/include/util/realtime.h`
+
+```cpp
+inline void set_thread_params(const char* name, int core,
+                               int policy, int priority) {
+    pthread_setname_np(pthread_self(), name);      // name (max 15 chars)
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);  // pin to core
+
+    if (policy == SCHED_FIFO || policy == SCHED_RR) {
+        sched_param param{};
+        param.sched_priority = priority;
+        pthread_setschedparam(pthread_self(), policy, &param);  // RT priority
+    }
+}
+
+// Usage in the comms process:
+std::thread fc_rx([&] {
+    set_thread_params("fc_rx", 2, SCHED_FIFO, 80);
+    while (g_running.load()) { /* ... */ }
+});
+```
+
+**Why pin threads?** In real-time systems, you want deterministic latency.
+CPU migration (the OS moving a thread between cores) invalidates caches and
+adds jitter.  Pinning to a specific core eliminates this.
+
+**Why `SCHED_FIFO`?** Normal Linux scheduling (`SCHED_OTHER`) can preempt
+your thread for up to ~10ms.  `SCHED_FIFO` gives the thread strict priority —
+it runs until it voluntarily yields or blocks.  Critical for flight controller
+communication.
+
+---
+
+## 3. Modern C++ Techniques
+
+### 3.1 `std::variant` and `std::visit`
+
+**What:** `std::variant` is a type-safe union — it holds exactly one of
+several types at a time.  `std::visit` dispatches a callable to the currently
+held type.
+
+**Why:** The message bus can be either `ShmMessageBus` or `ZenohMessageBus`.
+We can't use inheritance (they're templated factories), so `std::variant`
+provides type-safe runtime dispatch.
+
+**Where:** `common/ipc/include/ipc/message_bus_factory.h`
+
+```cpp
+// The variant — holds exactly one bus type
+using MessageBusVariant = std::variant<
+    std::unique_ptr<ShmMessageBus>,
+    std::unique_ptr<ZenohMessageBus>
+>;
+
+// Create a publisher through whichever bus is active
+template <typename T>
+std::unique_ptr<IPublisher<T>> bus_advertise(
+    MessageBusVariant& bus, const std::string& topic)
+{
+    return std::visit([&](auto& b) -> std::unique_ptr<IPublisher<T>> {
+        return b->template advertise<T>(topic);
+    }, bus);
+}
+```
+
+**How `std::visit` works:** The lambda `[&](auto& b)` is a *generic lambda* —
+the compiler generates one version for each type in the variant.  At runtime,
+`std::visit` calls the version matching the currently held type.
+
+**`b->template advertise<T>(topic)`**: The `template` keyword is required
+because `b` is a dependent type (its type depends on the template parameter).
+Without it, the compiler parses `<T>` as a less-than operator.
+
+---
+
+### 3.2 `std::optional`
+
+**What:** A wrapper that either contains a value or is empty (`std::nullopt`).
+Safer than using sentinel values (`-1`, `nullptr`, `false`) to indicate "no value".
+
+**Where used:**
+
+```cpp
+// SPSC Ring — try_pop() returns nullopt when empty
+std::optional<T> try_pop() {
+    if (r >= w) return std::nullopt;   // nothing to read
+    return item;
+}
+
+// Zenoh session — lazily initialized
+std::optional<zenoh::Session> session_;   // empty until first use
+
+// Service channel — response might not arrive
+std::optional<ServiceResponse<Resp>> call(const Req& request, uint64_t timeout_ms);
+```
+
+**Why not raw pointers?** `std::optional` is a value type — it lives on the
+stack, has no heap allocation, and makes the "empty" case explicit in the type
+signature.
+
+---
+
+### 3.3 `if constexpr` — Compile-Time Branching
+
+**What:** `if constexpr` evaluates a condition at compile time.  The false
+branch is completely discarded — it doesn't even need to be valid C++ for that
+particular template instantiation.
+
+**Where:** Zenoh publisher chooses SHM vs bytes path based on message size:
+
+```cpp
+void publish(const T& msg) override {
+    if constexpr (sizeof(T) > kShmPublishThreshold) {
+        publish_shm(msg);      // zero-copy path for large messages (>64KB)
+    } else {
+        publish_bytes(msg);    // memcpy path for small messages
+    }
+}
+```
+
+**Why not regular `if`?** A regular `if` would require both branches to
+compile for every `T`.  But `publish_shm()` uses SHM-specific APIs that might
+not make sense for small types.  `if constexpr` eliminates the unused branch
+entirely.
+
+**Another example** — bus-type-aware service channel creation:
+
+```cpp
+if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
+    return b->template create_client<Req, Resp>(service, timeout_ms);
+}
+// else: SHM doesn't support service channels, return nullptr
+```
+
+---
+
+### 3.4 `static_assert` — Compile-Time Contracts
+
+**What:** Fails compilation with a custom error message if a condition is false.
+
+**Why:** The SHM IPC uses `memcpy` to transfer data between processes.  This
+only works for trivially copyable types (no virtual tables, no heap pointers,
+no non-trivial constructors).  `static_assert` catches violations at compile
+time:
+
+```cpp
+template <typename T>
+class ShmWriter {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "SHM payload must be trivially copyable");
+    // ...
+};
+```
+
+If someone tries `ShmWriter<std::string>`, the compiler emits:
+```
+error: static assertion failed: SHM payload must be trivially copyable
+```
+
+**Other uses:**
+
+```cpp
+// SPSC ring: capacity must be power of 2
+static_assert((N & (N - 1)) == 0, "N must be power of 2");
+
+// Wire header: exact binary layout
+static_assert(sizeof(WireHeader) == 24, "WireHeader must be exactly 24 bytes");
+```
+
+---
+
+### 3.5 Smart Pointers (`unique_ptr`, `shared_ptr`)
+
+**What:** Smart pointers automate memory management — no more `new`/`delete`.
+
+| Type | Ownership | Overhead | Where Used |
+|------|-----------|----------|------------|
+| `std::unique_ptr<T>` | Exclusive (single owner) | Zero (same as raw pointer) | Factory returns, publishers, subscribers, HAL backends |
+| `std::shared_ptr<T>` | Shared (reference counted) | ~16 bytes + atomic refcount | Zenoh service callbacks, MAVSDK system, loggers |
+
+```cpp
+// Factory returns unique_ptr — caller owns the object
+std::unique_ptr<ICamera> cam = create_camera(cfg, "video_capture.mission_cam");
+
+// shared_ptr — multiple threads share ownership of the callback queue
+auto pending = std::make_shared<PendingQueue>();
+// Lambda captures shared_ptr — the queue lives as long as any lambda exists
+auto callback = [pending](const zenoh::Query& query) {
+    std::lock_guard lock(pending->mutex);
+    pending->queue.push_back(query);
+};
+```
+
+**Rule of thumb:** Use `unique_ptr` by default.  Only use `shared_ptr` when
+you genuinely need multiple owners with independent lifetimes.
+
+---
+
+### 3.6 Move Semantics
+
+**What:** Move semantics allow transferring ownership of resources (heap
+memory, file descriptors, SHM mappings) from one object to another without
+copying.  The source is left in a valid but empty state.
+
+**Where:** `ShmWriter` and `ShmReader` — these manage raw OS handles (file
+descriptors, memory mappings) that must not be duplicated:
+
+```cpp
+// ShmWriter move constructor — transfers ownership of fd and mmap
+ShmWriter(ShmWriter&& other) noexcept
+    : fd_(other.fd_), ptr_(other.ptr_), name_(std::move(other.name_))
+{
+    other.fd_  = -1;       // source no longer owns the fd
+    other.ptr_ = nullptr;  // source no longer owns the mapping
+}
+
+// Copy is deleted — you can't have two objects owning the same SHM segment
+ShmWriter(const ShmWriter&) = delete;
+ShmWriter& operator=(const ShmWriter&) = delete;
+```
+
+**`noexcept`:** Move constructors should be `noexcept` because `std::vector`
+and other containers will only use move (instead of copy) during reallocation
+if the move constructor is marked `noexcept`.
+
+---
+
+### 3.7 Lambda Expressions
+
+**What:** Anonymous functions defined inline.  Capture variables from the
+surrounding scope by value `[=]`, by reference `[&]`, or selectively `[this]`,
+`[x, &y]`.
+
+**Where used throughout the codebase:**
+
+```cpp
+// [&] capture — generic lambda for std::visit
+std::visit([&](auto& b) -> std::unique_ptr<IPublisher<T>> {
+    return b->template advertise<T>(topic);
+}, bus);
+
+// [this] capture — Zenoh callback
+session.declare_subscriber(key,
+    [this](const zenoh::Sample& sample) {
+        std::lock_guard lock(data_mutex_);
+        // deserialize sample into cached value
+    });
+
+// shared_ptr capture — ensure queue outlives the callback
+auto responses = std::make_shared<ResponseQueue>();
+session.get(key,
+    [responses](const zenoh::Reply& reply) {
+        std::lock_guard lock(responses->mutex);
+        responses->deque.push_back(reply);
+    });
+
+// Predicate lambda — condition variable
+cv_.wait_for(lock, 100ms, [this] { return frame_ready_ || !open_; });
+```
+
+**Capture pitfall:** Capturing `[this]` in a callback is dangerous if the
+object is destroyed before the callback fires.  The Zenoh service classes solve
+this by capturing a `shared_ptr` to the queue instead of `this`.
+
+---
+
+### 3.8 `constexpr` — Compile-Time Constants
+
+**What:** `constexpr` values are computed at compile time and baked into the
+binary as constants.
+
+```cpp
+// SHM segment names — evaluated at compile time, stored in read-only memory
+namespace shm_names {
+    constexpr const char* VIDEO_MISSION_CAM = "/drone_mission_cam";
+    constexpr const char* SLAM_POSE         = "/slam_pose";
+    constexpr const char* SYSTEM_HEALTH     = "/system_health";
+    // ...
+}
+
+// Zenoh constants
+static constexpr std::size_t kDefaultShmPoolBytes = 32 * 1024 * 1024;  // 32 MB
+static constexpr std::size_t kShmPublishThreshold = 64 * 1024;         // 64 KB
+
+// Wire format
+static constexpr uint32_t kWireMagic = 0x4E4F5244;  // "DRON" in ASCII (LE)
+```
+
+**Why not `#define`?** `constexpr` is type-safe, respects scope and namespace,
+and can be debugged with a debugger.  `#define` is a text substitution with
+no type checking.
+
+---
+
+### 3.9 `std::string_view`
+
+**What:** A non-owning reference to a string (pointer + length).  Zero-copy
+alternative to `std::string` for read-only access.
+
+**Where:**
+
+```cpp
+// Liveliness — extract process name from key expression
+static std::string extract_process_name(const std::string& key) {
+    const auto prefix_len = std::string_view(kLivelinessPrefix).size();
+    if (key.size() >= prefix_len &&
+        key.substr(0, prefix_len) == kLivelinessPrefix) {
+        return key.substr(prefix_len);
+    }
+    return key;
+}
+
+// Zenoh sample — zero-copy access to key expression
+auto key_sv = sample.get_keyexpr().as_string_view();
+```
+
+**When to use:** When you need to read a string but don't need to own or
+modify it.  Avoids heap allocation.
+
+---
+
+### 3.10 `enum class` — Scoped Enumerations
+
+**What:** C++11 scoped enums that don't implicitly convert to `int` and don't
+pollute the enclosing namespace.
+
+```cpp
+// Mission states — can't accidentally compare with integers
+enum class MissionState : uint8_t {
+    IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, LOITER, RTL, LAND, EMERGENCY
+};
+
+// Wire message types — stable numeric values for network protocol
+enum class WireMessageType : uint16_t {
+    UNKNOWN       = 0,
+    VIDEO_FRAME   = 1,
+    DETECTIONS    = 10,
+    SLAM_POSE     = 20,
+    // ...
+};
+
+// Service status — clear semantic error codes
+enum class ServiceStatus { OK, REJECTED, TIMEOUT, ERROR };
+```
+
+**Why not plain `enum`?** Plain enums leak their names into the surrounding
+scope and implicitly convert to `int`, leading to bugs like comparing a
+`MissionState` with a `WireMessageType`.
+
+---
+
+### 3.11 `alignas` — Cache-Line Alignment
+
+**What:** Forces a variable or struct to start on a specific memory boundary.
+
+**Why:** Modern CPUs have 64-byte cache lines.  When two atomic variables
+used by different threads are on the *same* cache line, updating one
+invalidates the other's cache — called **false sharing**.  This causes massive
+performance degradation.
+
+```cpp
+// SPSC Ring — producer and consumer indices on separate cache lines
+alignas(64) std::atomic<uint64_t> write_idx_{0};   // producer's variable
+alignas(64) std::atomic<uint64_t> read_idx_{0};    // consumer's variable
+```
+
+Without `alignas(64)`, both atomics might live within the same 64-byte line:
+```
+Cache line: [write_idx_ | read_idx_ | ...]
+             ^^^^^^^^     ^^^^^^^^
+             Core 0       Core 1      ← every write by Core 0 invalidates
+                                        Core 1's cache of read_idx_!
+```
+
+With `alignas(64)`:
+```
+Cache line 0: [write_idx_ | padding...]    ← Core 0 only
+Cache line 1: [read_idx_  | padding...]    ← Core 1 only
+```
+
+**Where else:** `ShmPose` is `alignas(64)` so the SLAM pose struct starts on
+a cache-line boundary, ensuring the SeqLock atomic sits at a clean boundary.
+
+---
+
+### 3.12 Structured `__attribute__((packed))`
+
+**What:** Removes all compiler-inserted padding from a struct, giving an
+exact binary layout.
+
+**Where:** The wire format header must be exactly 24 bytes for network
+compatibility:
+
+```cpp
+struct __attribute__((packed)) WireHeader {
+    uint32_t        magic;         // 4 bytes  [0..3]
+    uint8_t         version;       // 1 byte   [4]
+    uint8_t         flags;         // 1 byte   [5]
+    WireMessageType msg_type;      // 2 bytes  [6..7]
+    uint32_t        payload_size;  // 4 bytes  [8..11]
+    uint64_t        timestamp_ns;  // 8 bytes  [12..19]
+    uint32_t        sequence;      // 4 bytes  [20..23]
+};                                 // Total: 24 bytes
+
+static_assert(sizeof(WireHeader) == 24, "WireHeader must be exactly 24 bytes");
+```
+
+**Without `packed`:** The compiler would insert 4 bytes of padding after
+`sequence` to align the struct to 8 bytes (for the `uint64_t`), making it 32
+bytes.  The struct received over the network would then be misinterpreted.
+
+**Tradeoff:** Packed structs can cause slower unaligned memory access on some
+architectures (ARM).  This is acceptable for header parsing (done once per
+message) but not for high-frequency data structures.
+
+---
+
+## 4. Systems Programming Concepts
+
+### 4.1 POSIX Shared Memory (`shm_open` / `mmap`)
+
+**What:** Inter-process communication by mapping a named memory region into
+multiple processes' address spaces.
+
+**How it works:**
+
+```
+Process 1 (Writer)              Process 2 (Reader)
+─────────────────               ─────────────────
+shm_open("/slam_pose", O_CREAT | O_RDWR)
+ftruncate(fd, sizeof(Block))
+mmap(PROT_READ|PROT_WRITE)      shm_open("/slam_pose", O_RDONLY)
+   │                             mmap(PROT_READ)
+   │                                │
+   ▼ (same physical memory)        ▼
+   ┌──────────────────────────────────┐
+   │  seq | timestamp | T data       │  ← /dev/shm/slam_pose
+   └──────────────────────────────────┘
+```
+
+**From `ShmWriter<T>::create()`:**
+
+```cpp
+bool create(const std::string& name) {
+    fd_ = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);   // create segment
+    ftruncate(fd_, sizeof(ShmBlock));                         // set size
+    ptr_ = static_cast<ShmBlock*>(
+        mmap(nullptr, sizeof(ShmBlock),
+             PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));   // map into memory
+    ptr_->seq.store(0, std::memory_order_relaxed);           // initialize
+    return true;
+}
+```
+
+**Key point:** The data is in the OS page cache, not in either process's heap.
+Both processes see the same physical memory.  No serialization, no copies,
+no system calls to read/write — just `memcpy` to/from the mapped pointer.
+
+---
+
+### 4.2 Binary Wire Format
+
+**What:** A compact binary protocol for encoding messages sent over a network.
+
+**Why not Protobuf/JSON?** Our IPC types are already fixed-size, trivially
+copyable C structs.  A binary header + raw bytes is:
+- **Zero-dependency** (no codegen, no protobuf runtime)
+- **Zero-copy** (just `memcpy` the struct)
+- **Fixed overhead** (24-byte header regardless of payload size)
+
+**Protocol layout:**
+
+```
+┌────────────────── WireHeader (24 bytes) ──────────────────┐  ┌── Payload ──┐
+│ magic(4) │ ver(1) │ flags(1) │ type(2) │ size(4) │ ts(8) │ seq(4) │  T data   │
+└───────────────────────────────────────────────────────────┘  └─────────────┘
+  0x4E4F5244   1       0         enum      sizeof(T)
+  ("DRON" LE)
+```
+
+**Serialization** is a zero-overhead `memcpy`:
+
+```cpp
+template <typename T>
+std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, ...) {
+    static_assert(std::is_trivially_copyable_v<T>, "...");
+    WireHeader hdr;
+    hdr.msg_type     = msg_type;
+    hdr.payload_size = sizeof(T);
+
+    std::vector<uint8_t> buf(sizeof(WireHeader) + sizeof(T));
+    std::memcpy(buf.data(), &hdr, sizeof(WireHeader));
+    std::memcpy(buf.data() + sizeof(WireHeader), &msg, sizeof(T));
+    return buf;
+}
+```
+
+---
+
+### 4.3 Conditional Compilation (`#ifdef`)
+
+**What:** Include or exclude code at compile time based on preprocessor macros.
+
+**Why:** Not every build has the same dependencies.  A CI server might not
+have MAVSDK or Gazebo installed.  The code must compile cleanly in all
+configurations.
+
+```cpp
+// CMakeLists.txt sets HAVE_ZENOH=1 when Zenoh is found
+if(ENABLE_ZENOH)
+    add_compile_definitions(HAVE_ZENOH=1)
+endif()
+
+// In code — only compile Zenoh types when available
+#ifdef HAVE_ZENOH
+#include "ipc/zenoh_message_bus.h"
+#endif
+
+using MessageBusVariant = std::variant<
+    std::unique_ptr<ShmMessageBus>
+#ifdef HAVE_ZENOH
+    , std::unique_ptr<ZenohMessageBus>
+#endif
+>;
+```
+
+**Three guards used in this codebase:**
+
+| Macro | Set by | Controls |
+|-------|--------|----------|
+| `HAVE_ZENOH` | `-DENABLE_ZENOH=ON` | Zenoh IPC backend |
+| `HAVE_MAVSDK` | `find_package(MAVSDK)` | MAVLink flight controller |
+| `HAVE_GAZEBO` | `find_package(gz-transport13)` | Gazebo camera/IMU backends |
+
+---
+
+## 5. Concept Map — Where Patterns Intersect
+
+The real power of these patterns is how they compose.  Here's how they
+connect in a single publish operation:
+
+```
+                     ┌── Factory Pattern ──┐
+config.json          │                     │
+  "ipc_backend":     │  create_message_bus │
+  "zenoh"  ─────────►│  returns variant    │
+                     └─────────┬───────────┘
+                               │ MessageBusVariant
+                               ▼
+                     ┌── std::variant ─────┐
+                     │  std::visit(lambda)  │ ◄── std::visit + generic lambda
+                     └─────────┬───────────┘
+                               │ dispatches to ZenohMessageBus
+                               ▼
+                     ┌── Strategy Pattern ──┐
+                     │  IPublisher<T>       │
+                     │  → ZenohPublisher<T> │
+                     └─────────┬───────────┘
+                               │ publish(msg)
+                               ▼
+                     ┌── if constexpr ──────┐
+                     │  sizeof(T) > 64KB?   │ ◄── compile-time branching
+                     │  yes → publish_shm() │
+                     │  no  → publish_bytes()│
+                     └─────────┬───────────┘
+                               │ SHM path
+                               ▼
+                     ┌── Singleton ─────────┐
+                     │  ZenohSession::      │
+                     │  instance()          │
+                     │  .shm_provider()     │
+                     └─────────┬───────────┘
+                               │ alloc + memcpy
+                               ▼
+                     ┌── RAII ──────────────┐
+                     │  ZShmMut buffer      │ ◄── auto-freed on scope exit
+                     │  publisher_.put()    │
+                     └──────────────────────┘
+```
+
+---
+
+## 6. Glossary
+
+| Term | Definition |
+|------|-----------|
+| **ABI** | Application Binary Interface — the binary-level contract between compiled code. `trivially_copyable` types have a stable ABI. |
+| **Acquire/Release** | Memory ordering semantics. A `release` store makes all prior writes visible to a thread that does an `acquire` load of the same variable. |
+| **Cache line** | The smallest unit of data transfer between CPU and cache, typically 64 bytes on modern processors. |
+| **False sharing** | Performance degradation when two threads write to independent variables that happen to share a cache line. |
+| **FIFO scheduling** | `SCHED_FIFO` — a real-time scheduling policy where the highest-priority runnable thread always executes. |
+| **IPC** | Inter-Process Communication — mechanisms for separate processes to exchange data. |
+| **Lock-free** | A concurrency guarantee: at least one thread makes progress, even if others are suspended. SeqLock and SPSC ring are lock-free. |
+| **mmap** | Memory-map a file or shared memory object into a process's virtual address space. |
+| **RAII** | Resource Acquisition Is Initialization — tying resource lifetime to object lifetime via constructor/destructor. |
+| **SeqLock** | A reader-writer synchronization mechanism using an atomic sequence counter. Writers never block; readers retry on torn reads. |
+| **SHM** | Shared Memory — a region of memory visible to multiple processes. |
+| **SITL** | Software-In-The-Loop — running the real flight controller software in a simulator. |
+| **SPSC** | Single-Producer Single-Consumer — a queue with exactly one writer and one reader thread. |
+| **Trivially copyable** | A C++ type that can be safely copied with `memcpy`. No virtual functions, no non-trivial constructors/destructors, no heap pointers. |
+| **Variant** | `std::variant` — a type-safe union that holds one of several specified types. |
+| **Wait-free** | A stronger guarantee than lock-free: every thread completes in bounded steps. |
+| **Wire format** | The binary encoding used to send messages over a network. |
+| **Zero-copy** | Transferring data without intermediate buffer copies — e.g., SHM publisher writes directly to shared memory that the subscriber reads. |
