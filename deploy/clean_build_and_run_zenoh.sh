@@ -47,19 +47,49 @@ for p in video_capture perception slam_vio_nav mission_planner comms payload_man
     pkill -f "build/bin/$p" 2>/dev/null || true
 done
 sleep 2
-rm -f /dev/shm/drone_* /dev/shm/detected_* /dev/shm/slam_* \
-      /dev/shm/mission_* /dev/shm/trajectory_* /dev/shm/payload_* \
-      /dev/shm/fc_* /dev/shm/gcs_* /dev/shm/system_* 2>/dev/null || true
+# Remove only the explicit SHM segments this stack creates (see shm_types.h::shm_names).
+# Avoid broad globs that could delete unrelated /dev/shm objects.
+SHM_SEGMENTS=(
+    /dev/shm/drone_mission_cam
+    /dev/shm/drone_stereo_cam
+    /dev/shm/detected_objects
+    /dev/shm/slam_pose
+    /dev/shm/mission_status
+    /dev/shm/trajectory_cmd
+    /dev/shm/payload_commands
+    /dev/shm/fc_commands
+    /dev/shm/fc_state
+    /dev/shm/gcs_commands
+    /dev/shm/payload_status
+    /dev/shm/system_health
+)
+rm -f "${SHM_SEGMENTS[@]}" 2>/dev/null || true
 echo "  Done."
 
 # ── Step 2: Clean build (Zenoh ON) ───────────────────────────
 echo ""
 echo "═══ [2/4] Clean build (Release, IPC = Zenoh) ═══"
+# Determine Zenoh security configuration:
+# - If ZENOH_CONFIG_PATH is set, use it (secure build).
+# - Otherwise, fall back to ALLOW_INSECURE_ZENOH (dev/test only).
+ZENOH_SECURITY_FLAGS=""
+if [[ -n "${ZENOH_CONFIG_PATH:-}" ]]; then
+    if [[ ! -f "$ZENOH_CONFIG_PATH" ]]; then
+        echo "ERROR: ZENOH_CONFIG_PATH='${ZENOH_CONFIG_PATH}' does not exist."
+        exit 1
+    fi
+    echo "  Using secure Zenoh config: ${ZENOH_CONFIG_PATH}"
+    ZENOH_SECURITY_FLAGS="-DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+else
+    echo "  WARNING: No ZENOH_CONFIG_PATH set — using insecure mode (dev/test only)."
+    ZENOH_SECURITY_FLAGS="-DALLOW_INSECURE_ZENOH=ON"
+fi
+
 rm -rf build/
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_ZENOH=ON \
-      -DALLOW_INSECURE_ZENOH=ON \
+      ${ZENOH_SECURITY_FLAGS} \
       ..
 cmake --build . -j"$(nproc)"
 cd "$PROJECT_DIR"

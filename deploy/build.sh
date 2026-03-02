@@ -29,7 +29,7 @@ for arg in "$@"; do
     esac
 done
 
-# Zenoh requires ALLOW_INSECURE_ZENOH for dev/test (no TLS config)
+# Zenoh backend configuration
 ZENOH_FLAGS=""
 if [[ "$ENABLE_ZENOH" == "ON" ]]; then
     if ! pkg-config --exists zenohc 2>/dev/null; then
@@ -37,7 +37,18 @@ if [[ "$ENABLE_ZENOH" == "ON" ]]; then
         echo "  Install: sudo apt install libzenohc libzenohc-dev"
         exit 1
     fi
-    ZENOH_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
+    # Prefer secure config if ZENOH_CONFIG_PATH is provided; fall back to
+    # insecure for dev/test.
+    if [[ -n "${ZENOH_CONFIG_PATH:-}" ]]; then
+        if [[ ! -f "$ZENOH_CONFIG_PATH" ]]; then
+            echo "ERROR: ZENOH_CONFIG_PATH='${ZENOH_CONFIG_PATH}' does not exist."
+            exit 1
+        fi
+        ZENOH_FLAGS="-DENABLE_ZENOH=ON -DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+    else
+        echo "NOTE: No ZENOH_CONFIG_PATH set — using insecure mode (dev/test only)."
+        ZENOH_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
+    fi
 fi
 
 echo "══════════════════════════════════════════"

@@ -538,7 +538,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-#  STEP 5: PX4 SITL (Optional — requires Gazebo + MAVSDK)
+#  STEP 6: PX4 SITL (Optional — requires Gazebo + MAVSDK)
 # ══════════════════════════════════════════════════════════════
 header "Step 6/6: PX4 SITL (Optional — Flight Controller Simulator)"
 
@@ -663,8 +663,14 @@ cd "$PROJECT_DIR"
 # Detect if Zenoh was installed and pass the right CMake flags
 ZENOH_CMAKE_FLAGS=""
 if pkg-config --exists zenohc 2>/dev/null; then
-    ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
-    info "Zenoh detected — building with ENABLE_ZENOH=ON"
+    # Prefer secure config if ZENOH_CONFIG_PATH env var is set.
+    if [[ -n "${ZENOH_CONFIG_PATH:-}" && -f "${ZENOH_CONFIG_PATH:-}" ]]; then
+        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+        info "Zenoh detected — building with secure config: ${ZENOH_CONFIG_PATH}"
+    else
+        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
+        info "Zenoh detected — building with ENABLE_ZENOH=ON (insecure — dev/test only)"
+    fi
 else
     info "Zenoh not found — building with SHM backend only"
 fi
