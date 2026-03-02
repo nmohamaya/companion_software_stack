@@ -6,8 +6,14 @@ include(GoogleTest)
 set(CMAKE_CROSSCOMPILING_EMULATOR "env" "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu")
 
 # ── Helper: create a test target ─────────────────────────────
+# Usage:  add_drone_test(name source1 source2 ...
+#                        [PROPERTIES key val ...])
+# Any key/value pairs after PROPERTIES are forwarded to
+# gtest_discover_tests() — handy for RESOURCE_LOCK, TIMEOUT, etc.
 function(add_drone_test TEST_NAME)
-    add_executable(${TEST_NAME} ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "" "PROPERTIES")
+
+    add_executable(${TEST_NAME} ${ARG_UNPARSED_ARGUMENTS})
     target_link_libraries(${TEST_NAME} PRIVATE
         GTest::gtest_main
         drone_ipc
@@ -24,11 +30,16 @@ function(add_drone_test TEST_NAME)
         ${PROJECT_SOURCE_DIR}/process7_system_monitor/include
     )
     target_link_libraries(${TEST_NAME} PRIVATE drone_hal)
-    gtest_discover_tests(${TEST_NAME})
+    if(ARG_PROPERTIES)
+        gtest_discover_tests(${TEST_NAME} PROPERTIES ${ARG_PROPERTIES})
+    else()
+        gtest_discover_tests(${TEST_NAME})
+    endif()
 endfunction()
 
-# ── IPC tests ────────────────────────────────────────────────
-add_drone_test(test_shm_ipc         test_shm_ipc.cpp)
+# ── IPC tests (POSIX SHM — serialise to avoid /dev/shm collisions) ───
+add_drone_test(test_shm_ipc         test_shm_ipc.cpp
+    PROPERTIES RESOURCE_LOCK "posix_shm")
 
 # ── SPSC Ring tests ──────────────────────────────────────────
 add_drone_test(test_spsc_ring       test_spsc_ring.cpp)
@@ -75,13 +86,18 @@ add_drone_test(test_gazebo_imu      test_gazebo_imu.cpp)
 add_drone_test(test_message_bus     test_message_bus.cpp)
 
 # ── Zenoh IPC + MessageBusFactory tests ──────────────────────
-add_drone_test(test_zenoh_ipc       test_zenoh_ipc.cpp)
+# Zenoh tests open sessions + allocate 32 MB SHM pools.  RESOURCE_LOCK
+# serialises them so ctest -j never runs multiple Zenoh binaries at once.
+add_drone_test(test_zenoh_ipc       test_zenoh_ipc.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
 
 # ── Phase E: Network transport tests ─────────────────────────
-add_drone_test(test_zenoh_network   test_zenoh_network.cpp)
+add_drone_test(test_zenoh_network   test_zenoh_network.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
 
 # ── Phase F: Liveliness token tests ──────────────────────────
-add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp)
+add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
 
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)

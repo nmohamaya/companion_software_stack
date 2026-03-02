@@ -10,10 +10,11 @@
 # What this installs:
 #   CORE (always):  build-essential, cmake, spdlog, Eigen3, nlohmann-json, GTest
 #   OPTIONAL:
-#     OpenCV 4.10   — YOLOv8-nano object detection via OpenCV DNN module
-#     MAVSDK 2.12   — MAVLink communication with PX4 flight controller
-#     Gazebo Harmonic — 3D physics simulation (camera, IMU, odometry)
-#     PX4 SITL      — Software-in-the-loop flight controller
+#     OpenCV 4.10       — YOLOv8-nano object detection via OpenCV DNN module
+#     MAVSDK 2.12       — MAVLink communication with PX4 flight controller
+#     Zenoh (zenohc)    — Zenoh IPC backend (alternative to POSIX SHM)
+#     Gazebo Harmonic   — 3D physics simulation (camera, IMU, odometry)
+#     PX4 SITL          — Software-in-the-loop flight controller
 #
 # After running this script, build the stack with:
 #   bash deploy/build.sh
@@ -138,7 +139,7 @@ SKIPPED=()
 # ══════════════════════════════════════════════════════════════
 #  STEP 1: Core build tools & required libraries
 # ══════════════════════════════════════════════════════════════
-header "Step 1/5: Core Dependencies (Required)"
+header "Step 1/6: Core Dependencies (Required)"
 
 info "Installing build tools and required libraries..."
 sudo apt-get update -qq
@@ -163,7 +164,7 @@ INSTALLED+=("Core (spdlog, Eigen3, nlohmann-json, GTest)")
 # ══════════════════════════════════════════════════════════════
 #  STEP 2: OpenCV (Optional)
 # ══════════════════════════════════════════════════════════════
-header "Step 2/5: OpenCV (Optional — YOLOv8 Object Detection)"
+header "Step 2/6: OpenCV (Optional — YOLOv8 Object Detection)"
 
 echo "  OpenCV's DNN module enables the YOLOv8-nano detector backend."
 echo "  Without it, the stack uses ColorContourDetector (HSV + union-find)"
@@ -290,7 +291,7 @@ fi
 # ══════════════════════════════════════════════════════════════
 #  STEP 3: MAVSDK (Optional)
 # ══════════════════════════════════════════════════════════════
-header "Step 3/5: MAVSDK 2.x (Optional — PX4 MAVLink Communication)"
+header "Step 3/6: MAVSDK 2.x (Optional — PX4 MAVLink Communication)"
 
 echo "  MAVSDK provides MAVLink communication with the PX4 flight controller."
 echo "  It enables real arming, takeoff, landing, position commands, and telemetry."
@@ -366,9 +367,110 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-#  STEP 4: Gazebo Harmonic (Optional)
+#  STEP 4: Zenoh IPC Backend (Optional)
 # ══════════════════════════════════════════════════════════════
-header "Step 4/5: Gazebo Harmonic (Optional — 3D Physics Simulation)"
+header "Step 4/6: Zenoh IPC Backend (Optional — Alternative to POSIX SHM)"
+
+echo "  Zenoh provides a high-performance publish/subscribe IPC backend"
+echo "  as an alternative to the default POSIX SHM transport."
+echo "  It supports shared-memory zero-copy, peer-to-peer networking, and"
+echo "  is the recommended backend for multi-machine drone deployments."
+echo "  Without it, the stack uses POSIX SHM (single-machine only)."
+echo ""
+
+INSTALL_ZENOH=false
+if ask_yes_no "Install Zenoh (zenohc + zenoh-cpp)?" "y"; then
+    INSTALL_ZENOH=true
+fi
+
+if $INSTALL_ZENOH; then
+    # Check if already installed
+    if pkg-config --exists zenohc 2>/dev/null; then
+        ZENOH_C_VER="$(pkg-config --modversion zenohc 2>/dev/null || echo 'unknown')"
+        info "zenohc ${ZENOH_C_VER} already detected."
+        if ask_yes_no "Reinstall Zenoh?" "n"; then
+            info "Proceeding with reinstall..."
+        else
+            success "Keeping existing Zenoh installation."
+            INSTALLED+=("Zenoh zenohc ${ZENOH_C_VER} (already present)")
+            INSTALL_ZENOH=false
+        fi
+    fi
+
+    if $INSTALL_ZENOH; then
+        info "Installing Zenoh C bindings (zenohc)..."
+
+        # Method: install from Eclipse Zenoh apt repo / pre-built .deb
+        # The zenohc packages provide libzenohc.so and the CMake config
+        # files needed by find_package(zenohc).
+        ZENOH_VERSION="1.7.2"
+        ARCH="$(dpkg --print-architecture)"
+        ZENOH_DEB_URL="https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}"
+
+        ZENOH_TMP="/tmp/zenoh_install_$$"
+        mkdir -p "$ZENOH_TMP"
+        cd "$ZENOH_TMP"
+
+        info "Downloading zenohc ${ZENOH_VERSION} .deb packages..."
+        wget -q --show-progress "${ZENOH_DEB_URL}/libzenohc_${ZENOH_VERSION}-1_${ARCH}.deb" \
+            -O "libzenohc.deb" || true
+        wget -q --show-progress "${ZENOH_DEB_URL}/libzenohc-dev_${ZENOH_VERSION}-1_${ARCH}.deb" \
+            -O "libzenohc-dev.deb" || true
+
+        if [[ -f libzenohc.deb && -f libzenohc-dev.deb ]]; then
+            sudo dpkg -i libzenohc.deb libzenohc-dev.deb || sudo apt-get -f install -y
+            sudo ldconfig
+            if pkg-config --exists zenohc 2>/dev/null; then
+                VER="$(pkg-config --modversion zenohc)"
+                success "zenohc ${VER} installed successfully"
+                INSTALLED+=("Zenoh zenohc ${VER}")
+            else
+                warn "zenohc installed but pkg-config doesn't see it."
+                INSTALLED+=("Zenoh zenohc ${ZENOH_VERSION} (no pkg-config)")
+            fi
+        else
+            warn "Could not download zenohc .deb packages."
+            warn "Try manual install: https://github.com/eclipse-zenoh/zenoh-c/releases"
+            SKIPPED+=("Zenoh")
+            INSTALL_ZENOH=false
+        fi
+
+        # Install zenoh-cpp (header-only C++17 bindings)
+        if $INSTALL_ZENOH; then
+            info "Installing zenoh-cpp headers..."
+            if [[ ! -d /usr/local/include/zenoh ]]; then
+                ZENOH_CPP_VER="1.7.2"
+                git clone --depth 1 --branch "${ZENOH_CPP_VER}" \
+                    https://github.com/eclipse-zenoh/zenoh-cpp.git \
+                    "${ZENOH_TMP}/zenoh-cpp" 2>/dev/null || true
+                if [[ -d "${ZENOH_TMP}/zenoh-cpp" ]]; then
+                    cd "${ZENOH_TMP}/zenoh-cpp"
+                    cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DZENOHCXX_ZENOHC=OFF
+                    sudo cmake --install build
+                    success "zenoh-cpp headers installed to /usr/local/include/zenoh"
+                    INSTALLED+=("zenoh-cpp ${ZENOH_CPP_VER} (headers)")
+                else
+                    warn "Could not clone zenoh-cpp. Install manually from:"
+                    warn "  https://github.com/eclipse-zenoh/zenoh-cpp"
+                fi
+            else
+                info "zenoh-cpp headers already exist at /usr/local/include/zenoh"
+                INSTALLED+=("zenoh-cpp (already present)")
+            fi
+        fi
+
+        cd "$PROJECT_DIR"
+        rm -rf "$ZENOH_TMP"
+    fi
+else
+    info "Skipping Zenoh."
+    SKIPPED+=("Zenoh")
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 5: Gazebo Harmonic (Optional)
+# ══════════════════════════════════════════════════════════════
+header "Step 5/6: Gazebo Harmonic (Optional — 3D Physics Simulation)"
 
 echo "  Gazebo Harmonic (gz-sim 8) provides physics-based simulation with"
 echo "  rendered camera images, IMU data, and ground-truth odometry."
@@ -436,9 +538,9 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-#  STEP 5: PX4 SITL (Optional — requires Gazebo + MAVSDK)
+#  STEP 6: PX4 SITL (Optional — requires Gazebo + MAVSDK)
 # ══════════════════════════════════════════════════════════════
-header "Step 5/5: PX4 SITL (Optional — Flight Controller Simulator)"
+header "Step 6/6: PX4 SITL (Optional — Flight Controller Simulator)"
 
 echo "  PX4 SITL runs a real PX4 flight controller in software, connected"
 echo "  to Gazebo for physics. Requires Gazebo and MAVSDK to be useful."
@@ -558,10 +660,25 @@ header "Building Companion Stack"
 
 cd "$PROJECT_DIR"
 
+# Detect if Zenoh was installed and pass the right CMake flags
+ZENOH_CMAKE_FLAGS=""
+if pkg-config --exists zenohc 2>/dev/null; then
+    # Prefer secure config if ZENOH_CONFIG_PATH env var is set.
+    if [[ -n "${ZENOH_CONFIG_PATH:-}" && -f "${ZENOH_CONFIG_PATH:-}" ]]; then
+        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+        info "Zenoh detected — building with secure config: ${ZENOH_CONFIG_PATH}"
+    else
+        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
+        info "Zenoh detected — building with ENABLE_ZENOH=ON (insecure — dev/test only)"
+    fi
+else
+    info "Zenoh not found — building with SHM backend only"
+fi
+
 info "Configuring with CMake..."
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release .. 2>&1 | tee cmake_configure.log
+cmake -DCMAKE_BUILD_TYPE=Release ${ZENOH_CMAKE_FLAGS} .. 2>&1 | tee cmake_configure.log
 
 echo ""
 info "Building (using $(nproc) cores)..."
@@ -594,11 +711,13 @@ fi
 
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
-echo "  1. Build:       bash deploy/build.sh"
-echo "  2. Run tests:   cd build && ctest --output-on-failure"
-echo "  3. Run stack:   bash deploy/launch_all.sh"
+echo "  1. Build (SHM):     bash deploy/build.sh"
+echo "     Build (Zenoh):   bash deploy/build.sh --zenoh"
+echo "  2. Run tests:       cd build && ctest --output-on-failure"
+echo "  3. Run stack:       bash deploy/launch_all.sh"
 if $INSTALL_GAZEBO || [[ "${INSTALLED[*]}" == *"Gazebo"* ]]; then
-    echo "  4. Run SITL:    bash deploy/launch_gazebo.sh --gui"
+    echo "  4. SITL (SHM):      bash deploy/clean_build_and_run_shm.sh --gui"
+    echo "     SITL (Zenoh):    bash deploy/clean_build_and_run_zenoh.sh --gui"
 fi
 echo ""
 echo "  See INSTALL.md for troubleshooting and detailed documentation."

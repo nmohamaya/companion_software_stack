@@ -319,10 +319,11 @@ trap cleanup EXIT INT TERM
 # 1. System Monitor (no deps)
 # 2. Video Capture (no deps)
 # 3. Comms (no deps — connects to FC)
-# 4. Perception (needs Video Capture SHM)
-# 5. SLAM/VIO/Nav (needs Video Capture + IMU SHM)
-# 6. Mission Planner (needs SLAM + Perception + Comms SHM)
-# 7. Payload Manager (needs Mission Planner SHM)
+# 4. Perception (needs Video Capture IPC)
+# 5. SLAM/VIO/Nav (needs Video Capture + IMU IPC)
+# 6. Mission Planner (needs SLAM + Perception + Comms IPC)
+# 7. Payload Manager (needs Mission Planner IPC)
+# IPC backend (SHM or Zenoh) is determined by the config file.
 
 echo ""
 echo "[Stack] Launching 7 companion processes..."
