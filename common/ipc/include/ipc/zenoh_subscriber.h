@@ -71,9 +71,12 @@ public:
         return true;
     }
 
-    /// Returns true once at least one sample has been received.
+    /// Returns true if the Zenoh subscriber was successfully declared.
+    /// Unlike POSIX SHM (which requires the segment to exist), Zenoh
+    /// subscriptions are valid immediately — data arrives asynchronously
+    /// once a publisher appears.  Use receive() to check for actual data.
     bool is_connected() const override {
-        return has_data_.load(std::memory_order_acquire);
+        return subscriber_.has_value();
     }
 
     const std::string& topic_name() const override { return key_expr_; }

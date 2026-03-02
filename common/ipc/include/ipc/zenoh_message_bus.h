@@ -56,7 +56,10 @@ public:
 
     /// Create a subscriber for the given topic.
     /// @param topic        SHM segment name or Zenoh key expression.
-    /// @param max_retries  Ignored (Zenoh connects asynchronously).
+    /// @param max_retries  Ignored — Zenoh subscriptions are created
+    ///                     immediately and is_connected() returns true as
+    ///                     soon as the subscriber is declared.  Data may
+    ///                     arrive later when a publisher appears.
     /// @param retry_ms     Ignored.
     template <typename T>
     std::unique_ptr<ISubscriber<T>> subscribe(

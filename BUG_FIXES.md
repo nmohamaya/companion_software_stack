@@ -253,3 +253,25 @@ When `ZENOH_CONFIG_PATH` is set, it's compiled in as `ZENOH_CONFIG_PATH="/path/t
 **Severity:** Low (documentation)
 **Bug:** JSON example defined `ipc_backend` twice — invalid JSON syntax.
 **Fix:** Collapsed to a single key with a comment showing both options.
+
+---
+
+## Fix #9 — ZenohSubscriber::is_connected() Semantic Mismatch (E2E Crash)
+
+**Date:** 2026-03-01  
+**Severity:** Critical  
+**Files:** `common/ipc/include/ipc/zenoh_subscriber.h`, `common/ipc/include/ipc/zenoh_message_bus.h`, `tests/test_zenoh_ipc.cpp`
+
+**Bug:** When running all 7 processes with `ipc_backend: "zenoh"`, processes 2 (perception), 4 (mission_planner), and 6 (payload_manager) crashed immediately on startup. Each process's `main()` calls `is_connected()` on mandatory subscriptions right after `subscribe()` and exits with `return 1` if it returns false. Under the Zenoh backend, `is_connected()` always returned false at that point because no data had arrived yet.
+
+**Root Cause:** `ZenohSubscriber::is_connected()` was implemented as `return has_data_.load()`, which only becomes true after the first message is received via the asynchronous callback. This matched SHM semantics (where `is_connected()` checks whether the shared memory segment exists, i.e., the publisher has started), but not Zenoh semantics. In Zenoh, a subscription is immediately valid upon declaration — data arrives asynchronously once a publisher is discovered via the Zenoh discovery protocol. There is no equivalent of "segment doesn't exist yet".
+
+**Failed Fix Attempt (Retry Polling):** Initially tried adding a retry loop in `ZenohMessageBus::subscribe()` that polled for data arrival (up to 10 seconds, 50 ms intervals). This caused a **circular deadlock**: `comms` subscribes to `trajectory` (published by `mission_planner`) and waits, while `mission_planner` subscribes to `fc_state` (published by `comms`) and waits. Neither process could start publishing because both were blocked in their subscribe calls.
+
+**Fix:** Changed `is_connected()` to return `subscriber_.has_value()` — i.e., true if the Zenoh subscriber object was successfully declared, regardless of whether any data has arrived. This correctly models Zenoh's always-connected subscription semantics. Updated two unit tests (`ZenohSubscriber.Constructs` and `ZenohPubSub.NoData`) to expect `is_connected() == true` after construction.
+
+**Key Insight:** SHM and Zenoh have fundamentally different connection models:
+- **SHM:** Publisher creates a named shared memory segment. Subscriber opens it. `is_connected()` = "does the segment exist?" (depends on publisher being alive).
+- **Zenoh:** Subscriber declares interest in a key expression. Publisher declares a matching key expression. Zenoh's discovery protocol handles matching asynchronously. `is_connected()` = "was the subscription declared?" (always true after `subscribe()`).
+
+**Found by:** End-to-end Zenoh smoke test (`tests/test_zenoh_e2e.sh`) — Phase 3 (process liveness) detected that 3 of 7 processes exited within the first second.
