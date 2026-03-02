@@ -2,7 +2,7 @@
 
 This project follows a structured development process designed to catch issues early and maintain code quality. All changes must go through this workflow.
 
-**Stack:** C++17 · CMake 3.16+ · Google Test · spdlog · Eigen3 · nlohmann/json  
+**Stack:** C++17 · CMake 3.16+ · Google Test · spdlog · Eigen3 · nlohmann/json · Zenoh (optional)  
 **Repo:** https://github.com/nmohamaya/companion_software_stack  
 **CI:** GitHub Actions (Ubuntu 24.04, `-Werror -Wall -Wextra`)
 
@@ -45,41 +45,65 @@ git checkout -b feature/issue-XX-short-description
 
 ##### 4a. Build (zero warnings required)
 ```bash
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release \
-      -DGTest_DIR=/usr/lib/x86_64-linux-gnu/cmake/GTest ..
-make -j$(nproc)
+# Default (SHM backend):
+bash deploy/build.sh Release
+
+# With Zenoh backend:
+bash deploy/build.sh Release --zenoh
+
+# Clean rebuild:
+bash deploy/build.sh Release --clean          # SHM
+bash deploy/build.sh Release --zenoh --clean   # Zenoh
+
+# Or manually:
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release   # add -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON for Zenoh
+cmake --build build -j$(nproc)
 ```
 - All 7 binaries + all test targets must compile
 - Zero compiler warnings
 
 ##### 4b. Tests (100% pass rate required)
 ```bash
-LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" \
-  ctest --output-on-failure -j$(nproc)
+ctest --test-dir build --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 121 across 10 suites)
+- All tests must pass (currently 377 across 47 suites)
 - No regressions in existing tests
 - New features must include tests
+- Zenoh and SHM test binaries use `RESOURCE_LOCK` to avoid parallel collisions under `ctest -j`
 
-> **Note:** The `LD_LIBRARY_PATH` and `GTest_DIR` overrides are only needed on machines with Anaconda installed. On clean Ubuntu or in CI, plain `cmake .. && make && ctest` works.
+> **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 
 ##### 4c. Smoke Test (for IPC/process changes)
 ```bash
+# Quick manual test:
 cd build/bin
 ./video_capture &
 sleep 1 && ./perception &
 sleep 2
 kill %1 %2
+
+# Full Gazebo SITL (SHM backend):
+bash deploy/clean_build_and_run_shm.sh         # headless
+bash deploy/clean_build_and_run_shm.sh --gui   # with Gazebo GUI
+
+# Full Gazebo SITL (Zenoh backend):
+bash deploy/clean_build_and_run_zenoh.sh        # headless
+bash deploy/clean_build_and_run_zenoh.sh --gui  # with Gazebo GUI
 ```
-- Verify SHM segments created/cleaned up
+- Verify IPC channels created/cleaned up
 - No segfaults or assertion failures
+- Both SHM and Zenoh backends should be tested when IPC-related code changes
 
 ##### 4d. Integration / Simulation Tests (when applicable)
 For changes that interact with external simulators or hardware:
 ```bash
-# Example: run Gazebo SITL integration test
-./build/bin/integration_test_gazebo --config config/gazebo_sitl.json
+# Gazebo SITL via deploy scripts (recommended):
+bash deploy/launch_gazebo.sh              # SHM backend (default)
+bash deploy/launch_gazebo.sh --gui        # with Gazebo GUI
+CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui  # Zenoh
+
+# End-to-end Zenoh smoke test (automated, no GUI required):
+bash tests/test_zenoh_e2e.sh
 ```
 - Only required when the change involves HAL backends or end-to-end pipelines
 - These tests are **not** part of the CI gate (simulators may not be installed)
@@ -393,6 +417,9 @@ chore(#25): upgrade spdlog to 1.13.0
 - ✅ Use `PoseDoubleBuffer` pattern for cross-thread exchange (not raw pointers)
 - ✅ `SPSCRing<T, N>` for producer-consumer queues
 - ✅ `std::memory_order_acquire`/`release` for lock-free patterns
+- ✅ Use `MessageBusFactory::create_message_bus(backend)` — never hardcode SHM or Zenoh directly in process code
+- ✅ IPC backend is config-driven (`ipc_backend: "shm"` or `"zenoh"` in JSON config)
+- ✅ Zenoh tests must use `RESOURCE_LOCK` to prevent parallel session exhaustion
 
 ---
 
@@ -405,6 +432,9 @@ chore(#25): upgrade spdlog to 1.13.0
 | CI fails but local passes | Anaconda `LD_LIBRARY_PATH` masking issues | CI uses clean Ubuntu; check for Anaconda-specific workarounds in local build |
 | SHM segment leak | Process killed without cleanup | Use `launch_all.sh` which traps signals, or run `rm /dev/shm/drone_*` |
 | Eigen warnings | Uninitialized members | Always default-initialize Eigen types: `= Eigen::Vector3f::Zero()` |
+| Intermittent Zenoh test SIGABRT | Parallel `ctest -j` exhausts Zenoh sessions/SHM pools | Add `RESOURCE_LOCK "zenoh_session"` via `gtest_discover_tests PROPERTIES` |
+| Zenoh `is_connected()` false at startup | Zenoh subscriptions are async — no data yet | `is_connected()` returns `subscriber_.has_value()`, not `has_data_` |
+| `ENABLE_ZENOH` not taking effect | Stale CMake cache | Use `--clean` flag or `rm -rf build/` before reconfiguring |
 
 ---
 
@@ -426,10 +456,12 @@ chore(#25): upgrade spdlog to 1.13.0
 |---|---|---|
 | [PROGRESS.md](PROGRESS.md) | Track all improvements & features | After each improvement |
 | [BUG_FIXES.md](BUG_FIXES.md) | Document all bug fixes | After each bug fix |
+| [ROADMAP.md](ROADMAP.md) | Epic/phase tracking & issue registry | When phases complete or new work is planned |
 | [docs/API.md](docs/API.md) | Interface & IPC API reference | When interfaces or IPC classes change |
 | [config/default.json](config/default.json) | Default configuration | When adding new tunables |
 | [README.md](README.md) | Project overview & build instructions | As architecture changes |
 | [CI_ISSUES.md](CI_ISSUES.md) | CI failure log & root cause analysis | After every CI-specific failure |
+| [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | Production checklist & gap analysis | When readiness status changes |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
 
 > **Living Document:** This workflow document is meant to evolve with the project.
