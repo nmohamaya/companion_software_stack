@@ -275,3 +275,50 @@ When `ZENOH_CONFIG_PATH` is set, it's compiled in as `ZENOH_CONFIG_PATH="/path/t
 - **Zenoh:** Subscriber declares interest in a key expression. Publisher declares a matching key expression. Zenoh's discovery protocol handles matching asynchronously. `is_connected()` = "was the subscription declared?" (always true after `subscribe()`).
 
 **Found by:** End-to-end Zenoh smoke test (`tests/test_zenoh_e2e.sh`) — Phase 3 (process liveness) detected that 3 of 7 processes exited within the first second.
+
+---
+
+## Fix #10 — Intermittent Zenoh Test Failures Under Parallel CTest
+
+**Date:** 2026-03-02  
+**Severity:** High  
+**File:** `tests/CMakeLists.txt`
+
+**Bug:** Running `ctest -j$(nproc)` intermittently caused 1–2 Zenoh tests to fail with "Subprocess aborted" (SIGABRT). The specific failing tests varied between runs — e.g., `ZenohMessageBus.SubscribeLazyCreatesSubscriber`, `ZenohShmPublish.FactoryVideoRoundTrip`, `ShmIPCTest.ReadBeforeWrite`, etc. Every failing test passed when run individually.
+
+**Root Cause:** Three Zenoh test binaries (`test_zenoh_ipc`, `test_zenoh_network`, `test_zenoh_liveliness`) each open their own Zenoh sessions and allocate 32 MB SHM pools. When `ctest -j$(nproc)` ran them all simultaneously, the combined resource usage (multiple concurrent Zenoh sessions, SHM pool allocations, Zenoh router discovery) exceeded system limits, triggering SIGABRT in the zenohc runtime. The `test_shm_ipc` binary also shares `/drone_test_shm` POSIX SHM segments that could collide under parallel execution.
+
+**Reproduction:** 3 consecutive `ctest -j$(nproc)` runs: Run 1 failed (2 tests), Runs 2–3 passed 377/377 — confirming the failure was intermittent and load-dependent.
+
+**Failed Fix Attempt:** Initially added `set_tests_properties()` with `RESOURCE_LOCK` listing individual test names (e.g., `ZenohRoundTrip.PoseRoundTrip`). This failed because `gtest_discover_tests()` generates test names at **build time**, not **configure time** — the names used in `set_tests_properties()` didn't match the actual discovered test names, so the locks were silently ignored.
+
+**Fix:** Extended the `add_drone_test()` CMake function to accept an optional `PROPERTIES` keyword argument, forwarded directly to `gtest_discover_tests()`:
+
+```cmake
+function(add_drone_test TEST_NAME)
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "" "PROPERTIES")
+    # ... target setup ...
+    if(ARG_PROPERTIES)
+        gtest_discover_tests(${TEST_NAME} PROPERTIES ${ARG_PROPERTIES})
+    else()
+        gtest_discover_tests(${TEST_NAME})
+    endif()
+endfunction()
+```
+
+Applied `RESOURCE_LOCK` to 4 test targets:
+
+| Target | Lock Name | Reason |
+|--------|-----------|--------|
+| `test_shm_ipc` | `posix_shm` | Shares `/drone_test_shm` POSIX SHM segment |
+| `test_zenoh_ipc` | `zenoh_session` | Opens Zenoh session + 32 MB SHM pool |
+| `test_zenoh_network` | `zenoh_session` | Opens Zenoh session for network tests |
+| `test_zenoh_liveliness` | `zenoh_session` | Opens Zenoh session for liveliness tests |
+
+All three Zenoh binaries share the same `"zenoh_session"` lock, so CTest never runs them simultaneously. All other tests (306 of 377) continue to run fully in parallel.
+
+**Verification:** 3 consecutive `ctest -j$(nproc)` runs after the fix — 377/377 passed on all 3 runs.
+
+**Key Insight:** `gtest_discover_tests()` creates test entries at build time (via a POST_BUILD step that runs the binary with `--gtest_list_tests`). Any `set_tests_properties()` call at configure time with test names will silently fail if the names don't match exactly. The correct approach is to pass `PROPERTIES` directly to `gtest_discover_tests()`, which applies them to all discovered tests from that binary.
+
+**Found by:** `deploy/clean_build_and_run_zenoh.sh` aborting during the test phase (`set -e` + `ctest -j$(nproc)` failure).

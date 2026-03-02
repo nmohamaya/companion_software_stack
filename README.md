@@ -848,15 +848,62 @@ make -j$(nproc)
 
 Or use the build script:
 ```bash
-./deploy/build.sh          # Release build (default)
-./deploy/build.sh Debug    # Debug build
+./deploy/build.sh                 # Release build, SHM backend (default)
+./deploy/build.sh --zenoh         # Release build, Zenoh IPC backend
+./deploy/build.sh Debug           # Debug build, SHM backend
+./deploy/build.sh Debug --zenoh   # Debug build, Zenoh backend
+./deploy/build.sh --clean         # Delete build/ first, then build
+./deploy/build.sh --clean --zenoh # Clean rebuild with Zenoh
 ```
 
 Binaries are placed in `build/bin/`.
 
 ## Run
 
-### Launch all processes (recommended)
+### Deploy scripts reference
+
+| Script | Purpose | When to use |
+|---|---|---|
+| `deploy/clean_build_and_run_shm.sh [--gui]` | Clean build (SHM) + Gazebo SITL flight | First run, or after code changes — uses POSIX SHM IPC |
+| `deploy/clean_build_and_run_zenoh.sh [--gui]` | Clean build (Zenoh) + Gazebo SITL flight | First run with Zenoh, or after code changes — uses Zenoh IPC |
+| `deploy/build.sh [--zenoh] [--clean]` | Build only (no launch) | Quick incremental builds during development |
+| `deploy/launch_all.sh` | Launch 7 processes (no PX4/Gazebo) | Standalone launch with `default.json`, or when PX4 is already running |
+| `deploy/launch_gazebo.sh [--gui]` | PX4 SITL + Gazebo + 7 processes | Launch simulation without rebuilding |
+| `deploy/launch_hardware.sh [--config ...] [--dry-run]` | Real drone hardware launch | Production flight on real hardware |
+| `deploy/install_dependencies.sh [--all]` | Install all dependencies | Fresh machine setup |
+
+### Clean build and run (recommended for first use)
+
+These scripts clean-build the entire stack, run all unit tests, then launch a full
+Gazebo SITL autonomous flight:
+
+```bash
+# SHM backend (POSIX shared memory):
+bash deploy/clean_build_and_run_shm.sh          # headless
+bash deploy/clean_build_and_run_shm.sh --gui    # with Gazebo 3-D GUI
+
+# Zenoh backend (requires zenohc ≥ 1.0 installed):
+bash deploy/clean_build_and_run_zenoh.sh         # headless
+bash deploy/clean_build_and_run_zenoh.sh --gui   # with Gazebo 3-D GUI
+```
+
+Both scripts: kill stale processes → `rm -rf build/` → cmake + build → ctest → launch Gazebo SITL.
+
+### Launch Gazebo SITL (without rebuilding)
+
+If the stack is already built, launch simulation directly:
+
+```bash
+# SHM backend (default config):
+bash deploy/launch_gazebo.sh --gui
+
+# Zenoh backend:
+CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui
+```
+
+The `--gui` flag is optional — omit it for headless mode.
+
+### Launch all processes (standalone, no PX4/Gazebo)
 
 The launch script handles SHM cleanup, library path fixes, and starts all 7 processes in the correct dependency order:
 
@@ -870,6 +917,22 @@ sudo ./deploy/launch_all.sh
 
 Press `Ctrl+C` to gracefully stop all processes.
 
+### Launch on real hardware
+
+```bash
+# Validate config and FC connection without starting (dry run):
+bash deploy/launch_hardware.sh --dry-run
+
+# Launch with default hardware config (config/hardware.json — Zenoh backend):
+bash deploy/launch_hardware.sh
+
+# Launch with a custom config:
+bash deploy/launch_hardware.sh --config config/my_drone.json
+```
+
+The hardware launcher auto-detects Pixhawk serial devices, validates the config,
+checks disk/memory/temperature, and monitors process health during flight.
+
 ### Run individual processes
 
 Start processes in dependency order — upstream producers first, then consumers:
@@ -880,14 +943,14 @@ Start processes in dependency order — upstream producers first, then consumers
 ./build/bin/video_capture &
 ./build/bin/comms &
 
-# 2. Depends on video_capture SHM
+# 2. Depends on video_capture IPC
 ./build/bin/perception &
 ./build/bin/slam_vio_nav &
 
-# 3. Depends on slam_vio_nav + perception + comms SHM
+# 3. Depends on slam_vio_nav + perception + comms IPC
 ./build/bin/mission_planner &
 
-# 4. Depends on mission_planner SHM
+# 4. Depends on mission_planner IPC
 ./build/bin/payload_manager &
 ```
 
@@ -895,6 +958,7 @@ Start processes in dependency order — upstream producers first, then consumers
 
 All processes accept:
 ```
+--config <file>       Config file (default: config/default.json)
 --log-level <level>   Set log level: trace/debug/info/warn/error (default: info)
 --sim                 Simulation mode (default — all hardware is simulated)
 --help                Show help
@@ -1071,8 +1135,13 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 ├── models/
 │   └── yolov8n.onnx                 # YOLOv8-nano ONNX model (12.8 MB)
 └── deploy/
-    ├── build.sh                      # Build script (Release/Debug)
-    └── launch_all.sh                 # Launch all 7 processes in order
+    ├── build.sh                      # Build (Release/Debug, --zenoh, --clean)
+    ├── clean_build_and_run_shm.sh    # Clean build + Gazebo SITL (SHM backend)
+    ├── clean_build_and_run_zenoh.sh  # Clean build + Gazebo SITL (Zenoh backend)
+    ├── install_dependencies.sh       # Full dependency installer (interactive)
+    ├── launch_all.sh                 # Launch 7 processes (no PX4/Gazebo)
+    ├── launch_gazebo.sh              # PX4 SITL + Gazebo + 7 processes
+    └── launch_hardware.sh            # Real drone hardware launch
 ```
 
 ## Simulation Mode
@@ -1093,8 +1162,8 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | nlohmann/json | ≥ 3.11 | JSON config parsing | `apt install nlohmann-json3-dev` | Yes |
 | Google Test | ≥ 1.14 | Unit testing | `apt install libgtest-dev` | Yes |
 | GCC | ≥ 11 | C++17 compiler | `apt install build-essential` | Yes |
-| zenohc | ≥ 1.0 | Zenoh IPC backend (`ZenohMessageBus`) | [Pre-built `.deb`](https://github.com/eclipse-zenoh/zenoh-c/releases) or build from source | Planned (`HAVE_ZENOH`) |
-| zenoh-cpp | ≥ 1.0 | Header-only C++17 Zenoh bindings | [zenoh-cpp](https://github.com/eclipse-zenoh/zenoh-cpp) | Planned (with `HAVE_ZENOH`) |
+| zenohc | ≥ 1.0 | Zenoh IPC backend (`ZenohMessageBus`) | [Pre-built `.deb`](https://github.com/eclipse-zenoh/zenoh-c/releases) or `deploy/install_dependencies.sh` | Optional (`HAVE_ZENOH`) |
+| zenoh-cpp | ≥ 1.0 | Header-only C++17 Zenoh bindings | [zenoh-cpp](https://github.com/eclipse-zenoh/zenoh-cpp) or `deploy/install_dependencies.sh` | Optional (with `HAVE_ZENOH`) |
 | OpenCV | ≥ 4.6 | YOLOv8 DNN inference (`OpenCvYoloDetector`) | Build from source or `apt install libopencv-dev` | Optional (`HAS_OPENCV`) |
 | MAVSDK | ≥ 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
