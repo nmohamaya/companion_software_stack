@@ -75,6 +75,13 @@ find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
 - The `format-check` CI job blocks the build matrix — fix formatting before pushing
 - Config: `.clang-format` (4-space indent, K&R braces, 100-col limit)
 
+**Pre-commit hook (recommended):** Automatically formats staged files before each commit, preventing CI format failures:
+```bash
+# One-time install (symlinks deploy/pre-commit into .git/hooks/):
+ln -sf ../../deploy/pre-commit .git/hooks/pre-commit
+```
+The hook runs `clang-format` on staged `.h`/`.cpp` files, re-stages the formatted versions, and is silently skipped if `clang-format` is not installed.
+
 ##### 4c. Tests (100% pass rate required)
 ```bash
 ctest --test-dir build --output-on-failure -j$(nproc)
