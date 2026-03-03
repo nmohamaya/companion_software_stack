@@ -2,15 +2,19 @@
 // Unit tests for the structured JSON logging sink.
 #include "util/json_log_sink.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
 
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
+#include <unistd.h>
 
 using drone::util::JsonLogSink;
 using drone::util::JsonLogSink_mt;
@@ -44,7 +48,7 @@ protected:
     }
 
     /// Get the last JSON line from the sink (via accessor).
-    const std::string& last_json() { return sink_->last_json(); }
+    std::string last_json() { return sink_->last_json(); }
 
     std::string                     tmp_path_;
     std::FILE*                      fp_ = nullptr;
@@ -258,13 +262,18 @@ TEST_F(JsonSinkTest, LongMessageHandled) {
 // ── Thread-safe variant compiles and works ──────────────────
 
 TEST(JsonSinkMtTest, MtVariantProducesOutput) {
-    auto sink   = std::make_shared<JsonLogSink_mt>(stdout);
-    auto logger = std::make_shared<spdlog::logger>("mt_test", sink);
-    logger->set_level(spdlog::level::info);
+    std::FILE* tmp = std::tmpfile();
+    ASSERT_NE(tmp, nullptr);
+    {
+        auto sink   = std::make_shared<JsonLogSink_mt>(tmp);
+        auto logger = std::make_shared<spdlog::logger>("mt_test", sink);
+        logger->set_level(spdlog::level::info);
 
-    // Just verify it compiles and doesn't crash
-    logger->info("mt test");
-    EXPECT_FALSE(sink->last_json().empty());
+        // Just verify it compiles and doesn't crash
+        logger->info("mt test");
+        EXPECT_FALSE(sink->last_json().empty());
+    }
+    std::fclose(tmp);
 }
 
 // ── detail::json_escape unit tests ──────────────────────────
@@ -324,8 +333,7 @@ TEST(LevelToStrTest, AllLevels) {
 TEST(LogConfigJsonTest, JsonModeInitDoesNotCrash) {
     // Init with json_mode = true to a temp dir
     std::string tmp_dir = "/tmp/test_logconfig_json_" + std::to_string(getpid());
-    std::string cmd     = "mkdir -p " + tmp_dir;
-    ASSERT_EQ(std::system(cmd.c_str()), 0);
+    std::filesystem::create_directories(tmp_dir);
 
     // Should not throw
     EXPECT_NO_THROW(LogConfig::init("json_test", tmp_dir, "debug", true));
@@ -336,14 +344,12 @@ TEST(LogConfigJsonTest, JsonModeInitDoesNotCrash) {
 
     // Clean up
     spdlog::drop_all();
-    cmd = "rm -rf " + tmp_dir;
-    std::system(cmd.c_str());
+    std::filesystem::remove_all(tmp_dir);
 }
 
 TEST(LogConfigJsonTest, HumanModeStillWorks) {
     std::string tmp_dir = "/tmp/test_logconfig_human_" + std::to_string(getpid());
-    std::string cmd     = "mkdir -p " + tmp_dir;
-    ASSERT_EQ(std::system(cmd.c_str()), 0);
+    std::filesystem::create_directories(tmp_dir);
 
     EXPECT_NO_THROW(LogConfig::init("human_test", tmp_dir, "info", false));
 
@@ -351,8 +357,7 @@ TEST(LogConfigJsonTest, HumanModeStillWorks) {
     EXPECT_EQ(logger->name(), "human_test");
 
     spdlog::drop_all();
-    cmd = "rm -rf " + tmp_dir;
-    std::system(cmd.c_str());
+    std::filesystem::remove_all(tmp_dir);
 }
 
 // ── ParsedArgs --json-logs flag ─────────────────────────────

@@ -17,8 +17,10 @@
 
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 #include <spdlog/details/null_mutex.h>
 #include <spdlog/sinks/base_sink.h>
@@ -31,7 +33,7 @@ namespace detail {
 
 /// Escape a string for JSON output (handles \, ", \n, \r, \t, control chars).
 /// Writes directly to the output buffer for speed — no intermediate std::string.
-inline void json_escape(std::string& out, const std::string& input) {
+inline void json_escape(std::string& out, std::string_view input) {
     out.reserve(out.size() + input.size() + 16);
     for (char c : input) {
         switch (c) {
@@ -64,7 +66,7 @@ inline std::string format_timestamp(const std::chrono::system_clock::time_point&
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(tp.time_since_epoch()) %
               std::chrono::seconds(1);
 
-    char buf[32];
+    char buf[64];
     std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%06ld", tm.tm_year + 1900,
                   tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec,
                   static_cast<long>(us.count()));
@@ -95,7 +97,11 @@ public:
     explicit JsonLogSink(std::FILE* output = stdout) : output_(output) {}
 
     /// Get the last formatted JSON line (useful for testing).
-    [[nodiscard]] const std::string& last_json() const { return last_json_; }
+    /// Returns a copy to avoid data races when called concurrently with logging.
+    [[nodiscard]] std::string last_json() {
+        std::lock_guard<Mutex> lock(this->mutex_);
+        return last_json_;
+    }
 
 protected:
     void sink_it_(const spdlog::details::log_msg& msg) override {
@@ -110,7 +116,7 @@ protected:
         json += detail::level_to_str(msg.level);
 
         json += "\",\"logger\":\"";
-        detail::json_escape(json, std::string(msg.logger_name.data(), msg.logger_name.size()));
+        detail::json_escape(json, std::string_view(msg.logger_name.data(), msg.logger_name.size()));
 
         json += "\",\"thread\":";
         json += std::to_string(msg.thread_id);
@@ -119,7 +125,7 @@ protected:
         json += std::to_string(static_cast<int>(getpid()));
 
         json += ",\"msg\":\"";
-        detail::json_escape(json, std::string(msg.payload.data(), msg.payload.size()));
+        detail::json_escape(json, std::string_view(msg.payload.data(), msg.payload.size()));
 
         json += "\"";
 
