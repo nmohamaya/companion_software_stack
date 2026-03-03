@@ -1312,3 +1312,81 @@ All call sites fixed to properly handle return values:
 | E2E checks | — | — | — | **42/42** | **42/42** | **42/42** |
 
 *Last updated after Zenoh E2E smoke test — PR #58: 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete.*
+
+---
+
+## Phase 10 — Foundation Hardening (Epic #64)
+
+### Improvement #21 — Sanitizer CI Support (Issue #67, PR #71)
+
+**Date:** 2026-03-03  
+**Category:** Infrastructure — Build & CI  
+**Issue:** [#67](https://github.com/nmohamaya/companion_software_stack/issues/67)  
+**PR:** [#71](https://github.com/nmohamaya/companion_software_stack/pull/71)
+
+**Files Modified:**
+- `CMakeLists.txt` — Added `ENABLE_ASAN`, `ENABLE_TSAN`, `ENABLE_UBSAN` options with mutual exclusivity + frame pointer flags
+- `.github/workflows/ci.yml` — Expanded matrix from 2→7 legs (shm, zenoh, shm+asan, shm+tsan, shm+ubsan, zenoh+asan, zenoh+ubsan)
+- `BUG_FIXES.md` — Fix #11 (TSan ASLR crash on kernel 6.17)
+- `CI_ISSUES.md` — CI-005 (TSan `-Wtsan` warning under `-Werror`)
+
+**What:** Added first-class sanitizer support to CMake and CI. Three mutually exclusive options (`ENABLE_ASAN`, `ENABLE_TSAN`, `ENABLE_UBSAN`) each add the appropriate compile/link flags and automatically switch to Debug mode. The CI matrix expanded from 2 legs (shm, zenoh) to 7 legs covering all sanitizer+backend combinations (TSan excluded for Zenoh due to uninstrumented zenohc library). Fixed TSan ASLR crash on kernel 6.17 (`vm.mmap_rnd_bits=28`) and GCC 13 `-Wtsan` warning.
+
+**Metrics:**
+- CI matrix: 2 → **7 legs**
+- All 400 tests pass under ASan, TSan, and UBSan
+
+---
+
+### Improvement #22 — clang-format + clang-tidy + .editorconfig (Issue #65, PR #72)
+
+**Date:** 2026-03-03  
+**Category:** Infrastructure — Code Quality  
+**Issue:** [#65](https://github.com/nmohamaya/companion_software_stack/issues/65)  
+**PR:** [#72](https://github.com/nmohamaya/companion_software_stack/pull/72)
+
+**Files Added:**
+- `.clang-format` — 4-space indent, K&R braces, 100-col limit, left pointer alignment
+- `.clang-tidy` — bugprone/cert/cppcoreguidelines/misc/modernize/performance/readability checks with naming conventions
+- `.editorconfig` — UTF-8, LF, language-appropriate indent sizes
+- `.git-blame-ignore-revs` — ignores the one-time format pass commit in `git blame`
+
+**Files Modified:**
+- 91 C++ source files — one-time automated format pass
+- `.github/workflows/ci.yml` — Added `format-check` fast gate job (pinned `clang-format-18`)
+
+**What:** Established consistent code style across the entire codebase. The `.clang-format` config was tuned to match the project's existing style (CamelCase classes, lower_case methods, trailing `_` for private members). A `format-check` CI job runs before the build matrix as a fast gate — any formatting drift fails the pipeline immediately. The `.git-blame-ignore-revs` file ensures `git blame` skips the bulk format commit.
+
+---
+
+### Improvement #23 — Code Coverage Reporting (Issue #66, PR #73)
+
+**Date:** 2026-03-03  
+**Category:** Infrastructure — Testing  
+**Issue:** [#66](https://github.com/nmohamaya/companion_software_stack/issues/66)  
+**PR:** [#73](https://github.com/nmohamaya/companion_software_stack/pull/73)
+
+**Files Modified:**
+- `CMakeLists.txt` — Added `ENABLE_COVERAGE` option (`--coverage -fprofile-arcs -ftest-coverage`)
+- `.github/workflows/ci.yml` — Added `coverage (shm)` CI job: build → test → lcov capture → filter → genhtml → upload artifact (14-day retention)
+- `.gitignore` — Added `build-*/`, `*.gcno`, `*.gcda`, `coverage-report/`
+
+**What:** Added gcov/lcov code coverage instrumentation. The `ENABLE_COVERAGE` CMake option adds coverage flags; a dedicated CI job builds with coverage, runs all tests, captures lcov data, filters out system headers and test code, generates an HTML report, and uploads it as a GitHub Actions artifact (14-day retention). Local verification showed **75.1% line coverage** and **84.9% function coverage**.
+
+---
+
+## Updated Summary (Post Foundation Hardening Tier 1)
+
+| Metric | FaultMgr | Sanitizers | Format/Tidy | Coverage |
+|---|---|---|---|---|
+| Bug fixes | 19 | **21** | 21 | **21** |
+| Unit tests | 400 | 400 | 400 | **400** |
+| Test suites | 23 | 23 | 23 | **23** |
+| Compiler warnings | 0 | 0 | 0 | **0** |
+| CI matrix legs | 2 | **7** | 7 + format gate | **7 + format gate + coverage** |
+| Line coverage | — | — | — | **75.1%** |
+| Function coverage | — | — | — | **84.9%** |
+| Code style | — | — | **enforced** | enforced |
+| Sanitizers | — | **ASan, TSan, UBSan** | ASan, TSan, UBSan | ASan, TSan, UBSan |
+
+*Last updated after Foundation Hardening Tier 1 — PR #71, #72, #73: 400 tests, 7+2 CI jobs, 75.1% coverage.*

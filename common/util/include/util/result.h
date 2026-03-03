@@ -75,6 +75,8 @@ inline constexpr ErrTag err_tag{};
 template<typename T, typename E = Error>
 class [[nodiscard]] Result {
 public:
+    using error_type = E;
+
     // ── Construction helpers ─────────────────────────────────
     /// Construct a success value.
     static Result ok(T value) { return Result(ok_tag, std::move(value)); }
@@ -86,12 +88,12 @@ public:
     [[nodiscard]] bool is_ok() const { return storage_.index() == 0; }
     [[nodiscard]] bool is_err() const { return storage_.index() == 1; }
 
-    /// Access the success value.  UB if is_err().
+    /// Access the success value.  Precondition: is_ok() (throws std::bad_variant_access otherwise).
     [[nodiscard]] const T& value() const& { return std::get<0>(storage_); }
     [[nodiscard]] T&       value() & { return std::get<0>(storage_); }
     [[nodiscard]] T&&      value() && { return std::get<0>(std::move(storage_)); }
 
-    /// Access the error.  UB if is_ok().
+    /// Access the error.  Precondition: is_err() (throws std::bad_variant_access otherwise).
     [[nodiscard]] const E& error() const& { return std::get<1>(storage_); }
     [[nodiscard]] E&       error() & { return std::get<1>(storage_); }
     [[nodiscard]] E&&      error() && { return std::get<1>(std::move(storage_)); }
@@ -105,34 +107,56 @@ public:
     // ── Monadic operations ───────────────────────────────────
 
     /// Transform the success value (T → U).  Propagates error unchanged.
+    /// If F returns void, produces Result<void, E>.
     template<typename F>
     [[nodiscard]] auto map(F&& func) const& -> Result<std::invoke_result_t<F, const T&>, E> {
         using U = std::invoke_result_t<F, const T&>;
-        if (is_ok()) return Result<U, E>::ok(std::invoke(std::forward<F>(func), value()));
-        return Result<U, E>::err(error());
+        if constexpr (std::is_void_v<U>) {
+            if (is_ok()) {
+                std::invoke(std::forward<F>(func), value());
+                return Result<void, E>::ok();
+            }
+            return Result<void, E>::err(error());
+        } else {
+            if (is_ok()) return Result<U, E>::ok(std::invoke(std::forward<F>(func), value()));
+            return Result<U, E>::err(error());
+        }
     }
 
     template<typename F>
     [[nodiscard]] auto map(F&& func) && -> Result<std::invoke_result_t<F, T&&>, E> {
         using U = std::invoke_result_t<F, T&&>;
-        if (is_ok())
-            return Result<U, E>::ok(std::invoke(std::forward<F>(func), std::move(value())));
-        return Result<U, E>::err(std::move(error()));
+        if constexpr (std::is_void_v<U>) {
+            if (is_ok()) {
+                std::invoke(std::forward<F>(func), std::move(value()));
+                return Result<void, E>::ok();
+            }
+            return Result<void, E>::err(std::move(error()));
+        } else {
+            if (is_ok())
+                return Result<U, E>::ok(std::invoke(std::forward<F>(func), std::move(value())));
+            return Result<U, E>::err(std::move(error()));
+        }
     }
 
     /// Chain with a function that returns Result<U, E>.  Propagates error.
+    /// The callable must return a Result whose error type is E (or convertible to E).
     /// (flat-map / bind / and_then)
     template<typename F>
     [[nodiscard]] auto and_then(F&& func) const& -> std::invoke_result_t<F, const T&> {
-        if (is_ok()) return std::invoke(std::forward<F>(func), value());
         using RetResult = std::invoke_result_t<F, const T&>;
+        static_assert(std::is_same_v<typename RetResult::error_type, E>,
+                      "and_then: callable must return Result with the same error type E");
+        if (is_ok()) return std::invoke(std::forward<F>(func), value());
         return RetResult::err(error());
     }
 
     template<typename F>
     [[nodiscard]] auto and_then(F&& func) && -> std::invoke_result_t<F, T&&> {
-        if (is_ok()) return std::invoke(std::forward<F>(func), std::move(value()));
         using RetResult = std::invoke_result_t<F, T&&>;
+        static_assert(std::is_same_v<typename RetResult::error_type, E>,
+                      "and_then: callable must return Result with the same error type E");
+        if (is_ok()) return std::invoke(std::forward<F>(func), std::move(value()));
         return RetResult::err(std::move(error()));
     }
 
@@ -166,6 +190,8 @@ private:
 template<typename E>
 class [[nodiscard]] Result<void, E> {
 public:
+    using error_type = E;
+
     static Result ok() { return Result(ok_tag); }
     static Result err(E error) { return Result(err_tag, std::move(error)); }
 

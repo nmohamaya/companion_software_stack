@@ -16,7 +16,7 @@ class Config {
 public:
     /// Load configuration from a JSON file.
     /// Returns false if the file cannot be read; the config stays empty (all defaults).
-    [[nodiscard]] bool load(const std::string& path) {
+    bool load(const std::string& path) {
         auto r = load_config(path);
         return r.is_ok();
     }

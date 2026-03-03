@@ -4,12 +4,16 @@
 # Gazebo SITL simulation.
 #
 # Usage:
-#   bash deploy/clean_build_and_run_shm.sh          # headless
-#   bash deploy/clean_build_and_run_shm.sh --gui    # with Gazebo 3-D GUI
+#   bash deploy/clean_build_and_run_shm.sh               # headless
+#   bash deploy/clean_build_and_run_shm.sh --gui          # with Gazebo 3-D GUI
+#   bash deploy/clean_build_and_run_shm.sh --asan         # + AddressSanitizer
+#   bash deploy/clean_build_and_run_shm.sh --tsan         # + ThreadSanitizer
+#   bash deploy/clean_build_and_run_shm.sh --ubsan        # + UBSan
+#   bash deploy/clean_build_and_run_shm.sh --coverage     # + code coverage
 #
 # What it does:
 #   1. Kill leftover PX4/Gazebo/companion processes & stale SHM segments
-#   2. Clean-build (Release, Zenoh OFF)
+#   2. Clean-build (Release by default, Debug if sanitizer/coverage, SHM IPC)
 #   3. Run unit tests
 #   4. Launch Gazebo SITL flight with config/gazebo.json (SHM IPC)
 set -euo pipefail
@@ -19,9 +23,39 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 GUI_FLAG=""
+SANITIZER=""
+ENABLE_COVERAGE="OFF"
+
 for arg in "$@"; do
-    [[ "$arg" == "--gui" ]] && GUI_FLAG="--gui"
+    case "$arg" in
+        --gui)       GUI_FLAG="--gui" ;;
+        --asan)      SANITIZER="asan" ;;
+        --tsan)      SANITIZER="tsan" ;;
+        --ubsan)     SANITIZER="ubsan" ;;
+        --coverage)  ENABLE_COVERAGE="ON" ;;
+        *)
+            echo "Unknown argument: $arg"
+            echo "Usage: $0 [--gui] [--asan|--tsan|--ubsan] [--coverage]"
+            exit 1
+            ;;
+    esac
 done
+
+# Build type: Debug if sanitizer or coverage requested, Release otherwise
+BUILD_TYPE="Release"
+EXTRA_CMAKE_FLAGS=""
+if [[ -n "$SANITIZER" ]]; then
+    BUILD_TYPE="Debug"
+    case "$SANITIZER" in
+        asan)  EXTRA_CMAKE_FLAGS="-DENABLE_ASAN=ON" ;;
+        tsan)  EXTRA_CMAKE_FLAGS="-DENABLE_TSAN=ON" ;;
+        ubsan) EXTRA_CMAKE_FLAGS="-DENABLE_UBSAN=ON" ;;
+    esac
+fi
+if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
+    BUILD_TYPE="Debug"
+    EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DENABLE_COVERAGE=ON"
+fi
 
 # ── Step 1: Kill leftover processes & SHM ────────────────────
 echo "═══ [1/4] Cleaning up old processes & shared memory ═══"
@@ -53,11 +87,14 @@ echo "  Done."
 
 # ── Step 2: Clean build (SHM — Zenoh OFF) ────────────────────
 echo ""
-echo "═══ [2/4] Clean build (Release, IPC = POSIX SHM) ═══"
+echo "═══ [2/4] Clean build (${BUILD_TYPE}, IPC = POSIX SHM) ═══"
+[[ -n "$SANITIZER" ]]            && echo "  Sanitizer: ${SANITIZER}"
+[[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage : ON"
 rm -rf build/
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release \
+cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
       -DENABLE_ZENOH=OFF \
+      ${EXTRA_CMAKE_FLAGS} \
       ..
 cmake --build . -j"$(nproc)"
 cd "$PROJECT_DIR"

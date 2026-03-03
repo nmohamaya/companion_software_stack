@@ -4,7 +4,7 @@ This project follows a structured development process designed to catch issues e
 
 **Stack:** C++17 · CMake 3.16+ · Google Test · spdlog · Eigen3 · nlohmann/json · Zenoh (optional)  
 **Repo:** https://github.com/nmohamaya/companion_software_stack  
-**CI:** GitHub Actions (Ubuntu 24.04, `-Werror -Wall -Wextra`)
+**CI:** GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md))
 
 ---
 
@@ -62,7 +62,20 @@ cmake --build build -j$(nproc)
 - All 7 binaries + all test targets must compile
 - Zero compiler warnings
 
-##### 4b. Tests (100% pass rate required)
+##### 4b. Formatting (CI enforced)
+```bash
+# Check formatting (must match .clang-format):
+find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
+  | xargs -0 clang-format-18 --dry-run --Werror
+
+# Auto-fix:
+find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
+  | xargs -0 clang-format-18 -i
+```
+- The `format-check` CI job blocks the build matrix — fix formatting before pushing
+- Config: `.clang-format` (4-space indent, K&R braces, 100-col limit)
+
+##### 4c. Tests (100% pass rate required)
 ```bash
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
@@ -450,6 +463,8 @@ chore(#25): upgrade spdlog to 1.13.0
 |---|---|
 | **Test pass rate** | 100% (all tests must pass) |
 | **Compiler warnings** | 0 (CI builds with `-Werror -Wall -Wextra`) |
+| **Code formatting** | Must pass `clang-format-18 --dry-run --Werror` (CI gate) |
+| **Sanitizers** | ASan, TSan, UBSan — all tests must pass under all 3 sanitizers |
 | **New features** | Must include unit tests |
 | **Bug fixes** | Must include regression test |
 | **Config values** | Must use `cfg.get<>()` with sensible defaults |
@@ -469,6 +484,7 @@ chore(#25): upgrade spdlog to 1.13.0
 | [CI_ISSUES.md](CI_ISSUES.md) | CI failure log & root cause analysis | After every CI-specific failure |
 | [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | Production checklist & gap analysis | When readiness status changes |
 | [tests/TESTS.md](tests/TESTS.md) | Test suite index & per-test documentation | When adding or modifying tests |
+| [docs/CI_SETUP.md](docs/CI_SETUP.md) | CI pipeline architecture & DevOps guide | When CI jobs/matrix change |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
 
 > **Living Document:** This workflow document is meant to evolve with the project.

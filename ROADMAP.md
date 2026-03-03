@@ -47,7 +47,9 @@
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL |
 | Autonomous flight | ARM → Takeoff → Navigate 3 WPs → RTL → Land → Disarm |
-| CI | GitHub Actions — 9-job pipeline: format-check → 7-leg matrix (shm/zenoh × ASan/TSan/UBSan) → coverage |
+| CI | GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix (shm/zenoh × sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
+| Line coverage | **75.1%** (lcov, SHM backend) |
+| Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
 | Config tunables | 95+ (JSON, dot-path access, schema-validated) |
 | Error handling | `Result<T,E>` monadic type — no exceptions |
 | Sanitizers | ASan, TSan, UBSan (all CI-enforced) |
@@ -344,20 +346,30 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Zenoh F | E2E | FaultMgr | **Hardening (Current)** |
-|--------|---------|---------|---------|---------|---------|---------|-----|----------|------------------------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 370 | 377 | 400 | **464** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 21 | 22 | 23 | **26** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 17 | 19 | 19 | **19** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 90+ | 90+ | 95+ | **95+** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | **9** |
-| Sanitizers | — | — | — | — | — | — | — | — | **ASan+TSan+UBSan** |
-| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | **26** |
-| Config schemas | — | — | — | — | — | — | — | — | **7** |
-| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | **Result<T,E>** |
-| Fault conditions | — | — | — | — | — | — | — | **8** | **8** |
-| E2E checks | — | — | — | — | — | — | 42/42 | 42/42 | **42/42** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | **Hardening (Current)** |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | **464** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | **26** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | **21** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | **95+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **9** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | **8** |
+| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **ASan, TSan, UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | **Result<T,E>** |
+| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **75.1%** |
+| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **enforced (clang-format-18)** |
 
 ### Process Activity During Simulation
 
@@ -373,4 +385,4 @@
 
 ---
 
-*Last updated after Foundation Hardening (Epic #64) — 464 tests, 26 suites, 9-job CI pipeline, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers.*
+*Last updated after Foundation Hardening (Epic #64) — 464 tests, 26 suites, 9-job CI pipeline, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers, 75.1% line coverage.*

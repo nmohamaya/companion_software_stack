@@ -296,6 +296,32 @@ TEST(ResultTest, CustomErrorMapToDefault) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// map() with void-returning callable
+// ═══════════════════════════════════════════════════════════
+
+TEST(ResultTest, MapVoidReturnOk) {
+    auto r        = Result<int>::ok(42);
+    int  captured = 0;
+    auto v        = r.map([&](int x) { captured = x; });
+    static_assert(std::is_same_v<decltype(v), Result<void>>);
+    EXPECT_TRUE(v.is_ok());
+    EXPECT_EQ(captured, 42);
+}
+
+TEST(ResultTest, MapVoidReturnErr) {
+    auto r      = Result<int>::err(Error{ErrorCode::Unknown, "fail"});
+    bool called = false;
+    auto v      = r.map([&](int) { called = true; });
+    EXPECT_TRUE(v.is_err());
+    EXPECT_FALSE(called);
+}
+
+TEST(ResultTest, MapVoidReturnRvalue) {
+    auto v = Result<std::string>::ok("hello").map([](std::string&&) {});
+    EXPECT_TRUE(v.is_ok());
+}
+
+// ═══════════════════════════════════════════════════════════
 // ErrorCode coverage
 // ═══════════════════════════════════════════════════════════
 
