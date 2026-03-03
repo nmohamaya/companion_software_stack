@@ -1196,22 +1196,119 @@ See [BUG_FIXES.md](BUG_FIXES.md) Fix #9 for full details.
 
 ---
 
-## Updated Summary (Post FaultManager)
+---
 
-| Metric | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Bug fixes | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | **19** | **19** |
-| Unit tests | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | **400** |
-| Test suites | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | **23** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| IPC backends | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** | **SHM + Zenoh** |
-| Zenoh channels | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** | **12/12** |
-| Processes on factory | — | — | — | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** | **7/7** |
-| CI matrix | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | **2** | **2** |
-| Service channels | SHM | SHM | SHM | SHM | SHM | SHM | **Zenoh** | Zenoh | Zenoh | **Zenoh** | **Zenoh** |
-| Network transport | — | — | — | — | — | — | — | **Yes** | Yes | **Yes** | **Yes** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | **7** | **7** | **7** |
-| E2E checks | — | — | — | — | — | — | — | — | — | **42/42** | **42/42** |
-| Fault conditions | — | — | — | — | — | — | — | — | — | — | **8** |
+## Phase 10 — Foundation Hardening (Epic #64)
+
+### Improvement #21 — Tier 1: CI Infrastructure (Issues #65, #66, #67)
+
+**Date:** 2026-03-03  
+**Category:** Infrastructure / CI  
+**Issues:** [#65](https://github.com/nmohamaya/companion_software_stack/issues/65), [#66](https://github.com/nmohamaya/companion_software_stack/issues/66), [#67](https://github.com/nmohamaya/companion_software_stack/issues/67)  
+**PRs:** [#71](https://github.com/nmohamaya/companion_software_stack/pull/71) (sanitizers), [#72](https://github.com/nmohamaya/companion_software_stack/pull/72) (clang-tidy/format), [#73](https://github.com/nmohamaya/companion_software_stack/pull/73) (coverage)
+
+**What:**
+- **Sanitizer support (#67):** CMake `SANITIZER` option supporting ASan, TSan, UBSan. CI expanded from 2 legs to 7 (shm/zenoh × ASan/TSan/UBSan + baseline).
+- **clang-tidy + clang-format (#65):** `.clang-tidy` config, `.clang-format` config, `format-check` CI job that enforces style on every PR.
+- **Code coverage (#66):** CMake `ENABLE_COVERAGE` option, `coverage` CI job that generates lcov reports.
+
+**CI pipeline post-Tier 1:** 9 jobs (format-check → 7-leg build matrix → coverage).
+
+---
+
+### Improvement #22 — Tier 2: Result<T,E> Error Type (Issue #68, PR #75)
+
+**Date:** 2026-03-04  
+**Category:** Architecture — Error Handling  
+**Issue:** [#68](https://github.com/nmohamaya/companion_software_stack/issues/68)  
+**PR:** [#75](https://github.com/nmohamaya/companion_software_stack/pull/75)
+
+**Files Added:**
+- `common/util/include/util/result.h` — `Result<T,E>` class template, `ErrorCode` enum, `Error` class
+- `tests/test_result.cpp` — 32 unit tests
+
+**Files Modified:**
+- `common/util/include/util/config.h` — Added `load_config()` → `VoidResult`, `require<T>()` → `Result<T>`
+
+**What:** Lightweight monadic `Result<T,E>` type for structured error handling without exceptions. Based on `std::variant<T, E>` storage with monadic API:
+- `map()`, `and_then()`, `map_error()`, `value_or()`
+- `Result<void, E>` specialization for operations with no return value
+- `ErrorCode` enum with 10 codes (INVALID_ARGUMENT, NOT_FOUND, IO_ERROR, etc.)
+
+Design constraint: **no `shared_ptr`** — zero-cost value semantics throughout, suitable for real-time drone software.
+
+**Metrics:**
+- Tests: 400 → **442** (+32 Result tests, +10 config Result tests)
+- Test suites: 23 → **25**
+
+---
+
+### Improvement #23 — Tier 2: Config Schema Validation (Issue #69, PR #76)
+
+**Date:** 2026-03-04  
+**Category:** Architecture — Config Validation  
+**Issue:** [#69](https://github.com/nmohamaya/companion_software_stack/issues/69)  
+**PR:** [#76](https://github.com/nmohamaya/companion_software_stack/pull/76)
+
+**Files Added:**
+- `common/util/include/util/config_validator.h` — `ConfigSchema`, `FieldRule<T>`, 7 pre-built process schemas
+- `tests/test_config_validator.cpp` — 22 unit tests
+
+**What:** Startup-time JSON config schema validation with builder-pattern API:
+- `ConfigSchema` with `.required<T>()`, `.optional<T>()`, `.required_section()`, `.custom()`
+- `FieldRule<T>` with `.range()`, `.one_of()`, `.satisfies()` constraints
+- `validate()` collects all errors in one pass, returns `Result<void, vector<string>>`
+- 7 pre-built schemas: `common_schema()`, `video_capture_schema()`, `perception_schema()`, `slam_schema()`, `mission_planner_schema()`, `comms_schema()`, `payload_manager_schema()`, `system_monitor_schema()`
+
+**Design:** Uses virtual base class `IFieldRuleBase` + `unique_ptr` for type-erased rule storage — zero overhead via vtable dispatch, no `shared_ptr` (no atomic refcounting in real-time code).
+
+**Metrics:**
+- Tests: 442 → **464** (+22 config validator tests)
+- Test suites: 25 → **26**
+
+---
+
+### Improvement #24 — Tier 2: [[nodiscard]] Audit (Issue #70, PR #77)
+
+**Date:** 2026-03-04  
+**Category:** Code Quality — Correctness  
+**Issue:** [#70](https://github.com/nmohamaya/companion_software_stack/issues/70)  
+**PR:** [#77](https://github.com/nmohamaya/companion_software_stack/pull/77)
+
+**Files Modified:** 41 files (26 headers + 7 process mains + 8 test files)
+
+**What:** Comprehensive `[[nodiscard]]` annotation of all public methods returning values across the entire codebase:
+- IPC interfaces & implementations (7 files)
+- Wire format free functions (1 file)
+- HAL interfaces (5 files)
+- Process headers (3 files)
+- Concrete implementations (3 files)
+- Zenoh layer (7 files)
+- Config utility (1 file, `get()` and `section()`)
+
+All call sites fixed to properly handle return values:
+- 7 process mains: `cfg.load()` → `if (!cfg.load()) { warn }`
+- Test files: bare calls → `ASSERT_TRUE()` or `(void)` cast with explanation
+
+**Metrics:**
+- `[[nodiscard]]` warnings: **0** (compiler-enforced)
+- Tests: **464/464** pass (unchanged count)
+
+---
+
+## Updated Summary (Post Foundation Hardening)
+
+| Metric | Phase 7 | Phase 8 | Zenoh F | E2E | FaultMgr | **Hardening** |
+|---|---|---|---|---|---|---|
+| Bug fixes | 13 | 15 | 17 | **19** | **19** | **19** |
+| Unit tests | 262 | 262 | 370 | 377 | 400 | **464** |
+| Test suites | 18 | 18 | 21 | 22 | 23 | **26** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | **0** |
+| CI matrix legs | 1 | 1 | 2 | 2 | 2 | **9** |
+| `[[nodiscard]]` headers | — | — | — | — | — | **26** |
+| Config schemas | — | — | — | — | — | **7** |
+| Sanitizers | — | — | — | — | — | **ASan+TSan+UBSan** |
+| Fault conditions | — | — | — | — | **8** | **8** |
+| E2E checks | — | — | — | **42/42** | **42/42** | **42/42** |
 
 *Last updated after Zenoh E2E smoke test — PR #58: 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete.*
