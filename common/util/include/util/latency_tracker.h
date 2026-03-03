@@ -7,9 +7,11 @@
 //   auto stats = tracker.summary();        // p50/p90/p99/max/mean
 //   tracker.reset();                       // clear for next window
 //
-// Thread safety: record() is safe to call from one writer thread.
-// summary() / reset() should be called from a single reporting thread.
-// Multiple concurrent writers require external synchronisation.
+// Thread safety: NOT thread-safe.  record(), summary(), and reset()
+// must all be called from the **same** thread, or the caller must
+// provide external synchronisation (e.g. a mutex).  In practice each
+// subscriber owns its own LatencyTracker and drives it from a single
+// main-loop thread, so no locking is needed.
 #pragma once
 
 #include <algorithm>
@@ -24,14 +26,15 @@ namespace drone::util {
 
 /// Summary statistics from a LatencyTracker reporting window.
 struct LatencySummary {
-    uint64_t count   = 0;    ///< Number of samples recorded.
-    uint64_t min_ns  = 0;    ///< Minimum latency (ns).
-    uint64_t max_ns  = 0;    ///< Maximum latency (ns).
-    double   mean_ns = 0.0;  ///< Arithmetic mean (ns).
-    uint64_t p50_ns  = 0;    ///< 50th percentile (ns).
-    uint64_t p90_ns  = 0;    ///< 90th percentile (ns).
-    uint64_t p95_ns  = 0;    ///< 95th percentile (ns).
-    uint64_t p99_ns  = 0;    ///< 99th percentile (ns).
+    uint64_t count       = 0;    ///< Total samples recorded since last reset.
+    size_t   window_size = 0;    ///< Samples used for percentile calc (≤ capacity).
+    uint64_t min_ns      = 0;    ///< Minimum latency (ns).
+    uint64_t max_ns      = 0;    ///< Maximum latency (ns).
+    double   mean_ns     = 0.0;  ///< Arithmetic mean (ns).
+    uint64_t p50_ns      = 0;    ///< 50th percentile (ns).
+    uint64_t p90_ns      = 0;    ///< 90th percentile (ns).
+    uint64_t p95_ns      = 0;    ///< 95th percentile (ns).
+    uint64_t p99_ns      = 0;    ///< 99th percentile (ns).
 
     /// Convert a nanosecond value to microseconds for readability.
     static double to_us(uint64_t ns) { return static_cast<double>(ns) / 1000.0; }
@@ -66,7 +69,7 @@ public:
 
     /// Compute summary statistics over the current window.
     /// Sorts a copy of the internal buffer — O(n log n).
-    /// Safe to call while record() is writing (snapshot-based).
+    /// Must not be called concurrently with record() or reset().
     [[nodiscard]] LatencySummary summary() const {
         LatencySummary s;
         size_t         n = std::min(total_count_, samples_.size());
@@ -76,13 +79,14 @@ public:
         std::vector<uint64_t> sorted(samples_.begin(), samples_.begin() + n);
         std::sort(sorted.begin(), sorted.end());
 
-        s.count  = total_count_;
-        s.min_ns = sorted.front();
-        s.max_ns = sorted.back();
+        s.count       = total_count_;
+        s.window_size = n;
+        s.min_ns      = sorted.front();
+        s.max_ns      = sorted.back();
 
-        uint64_t sum = 0;
-        for (auto v : sorted) sum += v;
-        s.mean_ns = static_cast<double>(sum) / static_cast<double>(n);
+        double sum = 0.0;
+        for (auto v : sorted) sum += static_cast<double>(v);
+        s.mean_ns = sum / static_cast<double>(n);
 
         s.p50_ns = percentile_sorted(sorted, 50.0);
         s.p90_ns = percentile_sorted(sorted, 90.0);
@@ -126,7 +130,7 @@ public:
                      "p99={:.1f}µs, max={:.1f}µs, mean={:.1f}µs",
                      topic_name, s.count, LatencySummary::to_us(s.p50_ns),
                      LatencySummary::to_us(s.p90_ns), LatencySummary::to_us(s.p99_ns),
-                     LatencySummary::to_us(s.max_ns), LatencySummary::to_us(s.mean_ns));
+                     LatencySummary::to_us(s.max_ns), s.mean_ns / 1000.0);
         reset();
         return true;
     }

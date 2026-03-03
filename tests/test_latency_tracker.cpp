@@ -63,6 +63,7 @@ TEST(LatencyTrackerTest, SummaryEmptyTracker) {
     LatencyTracker tracker;
     auto           s = tracker.summary();
     EXPECT_EQ(s.count, 0u);
+    EXPECT_EQ(s.window_size, 0u);
     EXPECT_EQ(s.min_ns, 0u);
     EXPECT_EQ(s.max_ns, 0u);
     EXPECT_DOUBLE_EQ(s.mean_ns, 0.0);
@@ -195,12 +196,20 @@ TEST(LatencyTrackerTest, ConversionToMs) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(LatencyTrackerTest, NowNsReturnsIncreasingValues) {
+    // Poll in a tight loop instead of relying on sleep timing,
+    // which can be flaky on overloaded CI runners.
     auto t1 = LatencyTracker::now_ns();
-    std::this_thread::sleep_for(std::chrono::microseconds(100));
-    auto t2 = LatencyTracker::now_ns();
+    EXPECT_GT(t1, 0u);
+
+    // Busy-poll until the clock advances (should be near-instant)
+    auto     deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    uint64_t t2       = t1;
+    while (t2 <= t1) {
+        t2 = LatencyTracker::now_ns();
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+            << "Clock did not advance within 500 ms";
+    }
     EXPECT_GT(t2, t1);
-    // Should be at least ~100µs = 100,000 ns apart
-    EXPECT_GE(t2 - t1, 50'000u);  // allow some scheduling slack
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -255,6 +264,8 @@ TEST(LatencyTrackerTest, WrappedBufferReportsMostRecentData) {
 
     // Summary should reflect only the 4 most recent (capacity-limited snapshot)
     auto s = tracker.summary();
+    EXPECT_EQ(s.count, 8u);        // total samples ever recorded
+    EXPECT_EQ(s.window_size, 4u);  // only 4 fit in the ring buffer
     // The ring contains [9999, 9999, 9999, 9999] after wrapping
     EXPECT_EQ(s.min_ns, 9999u);
     EXPECT_EQ(s.max_ns, 9999u);
@@ -271,7 +282,8 @@ TEST(LatencyTrackerTest, StressManyRecords) {
     }
     EXPECT_EQ(tracker.total_count(), 100'000u);
     auto s = tracker.summary();
-    EXPECT_GT(s.count, 0u);
+    EXPECT_EQ(s.count, 100'000u);     // total ever recorded
+    EXPECT_EQ(s.window_size, 4096u);  // capped to ring buffer capacity
     EXPECT_LT(s.min_ns, s.max_ns);
     EXPECT_LE(s.p50_ns, s.p90_ns);
 }

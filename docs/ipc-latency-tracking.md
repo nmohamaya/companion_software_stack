@@ -44,16 +44,32 @@ with negligible overhead, so you can:
                                  │     now-ts)   │     (ring buffer)
                                  └──────────────┘
 
-Same pattern for ZenohPublisher → ZenohSubscriber.
+Same pattern for ZenohPublisher → ZenohSubscriber, **with one
+important caveat**: ZenohPublisher does **not** embed a send
+timestamp in the wire payload.  Instead, ZenohSubscriber stamps
+`steady_clock::now()` when the Zenoh callback delivers the
+sample.  Therefore the Zenoh "latency" measures **callback → poll
+delay** (consumer processing lag), not true publisher-to-subscriber
+wire latency.  See the [Limitations](#known-limitations) section.
 ```
 
 **How it works:**
 
-1. The **publisher** (ShmWriter) stamps each message with
+1. **SHM path (true publisher → subscriber latency):**
+   The publisher (ShmWriter) stamps each message with
    `steady_clock::now()` in nanoseconds (`timestamp_ns` field in the
-   ShmBlock header).
-2. The **subscriber** (ShmSubscriber / ZenohSubscriber) reads the
-   message, then computes `now_ns() - message_timestamp_ns`.
+   ShmBlock header).  The subscriber (ShmSubscriber) computes
+   `now_ns() - message_timestamp_ns` on `receive()`.
+
+2. **Zenoh path (callback → poll delay only):**
+   ZenohPublisher sends raw bytes with no timestamp header.
+   ZenohSubscriber records `steady_clock::now()` in its `on_sample()`
+   callback.  When `receive()` is later called, it computes
+   `now_ns() - callback_timestamp`.  This measures how long the message
+   waited in the subscriber's latest-value cache before the main loop
+   polled it — useful for tuning poll rates, but **not** a wire latency
+   measurement.
+
 3. That delta is pushed into a **LatencyTracker** — a fixed-size ring
    buffer that holds the most recent N samples.
 4. At any time you can call `summary()` to get percentile statistics
@@ -62,9 +78,7 @@ Same pattern for ZenohPublisher → ZenohSubscriber.
 
 > **Clock note:** Both publisher and subscriber use
 > `std::chrono::steady_clock` so results are immune to NTP jumps.
-> SHM channels are intra-machine, so no clock-sync issues.  For Zenoh
-> cross-machine channels, ensure NTP/PTP time sync or interpret results
-> as "receive delay" rather than "wire latency."
+> SHM channels are intra-machine, so no clock-sync issues.
 
 ---
 
@@ -315,12 +329,25 @@ is a good balance for 30–100 Hz topics.
 
 ## Thread Safety
 
+`LatencyTracker` is **not** internally synchronised (no atomics, no
+mutex).  All three operations — `record()`, `summary()`, and `reset()`
+— must be called from the **same** thread, or the caller must provide
+external locking.
+
+In practice this is safe because each subscriber owns its own tracker,
+and the main loop of every process drives both `receive()` (which calls
+`record()`) and `log_latency_if_due()` (which calls `summary()` +
+`reset()`) **sequentially on the same thread**.
+
 | Operation | Thread safety |
 |---|---|
-| `record()` | Safe from **one** writer thread at a time. Each subscriber owns its tracker — this is the normal case. |
-| `summary()` | Safe to call concurrently with `record()`. Takes a snapshot (copy) of the buffer. |
-| `reset()` | Must **not** race with `record()`. Call it from the same thread, or after logging in the health-check loop (which doesn't race because `log_summary_if_due` gates on count). |
-| Multiple subscribers | Each `ShmSubscriber` / `ZenohSubscriber` has its **own** `LatencyTracker` instance. No sharing. |
+| `record()` | Single-thread only.  Each subscriber owns its tracker — no sharing. |
+| `summary()` | Must **not** be called concurrently with `record()` or `reset()`. |
+| `reset()` | Must **not** race with `record()` or `summary()`.  Called automatically by `log_summary_if_due()`. |
+| Multiple subscribers | Each `ShmSubscriber` / `ZenohSubscriber` has its **own** `LatencyTracker` instance.  No sharing. |
+
+> If a future design requires cross-thread access, wrap calls in a
+> `std::mutex` or switch the ring buffer to use atomic indices.
 
 ---
 
@@ -338,7 +365,7 @@ ShmSubscriber<T> sub("/topic", 50, 200, /*track_latency=*/false);
 ```
 
 Future: A config-file option (`ipc.latency_tracking: true/false`) and
-runtime toggle are planned for Issue #79 (structured logging).
+runtime toggle may be added in a follow-up issue.
 
 ---
 
@@ -396,6 +423,27 @@ The SHM and Zenoh integration is also covered by the existing
 
 ---
 
+## Known Limitations
+
+1. **Zenoh latency is callback → poll delay, not wire latency.**
+   `ZenohPublisher` sends raw bytes with no embedded timestamp.
+   `ZenohSubscriber` stamps `steady_clock::now()` inside the Zenoh
+   callback, so the recorded delta only shows how long the message sat
+   in the subscriber's latest-value cache before `receive()` polled it.
+   To measure true publisher → subscriber wire latency, a future change
+   would need to embed a send timestamp in the Zenoh payload (Issue TBD).
+
+2. **Not thread-safe.**  `LatencyTracker` has no internal
+   synchronisation.  All calls (`record`, `summary`, `reset`) must come
+   from the same thread or be externally serialised.  This is fine for
+   the current single-threaded main-loop architecture.
+
+3. **No runtime config-file toggle.**  Tracking is controlled at
+   construction time via a boolean.  A config-file option may be added
+   later.
+
+---
+
 ## FAQ
 
 **Q: Does latency tracking add overhead to the hot path?**
@@ -408,12 +456,20 @@ periodic reporting path, not per-message.
 
 **Q: What does the timestamp measure?**
 
-The delta between `ShmWriter::write()` stamping `timestamp_ns` and
-`ShmSubscriber::receive()` calling `now_ns()`. This includes:
-- SeqLock retry time (usually 0)
-- `memcpy` of the payload
-- Time between the publisher's `write()` and the subscriber's
-  `receive()` poll — this dominates and reflects your polling rate
+It depends on the transport:
+
+- **SHM:** The delta between `ShmWriter::write()` stamping
+  `timestamp_ns` in the ShmBlock header and `ShmSubscriber::receive()`
+  calling `now_ns()`.  This is **true publisher → subscriber latency**
+  and includes SeqLock retry time (usually 0), `memcpy` of the payload,
+  and the polling interval between `write()` and `receive()`.
+
+- **Zenoh:** The delta between the `on_sample()` callback stamping
+  `steady_clock::now()` and `receive()` calling `now_ns()`.  This
+  measures **callback → poll delay** — how long the message waited in
+  the subscriber's latest-value cache before the main loop polled it.
+  It does **not** include wire/serialisation time because
+  `ZenohPublisher` does not embed a send timestamp.
 
 **Q: Why use `steady_clock` instead of `system_clock`?**
 

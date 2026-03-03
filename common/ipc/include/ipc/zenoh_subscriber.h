@@ -53,7 +53,13 @@ public:
 
     /// Read the latest message.
     /// @param out          Destination for the payload.
-    /// @param timestamp_ns Optional output — the receive timestamp (ns).
+    /// @param timestamp_ns Optional output — the time (steady_clock, ns)
+    ///                     at which the Zenoh callback delivered the sample.
+    ///                     NOTE: this is the *callback arrival* time, not
+    ///                     the publisher's send time.  ZenohPublisher does
+    ///                     not embed a send timestamp, so the latency
+    ///                     recorded here reflects callback→receive() delay
+    ///                     (consumer polling lag), NOT wire latency.
     /// @return true if a message was available, false otherwise.
     [[nodiscard]] bool receive(T& out, uint64_t* timestamp_ns = nullptr) const override {
         if (!has_data_.load(std::memory_order_acquire)) return false;
@@ -96,6 +102,8 @@ public:
 
 private:
     /// Zenoh callback — runs on Zenoh internal thread.
+    /// Stamps timestamp_ns_ with the arrival time so that receive()
+    /// can measure *callback→poll* delay (not true wire latency).
     void on_sample(zenoh::Sample& sample) {
         const auto& payload = sample.get_payload();
         auto        bytes   = payload.as_vector();
