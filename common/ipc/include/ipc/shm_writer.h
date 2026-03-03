@@ -23,7 +23,7 @@ public:
         T                     data;
     };
 
-    bool create(const std::string& name) {
+    [[nodiscard]] bool create(const std::string& name) {
         name_ = name;
         fd_   = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
         if (fd_ < 0) return false;

@@ -21,10 +21,10 @@ public:
     virtual ~IGimbal() = default;
 
     /// Initialise the gimbal hardware/simulation.
-    virtual bool init() = 0;
+    [[nodiscard]] virtual bool init() = 0;
 
     /// Check if initialised.
-    virtual bool is_initialised() const = 0;
+    [[nodiscard]] virtual bool is_initialised() const = 0;
 
     /// Set target angles (degrees).
     virtual void set_target(float pitch_deg, float yaw_deg) = 0;
@@ -33,10 +33,10 @@ public:
     virtual void update(float dt_s) = 0;
 
     /// Get current state.
-    virtual GimbalState state() const = 0;
+    [[nodiscard]] virtual GimbalState state() const = 0;
 
     /// Trigger a still image capture. Returns timestamp_ns.
-    virtual uint64_t capture_image() = 0;
+    [[nodiscard]] virtual uint64_t capture_image() = 0;
 
     /// Start video recording.
     virtual void start_recording() = 0;
@@ -45,10 +45,10 @@ public:
     virtual void stop_recording() = 0;
 
     /// Check if currently recording.
-    virtual bool is_recording() const = 0;
+    [[nodiscard]] virtual bool is_recording() const = 0;
 
     /// Human-readable name.
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
 
 }  // namespace drone::hal

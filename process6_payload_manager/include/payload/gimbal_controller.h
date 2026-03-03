@@ -20,13 +20,13 @@ struct GimbalState {
 // ── Simulated gimbal controller ──────────────────────────────
 class GimbalController {
 public:
-    bool init() {
+    [[nodiscard]] bool init() {
         spdlog::info("[Gimbal] Initialised (simulated)");
         initialised_ = true;
         return true;
     }
 
-    bool is_initialised() const { return initialised_; }
+    [[nodiscard]] bool is_initialised() const { return initialised_; }
 
     // Set target angles — smooth move simulated
     void set_target(float pitch_deg, float yaw_deg) {
@@ -46,10 +46,10 @@ public:
         state_.yaw += std::clamp(dy, -max_step, max_step);
     }
 
-    const GimbalState& state() const { return state_; }
+    [[nodiscard]] const GimbalState& state() const { return state_; }
 
     // Trigger camera capture (simulated)
-    uint64_t capture_image() {
+    [[nodiscard]] uint64_t capture_image() {
         capture_count_++;
         auto ts = std::chrono::duration_cast<std::chrono::nanoseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
@@ -68,7 +68,7 @@ public:
         recording_ = false;
         spdlog::info("[Gimbal] Recording stopped");
     }
-    bool is_recording() const { return recording_; }
+    [[nodiscard]] bool is_recording() const { return recording_; }
 
 private:
     bool        initialised_{false};

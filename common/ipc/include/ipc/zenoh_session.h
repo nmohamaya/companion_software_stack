@@ -124,19 +124,19 @@ public:
     }
 
     /// Returns true if the session has been opened.
-    bool is_open() const {
+    [[nodiscard]] bool is_open() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return session_.has_value();
     }
 
     /// Returns configured SHM pool size (bytes).  0 = disabled.
-    std::size_t shm_pool_bytes() const {
+    [[nodiscard]] std::size_t shm_pool_bytes() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return shm_pool_bytes_;
     }
 
     /// Returns true if network transport is enabled.
-    bool is_network_enabled() const {
+    [[nodiscard]] bool is_network_enabled() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return network_enabled_;
     }

@@ -63,16 +63,18 @@ public:
     }
 
     /// Number of publishes that used the SHM zero-copy path.
-    uint64_t shm_publish_count() const { return shm_publishes_.load(std::memory_order_relaxed); }
+    [[nodiscard]] uint64_t shm_publish_count() const {
+        return shm_publishes_.load(std::memory_order_relaxed);
+    }
 
     /// Number of publishes that used the standard bytes path.
-    uint64_t bytes_publish_count() const {
+    [[nodiscard]] uint64_t bytes_publish_count() const {
         return bytes_publishes_.load(std::memory_order_relaxed);
     }
 
-    const std::string& topic_name() const override { return key_expr_; }
+    [[nodiscard]] const std::string& topic_name() const override { return key_expr_; }
 
-    bool is_ready() const override { return ready_; }
+    [[nodiscard]] bool is_ready() const override { return ready_; }
 
 private:
     /// Small-message path: serialize to vector<uint8_t>.

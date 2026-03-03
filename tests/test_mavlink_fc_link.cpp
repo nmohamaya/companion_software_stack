@@ -149,7 +149,7 @@ TEST(MavlinkFCLinkTest, FactoryCreatesMavlinkBackend) {
                             "timeout_ms": 1000 } }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
 
     auto fc = drone::hal::create_fc_link(cfg, "comms.fc");
     ASSERT_NE(fc, nullptr);
@@ -174,7 +174,7 @@ TEST(MavlinkFCLinkTest, MavlinkBackendThrowsWithoutMAVSDK) {
         "comms": { "fc": { "backend": "mavlink" } }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
 
     EXPECT_THROW(drone::hal::create_fc_link(cfg, "comms.fc"), std::runtime_error);
 }
@@ -184,7 +184,7 @@ TEST(MavlinkFCLinkTest, SimulatedStillWorksWithoutMAVSDK) {
         "comms": { "fc": { "backend": "simulated" } }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
 
     auto fc = drone::hal::create_fc_link(cfg, "comms.fc");
     ASSERT_NE(fc, nullptr);

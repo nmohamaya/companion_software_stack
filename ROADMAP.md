@@ -40,19 +40,20 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | **400** (23 suites, 0 failures) |
-| Compiler warnings | **0** (`-Werror -Wall -Wextra`) |
+| Unit tests | **464** (26 suites, 0 failures) |
+| Compiler warnings | **0** (`-Werror -Wall -Wextra`, `[[nodiscard]]` enforced) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL |
 | Autonomous flight | ARM → Takeoff → Navigate 3 WPs → RTL → Land → Disarm |
 | CI | GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix (shm/zenoh × sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
-| Unit tests | **400** (23 suites, 0 failures) |
 | Line coverage | **75.1%** (lcov, SHM backend) |
-| Sanitizers | ASan, TSan, UBSan (CMake options, CI-enforced) |
 | Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
-| Config tunables | 95+ (JSON, dot-path access) |
+| Config tunables | 95+ (JSON, dot-path access, schema-validated) |
+| Error handling | `Result<T,E>` monadic type — no exceptions |
+| Sanitizers | ASan, TSan, UBSan (all CI-enforced) |
+| `[[nodiscard]]` | 26 headers annotated, compiler-enforced |
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
@@ -278,18 +279,18 @@
 |---|-------|-------|
 | [#25](https://github.com/nmohamaya/companion_software_stack/issues/25) | [Epic] Real Drone Deployment — From Simulation to Flight | Open |
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | **Closed** ✅ |
-| [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening | **In Progress** |
+| [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening — CI, Error Handling, Code Quality | **Closed** ✅ |
 
-### Foundation Hardening (Epic #64)
+### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
 | # | Title | Tier | State |
 |---|-------|------|-------|
-| [#65](https://github.com/nmohamaya/companion_software_stack/issues/65) | clang-tidy + clang-format + .editorconfig | 1 | **Closed** (PR #72) |
-| [#66](https://github.com/nmohamaya/companion_software_stack/issues/66) | Code coverage reporting | 1 | **Closed** (PR #73) |
-| [#67](https://github.com/nmohamaya/companion_software_stack/issues/67) | Sanitizer support (ASan/TSan/UBSan) | 1 | **Closed** (PR #71) |
-| [#68](https://github.com/nmohamaya/companion_software_stack/issues/68) | Result<T,E> error type | 2 | Open |
-| [#69](https://github.com/nmohamaya/companion_software_stack/issues/69) | Config schema validation | 2 | Open |
-| [#70](https://github.com/nmohamaya/companion_software_stack/issues/70) | [[nodiscard]] audit | 2 | Open |
+| [#65](https://github.com/nmohamaya/companion_software_stack/issues/65) | clang-tidy + clang-format | Tier 1 | **Closed** (PR #72) |
+| [#66](https://github.com/nmohamaya/companion_software_stack/issues/66) | Code coverage reporting | Tier 1 | **Closed** (PR #73) |
+| [#67](https://github.com/nmohamaya/companion_software_stack/issues/67) | Sanitizer support (ASan/TSan/UBSan) | Tier 1 | **Closed** (PR #71) |
+| [#68](https://github.com/nmohamaya/companion_software_stack/issues/68) | Result<T,E> error type | Tier 2 | **Closed** (PR #75) |
+| [#69](https://github.com/nmohamaya/companion_software_stack/issues/69) | Config schema validation | Tier 2 | **Closed** (PR #76) |
+| [#70](https://github.com/nmohamaya/companion_software_stack/issues/70) | [[nodiscard]] audit | Tier 2 | **Closed** (PR #77) |
 
 ### Phase 9 — First Safe Flight
 
@@ -345,10 +346,10 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Foundation T1 (Current) |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | **Hardening (Current)** |
 |--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | **400** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | **23** |
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | **464** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | **26** |
 | Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | **21** |
 | Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | **95+** |
 | HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
@@ -361,9 +362,12 @@
 | Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | **7** |
 | Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | **Yes** |
 | E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **9 (7 build + format + coverage)** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **9** |
 | Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | **8** |
 | Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **ASan, TSan, UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | **Result<T,E>** |
 | Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **75.1%** |
 | Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **enforced (clang-format-18)** |
 
@@ -381,4 +385,4 @@
 
 ---
 
-*Last updated after Foundation Hardening Tier 1 (PRs #71, #72, #73) — 400 tests, 23 suites, 9-job CI pipeline, 75.1% line coverage.*
+*Last updated after Foundation Hardening (Epic #64) — 464 tests, 26 suites, 9-job CI pipeline, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers, 75.1% line coverage.*

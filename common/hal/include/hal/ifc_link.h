@@ -26,31 +26,31 @@ public:
     virtual ~IFCLink() = default;
 
     /// Open the link (e.g. serial port or simulated).
-    virtual bool open(const std::string& port, int baud) = 0;
+    [[nodiscard]] virtual bool open(const std::string& port, int baud) = 0;
 
     /// Close the link.
     virtual void close() = 0;
 
     /// Check connection status.
-    virtual bool is_connected() const = 0;
+    [[nodiscard]] virtual bool is_connected() const = 0;
 
     /// Send a velocity+yaw trajectory command to the FC.
-    virtual bool send_trajectory(float vx, float vy, float vz, float yaw) = 0;
+    [[nodiscard]] virtual bool send_trajectory(float vx, float vy, float vz, float yaw) = 0;
 
     /// Send arm/disarm command.
-    virtual bool send_arm(bool arm) = 0;
+    [[nodiscard]] virtual bool send_arm(bool arm) = 0;
 
     /// Send flight mode change.
-    virtual bool send_mode(uint8_t mode) = 0;
+    [[nodiscard]] virtual bool send_mode(uint8_t mode) = 0;
 
     /// Command autonomous takeoff to a target altitude (m AGL).
-    virtual bool send_takeoff(float altitude_m) = 0;
+    [[nodiscard]] virtual bool send_takeoff(float altitude_m) = 0;
 
     /// Receive the latest FC state (heartbeat).
-    virtual FCState receive_state() = 0;
+    [[nodiscard]] virtual FCState receive_state() = 0;
 
     /// Human-readable name.
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
 
 }  // namespace drone::hal

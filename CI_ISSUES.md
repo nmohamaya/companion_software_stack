@@ -347,3 +347,60 @@ cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
 ```
 
 **Note:** TSan on kernel 6.x also requires `sudo sysctl vm.mmap_rnd_bits=28` to avoid ASLR-related crashes (see BUG_FIXES.md Fix #11).
+
+---
+
+## CI-007: Merge Conflicts — PR #77 Branch vs `main`
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-03-03 |
+| **Branch** | `infra/issue-70-nodiscard-audit` |
+| **PR** | #77 |
+| **Affected files** | `DEVELOPMENT_WORKFLOW.md`, `ROADMAP.md`, `common/util/include/util/result.h` |
+| **CI status** | `DIRTY` / `CONFLICTING` — GitHub blocked merging |
+
+### Symptoms
+
+GitHub showed PR #77 as "This branch has conflicts that must be resolved" with `mergeStateStatus: DIRTY` and `mergeable: CONFLICTING`. The PR could not be merged.
+
+### Root Cause
+
+PR #74 (Tier 1 docs + deploy scripts) merged into `main` while PRs #75–#77 were still open on branches that were created *before* PR #74 merged. The overlapping files:
+
+1. **`DEVELOPMENT_WORKFLOW.md`** — PR #74 added a `docs/CI_SETUP.md` row to the documentation table; this branch added a `tests/TESTS.md` row at the same location.
+
+2. **`ROADMAP.md`** (5 conflict regions) — PR #74 updated the metrics table with detailed per-phase columns and Tier 1 data (400 tests, 23 suites). This branch had a condensed table with Tier 2 data (464 tests, 26 suites, all issues closed). Both sides also edited the "Current State at a Glance" summary and the footer.
+
+3. **`result.h`** (2 conflict regions) — PR #75 (merged into `main`) added `static_assert` guards in `and_then()` and removed the duplicate early-return before them. This branch still had the old code with the duplicate early-return.
+
+### Fix Applied
+
+Merged `origin/main` into the feature branch and resolved all conflicts:
+
+```bash
+git fetch origin main
+git merge origin/main
+# Resolve conflicts in 3 files, then:
+git add -A && git commit
+git push
+```
+
+**Resolution strategy per file:**
+
+| File | Strategy |
+|------|----------|
+| `DEVELOPMENT_WORKFLOW.md` | Kept both doc rows (additive — `tests/TESTS.md` + `docs/CI_SETUP.md`) |
+| `ROADMAP.md` | Took `main`'s detailed per-phase table, updated final column with this branch's data (464 tests, 26 suites, all issues closed), added new rows (`[[nodiscard]]`, config schemas, `Result<T,E>`, line coverage) |
+| `result.h` | Took `main`'s version — removed the duplicate early-return before `static_assert` (correct call already exists after the assertion) |
+
+Commit: `7514538`
+
+### Prevention
+
+See [DEVELOPMENT_WORKFLOW.md § Avoiding Merge Conflicts](#avoiding-merge-conflicts) for the full best-practices guide. Key points:
+
+1. **Rebase feature branches frequently** — `git fetch origin main && git rebase origin/main` at least daily
+2. **Use stacked PR base branches** for chained work (PR #76 base = PR #75's branch, not `main`)
+3. **Keep doc updates on `main`** — project-wide metrics files (ROADMAP.md, PROGRESS.md) are especially conflict-prone
+4. **Keep branches short-lived** — aim for <3 days, merge in order promptly

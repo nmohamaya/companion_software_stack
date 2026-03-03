@@ -47,19 +47,19 @@ public:
     ShmSubscriber() = default;
 
     /// Manually attempt to connect (for lazy/optional subscribers).
-    bool connect(const std::string& topic) {
+    [[nodiscard]] bool connect(const std::string& topic) {
         topic_ = topic;
         return reader_.open(topic);
     }
 
-    bool receive(T& out, uint64_t* timestamp_ns = nullptr) const override {
+    [[nodiscard]] bool receive(T& out, uint64_t* timestamp_ns = nullptr) const override {
         if (!is_connected()) return false;
         return reader_.read(out, timestamp_ns);
     }
 
-    bool is_connected() const override { return reader_.is_open(); }
+    [[nodiscard]] bool is_connected() const override { return reader_.is_open(); }
 
-    const std::string& topic_name() const override { return topic_; }
+    [[nodiscard]] const std::string& topic_name() const override { return topic_; }
 
 private:
     ShmReader<T> reader_;

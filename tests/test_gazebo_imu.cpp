@@ -112,7 +112,7 @@ TEST(GazeboIMUTest, FactoryCreatesGazeboBackend) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
     ASSERT_NE(imu, nullptr);
     EXPECT_EQ(imu->name(), "GazeboIMU(/test/factory_imu)");
@@ -127,7 +127,7 @@ TEST(GazeboIMUTest, FactoryDefaultTopicIsImu) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
     ASSERT_NE(imu, nullptr);
     EXPECT_EQ(imu->name(), "GazeboIMU(/imu)");
@@ -142,7 +142,7 @@ TEST(GazeboIMUTest, FactoryStillCreatesSimulated) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
     ASSERT_NE(imu, nullptr);
     EXPECT_EQ(imu->name(), "SimulatedIMU");

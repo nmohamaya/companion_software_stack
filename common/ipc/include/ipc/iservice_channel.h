@@ -60,16 +60,17 @@ public:
     virtual ~IServiceClient() = default;
 
     /// Send a request and return its correlation ID.
-    virtual uint64_t send_request(const Req& request) = 0;
+    [[nodiscard]] virtual uint64_t send_request(const Req& request) = 0;
 
     /// Poll for a response matching the given correlation ID.
     /// Returns the response if available, std::nullopt otherwise.
-    virtual std::optional<ServiceResponse<Resp>> poll_response(uint64_t correlation_id) = 0;
+    [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> poll_response(
+        uint64_t correlation_id) = 0;
 
     /// Blocking wait for a response with timeout.
     /// Default implementation polls in a spin-sleep loop.
-    virtual std::optional<ServiceResponse<Resp>> await_response(uint64_t correlation_id,
-                                                                std::chrono::milliseconds timeout) {
+    [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> await_response(
+        uint64_t correlation_id, std::chrono::milliseconds timeout) {
         auto deadline = std::chrono::steady_clock::now() + timeout;
         while (std::chrono::steady_clock::now() < deadline) {
             if (auto resp = poll_response(correlation_id)) {
@@ -100,7 +101,7 @@ public:
 
     /// Poll for an incoming request.
     /// Returns the request envelope if a new one is available.
-    virtual std::optional<ServiceEnvelope<Req>> poll_request() = 0;
+    [[nodiscard]] virtual std::optional<ServiceEnvelope<Req>> poll_request() = 0;
 
     /// Send a response for the given correlation ID.
     virtual void send_response(uint64_t correlation_id, ServiceStatus status,

@@ -143,7 +143,7 @@ TEST(GazeboCameraTest, FactoryCreatesGazeboBackend) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
 
     auto cam = drone::hal::create_camera(cfg, "video_capture.mission_cam");
     ASSERT_NE(cam, nullptr);
@@ -162,7 +162,7 @@ TEST(GazeboCameraTest, FactoryDefaultTopicIsCameraSlash) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
 
     auto cam = drone::hal::create_camera(cfg, "video_capture.mission_cam");
     ASSERT_NE(cam, nullptr);

@@ -56,7 +56,9 @@ int main(int argc, char* argv[]) {
     LogConfig::init("mission_planner", LogConfig::resolve_log_dir(), args.log_level);
 
     drone::Config cfg;
-    cfg.load(args.config_path);
+    if (!cfg.load(args.config_path)) {
+        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+    }
 
     spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
 

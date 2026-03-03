@@ -425,7 +425,7 @@ TEST(ColorContourDetectorTest, ConfigMinAreaOverride) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     ColorContourDetector det(cfg);
 
     // 200×200 black + 15×15 red rect = 225 pixels < 500 → filtered
@@ -452,7 +452,7 @@ TEST(ColorContourDetectorTest, ConfigMaxDetections) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     ColorContourDetector det(cfg);
 
     // Create image with 4 distinct colored rectangles
@@ -477,7 +477,7 @@ TEST(ColorContourDetectorTest, ConfigFallsBackToDefaults) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     ColorContourDetector det(cfg);
     EXPECT_EQ(det.color_ranges().size(), 6u);
 }
@@ -507,7 +507,7 @@ TEST(DetectorFactoryTest, CreateColorContourWithConfig) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     auto det = create_detector("color_contour", &cfg);
     ASSERT_NE(det, nullptr);
     EXPECT_EQ(det->name(), "ColorContourDetector");

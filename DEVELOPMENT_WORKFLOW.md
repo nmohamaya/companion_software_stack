@@ -79,10 +79,11 @@ find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
 ```bash
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 400 across 23 suites with `ENABLE_ZENOH=ON`; 323 with Zenoh OFF)
+- All tests must pass (currently 464 across 26 suites with `ENABLE_ZENOH=ON`)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh and SHM test binaries use `RESOURCE_LOCK` to avoid parallel collisions under `ctest -j`
+- See [`tests/TESTS.md`](tests/TESTS.md) for a full index of all test suites, what each validates, and instructions for adding new tests
 
 > **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 
@@ -173,7 +174,12 @@ Before merging, update the project's tracking documents:
    - Prevention strategy (how to avoid this class of issue)
    - Use the template at the bottom of the file for consistent formatting
 
-6. **When to update:** Include doc updates in the same PR branch, committed before merge.
+6. **`tests/TESTS.md`** — Update when adding or modifying tests:
+   - Add new test file entry in the appropriate component section
+   - Update suite/test counts in the summary table
+   - Document what each new suite validates
+
+7. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 Once CI passes and review is approved:
@@ -417,6 +423,69 @@ chore(#25): upgrade spdlog to 1.13.0
 - ✅ Keep branches short-lived (<3 days)
 - ✅ Always pull before pushing
 - ✅ Never force-push to `main`
+- ✅ Rebase on `main` at least daily (see [Avoiding Merge Conflicts](#avoiding-merge-conflicts))
+
+### Avoiding Merge Conflicts
+
+Merge conflicts are inevitable when multiple people work on feature branches. These practices minimize their frequency and severity.
+
+#### Rebase feature branches regularly
+
+Keep your branch up-to-date with `main`. Do this **at least daily**, or before every push:
+
+```bash
+git fetch origin main
+git rebase origin/main
+```
+
+This surfaces conflicts early (when they're small) rather than late (when they've accumulated across many files).
+
+#### Use stacked PR base branches for chained work
+
+When PRs depend on each other, **chain the base branches** instead of all targeting `main`:
+
+```
+# WRONG — all target main, creating overlapping diffs:
+PR #75 (result type)      base=main
+PR #76 (config validator) base=main    ← conflicts with #75's changes
+PR #77 (nodiscard audit)  base=main    ← conflicts with both
+
+# RIGHT — each PR builds on the previous:
+PR #75 (result type)      base=main
+PR #76 (config validator) base=infra/issue-68-result-type     (PR #75's branch)
+PR #77 (nodiscard audit)  base=infra/issue-69-config-validation (PR #76's branch)
+```
+
+GitHub automatically updates the base when the parent PR merges.
+
+#### Minimize documentation changes on feature branches
+
+Project-wide metrics files (`ROADMAP.md`, `PROGRESS.md`, `DEVELOPMENT_WORKFLOW.md`) are the #1 source of merge conflicts because every branch touches them. Strategies:
+
+- **Update docs on `main` only** — after merging the feature PR, push a follow-up doc commit
+- **Dedicate a single doc commit** at the end of a branch so rebasing only conflicts in one commit
+- **Automate metrics** where possible (e.g., test counts from CI output)
+
+#### Keep branches short-lived
+
+The longer a branch lives, the more `main` diverges. Aim for:
+- Small, focused PRs (1–3 days max)
+- Merge PRs in order promptly — don't let a chain of 3+ PRs sit open simultaneously
+
+#### Enable branch protection rules
+
+In GitHub repo settings → Branch protection for `main`:
+- **Require branches to be up to date before merging** — forces authors to rebase before the merge button works
+- Use **"Rebase and merge"** as the default merge strategy (linear history, fewer conflicts)
+
+#### Partition file ownership
+
+When two features must touch the same file (e.g., `result.h`), coordinate:
+- One person finishes and merges first
+- The other rebases after
+- Avoid two branches modifying the same function simultaneously
+
+> **History:** See [CI_ISSUES.md § CI-007](CI_ISSUES.md#ci-007-merge-conflicts--pr-77-branch-vs-main) for a real example of this problem and its resolution.
 
 ### Testing Strategy
 - ✅ Write tests alongside code, not after
@@ -477,6 +546,7 @@ chore(#25): upgrade spdlog to 1.13.0
 | [README.md](README.md) | Project overview & build instructions | As architecture changes |
 | [CI_ISSUES.md](CI_ISSUES.md) | CI failure log & root cause analysis | After every CI-specific failure |
 | [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | Production checklist & gap analysis | When readiness status changes |
+| [tests/TESTS.md](tests/TESTS.md) | Test suite index & per-test documentation | When adding or modifying tests |
 | [docs/CI_SETUP.md](docs/CI_SETUP.md) | CI pipeline architecture & DevOps guide | When CI jobs/matrix change |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
 

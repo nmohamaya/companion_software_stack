@@ -48,7 +48,7 @@ public:
     /// Create a publisher for the given topic.
     /// @param topic  SHM segment name (auto-mapped) or Zenoh key expression.
     template<typename T>
-    std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
+    [[nodiscard]] std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
         return std::make_unique<ZenohPublisher<T>>(to_key_expr(topic));
     }
 
@@ -60,9 +60,9 @@ public:
     ///                     arrive later when a publisher appears.
     /// @param retry_ms     Ignored.
     template<typename T>
-    std::unique_ptr<ISubscriber<T>> subscribe(const std::string&   topic,
-                                              [[maybe_unused]] int max_retries = 50,
-                                              [[maybe_unused]] int retry_ms    = 200) {
+    [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe(const std::string&   topic,
+                                                            [[maybe_unused]] int max_retries = 50,
+                                                            [[maybe_unused]] int retry_ms = 200) {
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
@@ -72,7 +72,7 @@ public:
     /// and lazy subscription.
     /// @param topic  SHM segment name or Zenoh key expression.
     template<typename T>
-    std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(const std::string& topic) {
+    [[nodiscard]] std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(const std::string& topic) {
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
@@ -80,15 +80,16 @@ public:
     /// @param service     Service name (e.g. "trajectory") or full key expression.
     /// @param timeout_ms  Timeout for each GET operation in milliseconds.
     template<typename Req, typename Resp>
-    std::unique_ptr<IServiceClient<Req, Resp>> create_client(const std::string& service,
-                                                             uint64_t           timeout_ms = 5000) {
+    [[nodiscard]] std::unique_ptr<IServiceClient<Req, Resp>> create_client(
+        const std::string& service, uint64_t timeout_ms = 5000) {
         return std::make_unique<ZenohServiceClient<Req, Resp>>(to_service_key(service), timeout_ms);
     }
 
     /// Create a service server for the given service name.
     /// @param service  Service name (e.g. "trajectory") or full key expression.
     template<typename Req, typename Resp>
-    std::unique_ptr<IServiceServer<Req, Resp>> create_server(const std::string& service) {
+    [[nodiscard]] std::unique_ptr<IServiceServer<Req, Resp>> create_server(
+        const std::string& service) {
         return std::make_unique<ZenohServiceServer<Req, Resp>>(to_service_key(service));
     }
 
@@ -98,7 +99,7 @@ public:
     ///
     /// If the name is not in the mapping table, it's passed through
     /// with the leading '/' stripped and '_' replaced by '/'.
-    static std::string to_key_expr(const std::string& name) {
+    [[nodiscard]] static std::string to_key_expr(const std::string& name) {
         if (name.empty()) {
             spdlog::warn("[ZenohMessageBus] to_key_expr() called with empty name");
             return "";
@@ -146,7 +147,7 @@ public:
     /// If the name already contains '/' and doesn't start with '/',
     /// it's treated as a full key expression.  Otherwise, a leading '/'
     /// and "/svc_" prefix are stripped, and "drone/service/" is prepended.
-    static std::string to_service_key(const std::string& name) {
+    [[nodiscard]] static std::string to_service_key(const std::string& name) {
         if (name.empty()) return "";
 
         // Already a full Zenoh key expression

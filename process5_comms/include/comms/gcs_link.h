@@ -30,7 +30,7 @@ struct GCSMessage {
 // ── Simulated GCS link ──────────────────────────────────────
 class GCSLink {
 public:
-    bool open(const std::string& addr, int port) {
+    [[nodiscard]] bool open(const std::string& addr, int port) {
         (void)addr;
         (void)port;
         spdlog::info("[GCSLink] Simulated UDP link {}:{}", addr, port);
@@ -39,10 +39,11 @@ public:
         return true;
     }
 
-    bool is_connected() const { return connected_; }
+    [[nodiscard]] bool is_connected() const { return connected_; }
 
     // Send telemetry to GCS (simulated — just logs)
-    bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) {
+    [[nodiscard]] bool send_telemetry(float lat, float lon, float alt, float battery,
+                                      uint8_t state) {
         if (!connected_) return false;
         telem_count_++;
         if (telem_count_ % 50 == 0) {
@@ -54,7 +55,7 @@ public:
     }
 
     // Poll for incoming GCS commands (simulated — empty most of the time)
-    GCSMessage poll_command() {
+    [[nodiscard]] GCSMessage poll_command() {
         GCSMessage msg{};
         auto       now     = std::chrono::steady_clock::now();
         double     elapsed = std::chrono::duration<double>(now - start_time_).count();

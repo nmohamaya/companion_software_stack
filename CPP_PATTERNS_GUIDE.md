@@ -42,6 +42,8 @@
    - [3.10 `enum class` — Scoped Enumerations](#310-enum-class--scoped-enumerations)
    - [3.11 `alignas` — Cache-Line Alignment](#311-alignas--cache-line-alignment)
    - [3.12 Structured `__attribute__((packed))`](#312-structured-__attribute__packed)
+   - [3.13 `Result<T,E>` — Monadic Error Handling](#313-resultte--monadic-error-handling)
+   - [3.14 `[[nodiscard]]` — Compiler-Enforced Return Checking](#314-nodiscard--compiler-enforced-return-checking)
 4. [Systems Programming Concepts](#4-systems-programming-concepts)
    - [4.1 POSIX Shared Memory (`shm_open` / `mmap`)](#41-posix-shared-memory-shm_open--mmap)
    - [4.2 Binary Wire Format](#42-binary-wire-format)
@@ -1147,6 +1149,112 @@ be misinterpreted.
 **Tradeoff:** Packed structs can cause slower unaligned memory access on some
 architectures (ARM).  This is acceptable for header parsing (done once per
 message) but not for high-frequency data structures.
+
+---
+
+### 3.13 `Result<T,E>` — Monadic Error Handling
+
+**What:** A type-safe sum type that holds either a success value (`T`) or an
+error value (`E`).  Functions return `Result` instead of throwing exceptions or
+returning error codes.
+
+**Why:** In real-time drone software, exceptions are **forbidden** (stack
+unwinding has unpredictable latency).  Raw error codes (like returning `bool`
+or `-1`) are easy to ignore.  `Result<T,E>` gives the best of both worlds:
+structured error information with zero-cost, deterministic control flow.
+
+**Where:** `common/util/include/util/result.h`
+
+```cpp
+// Error type with code + message
+enum class ErrorCode : uint8_t {
+    INVALID_ARGUMENT, NOT_FOUND, IO_ERROR, TIMEOUT,
+    PERMISSION_DENIED, ALREADY_EXISTS, NOT_CONNECTED,
+    PARSE_ERROR, OUT_OF_RANGE, INTERNAL
+};
+
+struct Error {
+    ErrorCode   code;
+    std::string message;
+};
+
+// Result is backed by std::variant — zero heap allocation
+template <typename T, typename E = Error>
+class Result {
+    std::variant<T, E> storage_;
+public:
+    bool ok() const;
+    const T& value() const;     // throws only in debug builds
+    const E& error() const;
+    T value_or(T fallback) const;
+};
+```
+
+**Monadic chaining** — compose operations without manual error checking:
+
+```cpp
+auto result = cfg.load_config("config/default.json")  // VoidResult
+    .and_then([&]() { return cfg.require<int>("video_capture.mission_cam.width"); })
+    .map([](int w) { return w * 2; });
+
+if (!result.ok()) {
+    spdlog::error("Config error: {}", result.error().message);
+    return 1;
+}
+```
+
+**Design rule for this codebase:** `Result` uses value semantics only —
+`std::variant<T, E>` storage with move support.  No `shared_ptr` anywhere
+(atomic reference counting is incompatible with real-time constraints).
+
+---
+
+### 3.14 `[[nodiscard]]` — Compiler-Enforced Return Checking
+
+**What:** A C++17 attribute that causes a compiler warning if a function's
+return value is silently discarded.
+
+**Why:** In safety-critical code, silently ignoring a return value is almost
+always a bug.  If `open()` returns `false` and you don't check it, the system
+operates on an uninitialised resource.  `[[nodiscard]]` turns this silent bug
+into a compiler warning (and with `-Werror`, a hard error).
+
+**Where:** Every public method returning a value in this codebase is annotated.
+26 headers across IPC, HAL, process logic, and Zenoh layers.
+
+```cpp
+class ICamera {
+public:
+    [[nodiscard]] virtual bool open(const std::string& device) = 0;
+    [[nodiscard]] virtual bool capture(Frame& frame) = 0;
+    [[nodiscard]] virtual bool is_open() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
+    virtual ~ICamera() = default;
+};
+```
+
+**Call-site patterns:**
+
+```cpp
+// ✅ Good — check the return value
+if (!camera->open("/dev/video0")) {
+    spdlog::error("Camera open failed");
+    return 1;
+}
+
+// ✅ Good — assert in tests
+ASSERT_TRUE(camera->open("/dev/video0"));
+
+// ✅ Good — explicit discard for side-effect-only calls
+(void)tracker.update(bbox);  // side-effect: updates internal state
+
+// ❌ Bad — compiler warning (error with -Werror)
+camera->open("/dev/video0");  // return value ignored!
+```
+
+**Policy:** All new public methods returning values **must** have
+`[[nodiscard]]`.  When a return value is intentionally ignored (rare), use
+`(void)` cast with a comment explaining why.
 
 ---
 

@@ -12,7 +12,7 @@ using drone::util::validate;
 
 class ConfigValidatorTest : public ::testing::Test {
 protected:
-    std::string tmp_path_;
+    std::string   tmp_path_;
     drone::Config cfg_;
 
     void load_json(const std::string& content) {
@@ -192,8 +192,7 @@ TEST_F(ConfigValidatorTest, CustomPredicatePass) {
     load_json(R"({"port": 8080})");
 
     ConfigSchema s;
-    s.required<int>("port").satisfies(
-        [](const int& p) { return p > 1024; }, "port must be > 1024");
+    s.required<int>("port").satisfies([](const int& p) { return p > 1024; }, "port must be > 1024");
 
     auto r = validate(cfg_, s);
     EXPECT_TRUE(r.is_ok());
@@ -203,8 +202,7 @@ TEST_F(ConfigValidatorTest, CustomPredicateFail) {
     load_json(R"({"port": 80})");
 
     ConfigSchema s;
-    s.required<int>("port").satisfies(
-        [](const int& p) { return p > 1024; }, "port must be > 1024");
+    s.required<int>("port").satisfies([](const int& p) { return p > 1024; }, "port must be > 1024");
 
     auto r = validate(cfg_, s);
     EXPECT_TRUE(r.is_err());
@@ -239,7 +237,7 @@ TEST_F(ConfigValidatorTest, DoubleOutOfRange) {
 TEST_F(ConfigValidatorTest, DefaultConfigPassesAllSchemas) {
     // Load the actual default.json — it should pass all schemas
     drone::Config cfg;
-    bool loaded = cfg.load("config/default.json");
+    bool          loaded = cfg.load("config/default.json");
     if (!loaded) {
         GTEST_SKIP() << "config/default.json not available (CWD-dependent)";
     }
@@ -253,13 +251,13 @@ TEST_F(ConfigValidatorTest, DefaultConfigPassesAllSchemas) {
         }
     };
 
-    check("video_capture",    drone::util::video_capture_schema());
-    check("perception",       drone::util::perception_schema());
-    check("slam",             drone::util::slam_schema());
-    check("mission_planner",  drone::util::mission_planner_schema());
-    check("comms",            drone::util::comms_schema());
-    check("payload_manager",  drone::util::payload_manager_schema());
-    check("system_monitor",   drone::util::system_monitor_schema());
+    check("video_capture", drone::util::video_capture_schema());
+    check("perception", drone::util::perception_schema());
+    check("slam", drone::util::slam_schema());
+    check("mission_planner", drone::util::mission_planner_schema());
+    check("comms", drone::util::comms_schema());
+    check("payload_manager", drone::util::payload_manager_schema());
+    check("system_monitor", drone::util::system_monitor_schema());
 }
 
 // ─── Bool field ──────────────────────────────────────────────
