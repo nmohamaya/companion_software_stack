@@ -1,17 +1,18 @@
 // tests/test_config.cpp
 // Unit tests for the JSON configuration system.
-#include <gtest/gtest.h>
 #include "util/config.h"
-#include <fstream>
+
 #include <cstdio>
+#include <fstream>
+
+#include <gtest/gtest.h>
 
 class ConfigTest : public ::testing::Test {
 protected:
     std::string tmp_path_;
 
     void write_json(const std::string& content) {
-        tmp_path_ = "/tmp/drone_test_config_" +
-            std::to_string(::getpid()) + ".json";
+        tmp_path_ = "/tmp/drone_test_config_" + std::to_string(::getpid()) + ".json";
         std::ofstream ofs(tmp_path_);
         ofs << content;
         ofs.close();

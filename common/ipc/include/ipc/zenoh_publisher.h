@@ -14,8 +14,6 @@
 #include "ipc/ipublisher.h"
 #include "ipc/zenoh_session.h"
 
-#include <zenoh.hxx>
-
 #include <atomic>
 #include <cstring>
 #include <optional>
@@ -25,32 +23,29 @@
 #include <vector>
 
 #include <spdlog/spdlog.h>
+#include <zenoh.hxx>
 
 namespace drone::ipc {
 
 /// Zenoh-backed publisher implementing IPublisher<T>.
-template <typename T>
+template<typename T>
 class ZenohPublisher final : public IPublisher<T> {
     static_assert(std::is_trivially_copyable_v<T>,
                   "ZenohPublisher requires trivially copyable types");
+
 public:
     /// Construct and declare a Zenoh publisher on the given key expression.
     /// @param key_expr  Zenoh key expression (e.g. "drone/slam/pose").
-    explicit ZenohPublisher(const std::string& key_expr)
-        : key_expr_(key_expr)
-    {
+    explicit ZenohPublisher(const std::string& key_expr) : key_expr_(key_expr) {
         try {
             auto& session = ZenohSession::instance().session();
-            publisher_.emplace(
-                session.declare_publisher(zenoh::KeyExpr(key_expr)));
+            publisher_.emplace(session.declare_publisher(zenoh::KeyExpr(key_expr)));
             ready_ = true;
             spdlog::info("[ZenohPublisher] Declared on '{}' "
                          "(size={}, shm={})",
-                         key_expr, sizeof(T),
-                         sizeof(T) > kShmPublishThreshold ? "yes" : "no");
+                         key_expr, sizeof(T), sizeof(T) > kShmPublishThreshold ? "yes" : "no");
         } catch (const std::exception& e) {
-            spdlog::error("[ZenohPublisher] Failed to declare on '{}': {}",
-                          key_expr, e.what());
+            spdlog::error("[ZenohPublisher] Failed to declare on '{}': {}", key_expr, e.what());
             ready_ = false;
         }
     }
@@ -68,9 +63,7 @@ public:
     }
 
     /// Number of publishes that used the SHM zero-copy path.
-    uint64_t shm_publish_count() const {
-        return shm_publishes_.load(std::memory_order_relaxed);
-    }
+    uint64_t shm_publish_count() const { return shm_publishes_.load(std::memory_order_relaxed); }
 
     /// Number of publishes that used the standard bytes path.
     uint64_t bytes_publish_count() const {
@@ -84,7 +77,7 @@ public:
 private:
     /// Small-message path: serialize to vector<uint8_t>.
     void publish_bytes(const T& msg) {
-        const auto* ptr = reinterpret_cast<const uint8_t*>(&msg);
+        const auto*          ptr = reinterpret_cast<const uint8_t*>(&msg);
         std::vector<uint8_t> buf(ptr, ptr + sizeof(T));
         publisher_->put(zenoh::Bytes(std::move(buf)));
     }
@@ -98,11 +91,12 @@ private:
             return;
         }
 
-        auto result = provider->alloc_gc_defrag_blocking(sizeof(T));
-        auto* buf = std::get_if<zenoh::ZShmMut>(&result);
+        auto  result = provider->alloc_gc_defrag_blocking(sizeof(T));
+        auto* buf    = std::get_if<zenoh::ZShmMut>(&result);
         if (!buf) {
             spdlog::warn("[ZenohPublisher] SHM alloc failed on '{}', "
-                         "falling back to bytes", key_expr_);
+                         "falling back to bytes",
+                         key_expr_);
             publish_bytes(msg);
             return;
         }
@@ -116,11 +110,11 @@ private:
         publisher_->put(zenoh::Bytes(std::move(*buf)));
     }
 
-    std::string key_expr_;
+    std::string                     key_expr_;
     std::optional<zenoh::Publisher> publisher_;
-    bool ready_ = false;
-    std::atomic<uint64_t> shm_publishes_{0};
-    std::atomic<uint64_t> bytes_publishes_{0};
+    bool                            ready_ = false;
+    std::atomic<uint64_t>           shm_publishes_{0};
+    std::atomic<uint64_t>           bytes_publishes_{0};
 };
 
 }  // namespace drone::ipc

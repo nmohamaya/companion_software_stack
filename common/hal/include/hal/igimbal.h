@@ -9,10 +9,10 @@ namespace drone::hal {
 
 /// Current gimbal state.
 struct GimbalState {
-    float pitch{0.0f};      // degrees, -90 (nadir) to +30
-    float yaw{0.0f};        // degrees, relative to body frame
-    float roll{0.0f};       // degrees
-    bool stabilised{true};
+    float pitch{0.0f};  // degrees, -90 (nadir) to +30
+    float yaw{0.0f};    // degrees, relative to body frame
+    float roll{0.0f};   // degrees
+    bool  stabilised{true};
 };
 
 /// Abstract gimbal interface.

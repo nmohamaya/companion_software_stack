@@ -9,7 +9,7 @@ namespace drone::ipc {
 
 /// Abstract typed publisher — write one message at a time.
 /// Concrete implementations: ShmPublisher<T>, (future) DdsPublisher<T>.
-template <typename T>
+template<typename T>
 class IPublisher {
 public:
     virtual ~IPublisher() = default;

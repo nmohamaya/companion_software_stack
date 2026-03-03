@@ -1,6 +1,7 @@
 // tests/test_system_monitor.cpp — Tests for sys_info.h functions
-#include <gtest/gtest.h>
 #include "monitor/sys_info.h"
+
+#include <gtest/gtest.h>
 #include <unistd.h>
 
 using namespace drone::monitor;
@@ -17,14 +18,14 @@ TEST(SysInfo, CpuTimesDefaultsZero) {
 
 TEST(SysInfo, CpuTimesTotalAndActive) {
     CpuTimes t{};
-    t.user   = 100;
-    t.nice   = 10;
-    t.system = 50;
-    t.idle   = 200;
-    t.iowait = 20;
-    t.irq    = 5;
+    t.user    = 100;
+    t.nice    = 10;
+    t.system  = 50;
+    t.idle    = 200;
+    t.iowait  = 20;
+    t.irq     = 5;
     t.softirq = 3;
-    t.steal  = 2;
+    t.steal   = 2;
 
     EXPECT_EQ(t.total(), 390u);
     EXPECT_EQ(t.active(), 170u);  // total - idle - iowait = 390 - 200 - 20
@@ -38,16 +39,22 @@ TEST(SysInfo, ReadCpuTimesReturnsNonZero) {
 
 TEST(SysInfo, ComputeCpuUsageZeroDelta) {
     CpuTimes prev{}, now{};
-    float usage = compute_cpu_usage(prev, now);
+    float    usage = compute_cpu_usage(prev, now);
     EXPECT_FLOAT_EQ(usage, 0.0f);
 }
 
 TEST(SysInfo, ComputeCpuUsageKnownValues) {
     CpuTimes prev{};
-    prev.user = 100; prev.system = 50; prev.idle = 200; prev.iowait = 50;
+    prev.user   = 100;
+    prev.system = 50;
+    prev.idle   = 200;
+    prev.iowait = 50;
 
     CpuTimes now{};
-    now.user = 200; now.system = 100; now.idle = 250; now.iowait = 50;
+    now.user   = 200;
+    now.system = 100;
+    now.idle   = 250;
+    now.iowait = 50;
 
     float usage = compute_cpu_usage(prev, now);
     // delta_total = (200+100+250+50) - (100+50+200+50) = 600 - 400 = 200

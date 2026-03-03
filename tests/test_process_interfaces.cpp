@@ -1,17 +1,17 @@
 // tests/test_process_interfaces.cpp
 // Tests for internal process strategy interfaces:
 //   IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor
-#include <gtest/gtest.h>
-
-#include "slam/ivisual_frontend.h"
-#include "planner/ipath_planner.h"
-#include "planner/iobstacle_avoider.h"
 #include "monitor/iprocess_monitor.h"
+#include "planner/iobstacle_avoider.h"
+#include "planner/ipath_planner.h"
+#include "slam/ivisual_frontend.h"
 
-#include <cmath>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 using namespace drone::ipc;
 using namespace drone::slam;
@@ -57,13 +57,13 @@ TEST(VisualFrontendTest, NameReturnsString) {
 }
 
 TEST(VisualFrontendTest, ImplementsInterface) {
-    auto fe = create_visual_frontend("simulated");
+    auto             fe    = create_visual_frontend("simulated");
     IVisualFrontend* iface = fe.get();
     EXPECT_NE(iface, nullptr);
 
     ShmStereoFrame frame{};
     frame.timestamp_ns = 500;
-    auto pose = iface->process_frame(frame);
+    auto pose          = iface->process_frame(frame);
     EXPECT_GT(pose.timestamp, 0.0);
 }
 
@@ -84,7 +84,9 @@ TEST(PathPlannerTest, PlanReturnsWaypoints) {
     auto pp = create_path_planner("potential_field");
 
     ShmPose pose{};
-    pose.translation[0] = 0; pose.translation[1] = 0; pose.translation[2] = 0;
+    pose.translation[0] = 0;
+    pose.translation[1] = 0;
+    pose.translation[2] = 0;
 
     Waypoint target{10.0f, 0.0f, 0.0f, 0.0f, 2.0f, 5.0f, false};
 
@@ -105,7 +107,7 @@ TEST(PathPlannerTest, WithObstacles) {
     pose.translation[0] = 9.5;
 
     Waypoint target{10.0f, 0.0f, 0.0f, 0.0f, 2.0f, 5.0f, false};
-    auto cmd = pp->plan(pose, target);
+    auto     cmd = pp->plan(pose, target);
     EXPECT_TRUE(cmd.valid);
     // Close to target — speed ramps down but stays above min_speed (1 m/s)
     EXPECT_GT(std::abs(cmd.velocity_x), 0.5f);
@@ -116,10 +118,12 @@ TEST(PathPlannerTest, AtGoalZeroVelocity) {
     auto pp = create_path_planner("potential_field");
 
     ShmPose pose{};
-    pose.translation[0] = 5; pose.translation[1] = 5; pose.translation[2] = 5;
+    pose.translation[0] = 5;
+    pose.translation[1] = 5;
+    pose.translation[2] = 5;
 
     Waypoint target{5.0f, 5.0f, 5.0f, 0.0f, 2.0f, 5.0f, false};
-    auto cmd = pp->plan(pose, target);
+    auto     cmd = pp->plan(pose, target);
     // At target — velocity should be ~0
     EXPECT_NEAR(cmd.velocity_x, 0.0f, 0.1f);
     EXPECT_NEAR(cmd.velocity_y, 0.0f, 0.1f);
@@ -143,12 +147,12 @@ TEST(ObstacleAvoiderTest, NoObstacleNoChange) {
     auto oa = create_obstacle_avoider("potential_field");
 
     ShmTrajectoryCmd planned{};
-    planned.valid = true;
+    planned.valid      = true;
     planned.velocity_x = 2.0f;
     planned.velocity_y = 0.0f;
     planned.velocity_z = 0.0f;
 
-    ShmPose pose{};
+    ShmPose               pose{};
     ShmDetectedObjectList objects{};
     objects.num_objects = 0;
 
@@ -162,7 +166,7 @@ TEST(ObstacleAvoiderTest, ObstacleDeflectsTrajectory) {
     auto oa = create_obstacle_avoider("potential_field", 5.0f, 1.0f);
 
     ShmTrajectoryCmd planned{};
-    planned.valid = true;
+    planned.valid      = true;
     planned.velocity_x = 2.0f;
     planned.velocity_y = 0.0f;
 
@@ -173,9 +177,10 @@ TEST(ObstacleAvoiderTest, ObstacleDeflectsTrajectory) {
     // Place obstacle 2m ahead
     ShmDetectedObjectList objects{};
     objects.num_objects = 1;
-    objects.timestamp_ns = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
     objects.objects[0].position_x = 2.0f;
     objects.objects[0].position_y = 0.0f;
     objects.objects[0].confidence = 0.9f;
@@ -189,7 +194,7 @@ TEST(ObstacleAvoiderTest, FarObstacleNoEffect) {
     auto oa = create_obstacle_avoider("potential_field", 2.0f, 1.0f);
 
     ShmTrajectoryCmd planned{};
-    planned.valid = true;
+    planned.valid      = true;
     planned.velocity_x = 1.0f;
 
     ShmPose pose{};
@@ -197,9 +202,10 @@ TEST(ObstacleAvoiderTest, FarObstacleNoEffect) {
     // Obstacle very far away
     ShmDetectedObjectList objects{};
     objects.num_objects = 1;
-    objects.timestamp_ns = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
     objects.objects[0].position_x = 100.0f;
     objects.objects[0].position_y = 100.0f;
     objects.objects[0].confidence = 0.9f;
@@ -241,7 +247,7 @@ TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
 }
 
 TEST(ProcessMonitorTest, ThermalZonePopulated) {
-    auto pm = create_process_monitor("linux");
+    auto pm     = create_process_monitor("linux");
     auto health = pm->collect();
 
     // thermal_zone should be one of 0=normal, 1=warm, 2=hot, 3=critical
@@ -249,7 +255,7 @@ TEST(ProcessMonitorTest, ThermalZonePopulated) {
 }
 
 TEST(ProcessMonitorTest, ImplementsInterface) {
-    auto pm = create_process_monitor("linux");
+    auto             pm    = create_process_monitor("linux");
     IProcessMonitor* iface = pm.get();
     EXPECT_NE(iface, nullptr);
 

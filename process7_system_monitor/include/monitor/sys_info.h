@@ -2,14 +2,15 @@
 // Linux system information gathering from /proc and /sys.
 
 #pragma once
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <fstream>
 #include <sstream>
-#include <array>
-#include <chrono>
+#include <string>
+
 #include <spdlog/spdlog.h>
 
 namespace drone::monitor {
@@ -18,30 +19,27 @@ struct CpuTimes {
     uint64_t user{0}, nice{0}, system{0}, idle{0};
     uint64_t iowait{0}, irq{0}, softirq{0}, steal{0};
 
-    uint64_t total() const {
-        return user + nice + system + idle + iowait + irq + softirq + steal;
-    }
+    uint64_t total() const { return user + nice + system + idle + iowait + irq + softirq + steal; }
     uint64_t active() const { return total() - idle - iowait; }
 };
 
 // ── CPU usage (two-sample delta) ────────────────────────────
 inline CpuTimes read_cpu_times() {
-    CpuTimes t{};
+    CpuTimes      t{};
     std::ifstream f("/proc/stat");
     if (!f.is_open()) return t;
     std::string line;
     if (std::getline(f, line)) {
         // "cpu  user nice system idle iowait irq softirq steal ..."
-        std::sscanf(line.c_str(), "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
-                    &t.user, &t.nice, &t.system, &t.idle,
-                    &t.iowait, &t.irq, &t.softirq, &t.steal);
+        std::sscanf(line.c_str(), "cpu %lu %lu %lu %lu %lu %lu %lu %lu", &t.user, &t.nice,
+                    &t.system, &t.idle, &t.iowait, &t.irq, &t.softirq, &t.steal);
     }
     return t;
 }
 
 inline float compute_cpu_usage(const CpuTimes& prev, const CpuTimes& now) {
-    uint64_t dt  = now.total()  - prev.total();
-    uint64_t da  = now.active() - prev.active();
+    uint64_t dt = now.total() - prev.total();
+    uint64_t da = now.active() - prev.active();
     if (dt == 0) return 0.0f;
     return 100.0f * static_cast<float>(da) / static_cast<float>(dt);
 }
@@ -50,11 +48,11 @@ inline float compute_cpu_usage(const CpuTimes& prev, const CpuTimes& now) {
 struct MemInfo {
     uint64_t total_kb{0};
     uint64_t available_kb{0};
-    float usage_percent{0.0f};
+    float    usage_percent{0.0f};
 };
 
 inline MemInfo read_meminfo() {
-    MemInfo m{};
+    MemInfo       m{};
     std::ifstream f("/proc/meminfo");
     if (!f.is_open()) return m;
     std::string line;
@@ -65,9 +63,8 @@ inline MemInfo read_meminfo() {
             std::sscanf(line.c_str(), "MemAvailable: %lu kB", &m.available_kb);
     }
     if (m.total_kb > 0) {
-        m.usage_percent = 100.0f *
-            static_cast<float>(m.total_kb - m.available_kb) /
-            static_cast<float>(m.total_kb);
+        m.usage_percent = 100.0f * static_cast<float>(m.total_kb - m.available_kb) /
+                          static_cast<float>(m.total_kb);
     }
     return m;
 }
@@ -94,7 +91,7 @@ inline float read_cpu_temp() {
 struct DiskInfo {
     uint64_t total_mb{0};
     uint64_t free_mb{0};
-    float usage_percent{0.0f};
+    float    usage_percent{0.0f};
 };
 
 inline DiskInfo read_disk_usage() {
@@ -105,12 +102,12 @@ inline DiskInfo read_disk_usage() {
         char buf[256];
         if (fgets(buf, sizeof(buf), fp)) {
             uint64_t total, used, avail;
-            char dev[128], mount[128];
-            int pct;
-            if (std::sscanf(buf, "%s %lu %lu %lu %d%% %s",
-                            dev, &total, &used, &avail, &pct, mount) >= 5) {
-                d.total_mb = total;
-                d.free_mb  = avail;
+            char     dev[128], mount[128];
+            int      pct;
+            if (std::sscanf(buf, "%s %lu %lu %lu %d%% %s", dev, &total, &used, &avail, &pct,
+                            mount) >= 5) {
+                d.total_mb      = total;
+                d.free_mb       = avail;
                 d.usage_percent = static_cast<float>(pct);
             }
         }

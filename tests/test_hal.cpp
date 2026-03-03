@@ -1,7 +1,6 @@
 // tests/test_hal.cpp
 // Unit tests for the Hardware Abstraction Layer (HAL).
 // Tests interfaces, simulated backends, and factory creation.
-#include <gtest/gtest.h>
 #include "hal/hal_factory.h"
 #include "hal/icamera.h"
 #include "hal/ifc_link.h"
@@ -10,11 +9,13 @@
 #include "hal/iimu_source.h"
 #include "util/config.h"
 
-#include <fstream>
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
+#include <fstream>
 #include <vector>
+
+#include <gtest/gtest.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════
 // Helper: create a unique temporary config file (cleaned up via RAII)
@@ -23,10 +24,10 @@ static std::vector<std::string> g_temp_files;
 
 static std::string create_temp_config(const std::string& json_content) {
     char tmpl[] = "/tmp/test_hal_XXXXXX.json";
-    int fd = mkstemps(tmpl, 5);  // 5 = strlen(".json")
+    int  fd     = mkstemps(tmpl, 5);  // 5 = strlen(".json")
     if (fd < 0) {
         // Fallback
-        std::string path = "/tmp/test_hal_" + std::to_string(getpid()) + ".json";
+        std::string   path = "/tmp/test_hal_" + std::to_string(getpid()) + ".json";
         std::ofstream ofs(path);
         ofs << json_content;
         ofs.close();
@@ -34,7 +35,7 @@ static std::string create_temp_config(const std::string& json_content) {
         return path;
     }
     ::close(fd);
-    std::string path(tmpl);
+    std::string   path(tmpl);
     std::ofstream ofs(path);
     ofs << json_content;
     ofs.close();
@@ -111,7 +112,7 @@ TEST_F(HALFactoryTest, CreateIMUSourceReturnsNonNull) {
 }
 
 TEST_F(HALFactoryTest, UnknownBackendThrows) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "video_capture": { "mission_cam": { "backend": "nonexistent" } }
     })");
     drone::Config bad_cfg;
@@ -121,7 +122,7 @@ TEST_F(HALFactoryTest, UnknownBackendThrows) {
 }
 
 TEST_F(HALFactoryTest, MissingBackendDefaultsToSimulated) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "video_capture": { "mission_cam": { "width": 640 } }
     })");
     drone::Config no_backend_cfg;
@@ -136,9 +137,7 @@ TEST_F(HALFactoryTest, MissingBackendDefaultsToSimulated) {
 // ═══════════════════════════════════════════════════════════
 class SimulatedCameraTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        cam_ = std::make_unique<drone::hal::SimulatedCamera>();
-    }
+    void SetUp() override { cam_ = std::make_unique<drone::hal::SimulatedCamera>(); }
     std::unique_ptr<drone::hal::SimulatedCamera> cam_;
 };
 
@@ -181,9 +180,7 @@ TEST_F(SimulatedCameraTest, CaptureWhenClosedReturnsInvalid) {
 // ═══════════════════════════════════════════════════════════
 class SimulatedFCLinkTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        fc_ = std::make_unique<drone::hal::SimulatedFCLink>();
-    }
+    void SetUp() override { fc_ = std::make_unique<drone::hal::SimulatedFCLink>(); }
     std::unique_ptr<drone::hal::SimulatedFCLink> fc_;
 };
 
@@ -266,9 +263,7 @@ TEST(SimulatedGCSLinkTest, PollCommandInitiallyNoCommand) {
 // ═══════════════════════════════════════════════════════════
 class SimulatedGimbalTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        gimbal_ = std::make_unique<drone::hal::SimulatedGimbal>();
-    }
+    void SetUp() override { gimbal_ = std::make_unique<drone::hal::SimulatedGimbal>(); }
     std::unique_ptr<drone::hal::SimulatedGimbal> gimbal_;
 };
 
@@ -316,7 +311,7 @@ TEST_F(SimulatedGimbalTest, Recording) {
 TEST_F(SimulatedGimbalTest, PitchClampedToRange) {
     gimbal_->init();
     gimbal_->set_target(-200.0f, 0.0f);  // below -90 min
-    gimbal_->update(100.0f);  // large dt to reach target
+    gimbal_->update(100.0f);             // large dt to reach target
     auto state = gimbal_->state();
     EXPECT_GE(state.pitch, -90.0f);  // clamped
 }
@@ -339,7 +334,7 @@ TEST(SimulatedIMUTest, InitAndRead) {
 
 TEST(SimulatedIMUTest, ReadWhenNotInitReturnsInvalid) {
     drone::hal::SimulatedIMU imu;
-    auto reading = imu.read();
+    auto                     reading = imu.read();
     EXPECT_FALSE(reading.valid);
 }
 

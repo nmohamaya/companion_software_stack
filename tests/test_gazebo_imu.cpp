@@ -11,17 +11,18 @@
 //  7. Graceful behavior when Gazebo is not running
 //
 // NOTE: Full integration tests with a running Gazebo world are planned in Phase 4 (#11).
-#include <gtest/gtest.h>
 #include "hal/hal_factory.h"
 #include "hal/iimu_source.h"
 #include "util/config.h"
 
-#include <fstream>
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════
 // Helper: temp config (same pattern as other HAL tests)
@@ -30,7 +31,7 @@ static std::vector<std::string> g_gz_imu_temp_files;
 
 static std::string create_temp_config(const std::string& json_content) {
     char path[] = "/tmp/test_gz_imu_XXXXXX";
-    int fd = mkstemp(path);
+    int  fd     = mkstemp(path);
     if (fd < 0) throw std::runtime_error("mkstemp failed");
     std::ofstream ofs(path);
     ofs << json_content;
@@ -102,7 +103,7 @@ TEST(GazeboIMUTest, MessageCountStartsAtZero) {
 
 // ── Factory tests ──────────────────────────────────────────
 TEST(GazeboIMUTest, FactoryCreatesGazeboBackend) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "slam": {
             "imu": {
                 "backend": "gazebo",
@@ -118,7 +119,7 @@ TEST(GazeboIMUTest, FactoryCreatesGazeboBackend) {
 }
 
 TEST(GazeboIMUTest, FactoryDefaultTopicIsImu) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "slam": {
             "imu": {
                 "backend": "gazebo"
@@ -133,7 +134,7 @@ TEST(GazeboIMUTest, FactoryDefaultTopicIsImu) {
 }
 
 TEST(GazeboIMUTest, FactoryStillCreatesSimulated) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "slam": {
             "imu": {
                 "backend": "simulated"
@@ -154,7 +155,7 @@ TEST(GazeboIMUTest, FactoryStillCreatesSimulated) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(GazeboIMUFallbackTest, FactoryCreatesSimulatedBackend) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "slam": {
             "imu": {
                 "backend": "simulated"
@@ -169,7 +170,7 @@ TEST(GazeboIMUFallbackTest, FactoryCreatesSimulatedBackend) {
 }
 
 TEST(GazeboIMUFallbackTest, GazeboBackendThrowsWithoutLib) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "slam": {
             "imu": {
                 "backend": "gazebo"
@@ -178,8 +179,7 @@ TEST(GazeboIMUFallbackTest, GazeboBackendThrowsWithoutLib) {
     })");
     drone::Config cfg;
     cfg.load(path);
-    EXPECT_THROW(drone::hal::create_imu_source(cfg, "slam.imu"),
-                 std::runtime_error);
+    EXPECT_THROW(drone::hal::create_imu_source(cfg, "slam.imu"), std::runtime_error);
 }
 
 #endif  // HAVE_GAZEBO

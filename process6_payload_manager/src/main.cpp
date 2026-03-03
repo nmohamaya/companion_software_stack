@@ -3,19 +3,20 @@
 // Uses HAL IGimbal interface — backend selected via config.
 // Reads ShmPayloadCommand from Mission Planner, publishes ShmPayloadStatus.
 
+#include "hal/hal_factory.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
-#include "util/signal_handler.h"
+#include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
-#include "hal/hal_factory.h"
+#include "util/signal_handler.h"
 
-#include <thread>
 #include <atomic>
 #include <chrono>
+#include <thread>
+
 #include <spdlog/spdlog.h>
 
 static std::atomic<bool> g_running{true};
@@ -60,33 +61,27 @@ int main(int argc, char* argv[]) {
     spdlog::info("Payload Manager READY");
     uint64_t last_cmd_ts = 0;
 
-    const int update_hz = cfg.get<int>("payload_manager.update_rate_hz", 50);
-    const int loop_sleep_ms = update_hz > 0 ? 1000 / update_hz : 20;
-    const float dt = loop_sleep_ms / 1000.0f;
+    const int   update_hz     = cfg.get<int>("payload_manager.update_rate_hz", 50);
+    const int   loop_sleep_ms = update_hz > 0 ? 1000 / update_hz : 20;
+    const float dt            = loop_sleep_ms / 1000.0f;
 
     // ── Main loop (configurable control rate) ───────────────
     while (g_running.load(std::memory_order_relaxed)) {
 
         // Read commands
         drone::ipc::ShmPayloadCommand cmd{};
-        if (cmd_sub->receive(cmd) && cmd.valid &&
-            cmd.timestamp_ns != last_cmd_ts) {
+        if (cmd_sub->receive(cmd) && cmd.valid && cmd.timestamp_ns != last_cmd_ts) {
             last_cmd_ts = cmd.timestamp_ns;
 
             gimbal->set_target(cmd.gimbal_pitch, cmd.gimbal_yaw);
 
             switch (cmd.action) {
-                case drone::ipc::PayloadAction::CAMERA_CAPTURE:
-                    gimbal->capture_image();
-                    break;
+                case drone::ipc::PayloadAction::CAMERA_CAPTURE: gimbal->capture_image(); break;
                 case drone::ipc::PayloadAction::CAMERA_START_VIDEO:
                     gimbal->start_recording();
                     break;
-                case drone::ipc::PayloadAction::CAMERA_STOP_VIDEO:
-                    gimbal->stop_recording();
-                    break;
-                default:
-                    break;
+                case drone::ipc::PayloadAction::CAMERA_STOP_VIDEO: gimbal->stop_recording(); break;
+                default: break;
             }
         }
 
@@ -94,11 +89,11 @@ int main(int argc, char* argv[]) {
         gimbal->update(dt);
 
         // Publish status
-        auto g_state = gimbal->state();
+        auto                         g_state = gimbal->state();
         drone::ipc::ShmPayloadStatus status{};
-        status.timestamp_ns = std::chrono::duration_cast<
-            std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+        status.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count();
         status.gimbal_pitch      = g_state.pitch;
         status.gimbal_yaw        = g_state.yaw;
         status.gimbal_stabilized = g_state.stabilised;

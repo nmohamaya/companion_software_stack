@@ -21,7 +21,6 @@
 #include "hal/igcs_link.h"
 #include "hal/igimbal.h"
 #include "hal/iimu_source.h"
-
 #include "hal/simulated_camera.h"
 #include "hal/simulated_fc_link.h"
 #include "hal/simulated_gcs_link.h"
@@ -42,6 +41,7 @@
 
 #include <memory>
 #include <stdexcept>
+
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -49,9 +49,8 @@ namespace drone::hal {
 /// Create a camera backend from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
-inline std::unique_ptr<ICamera> create_camera(
-    const drone::Config& cfg, const std::string& section)
-{
+inline std::unique_ptr<ICamera> create_camera(const drone::Config& cfg,
+                                              const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating camera '{}' backend='{}'", section, backend);
 
@@ -72,9 +71,8 @@ inline std::unique_ptr<ICamera> create_camera(
 /// Create a flight controller link from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "comms.mavlink")
-inline std::unique_ptr<IFCLink> create_fc_link(
-    const drone::Config& cfg, const std::string& section)
-{
+inline std::unique_ptr<IFCLink> create_fc_link(const drone::Config& cfg,
+                                               const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating FC link '{}' backend='{}'", section, backend);
 
@@ -92,9 +90,8 @@ inline std::unique_ptr<IFCLink> create_fc_link(
 /// Create a GCS link from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "comms.gcs")
-inline std::unique_ptr<IGCSLink> create_gcs_link(
-    const drone::Config& cfg, const std::string& section)
-{
+inline std::unique_ptr<IGCSLink> create_gcs_link(const drone::Config& cfg,
+                                                 const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating GCS link '{}' backend='{}'", section, backend);
 
@@ -109,9 +106,8 @@ inline std::unique_ptr<IGCSLink> create_gcs_link(
 /// Create a gimbal backend from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "payload_manager.gimbal")
-inline std::unique_ptr<IGimbal> create_gimbal(
-    const drone::Config& cfg, const std::string& section)
-{
+inline std::unique_ptr<IGimbal> create_gimbal(const drone::Config& cfg,
+                                              const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating gimbal '{}' backend='{}'", section, backend);
 
@@ -126,9 +122,8 @@ inline std::unique_ptr<IGimbal> create_gimbal(
 /// Create an IMU source from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "slam.imu")
-inline std::unique_ptr<IIMUSource> create_imu_source(
-    const drone::Config& cfg, const std::string& section)
-{
+inline std::unique_ptr<IIMUSource> create_imu_source(const drone::Config& cfg,
+                                                     const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating IMU source '{}' backend='{}'", section, backend);
 
@@ -138,7 +133,7 @@ inline std::unique_ptr<IIMUSource> create_imu_source(
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
         auto gz_topic = cfg.get<std::string>(section + ".gz_topic", "/imu");
-        auto imu = std::make_unique<GazeboIMUBackend>(gz_topic);
+        auto imu      = std::make_unique<GazeboIMUBackend>(gz_topic);
         return imu;
     }
 #endif

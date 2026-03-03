@@ -70,34 +70,27 @@ struct ZenohNetworkConfig {
     // ─── Convenience factory methods ──────────────────────────
 
     /// Create a drone-side config: peer mode, listening on all interfaces.
-    static ZenohNetworkConfig make_drone(
-        uint16_t port = 7447,
-        const std::string& address = "0.0.0.0",
-        const std::string& proto = "tcp")
-    {
+    static ZenohNetworkConfig make_drone(uint16_t           port    = 7447,
+                                         const std::string& address = "0.0.0.0",
+                                         const std::string& proto   = "tcp") {
         ZenohNetworkConfig cfg;
-        cfg.mode = "peer";
-        cfg.listen_port = port;
+        cfg.mode           = "peer";
+        cfg.listen_port    = port;
         cfg.listen_address = address;
-        cfg.protocol = proto;
-        cfg.listen_endpoints.push_back(
-            proto + "/" + address + ":" + std::to_string(port));
+        cfg.protocol       = proto;
+        cfg.listen_endpoints.push_back(proto + "/" + address + ":" + std::to_string(port));
         cfg.multicast_scouting = true;
         return cfg;
     }
 
     /// Create a GCS-side config: client mode, connect to drone IP.
-    static ZenohNetworkConfig make_gcs(
-        const std::string& drone_ip,
-        uint16_t port = 7447,
-        const std::string& proto = "tcp")
-    {
+    static ZenohNetworkConfig make_gcs(const std::string& drone_ip, uint16_t port = 7447,
+                                       const std::string& proto = "tcp") {
         ZenohNetworkConfig cfg;
         cfg.mode = "client";
-        cfg.connect_endpoints.push_back(
-            proto + "/" + drone_ip + ":" + std::to_string(port));
+        cfg.connect_endpoints.push_back(proto + "/" + drone_ip + ":" + std::to_string(port));
         cfg.multicast_scouting = false;
-        cfg.gossip_scouting = false;
+        cfg.gossip_scouting    = false;
         return cfg;
     }
 
@@ -105,9 +98,9 @@ struct ZenohNetworkConfig {
     /// Suitable for unit tests and single-machine operation.
     static ZenohNetworkConfig make_local() {
         ZenohNetworkConfig cfg;
-        cfg.mode = "peer";
+        cfg.mode               = "peer";
         cfg.multicast_scouting = false;
-        cfg.gossip_scouting = false;
+        cfg.gossip_scouting    = false;
         return cfg;
     }
 
@@ -143,10 +136,10 @@ struct ZenohNetworkConfig {
 
         // Scouting
         json += ",\n  \"scouting\": {\n";
-        json += "    \"multicast\": { \"enabled\": "
-                + std::string(multicast_scouting ? "true" : "false") + " },\n";
-        json += "    \"gossip\": { \"enabled\": "
-                + std::string(gossip_scouting ? "true" : "false") + " }\n";
+        json += "    \"multicast\": { \"enabled\": " +
+                std::string(multicast_scouting ? "true" : "false") + " },\n";
+        json += "    \"gossip\": { \"enabled\": " +
+                std::string(gossip_scouting ? "true" : "false") + " }\n";
         json += "  }";
 
         json += "\n}";
@@ -183,7 +176,7 @@ struct ZenohNetworkConfig {
     ///
     /// This method is implemented as a template to avoid pulling in
     /// nlohmann/json.hpp into this header.
-    template <typename JsonT>
+    template<typename JsonT>
     static ZenohNetworkConfig from_app_config(const JsonT& zenoh_network) {
         ZenohNetworkConfig cfg;
 
@@ -191,52 +184,40 @@ struct ZenohNetworkConfig {
             cfg.mode = zenoh_network["mode"].template get<std::string>();
         }
         if (zenoh_network.contains("listen_port")) {
-            cfg.listen_port = zenoh_network["listen_port"]
-                                  .template get<uint16_t>();
+            cfg.listen_port = zenoh_network["listen_port"].template get<uint16_t>();
         }
         if (zenoh_network.contains("listen_address")) {
-            cfg.listen_address = zenoh_network["listen_address"]
-                                     .template get<std::string>();
+            cfg.listen_address = zenoh_network["listen_address"].template get<std::string>();
         }
         if (zenoh_network.contains("protocol")) {
-            cfg.protocol = zenoh_network["protocol"]
-                               .template get<std::string>();
+            cfg.protocol = zenoh_network["protocol"].template get<std::string>();
         }
         if (zenoh_network.contains("multicast_scouting")) {
-            cfg.multicast_scouting = zenoh_network["multicast_scouting"]
-                                         .template get<bool>();
+            cfg.multicast_scouting = zenoh_network["multicast_scouting"].template get<bool>();
         }
         if (zenoh_network.contains("gossip_scouting")) {
-            cfg.gossip_scouting = zenoh_network["gossip_scouting"]
-                                      .template get<bool>();
+            cfg.gossip_scouting = zenoh_network["gossip_scouting"].template get<bool>();
         }
 
         // Build listen endpoint from components
         if (zenoh_network.contains("listen_port")) {
             cfg.listen_endpoints.clear();
-            cfg.listen_endpoints.push_back(
-                cfg.protocol + "/" + cfg.listen_address + ":"
-                + std::to_string(cfg.listen_port));
+            cfg.listen_endpoints.push_back(cfg.protocol + "/" + cfg.listen_address + ":" +
+                                           std::to_string(cfg.listen_port));
         }
 
         // Parse explicit connect endpoints
         if (zenoh_network.contains("connect_endpoints")) {
             for (const auto& ep : zenoh_network["connect_endpoints"]) {
-                cfg.connect_endpoints.push_back(
-                    ep.template get<std::string>());
+                cfg.connect_endpoints.push_back(ep.template get<std::string>());
             }
         }
 
         spdlog::info("[ZenohNetworkConfig] Loaded from app config: "
                      "mode={}, listen={}, connect_eps={}, "
                      "multicast={}, gossip={}",
-                     cfg.mode,
-                     cfg.listen_endpoints.empty()
-                         ? "none"
-                         : cfg.listen_endpoints[0],
-                     cfg.connect_endpoints.size(),
-                     cfg.multicast_scouting,
-                     cfg.gossip_scouting);
+                     cfg.mode, cfg.listen_endpoints.empty() ? "none" : cfg.listen_endpoints[0],
+                     cfg.connect_endpoints.size(), cfg.multicast_scouting, cfg.gossip_scouting);
         return cfg;
     }
 };

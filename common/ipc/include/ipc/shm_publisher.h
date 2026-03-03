@@ -6,12 +6,13 @@
 #include "ipc/shm_writer.h"
 
 #include <string>
+
 #include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
 /// Publishes typed messages to a POSIX shared-memory segment using SeqLock.
-template <typename T>
+template<typename T>
 class ShmPublisher final : public IPublisher<T> {
 public:
     /// Construct and create the SHM segment.
@@ -25,9 +26,7 @@ public:
         }
     }
 
-    void publish(const T& msg) override {
-        writer_.write(msg);
-    }
+    void publish(const T& msg) override { writer_.write(msg); }
 
     const std::string& topic_name() const override { return topic_; }
 
@@ -35,8 +34,8 @@ public:
 
 private:
     ShmWriter<T> writer_;
-    std::string topic_;
-    bool ready_ = false;
+    std::string  topic_;
+    bool         ready_ = false;
 };
 
 }  // namespace drone::ipc

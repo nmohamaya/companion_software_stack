@@ -9,14 +9,14 @@ namespace drone::hal {
 
 /// Result of a single frame capture.
 struct CapturedFrame {
-    uint64_t    timestamp_ns{0};
-    uint64_t    sequence{0};
-    uint32_t    width{0};
-    uint32_t    height{0};
-    uint32_t    channels{0};      // 1=GRAY, 3=RGB
-    uint32_t    stride{0};
-    const uint8_t* data{nullptr}; // pointer to internal buffer — valid until next capture()
-    bool        valid{false};
+    uint64_t       timestamp_ns{0};
+    uint64_t       sequence{0};
+    uint32_t       width{0};
+    uint32_t       height{0};
+    uint32_t       channels{0};  // 1=GRAY, 3=RGB
+    uint32_t       stride{0};
+    const uint8_t* data{nullptr};  // pointer to internal buffer — valid until next capture()
+    bool           valid{false};
 };
 
 /// Abstract camera interface.

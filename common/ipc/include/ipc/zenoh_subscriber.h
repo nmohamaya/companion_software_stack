@@ -13,8 +13,6 @@
 #include "ipc/isubscriber.h"
 #include "ipc/zenoh_session.h"
 
-#include <zenoh.hxx>
-
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -24,34 +22,29 @@
 #include <type_traits>
 
 #include <spdlog/spdlog.h>
+#include <zenoh.hxx>
 
 namespace drone::ipc {
 
 /// Zenoh-backed subscriber implementing ISubscriber<T>.
 /// Maintains a latest-value cache updated by the Zenoh callback thread.
-template <typename T>
+template<typename T>
 class ZenohSubscriber final : public ISubscriber<T> {
     static_assert(std::is_trivially_copyable_v<T>,
                   "ZenohSubscriber requires trivially copyable types");
+
 public:
     /// Construct and declare a Zenoh subscriber on the given key expression.
     /// @param key_expr  Zenoh key expression (e.g. "drone/slam/pose").
-    explicit ZenohSubscriber(const std::string& key_expr)
-        : key_expr_(key_expr)
-    {
+    explicit ZenohSubscriber(const std::string& key_expr) : key_expr_(key_expr) {
         try {
             auto& session = ZenohSession::instance().session();
-            subscriber_.emplace(
-                session.declare_subscriber(
-                    zenoh::KeyExpr(key_expr),
-                    [this](zenoh::Sample& sample) {
-                        on_sample(sample);
-                    },
-                    []() { /* on_drop — no-op */ }));
+            subscriber_.emplace(session.declare_subscriber(
+                zenoh::KeyExpr(key_expr), [this](zenoh::Sample& sample) { on_sample(sample); },
+                []() { /* on_drop — no-op */ }));
             spdlog::info("[ZenohSubscriber] Subscribed to '{}'", key_expr);
         } catch (const std::exception& e) {
-            spdlog::error("[ZenohSubscriber] Failed to subscribe to '{}': {}",
-                          key_expr, e.what());
+            spdlog::error("[ZenohSubscriber] Failed to subscribe to '{}': {}", key_expr, e.what());
         }
     }
 
@@ -75,9 +68,7 @@ public:
     /// Unlike POSIX SHM (which requires the segment to exist), Zenoh
     /// subscriptions are valid immediately — data arrives asynchronously
     /// once a publisher appears.  Use receive() to check for actual data.
-    bool is_connected() const override {
-        return subscriber_.has_value();
-    }
+    bool is_connected() const override { return subscriber_.has_value(); }
 
     const std::string& topic_name() const override { return key_expr_; }
 
@@ -85,7 +76,7 @@ private:
     /// Zenoh callback — runs on Zenoh internal thread.
     void on_sample(zenoh::Sample& sample) {
         const auto& payload = sample.get_payload();
-        auto bytes = payload.as_vector();
+        auto        bytes   = payload.as_vector();
         if (bytes.size() != sizeof(T)) {
             spdlog::warn("[ZenohSubscriber] Size mismatch on '{}': "
                          "expected {} got {}",
@@ -95,23 +86,23 @@ private:
 
         std::lock_guard<std::mutex> lock(data_mutex_);
         std::memcpy(&latest_msg_, bytes.data(), sizeof(T));
-        timestamp_ns_ = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count());
+        timestamp_ns_ =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
         seq_.fetch_add(1, std::memory_order_relaxed);
         has_data_.store(true, std::memory_order_release);
     }
 
-    std::string key_expr_;
+    std::string                            key_expr_;
     std::optional<zenoh::Subscriber<void>> subscriber_;
 
     // Latest-value cache (protected by data_mutex_ + atomics)
-    mutable std::mutex data_mutex_;
-    T latest_msg_{};
-    uint64_t timestamp_ns_{0};
+    mutable std::mutex    data_mutex_;
+    T                     latest_msg_{};
+    uint64_t              timestamp_ns_{0};
     std::atomic<uint64_t> seq_{0};
-    std::atomic<bool> has_data_{false};
+    std::atomic<bool>     has_data_{false};
 };
 
 }  // namespace drone::ipc

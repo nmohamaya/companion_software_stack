@@ -19,8 +19,6 @@
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_session.h"
 
-#include <zenoh.hxx>
-
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -35,6 +33,7 @@
 #include <vector>
 
 #include <spdlog/spdlog.h>
+#include <zenoh.hxx>
 
 namespace drone::ipc {
 
@@ -43,81 +42,79 @@ namespace drone::ipc {
 /// Declares a Zenoh queryable.  Incoming queries carry the request payload
 /// (as raw bytes) and the correlation ID in the parameters string ("cid=N").
 /// The Query handle is cloned and stored so send_response() can reply later.
-template <typename Req, typename Resp>
+template<typename Req, typename Resp>
 class ZenohServiceServer final : public IServiceServer<Req, Resp> {
     static_assert(std::is_trivially_copyable_v<Req>,
                   "ZenohServiceServer requires trivially copyable Req");
     static_assert(std::is_trivially_copyable_v<Resp>,
                   "ZenohServiceServer requires trivially copyable Resp");
+
 public:
     /// @param key_expr  Zenoh key expression for the service
     ///                  (e.g. "drone/service/trajectory").
-    explicit ZenohServiceServer(const std::string& key_expr)
-        : key_expr_(key_expr)
-    {
+    explicit ZenohServiceServer(const std::string& key_expr) : key_expr_(key_expr) {
         auto pending = pending_;  // capture shared_ptr for callback
 
         auto& session = ZenohSession::instance().session();
-        queryable_.emplace(
-            session.declare_queryable(
-                zenoh::KeyExpr(key_expr),
-                // on_query callback — runs on Zenoh internal thread
-                [key_expr, pending](zenoh::Query& query) {
-                    try {
-                        // Parse correlation ID from parameters
-                        uint64_t cid = 0;
-                        auto params = query.get_parameters();
-                        auto pos = params.find("cid=");
-                        if (pos != std::string_view::npos) {
-                            cid = std::stoull(
-                                std::string(params.substr(pos + 4)));
-                        }
-
-                        // Deserialise request payload
-                        auto payload_opt = query.get_payload();
-                        if (!payload_opt.has_value()) {
-                            spdlog::warn("[ZenohServiceServer] Query on '{}' "
-                                         "has no payload", key_expr);
-                            return;
-                        }
-                        auto bytes = payload_opt->get().as_vector();
-                        if (bytes.size() != sizeof(Req)) {
-                            spdlog::warn("[ZenohServiceServer] Payload size "
-                                         "mismatch on '{}': expected {} got {}",
-                                         key_expr, sizeof(Req), bytes.size());
-                            return;
-                        }
-
-                        Req req{};
-                        std::memcpy(&req, bytes.data(), sizeof(Req));
-
-                        // Build envelope
-                        ServiceEnvelope<Req> env;
-                        env.correlation_id = cid;
-                        env.timestamp_ns = static_cast<uint64_t>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                std::chrono::steady_clock::now()
-                                    .time_since_epoch())
-                                .count());
-                        env.valid = true;
-                        env.payload = req;
-
-                        // Clone query handle and enqueue
-                        std::lock_guard<std::mutex> lock(pending->mutex);
-                        pending->queue.push_back({env, query.clone()});
-
-                        spdlog::debug("[ZenohServiceServer] Received query "
-                                      "cid={} on '{}'", cid, key_expr);
-                    } catch (const std::exception& e) {
-                        spdlog::error("[ZenohServiceServer] Error in query "
-                                      "callback: {}", e.what());
+        queryable_.emplace(session.declare_queryable(
+            zenoh::KeyExpr(key_expr),
+            // on_query callback — runs on Zenoh internal thread
+            [key_expr, pending](zenoh::Query& query) {
+                try {
+                    // Parse correlation ID from parameters
+                    uint64_t cid    = 0;
+                    auto     params = query.get_parameters();
+                    auto     pos    = params.find("cid=");
+                    if (pos != std::string_view::npos) {
+                        cid = std::stoull(std::string(params.substr(pos + 4)));
                     }
-                },
-                // on_drop callback
-                []() {}));
 
-        spdlog::info("[ZenohServiceServer] Queryable declared on '{}'",
-                     key_expr);
+                    // Deserialise request payload
+                    auto payload_opt = query.get_payload();
+                    if (!payload_opt.has_value()) {
+                        spdlog::warn("[ZenohServiceServer] Query on '{}' "
+                                     "has no payload",
+                                     key_expr);
+                        return;
+                    }
+                    auto bytes = payload_opt->get().as_vector();
+                    if (bytes.size() != sizeof(Req)) {
+                        spdlog::warn("[ZenohServiceServer] Payload size "
+                                     "mismatch on '{}': expected {} got {}",
+                                     key_expr, sizeof(Req), bytes.size());
+                        return;
+                    }
+
+                    Req req{};
+                    std::memcpy(&req, bytes.data(), sizeof(Req));
+
+                    // Build envelope
+                    ServiceEnvelope<Req> env;
+                    env.correlation_id = cid;
+                    env.timestamp_ns   = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count());
+                    env.valid   = true;
+                    env.payload = req;
+
+                    // Clone query handle and enqueue
+                    std::lock_guard<std::mutex> lock(pending->mutex);
+                    pending->queue.push_back({env, query.clone()});
+
+                    spdlog::debug("[ZenohServiceServer] Received query "
+                                  "cid={} on '{}'",
+                                  cid, key_expr);
+                } catch (const std::exception& e) {
+                    spdlog::error("[ZenohServiceServer] Error in query "
+                                  "callback: {}",
+                                  e.what());
+                }
+            },
+            // on_drop callback
+            []() {}));
+
+        spdlog::info("[ZenohServiceServer] Queryable declared on '{}'", key_expr);
     }
 
     std::optional<ServiceEnvelope<Req>> poll_request() override {
@@ -125,7 +122,7 @@ public:
         if (pending_->queue.empty()) return std::nullopt;
 
         auto& front = pending_->queue.front();
-        auto env = front.envelope;
+        auto  env   = front.envelope;
 
         // Move the query to the outstanding map for later reply
         {
@@ -136,33 +133,32 @@ public:
         return env;
     }
 
-    void send_response(uint64_t correlation_id,
-                        ServiceStatus status,
-                        const Resp& response) override
-    {
+    void send_response(uint64_t correlation_id, ServiceStatus status,
+                       const Resp& response) override {
         // Build response envelope
         ServiceResponse<Resp> resp;
         resp.correlation_id = correlation_id;
-        resp.timestamp_ns = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count());
-        resp.status = status;
-        resp.valid = true;
+        resp.timestamp_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+        resp.status  = status;
+        resp.valid   = true;
         resp.payload = response;
 
         // Serialise
-        const auto* ptr = reinterpret_cast<const uint8_t*>(&resp);
+        const auto*          ptr = reinterpret_cast<const uint8_t*>(&resp);
         std::vector<uint8_t> buf(ptr, ptr + sizeof(ServiceResponse<Resp>));
 
         // Find and remove the outstanding query
         std::optional<zenoh::Query> query_handle;
         {
             std::lock_guard<std::mutex> lock(outstanding_mutex_);
-            auto it = outstanding_.find(correlation_id);
+            auto                        it = outstanding_.find(correlation_id);
             if (it == outstanding_.end()) {
                 spdlog::warn("[ZenohServiceServer] No outstanding query for "
-                             "cid={}", correlation_id);
+                             "cid={}",
+                             correlation_id);
                 return;
             }
             query_handle.emplace(std::move(it->second));
@@ -170,33 +166,31 @@ public:
         }
 
         // Reply through the Zenoh query handle
-        query_handle->reply(zenoh::KeyExpr(key_expr_),
-                            zenoh::Bytes(std::move(buf)));
+        query_handle->reply(zenoh::KeyExpr(key_expr_), zenoh::Bytes(std::move(buf)));
 
-        spdlog::debug("[ZenohServiceServer] Sent response cid={} status={}",
-                      correlation_id, static_cast<int>(status));
+        spdlog::debug("[ZenohServiceServer] Sent response cid={} status={}", correlation_id,
+                      static_cast<int>(status));
     }
 
 private:
     /// Pending request queue entry: envelope + cloned Query handle.
     struct PendingEntry {
         ServiceEnvelope<Req> envelope;
-        zenoh::Query query;
+        zenoh::Query         query;
     };
 
     /// Thread-safe pending queue shared with the queryable callback.
     struct PendingQueue {
-        std::mutex mutex;
+        std::mutex               mutex;
         std::deque<PendingEntry> queue;
     };
 
-    std::string key_expr_;
+    std::string                           key_expr_;
     std::optional<zenoh::Queryable<void>> queryable_;
-    std::shared_ptr<PendingQueue> pending_ =
-        std::make_shared<PendingQueue>();
+    std::shared_ptr<PendingQueue>         pending_ = std::make_shared<PendingQueue>();
 
     // Outstanding queries awaiting send_response()
-    std::mutex outstanding_mutex_;
+    std::mutex                                 outstanding_mutex_;
     std::unordered_map<uint64_t, zenoh::Query> outstanding_;
 };
 

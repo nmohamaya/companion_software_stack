@@ -4,8 +4,10 @@
 // Thread-safe: all mutable state guarded by mutex.
 #pragma once
 #include "hal/igcs_link.h"
+
 #include <chrono>
 #include <mutex>
+
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -14,9 +16,10 @@ class SimulatedGCSLink : public IGCSLink {
 public:
     bool open(const std::string& addr, int port) override {
         std::lock_guard<std::mutex> lock(mtx_);
-        (void)addr; (void)port;
+        (void)addr;
+        (void)port;
         spdlog::info("[SimulatedGCSLink] Simulated UDP link {}:{}", addr, port);
-        connected_ = true;
+        connected_  = true;
         start_time_ = std::chrono::steady_clock::now();
         return true;
     }
@@ -32,8 +35,7 @@ public:
         return connected_;
     }
 
-    bool send_telemetry(float lat, float lon, float alt,
-                        float battery, uint8_t state) override {
+    bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) override {
         std::lock_guard<std::mutex> lock(mtx_);
         if (!connected_) return false;
         telem_count_++;
@@ -47,16 +49,16 @@ public:
 
     GCSCommand poll_command() override {
         std::lock_guard<std::mutex> lock(mtx_);
-        GCSCommand cmd{};
-        auto now = std::chrono::steady_clock::now();
-        double elapsed = std::chrono::duration<double>(now - start_time_).count();
+        GCSCommand                  cmd{};
+        auto                        now = std::chrono::steady_clock::now();
+        double elapsed                  = std::chrono::duration<double>(now - start_time_).count();
 
         // Simulate an RTL command after 120 seconds
         if (!rtl_sent_ && elapsed > 120.0) {
-            cmd.type = GCSCommandType::RTL;
+            cmd.type         = GCSCommandType::RTL;
             cmd.timestamp_ns = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    now.time_since_epoch()).count());
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch())
+                    .count());
             cmd.valid = true;
             rtl_sent_ = true;
             spdlog::info("[SimulatedGCSLink] Simulated RTL command from GCS");
@@ -67,10 +69,10 @@ public:
     std::string name() const override { return "SimulatedGCSLink"; }
 
 private:
-    mutable std::mutex mtx_;
-    bool connected_{false};
-    bool rtl_sent_{false};
-    uint64_t telem_count_{0};
+    mutable std::mutex                    mtx_;
+    bool                                  connected_{false};
+    bool                                  rtl_sent_{false};
+    uint64_t                              telem_count_{0};
     std::chrono::steady_clock::time_point start_time_;
 };
 

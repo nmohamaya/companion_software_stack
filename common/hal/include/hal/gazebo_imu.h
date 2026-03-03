@@ -12,13 +12,13 @@
 
 #include "hal/iimu_source.h"
 
-#include <gz/transport/Node.hh>
-#include <gz/msgs/imu.pb.h>
-
 #include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
+
+#include <gz/msgs/imu.pb.h>
+#include <gz/transport/Node.hh>
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -33,12 +33,9 @@ namespace drone::hal {
 class GazeboIMUBackend : public IIMUSource {
 public:
     /// @param gz_topic  Gazebo transport topic (e.g. "/imu")
-    explicit GazeboIMUBackend(std::string gz_topic)
-        : gz_topic_(std::move(gz_topic)) {}
+    explicit GazeboIMUBackend(std::string gz_topic) : gz_topic_(std::move(gz_topic)) {}
 
-    ~GazeboIMUBackend() override {
-        shutdown();
-    }
+    ~GazeboIMUBackend() override { shutdown(); }
 
     /// Explicitly shut down: prevents callbacks from racing the destructor.
     void shutdown() {
@@ -48,15 +45,14 @@ public:
             active_.store(false, std::memory_order_release);
         }
         node_.Unsubscribe(gz_topic_);
-        spdlog::info("[GazeboIMU] Shut down — unsubscribed from '{}'",
-                     gz_topic_);
+        spdlog::info("[GazeboIMU] Shut down — unsubscribed from '{}'", gz_topic_);
     }
 
     // Non-copyable, non-movable (owns gz::transport::Node)
-    GazeboIMUBackend(const GazeboIMUBackend&) = delete;
+    GazeboIMUBackend(const GazeboIMUBackend&)            = delete;
     GazeboIMUBackend& operator=(const GazeboIMUBackend&) = delete;
-    GazeboIMUBackend(GazeboIMUBackend&&) = delete;
-    GazeboIMUBackend& operator=(GazeboIMUBackend&&) = delete;
+    GazeboIMUBackend(GazeboIMUBackend&&)                 = delete;
+    GazeboIMUBackend& operator=(GazeboIMUBackend&&)      = delete;
 
     /// Initialise — subscribe to the Gazebo IMU topic.
     /// @param rate_hz  Informational; actual rate is driven by Gazebo sensor.
@@ -69,8 +65,7 @@ public:
 
         rate_hz_ = rate_hz;
 
-        bool subscribed = node_.Subscribe(gz_topic_,
-            &GazeboIMUBackend::on_imu_msg, this);
+        bool subscribed = node_.Subscribe(gz_topic_, &GazeboIMUBackend::on_imu_msg, this);
 
         if (!subscribed) {
             spdlog::error("[GazeboIMU] Failed to subscribe to '{}'", gz_topic_);
@@ -78,8 +73,8 @@ public:
         }
 
         active_.store(true, std::memory_order_release);
-        spdlog::info("[GazeboIMU] Subscribed to '{}' (rate_hz={} informational)",
-                     gz_topic_, rate_hz_);
+        spdlog::info("[GazeboIMU] Subscribed to '{}' (rate_hz={} informational)", gz_topic_,
+                     rate_hz_);
         return true;
     }
 
@@ -97,14 +92,10 @@ public:
     }
 
     /// Human-readable name including the topic.
-    std::string name() const override {
-        return "GazeboIMU(" + gz_topic_ + ")";
-    }
+    std::string name() const override { return "GazeboIMU(" + gz_topic_ + ")"; }
 
     /// Number of messages received (useful for diagnostics).
-    uint64_t message_count() const {
-        return msg_count_.load(std::memory_order_acquire);
-    }
+    uint64_t message_count() const { return msg_count_.load(std::memory_order_acquire); }
 
 private:
     // ── gz-transport callback (called on transport thread) ──────────
@@ -118,14 +109,14 @@ private:
         bool has_accel = msg.has_linear_acceleration();
         if (has_accel) {
             const auto& la = msg.linear_acceleration();
-            r.accel = Eigen::Vector3d(la.x(), la.y(), la.z());
+            r.accel        = Eigen::Vector3d(la.x(), la.y(), la.z());
         }
 
         // Extract angular velocity (rad/s)
         bool has_gyro = msg.has_angular_velocity();
         if (has_gyro) {
             const auto& av = msg.angular_velocity();
-            r.gyro = Eigen::Vector3d(av.x(), av.y(), av.z());
+            r.gyro         = Eigen::Vector3d(av.x(), av.y(), av.z());
         }
 
         // Mark valid only when both required fields are present
@@ -133,8 +124,9 @@ private:
         if (!r.valid) return;  // discard incomplete messages
 
         // Timestamp: use steady_clock for monotonic time
-        r.timestamp = std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+        r.timestamp =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
 
         // Store under lock (fast — ImuReading is ~56 bytes)
         {
@@ -148,20 +140,19 @@ private:
             spdlog::info("[GazeboIMU] First IMU message from '{}': "
                          "accel=({:.3f}, {:.3f}, {:.3f}) "
                          "gyro=({:.4f}, {:.4f}, {:.4f})",
-                         gz_topic_,
-                         r.accel.x(), r.accel.y(), r.accel.z(),
-                         r.gyro.x(), r.gyro.y(), r.gyro.z());
+                         gz_topic_, r.accel.x(), r.accel.y(), r.accel.z(), r.gyro.x(), r.gyro.y(),
+                         r.gyro.z());
         }
     }
 
     // ── Members ────────────────────────────────────────────────────
-    std::string gz_topic_;                    ///< Gazebo transport topic
-    int rate_hz_{200};                        ///< Informational sample rate
-    gz::transport::Node node_;                ///< Transport node (owns sub)
-    std::atomic<bool> active_{false};         ///< True after init() succeeds
-    std::atomic<uint64_t> msg_count_{0};      ///< Messages received
-    mutable std::mutex reading_mutex_;        ///< Guards cached_reading_
-    ImuReading cached_reading_;               ///< Latest reading
+    std::string           gz_topic_;        ///< Gazebo transport topic
+    int                   rate_hz_{200};    ///< Informational sample rate
+    gz::transport::Node   node_;            ///< Transport node (owns sub)
+    std::atomic<bool>     active_{false};   ///< True after init() succeeds
+    std::atomic<uint64_t> msg_count_{0};    ///< Messages received
+    mutable std::mutex    reading_mutex_;   ///< Guards cached_reading_
+    ImuReading            cached_reading_;  ///< Latest reading
 };
 
 }  // namespace drone::hal

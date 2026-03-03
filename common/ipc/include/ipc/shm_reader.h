@@ -4,25 +4,26 @@
 #include <atomic>
 #include <cstring>
 #include <string>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <type_traits>
 
-template <typename T>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+template<typename T>
 class ShmReader {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "SHM payload must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<T>, "SHM payload must be trivially copyable");
+
 public:
     struct ShmBlock {
         std::atomic<uint64_t> seq;
-        uint64_t timestamp_ns;
-        T data;
+        uint64_t              timestamp_ns;
+        T                     data;
     };
 
     bool open(const std::string& name) {
         name_ = name;
-        fd_ = shm_open(name.c_str(), O_RDONLY, 0);
+        fd_   = shm_open(name.c_str(), O_RDONLY, 0);
         if (fd_ < 0) return false;
         ptr_ = static_cast<const ShmBlock*>(
             mmap(nullptr, sizeof(ShmBlock), PROT_READ, MAP_SHARED, fd_, 0));
@@ -47,30 +48,27 @@ public:
     bool is_open() const { return ptr_ != nullptr && ptr_ != MAP_FAILED; }
 
     ~ShmReader() {
-        if (ptr_ && ptr_ != MAP_FAILED)
-            munmap(const_cast<ShmBlock*>(ptr_), sizeof(ShmBlock));
+        if (ptr_ && ptr_ != MAP_FAILED) munmap(const_cast<ShmBlock*>(ptr_), sizeof(ShmBlock));
         if (fd_ >= 0) close(fd_);
     }
 
-    ShmReader(const ShmReader&) = delete;
+    ShmReader(const ShmReader&)            = delete;
     ShmReader& operator=(const ShmReader&) = delete;
 
     ShmReader(ShmReader&& other) noexcept
-        : fd_(other.fd_), ptr_(other.ptr_), name_(std::move(other.name_))
-    {
-        other.fd_ = -1;
+        : fd_(other.fd_), ptr_(other.ptr_), name_(std::move(other.name_)) {
+        other.fd_  = -1;
         other.ptr_ = nullptr;
     }
 
     ShmReader& operator=(ShmReader&& other) noexcept {
         if (this != &other) {
-            if (ptr_ && ptr_ != MAP_FAILED)
-                munmap(const_cast<ShmBlock*>(ptr_), sizeof(ShmBlock));
+            if (ptr_ && ptr_ != MAP_FAILED) munmap(const_cast<ShmBlock*>(ptr_), sizeof(ShmBlock));
             if (fd_ >= 0) close(fd_);
-            fd_ = other.fd_;
-            ptr_ = other.ptr_;
-            name_ = std::move(other.name_);
-            other.fd_ = -1;
+            fd_        = other.fd_;
+            ptr_       = other.ptr_;
+            name_      = std::move(other.name_);
+            other.fd_  = -1;
             other.ptr_ = nullptr;
         }
         return *this;
@@ -79,7 +77,7 @@ public:
     ShmReader() = default;
 
 private:
-    int fd_ = -1;
+    int             fd_  = -1;
     const ShmBlock* ptr_ = nullptr;
-    std::string name_;
+    std::string     name_;
 };

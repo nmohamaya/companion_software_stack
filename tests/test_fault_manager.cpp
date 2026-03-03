@@ -1,9 +1,10 @@
 // tests/test_fault_manager.cpp
 // Unit tests for FaultManager graceful-degradation engine.
-#include <gtest/gtest.h>
 #include "planner/fault_manager.h"
 
 #include <cstring>
+
+#include <gtest/gtest.h>
 
 using namespace drone::planner;
 using drone::ipc::ShmSystemHealth;
@@ -20,22 +21,22 @@ constexpr uint64_t S  = 1'000'000'000ULL;
 /// Return a nominal ShmSystemHealth (all OK).
 ShmSystemHealth make_healthy() {
     ShmSystemHealth h{};
-    h.timestamp_ns     = 1'000 * S;
+    h.timestamp_ns      = 1'000 * S;
     h.cpu_usage_percent = 30.0f;
-    h.thermal_zone     = 0;
-    h.critical_failure = false;
-    h.num_processes    = 0;
+    h.thermal_zone      = 0;
+    h.critical_failure  = false;
+    h.num_processes     = 0;
     return h;
 }
 
 /// Return a nominal ShmFCState (connected, battery full).
 ShmFCState make_fc_ok() {
     ShmFCState fc{};
-    fc.timestamp_ns       = 1'000 * S;
-    fc.connected          = true;
-    fc.battery_remaining  = 80.0f;
-    fc.battery_voltage    = 16.0f;
-    fc.armed              = true;
+    fc.timestamp_ns      = 1'000 * S;
+    fc.connected         = true;
+    fc.battery_remaining = 80.0f;
+    fc.battery_voltage   = 16.0f;
+    fc.armed             = true;
     return fc;
 }
 
@@ -45,7 +46,7 @@ void add_process(ShmSystemHealth& h, const char* name, bool alive) {
         << "add_process() would overflow processes[]";
     auto& p = h.processes[h.num_processes];
     std::strncpy(p.name, name, sizeof(p.name) - 1);
-    p.alive = alive;
+    p.alive        = alive;
     p.last_seen_ns = h.timestamp_ns;
     ++h.num_processes;
 }
@@ -53,11 +54,11 @@ void add_process(ShmSystemHealth& h, const char* name, bool alive) {
 /// Default config for tests.
 FaultConfig default_cfg() {
     FaultConfig c;
-    c.pose_stale_timeout_ns        = 500 * MS;      // 500 ms
+    c.pose_stale_timeout_ns        = 500 * MS;  // 500 ms
     c.battery_warn_percent         = 20.0f;
     c.battery_crit_percent         = 10.0f;
-    c.fc_link_lost_timeout_ns      = 3 * S;          // 3 s
-    c.loiter_escalation_timeout_ns = 30 * S;          // 30 s
+    c.fc_link_lost_timeout_ns      = 3 * S;   // 3 s
+    c.loiter_escalation_timeout_ns = 30 * S;  // 30 s
     return c;
 }
 
@@ -68,9 +69,9 @@ FaultConfig default_cfg() {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, NominalReturnsNone) {
     FaultManager mgr(default_cfg());
-    auto health  = make_healthy();
-    auto fc      = make_fc_ok();
-    uint64_t now = 1'000 * S + 100 * MS;   // 100 ms after health ts
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S + 100 * MS;  // 100 ms after health ts
 
     auto result = mgr.evaluate(health, fc, now - 50 * MS, now);
 
@@ -84,10 +85,10 @@ TEST(FaultManagerTest, NominalReturnsNone) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, CriticalProcessDeath) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
+    auto         health     = make_healthy();
     health.critical_failure = true;
-    auto fc      = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto     fc             = make_fc_ok();
+    uint64_t now            = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -100,9 +101,9 @@ TEST(FaultManagerTest, CriticalProcessDeath) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, PoseStaleTriggersLoiter) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
 
     // Pose is 600 ms old — exceeds 500 ms threshold
     auto result = mgr.evaluate(health, fc, now - 600 * MS, now);
@@ -113,9 +114,9 @@ TEST(FaultManagerTest, PoseStaleTriggersLoiter) {
 
 TEST(FaultManagerTest, PoseNotStaleBelowTimeout) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
 
     // Pose is 400 ms old — below 500 ms threshold
     auto result = mgr.evaluate(health, fc, now - 400 * MS, now);
@@ -129,10 +130,10 @@ TEST(FaultManagerTest, PoseNotStaleBelowTimeout) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, BatteryLowTriggersRTL) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.battery_remaining = 15.0f;   // below 20% warn
-    uint64_t now = 1'000 * S;
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 15.0f;  // below 20% warn
+    uint64_t now         = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -146,10 +147,10 @@ TEST(FaultManagerTest, BatteryLowTriggersRTL) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, BatteryCriticalTriggersEmergencyLand) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.battery_remaining = 8.0f;   // below 10% crit
-    uint64_t now = 1'000 * S;
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 8.0f;  // below 10% crit
+    uint64_t now         = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -164,10 +165,10 @@ TEST(FaultManagerTest, BatteryCriticalTriggersEmergencyLand) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, ThermalWarningTriggersWarn) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
+    auto         health = make_healthy();
     health.thermal_zone = 2;
-    auto fc     = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto     fc         = make_fc_ok();
+    uint64_t now        = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -180,10 +181,10 @@ TEST(FaultManagerTest, ThermalWarningTriggersWarn) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, ThermalCriticalTriggersRTL) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
+    auto         health = make_healthy();
     health.thermal_zone = 3;
-    auto fc     = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto     fc         = make_fc_ok();
+    uint64_t now        = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -196,9 +197,9 @@ TEST(FaultManagerTest, ThermalCriticalTriggersRTL) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, PerceptionDeadTriggersWarn) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    add_process(health, "perception", false);   // dead
-    auto fc     = make_fc_ok();
+    auto         health = make_healthy();
+    add_process(health, "perception", false);  // dead
+    auto     fc  = make_fc_ok();
     uint64_t now = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
@@ -209,9 +210,9 @@ TEST(FaultManagerTest, PerceptionDeadTriggersWarn) {
 
 TEST(FaultManagerTest, PerceptionAliveNoFault) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    add_process(health, "perception", true);   // alive
-    auto fc     = make_fc_ok();
+    auto         health = make_healthy();
+    add_process(health, "perception", true);  // alive
+    auto     fc  = make_fc_ok();
     uint64_t now = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
@@ -225,11 +226,11 @@ TEST(FaultManagerTest, PerceptionAliveNoFault) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, FCLinkLostTriggersLoiter) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.connected     = false;
-    fc.timestamp_ns  = 1'000 * S;
-    uint64_t now     = 1'000 * S + 4 * S;   // 4 s with no FC → exceeds 3 s
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    fc.connected        = false;
+    fc.timestamp_ns     = 1'000 * S;
+    uint64_t now        = 1'000 * S + 4 * S;  // 4 s with no FC → exceeds 3 s
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -239,11 +240,11 @@ TEST(FaultManagerTest, FCLinkLostTriggersLoiter) {
 
 TEST(FaultManagerTest, FCLinkLostBriefNoFault) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.connected     = false;
-    fc.timestamp_ns  = 1'000 * S;
-    uint64_t now     = 1'000 * S + 2 * S;   // only 2 s — below 3 s threshold
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    fc.connected        = false;
+    fc.timestamp_ns     = 1'000 * S;
+    uint64_t now        = 1'000 * S + 2 * S;  // only 2 s — below 3 s threshold
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -256,19 +257,19 @@ TEST(FaultManagerTest, FCLinkLostBriefNoFault) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, EscalationOnlyNeverDowngrades) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
 
     // First: battery low → RTL
     fc.battery_remaining = 15.0f;
-    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now);
+    auto r1              = mgr.evaluate(health, fc, now - 10 * MS, now);
     EXPECT_EQ(r1.recommended_action, FaultAction::RTL);
     EXPECT_EQ(mgr.high_water_mark(), FaultAction::RTL);
 
     // Second: battery recovers (hypothetical) — should stay RTL
     fc.battery_remaining = 80.0f;
-    auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S);
+    auto r2              = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S);
     EXPECT_EQ(r2.recommended_action, FaultAction::RTL);
     EXPECT_EQ(mgr.high_water_mark(), FaultAction::RTL);
 }
@@ -277,17 +278,17 @@ TEST(FaultManagerTest, EscalationOnlyNeverDowngrades) {
 // Loiter timeout escalation → RTL after 30 s
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, LoiterEscalatesToRTLAfterTimeout) {
-    FaultConfig cfg = default_cfg();
-    cfg.loiter_escalation_timeout_ns = 5 * S;   // 5 s for test speed
+    FaultConfig cfg                  = default_cfg();
+    cfg.loiter_escalation_timeout_ns = 5 * S;  // 5 s for test speed
     FaultManager mgr(cfg);
 
-    auto health = make_healthy();
-    health.critical_failure = true;   // → LOITER
-    auto fc     = make_fc_ok();
+    auto health             = make_healthy();
+    health.critical_failure = true;  // → LOITER
+    auto fc                 = make_fc_ok();
 
     // t=0: LOITER starts
     uint64_t t0 = 1'000 * S;
-    auto r1 = mgr.evaluate(health, fc, t0 - 10 * MS, t0);
+    auto     r1 = mgr.evaluate(health, fc, t0 - 10 * MS, t0);
     EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
 
     // t=3s: still LOITER
@@ -304,18 +305,18 @@ TEST(FaultManagerTest, LoiterEscalatesToRTLAfterTimeout) {
 // LOITER cause cleared but high-water mark keeps LOITER → RTL after timeout
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, LoiterCauseClearedStillEscalatesViaHighWaterMark) {
-    FaultConfig cfg = default_cfg();
+    FaultConfig cfg                  = default_cfg();
     cfg.loiter_escalation_timeout_ns = 5 * S;
     FaultManager mgr(cfg);
 
-    auto health_fault = make_healthy();
-    health_fault.critical_failure = true;   // → LOITER
-    auto health_ok = make_healthy();        // nominal
-    auto fc = make_fc_ok();
+    auto health_fault             = make_healthy();
+    health_fault.critical_failure = true;            // → LOITER
+    auto health_ok                = make_healthy();  // nominal
+    auto fc                       = make_fc_ok();
 
     // t=0: LOITER starts (cause active)
     uint64_t t0 = 1'000 * S;
-    auto r1 = mgr.evaluate(health_fault, fc, t0 - 10 * MS, t0);
+    auto     r1 = mgr.evaluate(health_fault, fc, t0 - 10 * MS, t0);
     EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
 
     // t=2s: cause clears — high-water mark should keep LOITER
@@ -335,10 +336,10 @@ TEST(FaultManagerTest, LoiterCauseClearedStillEscalatesViaHighWaterMark) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, ResetClearsHighWaterMark) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.battery_remaining = 15.0f;   // → RTL
-    uint64_t now = 1'000 * S;
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 15.0f;  // → RTL
+    uint64_t now         = 1'000 * S;
 
     mgr.evaluate(health, fc, now - 10 * MS, now);
     EXPECT_EQ(mgr.high_water_mark(), FaultAction::RTL);
@@ -348,7 +349,7 @@ TEST(FaultManagerTest, ResetClearsHighWaterMark) {
 
     // After reset, nominal input → NONE
     fc.battery_remaining = 80.0f;
-    auto result = mgr.evaluate(health, fc, now + 1 * S - 10 * MS, now + 1 * S);
+    auto result          = mgr.evaluate(health, fc, now + 1 * S - 10 * MS, now + 1 * S);
     EXPECT_EQ(result.recommended_action, FaultAction::NONE);
 }
 
@@ -357,12 +358,12 @@ TEST(FaultManagerTest, ResetClearsHighWaterMark) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, MultipleFaultsHighestActionWins) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    health.critical_failure = true;           // → LOITER
-    health.thermal_zone = 3;                  // → RTL
-    auto fc = make_fc_ok();
-    fc.battery_remaining = 8.0f;              // → EMERGENCY_LAND
-    uint64_t now = 1'000 * S;
+    auto         health     = make_healthy();
+    health.critical_failure = true;  // → LOITER
+    health.thermal_zone     = 3;     // → RTL
+    auto fc                 = make_fc_ok();
+    fc.battery_remaining    = 8.0f;  // → EMERGENCY_LAND
+    uint64_t now            = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -380,10 +381,10 @@ TEST(FaultManagerTest, MultipleFaultsHighestActionWins) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, BatteryCritOverridesBatteryLow) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.battery_remaining = 5.0f;   // well below both thresholds
-    uint64_t now = 1'000 * S;
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 5.0f;  // well below both thresholds
+    uint64_t now         = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -399,9 +400,9 @@ TEST(FaultManagerTest, BatteryCritOverridesBatteryLow) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, PoseTimestampZeroIsNotStale) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    uint64_t now = 1'000 * S;
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
 
     // pose_timestamp_ns = 0 → skip staleness check
     auto result = mgr.evaluate(health, fc, 0, now);
@@ -415,10 +416,10 @@ TEST(FaultManagerTest, PoseTimestampZeroIsNotStale) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, BatteryRemainingZeroNoFalseAlarm) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.battery_remaining = 0.0f;   // not yet read from FC
-    uint64_t now = 1'000 * S;
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 0.0f;  // not yet read from FC
+    uint64_t now         = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
@@ -443,9 +444,9 @@ TEST(FaultManagerTest, FaultActionNames) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, UntrackedProcessAssumedAlive) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
+    auto         health = make_healthy();
     // No processes registered — perception not tracked
-    auto fc     = make_fc_ok();
+    auto     fc  = make_fc_ok();
     uint64_t now = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
@@ -458,11 +459,11 @@ TEST(FaultManagerTest, UntrackedProcessAssumedAlive) {
 // ═══════════════════════════════════════════════════════════
 TEST(FaultManagerTest, FCDisconnectedNoTimestampNoFault) {
     FaultManager mgr(default_cfg());
-    auto health = make_healthy();
-    auto fc     = make_fc_ok();
-    fc.connected    = false;
-    fc.timestamp_ns = 0;   // never received
-    uint64_t now    = 1'000 * S;
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    fc.connected        = false;
+    fc.timestamp_ns     = 0;  // never received
+    uint64_t now        = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 

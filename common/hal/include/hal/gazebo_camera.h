@@ -17,9 +17,6 @@
 
 #include "hal/icamera.h"
 
-#include <gz/transport/Node.hh>
-#include <gz/msgs/image.pb.h>
-
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -29,6 +26,8 @@
 #include <string>
 #include <vector>
 
+#include <gz/msgs/image.pb.h>
+#include <gz/transport/Node.hh>
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -42,16 +41,15 @@ class GazeboCameraBackend : public ICamera {
 public:
     /// @param gz_topic  Gazebo transport topic to subscribe to
     ///                  (e.g. "/camera", "/stereo_left").
-    explicit GazeboCameraBackend(std::string gz_topic)
-        : gz_topic_(std::move(gz_topic)) {}
+    explicit GazeboCameraBackend(std::string gz_topic) : gz_topic_(std::move(gz_topic)) {}
 
     ~GazeboCameraBackend() override { close(); }
 
     // Non-copyable, non-movable (owns gz::transport::Node)
-    GazeboCameraBackend(const GazeboCameraBackend&) = delete;
+    GazeboCameraBackend(const GazeboCameraBackend&)            = delete;
     GazeboCameraBackend& operator=(const GazeboCameraBackend&) = delete;
-    GazeboCameraBackend(GazeboCameraBackend&&) = delete;
-    GazeboCameraBackend& operator=(GazeboCameraBackend&&) = delete;
+    GazeboCameraBackend(GazeboCameraBackend&&)                 = delete;
+    GazeboCameraBackend& operator=(GazeboCameraBackend&&)      = delete;
 
     // ── ICamera interface ──────────────────────────────────
 
@@ -62,12 +60,12 @@ public:
             return false;
         }
 
-        width_    = width;
-        height_   = height;
-        fps_      = fps;
-        channels_ = 3;  // Default RGB; adjusted on first frame
-        stride_   = width_ * channels_;
-        sequence_ = 0;
+        width_       = width;
+        height_      = height;
+        fps_         = fps;
+        channels_    = 3;  // Default RGB; adjusted on first frame
+        stride_      = width_ * channels_;
+        sequence_    = 0;
         frame_ready_ = false;
 
         // Pre-allocate double buffers (RGB assumed)
@@ -76,18 +74,16 @@ public:
         front_buffer_.resize(buf_size, 0);
 
         // Subscribe to the Gazebo image topic
-        bool subscribed = node_.Subscribe(gz_topic_,
-            &GazeboCameraBackend::on_image, this);
+        bool subscribed = node_.Subscribe(gz_topic_, &GazeboCameraBackend::on_image, this);
 
         if (!subscribed) {
-            spdlog::error("[GazeboCameraBackend] Failed to subscribe to '{}'",
-                          gz_topic_);
+            spdlog::error("[GazeboCameraBackend] Failed to subscribe to '{}'", gz_topic_);
             return false;
         }
 
         open_ = true;
-        spdlog::info("[GazeboCameraBackend] Subscribed to '{}' (expecting {}x{}@{}Hz)",
-                     gz_topic_, width_, height_, fps_);
+        spdlog::info("[GazeboCameraBackend] Subscribed to '{}' (expecting {}x{}@{}Hz)", gz_topic_,
+                     width_, height_, fps_);
         return true;
     }
 
@@ -96,7 +92,7 @@ public:
         if (!open_) return;
 
         node_.Unsubscribe(gz_topic_);
-        open_ = false;
+        open_        = false;
         frame_ready_ = false;
 
         // Wake any thread blocked in capture()
@@ -107,14 +103,13 @@ public:
 
     CapturedFrame capture() override {
         std::unique_lock<std::mutex> lock(mtx_);
-        CapturedFrame frame;
+        CapturedFrame                frame;
         if (!open_) return frame;
 
         // Wait for a frame (with timeout)
         constexpr auto kTimeout = std::chrono::seconds(2);
         if (!cv_.wait_for(lock, kTimeout, [this] { return frame_ready_ || !open_; })) {
-            spdlog::warn("[GazeboCameraBackend] capture() timed out on '{}'",
-                         gz_topic_);
+            spdlog::warn("[GazeboCameraBackend] capture() timed out on '{}'", gz_topic_);
             return frame;
         }
 
@@ -142,9 +137,7 @@ public:
         return open_;
     }
 
-    std::string name() const override {
-        return "GazeboCameraBackend(" + gz_topic_ + ")";
-    }
+    std::string name() const override { return "GazeboCameraBackend(" + gz_topic_ + ")"; }
 
 private:
     // ── gz-transport callback ──────────────────────────────
@@ -154,7 +147,7 @@ private:
 
         uint32_t msg_w  = msg.width();
         uint32_t msg_h  = msg.height();
-        auto pf         = msg.pixel_format_type();
+        auto     pf     = msg.pixel_format_type();
         uint32_t src_ch = pixel_format_channels(pf);
         if (src_ch == 0) {
             spdlog::warn("[GazeboCameraBackend] Unsupported pixel format {} on '{}'",
@@ -196,16 +189,16 @@ private:
             convert_bgra_to_rgb(src, back_buffer_.data(), msg_w * msg_h);
         } else {
             // Fallback: just copy what fits
-            std::memcpy(back_buffer_.data(), src,
-                        std::min(dst_size, msg.data().size()));
+            std::memcpy(back_buffer_.data(), src, std::min(dst_size, msg.data().size()));
         }
 
-        last_width_       = msg_w;
-        last_height_      = msg_h;
-        last_channels_    = dst_ch;
-        last_timestamp_ns_ = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
+        last_width_    = msg_w;
+        last_height_   = msg_h;
+        last_channels_ = dst_ch;
+        last_timestamp_ns_ =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
 
         frame_ready_ = true;
         cv_.notify_one();
@@ -216,18 +209,16 @@ private:
     /// Return number of bytes per pixel for supported formats (0 = unsupported).
     static uint32_t pixel_format_channels(gz::msgs::PixelFormatType pf) {
         switch (pf) {
-            case gz::msgs::L_INT8:     return 1;
-            case gz::msgs::RGB_INT8:   return 3;
-            case gz::msgs::BGR_INT8:   return 3;
-            case gz::msgs::RGBA_INT8:  return 4;
-            case gz::msgs::BGRA_INT8:  return 4;
-            default:                   return 0;  // 16/32-bit not supported
+            case gz::msgs::L_INT8: return 1;
+            case gz::msgs::RGB_INT8: return 3;
+            case gz::msgs::BGR_INT8: return 3;
+            case gz::msgs::RGBA_INT8: return 4;
+            case gz::msgs::BGRA_INT8: return 4;
+            default: return 0;  // 16/32-bit not supported
         }
     }
 
-    static bool is_bgr_format(gz::msgs::PixelFormatType pf) {
-        return pf == gz::msgs::BGR_INT8;
-    }
+    static bool is_bgr_format(gz::msgs::PixelFormatType pf) { return pf == gz::msgs::BGR_INT8; }
 
     static void convert_bgr_to_rgb(const uint8_t* src, uint8_t* dst, size_t pixel_count) {
         for (size_t i = 0; i < pixel_count; ++i) {
@@ -254,11 +245,11 @@ private:
     }
 
     // ── Members ────────────────────────────────────────────
-    std::string gz_topic_;              ///< Gazebo transport topic name
-    gz::transport::Node node_;          ///< Gazebo transport node
+    std::string         gz_topic_;  ///< Gazebo transport topic name
+    gz::transport::Node node_;      ///< Gazebo transport node
 
-    mutable std::mutex mtx_;            ///< Guards all mutable state
-    std::condition_variable cv_;        ///< Signals new frame available
+    mutable std::mutex      mtx_;  ///< Guards all mutable state
+    std::condition_variable cv_;   ///< Signals new frame available
 
     bool     open_{false};
     uint32_t width_{0};
@@ -268,9 +259,9 @@ private:
     uint32_t stride_{0};
 
     // Double-buffer scheme
-    std::vector<uint8_t> back_buffer_;  ///< Written by gz callback
-    std::vector<uint8_t> front_buffer_; ///< Read by capture()
-    bool     frame_ready_{false};       ///< Back buffer has new data
+    std::vector<uint8_t> back_buffer_;         ///< Written by gz callback
+    std::vector<uint8_t> front_buffer_;        ///< Read by capture()
+    bool                 frame_ready_{false};  ///< Back buffer has new data
 
     // Last received frame metadata
     uint32_t last_width_{0};

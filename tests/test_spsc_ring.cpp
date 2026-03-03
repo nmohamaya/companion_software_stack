@@ -1,9 +1,11 @@
 // tests/test_spsc_ring.cpp
 // Unit tests for SPSCRing lock-free single-producer single-consumer ring buffer.
-#include <gtest/gtest.h>
 #include "util/spsc_ring.h"
-#include <thread>
+
 #include <atomic>
+#include <thread>
+
+#include <gtest/gtest.h>
 
 using drone::SPSCRing;
 
@@ -29,7 +31,7 @@ TEST(SPSCRingTest, PushAndPop) {
 
 TEST(SPSCRingTest, PopEmptyReturnsNullopt) {
     SPSCRing<int, 4> ring;
-    auto v = ring.try_pop();
+    auto             v = ring.try_pop();
     EXPECT_FALSE(v.has_value());
 }
 
@@ -72,8 +74,8 @@ TEST(SPSCRingTest, Available) {
 
 TEST(SPSCRingTest, ConcurrentProducerConsumer) {
     SPSCRing<uint64_t, 1024> ring;
-    constexpr uint64_t COUNT = 100000;
-    std::atomic<bool> done{false};
+    constexpr uint64_t       COUNT = 100000;
+    std::atomic<bool>        done{false};
 
     std::thread producer([&]() {
         for (uint64_t i = 0; i < COUNT; ++i) {
@@ -108,9 +110,9 @@ TEST(SPSCRingTest, ConcurrentProducerConsumer) {
 
 // Test with struct type
 struct TestStruct {
-    int id;
+    int    id;
     double value;
-    char tag[8];
+    char   tag[8];
 };
 
 TEST(SPSCRingTest, StructPayload) {

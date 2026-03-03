@@ -11,20 +11,20 @@
 // Build:
 //   cmake -B build                          → runs category 1 only
 //   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1–5
-#include <gtest/gtest.h>
-
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_message_bus.h"
 #include "ipc/shm_types.h"
-#include "ipc/message_bus_factory.h"
+
+#include <gtest/gtest.h>
 
 #ifdef HAVE_ZENOH
+#include "ipc/iservice_channel.h"
 #include "ipc/zenoh_message_bus.h"
 #include "ipc/zenoh_publisher.h"
-#include "ipc/zenoh_subscriber.h"
-#include "ipc/zenoh_session.h"
 #include "ipc/zenoh_service_client.h"
 #include "ipc/zenoh_service_server.h"
-#include "ipc/iservice_channel.h"
+#include "ipc/zenoh_session.h"
+#include "ipc/zenoh_subscriber.h"
 #endif
 
 #include <algorithm>
@@ -33,6 +33,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+
 #include <unistd.h>
 
 using namespace drone::ipc;
@@ -44,63 +45,51 @@ using namespace drone::ipc;
 #ifdef HAVE_ZENOH
 
 TEST(ZenohTopicMapping, VideoMissionCam) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/drone_mission_cam"),
-              "drone/video/frame");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/drone_mission_cam"), "drone/video/frame");
 }
 
 TEST(ZenohTopicMapping, VideoStereoCam) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/drone_stereo_cam"),
-              "drone/video/stereo_frame");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/drone_stereo_cam"), "drone/video/stereo_frame");
 }
 
 TEST(ZenohTopicMapping, DetectedObjects) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/detected_objects"),
-              "drone/perception/detections");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/detected_objects"), "drone/perception/detections");
 }
 
 TEST(ZenohTopicMapping, SlamPose) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/slam_pose"),
-              "drone/slam/pose");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/slam_pose"), "drone/slam/pose");
 }
 
 TEST(ZenohTopicMapping, MissionStatus) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/mission_status"),
-              "drone/mission/status");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/mission_status"), "drone/mission/status");
 }
 
 TEST(ZenohTopicMapping, TrajectoryCmd) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/trajectory_cmd"),
-              "drone/mission/trajectory");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/trajectory_cmd"), "drone/mission/trajectory");
 }
 
 TEST(ZenohTopicMapping, PayloadCommands) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/payload_commands"),
-              "drone/mission/payload_command");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/payload_commands"), "drone/mission/payload_command");
 }
 
 TEST(ZenohTopicMapping, FCCommands) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/fc_commands"),
-              "drone/comms/fc_command");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/fc_commands"), "drone/comms/fc_command");
 }
 
 TEST(ZenohTopicMapping, FCState) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/fc_state"),
-              "drone/comms/fc_state");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/fc_state"), "drone/comms/fc_state");
 }
 
 TEST(ZenohTopicMapping, GCSCommands) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/gcs_commands"),
-              "drone/comms/gcs_command");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/gcs_commands"), "drone/comms/gcs_command");
 }
 
 TEST(ZenohTopicMapping, PayloadStatus) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/payload_status"),
-              "drone/payload/status");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/payload_status"), "drone/payload/status");
 }
 
 TEST(ZenohTopicMapping, SystemHealth) {
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/system_health"),
-              "drone/monitor/health");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/system_health"), "drone/monitor/health");
 }
 
 TEST(ZenohTopicMapping, AllTwelveSegmentsMapped) {
@@ -121,14 +110,12 @@ TEST(ZenohTopicMapping, AllTwelveSegmentsMapped) {
 
 TEST(ZenohTopicMapping, PassthroughZenohKeyExpr) {
     // Already a Zenoh key expression — no leading '/'
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("drone/test/data"),
-              "drone/test/data");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("drone/test/data"), "drone/test/data");
 }
 
 TEST(ZenohTopicMapping, FallbackUnmappedShmName) {
     // Unknown SHM name — fallback: strip '/' and replace '_' with '/'
-    EXPECT_EQ(ZenohMessageBus::to_key_expr("/some_unknown_topic"),
-              "some/unknown/topic");
+    EXPECT_EQ(ZenohMessageBus::to_key_expr("/some_unknown_topic"), "some/unknown/topic");
 }
 
 #endif  // HAVE_ZENOH
@@ -153,27 +140,24 @@ TEST(MessageBusFactory, ZenohRequestWithoutBuild) {
     // create a ZenohMessageBus.
     auto bus = create_message_bus("zenoh");
 #ifdef HAVE_ZENOH
-    EXPECT_TRUE(
-        std::holds_alternative<std::unique_ptr<ZenohMessageBus>>(bus));
+    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ZenohMessageBus>>(bus));
 #else
-    EXPECT_TRUE(
-        std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
+    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
 #endif
 }
 
 TEST(MessageBusFactory, BusAdvertiseViaVariant) {
     auto bus = create_message_bus("shm");
-    auto pub = bus_advertise<ShmPose>(bus, "/test_factory_pub_" +
-                                     std::to_string(getpid()));
+    auto pub = bus_advertise<ShmPose>(bus, "/test_factory_pub_" + std::to_string(getpid()));
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 }
 
 TEST(MessageBusFactory, BusSubscribeViaVariant) {
     // Create publisher first so subscriber can connect
-    auto bus = create_message_bus("shm");
+    auto bus   = create_message_bus("shm");
     auto topic = "/test_factory_sub_" + std::to_string(getpid());
-    auto pub = bus_advertise<ShmPose>(bus, topic);
+    auto pub   = bus_advertise<ShmPose>(bus, topic);
     ASSERT_NE(pub, nullptr);
 
     auto sub = bus_subscribe<ShmPose>(bus, topic, 5, 50);
@@ -190,8 +174,8 @@ TEST(MessageBusFactory, BusSubscribeViaVariant) {
 // Small trivially-copyable test payload
 struct ZenohTestPayload {
     uint64_t id{0};
-    float value{0.0f};
-    char tag[16]{};
+    float    value{0.0f};
+    char     tag[16]{};
 };
 
 TEST(ZenohSession, Opens) {
@@ -224,12 +208,11 @@ TEST(ZenohSubscriber, Constructs) {
 // ---------------------------------------------------------------------------
 
 /// Poll subscriber until a message is received or timeout is reached.
-template <typename T>
-bool poll_receive(drone::ipc::ZenohSubscriber<T>& sub, T& out,
-                  uint64_t* ts = nullptr,
+template<typename T>
+bool poll_receive(drone::ipc::ZenohSubscriber<T>& sub, T& out, uint64_t* ts = nullptr,
                   std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
     constexpr auto kInterval = std::chrono::milliseconds(5);
-    auto deadline = std::chrono::steady_clock::now() + timeout;
+    auto           deadline  = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         if (sub.receive(out, ts)) return true;
         std::this_thread::sleep_for(kInterval);
@@ -240,19 +223,16 @@ bool poll_receive(drone::ipc::ZenohSubscriber<T>& sub, T& out,
 /// Publish (with retries) until the subscriber receives a message.
 /// Handles the Zenoh discovery window during which messages are dropped
 /// because the publisher and subscriber have not yet matched.
-template <typename T>
-bool publish_until_received(
-        drone::ipc::ZenohPublisher<T>& pub, const T& msg,
-        drone::ipc::ZenohSubscriber<T>& sub, T& out,
-        uint64_t* ts = nullptr,
-        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+template<typename T>
+bool publish_until_received(drone::ipc::ZenohPublisher<T>& pub, const T& msg,
+                            drone::ipc::ZenohSubscriber<T>& sub, T& out, uint64_t* ts = nullptr,
+                            std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
     constexpr auto kPollInterval  = std::chrono::milliseconds(5);
     constexpr auto kRetryInterval = std::chrono::milliseconds(50);
-    auto deadline = std::chrono::steady_clock::now() + timeout;
+    auto           deadline       = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         pub.publish(msg);
-        auto batch_end = std::min(
-            std::chrono::steady_clock::now() + kRetryInterval, deadline);
+        auto batch_end = std::min(std::chrono::steady_clock::now() + kRetryInterval, deadline);
         while (std::chrono::steady_clock::now() < batch_end) {
             if (sub.receive(out, ts)) return true;
             std::this_thread::sleep_for(kPollInterval);
@@ -266,14 +246,14 @@ bool publish_until_received(
 // ---------------------------------------------------------------------------
 
 TEST(ZenohPubSub, SmallMessageRoundTrip) {
-    ZenohPublisher<ZenohTestPayload> pub("drone/test/small_rt");
+    ZenohPublisher<ZenohTestPayload>  pub("drone/test/small_rt");
     ZenohSubscriber<ZenohTestPayload> sub("drone/test/small_rt");
 
     ZenohTestPayload sent{42, 3.14f, {}};
     std::strncpy(sent.tag, "hello", sizeof(sent.tag));
 
     ZenohTestPayload received;
-    uint64_t ts = 0;
+    uint64_t         ts = 0;
     ASSERT_TRUE(publish_until_received(pub, sent, sub, received, &ts));
     EXPECT_EQ(received.id, 42u);
     EXPECT_FLOAT_EQ(received.value, 3.14f);
@@ -283,16 +263,16 @@ TEST(ZenohPubSub, SmallMessageRoundTrip) {
 }
 
 TEST(ZenohPubSub, ShmPoseRoundTrip) {
-    ZenohPublisher<ShmPose> pub("drone/test/pose_rt");
+    ZenohPublisher<ShmPose>  pub("drone/test/pose_rt");
     ZenohSubscriber<ShmPose> sub("drone/test/pose_rt");
 
     ShmPose sent{};
-    sent.timestamp_ns = 123456789;
+    sent.timestamp_ns   = 123456789;
     sent.translation[0] = 1.0;
     sent.translation[1] = 2.0;
     sent.translation[2] = 3.0;
-    sent.quaternion[0] = 1.0;  // w
-    sent.quality = 2;
+    sent.quaternion[0]  = 1.0;  // w
+    sent.quality        = 2;
 
     ShmPose received{};
     ASSERT_TRUE(publish_until_received(pub, sent, sub, received));
@@ -304,18 +284,18 @@ TEST(ZenohPubSub, ShmPoseRoundTrip) {
 }
 
 TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
-    ZenohPublisher<ShmVideoFrame> pub("drone/test/video_rt");
+    ZenohPublisher<ShmVideoFrame>  pub("drone/test/video_rt");
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/video_rt");
 
     // Heap-allocate — ShmVideoFrame is ~6 MB, too large for the stack.
-    auto sent = std::make_unique<ShmVideoFrame>();
-    sent->timestamp_ns = 999;
-    sent->width = 1920;
-    sent->height = 1080;
-    sent->channels = 3;
-    sent->sequence_number = 7;
-    sent->pixel_data[0] = 0xAA;
-    sent->pixel_data[1] = 0xBB;
+    auto sent                                      = std::make_unique<ShmVideoFrame>();
+    sent->timestamp_ns                             = 999;
+    sent->width                                    = 1920;
+    sent->height                                   = 1080;
+    sent->channels                                 = 3;
+    sent->sequence_number                          = 7;
+    sent->pixel_data[0]                            = 0xAA;
+    sent->pixel_data[1]                            = 0xBB;
     sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xFF;
 
     auto received = std::make_unique<ShmVideoFrame>();
@@ -330,9 +310,9 @@ TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
 }
 
 TEST(ZenohPubSub, MultipleTopics) {
-    ZenohPublisher<ZenohTestPayload> pub1("drone/test/multi/a");
-    ZenohPublisher<ZenohTestPayload> pub2("drone/test/multi/b");
-    ZenohPublisher<ZenohTestPayload> pub3("drone/test/multi/c");
+    ZenohPublisher<ZenohTestPayload>  pub1("drone/test/multi/a");
+    ZenohPublisher<ZenohTestPayload>  pub2("drone/test/multi/b");
+    ZenohPublisher<ZenohTestPayload>  pub3("drone/test/multi/c");
     ZenohSubscriber<ZenohTestPayload> sub1("drone/test/multi/a");
     ZenohSubscriber<ZenohTestPayload> sub2("drone/test/multi/b");
     ZenohSubscriber<ZenohTestPayload> sub3("drone/test/multi/c");
@@ -360,13 +340,13 @@ TEST(ZenohPubSub, NoData) {
 }
 
 TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
-    ZenohPublisher<ZenohTestPayload> pub("drone/test/seq");
+    ZenohPublisher<ZenohTestPayload>  pub("drone/test/seq");
     ZenohSubscriber<ZenohTestPayload> sub("drone/test/seq");
 
     // First message — handles discovery latency via retry loop.
     ZenohTestPayload m1{10, 0.0f, {}};
     ZenohTestPayload r1;
-    uint64_t ts1 = 0;
+    uint64_t         ts1 = 0;
     ASSERT_TRUE(publish_until_received(pub, m1, sub, r1, &ts1));
     EXPECT_EQ(r1.id, 10u);
 
@@ -374,7 +354,7 @@ TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
     ZenohTestPayload m2{20, 0.0f, {}};
     pub.publish(m2);
     ZenohTestPayload r2;
-    uint64_t ts2 = 0;
+    uint64_t         ts2 = 0;
     ASSERT_TRUE(poll_receive(sub, r2, &ts2));
     EXPECT_EQ(r2.id, 20u);
     EXPECT_GE(ts2, ts1);
@@ -382,7 +362,7 @@ TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
 
 TEST(ZenohMessageBus, AdvertiseCreatesPublisher) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmPose>("/slam_pose");
+    auto            pub = bus.advertise<ShmPose>("/slam_pose");
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
     // Should have mapped to Zenoh key expression
@@ -391,38 +371,39 @@ TEST(ZenohMessageBus, AdvertiseCreatesPublisher) {
 
 TEST(ZenohMessageBus, SubscribeCreatesSubscriber) {
     ZenohMessageBus bus;
-    auto sub = bus.subscribe<ShmPose>("/slam_pose");
+    auto            sub = bus.subscribe<ShmPose>("/slam_pose");
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
 
 TEST(ZenohMessageBus, SubscribeLazyCreatesSubscriber) {
     ZenohMessageBus bus;
-    auto sub = bus.subscribe_lazy<ShmPose>("/slam_pose");
+    auto            sub = bus.subscribe_lazy<ShmPose>("/slam_pose");
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
 
 TEST(ZenohMessageBus, RoundTripViaFactory) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ZenohTestPayload>("/detected_objects");
-    auto sub = bus.subscribe<ZenohTestPayload>("/detected_objects");
+    auto            pub = bus.advertise<ZenohTestPayload>("/detected_objects");
+    auto            sub = bus.subscribe<ZenohTestPayload>("/detected_objects");
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
     ZenohTestPayload sent{99, 2.71f, {}};
     ZenohTestPayload received;
     // Manual publish-and-poll loop (IPublisher/ISubscriber interfaces).
-    bool ok = false;
-    auto deadline = std::chrono::steady_clock::now()
-                  + std::chrono::milliseconds(5000);
+    bool ok       = false;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
     while (std::chrono::steady_clock::now() < deadline) {
         pub->publish(sent);
-        auto batch = std::min(
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
-            deadline);
+        auto batch = std::min(std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+                              deadline);
         while (std::chrono::steady_clock::now() < batch) {
-            if (sub->receive(received)) { ok = true; break; }
+            if (sub->receive(received)) {
+                ok = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         if (ok) break;
@@ -443,18 +424,15 @@ TEST(ZenohMessageBus, RoundTripViaFactory) {
 // Interface-level polling helper (works with IPublisher/ISubscriber)
 // ---------------------------------------------------------------------------
 
-template <typename T>
+template<typename T>
 static bool publish_until_received_iface(
-    IPublisher<T>& pub, const T& msg,
-    ISubscriber<T>& sub, T& out,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
-{
+    IPublisher<T>& pub, const T& msg, ISubscriber<T>& sub, T& out,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
     auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         pub.publish(msg);
-        auto batch = std::min(
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
-            deadline);
+        auto batch = std::min(std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+                              deadline);
         while (std::chrono::steady_clock::now() < batch) {
             if (sub.receive(out)) return true;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -467,21 +445,21 @@ static bool publish_until_received_iface(
 
 TEST(ZenohMigration, Pose_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmPose>(shm_names::SLAM_POSE);
-    auto sub = bus.subscribe<ShmPose>(shm_names::SLAM_POSE);
+    auto            pub = bus.advertise<ShmPose>(shm_names::SLAM_POSE);
+    auto            sub = bus.subscribe<ShmPose>(shm_names::SLAM_POSE);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(pub->topic_name(), "drone/slam/pose");
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 
     ShmPose sent{};
-    sent.timestamp_ns = 100;
+    sent.timestamp_ns   = 100;
     sent.translation[0] = 10.0;
     sent.translation[1] = 20.0;
     sent.translation[2] = 30.0;
-    sent.quaternion[0] = 1.0;
-    sent.velocity[0] = 1.5;
-    sent.quality = 2;
+    sent.quaternion[0]  = 1.0;
+    sent.velocity[0]    = 1.5;
+    sent.quality        = 2;
 
     ShmPose received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -498,22 +476,22 @@ TEST(ZenohMigration, Pose_RoundTrip) {
 
 TEST(ZenohMigration, FCState_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmFCState>(shm_names::FC_STATE);
-    auto sub = bus.subscribe<ShmFCState>(shm_names::FC_STATE);
+    auto            pub = bus.advertise<ShmFCState>(shm_names::FC_STATE);
+    auto            sub = bus.subscribe<ShmFCState>(shm_names::FC_STATE);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(pub->topic_name(), "drone/comms/fc_state");
 
     ShmFCState sent{};
-    sent.timestamp_ns = 200;
-    sent.gps_lat = 37.7749f;
-    sent.gps_lon = -122.4194f;
-    sent.battery_voltage = 11.8f;
-    sent.battery_remaining = 72.0f;
-    sent.armed = true;
-    sent.connected = true;
+    sent.timestamp_ns       = 200;
+    sent.gps_lat            = 37.7749f;
+    sent.gps_lon            = -122.4194f;
+    sent.battery_voltage    = 11.8f;
+    sent.battery_remaining  = 72.0f;
+    sent.armed              = true;
+    sent.connected          = true;
     sent.satellites_visible = 12;
-    sent.flight_mode = 6;
+    sent.flight_mode        = 6;
 
     ShmFCState received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -532,16 +510,16 @@ TEST(ZenohMigration, FCState_RoundTrip) {
 
 TEST(ZenohMigration, FCCommand_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmFCCommand>(shm_names::FC_COMMANDS);
-    auto sub = bus.subscribe<ShmFCCommand>(shm_names::FC_COMMANDS);
+    auto            pub = bus.advertise<ShmFCCommand>(shm_names::FC_COMMANDS);
+    auto            sub = bus.subscribe<ShmFCCommand>(shm_names::FC_COMMANDS);
     EXPECT_EQ(pub->topic_name(), "drone/comms/fc_command");
 
     ShmFCCommand sent{};
     sent.timestamp_ns = 300;
-    sent.command = FCCommandType::TAKEOFF;
-    sent.param1 = 5.0f;
-    sent.sequence_id = 42;
-    sent.valid = true;
+    sent.command      = FCCommandType::TAKEOFF;
+    sent.param1       = 5.0f;
+    sent.sequence_id  = 42;
+    sent.valid        = true;
 
     ShmFCCommand received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -556,21 +534,21 @@ TEST(ZenohMigration, FCCommand_RoundTrip) {
 
 TEST(ZenohMigration, MissionStatus_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmMissionStatus>(shm_names::MISSION_STATUS);
-    auto sub = bus.subscribe<ShmMissionStatus>(shm_names::MISSION_STATUS);
+    auto            pub = bus.advertise<ShmMissionStatus>(shm_names::MISSION_STATUS);
+    auto            sub = bus.subscribe<ShmMissionStatus>(shm_names::MISSION_STATUS);
     EXPECT_EQ(pub->topic_name(), "drone/mission/status");
 
     ShmMissionStatus sent{};
-    sent.timestamp_ns = 400;
-    sent.state = MissionState::NAVIGATE;
+    sent.timestamp_ns     = 400;
+    sent.state            = MissionState::NAVIGATE;
     sent.current_waypoint = 3;
-    sent.total_waypoints = 10;
+    sent.total_waypoints  = 10;
     sent.progress_percent = 30.0f;
-    sent.target_x = 100.0f;
-    sent.target_y = 200.0f;
-    sent.target_z = 50.0f;
-    sent.battery_percent = 85.0f;
-    sent.mission_active = true;
+    sent.target_x         = 100.0f;
+    sent.target_y         = 200.0f;
+    sent.target_z         = 50.0f;
+    sent.battery_percent  = 85.0f;
+    sent.mission_active   = true;
 
     ShmMissionStatus received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -587,22 +565,22 @@ TEST(ZenohMigration, MissionStatus_RoundTrip) {
 
 TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
-    auto sub = bus.subscribe<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
+    auto            pub = bus.advertise<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
+    auto            sub = bus.subscribe<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
     EXPECT_EQ(pub->topic_name(), "drone/mission/trajectory");
 
     ShmTrajectoryCmd sent{};
-    sent.timestamp_ns = 500;
-    sent.target_x = 10.0f;
-    sent.target_y = 20.0f;
-    sent.target_z = 5.0f;
-    sent.target_yaw = 1.57f;
-    sent.velocity_x = 2.0f;
-    sent.velocity_y = 0.0f;
-    sent.velocity_z = -0.5f;
-    sent.yaw_rate = 0.1f;
+    sent.timestamp_ns     = 500;
+    sent.target_x         = 10.0f;
+    sent.target_y         = 20.0f;
+    sent.target_z         = 5.0f;
+    sent.target_yaw       = 1.57f;
+    sent.velocity_x       = 2.0f;
+    sent.velocity_y       = 0.0f;
+    sent.velocity_z       = -0.5f;
+    sent.yaw_rate         = 0.1f;
     sent.coordinate_frame = 8;
-    sent.valid = true;
+    sent.valid            = true;
 
     ShmTrajectoryCmd received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -618,18 +596,18 @@ TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
 
 TEST(ZenohMigration, GCSCommand_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmGCSCommand>(shm_names::GCS_COMMANDS);
-    auto sub = bus.subscribe<ShmGCSCommand>(shm_names::GCS_COMMANDS);
+    auto            pub = bus.advertise<ShmGCSCommand>(shm_names::GCS_COMMANDS);
+    auto            sub = bus.subscribe<ShmGCSCommand>(shm_names::GCS_COMMANDS);
     EXPECT_EQ(pub->topic_name(), "drone/comms/gcs_command");
 
     ShmGCSCommand sent{};
     sent.timestamp_ns = 600;
-    sent.command = GCSCommandType::RTL;
-    sent.param1 = 0.0f;
-    sent.param2 = 0.0f;
-    sent.param3 = 0.0f;
-    sent.sequence_id = 7;
-    sent.valid = true;
+    sent.command      = GCSCommandType::RTL;
+    sent.param1       = 0.0f;
+    sent.param2       = 0.0f;
+    sent.param3       = 0.0f;
+    sent.sequence_id  = 7;
+    sent.valid        = true;
 
     ShmGCSCommand received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -643,22 +621,22 @@ TEST(ZenohMigration, GCSCommand_RoundTrip) {
 
 TEST(ZenohMigration, DetectedObjects_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmDetectedObjectList>(shm_names::DETECTED_OBJECTS);
-    auto sub = bus.subscribe<ShmDetectedObjectList>(shm_names::DETECTED_OBJECTS);
+    auto            pub = bus.advertise<ShmDetectedObjectList>(shm_names::DETECTED_OBJECTS);
+    auto            sub = bus.subscribe<ShmDetectedObjectList>(shm_names::DETECTED_OBJECTS);
     EXPECT_EQ(pub->topic_name(), "drone/perception/detections");
 
     ShmDetectedObjectList sent{};
-    sent.timestamp_ns = 700;
-    sent.frame_sequence = 42;
-    sent.num_objects = 2;
-    sent.objects[0].track_id = 1;
-    sent.objects[0].class_id = ObjectClass::PERSON;
+    sent.timestamp_ns          = 700;
+    sent.frame_sequence        = 42;
+    sent.num_objects           = 2;
+    sent.objects[0].track_id   = 1;
+    sent.objects[0].class_id   = ObjectClass::PERSON;
     sent.objects[0].confidence = 0.95f;
     sent.objects[0].position_x = 5.0f;
     sent.objects[0].position_y = 3.0f;
     sent.objects[0].position_z = 0.0f;
-    sent.objects[1].track_id = 2;
-    sent.objects[1].class_id = ObjectClass::VEHICLE_CAR;
+    sent.objects[1].track_id   = 2;
+    sent.objects[1].class_id   = ObjectClass::VEHICLE_CAR;
     sent.objects[1].confidence = 0.87f;
 
     ShmDetectedObjectList received{};
@@ -678,17 +656,17 @@ TEST(ZenohMigration, DetectedObjects_RoundTrip) {
 
 TEST(ZenohMigration, PayloadCommand_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmPayloadCommand>(shm_names::PAYLOAD_COMMANDS);
-    auto sub = bus.subscribe<ShmPayloadCommand>(shm_names::PAYLOAD_COMMANDS);
+    auto            pub = bus.advertise<ShmPayloadCommand>(shm_names::PAYLOAD_COMMANDS);
+    auto            sub = bus.subscribe<ShmPayloadCommand>(shm_names::PAYLOAD_COMMANDS);
     EXPECT_EQ(pub->topic_name(), "drone/mission/payload_command");
 
     ShmPayloadCommand sent{};
     sent.timestamp_ns = 800;
-    sent.action = PayloadAction::GIMBAL_POINT;
+    sent.action       = PayloadAction::GIMBAL_POINT;
     sent.gimbal_pitch = -30.0f;
-    sent.gimbal_yaw = 45.0f;
-    sent.sequence_id = 100;
-    sent.valid = true;
+    sent.gimbal_yaw   = 45.0f;
+    sent.sequence_id  = 100;
+    sent.valid        = true;
 
     ShmPayloadCommand received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -704,17 +682,17 @@ TEST(ZenohMigration, PayloadCommand_RoundTrip) {
 
 TEST(ZenohMigration, PayloadStatus_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmPayloadStatus>(shm_names::PAYLOAD_STATUS);
-    auto sub = bus.subscribe<ShmPayloadStatus>(shm_names::PAYLOAD_STATUS);
+    auto            pub = bus.advertise<ShmPayloadStatus>(shm_names::PAYLOAD_STATUS);
+    auto            sub = bus.subscribe<ShmPayloadStatus>(shm_names::PAYLOAD_STATUS);
     EXPECT_EQ(pub->topic_name(), "drone/payload/status");
 
     ShmPayloadStatus sent{};
-    sent.timestamp_ns = 900;
-    sent.gimbal_pitch = -15.0f;
-    sent.gimbal_yaw = 90.0f;
-    sent.images_captured = 42;
-    sent.recording_video = true;
-    sent.gimbal_stabilized = true;
+    sent.timestamp_ns       = 900;
+    sent.gimbal_pitch       = -15.0f;
+    sent.gimbal_yaw         = 90.0f;
+    sent.images_captured    = 42;
+    sent.recording_video    = true;
+    sent.gimbal_stabilized  = true;
     sent.num_plugins_active = 3;
 
     ShmPayloadStatus received{};
@@ -732,23 +710,23 @@ TEST(ZenohMigration, PayloadStatus_RoundTrip) {
 
 TEST(ZenohMigration, SystemHealth_RoundTrip) {
     ZenohMessageBus bus;
-    auto pub = bus.advertise<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
-    auto sub = bus.subscribe<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
+    auto            pub = bus.advertise<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
+    auto            sub = bus.subscribe<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
     EXPECT_EQ(pub->topic_name(), "drone/monitor/health");
 
     ShmSystemHealth sent{};
-    sent.timestamp_ns = 1000;
-    sent.cpu_usage_percent = 45.0f;
+    sent.timestamp_ns         = 1000;
+    sent.cpu_usage_percent    = 45.0f;
     sent.memory_usage_percent = 62.0f;
-    sent.disk_usage_percent = 38.0f;
-    sent.max_temp_c = 68.0f;
-    sent.gpu_temp_c = 55.0f;
-    sent.cpu_temp_c = 65.0f;
-    sent.total_healthy = 7;
-    sent.total_degraded = 0;
-    sent.total_dead = 0;
-    sent.power_watts = 12.5f;
-    sent.thermal_zone = 1;
+    sent.disk_usage_percent   = 38.0f;
+    sent.max_temp_c           = 68.0f;
+    sent.gpu_temp_c           = 55.0f;
+    sent.cpu_temp_c           = 65.0f;
+    sent.total_healthy        = 7;
+    sent.total_degraded       = 0;
+    sent.total_dead           = 0;
+    sent.power_watts          = 12.5f;
+    sent.thermal_zone         = 1;
 
     ShmSystemHealth received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
@@ -780,16 +758,26 @@ TEST(ZenohMigration, MultiChannel_Simultaneous) {
     auto health_sub = bus.subscribe<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
     auto status_sub = bus.subscribe<ShmMissionStatus>(shm_names::MISSION_STATUS);
 
-    ShmPose pose_s{};          pose_s.timestamp_ns = 1;  pose_s.quality = 2;
-    ShmFCState fc_s{};         fc_s.timestamp_ns = 2;    fc_s.armed = true;
-    ShmTrajectoryCmd traj_s{}; traj_s.timestamp_ns = 3;  traj_s.valid = true;
-    ShmSystemHealth hlth_s{};  hlth_s.timestamp_ns = 4;  hlth_s.total_healthy = 7;
-    ShmMissionStatus ms_s{};   ms_s.timestamp_ns = 5;    ms_s.mission_active = true;
+    ShmPose pose_s{};
+    pose_s.timestamp_ns = 1;
+    pose_s.quality      = 2;
+    ShmFCState fc_s{};
+    fc_s.timestamp_ns = 2;
+    fc_s.armed        = true;
+    ShmTrajectoryCmd traj_s{};
+    traj_s.timestamp_ns = 3;
+    traj_s.valid        = true;
+    ShmSystemHealth hlth_s{};
+    hlth_s.timestamp_ns  = 4;
+    hlth_s.total_healthy = 7;
+    ShmMissionStatus ms_s{};
+    ms_s.timestamp_ns   = 5;
+    ms_s.mission_active = true;
 
-    ShmPose pose_r{};
-    ShmFCState fc_r{};
+    ShmPose          pose_r{};
+    ShmFCState       fc_r{};
     ShmTrajectoryCmd traj_r{};
-    ShmSystemHealth hlth_r{};
+    ShmSystemHealth  hlth_r{};
     ShmMissionStatus ms_r{};
 
     ASSERT_TRUE(publish_until_received_iface(*pose_pub, pose_s, *pose_sub, pose_r));
@@ -808,7 +796,7 @@ TEST(ZenohMigration, MultiChannel_Simultaneous) {
 // --- High-rate: Pose at 200 Hz for 2 seconds -----------------
 
 TEST(ZenohMigration, HighRate_Pose) {
-    ZenohPublisher<ShmPose> pub("drone/test/highrate_pose");
+    ZenohPublisher<ShmPose>  pub("drone/test/highrate_pose");
     ZenohSubscriber<ShmPose> sub("drone/test/highrate_pose");
 
     // Wait for discovery
@@ -824,7 +812,7 @@ TEST(ZenohMigration, HighRate_Pose) {
     for (int i = 1; i <= total_msgs; ++i) {
         ShmPose msg{};
         msg.timestamp_ns = static_cast<uint64_t>(i);
-        msg.quality = 2;
+        msg.quality      = 2;
         pub.publish(msg);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -834,20 +822,17 @@ TEST(ZenohMigration, HighRate_Pose) {
     // so we poll repeatedly until the final message (ts == total_msgs)
     // appears or a generous timeout expires.
     ShmPose last{};
-    bool got_final = false;
-    auto poll_deadline = std::chrono::steady_clock::now()
-                       + std::chrono::milliseconds(3000);
+    bool    got_final     = false;
+    auto    poll_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     while (std::chrono::steady_clock::now() < poll_deadline) {
-        if (sub.receive(last) &&
-            last.timestamp_ns == static_cast<uint64_t>(total_msgs)) {
+        if (sub.receive(last) && last.timestamp_ns == static_cast<uint64_t>(total_msgs)) {
             got_final = true;
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    ASSERT_TRUE(got_final)
-        << "Timed out waiting for final message (ts=" << total_msgs
-        << "); last seen ts=" << last.timestamp_ns;
+    ASSERT_TRUE(got_final) << "Timed out waiting for final message (ts=" << total_msgs
+                           << "); last seen ts=" << last.timestamp_ns;
     EXPECT_EQ(last.quality, 2u);
 }
 
@@ -857,8 +842,8 @@ TEST(ZenohMigration, FactorySubscribeOptional) {
     // Use a unique key so this test is isolated from any other test that
     // may publish on GCS_COMMANDS.
     std::string unique_key = std::string("/factory_opt_test_") + std::to_string(::getpid());
-    auto bus = create_message_bus("zenoh");
-    auto sub = bus_subscribe_optional<ShmGCSCommand>(bus, unique_key);
+    auto        bus        = create_message_bus("zenoh");
+    auto        sub        = bus_subscribe_optional<ShmGCSCommand>(bus, unique_key);
     ASSERT_NE(sub, nullptr);
     // No publisher exists — receive should return false but not crash
     ShmGCSCommand cmd{};
@@ -898,8 +883,8 @@ TEST(ZenohShmProvider, AllocAndWriteBuffer) {
     }
 
     constexpr std::size_t buf_size = 4096;
-    auto result = provider->alloc_gc_defrag_blocking(buf_size);
-    auto* buf = std::get_if<zenoh::ZShmMut>(&result);
+    auto                  result   = provider->alloc_gc_defrag_blocking(buf_size);
+    auto*                 buf      = std::get_if<zenoh::ZShmMut>(&result);
     ASSERT_NE(buf, nullptr);
     EXPECT_EQ(buf->len(), buf_size);
 
@@ -916,10 +901,10 @@ TEST(ZenohShmProvider, AllocLargeVideoFrameBuffer) {
     }
 
     // Allocate a buffer the size of ShmVideoFrame (~6.2 MB)
-    auto result = provider->alloc_gc_defrag_blocking(sizeof(ShmVideoFrame));
-    auto* buf = std::get_if<zenoh::ZShmMut>(&result);
-    ASSERT_NE(buf, nullptr)
-        << "Failed to allocate " << sizeof(ShmVideoFrame) << " bytes from SHM pool";
+    auto  result = provider->alloc_gc_defrag_blocking(sizeof(ShmVideoFrame));
+    auto* buf    = std::get_if<zenoh::ZShmMut>(&result);
+    ASSERT_NE(buf, nullptr) << "Failed to allocate " << sizeof(ShmVideoFrame)
+                            << " bytes from SHM pool";
     EXPECT_EQ(buf->len(), sizeof(ShmVideoFrame));
 }
 
@@ -927,15 +912,14 @@ TEST(ZenohShmProvider, AllocLargeVideoFrameBuffer) {
 
 TEST(ZenohShmPublish, SmallMessageUsesBytes) {
     // ShmPose is small (~400 bytes) — should use bytes path, not SHM
-    static_assert(sizeof(ShmPose) <= kShmPublishThreshold,
-                  "ShmPose should be below SHM threshold");
+    static_assert(sizeof(ShmPose) <= kShmPublishThreshold, "ShmPose should be below SHM threshold");
 
-    ZenohPublisher<ShmPose> pub("drone/test/shm_small_path");
+    ZenohPublisher<ShmPose>  pub("drone/test/shm_small_path");
     ZenohSubscriber<ShmPose> sub("drone/test/shm_small_path");
 
     ShmPose sent{};
     sent.timestamp_ns = 42;
-    sent.quality = 2;
+    sent.quality      = 2;
 
     ShmPose received{};
     ASSERT_TRUE(publish_until_received(pub, sent, sub, received));
@@ -953,23 +937,23 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
     static_assert(sizeof(ShmVideoFrame) > kShmPublishThreshold,
                   "ShmVideoFrame should be above SHM threshold");
 
-    ZenohPublisher<ShmVideoFrame> pub("drone/test/shm_video_path");
+    ZenohPublisher<ShmVideoFrame>  pub("drone/test/shm_video_path");
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_video_path");
 
     // Record baseline counters before publish
-    const auto shm_before = pub.shm_publish_count();
+    const auto shm_before   = pub.shm_publish_count();
     const auto bytes_before = pub.bytes_publish_count();
 
     // Heap-allocate — too large for the stack
-    auto sent = std::make_unique<ShmVideoFrame>();
-    sent->timestamp_ns = 12345;
-    sent->width = 1920;
-    sent->height = 1080;
-    sent->channels = 3;
+    auto sent             = std::make_unique<ShmVideoFrame>();
+    sent->timestamp_ns    = 12345;
+    sent->width           = 1920;
+    sent->height          = 1080;
+    sent->channels        = 3;
     sent->sequence_number = 99;
     // Write sentinel bytes at key positions
-    sent->pixel_data[0] = 0xDE;
-    sent->pixel_data[1] = 0xAD;
+    sent->pixel_data[0]                            = 0xDE;
+    sent->pixel_data[1]                            = 0xAD;
     sent->pixel_data[sizeof(sent->pixel_data) / 2] = 0xBE;
     sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xEF;
 
@@ -986,8 +970,7 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
     EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) - 1], 0xEF);
 
     // Verify SHM path was actually used (not the bytes fallback)
-    EXPECT_GT(pub.shm_publish_count(), shm_before)
-        << "Expected SHM publish path for ShmVideoFrame";
+    EXPECT_GT(pub.shm_publish_count(), shm_before) << "Expected SHM publish path for ShmVideoFrame";
     EXPECT_EQ(pub.bytes_publish_count(), bytes_before)
         << "Bytes path should not be used for ShmVideoFrame";
 }
@@ -1002,20 +985,20 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
     static_assert(sizeof(ShmStereoFrame) > kShmPublishThreshold,
                   "ShmStereoFrame should be above SHM threshold");
 
-    ZenohPublisher<ShmStereoFrame> pub("drone/test/shm_stereo_path");
+    ZenohPublisher<ShmStereoFrame>  pub("drone/test/shm_stereo_path");
     ZenohSubscriber<ShmStereoFrame> sub("drone/test/shm_stereo_path");
 
-    const auto shm_before = pub.shm_publish_count();
+    const auto shm_before   = pub.shm_publish_count();
     const auto bytes_before = pub.bytes_publish_count();
 
-    auto sent = std::make_unique<ShmStereoFrame>();
-    sent->timestamp_ns = 77777;
-    sent->width = 640;
-    sent->height = 480;
-    sent->sequence_number = 42;
-    sent->left_data[0] = 0xAA;
-    sent->right_data[0] = 0xBB;
-    sent->left_data[sizeof(sent->left_data) - 1] = 0xCC;
+    auto sent                                      = std::make_unique<ShmStereoFrame>();
+    sent->timestamp_ns                             = 77777;
+    sent->width                                    = 640;
+    sent->height                                   = 480;
+    sent->sequence_number                          = 42;
+    sent->left_data[0]                             = 0xAA;
+    sent->right_data[0]                            = 0xBB;
+    sent->left_data[sizeof(sent->left_data) - 1]   = 0xCC;
     sent->right_data[sizeof(sent->right_data) - 1] = 0xDD;
 
     auto received = std::make_unique<ShmStereoFrame>();
@@ -1045,24 +1028,25 @@ TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
-    auto sent = std::make_unique<ShmVideoFrame>();
-    sent->timestamp_ns = 555;
-    sent->width = 1920;
-    sent->height = 1080;
-    sent->channels = 3;
+    auto sent             = std::make_unique<ShmVideoFrame>();
+    sent->timestamp_ns    = 555;
+    sent->width           = 1920;
+    sent->height          = 1080;
+    sent->channels        = 3;
     sent->pixel_data[100] = 0x42;
 
     auto received = std::make_unique<ShmVideoFrame>();
-    bool ok = false;
-    auto deadline = std::chrono::steady_clock::now()
-                  + std::chrono::milliseconds(5000);
+    bool ok       = false;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
     while (std::chrono::steady_clock::now() < deadline) {
         pub->publish(*sent);
-        auto batch = std::min(
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
-            deadline);
+        auto batch = std::min(std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+                              deadline);
         while (std::chrono::steady_clock::now() < batch) {
-            if (sub->receive(*received)) { ok = true; break; }
+            if (sub->receive(*received)) {
+                ok = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         if (ok) break;
@@ -1080,23 +1064,24 @@ TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
-    auto sent = std::make_unique<ShmStereoFrame>();
-    sent->timestamp_ns = 888;
-    sent->width = 640;
-    sent->height = 480;
+    auto sent           = std::make_unique<ShmStereoFrame>();
+    sent->timestamp_ns  = 888;
+    sent->width         = 640;
+    sent->height        = 480;
     sent->left_data[42] = 0x99;
 
     auto received = std::make_unique<ShmStereoFrame>();
-    bool ok = false;
-    auto deadline = std::chrono::steady_clock::now()
-                  + std::chrono::milliseconds(5000);
+    bool ok       = false;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
     while (std::chrono::steady_clock::now() < deadline) {
         pub->publish(*sent);
-        auto batch = std::min(
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
-            deadline);
+        auto batch = std::min(std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+                              deadline);
         while (std::chrono::steady_clock::now() < batch) {
-            if (sub->receive(*received)) { ok = true; break; }
+            if (sub->receive(*received)) {
+                ok = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         if (ok) break;
@@ -1114,12 +1099,12 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
                         "cannot be verified";
     }
 
-    ZenohPublisher<ShmVideoFrame> pub("drone/test/shm_sustained_video");
+    ZenohPublisher<ShmVideoFrame>  pub("drone/test/shm_sustained_video");
     ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_sustained_video");
 
-    auto frame = std::make_unique<ShmVideoFrame>();
-    frame->width = 1920;
-    frame->height = 1080;
+    auto frame      = std::make_unique<ShmVideoFrame>();
+    frame->width    = 1920;
+    frame->height   = 1080;
     frame->channels = 3;
 
     auto received = std::make_unique<ShmVideoFrame>();
@@ -1132,19 +1117,18 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
 
     // Track distinct frames received via polling during publish window
     std::atomic<int> frames_seen{0};
-    uint64_t last_seen_ts = 0;
+    uint64_t         last_seen_ts = 0;
 
     // Publish 30 frames (simulating 1 second at 30 Hz)
     constexpr int total_frames = 30;
     for (int i = 1; i <= total_frames; ++i) {
-        frame->timestamp_ns = static_cast<uint64_t>(i);
+        frame->timestamp_ns    = static_cast<uint64_t>(i);
         frame->sequence_number = static_cast<uint64_t>(i);
-        frame->pixel_data[0] = static_cast<uint8_t>(i & 0xFF);
+        frame->pixel_data[0]   = static_cast<uint8_t>(i & 0xFF);
         pub.publish(*frame);
 
         // Poll between publishes to count distinct frames
-        if (sub.receive(*received) &&
-            received->timestamp_ns != last_seen_ts) {
+        if (sub.receive(*received) && received->timestamp_ns != last_seen_ts) {
             last_seen_ts = received->timestamp_ns;
             frames_seen.fetch_add(1, std::memory_order_relaxed);
         }
@@ -1153,8 +1137,7 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
     }
 
     // Wait for final frame to arrive
-    auto deadline = std::chrono::steady_clock::now()
-                  + std::chrono::milliseconds(3000);
+    auto deadline  = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     bool got_final = false;
     while (std::chrono::steady_clock::now() < deadline) {
         if (sub.receive(*received)) {
@@ -1169,23 +1152,20 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    ASSERT_TRUE(got_final)
-        << "Did not receive final video frame (ts=" << total_frames
-        << "); last seen ts=" << received->timestamp_ns;
-    EXPECT_EQ(received->sequence_number,
-              static_cast<uint64_t>(total_frames));
+    ASSERT_TRUE(got_final) << "Did not receive final video frame (ts=" << total_frames
+                           << "); last seen ts=" << received->timestamp_ns;
+    EXPECT_EQ(received->sequence_number, static_cast<uint64_t>(total_frames));
 
     // Verify we saw a meaningful number of distinct frames (not just the last)
     // With 33ms publish interval and 10ms poll interval, we should see
     // at least half the frames. This validates sustained delivery, not just
     // final-frame arrival.
     EXPECT_GE(frames_seen.load(), total_frames / 2)
-        << "Expected to observe at least " << total_frames / 2
-        << " distinct frames, but only saw " << frames_seen.load();
+        << "Expected to observe at least " << total_frames / 2 << " distinct frames, but only saw "
+        << frames_seen.load();
 
     // Verify SHM path was used for all publishes
-    EXPECT_GE(pub.shm_publish_count(),
-              static_cast<uint64_t>(total_frames))
+    EXPECT_GE(pub.shm_publish_count(), static_cast<uint64_t>(total_frames))
         << "Expected at least " << total_frames << " SHM publishes";
 }
 
@@ -1211,24 +1191,23 @@ TEST(ZenohShmProvider, PoolSizeConfiguration) {
 // Service test payload types
 struct SvcTestRequest {
     uint32_t command{0};
-    float param{0.0f};
+    float    param{0.0f};
 };
 
 struct SvcTestResponse {
     uint32_t result{0};
-    bool success{false};
+    bool     success{false};
 };
 
 // ---------------------------------------------------------------------------
 // Polling helper — waits for the server to receive a request.
 // ---------------------------------------------------------------------------
-template <typename Req, typename Resp>
+template<typename Req, typename Resp>
 std::optional<ServiceEnvelope<Req>> poll_server_request(
     IServiceServer<Req, Resp>& server,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
-{
+    std::chrono::milliseconds  timeout = std::chrono::milliseconds(5000)) {
     constexpr auto kInterval = std::chrono::milliseconds(5);
-    auto deadline = std::chrono::steady_clock::now() + timeout;
+    auto           deadline  = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         auto req = server.poll_request();
         if (req.has_value()) return req;
@@ -1242,8 +1221,7 @@ std::optional<ServiceEnvelope<Req>> poll_server_request(
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, ServerConstructs) {
-    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
-        "drone/service/test_construct");
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server("drone/service/test_construct");
     // Should not crash; queryable declared internally
 }
 
@@ -1262,23 +1240,20 @@ TEST(ZenohServiceChannel, ClientConstructs) {
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, ClientSendServerReceive) {
-    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
-        "drone/service/test_cs_recv");
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server("drone/service/test_cs_recv");
 
     // Brief delay for queryable declaration to propagate
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
-        "drone/service/test_cs_recv");
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client("drone/service/test_cs_recv");
 
     SvcTestRequest req{42, 3.14f};
-    auto cid = client.send_request(req);
+    auto           cid = client.send_request(req);
     EXPECT_GE(cid, 1u);
 
     // Server should receive the request
     auto received = poll_server_request<SvcTestRequest, SvcTestResponse>(server);
-    ASSERT_TRUE(received.has_value())
-        << "Server did not receive request within timeout";
+    ASSERT_TRUE(received.has_value()) << "Server did not receive request within timeout";
     EXPECT_EQ(received->correlation_id, cid);
     EXPECT_EQ(received->payload.command, 42u);
     EXPECT_FLOAT_EQ(received->payload.param, 3.14f);
@@ -1290,15 +1265,13 @@ TEST(ZenohServiceChannel, ClientSendServerReceive) {
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, FullRoundTrip) {
-    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
-        "drone/service/test_roundtrip");
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server("drone/service/test_roundtrip");
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
-        "drone/service/test_roundtrip");
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client("drone/service/test_roundtrip");
 
     SvcTestRequest req{1, 2.5f};
-    auto cid = client.send_request(req);
+    auto           cid = client.send_request(req);
 
     // Server side: receive request and send response
     auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(server);
@@ -1322,12 +1295,10 @@ TEST(ZenohServiceChannel, FullRoundTrip) {
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, WrongCorrelationIdReturnsNull) {
-    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
-        "drone/service/test_wrong_cid");
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server("drone/service/test_wrong_cid");
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
-        "drone/service/test_wrong_cid");
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client("drone/service/test_wrong_cid");
 
     auto cid = client.send_request(SvcTestRequest{1, 0.0f});
 
@@ -1351,12 +1322,11 @@ TEST(ZenohServiceChannel, WrongCorrelationIdReturnsNull) {
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, AwaitResponseTimeout) {
-    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
-        "drone/service/test_timeout");
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server("drone/service/test_timeout");
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
-        "drone/service/test_timeout", 200 /* short GET timeout */);
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client("drone/service/test_timeout",
+                                                               200 /* short GET timeout */);
 
     auto cid = client.send_request(SvcTestRequest{1, 0.0f});
     // Don't send a server response — should timeout
@@ -1370,16 +1340,14 @@ TEST(ZenohServiceChannel, AwaitResponseTimeout) {
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, ImplementsIServiceClient) {
-    auto client = std::make_unique<
-        ZenohServiceClient<SvcTestRequest, SvcTestResponse>>(
+    auto client = std::make_unique<ZenohServiceClient<SvcTestRequest, SvcTestResponse>>(
         "drone/service/test_iface_client");
     IServiceClient<SvcTestRequest, SvcTestResponse>* iface = client.get();
     (void)iface;  // Just verify the cast compiles
 }
 
 TEST(ZenohServiceChannel, ImplementsIServiceServer) {
-    auto server = std::make_unique<
-        ZenohServiceServer<SvcTestRequest, SvcTestResponse>>(
+    auto server = std::make_unique<ZenohServiceServer<SvcTestRequest, SvcTestResponse>>(
         "drone/service/test_iface_server");
     IServiceServer<SvcTestRequest, SvcTestResponse>* iface = server.get();
     (void)iface;  // Just verify the cast compiles
@@ -1390,30 +1358,24 @@ TEST(ZenohServiceChannel, ImplementsIServiceServer) {
 // ---------------------------------------------------------------------------
 
 TEST(ZenohServiceChannel, MultipleRequestsSequential) {
-    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server(
-        "drone/service/test_multi_seq");
+    ZenohServiceServer<SvcTestRequest, SvcTestResponse> server("drone/service/test_multi_seq");
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client(
-        "drone/service/test_multi_seq");
+    ZenohServiceClient<SvcTestRequest, SvcTestResponse> client("drone/service/test_multi_seq");
 
     for (int i = 0; i < 5; ++i) {
         SvcTestRequest req{static_cast<uint32_t>(i), 0.0f};
-        auto cid = client.send_request(req);
+        auto           cid = client.send_request(req);
 
-        auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(
-            server);
-        ASSERT_TRUE(srv_req.has_value())
-            << "Server did not receive request " << i;
+        auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(server);
+        ASSERT_TRUE(srv_req.has_value()) << "Server did not receive request " << i;
         EXPECT_EQ(srv_req->payload.command, static_cast<uint32_t>(i));
 
         SvcTestResponse resp{static_cast<uint32_t>(i * 10), true};
         server.send_response(cid, ServiceStatus::OK, resp);
 
-        auto cli_resp = client.await_response(
-            cid, std::chrono::milliseconds(5000));
-        ASSERT_TRUE(cli_resp.has_value())
-            << "Client did not receive response for request " << i;
+        auto cli_resp = client.await_response(cid, std::chrono::milliseconds(5000));
+        ASSERT_TRUE(cli_resp.has_value()) << "Client did not receive response for request " << i;
         EXPECT_EQ(cli_resp->payload.result, static_cast<uint32_t>(i * 10));
         EXPECT_EQ(cli_resp->status, ServiceStatus::OK);
     }
@@ -1426,23 +1388,19 @@ TEST(ZenohServiceChannel, MultipleRequestsSequential) {
 TEST(ZenohServiceChannel, ViaMessageBusFactory) {
     ZenohMessageBus bus;
 
-    auto server = bus.create_server<SvcTestRequest, SvcTestResponse>(
-        "test_factory_svc");
+    auto server = bus.create_server<SvcTestRequest, SvcTestResponse>("test_factory_svc");
     ASSERT_NE(server, nullptr);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    auto client = bus.create_client<SvcTestRequest, SvcTestResponse>(
-        "test_factory_svc");
+    auto client = bus.create_client<SvcTestRequest, SvcTestResponse>("test_factory_svc");
     ASSERT_NE(client, nullptr);
 
-    auto cid = client->send_request(SvcTestRequest{7, 1.0f});
-    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(
-        *server);
+    auto cid     = client->send_request(SvcTestRequest{7, 1.0f});
+    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(*server);
     ASSERT_TRUE(srv_req.has_value());
 
-    server->send_response(cid, ServiceStatus::OK,
-                          SvcTestResponse{77, true});
+    server->send_response(cid, ServiceStatus::OK, SvcTestResponse{77, true});
 
     auto resp = client->await_response(cid, std::chrono::milliseconds(5000));
     ASSERT_TRUE(resp.has_value());
@@ -1456,16 +1414,13 @@ TEST(ZenohServiceChannel, ViaMessageBusFactory) {
 
 TEST(ZenohServiceChannel, ServiceKeyMapping) {
     // Short name → prefixed
-    EXPECT_EQ(ZenohMessageBus::to_service_key("trajectory"),
-              "drone/service/trajectory");
+    EXPECT_EQ(ZenohMessageBus::to_service_key("trajectory"), "drone/service/trajectory");
 
     // SHM-style name → prefix stripped, converted
-    EXPECT_EQ(ZenohMessageBus::to_service_key("/svc_traj_cmd"),
-              "drone/service/traj/cmd");
+    EXPECT_EQ(ZenohMessageBus::to_service_key("/svc_traj_cmd"), "drone/service/traj/cmd");
 
     // Already a full key expression → pass-through
-    EXPECT_EQ(ZenohMessageBus::to_service_key("drone/service/custom"),
-              "drone/service/custom");
+    EXPECT_EQ(ZenohMessageBus::to_service_key("drone/service/custom"), "drone/service/custom");
 
     // Empty → empty
     EXPECT_EQ(ZenohMessageBus::to_service_key(""), "");
@@ -1478,24 +1433,22 @@ TEST(ZenohServiceChannel, ServiceKeyMapping) {
 TEST(ZenohServiceChannel, ViaBusVariantFactory) {
     auto bus = create_message_bus("zenoh");
 
-    auto server = bus_create_server<SvcTestRequest, SvcTestResponse>(
-        bus, "drone/service/test_variant_svc");
+    auto server =
+        bus_create_server<SvcTestRequest, SvcTestResponse>(bus, "drone/service/test_variant_svc");
     ASSERT_NE(server, nullptr);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    auto client = bus_create_client<SvcTestRequest, SvcTestResponse>(
-        bus, "drone/service/test_variant_svc");
+    auto client =
+        bus_create_client<SvcTestRequest, SvcTestResponse>(bus, "drone/service/test_variant_svc");
     ASSERT_NE(client, nullptr);
 
-    auto cid = client->send_request(SvcTestRequest{99, 0.0f});
-    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(
-        *server);
+    auto cid     = client->send_request(SvcTestRequest{99, 0.0f});
+    auto srv_req = poll_server_request<SvcTestRequest, SvcTestResponse>(*server);
     ASSERT_TRUE(srv_req.has_value());
     EXPECT_EQ(srv_req->payload.command, 99u);
 
-    server->send_response(cid, ServiceStatus::OK,
-                          SvcTestResponse{999, true});
+    server->send_response(cid, ServiceStatus::OK, SvcTestResponse{999, true});
 
     auto resp = client->await_response(cid, std::chrono::milliseconds(5000));
     ASSERT_TRUE(resp.has_value());
@@ -1512,19 +1465,18 @@ TEST(ZenohServiceChannel, ViaBusVariantFactory) {
 #ifndef HAVE_ZENOH
 struct SvcTestRequest {
     uint32_t command{0};
-    float param{0.0f};
+    float    param{0.0f};
 };
 
 struct SvcTestResponse {
     uint32_t result{0};
-    bool success{false};
+    bool     success{false};
 };
 #endif
 
 TEST(MessageBusFactory, ShmBusServiceClientReturnsNull) {
-    auto bus = create_message_bus("shm");
-    auto client = bus_create_client<SvcTestRequest, SvcTestResponse>(
-        bus, "test_no_svc");
+    auto bus    = create_message_bus("shm");
+    auto client = bus_create_client<SvcTestRequest, SvcTestResponse>(bus, "test_no_svc");
 #ifdef HAVE_ZENOH
     // Under HAVE_ZENOH the variant has both alternatives, but we selected SHM
     EXPECT_EQ(client, nullptr);
@@ -1534,8 +1486,7 @@ TEST(MessageBusFactory, ShmBusServiceClientReturnsNull) {
 }
 
 TEST(MessageBusFactory, ShmBusServiceServerReturnsNull) {
-    auto bus = create_message_bus("shm");
-    auto server = bus_create_server<SvcTestRequest, SvcTestResponse>(
-        bus, "test_no_svc");
+    auto bus    = create_message_bus("shm");
+    auto server = bus_create_server<SvcTestRequest, SvcTestResponse>(bus, "test_no_svc");
     EXPECT_EQ(server, nullptr);
 }

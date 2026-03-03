@@ -2,8 +2,9 @@
 // JSON configuration system for all processes.
 // Loads a JSON file and provides typed access to keys with defaults.
 #pragma once
-#include <string>
 #include <fstream>
+#include <string>
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -33,14 +34,14 @@ public:
     }
 
     /// Get a value by dot-separated key path (e.g. "video.width") with a default.
-    template <typename T>
+    template<typename T>
     T get(const std::string& key, const T& default_val) const {
         try {
             const auto* node = &data_;
             // Walk the dot-separated path
             size_t start = 0;
             while (start < key.size()) {
-                size_t dot = key.find('.', start);
+                size_t      dot  = key.find('.', start);
                 std::string part = key.substr(start, dot - start);
                 if (!node->contains(part)) return default_val;
                 node = &(*node)[part];
@@ -55,10 +56,10 @@ public:
 
     /// Check if a key exists.
     bool has(const std::string& key) const {
-        const auto* node = &data_;
-        size_t start = 0;
+        const auto* node  = &data_;
+        size_t      start = 0;
         while (start < key.size()) {
-            size_t dot = key.find('.', start);
+            size_t      dot  = key.find('.', start);
             std::string part = key.substr(start, dot - start);
             if (!node->contains(part)) return false;
             node = &(*node)[part];
@@ -71,10 +72,10 @@ public:
     /// Get the raw JSON object for a section.
     nlohmann::json section(const std::string& key) const {
         try {
-            const auto* node = &data_;
-            size_t start = 0;
+            const auto* node  = &data_;
+            size_t      start = 0;
             while (start < key.size()) {
-                size_t dot = key.find('.', start);
+                size_t      dot  = key.find('.', start);
                 std::string part = key.substr(start, dot - start);
                 if (!node->contains(part)) return nlohmann::json::object();
                 node = &(*node)[part];
@@ -98,7 +99,7 @@ public:
 
 private:
     nlohmann::json data_ = nlohmann::json::object();
-    std::string path_;
+    std::string    path_;
 };
 
-} // namespace drone
+}  // namespace drone

@@ -46,8 +46,8 @@ using drone::ipc::FAULT_FC_LINK_LOST;
 // ═══════════════════════════════════════════════════════════
 struct FaultState {
     FaultAction recommended_action = FaultAction::NONE;
-    uint32_t    active_faults      = FAULT_NONE;   // bitmask of FaultType
-    const char* reason             = "nominal";     // human-readable
+    uint32_t    active_faults      = FAULT_NONE;  // bitmask of FaultType
+    const char* reason             = "nominal";   // human-readable
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -55,17 +55,17 @@ struct FaultState {
 // ═══════════════════════════════════════════════════════════
 struct FaultConfig {
     // Pose staleness
-    uint64_t pose_stale_timeout_ns = 500'000'000ULL;   // 500 ms
+    uint64_t pose_stale_timeout_ns = 500'000'000ULL;  // 500 ms
 
     // Battery
     float battery_warn_percent = 20.0f;
     float battery_crit_percent = 10.0f;
 
     // FC link
-    uint64_t fc_link_lost_timeout_ns = 3'000'000'000ULL;   // 3 s
+    uint64_t fc_link_lost_timeout_ns = 3'000'000'000ULL;  // 3 s
 
     // Loiter → RTL escalation delay (how long to loiter before RTL)
-    uint64_t loiter_escalation_timeout_ns = 30'000'000'000ULL;   // 30 s
+    uint64_t loiter_escalation_timeout_ns = 30'000'000'000ULL;  // 30 s
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -75,31 +75,30 @@ class FaultManager {
 public:
     /// Construct with config-driven thresholds.
     /// @param cfg  Drone config — reads "fault_manager.*" keys.
-    template <typename Config>
+    template<typename Config>
     explicit FaultManager(const Config& cfg) {
-        config_.pose_stale_timeout_ns = static_cast<uint64_t>(
-            cfg.template get<int>("fault_manager.pose_stale_timeout_ms", 500))
-            * 1'000'000ULL;
+        config_.pose_stale_timeout_ns = static_cast<uint64_t>(cfg.template get<int>(
+                                            "fault_manager.pose_stale_timeout_ms", 500)) *
+                                        1'000'000ULL;
 
-        config_.battery_warn_percent =
-            cfg.template get<float>("fault_manager.battery_warn_percent", 20.0f);
-        config_.battery_crit_percent =
-            cfg.template get<float>("fault_manager.battery_crit_percent", 10.0f);
+        config_.battery_warn_percent = cfg.template get<float>("fault_manager.battery_warn_percent",
+                                                               20.0f);
+        config_.battery_crit_percent = cfg.template get<float>("fault_manager.battery_crit_percent",
+                                                               10.0f);
 
-        config_.fc_link_lost_timeout_ns = static_cast<uint64_t>(
-            cfg.template get<int>("fault_manager.fc_link_lost_timeout_ms", 3000))
-            * 1'000'000ULL;
+        config_.fc_link_lost_timeout_ns = static_cast<uint64_t>(cfg.template get<int>(
+                                              "fault_manager.fc_link_lost_timeout_ms", 3000)) *
+                                          1'000'000ULL;
 
-        config_.loiter_escalation_timeout_ns = static_cast<uint64_t>(
-            cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30))
-            * 1'000'000'000ULL;
+        config_.loiter_escalation_timeout_ns =
+            static_cast<uint64_t>(
+                cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30)) *
+            1'000'000'000ULL;
 
         spdlog::info("[FaultMgr] Thresholds: pose_stale={}ms, batt_warn={}%, "
                      "batt_crit={}%, fc_lost={}ms, loiter_esc={}s",
-                     config_.pose_stale_timeout_ns / 1'000'000,
-                     config_.battery_warn_percent,
-                     config_.battery_crit_percent,
-                     config_.fc_link_lost_timeout_ns / 1'000'000,
+                     config_.pose_stale_timeout_ns / 1'000'000, config_.battery_warn_percent,
+                     config_.battery_crit_percent, config_.fc_link_lost_timeout_ns / 1'000'000,
                      config_.loiter_escalation_timeout_ns / 1'000'000'000);
     }
 
@@ -113,12 +112,9 @@ public:
     /// @param pose_timestamp_ns  Timestamp from the last received ShmPose.
     /// @param now_ns           Current monotonic time (steady_clock).
     /// @return FaultState with recommended action and active fault bitmask.
-    FaultState evaluate(
-        const drone::ipc::ShmSystemHealth& health,
-        const drone::ipc::ShmFCState&      fc_state,
-        uint64_t                           pose_timestamp_ns,
-        uint64_t                           now_ns)
-    {
+    FaultState evaluate(const drone::ipc::ShmSystemHealth& health,
+                        const drone::ipc::ShmFCState& fc_state, uint64_t pose_timestamp_ns,
+                        uint64_t now_ns) {
         FaultState result;
 
         // ── 1. Critical process death (comms / SLAM) ────────
@@ -137,13 +133,11 @@ public:
         }
 
         // ── 3. Battery low ──────────────────────────────────
-        if (fc_state.connected &&
-            fc_state.battery_remaining > 0.0f &&
+        if (fc_state.connected && fc_state.battery_remaining > 0.0f &&
             fc_state.battery_remaining < config_.battery_crit_percent) {
             result.active_faults |= FAULT_BATTERY_CRITICAL;
             escalate(result, FaultAction::EMERGENCY_LAND, "battery critical");
-        } else if (fc_state.connected &&
-                   fc_state.battery_remaining > 0.0f &&
+        } else if (fc_state.connected && fc_state.battery_remaining > 0.0f &&
                    fc_state.battery_remaining < config_.battery_warn_percent) {
             result.active_faults |= FAULT_BATTERY_LOW;
             escalate(result, FaultAction::RTL, "battery low");
@@ -165,8 +159,7 @@ public:
         }
 
         // ── 6. FC link lost ─────────────────────────────────
-        if (!fc_state.connected && fc_state.timestamp_ns > 0 &&
-            now_ns > fc_state.timestamp_ns) {
+        if (!fc_state.connected && fc_state.timestamp_ns > 0 && now_ns > fc_state.timestamp_ns) {
             uint64_t fc_age = now_ns - fc_state.timestamp_ns;
             if (fc_age > config_.fc_link_lost_timeout_ns) {
                 result.active_faults |= FAULT_FC_LINK_LOST;
@@ -180,9 +173,9 @@ public:
         // cause still counts toward the escalation timeout.
         if (result.recommended_action < high_water_mark_) {
             result.recommended_action = high_water_mark_;
-            result.reason = high_water_reason_;
+            result.reason             = high_water_reason_;
         } else if (result.recommended_action > high_water_mark_) {
-            high_water_mark_ = result.recommended_action;
+            high_water_mark_   = result.recommended_action;
             high_water_reason_ = result.reason;
         }
 
@@ -191,17 +184,17 @@ public:
         // LOITER for too long, escalate to RTL.
         if (result.recommended_action == FaultAction::LOITER) {
             if (loiter_start_ns_ == 0) {
-                loiter_start_ns_ = now_ns;   // start the timer
+                loiter_start_ns_ = now_ns;  // start the timer
             } else if (now_ns - loiter_start_ns_ > config_.loiter_escalation_timeout_ns) {
                 result.recommended_action = FaultAction::RTL;
-                result.reason = "loiter timeout — escalating to RTL";
-                high_water_mark_ = FaultAction::RTL;
-                high_water_reason_ = result.reason;
+                result.reason             = "loiter timeout — escalating to RTL";
+                high_water_mark_          = FaultAction::RTL;
+                high_water_reason_        = result.reason;
             }
         } else if (result.recommended_action > FaultAction::LOITER) {
-            loiter_start_ns_ = 0;   // reset — already above LOITER
+            loiter_start_ns_ = 0;  // reset — already above LOITER
         } else {
-            loiter_start_ns_ = 0;   // reset — below LOITER (nominal/warn)
+            loiter_start_ns_ = 0;  // reset — below LOITER (nominal/warn)
         }
 
         return result;
@@ -209,9 +202,9 @@ public:
 
     /// Reset the escalation state (e.g. after landing / new mission).
     void reset() {
-        high_water_mark_ = FaultAction::NONE;
+        high_water_mark_   = FaultAction::NONE;
         high_water_reason_ = "nominal";
-        loiter_start_ns_ = 0;
+        loiter_start_ns_   = 0;
     }
 
     /// Current high-water mark (highest action ever returned).
@@ -222,29 +215,27 @@ public:
 
 private:
     FaultConfig config_;
-    FaultAction high_water_mark_ = FaultAction::NONE;
+    FaultAction high_water_mark_   = FaultAction::NONE;
     const char* high_water_reason_ = "nominal";
-    uint64_t    loiter_start_ns_ = 0;
+    uint64_t    loiter_start_ns_   = 0;
 
     /// Escalate to a higher action (no-op if target is lower/equal).
-    static void escalate(FaultState& state, FaultAction target,
-                         const char* reason) {
+    static void escalate(FaultState& state, FaultAction target, const char* reason) {
         if (target > state.recommended_action) {
             state.recommended_action = target;
-            state.reason = reason;
+            state.reason             = reason;
         }
     }
 
     /// Check if a specific process is reported dead in system health.
-    static bool is_process_dead(const drone::ipc::ShmSystemHealth& health,
-                                const char* name) {
+    static bool is_process_dead(const drone::ipc::ShmSystemHealth& health, const char* name) {
         for (uint8_t i = 0; i < health.num_processes; ++i) {
-            if (std::strncmp(health.processes[i].name, name,
-                             sizeof(health.processes[i].name)) == 0) {
+            if (std::strncmp(health.processes[i].name, name, sizeof(health.processes[i].name)) ==
+                0) {
                 return !health.processes[i].alive;
             }
         }
-        return false;   // not tracked → assume alive
+        return false;  // not tracked → assume alive
     }
 };
 

@@ -19,11 +19,6 @@
 
 #include "hal/ifc_link.h"
 
-#include <mavsdk/mavsdk.h>
-#include <mavsdk/plugins/action/action.h>
-#include <mavsdk/plugins/offboard/offboard.h>
-#include <mavsdk/plugins/telemetry/telemetry.h>
-
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -31,6 +26,10 @@
 #include <mutex>
 #include <string>
 
+#include <mavsdk/mavsdk.h>
+#include <mavsdk/plugins/action/action.h>
+#include <mavsdk/plugins/offboard/offboard.h>
+#include <mavsdk/plugins/telemetry/telemetry.h>
 #include <spdlog/spdlog.h>
 
 namespace drone::hal {
@@ -47,10 +46,10 @@ public:
     ~MavlinkFCLink() override { close(); }
 
     // Non-copyable, non-movable (owns MAVSDK resources)
-    MavlinkFCLink(const MavlinkFCLink&) = delete;
+    MavlinkFCLink(const MavlinkFCLink&)            = delete;
     MavlinkFCLink& operator=(const MavlinkFCLink&) = delete;
-    MavlinkFCLink(MavlinkFCLink&&) = delete;
-    MavlinkFCLink& operator=(MavlinkFCLink&&) = delete;
+    MavlinkFCLink(MavlinkFCLink&&)                 = delete;
+    MavlinkFCLink& operator=(MavlinkFCLink&&)      = delete;
 
     // ── IFCLink interface ──────────────────────────────────
 
@@ -67,14 +66,10 @@ public:
         }
 
         // Interpret parameters
-        std::string uri = port.empty() || port == "auto"
-                              ? "udp://:14540"
-                              : port;
-        double timeout_s = baud > 0 ? static_cast<double>(baud) / 1000.0
-                                    : 8.0;
+        std::string uri       = port.empty() || port == "auto" ? "udp://:14540" : port;
+        double      timeout_s = baud > 0 ? static_cast<double>(baud) / 1000.0 : 8.0;
 
-        spdlog::info("[MavlinkFCLink] Connecting to '{}' (timeout {:.1f}s)…",
-                     uri, timeout_s);
+        spdlog::info("[MavlinkFCLink] Connecting to '{}' (timeout {:.1f}s)…", uri, timeout_s);
 
         // Create MAVSDK instance.  Use GroundStation type so PX4 receives
         // GCS heartbeats and passes its "GCS connected" preflight check.
@@ -84,8 +79,7 @@ public:
 
         auto result = mavsdk_->add_any_connection(uri);
         if (result != mavsdk::ConnectionResult::Success) {
-            spdlog::error("[MavlinkFCLink] Connection failed: {}",
-                          connection_result_str(result));
+            spdlog::error("[MavlinkFCLink] Connection failed: {}", connection_result_str(result));
             mavsdk_.reset();
             return false;
         }
@@ -93,8 +87,7 @@ public:
         // Wait for the first autopilot system
         auto maybe_system = mavsdk_->first_autopilot(timeout_s);
         if (!maybe_system) {
-            spdlog::error("[MavlinkFCLink] No autopilot found within {:.1f}s",
-                          timeout_s);
+            spdlog::error("[MavlinkFCLink] No autopilot found within {:.1f}s", timeout_s);
             mavsdk_.reset();
             return false;
         }
@@ -110,11 +103,10 @@ public:
 
         // Set RTL return altitude to current flight altitude so RTL
         // doesn't climb to the PX4 default of 30 m before returning.
-        constexpr float rtl_alt_m = 5.0f;
-        auto rtl_result = action_->set_return_to_launch_altitude(rtl_alt_m);
+        constexpr float rtl_alt_m  = 5.0f;
+        auto            rtl_result = action_->set_return_to_launch_altitude(rtl_alt_m);
         if (rtl_result == mavsdk::Action::Result::Success) {
-            spdlog::info("[MavlinkFCLink] RTL return altitude set to {} m",
-                         rtl_alt_m);
+            spdlog::info("[MavlinkFCLink] RTL return altitude set to {} m", rtl_alt_m);
         } else {
             spdlog::warn("[MavlinkFCLink] Failed to set RTL altitude: {}",
                          action_result_str(rtl_result));
@@ -191,8 +183,8 @@ public:
             spdlog::info("[MavlinkFCLink] Offboard mode started");
         }
 
-        spdlog::debug("[MavlinkFCLink] velocity cmd N={:.2f} E={:.2f} D={:.2f} yaw={:.1f}°",
-                      vx, vy, vz, yaw);
+        spdlog::debug("[MavlinkFCLink] velocity cmd N={:.2f} E={:.2f} D={:.2f} yaw={:.1f}°", vx, vy,
+                      vz, yaw);
         return true;
     }
 
@@ -202,8 +194,8 @@ public:
 
         auto result = arm ? action_->arm() : action_->disarm();
         if (result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] {} failed: {}",
-                         arm ? "Arm" : "Disarm", action_result_str(result));
+            spdlog::warn("[MavlinkFCLink] {} failed: {}", arm ? "Arm" : "Disarm",
+                         action_result_str(result));
             return false;
         }
         spdlog::info("[MavlinkFCLink] {} successful", arm ? "Armed" : "Disarmed");
@@ -216,15 +208,14 @@ public:
 
         auto set_result = action_->set_takeoff_altitude(altitude_m);
         if (set_result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] set_takeoff_altitude({:.1f}m) failed: {}",
-                         altitude_m, action_result_str(set_result));
+            spdlog::warn("[MavlinkFCLink] set_takeoff_altitude({:.1f}m) failed: {}", altitude_m,
+                         action_result_str(set_result));
             return false;
         }
 
         auto result = action_->takeoff();
         if (result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] Takeoff failed: {}",
-                         action_result_str(result));
+            spdlog::warn("[MavlinkFCLink] Takeoff failed: {}", action_result_str(result));
             return false;
         }
         // Stop offboard if it was active — takeoff uses Auto mode
@@ -285,14 +276,12 @@ public:
                 }
                 result = action_->return_to_launch();
                 break;
-            default:
-                spdlog::warn("[MavlinkFCLink] Unknown mode {}", mode);
-                return false;
+            default: spdlog::warn("[MavlinkFCLink] Unknown mode {}", mode); return false;
         }
 
         if (result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] Mode change ({}) failed: {}",
-                         mode, action_result_str(result));
+            spdlog::warn("[MavlinkFCLink] Mode change ({}) failed: {}", mode,
+                         action_result_str(result));
             return false;
         }
         spdlog::info("[MavlinkFCLink] Mode changed to {}", mode);
@@ -310,56 +299,48 @@ private:
     // ── Subscription setup ─────────────────────────────────
     void setup_subscriptions() {
         // Position
-        telemetry_->subscribe_position(
-            [this](mavsdk::Telemetry::Position pos) {
-                std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.altitude_rel = pos.relative_altitude_m;
-            });
+        telemetry_->subscribe_position([this](mavsdk::Telemetry::Position pos) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.altitude_rel = pos.relative_altitude_m;
+        });
 
         // Battery
-        telemetry_->subscribe_battery(
-            [this](mavsdk::Telemetry::Battery batt) {
-                std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.battery_voltage = batt.voltage_v;
-                cached_state_.battery_current = batt.current_battery_a;
-                cached_state_.battery_percent = batt.remaining_percent;
-            });
+        telemetry_->subscribe_battery([this](mavsdk::Telemetry::Battery batt) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.battery_voltage = batt.voltage_v;
+            cached_state_.battery_current = batt.current_battery_a;
+            cached_state_.battery_percent = batt.remaining_percent;
+        });
 
         // Flight mode
-        telemetry_->subscribe_flight_mode(
-            [this](mavsdk::Telemetry::FlightMode fm) {
-                std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.flight_mode = map_flight_mode(fm);
-            });
+        telemetry_->subscribe_flight_mode([this](mavsdk::Telemetry::FlightMode fm) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.flight_mode = map_flight_mode(fm);
+        });
 
         // Armed state
-        telemetry_->subscribe_armed(
-            [this](bool armed) {
-                std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.armed = armed;
-            });
+        telemetry_->subscribe_armed([this](bool armed) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.armed = armed;
+        });
 
         // GPS info
-        telemetry_->subscribe_gps_info(
-            [this](mavsdk::Telemetry::GpsInfo gps) {
-                std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.satellites =
-                    static_cast<uint8_t>(std::clamp(gps.num_satellites, 0, 255));
-            });
+        telemetry_->subscribe_gps_info([this](mavsdk::Telemetry::GpsInfo gps) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.satellites = static_cast<uint8_t>(std::clamp(gps.num_satellites, 0, 255));
+        });
 
         // Velocity (for ground speed computation)
-        telemetry_->subscribe_velocity_ned(
-            [this](mavsdk::Telemetry::VelocityNed vel) {
-                std::lock_guard<std::mutex> lock(state_mtx_);
-                cached_state_.ground_speed =
-                    std::sqrt(vel.north_m_s * vel.north_m_s +
-                              vel.east_m_s  * vel.east_m_s);
-                // Update timestamp on every velocity update
-                cached_state_.timestamp_ns = static_cast<uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                        .count());
-            });
+        telemetry_->subscribe_velocity_ned([this](mavsdk::Telemetry::VelocityNed vel) {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            cached_state_.ground_speed =
+                std::sqrt(vel.north_m_s * vel.north_m_s + vel.east_m_s * vel.east_m_s);
+            // Update timestamp on every velocity update
+            cached_state_.timestamp_ns =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+        });
     }
 
     // ── Flight mode mapping ────────────────────────────────
@@ -375,31 +356,26 @@ private:
             case mavsdk::Telemetry::FlightMode::Altctl:
             case mavsdk::Telemetry::FlightMode::Posctl:
             case mavsdk::Telemetry::FlightMode::Acro:
-            case mavsdk::Telemetry::FlightMode::Rattitude:
-                return 0;  // STAB
+            case mavsdk::Telemetry::FlightMode::Rattitude: return 0;  // STAB
             case mavsdk::Telemetry::FlightMode::Offboard:
-            case mavsdk::Telemetry::FlightMode::FollowMe:
-                return 1;  // GUIDED
+            case mavsdk::Telemetry::FlightMode::FollowMe: return 1;  // GUIDED
             case mavsdk::Telemetry::FlightMode::Mission:
             case mavsdk::Telemetry::FlightMode::Takeoff:
             case mavsdk::Telemetry::FlightMode::Land:
-            case mavsdk::Telemetry::FlightMode::Hold:
-                return 2;  // AUTO
-            case mavsdk::Telemetry::FlightMode::ReturnToLaunch:
-                return 3;  // RTL
-            default:
-                return 0;  // Unknown → STAB
+            case mavsdk::Telemetry::FlightMode::Hold: return 2;            // AUTO
+            case mavsdk::Telemetry::FlightMode::ReturnToLaunch: return 3;  // RTL
+            default: return 0;                                             // Unknown → STAB
         }
     }
 
     // ── Result stringifiers (avoid pulling in <iostream>) ──
     static const char* connection_result_str(mavsdk::ConnectionResult r) {
         switch (r) {
-            case mavsdk::ConnectionResult::Success:            return "Success";
-            case mavsdk::ConnectionResult::Timeout:            return "Timeout";
-            case mavsdk::ConnectionResult::SocketError:        return "SocketError";
-            case mavsdk::ConnectionResult::BindError:          return "BindError";
-            case mavsdk::ConnectionResult::ConnectionError:    return "ConnectionError";
+            case mavsdk::ConnectionResult::Success: return "Success";
+            case mavsdk::ConnectionResult::Timeout: return "Timeout";
+            case mavsdk::ConnectionResult::SocketError: return "SocketError";
+            case mavsdk::ConnectionResult::BindError: return "BindError";
+            case mavsdk::ConnectionResult::ConnectionError: return "ConnectionError";
             case mavsdk::ConnectionResult::ConnectionUrlInvalid: return "ConnectionUrlInvalid";
             default: return "Unknown";
         }
@@ -407,40 +383,40 @@ private:
 
     static const char* action_result_str(mavsdk::Action::Result r) {
         switch (r) {
-            case mavsdk::Action::Result::Success:        return "Success";
-            case mavsdk::Action::Result::NoSystem:       return "NoSystem";
-            case mavsdk::Action::Result::ConnectionError:return "ConnectionError";
-            case mavsdk::Action::Result::Busy:           return "Busy";
-            case mavsdk::Action::Result::CommandDenied:  return "CommandDenied";
-            case mavsdk::Action::Result::Timeout:        return "Timeout";
-            case mavsdk::Action::Result::Unsupported:    return "Unsupported";
+            case mavsdk::Action::Result::Success: return "Success";
+            case mavsdk::Action::Result::NoSystem: return "NoSystem";
+            case mavsdk::Action::Result::ConnectionError: return "ConnectionError";
+            case mavsdk::Action::Result::Busy: return "Busy";
+            case mavsdk::Action::Result::CommandDenied: return "CommandDenied";
+            case mavsdk::Action::Result::Timeout: return "Timeout";
+            case mavsdk::Action::Result::Unsupported: return "Unsupported";
             default: return "Unknown";
         }
     }
 
     static const char* offboard_result_str(mavsdk::Offboard::Result r) {
         switch (r) {
-            case mavsdk::Offboard::Result::Success:       return "Success";
-            case mavsdk::Offboard::Result::NoSystem:      return "NoSystem";
-            case mavsdk::Offboard::Result::ConnectionError:return "ConnectionError";
-            case mavsdk::Offboard::Result::Busy:          return "Busy";
+            case mavsdk::Offboard::Result::Success: return "Success";
+            case mavsdk::Offboard::Result::NoSystem: return "NoSystem";
+            case mavsdk::Offboard::Result::ConnectionError: return "ConnectionError";
+            case mavsdk::Offboard::Result::Busy: return "Busy";
             case mavsdk::Offboard::Result::CommandDenied: return "CommandDenied";
-            case mavsdk::Offboard::Result::Timeout:       return "Timeout";
+            case mavsdk::Offboard::Result::Timeout: return "Timeout";
             default: return "Unknown";
         }
     }
 
     // ── Members ────────────────────────────────────────────
-    mutable std::mutex conn_mtx_;               ///< Guards connection lifecycle
-    std::mutex         state_mtx_;              ///< Guards cached_state_
-    FCState            cached_state_{};          ///< Latest telemetry snapshot
+    mutable std::mutex conn_mtx_;        ///< Guards connection lifecycle
+    std::mutex         state_mtx_;       ///< Guards cached_state_
+    FCState            cached_state_{};  ///< Latest telemetry snapshot
 
-    std::unique_ptr<mavsdk::Mavsdk>     mavsdk_;
-    std::shared_ptr<mavsdk::System>     system_;
-    std::unique_ptr<mavsdk::Action>     action_;
-    std::unique_ptr<mavsdk::Telemetry>  telemetry_;
-    std::unique_ptr<mavsdk::Offboard>   offboard_;
-    std::atomic<bool>                   offboard_active_{false};
+    std::unique_ptr<mavsdk::Mavsdk>    mavsdk_;
+    std::shared_ptr<mavsdk::System>    system_;
+    std::unique_ptr<mavsdk::Action>    action_;
+    std::unique_ptr<mavsdk::Telemetry> telemetry_;
+    std::unique_ptr<mavsdk::Offboard>  offboard_;
+    std::atomic<bool>                  offboard_active_{false};
 };
 
 }  // namespace drone::hal

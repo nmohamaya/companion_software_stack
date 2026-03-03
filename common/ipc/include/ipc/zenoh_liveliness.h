@@ -31,8 +31,8 @@
 
 #include "ipc/zenoh_session.h"
 
-#include <zenoh.hxx>
 #include <spdlog/spdlog.h>
+#include <zenoh.hxx>
 
 namespace drone::ipc {
 
@@ -62,17 +62,15 @@ public:
     /// @param process_name  Short name (e.g. "video_capture", "comms").
     ///                      Produces key expression "drone/alive/{process_name}".
     explicit LivelinessToken(const std::string& process_name)
-        : key_expr_(std::string(kLivelinessPrefix) + process_name)
-    {
+        : key_expr_(std::string(kLivelinessPrefix) + process_name) {
         try {
             auto& session = ZenohSession::instance().session();
-            auto key = zenoh::KeyExpr(key_expr_);
+            auto  key     = zenoh::KeyExpr(key_expr_);
             token_.emplace(session.liveliness_declare_token(key));
             valid_ = true;
             spdlog::info("[Liveliness] Token declared: {}", key_expr_);
         } catch (const std::exception& e) {
-            spdlog::error("[Liveliness] Failed to declare token '{}': {}",
-                          key_expr_, e.what());
+            spdlog::error("[Liveliness] Failed to declare token '{}': {}", key_expr_, e.what());
             valid_ = false;
         }
     }
@@ -83,8 +81,7 @@ public:
                 token_.reset();  // RAII — destructor undeclares the token
                 spdlog::info("[Liveliness] Token undeclared: {}", key_expr_);
             } catch (const std::exception& e) {
-                spdlog::warn("[Liveliness] Error undeclaring token: {}",
-                             e.what());
+                spdlog::warn("[Liveliness] Error undeclaring token: {}", e.what());
             }
         }
     }
@@ -106,15 +103,15 @@ public:
     }
 
     // Non-copyable (token is RAII), movable
-    LivelinessToken(const LivelinessToken&) = delete;
+    LivelinessToken(const LivelinessToken&)            = delete;
     LivelinessToken& operator=(const LivelinessToken&) = delete;
-    LivelinessToken(LivelinessToken&&) = default;
-    LivelinessToken& operator=(LivelinessToken&&) = default;
+    LivelinessToken(LivelinessToken&&)                 = default;
+    LivelinessToken& operator=(LivelinessToken&&)      = default;
 
 private:
-    std::string key_expr_;
+    std::string                           key_expr_;
     std::optional<zenoh::LivelinessToken> token_;
-    bool valid_ = false;
+    bool                                  valid_ = false;
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -146,12 +143,10 @@ public:
     ///                  discovered via history on startup).
     /// @param on_death  Called when a process token is dropped (crash/exit).
     LivelinessMonitor(AliveCallback on_alive, DeathCallback on_death)
-        : on_alive_(std::move(on_alive))
-        , on_death_(std::move(on_death))
-    {
+        : on_alive_(std::move(on_alive)), on_death_(std::move(on_death)) {
         try {
             auto& session = ZenohSession::instance().session();
-            auto key = zenoh::KeyExpr(kLivelinessWildcard);
+            auto  key     = zenoh::KeyExpr(kLivelinessWildcard);
 
             // Request history so we get PUT for already-declared tokens
             zenoh::Session::LivelinessSubscriberOptions opts;
@@ -168,8 +163,8 @@ public:
                         bool is_new = false;
                         {
                             std::lock_guard<std::mutex> lock(mutex_);
-                            if (std::find(alive_set_.begin(), alive_set_.end(),
-                                          name) == alive_set_.end()) {
+                            if (std::find(alive_set_.begin(), alive_set_.end(), name) ==
+                                alive_set_.end()) {
                                 alive_set_.push_back(name);
                                 is_new = true;
                             }
@@ -179,23 +174,18 @@ public:
                         {
                             std::lock_guard<std::mutex> lock(mutex_);
                             alive_set_.erase(
-                                std::remove(alive_set_.begin(),
-                                            alive_set_.end(), name),
+                                std::remove(alive_set_.begin(), alive_set_.end(), name),
                                 alive_set_.end());
                         }
                         if (on_death_) on_death_(name);
                     }
                 },
                 // on_drop (subscriber destroyed)
-                []() {},
-                std::move(opts)
-            ));
+                []() {}, std::move(opts)));
 
-            spdlog::info("[Liveliness] Monitor started on '{}'",
-                         kLivelinessWildcard);
+            spdlog::info("[Liveliness] Monitor started on '{}'", kLivelinessWildcard);
         } catch (const std::exception& e) {
-            spdlog::error("[Liveliness] Failed to start monitor: {}",
-                          e.what());
+            spdlog::error("[Liveliness] Failed to start monitor: {}", e.what());
         }
     }
 
@@ -210,21 +200,20 @@ public:
     /// Returns true if a specific process is currently alive.
     bool is_alive(const std::string& process_name) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return std::find(alive_set_.begin(), alive_set_.end(),
-                         process_name) != alive_set_.end();
+        return std::find(alive_set_.begin(), alive_set_.end(), process_name) != alive_set_.end();
     }
 
     // Non-copyable, non-movable (subscriber captures `this`)
-    LivelinessMonitor(const LivelinessMonitor&) = delete;
+    LivelinessMonitor(const LivelinessMonitor&)            = delete;
     LivelinessMonitor& operator=(const LivelinessMonitor&) = delete;
-    LivelinessMonitor(LivelinessMonitor&&) = delete;
-    LivelinessMonitor& operator=(LivelinessMonitor&&) = delete;
+    LivelinessMonitor(LivelinessMonitor&&)                 = delete;
+    LivelinessMonitor& operator=(LivelinessMonitor&&)      = delete;
 
 private:
-    AliveCallback on_alive_;
-    DeathCallback on_death_;
-    mutable std::mutex mutex_;
-    std::vector<std::string> alive_set_;
+    AliveCallback                          on_alive_;
+    DeathCallback                          on_death_;
+    mutable std::mutex                     mutex_;
+    std::vector<std::string>               alive_set_;
     std::optional<zenoh::Subscriber<void>> subscriber_;
 };
 
@@ -238,7 +227,7 @@ private:
 
 namespace drone::ipc {
 
-static constexpr const char* kLivelinessPrefix = "drone/alive/";
+static constexpr const char* kLivelinessPrefix   = "drone/alive/";
 static constexpr const char* kLivelinessWildcard = "drone/alive/**";
 
 /// No-op LivelinessToken when Zenoh is not available.
@@ -246,7 +235,7 @@ class LivelinessToken {
 public:
     explicit LivelinessToken(const std::string& /*process_name*/) {}
     const std::string& key_expr() const { return key_expr_; }
-    bool is_valid() const { return false; }
+    bool               is_valid() const { return false; }
     static std::string extract_process_name(const std::string& key) {
         const auto prefix_len = std::string_view(kLivelinessPrefix).size();
         if (key.size() >= prefix_len && key.substr(0, prefix_len) == kLivelinessPrefix) {
@@ -254,6 +243,7 @@ public:
         }
         return key;
     }
+
 private:
     std::string key_expr_;
 };
@@ -265,7 +255,7 @@ public:
     using DeathCallback = std::function<void(const std::string&)>;
     LivelinessMonitor(AliveCallback, DeathCallback) {}
     std::vector<std::string> get_alive_processes() const { return {}; }
-    bool is_alive(const std::string&) const { return false; }
+    bool                     is_alive(const std::string&) const { return false; }
 };
 
 }  // namespace drone::ipc

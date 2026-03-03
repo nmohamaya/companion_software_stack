@@ -1,14 +1,14 @@
 // common/util/include/util/arg_parser.h
 // Simple command-line argument parser for all processes.
 #pragma once
-#include <string>
 #include <cstring>
+#include <string>
 
 struct ParsedArgs {
     std::string config_path = "config/default.json";
     std::string log_level   = "info";
-    bool help               = false;
-    bool simulation         = false;
+    bool        help        = false;
+    bool        simulation  = false;
 };
 
 inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {

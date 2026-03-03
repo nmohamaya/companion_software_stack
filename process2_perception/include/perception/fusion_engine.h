@@ -2,6 +2,7 @@
 // Multi-sensor fusion: camera + LiDAR + radar → fused objects.
 #pragma once
 #include "perception/types.h"
+
 #include <vector>
 
 namespace drone::perception {
@@ -9,9 +10,9 @@ namespace drone::perception {
 /// Calibration data for projecting between sensor coordinate frames.
 struct CalibrationData {
     Eigen::Matrix3f camera_intrinsics;
-    Eigen::Matrix4f T_cam_lidar;   // LiDAR → camera transform
-    Eigen::Matrix4f T_cam_radar;   // radar → camera transform
-    float camera_height_m = 1.5f;  // camera height above ground
+    Eigen::Matrix4f T_cam_lidar;             // LiDAR → camera transform
+    Eigen::Matrix4f T_cam_radar;             // radar → camera transform
+    float           camera_height_m = 1.5f;  // camera height above ground
 };
 
 /// Fuses detections from camera tracker, LiDAR clusters, and radar scans.
@@ -19,9 +20,9 @@ class FusionEngine {
 public:
     explicit FusionEngine(const CalibrationData& calib) : calib_(calib) {}
 
-    FusedObjectList fuse(const TrackedObjectList& tracked,
+    FusedObjectList fuse(const TrackedObjectList&         tracked,
                          const std::vector<LiDARCluster>& lidar_clusters,
-                         const RadarDetectionList& radar_detections);
+                         const RadarDetectionList&        radar_detections);
 
 private:
     CalibrationData calib_;
@@ -36,4 +37,4 @@ private:
     Eigen::Vector3f radar_to_cartesian(const RadarDetection& det) const;
 };
 
-} // namespace drone::perception
+}  // namespace drone::perception

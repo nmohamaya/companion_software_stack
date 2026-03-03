@@ -9,17 +9,18 @@
 //  5. Interface compliance (all methods callable)
 //
 // NOTE: Full integration tests requiring PX4 SITL are planned in Phase 4 (#11).
-#include <gtest/gtest.h>
 #include "hal/hal_factory.h"
 #include "hal/ifc_link.h"
 #include "util/config.h"
 
-#include <fstream>
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════
 // Helper: temp config (same pattern as test_hal.cpp)
@@ -28,9 +29,9 @@ static std::vector<std::string> g_mavlink_temp_files;
 
 static std::string create_temp_config(const std::string& json_content) {
     char tmpl[] = "/tmp/test_mavlink_XXXXXX.json";
-    int fd = mkstemps(tmpl, 5);
+    int  fd     = mkstemps(tmpl, 5);
     if (fd < 0) {
-        std::string path = "/tmp/test_mavlink_" + std::to_string(getpid()) + ".json";
+        std::string   path = "/tmp/test_mavlink_" + std::to_string(getpid()) + ".json";
         std::ofstream ofs(path);
         ofs << json_content;
         ofs.close();
@@ -38,7 +39,7 @@ static std::string create_temp_config(const std::string& json_content) {
         return path;
     }
     ::close(fd);
-    std::string path(tmpl);
+    std::string   path(tmpl);
     std::ofstream ofs(path);
     ofs << json_content;
     ofs.close();
@@ -76,7 +77,7 @@ TEST(MavlinkFCLinkTest, InitiallyDisconnected) {
 
 TEST(MavlinkFCLinkTest, ReceiveStateDefaultWhenDisconnected) {
     drone::hal::MavlinkFCLink fc;
-    auto state = fc.receive_state();
+    auto                      state = fc.receive_state();
     EXPECT_EQ(state.timestamp_ns, 0u);
     EXPECT_FALSE(state.armed);
     EXPECT_FLOAT_EQ(state.battery_percent, 0.0f);
@@ -142,7 +143,7 @@ TEST(MavlinkFCLinkTest, DoubleOpenReturnsFalse) {
 
 // ── Factory creates MavlinkFCLink ──────────────────────────
 TEST(MavlinkFCLinkTest, FactoryCreatesMavlinkBackend) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "comms": { "fc": { "backend": "mavlink",
                             "uri": "udp://:14596",
                             "timeout_ms": 1000 } }
@@ -161,7 +162,7 @@ TEST(MavlinkFCLinkTest, FactoryCreatesMavlinkBackend) {
 // by checking the default flight_mode in a fresh state is 0 (STAB).
 TEST(MavlinkFCLinkTest, DefaultFlightModeIsZero) {
     drone::hal::MavlinkFCLink fc;
-    auto state = fc.receive_state();
+    auto                      state = fc.receive_state();
     EXPECT_EQ(state.flight_mode, 0);  // default = STAB
 }
 
@@ -169,18 +170,17 @@ TEST(MavlinkFCLinkTest, DefaultFlightModeIsZero) {
 
 // ── When MAVSDK is not available ───────────────────────────
 TEST(MavlinkFCLinkTest, MavlinkBackendThrowsWithoutMAVSDK) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "comms": { "fc": { "backend": "mavlink" } }
     })");
     drone::Config cfg;
     cfg.load(path);
 
-    EXPECT_THROW(drone::hal::create_fc_link(cfg, "comms.fc"),
-                 std::runtime_error);
+    EXPECT_THROW(drone::hal::create_fc_link(cfg, "comms.fc"), std::runtime_error);
 }
 
 TEST(MavlinkFCLinkTest, SimulatedStillWorksWithoutMAVSDK) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "comms": { "fc": { "backend": "simulated" } }
     })");
     drone::Config cfg;

@@ -1,7 +1,8 @@
 // tests/test_mission_fsm.cpp
 // Unit tests for MissionFSM state machine and waypoint logic.
-#include <gtest/gtest.h>
 #include "planner/mission_fsm.h"
+
+#include <gtest/gtest.h>
 
 using namespace drone::planner;
 
