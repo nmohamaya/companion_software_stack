@@ -28,7 +28,7 @@ struct FCHeartbeat {
 // ── Simulated MAVLink link ──────────────────────────────────
 class MavlinkSim {
 public:
-    bool open(const std::string& port, int baud) {
+    [[nodiscard]] bool open(const std::string& port, int baud) {
         (void)port;
         (void)baud;
         spdlog::info("[MavlinkSim] Opened simulated link {}@{}", port, baud);
@@ -37,10 +37,10 @@ public:
         return true;
     }
 
-    bool is_connected() const { return connected_; }
+    [[nodiscard]] bool is_connected() const { return connected_; }
 
     // Send trajectory command to FC (simulated)
-    bool send_trajectory(float vx, float vy, float vz, float yaw) {
+    [[nodiscard]] bool send_trajectory(float vx, float vy, float vz, float yaw) {
         if (!connected_) return false;
         spdlog::debug("[MavlinkSim] SET_POSITION_TARGET_LOCAL_NED "
                       "vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}",
@@ -52,21 +52,21 @@ public:
     }
 
     // Send arm / disarm
-    bool send_arm(bool arm) {
+    [[nodiscard]] bool send_arm(bool arm) {
         spdlog::info("[MavlinkSim] {} command sent", arm ? "ARM" : "DISARM");
         heartbeat_.armed = arm;
         return true;
     }
 
     // Send mode change
-    bool send_mode(uint8_t mode) {
+    [[nodiscard]] bool send_mode(uint8_t mode) {
         spdlog::info("[MavlinkSim] MODE change to {}", mode);
         heartbeat_.flight_mode = mode;
         return true;
     }
 
     // Receive heartbeat (simulated)
-    FCHeartbeat receive_heartbeat() {
+    [[nodiscard]] FCHeartbeat receive_heartbeat() {
         auto   now     = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(now - start_time_).count();
 

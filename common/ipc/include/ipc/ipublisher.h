@@ -18,10 +18,10 @@ public:
     virtual void publish(const T& msg) = 0;
 
     /// Returns the topic/channel name this publisher writes to.
-    virtual const std::string& topic_name() const = 0;
+    [[nodiscard]] virtual const std::string& topic_name() const = 0;
 
     /// Returns true if the publisher is ready to accept data.
-    virtual bool is_ready() const = 0;
+    [[nodiscard]] virtual bool is_ready() const = 0;
 };
 
 }  // namespace drone::ipc

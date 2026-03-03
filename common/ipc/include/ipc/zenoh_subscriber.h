@@ -52,7 +52,7 @@ public:
     /// @param out          Destination for the payload.
     /// @param timestamp_ns Optional output — the receive timestamp (ns).
     /// @return true if a message was available, false otherwise.
-    bool receive(T& out, uint64_t* timestamp_ns = nullptr) const override {
+    [[nodiscard]] bool receive(T& out, uint64_t* timestamp_ns = nullptr) const override {
         if (!has_data_.load(std::memory_order_acquire)) return false;
 
         // Copy under lock (protects against concurrent callback)
@@ -68,9 +68,9 @@ public:
     /// Unlike POSIX SHM (which requires the segment to exist), Zenoh
     /// subscriptions are valid immediately — data arrives asynchronously
     /// once a publisher appears.  Use receive() to check for actual data.
-    bool is_connected() const override { return subscriber_.has_value(); }
+    [[nodiscard]] bool is_connected() const override { return subscriber_.has_value(); }
 
-    const std::string& topic_name() const override { return key_expr_; }
+    [[nodiscard]] const std::string& topic_name() const override { return key_expr_; }
 
 private:
     /// Zenoh callback — runs on Zenoh internal thread.

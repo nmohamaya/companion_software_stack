@@ -23,16 +23,16 @@ public:
     virtual ~IIMUSource() = default;
 
     /// Initialise the IMU at the given sample rate (Hz).
-    virtual bool init(int rate_hz) = 0;
+    [[nodiscard]] virtual bool init(int rate_hz) = 0;
 
     /// Read the latest IMU sample (non-blocking).
-    virtual ImuReading read() = 0;
+    [[nodiscard]] virtual ImuReading read() = 0;
 
     /// Check whether the IMU is initialised and producing data.
-    virtual bool is_active() const = 0;
+    [[nodiscard]] virtual bool is_active() const = 0;
 
     /// Human-readable name.
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
 
 }  // namespace drone::hal

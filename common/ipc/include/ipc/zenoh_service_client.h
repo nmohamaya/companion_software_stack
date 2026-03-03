@@ -56,7 +56,7 @@ public:
         spdlog::info("[ZenohServiceClient] Created on '{}'", key_expr);
     }
 
-    uint64_t send_request(const Req& request) override {
+    [[nodiscard]] uint64_t send_request(const Req& request) override {
         uint64_t id = id_prefix_ | next_seq_.fetch_add(1, std::memory_order_relaxed);
 
         // Serialise the request into raw bytes
@@ -115,7 +115,7 @@ public:
         return id;
     }
 
-    std::optional<ServiceResponse<Resp>> poll_response(uint64_t correlation_id) override {
+    [[nodiscard]] std::optional<ServiceResponse<Resp>> poll_response(uint64_t correlation_id) override {
         std::lock_guard<std::mutex> lock(responses_->mutex);
         for (auto it = responses_->queue.begin(); it != responses_->queue.end(); ++it) {
             if (it->correlation_id == correlation_id && it->valid) {

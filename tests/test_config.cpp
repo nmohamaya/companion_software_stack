@@ -50,14 +50,14 @@ TEST_F(ConfigTest, LoadInvalidJSON) {
 TEST_F(ConfigTest, GetTopLevelString) {
     write_json(R"({"log_level": "debug"})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_EQ(cfg.get<std::string>("log_level", "info"), "debug");
 }
 
 TEST_F(ConfigTest, GetDefaultOnMissingKey) {
     write_json(R"({})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_EQ(cfg.get<std::string>("log_level", "info"), "info");
     EXPECT_EQ(cfg.get<int>("missing_int", 42), 42);
 }
@@ -73,7 +73,7 @@ TEST_F(ConfigTest, GetNestedValue) {
         }
     })");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     EXPECT_EQ(cfg.get<int>("video.mission_cam.width", 0), 1920);
     EXPECT_EQ(cfg.get<int>("video.mission_cam.height", 0), 1080);
@@ -83,14 +83,14 @@ TEST_F(ConfigTest, GetNestedValue) {
 TEST_F(ConfigTest, GetDeeplyNestedDefault) {
     write_json(R"({"a": {"b": {}}})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_EQ(cfg.get<int>("a.b.c.d", 99), 99);
 }
 
 TEST_F(ConfigTest, HasKey) {
     write_json(R"({"a": {"b": 1}})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_TRUE(cfg.has("a"));
     EXPECT_TRUE(cfg.has("a.b"));
     EXPECT_FALSE(cfg.has("a.c"));
@@ -100,7 +100,7 @@ TEST_F(ConfigTest, HasKey) {
 TEST_F(ConfigTest, Section) {
     write_json(R"({"parent": {"child1": 1, "child2": "hello"}})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     auto sec = cfg.section("parent");
     EXPECT_EQ(sec["child1"].get<int>(), 1);
@@ -110,7 +110,7 @@ TEST_F(ConfigTest, Section) {
 TEST_F(ConfigTest, MissingSectionReturnsEmptyObject) {
     write_json(R"({})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     auto sec = cfg.section("nonexistent");
     EXPECT_TRUE(sec.is_object());
     EXPECT_TRUE(sec.empty());
@@ -119,14 +119,14 @@ TEST_F(ConfigTest, MissingSectionReturnsEmptyObject) {
 TEST_F(ConfigTest, TypeMismatchReturnsDefault) {
     write_json(R"({"value": "not_a_number"})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_EQ(cfg.get<int>("value", 42), 42);
 }
 
 TEST_F(ConfigTest, FloatValues) {
     write_json(R"({"pi": 3.14159, "nested": {"gain": 0.8}})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_FLOAT_EQ(cfg.get<float>("pi", 0.0f), 3.14159f);
     EXPECT_FLOAT_EQ(cfg.get<float>("nested.gain", 0.0f), 0.8f);
 }
@@ -134,7 +134,7 @@ TEST_F(ConfigTest, FloatValues) {
 TEST_F(ConfigTest, BoolValues) {
     write_json(R"({"enabled": true, "disabled": false})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
     EXPECT_TRUE(cfg.get<bool>("enabled", false));
     EXPECT_FALSE(cfg.get<bool>("disabled", true));
 }
@@ -184,7 +184,7 @@ TEST_F(ConfigTest, LoadConfigParseError) {
 TEST_F(ConfigTest, RequireExistingKey) {
     write_json(R"({"port": 8080, "name": "drone1"})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     auto port = cfg.require<int>("port");
     EXPECT_TRUE(port.is_ok());
@@ -198,7 +198,7 @@ TEST_F(ConfigTest, RequireExistingKey) {
 TEST_F(ConfigTest, RequireMissingKey) {
     write_json(R"({})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     auto r = cfg.require<int>("missing_key");
     EXPECT_TRUE(r.is_err());
@@ -208,7 +208,7 @@ TEST_F(ConfigTest, RequireMissingKey) {
 TEST_F(ConfigTest, RequireNestedKey) {
     write_json(R"({"video": {"width": 1920}})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     auto w = cfg.require<int>("video.width");
     EXPECT_TRUE(w.is_ok());
@@ -222,7 +222,7 @@ TEST_F(ConfigTest, RequireNestedKey) {
 TEST_F(ConfigTest, RequireTypeMismatch) {
     write_json(R"({"value": "not_a_number"})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     auto r = cfg.require<int>("value");
     EXPECT_TRUE(r.is_err());
@@ -233,7 +233,7 @@ TEST_F(ConfigTest, RequireTypeMismatch) {
 TEST_F(ConfigTest, RequireWithValueOr) {
     write_json(R"({"a": 10})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     EXPECT_EQ(cfg.require<int>("a").value_or(99), 10);
     EXPECT_EQ(cfg.require<int>("missing").value_or(99), 99);
@@ -242,7 +242,7 @@ TEST_F(ConfigTest, RequireWithValueOr) {
 TEST_F(ConfigTest, RequireWithMap) {
     write_json(R"({"port": 8080})");
     drone::Config cfg;
-    cfg.load(tmp_path_);
+    ASSERT_TRUE(cfg.load(tmp_path_));
 
     auto doubled = cfg.require<int>("port").map([](int p) { return p * 2; });
     EXPECT_TRUE(doubled.is_ok());

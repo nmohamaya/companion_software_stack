@@ -202,12 +202,12 @@ TEST(MultiObjectTrackerTest, StaleTracksRemoved) {
     Detection2DList det_list;
     det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0});
 
-    tracker.update(det_list);
+    (void)tracker.update(det_list);  // side-effect: creates initial track
 
     // Now send empty detections for 11+ frames — track should be pruned
     Detection2DList empty;
     for (int i = 0; i < 15; ++i) {
-        tracker.update(empty);
+        (void)tracker.update(empty);  // side-effect: ages tracks
     }
 
     auto result = tracker.update(empty);

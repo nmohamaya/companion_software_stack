@@ -21,7 +21,7 @@ public:
         T                     data;
     };
 
-    bool open(const std::string& name) {
+    [[nodiscard]] bool open(const std::string& name) {
         name_ = name;
         fd_   = shm_open(name.c_str(), O_RDONLY, 0);
         if (fd_ < 0) return false;
@@ -31,7 +31,7 @@ public:
     }
 
     // Read with SeqLock retry
-    bool read(T& out, uint64_t* timestamp_ns = nullptr) const {
+    [[nodiscard]] bool read(T& out, uint64_t* timestamp_ns = nullptr) const {
         if (!ptr_ || ptr_ == MAP_FAILED) return false;
         for (int attempt = 0; attempt < 4; ++attempt) {
             uint64_t s1 = ptr_->seq.load(std::memory_order_acquire);
@@ -45,7 +45,7 @@ public:
         return false;  // torn read after 4 attempts
     }
 
-    bool is_open() const { return ptr_ != nullptr && ptr_ != MAP_FAILED; }
+    [[nodiscard]] bool is_open() const { return ptr_ != nullptr && ptr_ != MAP_FAILED; }
 
     ~ShmReader() {
         if (ptr_ && ptr_ != MAP_FAILED) munmap(const_cast<ShmBlock*>(ptr_), sizeof(ShmBlock));

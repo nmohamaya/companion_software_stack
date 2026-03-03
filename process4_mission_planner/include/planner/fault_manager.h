@@ -112,7 +112,7 @@ public:
     /// @param pose_timestamp_ns  Timestamp from the last received ShmPose.
     /// @param now_ns           Current monotonic time (steady_clock).
     /// @return FaultState with recommended action and active fault bitmask.
-    FaultState evaluate(const drone::ipc::ShmSystemHealth& health,
+    [[nodiscard]] FaultState evaluate(const drone::ipc::ShmSystemHealth& health,
                         const drone::ipc::ShmFCState& fc_state, uint64_t pose_timestamp_ns,
                         uint64_t now_ns) {
         FaultState result;
@@ -208,10 +208,10 @@ public:
     }
 
     /// Current high-water mark (highest action ever returned).
-    FaultAction high_water_mark() const { return high_water_mark_; }
+    [[nodiscard]] FaultAction high_water_mark() const { return high_water_mark_; }
 
     /// Get the config (for inspection / logging).
-    const FaultConfig& config() const { return config_; }
+    [[nodiscard]] const FaultConfig& config() const { return config_; }
 
 private:
     FaultConfig config_;

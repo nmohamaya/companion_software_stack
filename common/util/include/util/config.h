@@ -47,7 +47,7 @@ public:
 
     /// Get a value by dot-separated key path (e.g. "video.width") with a default.
     template<typename T>
-    T get(const std::string& key, const T& default_val) const {
+    [[nodiscard]] T get(const std::string& key, const T& default_val) const {
         try {
             const auto* node = &data_;
             // Walk the dot-separated path
@@ -112,7 +112,7 @@ public:
     }
 
     /// Get the raw JSON object for a section.
-    nlohmann::json section(const std::string& key) const {
+    [[nodiscard]] nlohmann::json section(const std::string& key) const {
         try {
             const auto* node  = &data_;
             size_t      start = 0;

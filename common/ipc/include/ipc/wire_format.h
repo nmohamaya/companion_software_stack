@@ -100,7 +100,7 @@ static_assert(std::is_trivially_copyable_v<WireHeader>, "WireHeader must be triv
 /// @param  seq       Sequence number (caller-managed per topic).
 /// @param  ts_ns     Timestamp in nanoseconds (0 = auto from steady_clock).
 template<typename T>
-std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, uint32_t seq = 0,
+[[nodiscard]] std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, uint32_t seq = 0,
                                     uint64_t ts_ns = 0) {
     static_assert(std::is_trivially_copyable_v<T>, "wire_serialize requires trivially copyable T");
 
@@ -125,7 +125,7 @@ std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, uint
 /// @param  data  Pointer to the received buffer.
 /// @param  len   Length of the buffer in bytes.
 /// @return true if the header is valid (magic + version + size check).
-inline bool wire_validate(const uint8_t* data, std::size_t len) {
+[[nodiscard]] inline bool wire_validate(const uint8_t* data, std::size_t len) {
     if (len < sizeof(WireHeader)) return false;
 
     WireHeader hdr;
@@ -139,7 +139,7 @@ inline bool wire_validate(const uint8_t* data, std::size_t len) {
 }
 
 /// Extract the wire header from a byte buffer (no validation).
-inline WireHeader wire_read_header(const uint8_t* data) {
+[[nodiscard]] inline WireHeader wire_read_header(const uint8_t* data) {
     WireHeader hdr;
     std::memcpy(&hdr, data, sizeof(WireHeader));
     return hdr;
@@ -153,7 +153,7 @@ inline WireHeader wire_read_header(const uint8_t* data) {
 /// @param  out   Output: deserialized message.
 /// @return true if deserialization succeeded, false on size mismatch.
 template<typename T>
-bool wire_deserialize(const uint8_t* data, std::size_t len, T& out) {
+[[nodiscard]] bool wire_deserialize(const uint8_t* data, std::size_t len, T& out) {
     static_assert(std::is_trivially_copyable_v<T>,
                   "wire_deserialize requires trivially copyable T");
 
@@ -170,7 +170,7 @@ bool wire_deserialize(const uint8_t* data, std::size_t len, T& out) {
 ///
 /// Used by network-aware publishers to stamp the correct type ID
 /// in the wire header.  Returns UNKNOWN for unrecognized keys.
-inline WireMessageType key_to_wire_type(const std::string& key) {
+[[nodiscard]] inline WireMessageType key_to_wire_type(const std::string& key) {
     // Use a simple if-chain; the mapping is small and called once per pub.
     if (key == "drone/video/frame") return WireMessageType::VIDEO_FRAME;
     if (key == "drone/video/stereo_frame") return WireMessageType::STEREO_FRAME;

@@ -117,7 +117,7 @@ public:
         spdlog::info("[ZenohServiceServer] Queryable declared on '{}'", key_expr);
     }
 
-    std::optional<ServiceEnvelope<Req>> poll_request() override {
+    [[nodiscard]] std::optional<ServiceEnvelope<Req>> poll_request() override {
         std::lock_guard<std::mutex> lock(pending_->mutex);
         if (pending_->queue.empty()) return std::nullopt;
 

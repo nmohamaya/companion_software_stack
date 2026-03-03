@@ -161,7 +161,7 @@ TEST(OpenCvYoloDetectorTest, ConfigConstructionWithMissingModel) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     OpenCvYoloDetector det(cfg);
     EXPECT_FALSE(det.is_loaded());
 }
@@ -238,7 +238,7 @@ TEST_F(YoloModelTest, ConfigConstruction) {
     })";
     auto          path = create_temp_config(cfg_json);
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     OpenCvYoloDetector det(cfg);
     EXPECT_TRUE(det.is_loaded());
 }
@@ -291,7 +291,7 @@ TEST(YoloFactoryTest, Yolov8BackendWithConfig) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     auto det = create_detector("yolov8", &cfg);
     ASSERT_NE(det, nullptr);
     EXPECT_EQ(det->name(), "OpenCvYoloDetector");

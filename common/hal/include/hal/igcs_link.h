@@ -31,22 +31,22 @@ public:
     virtual ~IGCSLink() = default;
 
     /// Open the GCS link (e.g. UDP socket or simulated).
-    virtual bool open(const std::string& addr, int port) = 0;
+    [[nodiscard]] virtual bool open(const std::string& addr, int port) = 0;
 
     /// Close the link.
     virtual void close() = 0;
 
     /// Check connection status.
-    virtual bool is_connected() const = 0;
+    [[nodiscard]] virtual bool is_connected() const = 0;
 
     /// Send telemetry to the GCS.
-    virtual bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) = 0;
+    [[nodiscard]] virtual bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) = 0;
 
     /// Poll for incoming GCS commands.
-    virtual GCSCommand poll_command() = 0;
+    [[nodiscard]] virtual GCSCommand poll_command() = 0;
 
     /// Human-readable name.
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
 
 }  // namespace drone::hal

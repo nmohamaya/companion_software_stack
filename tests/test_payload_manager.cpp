@@ -23,7 +23,7 @@ TEST(GimbalController, Init) {
 
 TEST(GimbalController, SetTargetClamping) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     // Pitch should clamp to [-90, 30]
     gimbal.set_target(-120.0f, 0.0f);
@@ -43,7 +43,7 @@ TEST(GimbalController, SetTargetClamping) {
 
 TEST(GimbalController, SmoothMotion) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     gimbal.set_target(-45.0f, 90.0f);
     gimbal.update(0.02f);
@@ -60,7 +60,7 @@ TEST(GimbalController, SmoothMotion) {
 
 TEST(GimbalController, ConvergesToTarget) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     gimbal.set_target(-45.0f, 90.0f);
     // Run enough steps to converge (90 deg / 1.2 deg/step = ~75 steps)
@@ -73,7 +73,7 @@ TEST(GimbalController, ConvergesToTarget) {
 
 TEST(GimbalController, CaptureImage) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     uint64_t ts = gimbal.capture_image();
     EXPECT_GT(ts, 0u);
@@ -81,7 +81,7 @@ TEST(GimbalController, CaptureImage) {
 
 TEST(GimbalController, Recording) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     EXPECT_FALSE(gimbal.is_recording());
 
@@ -94,7 +94,7 @@ TEST(GimbalController, Recording) {
 
 TEST(GimbalController, MultipleCapturesIncrement) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     uint64_t ts1 = gimbal.capture_image();
     uint64_t ts2 = gimbal.capture_image();
@@ -104,7 +104,7 @@ TEST(GimbalController, MultipleCapturesIncrement) {
 
 TEST(GimbalController, ZeroDtNoMovement) {
     GimbalController gimbal;
-    gimbal.init();
+    ASSERT_TRUE(gimbal.init());
 
     gimbal.set_target(-30.0f, 60.0f);
     float pitch_before = gimbal.state().pitch;

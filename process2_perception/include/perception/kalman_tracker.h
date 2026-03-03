@@ -22,8 +22,8 @@ public:
     KalmanBoxTracker(const Detection2D& initial_det, uint32_t id);
     void            predict(float dt = 1.0f / 30.0f);
     void            update(const Detection2D& det);
-    Detection2D     predicted_bbox() const;
-    Eigen::Vector2f velocity() const;
+    [[nodiscard]] Detection2D     predicted_bbox() const;
+    [[nodiscard]] Eigen::Vector2f velocity() const;
 
     uint32_t    track_id;
     ObjectClass class_id           = ObjectClass::UNKNOWN;
@@ -32,8 +32,8 @@ public:
     uint32_t    hits               = 0;
     uint32_t    consecutive_misses = 0;
 
-    bool is_confirmed() const { return hits >= 3; }
-    bool is_stale() const { return consecutive_misses > 10; }
+    [[nodiscard]] bool is_confirmed() const { return hits >= 3; }
+    [[nodiscard]] bool is_stale() const { return consecutive_misses > 10; }
 
 private:
     StateVec                                 x_;
@@ -58,7 +58,7 @@ public:
 /// Multi-object tracker using SORT algorithm.
 class MultiObjectTracker {
 public:
-    TrackedObjectList update(const Detection2DList& detections);
+    [[nodiscard]] TrackedObjectList update(const Detection2DList& detections);
 
 private:
     std::vector<KalmanBoxTracker> tracks_;

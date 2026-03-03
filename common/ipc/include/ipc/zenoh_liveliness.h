@@ -87,14 +87,14 @@ public:
     }
 
     /// The full key expression (e.g. "drone/alive/video_capture").
-    const std::string& key_expr() const { return key_expr_; }
+    [[nodiscard]] const std::string& key_expr() const { return key_expr_; }
 
     /// Returns true if the token was successfully declared.
-    bool is_valid() const { return valid_; }
+    [[nodiscard]] bool is_valid() const { return valid_; }
 
     /// Extract the process name from a liveliness key expression.
     /// "drone/alive/video_capture" → "video_capture"
-    static std::string extract_process_name(const std::string& key) {
+    [[nodiscard]] static std::string extract_process_name(const std::string& key) {
         const auto prefix_len = std::string_view(kLivelinessPrefix).size();
         if (key.size() >= prefix_len && key.substr(0, prefix_len) == kLivelinessPrefix) {
             return key.substr(prefix_len);
@@ -192,13 +192,13 @@ public:
     ~LivelinessMonitor() = default;
 
     /// Returns a snapshot of currently alive process names.
-    std::vector<std::string> get_alive_processes() const {
+    [[nodiscard]] std::vector<std::string> get_alive_processes() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return alive_set_;
     }
 
     /// Returns true if a specific process is currently alive.
-    bool is_alive(const std::string& process_name) const {
+    [[nodiscard]] bool is_alive(const std::string& process_name) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return std::find(alive_set_.begin(), alive_set_.end(), process_name) != alive_set_.end();
     }
@@ -234,9 +234,9 @@ static constexpr const char* kLivelinessWildcard = "drone/alive/**";
 class LivelinessToken {
 public:
     explicit LivelinessToken(const std::string& /*process_name*/) {}
-    const std::string& key_expr() const { return key_expr_; }
-    bool               is_valid() const { return false; }
-    static std::string extract_process_name(const std::string& key) {
+    [[nodiscard]] const std::string& key_expr() const { return key_expr_; }
+    [[nodiscard]] bool               is_valid() const { return false; }
+    [[nodiscard]] static std::string extract_process_name(const std::string& key) {
         const auto prefix_len = std::string_view(kLivelinessPrefix).size();
         if (key.size() >= prefix_len && key.substr(0, prefix_len) == kLivelinessPrefix) {
             return key.substr(prefix_len);
@@ -254,8 +254,8 @@ public:
     using AliveCallback = std::function<void(const std::string&)>;
     using DeathCallback = std::function<void(const std::string&)>;
     LivelinessMonitor(AliveCallback, DeathCallback) {}
-    std::vector<std::string> get_alive_processes() const { return {}; }
-    bool                     is_alive(const std::string&) const { return false; }
+    [[nodiscard]] std::vector<std::string> get_alive_processes() const { return {}; }
+    [[nodiscard]] bool                     is_alive(const std::string&) const { return false; }
 };
 
 }  // namespace drone::ipc

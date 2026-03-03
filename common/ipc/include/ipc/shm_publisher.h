@@ -28,9 +28,9 @@ public:
 
     void publish(const T& msg) override { writer_.write(msg); }
 
-    const std::string& topic_name() const override { return topic_; }
+    [[nodiscard]] const std::string& topic_name() const override { return topic_; }
 
-    bool is_ready() const override { return ready_; }
+    [[nodiscard]] bool is_ready() const override { return ready_; }
 
 private:
     ShmWriter<T> writer_;

@@ -341,7 +341,7 @@ TEST(FaultManagerTest, ResetClearsHighWaterMark) {
     fc.battery_remaining = 15.0f;  // → RTL
     uint64_t now         = 1'000 * S;
 
-    mgr.evaluate(health, fc, now - 10 * MS, now);
+    (void)mgr.evaluate(health, fc, now - 10 * MS, now);  // side-effect: sets high_water_mark
     EXPECT_EQ(mgr.high_water_mark(), FaultAction::RTL);
 
     mgr.reset();

@@ -27,20 +27,20 @@ public:
 
     /// Open the camera with the given resolution and frame rate.
     /// Returns true on success.
-    virtual bool open(uint32_t width, uint32_t height, int fps) = 0;
+    [[nodiscard]] virtual bool open(uint32_t width, uint32_t height, int fps) = 0;
 
     /// Close the camera and release resources.
     virtual void close() = 0;
 
     /// Capture one frame. Blocks until a frame is ready (or timeout).
     /// The returned CapturedFrame::data pointer is valid until the next call to capture().
-    virtual CapturedFrame capture() = 0;
+    [[nodiscard]] virtual CapturedFrame capture() = 0;
 
     /// Check whether the camera is currently open.
-    virtual bool is_open() const = 0;
+    [[nodiscard]] virtual bool is_open() const = 0;
 
     /// Human-readable name (e.g. "SimulatedCamera", "V4L2Camera(/dev/video0)").
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
 
 }  // namespace drone::hal
