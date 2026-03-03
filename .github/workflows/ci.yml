@@ -138,3 +138,67 @@ jobs:
         else
           ctest --output-on-failure -j"$(nproc)"
         fi
+
+  # ── Code coverage report ────────────────────────────────────
+  coverage:
+    runs-on: ubuntu-24.04
+    name: coverage (shm)
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential cmake \
+          libspdlog-dev \
+          libeigen3-dev \
+          nlohmann-json3-dev \
+          libgtest-dev \
+          lcov
+
+    - name: Configure CMake (coverage)
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DENABLE_COVERAGE=ON
+
+    - name: Build
+      run: cmake --build build -j$(nproc)
+
+    - name: Zero counters
+      run: lcov --zerocounters --directory build
+
+    - name: Run tests
+      working-directory: build
+      run: ctest --output-on-failure -j$(nproc)
+
+    - name: Capture coverage
+      run: |
+        lcov --capture --directory build --output-file coverage-raw.info \
+          --ignore-errors mismatch \
+          --rc lcov_branch_coverage=1
+        # Remove system headers, test code, and third-party libraries
+        lcov --remove coverage-raw.info \
+          '/usr/*' \
+          '*/googletest/*' \
+          '*/gtest/*' \
+          '*/test/*' \
+          '*/tests/*' \
+          '*_test.cpp' \
+          '*_test.h' \
+          --output-file coverage.info \
+          --ignore-errors unused \
+          --rc lcov_branch_coverage=1
+        lcov --list coverage.info --rc lcov_branch_coverage=1
+
+    - name: Generate HTML report
+      run: genhtml coverage.info --output-directory coverage-report --title "Companion Stack Coverage" --rc genhtml_branch_coverage=1
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage-report/
+        retention-days: 14
