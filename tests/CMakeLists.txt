@@ -64,6 +64,9 @@ add_drone_test(test_fusion_engine   test_fusion_engine.cpp
 # ── Config system tests ──────────────────────────────────────
 add_drone_test(test_config          test_config.cpp)
 
+# ── Config validator tests ───────────────────────────────────
+add_drone_test(test_config_validator test_config_validator.cpp)
+
 # ── Result<T,E> type tests ───────────────────────────────────
 add_drone_test(test_result          test_result.cpp)
 
