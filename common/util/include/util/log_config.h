@@ -8,6 +8,8 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
+#include "util/json_log_sink.h"
+
 namespace LogConfig {
 
 /// Return the log directory: $DRONE_LOG_DIR if set, otherwise `fallback`.
@@ -17,19 +19,29 @@ inline std::string resolve_log_dir(const std::string& fallback = "drone_logs") {
 }
 
 inline void init(const std::string& process_name, const std::string& log_dir,
-                 const std::string& level_str = "info") {
+                 const std::string& level_str = "info", bool json_mode = false) {
     try {
-        auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        auto file_sink    = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
             log_dir + "/" + process_name + ".log",
             5 * 1024 * 1024,  // 5 MB max
             3                 // 3 rotated files
         );
 
-        auto logger = std::make_shared<spdlog::logger>(
-            process_name, spdlog::sinks_init_list{console_sink, file_sink});
+        std::shared_ptr<spdlog::logger> logger;
 
-        logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] [t:%t] %v");
+        if (json_mode) {
+            // JSON mode: structured JSON on stdout, human-readable in log file
+            auto json_sink = std::make_shared<drone::util::JsonLogSink_mt>();
+            logger = std::make_shared<spdlog::logger>(
+                process_name, spdlog::sinks_init_list{json_sink, file_sink});
+            file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] [t:%t] %v");
+        } else {
+            // Human mode: coloured console + rotating file
+            auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+            logger = std::make_shared<spdlog::logger>(
+                process_name, spdlog::sinks_init_list{console_sink, file_sink});
+            logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] [t:%t] %v");
+        }
 
         if (level_str == "trace")
             logger->set_level(spdlog::level::trace);
@@ -45,7 +57,8 @@ inline void init(const std::string& process_name, const std::string& log_dir,
             logger->set_level(spdlog::level::info);
 
         spdlog::set_default_logger(logger);
-        spdlog::info("Logger '{}' initialised — level={}", process_name, level_str);
+        spdlog::info("Logger '{}' initialised — level={}, json={}", process_name, level_str,
+                     json_mode ? "on" : "off");
     } catch (const spdlog::spdlog_ex& ex) {
         std::fprintf(stderr, "Log init failed: %s\n", ex.what());
         // Fall back to default console logger

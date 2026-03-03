@@ -9,6 +9,7 @@ struct ParsedArgs {
     std::string log_level   = "info";
     bool        help        = false;
     bool        simulation  = false;
+    bool        json_logs   = false;
 };
 
 inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
@@ -20,6 +21,7 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
             std::printf("  --config <path>    Config file path\n");
             std::printf("  --log-level <lvl>  Log level (trace/debug/info/warn/error)\n");
             std::printf("  --sim              Run in simulation mode\n");
+            std::printf("  --json-logs        Emit structured JSON log lines\n");
             std::printf("  --help             Show this help\n");
         } else if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             args.config_path = argv[++i];
@@ -27,6 +29,8 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
             args.log_level = argv[++i];
         } else if (std::strcmp(argv[i], "--sim") == 0) {
             args.simulation = true;
+        } else if (std::strcmp(argv[i], "--json-logs") == 0) {
+            args.json_logs = true;
         }
     }
     return args;

@@ -94,6 +94,9 @@ add_drone_test(test_gazebo_imu      test_gazebo_imu.cpp)
 # ── Message Bus / API Interface tests ────────────────────────
 add_drone_test(test_message_bus     test_message_bus.cpp)
 
+# ── JSON logging sink tests ──────────────────────────────────
+add_drone_test(test_json_log_sink   test_json_log_sink.cpp)
+
 # ── Zenoh IPC + MessageBusFactory tests ──────────────────────
 # Zenoh tests open sessions + allocate 32 MB SHM pools.  RESOURCE_LOCK
 # serialises them so ctest -j never runs multiple Zenoh binaries at once.

@@ -141,7 +141,7 @@ int main(int argc, char* argv[]) {
     if (args.help) return 0;
 
     SignalHandler::install(g_running);
-    LogConfig::init("slam_vio_nav", LogConfig::resolve_log_dir(), args.log_level);
+    LogConfig::init("slam_vio_nav", LogConfig::resolve_log_dir(), args.log_level, args.json_logs);
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
