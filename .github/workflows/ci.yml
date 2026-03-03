@@ -18,10 +18,15 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Install clang-format
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends clang-format-18
+
     - name: Check clang-format
       run: |
-        find common process[1-7]_* tests -name '*.h' -o -name '*.cpp' \
-          | xargs clang-format --dry-run --Werror 2>&1
+        find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
+          | xargs -0 clang-format-18 --dry-run --Werror 2>&1
 
   # ── Build + test matrix ──────────────────────────────────────────
   build-and-test:
