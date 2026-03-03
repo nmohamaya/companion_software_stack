@@ -423,6 +423,69 @@ chore(#25): upgrade spdlog to 1.13.0
 - ✅ Keep branches short-lived (<3 days)
 - ✅ Always pull before pushing
 - ✅ Never force-push to `main`
+- ✅ Rebase on `main` at least daily (see [Avoiding Merge Conflicts](#avoiding-merge-conflicts))
+
+### Avoiding Merge Conflicts
+
+Merge conflicts are inevitable when multiple people work on feature branches. These practices minimize their frequency and severity.
+
+#### Rebase feature branches regularly
+
+Keep your branch up-to-date with `main`. Do this **at least daily**, or before every push:
+
+```bash
+git fetch origin main
+git rebase origin/main
+```
+
+This surfaces conflicts early (when they're small) rather than late (when they've accumulated across many files).
+
+#### Use stacked PR base branches for chained work
+
+When PRs depend on each other, **chain the base branches** instead of all targeting `main`:
+
+```
+# WRONG — all target main, creating overlapping diffs:
+PR #75 (result type)      base=main
+PR #76 (config validator) base=main    ← conflicts with #75's changes
+PR #77 (nodiscard audit)  base=main    ← conflicts with both
+
+# RIGHT — each PR builds on the previous:
+PR #75 (result type)      base=main
+PR #76 (config validator) base=infra/issue-68-result-type     (PR #75's branch)
+PR #77 (nodiscard audit)  base=infra/issue-69-config-validation (PR #76's branch)
+```
+
+GitHub automatically updates the base when the parent PR merges.
+
+#### Minimize documentation changes on feature branches
+
+Project-wide metrics files (`ROADMAP.md`, `PROGRESS.md`, `DEVELOPMENT_WORKFLOW.md`) are the #1 source of merge conflicts because every branch touches them. Strategies:
+
+- **Update docs on `main` only** — after merging the feature PR, push a follow-up doc commit
+- **Dedicate a single doc commit** at the end of a branch so rebasing only conflicts in one commit
+- **Automate metrics** where possible (e.g., test counts from CI output)
+
+#### Keep branches short-lived
+
+The longer a branch lives, the more `main` diverges. Aim for:
+- Small, focused PRs (1–3 days max)
+- Merge PRs in order promptly — don't let a chain of 3+ PRs sit open simultaneously
+
+#### Enable branch protection rules
+
+In GitHub repo settings → Branch protection for `main`:
+- **Require branches to be up to date before merging** — forces authors to rebase before the merge button works
+- Use **"Rebase and merge"** as the default merge strategy (linear history, fewer conflicts)
+
+#### Partition file ownership
+
+When two features must touch the same file (e.g., `result.h`), coordinate:
+- One person finishes and merges first
+- The other rebases after
+- Avoid two branches modifying the same function simultaneously
+
+> **History:** See [CI_ISSUES.md § CI-007](CI_ISSUES.md#ci-007-merge-conflicts--pr-77-branch-vs-main) for a real example of this problem and its resolution.
 
 ### Testing Strategy
 - ✅ Write tests alongside code, not after

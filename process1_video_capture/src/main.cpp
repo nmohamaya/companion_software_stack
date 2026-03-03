@@ -131,8 +131,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'",
-                     args.config_path);
+        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
     }
 
     spdlog::info("=== Video Capture process starting (PID {}) ===", getpid());
