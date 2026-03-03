@@ -46,7 +46,7 @@ public:
     void on_loiter()    { transition(MissionState::LOITER); }
     void on_rtl()       { transition(MissionState::RTL); }
     void on_land()      { transition(MissionState::LAND); }
-    void on_landed()    { transition(MissionState::IDLE); }
+    void on_landed()    { transition(MissionState::IDLE); fault_triggered_ = false; }
     void on_emergency() { transition(MissionState::EMERGENCY); }
 
     /// Check if waypoint is reached (within acceptance radius).

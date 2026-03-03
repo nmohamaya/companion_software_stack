@@ -3,8 +3,9 @@
 // each loop tick and returns the highest-priority response action.
 //
 // Design:
-//   - Pure function: evaluate() takes immutable snapshots and returns a
-//     FaultState — no side effects, trivial to unit-test.
+//   - Stateful evaluator: evaluate() inspects current sensor/health snapshots
+//     and updates internal escalation and timing state (e.g. high-water mark,
+//     reason string, loiter timer) before returning a FaultState.
 //   - Escalation-only: once an action is raised, it can only be superseded
 //     by a higher-severity action (NONE < WARN < LOITER < RTL < EMERGENCY_LAND).
 //   - Config-driven: all thresholds loaded from the "fault_manager" JSON section.
@@ -24,42 +25,21 @@
 
 namespace drone::planner {
 
-// ═══════════════════════════════════════════════════════════
-// FaultAction — graduated response severity
-// ═══════════════════════════════════════════════════════════
-enum class FaultAction : uint8_t {
-    NONE           = 0,   // nominal — no action
-    WARN           = 1,   // alert GCS, continue mission
-    LOITER         = 2,   // hold position, wait for recovery
-    RTL            = 3,   // return to launch
-    EMERGENCY_LAND = 4    // land immediately at current position
-};
-
-inline const char* fault_action_name(FaultAction a) {
-    switch (a) {
-        case FaultAction::NONE:           return "NONE";
-        case FaultAction::WARN:           return "WARN";
-        case FaultAction::LOITER:         return "LOITER";
-        case FaultAction::RTL:            return "RTL";
-        case FaultAction::EMERGENCY_LAND: return "EMERGENCY_LAND";
-        default:                          return "UNKNOWN";
-    }
-}
-
-// ═══════════════════════════════════════════════════════════
-// FaultType — bitmask of active fault conditions
-// ═══════════════════════════════════════════════════════════
-enum FaultType : uint32_t {
-    FAULT_NONE              = 0,
-    FAULT_CRITICAL_PROCESS  = 1 << 0,   // comms or SLAM died
-    FAULT_POSE_STALE        = 1 << 1,   // no pose update within timeout
-    FAULT_BATTERY_LOW       = 1 << 2,   // battery below warning threshold
-    FAULT_BATTERY_CRITICAL  = 1 << 3,   // battery below critical threshold
-    FAULT_THERMAL_WARNING   = 1 << 4,   // thermal zone 2 (hot)
-    FAULT_THERMAL_CRITICAL  = 1 << 5,   // thermal zone 3 (critical)
-    FAULT_PERCEPTION_DEAD   = 1 << 6,   // perception process died
-    FAULT_FC_LINK_LOST      = 1 << 7,   // FC not connected for >timeout
-};
+// Re-export fault types from ipc layer for planner convenience.
+// Canonical definitions live in ipc/shm_types.h so any process can
+// decode ShmMissionStatus::active_faults / fault_action.
+using drone::ipc::FaultAction;
+using drone::ipc::fault_action_name;
+using drone::ipc::FaultType;
+using drone::ipc::FAULT_NONE;
+using drone::ipc::FAULT_CRITICAL_PROCESS;
+using drone::ipc::FAULT_POSE_STALE;
+using drone::ipc::FAULT_BATTERY_LOW;
+using drone::ipc::FAULT_BATTERY_CRITICAL;
+using drone::ipc::FAULT_THERMAL_WARNING;
+using drone::ipc::FAULT_THERMAL_CRITICAL;
+using drone::ipc::FAULT_PERCEPTION_DEAD;
+using drone::ipc::FAULT_FC_LINK_LOST;
 
 // ═══════════════════════════════════════════════════════════
 // FaultState — output of evaluate()
@@ -194,28 +174,34 @@ public:
             }
         }
 
-        // ── 7. Loiter escalation to RTL ─────────────────────
-        // If we've been recommending LOITER for too long, escalate to RTL.
-        if (result.recommended_action == FaultAction::LOITER) {
-            if (loiter_start_ns_ == 0) {
-                loiter_start_ns_ = now_ns;   // start the timer
-            } else if (now_ns - loiter_start_ns_ > config_.loiter_escalation_timeout_ns) {
-                escalate(result, FaultAction::RTL, "loiter timeout — escalating to RTL");
-            }
-        } else if (result.recommended_action > FaultAction::LOITER) {
-            loiter_start_ns_ = 0;   // reset — already above LOITER
-        } else {
-            loiter_start_ns_ = 0;   // reset — below LOITER (nominal/warn)
-        }
-
-        // ── 8. Enforce escalation-only policy ───────────────
+        // ── 7. Enforce escalation-only policy ───────────────
         // Once we've escalated to a higher action, never downgrade.
+        // Applied BEFORE the loiter timer so that a cleared LOITER
+        // cause still counts toward the escalation timeout.
         if (result.recommended_action < high_water_mark_) {
             result.recommended_action = high_water_mark_;
             result.reason = high_water_reason_;
         } else if (result.recommended_action > high_water_mark_) {
             high_water_mark_ = result.recommended_action;
             high_water_reason_ = result.reason;
+        }
+
+        // ── 8. Loiter escalation to RTL ─────────────────────
+        // If the effective action (post high-water mark) has been
+        // LOITER for too long, escalate to RTL.
+        if (result.recommended_action == FaultAction::LOITER) {
+            if (loiter_start_ns_ == 0) {
+                loiter_start_ns_ = now_ns;   // start the timer
+            } else if (now_ns - loiter_start_ns_ > config_.loiter_escalation_timeout_ns) {
+                result.recommended_action = FaultAction::RTL;
+                result.reason = "loiter timeout — escalating to RTL";
+                high_water_mark_ = FaultAction::RTL;
+                high_water_reason_ = result.reason;
+            }
+        } else if (result.recommended_action > FaultAction::LOITER) {
+            loiter_start_ns_ = 0;   // reset — already above LOITER
+        } else {
+            loiter_start_ns_ = 0;   // reset — below LOITER (nominal/warn)
         }
 
         return result;

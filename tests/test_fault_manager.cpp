@@ -41,6 +41,8 @@ ShmFCState make_fc_ok() {
 
 /// Add a process entry to health.
 void add_process(ShmSystemHealth& h, const char* name, bool alive) {
+    ASSERT_LT(h.num_processes, drone::ipc::kMaxTrackedProcesses)
+        << "add_process() would overflow processes[]";
     auto& p = h.processes[h.num_processes];
     std::strncpy(p.name, name, sizeof(p.name) - 1);
     p.alive = alive;
@@ -295,6 +297,36 @@ TEST(FaultManagerTest, LoiterEscalatesToRTLAfterTimeout) {
     // t=6s: exceeds 5 s → RTL
     auto r3 = mgr.evaluate(health, fc, t0 + 6 * S - 10 * MS, t0 + 6 * S);
     EXPECT_EQ(r3.recommended_action, FaultAction::RTL);
+    EXPECT_EQ(mgr.high_water_mark(), FaultAction::RTL);
+}
+
+// ═══════════════════════════════════════════════════════════
+// LOITER cause cleared but high-water mark keeps LOITER → RTL after timeout
+// ═══════════════════════════════════════════════════════════
+TEST(FaultManagerTest, LoiterCauseClearedStillEscalatesViaHighWaterMark) {
+    FaultConfig cfg = default_cfg();
+    cfg.loiter_escalation_timeout_ns = 5 * S;
+    FaultManager mgr(cfg);
+
+    auto health_fault = make_healthy();
+    health_fault.critical_failure = true;   // → LOITER
+    auto health_ok = make_healthy();        // nominal
+    auto fc = make_fc_ok();
+
+    // t=0: LOITER starts (cause active)
+    uint64_t t0 = 1'000 * S;
+    auto r1 = mgr.evaluate(health_fault, fc, t0 - 10 * MS, t0);
+    EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
+
+    // t=2s: cause clears — high-water mark should keep LOITER
+    auto r2 = mgr.evaluate(health_ok, fc, t0 + 2 * S - 10 * MS, t0 + 2 * S);
+    EXPECT_EQ(r2.recommended_action, FaultAction::LOITER)
+        << "high-water mark should maintain LOITER even after cause clears";
+
+    // t=6s: exceeds 5 s total — should escalate to RTL
+    auto r3 = mgr.evaluate(health_ok, fc, t0 + 6 * S - 10 * MS, t0 + 6 * S);
+    EXPECT_EQ(r3.recommended_action, FaultAction::RTL)
+        << "loiter timeout should escalate to RTL even when original cause cleared";
     EXPECT_EQ(mgr.high_water_mark(), FaultAction::RTL);
 }
 

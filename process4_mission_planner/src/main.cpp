@@ -241,7 +241,8 @@ int main(int argc, char* argv[]) {
                     // Log only — continue mission
                     break;
                 case FaultAction::LOITER:
-                    if (fsm.state() == MissionState::NAVIGATE) {
+                    if (fsm.state() == MissionState::TAKEOFF ||
+                        fsm.state() == MissionState::NAVIGATE) {
                         // Stop sending trajectory commands
                         { drone::ipc::ShmTrajectoryCmd stop{};
                           stop.valid = false;
@@ -435,6 +436,9 @@ int main(int argc, char* argv[]) {
                     spdlog::info("[Planner] Landed (alt={:.2f}m) — mission IDLE",
                                  fc_state.rel_alt);
                     fsm.on_landed();
+                    // Reset fault state for next mission / flight
+                    fault_mgr.reset();
+                    last_fault_action = FaultAction::NONE;
                 }
                 break;
             }
