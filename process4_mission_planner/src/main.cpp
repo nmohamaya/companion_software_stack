@@ -187,8 +187,9 @@ int main(int argc, char* argv[]) {
     float                                 home_x = 0.0f, home_y = 0.0f, home_z = 0.0f;
     bool                                  home_recorded = false;
     std::chrono::steady_clock::time_point rtl_start_time{};
-    uint64_t last_gcs_timestamp = 0;  // dedup GCS commands by timestamp
-    auto     last_arm_time      = std::chrono::steady_clock::now() -
+    uint64_t last_gcs_timestamp    = 0;  // dedup GCS commands by timestamp
+    uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
+    auto     last_arm_time         = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
 
     // ── Main planning loop (10 Hz) ──────────────────────────
@@ -281,7 +282,8 @@ int main(int argc, char* argv[]) {
         drone::ipc::ShmGCSCommand gcs_cmd{};
         if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) && gcs_cmd.valid &&
             gcs_cmd.timestamp_ns > last_gcs_timestamp) {
-            last_gcs_timestamp = gcs_cmd.timestamp_ns;
+            last_gcs_timestamp    = gcs_cmd.timestamp_ns;
+            active_correlation_id = gcs_cmd.correlation_id;
             // Propagate GCS correlation ID into outgoing commands
             drone::util::ScopedCorrelation gcs_guard(gcs_cmd.correlation_id);
             switch (gcs_cmd.command) {
@@ -387,7 +389,7 @@ int main(int argc, char* argv[]) {
                         if (wp->trigger_payload) {
                             drone::ipc::ShmPayloadCommand pay_cmd{};
                             pay_cmd.timestamp_ns   = traj.timestamp_ns;
-                            pay_cmd.correlation_id = drone::util::CorrelationContext::get();
+                            pay_cmd.correlation_id = active_correlation_id;
                             pay_cmd.action         = drone::ipc::PayloadAction::CAMERA_CAPTURE;
                             pay_cmd.gimbal_pitch   = -90.0f;
                             pay_cmd.gimbal_yaw     = 0.0f;
@@ -466,7 +468,7 @@ int main(int argc, char* argv[]) {
         status.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
-        status.correlation_id   = drone::util::CorrelationContext::get();
+        status.correlation_id   = active_correlation_id;
         status.state            = fsm.state();
         status.current_waypoint = static_cast<uint32_t>(fsm.current_wp_index());
         status.total_waypoints  = static_cast<uint32_t>(fsm.total_waypoints());

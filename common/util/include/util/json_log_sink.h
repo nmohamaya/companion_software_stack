@@ -18,6 +18,7 @@
 #include "util/correlation.h"
 
 #include <chrono>
+#include <cinttypes>
 #include <cstdio>
 #include <ctime>
 #include <mutex>
@@ -137,7 +138,7 @@ protected:
             json += ",\"correlation_id\":\"";
             // Format as hex for readability (matches spdlog {:#x} format)
             char cid_buf[32];
-            std::snprintf(cid_buf, sizeof(cid_buf), "0x%016lx", static_cast<unsigned long>(cid));
+            std::snprintf(cid_buf, sizeof(cid_buf), "0x%016" PRIx64, static_cast<uint64_t>(cid));
             json += cid_buf;
             json += "\"";
         }

@@ -104,7 +104,8 @@ static_assert(std::is_trivially_copyable_v<WireHeader>, "WireHeader must be triv
 /// @param  ts_ns     Timestamp in nanoseconds (0 = auto from steady_clock).
 template<typename T>
 [[nodiscard]] std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type,
-                                                  uint32_t seq = 0, uint64_t ts_ns = 0) {
+                                                  uint32_t seq = 0, uint64_t ts_ns = 0,
+                                                  uint64_t corr_id = 0) {
     static_assert(std::is_trivially_copyable_v<T>, "wire_serialize requires trivially copyable T");
 
     if (ts_ns == 0) {
@@ -112,10 +113,11 @@ template<typename T>
     }
 
     WireHeader hdr;
-    hdr.msg_type     = msg_type;
-    hdr.payload_size = static_cast<uint32_t>(sizeof(T));
-    hdr.sequence     = seq;
-    hdr.timestamp_ns = ts_ns;
+    hdr.msg_type       = msg_type;
+    hdr.payload_size   = static_cast<uint32_t>(sizeof(T));
+    hdr.sequence       = seq;
+    hdr.timestamp_ns   = ts_ns;
+    hdr.correlation_id = corr_id;
 
     std::vector<uint8_t> buf(sizeof(WireHeader) + sizeof(T));
     std::memcpy(buf.data(), &hdr, sizeof(WireHeader));
@@ -125,9 +127,10 @@ template<typename T>
 
 /// Validate a wire header at the start of a byte buffer.
 ///
-/// Backward-compatible: accepts version 1 (24-byte header) and
-/// version 2 (32-byte header).  For v1 headers, correlation_id
-/// is set to 0 when read via wire_read_header().
+/// Forward-compatible reads: v2 readers accept both v1 (24-byte) and
+/// v2 (32-byte) headers.  For v1 headers, correlation_id is set to 0
+/// when read via wire_read_header().  Note: v1 readers will reject v2
+/// messages (one-way compatibility — new readers accept old writers).
 ///
 /// @param  data  Pointer to the received buffer.
 /// @param  len   Length of the buffer in bytes.
@@ -189,7 +192,9 @@ template<typename T>
     WireHeader hdr = wire_read_header(data);
     if (hdr.payload_size != sizeof(T)) return false;
 
-    std::memcpy(&out, data + sizeof(WireHeader), sizeof(T));
+    // Use version-dependent header size for payload offset (v1 = 24, v2 = 32).
+    const std::size_t hdr_size = (hdr.version >= 2) ? sizeof(WireHeader) : 24;
+    std::memcpy(&out, data + hdr_size, sizeof(T));
     return true;
 }
 

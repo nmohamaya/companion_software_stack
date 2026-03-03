@@ -140,6 +140,7 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs
             spdlog::info("[Comms] GCS cmd received: {} corr={:#x}",
                          static_cast<int>(shm_cmd.command), shm_cmd.correlation_id);
             pub.publish(shm_cmd);
+            drone::util::CorrelationContext::clear();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }

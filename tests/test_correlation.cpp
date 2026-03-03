@@ -15,12 +15,16 @@
 #include "util/correlation.h"
 #include "util/json_log_sink.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
+#include <memory>
 #include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 using namespace drone::util;
 using namespace drone::ipc;
@@ -380,10 +384,19 @@ TEST(WireHeaderBackcompat, TruncatedV2Rejected) {
 // JSON log sink — correlation_id field
 // ═══════════════════════════════════════════════════════════
 
+// RAII wrapper for tmpfile() to avoid FD leaks in tests.
+struct FileCloser {
+    void operator()(FILE* f) const {
+        if (f) std::fclose(f);
+    }
+};
+using FilePtr = std::unique_ptr<FILE, FileCloser>;
+
 TEST(JsonCorrelation, OmittedWhenZero) {
     CorrelationContext::clear();
-    auto sink   = std::make_shared<JsonLogSink_st>(tmpfile());
-    auto logger = std::make_shared<spdlog::logger>("test_corr_zero", sink);
+    FilePtr fp(tmpfile());
+    auto    sink   = std::make_shared<JsonLogSink_st>(fp.get());
+    auto    logger = std::make_shared<spdlog::logger>("test_corr_zero", sink);
 
     logger->info("no correlation");
 
@@ -394,8 +407,9 @@ TEST(JsonCorrelation, OmittedWhenZero) {
 
 TEST(JsonCorrelation, PresentWhenNonZero) {
     CorrelationContext::set(0x00010000ABCD0001);
-    auto sink   = std::make_shared<JsonLogSink_st>(tmpfile());
-    auto logger = std::make_shared<spdlog::logger>("test_corr_set", sink);
+    FilePtr fp(tmpfile());
+    auto    sink   = std::make_shared<JsonLogSink_st>(fp.get());
+    auto    logger = std::make_shared<spdlog::logger>("test_corr_set", sink);
 
     logger->info("with correlation");
 
@@ -407,8 +421,9 @@ TEST(JsonCorrelation, PresentWhenNonZero) {
 
 TEST(JsonCorrelation, ScopedGuardAffectsLogOutput) {
     CorrelationContext::clear();
-    auto sink   = std::make_shared<JsonLogSink_st>(tmpfile());
-    auto logger = std::make_shared<spdlog::logger>("test_corr_scoped", sink);
+    FilePtr fp(tmpfile());
+    auto    sink   = std::make_shared<JsonLogSink_st>(fp.get());
+    auto    logger = std::make_shared<spdlog::logger>("test_corr_scoped", sink);
 
     {
         ScopedCorrelation guard(0xFACEFEED);
@@ -424,8 +439,9 @@ TEST(JsonCorrelation, ScopedGuardAffectsLogOutput) {
 
 TEST(JsonCorrelation, CorrelationIdIsHexString) {
     CorrelationContext::set(255);
-    auto sink   = std::make_shared<JsonLogSink_st>(tmpfile());
-    auto logger = std::make_shared<spdlog::logger>("test_corr_hex", sink);
+    FilePtr fp(tmpfile());
+    auto    sink   = std::make_shared<JsonLogSink_st>(fp.get());
+    auto    logger = std::make_shared<spdlog::logger>("test_corr_hex", sink);
 
     logger->info("hex test");
 
