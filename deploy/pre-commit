@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# deploy/pre-commit — format-check staged C/C++ files before commit.
+#
+# Install:
+#   ln -sf ../../deploy/pre-commit .git/hooks/pre-commit
+#
+# What it does:
+#   1. Finds staged .h / .cpp files.
+#   2. Runs clang-format on them (in-place).
+#   3. Re-stages the formatted versions so the commit is clean.
+#
+# If clang-format is not installed the hook is silently skipped
+# (CI will still catch formatting issues).
+
+set -euo pipefail
+
+# Prefer clang-format-18 (matches CI), fall back to clang-format
+FMT=""
+for cmd in clang-format-18 clang-format; do
+    if command -v "$cmd" &>/dev/null; then
+        FMT="$cmd"
+        break
+    fi
+done
+
+if [[ -z "$FMT" ]]; then
+    echo "[pre-commit] clang-format not found — skipping format check"
+    exit 0
+fi
+
+# Collect staged C/C++ files (exclude deleted files)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=d -- '*.h' '*.cpp' || true)
+
+if [[ -z "$STAGED_FILES" ]]; then
+    exit 0  # nothing to format
+fi
+
+# Format and re-stage
+echo "[pre-commit] Formatting $(echo "$STAGED_FILES" | wc -l) file(s) with $FMT"
+echo "$STAGED_FILES" | xargs "$FMT" -i
+echo "$STAGED_FILES" | xargs git add
+
+exit 0
