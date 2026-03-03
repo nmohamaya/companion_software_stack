@@ -70,6 +70,9 @@ add_drone_test(test_config_validator test_config_validator.cpp)
 # ── Result<T,E> type tests ───────────────────────────────────
 add_drone_test(test_result          test_result.cpp)
 
+# ── LatencyTracker tests ─────────────────────────────────────
+add_drone_test(test_latency_tracker test_latency_tracker.cpp)
+
 # ── Comms tests ──────────────────────────────────────────────
 add_drone_test(test_comms           test_comms.cpp)
 

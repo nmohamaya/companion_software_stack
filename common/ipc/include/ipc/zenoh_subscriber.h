@@ -12,6 +12,7 @@
 
 #include "ipc/isubscriber.h"
 #include "ipc/zenoh_session.h"
+#include "util/latency_tracker.h"
 
 #include <atomic>
 #include <chrono>
@@ -35,8 +36,10 @@ class ZenohSubscriber final : public ISubscriber<T> {
 
 public:
     /// Construct and declare a Zenoh subscriber on the given key expression.
-    /// @param key_expr  Zenoh key expression (e.g. "drone/slam/pose").
-    explicit ZenohSubscriber(const std::string& key_expr) : key_expr_(key_expr) {
+    /// @param key_expr        Zenoh key expression (e.g. "drone/slam/pose").
+    /// @param track_latency   Enable IPC latency tracking (default: true).
+    explicit ZenohSubscriber(const std::string& key_expr, bool track_latency = true)
+        : key_expr_(key_expr), track_latency_(track_latency) {
         try {
             auto& session = ZenohSession::instance().session();
             subscriber_.emplace(session.declare_subscriber(
@@ -56,10 +59,20 @@ public:
         if (!has_data_.load(std::memory_order_acquire)) return false;
 
         // Copy under lock (protects against concurrent callback)
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        std::memcpy(&out, &latest_msg_, sizeof(T));
+        uint64_t msg_ts = 0;
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            std::memcpy(&out, &latest_msg_, sizeof(T));
+            msg_ts = timestamp_ns_;
+        }
         if (timestamp_ns) {
-            *timestamp_ns = timestamp_ns_;
+            *timestamp_ns = msg_ts;
+        }
+        if (track_latency_ && msg_ts > 0) {
+            uint64_t now = drone::util::LatencyTracker::now_ns();
+            if (now > msg_ts) {
+                latency_tracker_.record(now - msg_ts);
+            }
         }
         return true;
     }
@@ -71,6 +84,15 @@ public:
     [[nodiscard]] bool is_connected() const override { return subscriber_.has_value(); }
 
     [[nodiscard]] const std::string& topic_name() const override { return key_expr_; }
+
+    /// Access the latency tracker for periodic reporting.
+    [[nodiscard]] drone::util::LatencyTracker& latency_tracker() const { return latency_tracker_; }
+
+    /// Log latency summary if enough samples have been collected.
+    bool log_latency_if_due(size_t min_samples = 100) const {
+        if (!track_latency_) return false;
+        return latency_tracker_.log_summary_if_due(key_expr_, min_samples);
+    }
 
 private:
     /// Zenoh callback — runs on Zenoh internal thread.
@@ -103,6 +125,8 @@ private:
     uint64_t              timestamp_ns_{0};
     std::atomic<uint64_t> seq_{0};
     std::atomic<bool>     has_data_{false};
+    bool                  track_latency_ = true;
+    mutable drone::util::LatencyTracker latency_tracker_{1024};
 };
 
 }  // namespace drone::ipc
