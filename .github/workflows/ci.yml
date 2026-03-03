@@ -26,6 +26,14 @@ jobs:
             sanitizer: tsan
           - ipc_backend: shm
             sanitizer: ubsan
+          # Zenoh integration paths (serialisation, network callbacks, SHM provider)
+          # also benefit from sanitizer coverage. TSan is excluded because the
+          # pre-built zenohc library is not TSan-instrumented, producing false
+          # positives in Zenoh's internal threading (see CI_ISSUES.md CI-005).
+          - ipc_backend: zenoh
+            sanitizer: asan
+          - ipc_backend: zenoh
+            sanitizer: ubsan
 
     name: build (${{ matrix.ipc_backend }}${{ matrix.sanitizer != 'none' && format(', {0}', matrix.sanitizer) || '' }})
 
