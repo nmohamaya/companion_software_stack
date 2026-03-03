@@ -53,7 +53,7 @@ endif()
 
 if(ENABLE_TSAN)
     message(STATUS "  Sanitizer    : ThreadSanitizer (TSan) ENABLED")
-    add_compile_options(-fsanitize=thread -Wno-tsan)
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer -fno-optimize-sibling-calls -Wno-tsan)
     add_link_options(-fsanitize=thread)
 endif()
 

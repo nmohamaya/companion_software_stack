@@ -111,6 +111,10 @@ jobs:
         if [ "${{ matrix.sanitizer }}" = "tsan" ]; then
           # Exclude tests that depend on external libraries (Zenoh, MAVSDK, OpenCV YOLO)
           # whose internal threading produces false positives under TSan
-          CTEST_EXCLUDE="-E Zenoh|Mavlink|Yolo|Liveliness"
+          CTEST_EXCLUDE="Zenoh|Mavlink|Yolo|Liveliness"
         fi
-        ctest --output-on-failure -j$(nproc) ${CTEST_EXCLUDE}
+        if [ -n "${CTEST_EXCLUDE}" ]; then
+          ctest --output-on-failure -j"$(nproc)" -E "${CTEST_EXCLUDE}"
+        else
+          ctest --output-on-failure -j"$(nproc)"
+        fi
