@@ -1179,7 +1179,9 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │       └── include/util/
 │           ├── signal_handler.h      # Graceful SIGINT/SIGTERM
 │           ├── arg_parser.h          # CLI argument parsing
-│           ├── config.h              # JSON config (nlohmann/json)
+│           ├── config.h              # JSON config (nlohmann/json) + [[nodiscard]]
+│           ├── config_validator.h    # Config schema validation (7 process schemas)
+│           ├── result.h              # Result<T,E> monadic error type
 │           ├── log_config.h          # spdlog config + resolve_log_dir()
 │           ├── realtime.h            # Thread naming/affinity/RT
 │           ├── scoped_timer.h        # RAII timing + budget warnings
@@ -1212,33 +1214,15 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │       └── iobstacle_avoider.h       # IObstacleAvoider + PotentialFieldAvoider
 ├── process5_comms/                   # MAVLink + GCS comms (5 threads)
 │   └── include/comms/
-│       ├── gcs_link.h                # GCS protocol helpers
+│       ├── gcs_link.h                # GCS link implementation
 │       └── mavlink_sim.h             # MAVLink simulation helpers
 ├── process6_payload_manager/         # Gimbal control + camera trigger (1 thread)
 ├── process7_system_monitor/          # /proc + /sys health monitoring (1 thread)
 │   └── include/monitor/
 │       ├── iprocess_monitor.h        # IProcessMonitor + LinuxProcessMonitor
 │       └── sys_info.h                # CPU, memory, temperature utilities
-├── tests/                            # 400 Google Tests across 23 test files
-│   ├── test_shm_ipc.cpp
-│   ├── test_spsc_ring.cpp
-│   ├── test_config.cpp
-│   ├── test_hal.cpp
-│   ├── test_mission_fsm.cpp
-│   ├── test_fault_manager.cpp
-│   ├── test_kalman_tracker.cpp
-│   ├── test_fusion_engine.cpp
-│   ├── test_comms.cpp
-│   ├── test_payload_manager.cpp
-│   ├── test_system_monitor.cpp
-│   ├── test_message_bus.cpp
-│   ├── test_process_interfaces.cpp
-│   ├── test_color_contour_detector.cpp
-│   ├── test_opencv_yolo_detector.cpp
-│   ├── test_gazebo_camera.cpp
-│   ├── test_gazebo_imu.cpp
-│   ├── test_gazebo_integration.sh
-│   └── test_mavlink_fc_link.cpp
+├── tests/                            # Unit & E2E tests — see [tests/TESTS.md](tests/TESTS.md) for full catalog
+│   └── TESTS.md                      # Test inventory (suites, counts, run instructions)
 ├── models/
 │   └── yolov8n.onnx                 # YOLOv8-nano ONNX model (12.8 MB)
 └── deploy/
@@ -1248,7 +1232,8 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
     ├── install_dependencies.sh       # Full dependency installer (interactive)
     ├── launch_all.sh                 # Launch 7 processes (no PX4/Gazebo)
     ├── launch_gazebo.sh              # PX4 SITL + Gazebo + 7 processes
-    └── launch_hardware.sh            # Real drone hardware launch
+    ├── launch_hardware.sh            # Real drone hardware launch
+    └── view_coverage.sh              # Build with coverage, run tests, open HTML report
 ```
 
 ## Simulation Mode

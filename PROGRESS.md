@@ -1311,7 +1311,7 @@ All call sites fixed to properly handle return values:
 | Fault conditions | — | — | — | — | **8** | **8** |
 | E2E checks | — | — | — | **42/42** | **42/42** | **42/42** |
 
-*Last updated after Zenoh E2E smoke test — PR #58: 377 tests, 42/42 E2E checks, Zenoh Epic #45 complete.*
+*Last updated after Foundation Hardening Epic #64 — 464 tests, 26 suites, 42/42 E2E checks.*
 
 ---
 
@@ -1375,18 +1375,21 @@ All call sites fixed to properly handle return values:
 
 ---
 
-## Updated Summary (Post Foundation Hardening Tier 1)
+## Updated Summary (Post Foundation Hardening — Epic #64 COMPLETE)
 
-| Metric | FaultMgr | Sanitizers | Format/Tidy | Coverage |
-|---|---|---|---|---|
-| Bug fixes | 19 | **21** | 21 | **21** |
-| Unit tests | 400 | 400 | 400 | **400** |
-| Test suites | 23 | 23 | 23 | **23** |
-| Compiler warnings | 0 | 0 | 0 | **0** |
-| CI matrix legs | 2 | **7** | 7 + format gate | **7 + format gate + coverage** |
-| Line coverage | — | — | — | **75.1%** |
-| Function coverage | — | — | — | **84.9%** |
-| Code style | — | — | **enforced** | enforced |
-| Sanitizers | — | **ASan, TSan, UBSan** | ASan, TSan, UBSan | ASan, TSan, UBSan |
+| Metric | FaultMgr | Tier 1 | **Tier 2 (Final)** |
+|---|---|---|---|
+| Bug fixes | 19 | 21 | **21** |
+| Unit tests | 400 | 400 | **464** |
+| Test suites | 23 | 23 | **26** |
+| Compiler warnings | 0 | 0 | **0** |
+| CI matrix legs | 2 | 9 (7 build + format + coverage) | **9** |
+| Line coverage | — | 75.1% | **75.1%** |
+| Function coverage | — | 84.9% | **84.9%** |
+| Code style | — | enforced (clang-format-18) | **enforced** |
+| Sanitizers | — | ASan, TSan, UBSan | **ASan, TSan, UBSan** |
+| Error handling | exceptions | exceptions | **Result<T,E> monadic** |
+| Config validation | — | — | **7 schemas** |
+| `[[nodiscard]]` | — | — | **26 headers** |
 
-*Last updated after Foundation Hardening Tier 1 — PR #71, #72, #73: 400 tests, 7+2 CI jobs, 75.1% coverage.*
+*Last updated after Foundation Hardening Epic #64 complete — PRs #71–#77: 464 tests, 26 suites, 9-job CI, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers.*

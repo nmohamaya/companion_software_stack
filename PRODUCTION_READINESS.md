@@ -72,7 +72,7 @@ Production requires implementing the real backend behind each interface.
 | 4.1 | Process supervision | `launch_all.sh` — bash script, manual restart | systemd units with watchdog, auto-restart, dependency ordering | P0 | 🔴 | |
 | 4.2 | OTA updates | None — manual scp + rebuild | Mender / SWUpdate / custom updater | P2 | 🔴 | |
 | 4.3 | Log management | spdlog to files, no rotation | Log rotation (logrotate or spdlog rotating sink), remote log shipping | P1 | 🔴 | Disk will fill on long missions |
-| 4.4 | Config validation | No schema validation on JSON load | JSON Schema validation at startup; reject invalid configs | P1 | 🔴 | |
+| 4.4 | Config validation | JSON Schema validation at startup; reject invalid configs | `ConfigSchema` builder-pattern validation at startup (7 schemas) | P1 | 🟢 | PR #76 — Issue #69 |
 | 4.5 | Crash reporting | Process exits with return 1 | Core dump collection, crash telemetry upload | P2 | 🔴 | |
 | 4.6 | Cross-compilation | Native x86 build only | Cross-compile for aarch64 (Jetson) | P0 | 🔴 | Need CMake toolchain file |
 | 4.7 | Release builds | Debug/RelWithDebInfo | `-DCMAKE_BUILD_TYPE=Release` with `-O2 -DNDEBUG` + stripped binaries | P1 | 🔴 | |
@@ -87,8 +87,8 @@ Production requires implementing the real backend behind each interface.
 | 5.1 | Failsafe logic | Basic RTL on battery low / link loss | Comprehensive failsafe: GPS loss, IMU failure, motor fault, geofence breach | P0 | 🔴 | |
 | 5.2 | Geofencing | None | Configurable geofence polygons + altitude limits | P0 | 🔴 | |
 | 5.3 | Health watchdog | `ShmSystemHealth` published at 1 Hz | Hardware watchdog timer (WDT) + software heartbeat monitoring | P1 | 🔴 | |
-| 5.4 | Error recovery | Most errors → `spdlog::error()` + exit | Graceful degradation: retry, fallback, safe-state transition | P1 | 🔴 | |
-| 5.5 | Process heartbeats | None between processes | Zenoh liveliness tokens (Phase F, #51) | P2 | 🟡 | Planned for next phase |
+| 5.4 | Error recovery | Most errors → `spdlog::error()` + exit | Graceful degradation: retry, fallback, safe-state transition | P1 | � | `Result<T,E>` (PR #75), `FaultManager` (PR #63) provide structured error handling; full recovery chains TBD |
+| 5.5 | Process heartbeats | Zenoh liveliness tokens (Phase F, #51) | Zenoh liveliness tokens (Phase F, #51) | P2 | 🟢 | PR #57 — 7 tokens active, P7 monitors |
 | 5.6 | Redundancy | Single IMU, single GPS | Dual IMU + dual GPS with voting / consistency checks | P2 | 🔴 | |
 
 ---
@@ -109,7 +109,8 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Resolution | Date |
 |---|------|------------|------|
-| — | — | — | — |
+| 4.4 | Config validation | `ConfigSchema` builder-pattern validation with 7 process schemas (PR #76, Issue #69) | 2026-03-03 |
+| 5.5 | Process heartbeats | Zenoh liveliness tokens — 7 tokens active, P7 monitors deaths (PR #57, Phase F) | 2026-03-01 |
 
 ---
 
