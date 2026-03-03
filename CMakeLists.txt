@@ -77,7 +77,7 @@ option(ENABLE_COVERAGE "Enable gcov code coverage instrumentation" OFF)
 
 if(ENABLE_COVERAGE)
     message(STATUS "  Coverage     : ENABLED (gcov)")
-    add_compile_options(--coverage -fprofile-arcs -ftest-coverage)
+    add_compile_options(--coverage)
     add_link_options(--coverage)
 else()
     message(STATUS "  Coverage     : OFF")
