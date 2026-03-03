@@ -1284,3 +1284,5 @@ See [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) for the full development 
 - Multi-phase feature development
 - Pre-merge checklist
 - Quick reference commands
+
+**CI Pipeline:** 9-job GitHub Actions pipeline — format gate (clang-format-18) → 7-leg build matrix (shm/zenoh × ASan/TSan/UBSan) → coverage report (lcov). See [docs/CI_SETUP.md](docs/CI_SETUP.md) for the full DevOps guide.
