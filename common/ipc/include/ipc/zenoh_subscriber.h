@@ -120,12 +120,12 @@ private:
     std::optional<zenoh::Subscriber<void>> subscriber_;
 
     // Latest-value cache (protected by data_mutex_ + atomics)
-    mutable std::mutex    data_mutex_;
-    T                     latest_msg_{};
-    uint64_t              timestamp_ns_{0};
-    std::atomic<uint64_t> seq_{0};
-    std::atomic<bool>     has_data_{false};
-    bool                  track_latency_ = true;
+    mutable std::mutex                  data_mutex_;
+    T                                   latest_msg_{};
+    uint64_t                            timestamp_ns_{0};
+    std::atomic<uint64_t>               seq_{0};
+    std::atomic<bool>                   has_data_{false};
+    bool                                track_latency_ = true;
     mutable drone::util::LatencyTracker latency_tracker_{1024};
 };
 

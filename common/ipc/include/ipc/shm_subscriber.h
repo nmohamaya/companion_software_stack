@@ -86,9 +86,9 @@ public:
     }
 
 private:
-    ShmReader<T> reader_;
-    std::string  topic_;
-    bool         track_latency_ = true;
+    ShmReader<T>                        reader_;
+    std::string                         topic_;
+    bool                                track_latency_ = true;
     mutable drone::util::LatencyTracker latency_tracker_{1024};
 };
 

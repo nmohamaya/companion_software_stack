@@ -2,13 +2,13 @@
 // Unit tests for drone::util::LatencyTracker — IPC latency histogram utility.
 #include "util/latency_tracker.h"
 
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <chrono>
 #include <numeric>
 #include <thread>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 using drone::util::LatencySummary;
 using drone::util::LatencyTracker;
@@ -121,9 +121,9 @@ TEST(LatencyTrackerTest, SummaryWithOutlier) {
     EXPECT_EQ(s.count, 100u);
     EXPECT_EQ(s.min_ns, 1000u);
     EXPECT_EQ(s.max_ns, 1'000'000u);
-    EXPECT_EQ(s.p50_ns, 1000u);     // median is still 1000
-    EXPECT_EQ(s.p90_ns, 1000u);     // 90th percentile still 1000
-    EXPECT_GE(s.p99_ns, 1000u);     // 99th might interpolate to outlier
+    EXPECT_EQ(s.p50_ns, 1000u);  // median is still 1000
+    EXPECT_EQ(s.p90_ns, 1000u);  // 90th percentile still 1000
+    EXPECT_GE(s.p99_ns, 1000u);  // 99th might interpolate to outlier
 }
 
 // ═══════════════════════════════════════════════════════════

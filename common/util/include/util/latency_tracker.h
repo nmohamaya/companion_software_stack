@@ -24,14 +24,14 @@ namespace drone::util {
 
 /// Summary statistics from a LatencyTracker reporting window.
 struct LatencySummary {
-    uint64_t count    = 0;       ///< Number of samples recorded.
-    uint64_t min_ns   = 0;       ///< Minimum latency (ns).
-    uint64_t max_ns   = 0;       ///< Maximum latency (ns).
-    double   mean_ns  = 0.0;     ///< Arithmetic mean (ns).
-    uint64_t p50_ns   = 0;       ///< 50th percentile (ns).
-    uint64_t p90_ns   = 0;       ///< 90th percentile (ns).
-    uint64_t p95_ns   = 0;       ///< 95th percentile (ns).
-    uint64_t p99_ns   = 0;       ///< 99th percentile (ns).
+    uint64_t count   = 0;    ///< Number of samples recorded.
+    uint64_t min_ns  = 0;    ///< Minimum latency (ns).
+    uint64_t max_ns  = 0;    ///< Maximum latency (ns).
+    double   mean_ns = 0.0;  ///< Arithmetic mean (ns).
+    uint64_t p50_ns  = 0;    ///< 50th percentile (ns).
+    uint64_t p90_ns  = 0;    ///< 90th percentile (ns).
+    uint64_t p95_ns  = 0;    ///< 95th percentile (ns).
+    uint64_t p99_ns  = 0;    ///< 99th percentile (ns).
 
     /// Convert a nanosecond value to microseconds for readability.
     static double to_us(uint64_t ns) { return static_cast<double>(ns) / 1000.0; }
@@ -109,10 +109,9 @@ public:
 
     /// Return the current steady_clock time in nanoseconds.
     static uint64_t now_ns() {
-        return static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count());
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
     }
 
     // ── Periodic logging helper ──────────────────────────────
@@ -133,8 +132,8 @@ public:
     }
 
 private:
-    size_t                mask_;          ///< Bitmask for power-of-2 ring indexing.
-    std::vector<uint64_t> samples_;      ///< Ring buffer of latency samples (ns).
+    size_t                mask_;             ///< Bitmask for power-of-2 ring indexing.
+    std::vector<uint64_t> samples_;          ///< Ring buffer of latency samples (ns).
     size_t                write_pos_   = 0;  ///< Next write position (wraps via mask_).
     size_t                total_count_ = 0;  ///< Total samples recorded (may exceed capacity).
 
