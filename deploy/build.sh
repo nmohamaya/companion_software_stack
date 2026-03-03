@@ -7,6 +7,11 @@
 #   bash deploy/build.sh Debug           # Debug, SHM backend
 #   bash deploy/build.sh Debug --zenoh   # Debug, Zenoh backend
 #   bash deploy/build.sh --clean         # Delete build/ first
+#   bash deploy/build.sh --asan          # Debug + AddressSanitizer
+#   bash deploy/build.sh --tsan          # Debug + ThreadSanitizer
+#   bash deploy/build.sh --ubsan         # Debug + UndefinedBehaviorSanitizer
+#   bash deploy/build.sh --coverage      # Debug + gcov code coverage
+#   bash deploy/build.sh --format-check  # Check clang-format (no build)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -15,19 +20,74 @@ BUILD_DIR="${PROJECT_DIR}/build"
 BUILD_TYPE="Release"
 ENABLE_ZENOH="OFF"
 CLEAN=0
+SANITIZER=""
+ENABLE_COVERAGE="OFF"
+FORMAT_CHECK=0
 
 for arg in "$@"; do
     case "$arg" in
-        --zenoh)  ENABLE_ZENOH="ON" ;;
-        --clean)  CLEAN=1 ;;
+        --zenoh)         ENABLE_ZENOH="ON" ;;
+        --clean)         CLEAN=1 ;;
+        --asan)          SANITIZER="asan" ;;
+        --tsan)          SANITIZER="tsan" ;;
+        --ubsan)         SANITIZER="ubsan" ;;
+        --coverage)      ENABLE_COVERAGE="ON" ;;
+        --format-check)  FORMAT_CHECK=1 ;;
         Debug|Release|RelWithDebInfo|MinSizeRel) BUILD_TYPE="$arg" ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [Debug|Release] [--zenoh] [--clean]"
+            echo "Usage: $0 [Debug|Release] [--zenoh] [--clean] [--asan|--tsan|--ubsan] [--coverage] [--format-check]"
             exit 1
             ;;
     esac
 done
+
+# ── Format check (standalone — exits after) ──────────────────
+if [[ "$FORMAT_CHECK" -eq 1 ]]; then
+    echo "═══ Checking code formatting (clang-format-18) ═══"
+    cd "$PROJECT_DIR"
+    if ! command -v clang-format-18 &>/dev/null; then
+        # Fall back to plain clang-format if version-suffixed not found
+        if command -v clang-format &>/dev/null; then
+            echo "  WARNING: clang-format-18 not found, using $(clang-format --version)"
+            FORMATTER="clang-format"
+        else
+            echo "ERROR: clang-format-18 not found. Install: sudo apt install clang-format-18"
+            exit 1
+        fi
+    else
+        FORMATTER="clang-format-18"
+    fi
+    ERRORS=0
+    find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
+      | xargs -0 "$FORMATTER" --dry-run --Werror 2>&1 || ERRORS=$?
+    if [[ "$ERRORS" -ne 0 ]]; then
+        echo ""
+        echo "FAILED: Some files need formatting. Auto-fix with:"
+        echo "  find common process[1-7]_* tests \\( -name '*.h' -o -name '*.cpp' \\) -print0 | xargs -0 $FORMATTER -i"
+        exit 1
+    fi
+    echo "  All files formatted correctly."
+    exit 0
+fi
+
+# ── Sanitizer flags ──────────────────────────────────────────
+SANITIZER_FLAGS=""
+if [[ -n "$SANITIZER" ]]; then
+    BUILD_TYPE="Debug"  # Sanitizers need debug info
+    case "$SANITIZER" in
+        asan)  SANITIZER_FLAGS="-DENABLE_ASAN=ON" ;;
+        tsan)  SANITIZER_FLAGS="-DENABLE_TSAN=ON" ;;
+        ubsan) SANITIZER_FLAGS="-DENABLE_UBSAN=ON" ;;
+    esac
+fi
+
+# ── Coverage flags ───────────────────────────────────────────
+COVERAGE_FLAGS=""
+if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
+    BUILD_TYPE="Debug"  # Coverage needs debug info for accurate line mapping
+    COVERAGE_FLAGS="-DENABLE_COVERAGE=ON"
+fi
 
 # Zenoh backend configuration
 ZENOH_FLAGS=""
@@ -55,6 +115,8 @@ echo "════════════════════════�
 echo "  Building Drone Companion Stack"
 echo "  Build type : ${BUILD_TYPE}"
 echo "  IPC backend: $([ "$ENABLE_ZENOH" = "ON" ] && echo "Zenoh" || echo "SHM")"
+[[ -n "$SANITIZER" ]]          && echo "  Sanitizer  : ${SANITIZER}"
+[[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage   : ON"
 echo "══════════════════════════════════════════"
 
 if [[ "$CLEAN" -eq 1 ]]; then
@@ -65,9 +127,25 @@ fi
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
-cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" ${ZENOH_FLAGS} ..
+cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+      ${ZENOH_FLAGS} \
+      ${SANITIZER_FLAGS} \
+      ${COVERAGE_FLAGS} \
+      ..
 cmake --build . -j"$(nproc)"
 
 echo ""
 echo "Build complete! Binaries in: ${BUILD_DIR}/bin/"
 ls -la "${BUILD_DIR}/bin/"
+
+# ── Post-build: coverage report helper ───────────────────────
+if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
+    echo ""
+    echo "Coverage build ready.  To generate a report after running tests:"
+    echo "  cd ${BUILD_DIR}"
+    echo "  ctest --output-on-failure"
+    echo "  lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch"
+    echo "  lcov --remove coverage.info '/usr/*' '*/tests/*' --output-file coverage_filtered.info"
+    echo "  genhtml coverage_filtered.info --output-directory coverage_html"
+    echo "  echo \"Open: \${PWD}/coverage_html/index.html\""
+fi

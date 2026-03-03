@@ -4,12 +4,18 @@
 # Gazebo SITL simulation.
 #
 # Usage:
-#   bash deploy/clean_build_and_run_zenoh.sh          # headless
-#   bash deploy/clean_build_and_run_zenoh.sh --gui    # with Gazebo 3-D GUI
+#   bash deploy/clean_build_and_run_zenoh.sh               # headless
+#   bash deploy/clean_build_and_run_zenoh.sh --gui          # with Gazebo 3-D GUI
+#   bash deploy/clean_build_and_run_zenoh.sh --asan         # + AddressSanitizer
+#   bash deploy/clean_build_and_run_zenoh.sh --ubsan        # + UBSan
+#   bash deploy/clean_build_and_run_zenoh.sh --coverage     # + code coverage
+#
+# NOTE: --tsan is intentionally omitted for Zenoh builds because the zenohc
+#       library triggers TSan false-positives in its internal threading.
 #
 # What it does:
 #   1. Kill leftover PX4/Gazebo/companion processes & stale SHM segments
-#   2. Clean-build (Release, Zenoh ON)
+#   2. Clean-build (Release by default, Debug if sanitizer/coverage, Zenoh ON)
 #   3. Run unit tests
 #   4. Launch Gazebo SITL flight with config/gazebo_zenoh.json (Zenoh IPC)
 #
@@ -23,9 +29,42 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 GUI_FLAG=""
+SANITIZER=""
+ENABLE_COVERAGE="OFF"
+
 for arg in "$@"; do
-    [[ "$arg" == "--gui" ]] && GUI_FLAG="--gui"
+    case "$arg" in
+        --gui)       GUI_FLAG="--gui" ;;
+        --asan)      SANITIZER="asan" ;;
+        --tsan)
+            echo "ERROR: --tsan is not supported with Zenoh (false-positives in zenohc)."
+            echo "  Use --asan or --ubsan instead, or run TSan with the SHM backend."
+            exit 1
+            ;;
+        --ubsan)     SANITIZER="ubsan" ;;
+        --coverage)  ENABLE_COVERAGE="ON" ;;
+        *)
+            echo "Unknown argument: $arg"
+            echo "Usage: $0 [--gui] [--asan|--ubsan] [--coverage]"
+            exit 1
+            ;;
+    esac
 done
+
+# Build type: Debug if sanitizer or coverage requested, Release otherwise
+BUILD_TYPE="Release"
+EXTRA_CMAKE_FLAGS=""
+if [[ -n "$SANITIZER" ]]; then
+    BUILD_TYPE="Debug"
+    case "$SANITIZER" in
+        asan)  EXTRA_CMAKE_FLAGS="-DENABLE_ASAN=ON" ;;
+        ubsan) EXTRA_CMAKE_FLAGS="-DENABLE_UBSAN=ON" ;;
+    esac
+fi
+if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
+    BUILD_TYPE="Debug"
+    EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DENABLE_COVERAGE=ON"
+fi
 
 # ── Step 0: Verify zenohc is installed ────────────────────────
 if ! pkg-config --exists zenohc 2>/dev/null; then
@@ -68,7 +107,9 @@ echo "  Done."
 
 # ── Step 2: Clean build (Zenoh ON) ───────────────────────────
 echo ""
-echo "═══ [2/4] Clean build (Release, IPC = Zenoh) ═══"
+echo "═══ [2/4] Clean build (${BUILD_TYPE}, IPC = Zenoh) ═══"
+[[ -n "$SANITIZER" ]]            && echo "  Sanitizer: ${SANITIZER}"
+[[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage : ON"
 # Determine Zenoh security configuration:
 # - If ZENOH_CONFIG_PATH is set, use it (secure build).
 # - Otherwise, fall back to ALLOW_INSECURE_ZENOH (dev/test only).
@@ -87,9 +128,10 @@ fi
 
 rm -rf build/
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release \
+cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
       -DENABLE_ZENOH=ON \
       ${ZENOH_SECURITY_FLAGS} \
+      ${EXTRA_CMAKE_FLAGS} \
       ..
 cmake --build . -j"$(nproc)"
 cd "$PROJECT_DIR"
