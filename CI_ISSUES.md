@@ -287,3 +287,63 @@ cmake -B build-shm -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" && cmake --build bu
 cmake -B build-zenoh -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
   -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON && cmake --build build-zenoh
 ```
+
+---
+
+## CI-005: TSan build fails — `atomic_thread_fence` not supported with `-fsanitize=thread`
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-03-03 |
+| **Branch** | `infra/issue-67-sanitizers` |
+| **PR** | #71 |
+| **Affected leg** | `build (shm, tsan)` |
+| **Affected files** | `common/ipc/include/ipc/shm_reader.h`, `process2_perception/src/main.cpp`, `process3_slam_vio_nav/src/main.cpp` |
+
+### Symptoms
+
+```
+/usr/include/c++/13/bits/atomic_base.h:144:26: error: 'atomic_thread_fence' is not supported
+with '-fsanitize=thread' [-Werror=tsan]
+  144 |   { __atomic_thread_fence(int(__m)); }
+      |     ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~
+
+cc1plus: all warnings being treated as errors
+```
+
+The TSan CI leg (`shm + tsan`) failed at the **Build** step. The `shm` and `zenoh` legs (without sanitizers) passed fine. Local TSan builds also passed because they did not use `-Werror`.
+
+### Root Cause
+
+GCC 13 (shipped with Ubuntu 24.04) emits a `-Wtsan` diagnostic whenever `std::atomic_thread_fence()` is compiled with `-fsanitize=thread`. This is because ThreadSanitizer **replaces** fence operations with its own instrumentation — the fence in the source code is effectively a no-op at runtime under TSan.
+
+The warning is **informational**, not a correctness issue. TSan still correctly detects data races around the fenced memory accesses.
+
+However, the CI pipeline passes `-Werror` (via `CMAKE_CXX_FLAGS`), which promotes `-Wtsan` into a hard compile error. Our `ShmReader::read()` method uses `std::atomic_thread_fence(std::memory_order_acquire)` as part of the seqlock read pattern — a legitimate and intentional use.
+
+### Fix Applied
+
+Added `-Wno-tsan` to the TSan compile options in `CMakeLists.txt`:
+
+```cmake
+if(ENABLE_TSAN)
+    message(STATUS "  Sanitizer    : ThreadSanitizer (TSan) ENABLED")
+    add_compile_options(-fsanitize=thread -Wno-tsan)
+    add_link_options(-fsanitize=thread)
+endif()
+```
+
+This suppresses the informational warning without affecting TSan's ability to detect real data races.
+
+### Prevention
+
+When adding new sanitizer flags, always test with the **exact same flags** used in CI:
+
+```bash
+# Match CI conditions: -Werror + sanitizer
+cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+  -DENABLE_TSAN=ON && cmake --build build-tsan -j$(nproc)
+```
+
+**Note:** TSan on kernel 6.x also requires `sudo sysctl vm.mmap_rnd_bits=28` to avoid ASLR-related crashes (see BUG_FIXES.md Fix #11).

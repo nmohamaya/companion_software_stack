@@ -15,9 +15,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ipc_backend: [shm, zenoh]
+        include:
+          - ipc_backend: shm
+            sanitizer: none
+          - ipc_backend: zenoh
+            sanitizer: none
+          - ipc_backend: shm
+            sanitizer: asan
+          - ipc_backend: shm
+            sanitizer: tsan
+          - ipc_backend: shm
+            sanitizer: ubsan
+          # Zenoh integration paths (serialisation, network callbacks, SHM provider)
+          # also benefit from sanitizer coverage. TSan is excluded because the
+          # pre-built zenohc library is not TSan-instrumented, producing false
+          # positives in Zenoh's internal threading (see CI_ISSUES.md CI-005).
+          - ipc_backend: zenoh
+            sanitizer: asan
+          - ipc_backend: zenoh
+            sanitizer: ubsan
 
-    name: build (${{ matrix.ipc_backend }})
+    name: build (${{ matrix.ipc_backend }}${{ matrix.sanitizer != 'none' && format(', {0}', matrix.sanitizer) || '' }})
 
     steps:
     - name: Checkout
@@ -58,11 +76,29 @@ jobs:
         cmake -B build -DZENOHCXX_ZENOHC=ON -DZENOHCXX_ZENOHPICO=OFF
         sudo cmake --install build/
 
+    - name: Fix ASLR for TSan
+      if: matrix.sanitizer == 'tsan'
+      run: sudo sysctl vm.mmap_rnd_bits=28
+
     - name: Configure CMake
       run: |
+        SANITIZER_FLAGS=""
+        BUILD_TYPE="${{ env.BUILD_TYPE }}"
+        if [ "${{ matrix.sanitizer }}" = "asan" ]; then
+          SANITIZER_FLAGS="-DENABLE_ASAN=ON"
+          BUILD_TYPE="Debug"
+        elif [ "${{ matrix.sanitizer }}" = "tsan" ]; then
+          SANITIZER_FLAGS="-DENABLE_TSAN=ON"
+          BUILD_TYPE="Debug"
+        elif [ "${{ matrix.sanitizer }}" = "ubsan" ]; then
+          SANITIZER_FLAGS="-DENABLE_UBSAN=ON"
+          BUILD_TYPE="Debug"
+        fi
+
         cmake -B build \
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
           -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+          ${SANITIZER_FLAGS} \
           ${{ matrix.ipc_backend == 'zenoh' && '-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON' || '' }}
 
     - name: Build
@@ -70,4 +106,15 @@ jobs:
 
     - name: Run tests
       working-directory: build
-      run: ctest --output-on-failure -j$(nproc)
+      run: |
+        CTEST_EXCLUDE=""
+        if [ "${{ matrix.sanitizer }}" = "tsan" ]; then
+          # Exclude tests that depend on external libraries (Zenoh, MAVSDK, OpenCV YOLO)
+          # whose internal threading produces false positives under TSan
+          CTEST_EXCLUDE="Zenoh|Mavlink|Yolo|Liveliness"
+        fi
+        if [ -n "${CTEST_EXCLUDE}" ]; then
+          ctest --output-on-failure -j"$(nproc)" -E "${CTEST_EXCLUDE}"
+        else
+          ctest --output-on-failure -j"$(nproc)"
+        fi

@@ -322,3 +322,50 @@ All three Zenoh binaries share the same `"zenoh_session"` lock, so CTest never r
 **Key Insight:** `gtest_discover_tests()` creates test entries at build time (via a POST_BUILD step that runs the binary with `--gtest_list_tests`). Any `set_tests_properties()` call at configure time with test names will silently fail if the names don't match exactly. The correct approach is to pass `PROPERTIES` directly to `gtest_discover_tests()`, which applies them to all discovered tests from that binary.
 
 **Found by:** `deploy/clean_build_and_run_zenoh.sh` aborting during the test phase (`set -e` + `ctest -j$(nproc)` failure).
+
+---
+
+## Fix #11 — ThreadSanitizer Crashes on Linux Kernel 6.x (ASLR Entropy)
+
+**Date:** 2026-03-03  
+**Severity:** Medium (CI / tooling)  
+**Affects:** TSan CI leg, local TSan builds on kernel 6.x+
+
+**Bug:** Building with `-fsanitize=thread` (TSan) and running any test binary immediately crashed with:
+
+```
+FATAL: ThreadSanitizer: unexpected memory mapping 0x61a3f0509000-0x61a3f0513000
+```
+
+The crash occurred at gtest discovery time (`gtest_discover_tests` runs the binary with `--gtest_list_tests` during build), so the entire CMake build failed — not just test execution.
+
+**Root Cause:** Linux kernel 6.x increased the default Address Space Layout Randomization (ASLR) entropy (`vm.mmap_rnd_bits`) beyond what TSan's shadow memory layout can handle. TSan maps a fixed shadow region at compile time and expects userspace memory to fall within a predictable range. Higher ASLR entropy pushes `mmap` allocations outside that range, causing an immediate fatal error.
+
+- Kernel 5.x default: `vm.mmap_rnd_bits = 28` → works with TSan
+- Kernel 6.x default: `vm.mmap_rnd_bits = 32` (or higher) → breaks TSan
+
+This is a [known upstream issue](https://github.com/google/sanitizers/issues/1716) affecting GCC and Clang sanitizers on newer kernels.
+
+**Workaround:** Reduce ASLR entropy before building/running TSan-instrumented binaries:
+
+```bash
+sudo sysctl vm.mmap_rnd_bits=28
+```
+
+This is applied automatically in the CI pipeline via a dedicated step:
+
+```yaml
+- name: Fix ASLR for TSan
+  if: matrix.sanitizer == 'tsan'
+  run: sudo sysctl vm.mmap_rnd_bits=28
+```
+
+**Additional Note:** Even after fixing the ASLR issue, TSan produces false positives in tests that exercise **external libraries** (Zenoh, MAVSDK, OpenCV YOLO) because their internal threading is not compiled with TSan instrumentation. The CI TSan leg therefore excludes these tests:
+
+```yaml
+ctest --output-on-failure -j$(nproc) -E "Zenoh|Mavlink|Yolo|Liveliness"
+```
+
+This exclusion is safe — the TSan leg still runs all 277 core tests (SHM IPC, SPSC ring, FaultManager, MissionFSM, config, HAL, wire format, etc.), which is where TSan provides the most value for detecting data races in **our** code.
+
+**Found by:** `cmake --build build` failing during gtest discovery on kernel 6.17 with `ENABLE_TSAN=ON`.

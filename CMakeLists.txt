@@ -29,6 +29,44 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# ── Sanitizer support ───────────────────────────────────────
+# Usage: cmake -DENABLE_ASAN=ON, -DENABLE_TSAN=ON, or -DENABLE_UBSAN=ON
+# ASan and TSan are mutually exclusive (both instrument memory accesses).
+# Sanitizers require Debug or RelWithDebInfo for useful stack traces.
+option(ENABLE_ASAN  "Enable Address Sanitizer (memory errors, leaks)"      OFF)
+option(ENABLE_TSAN  "Enable Thread Sanitizer (data races)"                 OFF)
+option(ENABLE_UBSAN "Enable Undefined Behavior Sanitizer"                  OFF)
+
+# Validate mutual exclusivity
+if(ENABLE_ASAN AND ENABLE_TSAN)
+    message(FATAL_ERROR
+        "ENABLE_ASAN and ENABLE_TSAN are mutually exclusive. "
+        "ASan and TSan both instrument memory accesses and cannot be combined.")
+endif()
+
+# Apply sanitizer flags
+if(ENABLE_ASAN)
+    message(STATUS "  Sanitizer    : AddressSanitizer (ASan) ENABLED")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls)
+    add_link_options(-fsanitize=address)
+endif()
+
+if(ENABLE_TSAN)
+    message(STATUS "  Sanitizer    : ThreadSanitizer (TSan) ENABLED")
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer -fno-optimize-sibling-calls -Wno-tsan)
+    add_link_options(-fsanitize=thread)
+endif()
+
+if(ENABLE_UBSAN)
+    message(STATUS "  Sanitizer    : UndefinedBehaviorSanitizer (UBSan) ENABLED")
+    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=undefined)
+endif()
+
+if(NOT ENABLE_ASAN AND NOT ENABLE_TSAN AND NOT ENABLE_UBSAN)
+    message(STATUS "  Sanitizer    : NONE")
+endif()
+
 # ── Find system dependencies ────────────────────────────────
 find_package(Threads       REQUIRED)
 find_package(spdlog        REQUIRED)
