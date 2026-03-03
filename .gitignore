@@ -1,6 +1,14 @@
 # Build output
 build/
+build-*/
 cmake-build-*/
+
+# Code coverage artifacts
+coverage-raw.info
+coverage.info
+coverage-report/
+*.gcno
+*.gcda
 
 # IDE
 .vscode/

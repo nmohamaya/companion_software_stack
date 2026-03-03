@@ -67,6 +67,22 @@ if(NOT ENABLE_ASAN AND NOT ENABLE_TSAN AND NOT ENABLE_UBSAN)
     message(STATUS "  Sanitizer    : NONE")
 endif()
 
+# ── Code coverage support ───────────────────────────────────
+# Usage: cmake -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
+# Requires gcov + lcov. Generate reports after running ctest:
+#   lcov --capture --directory build --output-file coverage.info
+#   lcov --remove coverage.info '/usr/*' --output-file coverage.info
+#   genhtml coverage.info --output-directory coverage-report
+option(ENABLE_COVERAGE "Enable gcov code coverage instrumentation" OFF)
+
+if(ENABLE_COVERAGE)
+    message(STATUS "  Coverage     : ENABLED (gcov)")
+    add_compile_options(--coverage -fprofile-arcs -ftest-coverage)
+    add_link_options(--coverage)
+else()
+    message(STATUS "  Coverage     : OFF")
+endif()
+
 # ── Find system dependencies ────────────────────────────────
 find_package(Threads       REQUIRED)
 find_package(spdlog        REQUIRED)
