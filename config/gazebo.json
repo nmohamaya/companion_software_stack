@@ -113,6 +113,14 @@
         }
     },
 
+    "fault_manager": {
+        "pose_stale_timeout_ms": 500,
+        "battery_warn_percent": 20.0,
+        "battery_crit_percent": 10.0,
+        "fc_link_lost_timeout_ms": 3000,
+        "loiter_escalation_timeout_s": 30
+    },
+
     "system_monitor": {
         "update_rate_hz": 1,
         "disk_check_interval_s": 10,

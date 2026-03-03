@@ -77,6 +77,43 @@ enum class MissionState : uint8_t {
     LOITER = 4, RTL = 5, LAND = 6, EMERGENCY = 7
 };
 
+// ═══════════════════════════════════════════════════════════
+// Fault Classification — consumed by ShmMissionStatus and FaultManager
+// ═══════════════════════════════════════════════════════════
+
+/// Graduated response severity (stored in ShmMissionStatus::fault_action).
+enum class FaultAction : uint8_t {
+    NONE           = 0,   // nominal — no action
+    WARN           = 1,   // alert GCS, continue mission
+    LOITER         = 2,   // hold position, wait for recovery
+    RTL            = 3,   // return to launch
+    EMERGENCY_LAND = 4    // land immediately at current position
+};
+
+inline const char* fault_action_name(FaultAction a) {
+    switch (a) {
+        case FaultAction::NONE:           return "NONE";
+        case FaultAction::WARN:           return "WARN";
+        case FaultAction::LOITER:         return "LOITER";
+        case FaultAction::RTL:            return "RTL";
+        case FaultAction::EMERGENCY_LAND: return "EMERGENCY_LAND";
+        default:                          return "UNKNOWN";
+    }
+}
+
+/// Bitmask of active fault conditions (stored in ShmMissionStatus::active_faults).
+enum FaultType : uint32_t {
+    FAULT_NONE              = 0,
+    FAULT_CRITICAL_PROCESS  = 1 << 0,   // comms or SLAM died
+    FAULT_POSE_STALE        = 1 << 1,   // no pose update within timeout
+    FAULT_BATTERY_LOW       = 1 << 2,   // battery below warning threshold
+    FAULT_BATTERY_CRITICAL  = 1 << 3,   // battery below critical threshold
+    FAULT_THERMAL_WARNING   = 1 << 4,   // thermal zone 2 (hot)
+    FAULT_THERMAL_CRITICAL  = 1 << 5,   // thermal zone 3 (critical)
+    FAULT_PERCEPTION_DEAD   = 1 << 6,   // perception process died
+    FAULT_FC_LINK_LOST      = 1 << 7,   // FC not connected for >timeout
+};
+
 struct ShmMissionStatus {
     uint64_t timestamp_ns;
     MissionState state;
@@ -86,6 +123,8 @@ struct ShmMissionStatus {
     float target_x, target_y, target_z;
     float battery_percent;
     bool  mission_active;
+    uint32_t active_faults;     // bitmask of FaultType (0 = nominal)
+    uint8_t  fault_action;      // current FaultAction severity (0 = NONE)
 };
 
 // ═══════════════════════════════════════════════════════════

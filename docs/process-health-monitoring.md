@@ -145,6 +145,9 @@ When `HAVE_ZENOH` is not defined (SHM-only builds):
 - **#30** — Pre-flight check (query `get_alive_processes()` to verify all running)
 - **#41** — Contingency fault tree (liveliness is the detection mechanism)
 - **#50** — Network transport (liveliness works over network links too)
+- **#61** — FaultManager graceful degradation (consumes `ShmSystemHealth` +
+  `critical_failure` flag to evaluate faults and issue escalating flight-control
+  actions: WARN → LOITER → RTL → EMERGENCY_LAND)
 
 ## ⚠️ Limitations
 

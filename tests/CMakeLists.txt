@@ -52,6 +52,9 @@ add_drone_test(test_kalman_tracker  test_kalman_tracker.cpp
 # ── Mission FSM tests ────────────────────────────────────────
 add_drone_test(test_mission_fsm     test_mission_fsm.cpp)
 
+# ── Fault Manager tests ─────────────────────────────────────
+add_drone_test(test_fault_manager   test_fault_manager.cpp)
+
 # ── Fusion engine tests ──────────────────────────────────────
 add_drone_test(test_fusion_engine   test_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/fusion_engine.cpp

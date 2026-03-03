@@ -46,7 +46,7 @@ public:
     void on_loiter()    { transition(MissionState::LOITER); }
     void on_rtl()       { transition(MissionState::RTL); }
     void on_land()      { transition(MissionState::LAND); }
-    void on_landed()    { transition(MissionState::IDLE); }
+    void on_landed()    { transition(MissionState::IDLE); fault_triggered_ = false; }
     void on_emergency() { transition(MissionState::EMERGENCY); }
 
     /// Check if waypoint is reached (within acceptance radius).
@@ -81,10 +81,29 @@ public:
     size_t current_wp_index() const { return current_wp_; }
     size_t total_waypoints() const  { return waypoints_.size(); }
 
+    /// Returns true if the FSM is in a fault-handling state (LOITER from
+    /// fault, RTL, LAND, or EMERGENCY) and should not be overridden by
+    /// normal mission logic.
+    bool is_in_fault_state() const {
+        return fault_triggered_ && (
+            state_ == MissionState::LOITER ||
+            state_ == MissionState::RTL   ||
+            state_ == MissionState::LAND  ||
+            state_ == MissionState::EMERGENCY);
+    }
+
+    /// Mark that the current state was caused by a fault (not a GCS
+    /// command or normal mission completion).
+    void set_fault_triggered(bool v) { fault_triggered_ = v; }
+
+    /// Whether the current state was caused by a fault.
+    bool fault_triggered() const { return fault_triggered_; }
+
 private:
     MissionState state_;
     std::vector<Waypoint> waypoints_;
     size_t current_wp_ = 0;
+    bool fault_triggered_ = false;
 
     void transition(MissionState new_state) {
         spdlog::info("[FSM] {} → {}", state_name(state_), state_name(new_state));

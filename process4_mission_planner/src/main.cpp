@@ -4,6 +4,7 @@
 // Sends FC commands (arm, takeoff, mode) to comms via ShmFCCommand.
 
 #include "planner/mission_fsm.h"
+#include "planner/fault_manager.h"
 #include "planner/ipath_planner.h"
 #include "planner/iobstacle_avoider.h"
 #include "ipc/message_bus_factory.h"
@@ -97,6 +98,10 @@ int main(int argc, char* argv[]) {
     auto gcs_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmGCSCommand>(
         bus, drone::ipc::shm_names::GCS_COMMANDS);
 
+    // System health from Process 7 (optional — monitor may not be running)
+    auto health_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmSystemHealth>(
+        bus, drone::ipc::shm_names::SYSTEM_HEALTH);
+
     // ── Create publishers ───────────────────────────────────
     auto status_pub = drone::ipc::bus_advertise<drone::ipc::ShmMissionStatus>(
         bus, drone::ipc::shm_names::MISSION_STATUS);
@@ -172,6 +177,10 @@ int main(int argc, char* argv[]) {
     const int rtl_min_dwell_s = cfg.get<int>(
         "mission_planner.rtl_min_dwell_seconds", 5);
 
+    // ── Create fault manager (config-driven thresholds) ────
+    FaultManager fault_mgr(cfg);
+    FaultAction last_fault_action = FaultAction::NONE;
+
     spdlog::info("Mission Planner READY — {} waypoints loaded",
                  fsm.total_waypoints());
 
@@ -200,6 +209,73 @@ int main(int argc, char* argv[]) {
         drone::ipc::ShmFCState fc_state{};
         if (fc_state_sub->is_connected()) {
             fc_state_sub->receive(fc_state);
+        }
+
+        // Read system health from Process 7
+        drone::ipc::ShmSystemHealth sys_health{};
+        if (health_sub->is_connected()) {
+            health_sub->receive(sys_health);
+        }
+
+        // ── Fault evaluation (before GCS / FSM logic) ───────
+        auto now_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+
+        auto fault = fault_mgr.evaluate(sys_health, fc_state,
+                                        pose.timestamp_ns, now_ns);
+
+        // Apply fault action if escalated (only in airborne states)
+        if (fault.recommended_action > last_fault_action &&
+            fault.recommended_action > FaultAction::NONE &&
+            fsm.state() != MissionState::IDLE &&
+            fsm.state() != MissionState::PREFLIGHT) {
+
+            spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {})",
+                         fault_action_name(last_fault_action),
+                         fault_action_name(fault.recommended_action),
+                         fault.reason);
+
+            switch (fault.recommended_action) {
+                case FaultAction::WARN:
+                    // Log only — continue mission
+                    break;
+                case FaultAction::LOITER:
+                    if (fsm.state() == MissionState::TAKEOFF ||
+                        fsm.state() == MissionState::NAVIGATE) {
+                        // Stop sending trajectory commands
+                        { drone::ipc::ShmTrajectoryCmd stop{};
+                          stop.valid = false;
+                          stop.timestamp_ns = now_ns;
+                          traj_pub->publish(stop); }
+                        fsm.on_loiter();
+                        fsm.set_fault_triggered(true);
+                    }
+                    break;
+                case FaultAction::RTL:
+                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
+                    { drone::ipc::ShmTrajectoryCmd stop{};
+                      stop.valid = false;
+                      stop.timestamp_ns = now_ns;
+                      traj_pub->publish(stop); }
+                    rtl_start_time = std::chrono::steady_clock::now();
+                    fsm.on_rtl();
+                    fsm.set_fault_triggered(true);
+                    break;
+                case FaultAction::EMERGENCY_LAND:
+                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
+                    { drone::ipc::ShmTrajectoryCmd stop{};
+                      stop.valid = false;
+                      stop.timestamp_ns = now_ns;
+                      traj_pub->publish(stop); }
+                    land_sent = true;
+                    fsm.on_land();
+                    fsm.set_fault_triggered(true);
+                    break;
+                default:
+                    break;
+            }
+            last_fault_action = fault.recommended_action;
         }
 
         // Check GCS commands (dedup by timestamp to ignore stale values)
@@ -360,6 +436,9 @@ int main(int argc, char* argv[]) {
                     spdlog::info("[Planner] Landed (alt={:.2f}m) — mission IDLE",
                                  fc_state.rel_alt);
                     fsm.on_landed();
+                    // Reset fault state for next mission / flight
+                    fault_mgr.reset();
+                    last_fault_action = FaultAction::NONE;
                 }
                 break;
             }
@@ -381,6 +460,8 @@ int main(int argc, char* argv[]) {
         status.progress_percent = fsm.total_waypoints() > 0
             ? 100.0f * fsm.current_wp_index() / fsm.total_waypoints() : 0.0f;
         status.mission_active = (fsm.state() != MissionState::IDLE);
+        status.active_faults = fault.active_faults;
+        status.fault_action = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
