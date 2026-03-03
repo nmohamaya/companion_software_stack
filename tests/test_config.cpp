@@ -151,3 +151,100 @@ TEST_F(ConfigTest, LoadDefaultConfigFile) {
         EXPECT_EQ(cfg.get<int>("slam.vio_rate_hz", 0), 100);
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// Result-based Config API (load_config / require)
+// ═══════════════════════════════════════════════════════════
+
+TEST_F(ConfigTest, LoadConfigSuccess) {
+    write_json(R"({"key": "value"})");
+    drone::Config cfg;
+    auto          r = cfg.load_config(tmp_path_);
+    EXPECT_TRUE(r.is_ok());
+    EXPECT_TRUE(cfg.loaded());
+}
+
+TEST_F(ConfigTest, LoadConfigFileNotFound) {
+    drone::Config cfg;
+    auto          r = cfg.load_config("/nonexistent/file.json");
+    EXPECT_TRUE(r.is_err());
+    EXPECT_EQ(r.error().code(), drone::util::ErrorCode::FileNotFound);
+    EXPECT_FALSE(cfg.loaded());
+}
+
+TEST_F(ConfigTest, LoadConfigParseError) {
+    write_json("{invalid json!!!");
+    drone::Config cfg;
+    auto          r = cfg.load_config(tmp_path_);
+    EXPECT_TRUE(r.is_err());
+    EXPECT_EQ(r.error().code(), drone::util::ErrorCode::ParseError);
+    EXPECT_FALSE(cfg.loaded());
+}
+
+TEST_F(ConfigTest, RequireExistingKey) {
+    write_json(R"({"port": 8080, "name": "drone1"})");
+    drone::Config cfg;
+    cfg.load(tmp_path_);
+
+    auto port = cfg.require<int>("port");
+    EXPECT_TRUE(port.is_ok());
+    EXPECT_EQ(port.value(), 8080);
+
+    auto name = cfg.require<std::string>("name");
+    EXPECT_TRUE(name.is_ok());
+    EXPECT_EQ(name.value(), "drone1");
+}
+
+TEST_F(ConfigTest, RequireMissingKey) {
+    write_json(R"({})");
+    drone::Config cfg;
+    cfg.load(tmp_path_);
+
+    auto r = cfg.require<int>("missing_key");
+    EXPECT_TRUE(r.is_err());
+    EXPECT_EQ(r.error().code(), drone::util::ErrorCode::MissingKey);
+}
+
+TEST_F(ConfigTest, RequireNestedKey) {
+    write_json(R"({"video": {"width": 1920}})");
+    drone::Config cfg;
+    cfg.load(tmp_path_);
+
+    auto w = cfg.require<int>("video.width");
+    EXPECT_TRUE(w.is_ok());
+    EXPECT_EQ(w.value(), 1920);
+
+    auto h = cfg.require<int>("video.height");
+    EXPECT_TRUE(h.is_err());
+    EXPECT_EQ(h.error().code(), drone::util::ErrorCode::MissingKey);
+}
+
+TEST_F(ConfigTest, RequireTypeMismatch) {
+    write_json(R"({"value": "not_a_number"})");
+    drone::Config cfg;
+    cfg.load(tmp_path_);
+
+    auto r = cfg.require<int>("value");
+    EXPECT_TRUE(r.is_err());
+    // nlohmann throws type_error which we catch as TypeMismatch
+    EXPECT_EQ(r.error().code(), drone::util::ErrorCode::TypeMismatch);
+}
+
+TEST_F(ConfigTest, RequireWithValueOr) {
+    write_json(R"({"a": 10})");
+    drone::Config cfg;
+    cfg.load(tmp_path_);
+
+    EXPECT_EQ(cfg.require<int>("a").value_or(99), 10);
+    EXPECT_EQ(cfg.require<int>("missing").value_or(99), 99);
+}
+
+TEST_F(ConfigTest, RequireWithMap) {
+    write_json(R"({"port": 8080})");
+    drone::Config cfg;
+    cfg.load(tmp_path_);
+
+    auto doubled = cfg.require<int>("port").map([](int p) { return p * 2; });
+    EXPECT_TRUE(doubled.is_ok());
+    EXPECT_EQ(doubled.value(), 16160);
+}
