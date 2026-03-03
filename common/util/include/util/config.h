@@ -2,13 +2,13 @@
 // JSON configuration system for all processes.
 // Loads a JSON file and provides typed access to keys with defaults.
 #pragma once
+#include "util/result.h"
+
 #include <fstream>
 #include <string>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
-
-#include "util/result.h"
 
 namespace drone {
 
@@ -87,8 +87,7 @@ public:
             return util::Result<T>::ok(node->get<T>());
         } catch (const nlohmann::json::type_error&) {
             return util::Result<T>::err(
-                util::Error(util::ErrorCode::TypeMismatch,
-                            "Type mismatch for config key: " + key));
+                util::Error(util::ErrorCode::TypeMismatch, "Type mismatch for config key: " + key));
         } catch (const std::exception& e) {
             return util::Result<T>::err(
                 util::Error(util::ErrorCode::InvalidValue,

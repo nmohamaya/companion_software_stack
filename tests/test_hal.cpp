@@ -75,7 +75,7 @@ protected:
                 "imu": { "backend": "simulated" }
             }
         })");
-        cfg_.load(path);
+        ASSERT_TRUE(cfg_.load(path));
     }
 
     drone::Config cfg_;
@@ -116,7 +116,7 @@ TEST_F(HALFactoryTest, UnknownBackendThrows) {
         "video_capture": { "mission_cam": { "backend": "nonexistent" } }
     })");
     drone::Config bad_cfg;
-    bad_cfg.load(path);
+    ASSERT_TRUE(bad_cfg.load(path));
     EXPECT_THROW(drone::hal::create_camera(bad_cfg, "video_capture.mission_cam"),
                  std::runtime_error);
 }
@@ -126,7 +126,7 @@ TEST_F(HALFactoryTest, MissingBackendDefaultsToSimulated) {
         "video_capture": { "mission_cam": { "width": 640 } }
     })");
     drone::Config no_backend_cfg;
-    no_backend_cfg.load(path);
+    ASSERT_TRUE(no_backend_cfg.load(path));
     auto cam = drone::hal::create_camera(no_backend_cfg, "video_capture.mission_cam");
     ASSERT_NE(cam, nullptr);
     EXPECT_EQ(cam->name(), "SimulatedCamera");

@@ -14,6 +14,9 @@
 //       return EXIT_FAILURE;
 //   }
 #pragma once
+#include "util/config.h"
+#include "util/result.h"
+
 #include <cmath>
 #include <functional>
 #include <initializer_list>
@@ -25,9 +28,6 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
-
-#include "util/config.h"
-#include "util/result.h"
 
 namespace drone::util {
 
@@ -56,7 +56,7 @@ inline const nlohmann::json* walk_key(const nlohmann::json& root, const std::str
 
 class IFieldRuleBase {
 public:
-    virtual ~IFieldRuleBase() = default;
+    virtual ~IFieldRuleBase()                          = default;
     [[nodiscard]] virtual ValidationRule build() const = 0;
 };
 
@@ -74,8 +74,8 @@ public:
 
     /// Value must be in [lo, hi].
     FieldRule& range(T lo, T hi) {
-        range_lo_ = lo;
-        range_hi_ = hi;
+        range_lo_  = lo;
+        range_hi_  = hi;
         has_range_ = true;
         return *this;
     }
@@ -99,14 +99,14 @@ public:
     // Build the actual validation rule (called internally by ConfigSchema).
     [[nodiscard]] ValidationRule build() const override {
         // Copy captures for the lambda
-        auto key              = key_;
-        auto required         = required_;
-        auto has_range        = has_range_;
-        auto range_lo         = range_lo_;
-        auto range_hi         = range_hi_;
-        auto allowed          = allowed_;
-        auto custom_pred      = custom_pred_;
-        auto custom_desc      = custom_description_;
+        auto key         = key_;
+        auto required    = required_;
+        auto has_range   = has_range_;
+        auto range_lo    = range_lo_;
+        auto range_hi    = range_hi_;
+        auto allowed     = allowed_;
+        auto custom_pred = custom_pred_;
+        auto custom_desc = custom_description_;
 
         return [=](const Config& cfg, std::vector<std::string>& errors) {
             const auto* node = walk_key(cfg.raw(), key);
@@ -124,8 +124,8 @@ public:
             try {
                 val = node->get<T>();
             } catch (...) {
-                errors.push_back("Type mismatch for key '" + key + "': expected " +
-                                 type_name() + ", got " + node->type_name());
+                errors.push_back("Type mismatch for key '" + key + "': expected " + type_name() +
+                                 ", got " + node->type_name());
                 return;
             }
 
@@ -133,8 +133,8 @@ public:
             if (has_range) {
                 if (val < range_lo || val > range_hi) {
                     std::ostringstream oss;
-                    oss << "Out of range for '" << key << "': " << val
-                        << " (expected [" << range_lo << ", " << range_hi << "])";
+                    oss << "Out of range for '" << key << "': " << val << " (expected [" << range_lo
+                        << ", " << range_hi << "])";
                     errors.push_back(oss.str());
                 }
             }
@@ -165,17 +165,17 @@ public:
 
 private:
     static std::string type_name() {
-        if constexpr (std::is_same_v<T, int>)         return "integer";
-        if constexpr (std::is_same_v<T, double>)      return "number";
-        if constexpr (std::is_same_v<T, float>)       return "number";
-        if constexpr (std::is_same_v<T, bool>)        return "boolean";
+        if constexpr (std::is_same_v<T, int>) return "integer";
+        if constexpr (std::is_same_v<T, double>) return "number";
+        if constexpr (std::is_same_v<T, float>) return "number";
+        if constexpr (std::is_same_v<T, bool>) return "boolean";
         if constexpr (std::is_same_v<T, std::string>) return "string";
         return "unknown";
     }
 
     ConfigSchema&                 schema_;
     std::string                   key_;
-    bool                          required_ = false;
+    bool                          required_  = false;
     bool                          has_range_ = false;
     T                             range_lo_{};
     T                             range_hi_{};
@@ -193,8 +193,8 @@ public:
     /// Declare a required field with type T.
     template<typename T>
     FieldRule<T>& required(const std::string& key) {
-        auto uptr = std::make_unique<FieldRule<T>>(*this, key, true);
-        auto& ref = *uptr;
+        auto  uptr = std::make_unique<FieldRule<T>>(*this, key, true);
+        auto& ref  = *uptr;
         field_rules_.push_back(std::move(uptr));
         return ref;
     }
@@ -202,8 +202,8 @@ public:
     /// Declare an optional field with type T (validated if present).
     template<typename T>
     FieldRule<T>& optional(const std::string& key) {
-        auto uptr = std::make_unique<FieldRule<T>>(*this, key, false);
-        auto& ref = *uptr;
+        auto  uptr = std::make_unique<FieldRule<T>>(*this, key, false);
+        auto& ref  = *uptr;
         field_rules_.push_back(std::move(uptr));
         return ref;
     }
@@ -249,10 +249,10 @@ private:
 // ── validate() — run a schema against a Config ──────────────
 // Returns ok() if all rules pass, or err(vector of messages).
 
-[[nodiscard]] inline Result<void, std::vector<std::string>>
-validate(const Config& cfg, const ConfigSchema& schema) {
+[[nodiscard]] inline Result<void, std::vector<std::string>> validate(const Config&       cfg,
+                                                                     const ConfigSchema& schema) {
     std::vector<std::string> errors;
-    auto rules = schema.build();
+    auto                     rules = schema.build();
     for (auto& rule : rules) {
         rule(cfg, errors);
     }

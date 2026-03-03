@@ -64,12 +64,13 @@ public:
 
     /// Poll for a response matching the given correlation ID.
     /// Returns the response if available, std::nullopt otherwise.
-    [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> poll_response(uint64_t correlation_id) = 0;
+    [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> poll_response(
+        uint64_t correlation_id) = 0;
 
     /// Blocking wait for a response with timeout.
     /// Default implementation polls in a spin-sleep loop.
-    [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> await_response(uint64_t correlation_id,
-                                                                std::chrono::milliseconds timeout) {
+    [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> await_response(
+        uint64_t correlation_id, std::chrono::milliseconds timeout) {
         auto deadline = std::chrono::steady_clock::now() + timeout;
         while (std::chrono::steady_clock::now() < deadline) {
             if (auto resp = poll_response(correlation_id)) {

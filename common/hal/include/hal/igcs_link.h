@@ -40,7 +40,8 @@ public:
     [[nodiscard]] virtual bool is_connected() const = 0;
 
     /// Send telemetry to the GCS.
-    [[nodiscard]] virtual bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) = 0;
+    [[nodiscard]] virtual bool send_telemetry(float lat, float lon, float alt, float battery,
+                                              uint8_t state) = 0;
 
     /// Poll for incoming GCS commands.
     [[nodiscard]] virtual GCSCommand poll_command() = 0;

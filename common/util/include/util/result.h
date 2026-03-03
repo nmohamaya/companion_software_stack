@@ -46,11 +46,9 @@ class Error {
 public:
     Error() = default;
 
-    Error(ErrorCode code, std::string message)
-        : code_(code), message_(std::move(message)) {}
+    Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
-    explicit Error(std::string message)
-        : code_(ErrorCode::Unknown), message_(std::move(message)) {}
+    explicit Error(std::string message) : code_(ErrorCode::Unknown), message_(std::move(message)) {}
 
     [[nodiscard]] ErrorCode          code() const { return code_; }
     [[nodiscard]] const std::string& message() const { return message_; }
@@ -99,9 +97,7 @@ public:
     [[nodiscard]] E&&      error() && { return std::get<1>(std::move(storage_)); }
 
     /// Return the value if ok, otherwise `fallback`.
-    [[nodiscard]] T value_or(T fallback) const& {
-        return is_ok() ? value() : std::move(fallback);
-    }
+    [[nodiscard]] T value_or(T fallback) const& { return is_ok() ? value() : std::move(fallback); }
     [[nodiscard]] T value_or(T fallback) && {
         return is_ok() ? std::move(value()) : std::move(fallback);
     }
@@ -127,16 +123,14 @@ public:
     /// Chain with a function that returns Result<U, E>.  Propagates error.
     /// (flat-map / bind / and_then)
     template<typename F>
-    [[nodiscard]] auto and_then(F&& func) const&
-        -> std::invoke_result_t<F, const T&> {
+    [[nodiscard]] auto and_then(F&& func) const& -> std::invoke_result_t<F, const T&> {
         if (is_ok()) return std::invoke(std::forward<F>(func), value());
         using RetResult = std::invoke_result_t<F, const T&>;
         return RetResult::err(error());
     }
 
     template<typename F>
-    [[nodiscard]] auto and_then(F&& func) &&
-        -> std::invoke_result_t<F, T&&> {
+    [[nodiscard]] auto and_then(F&& func) && -> std::invoke_result_t<F, T&&> {
         if (is_ok()) return std::invoke(std::forward<F>(func), std::move(value()));
         using RetResult = std::invoke_result_t<F, T&&>;
         return RetResult::err(std::move(error()));

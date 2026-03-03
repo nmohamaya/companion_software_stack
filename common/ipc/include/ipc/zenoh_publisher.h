@@ -63,7 +63,9 @@ public:
     }
 
     /// Number of publishes that used the SHM zero-copy path.
-    [[nodiscard]] uint64_t shm_publish_count() const { return shm_publishes_.load(std::memory_order_relaxed); }
+    [[nodiscard]] uint64_t shm_publish_count() const {
+        return shm_publishes_.load(std::memory_order_relaxed);
+    }
 
     /// Number of publishes that used the standard bytes path.
     [[nodiscard]] uint64_t bytes_publish_count() const {

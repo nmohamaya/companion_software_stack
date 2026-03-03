@@ -61,8 +61,8 @@ public:
     /// @param retry_ms     Ignored.
     template<typename T>
     [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe(const std::string&   topic,
-                                              [[maybe_unused]] int max_retries = 50,
-                                              [[maybe_unused]] int retry_ms    = 200) {
+                                                            [[maybe_unused]] int max_retries = 50,
+                                                            [[maybe_unused]] int retry_ms = 200) {
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
@@ -80,15 +80,16 @@ public:
     /// @param service     Service name (e.g. "trajectory") or full key expression.
     /// @param timeout_ms  Timeout for each GET operation in milliseconds.
     template<typename Req, typename Resp>
-    [[nodiscard]] std::unique_ptr<IServiceClient<Req, Resp>> create_client(const std::string& service,
-                                                             uint64_t           timeout_ms = 5000) {
+    [[nodiscard]] std::unique_ptr<IServiceClient<Req, Resp>> create_client(
+        const std::string& service, uint64_t timeout_ms = 5000) {
         return std::make_unique<ZenohServiceClient<Req, Resp>>(to_service_key(service), timeout_ms);
     }
 
     /// Create a service server for the given service name.
     /// @param service  Service name (e.g. "trajectory") or full key expression.
     template<typename Req, typename Resp>
-    [[nodiscard]] std::unique_ptr<IServiceServer<Req, Resp>> create_server(const std::string& service) {
+    [[nodiscard]] std::unique_ptr<IServiceServer<Req, Resp>> create_server(
+        const std::string& service) {
         return std::make_unique<ZenohServiceServer<Req, Resp>>(to_service_key(service));
     }
 

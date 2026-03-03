@@ -87,7 +87,7 @@ TEST(ShmSubscriberTest, ReceivePublishedData) {
     ShmPublisher<TestPayload> pub(name);
 
     ShmSubscriber<TestPayload> sub;
-    sub.connect(name);
+    ASSERT_TRUE(sub.connect(name));
     ASSERT_TRUE(sub.is_connected());
 
     TestPayload sent{99, 2.718f, {}};

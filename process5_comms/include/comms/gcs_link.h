@@ -42,7 +42,8 @@ public:
     [[nodiscard]] bool is_connected() const { return connected_; }
 
     // Send telemetry to GCS (simulated — just logs)
-    [[nodiscard]] bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) {
+    [[nodiscard]] bool send_telemetry(float lat, float lon, float alt, float battery,
+                                      uint8_t state) {
         if (!connected_) return false;
         telem_count_++;
         if (telem_count_ % 50 == 0) {

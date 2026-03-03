@@ -113,8 +113,8 @@ public:
     /// @param now_ns           Current monotonic time (steady_clock).
     /// @return FaultState with recommended action and active fault bitmask.
     [[nodiscard]] FaultState evaluate(const drone::ipc::ShmSystemHealth& health,
-                        const drone::ipc::ShmFCState& fc_state, uint64_t pose_timestamp_ns,
-                        uint64_t now_ns) {
+                                      const drone::ipc::ShmFCState&      fc_state,
+                                      uint64_t pose_timestamp_ns, uint64_t now_ns) {
         FaultState result;
 
         // ── 1. Critical process death (comms / SLAM) ────────

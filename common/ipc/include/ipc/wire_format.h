@@ -100,8 +100,8 @@ static_assert(std::is_trivially_copyable_v<WireHeader>, "WireHeader must be triv
 /// @param  seq       Sequence number (caller-managed per topic).
 /// @param  ts_ns     Timestamp in nanoseconds (0 = auto from steady_clock).
 template<typename T>
-[[nodiscard]] std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, uint32_t seq = 0,
-                                    uint64_t ts_ns = 0) {
+[[nodiscard]] std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type,
+                                                  uint32_t seq = 0, uint64_t ts_ns = 0) {
     static_assert(std::is_trivially_copyable_v<T>, "wire_serialize requires trivially copyable T");
 
     if (ts_ns == 0) {

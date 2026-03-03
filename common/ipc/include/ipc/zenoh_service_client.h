@@ -115,7 +115,8 @@ public:
         return id;
     }
 
-    [[nodiscard]] std::optional<ServiceResponse<Resp>> poll_response(uint64_t correlation_id) override {
+    [[nodiscard]] std::optional<ServiceResponse<Resp>> poll_response(
+        uint64_t correlation_id) override {
         std::lock_guard<std::mutex> lock(responses_->mutex);
         for (auto it = responses_->queue.begin(); it != responses_->queue.end(); ++it) {
             if (it->correlation_id == correlation_id && it->valid) {

@@ -20,8 +20,8 @@ public:
     using MeasMat  = Eigen::Matrix<float, MEAS_DIM, STATE_DIM>;
 
     KalmanBoxTracker(const Detection2D& initial_det, uint32_t id);
-    void            predict(float dt = 1.0f / 30.0f);
-    void            update(const Detection2D& det);
+    void                          predict(float dt = 1.0f / 30.0f);
+    void                          update(const Detection2D& det);
     [[nodiscard]] Detection2D     predicted_bbox() const;
     [[nodiscard]] Eigen::Vector2f velocity() const;
 
