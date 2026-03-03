@@ -66,10 +66,11 @@ cmake --build build -j$(nproc)
 ```bash
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 400 across 23 suites with `ENABLE_ZENOH=ON`; 323 with Zenoh OFF)
+- All tests must pass (currently 464 across 26 suites with `ENABLE_ZENOH=ON`)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh and SHM test binaries use `RESOURCE_LOCK` to avoid parallel collisions under `ctest -j`
+- See [`tests/TESTS.md`](tests/TESTS.md) for a full index of all test suites, what each validates, and instructions for adding new tests
 
 > **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 
@@ -160,7 +161,12 @@ Before merging, update the project's tracking documents:
    - Prevention strategy (how to avoid this class of issue)
    - Use the template at the bottom of the file for consistent formatting
 
-6. **When to update:** Include doc updates in the same PR branch, committed before merge.
+6. **`tests/TESTS.md`** — Update when adding or modifying tests:
+   - Add new test file entry in the appropriate component section
+   - Update suite/test counts in the summary table
+   - Document what each new suite validates
+
+7. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 Once CI passes and review is approved:
@@ -462,6 +468,7 @@ chore(#25): upgrade spdlog to 1.13.0
 | [README.md](README.md) | Project overview & build instructions | As architecture changes |
 | [CI_ISSUES.md](CI_ISSUES.md) | CI failure log & root cause analysis | After every CI-specific failure |
 | [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | Production checklist & gap analysis | When readiness status changes |
+| [tests/TESTS.md](tests/TESTS.md) | Test suite index & per-test documentation | When adding or modifying tests |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices | When new practices are discovered |
 
 > **Living Document:** This workflow document is meant to evolve with the project.
