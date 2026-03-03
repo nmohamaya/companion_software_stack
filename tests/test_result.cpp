@@ -112,14 +112,14 @@ TEST(ResultTest, ValueOrMoveOnErr) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ResultTest, MapOnOk) {
-    auto r = Result<int>::ok(5);
+    auto r       = Result<int>::ok(5);
     auto doubled = r.map([](int x) { return x * 2; });
     EXPECT_TRUE(doubled.is_ok());
     EXPECT_EQ(doubled.value(), 10);
 }
 
 TEST(ResultTest, MapOnErr) {
-    auto r = Result<int>::err(Error("bad"));
+    auto r       = Result<int>::err(Error("bad"));
     auto doubled = r.map([](int x) { return x * 2; });
     EXPECT_TRUE(doubled.is_err());
     EXPECT_EQ(doubled.error().message(), "bad");
@@ -252,9 +252,9 @@ TEST(VoidResultTest, Err) {
 }
 
 TEST(VoidResultTest, AndThenOnOk) {
-    int called = 0;
-    auto r     = VoidResult::ok();
-    auto r2    = r.and_then([&]() -> VoidResult {
+    int  called = 0;
+    auto r      = VoidResult::ok();
+    auto r2     = r.and_then([&]() -> VoidResult {
         called++;
         return VoidResult::ok();
     });
@@ -263,9 +263,9 @@ TEST(VoidResultTest, AndThenOnOk) {
 }
 
 TEST(VoidResultTest, AndThenOnErr) {
-    int called = 0;
-    auto r     = VoidResult::err(Error("fail"));
-    auto r2    = r.and_then([&]() -> VoidResult {
+    int  called = 0;
+    auto r      = VoidResult::err(Error("fail"));
+    auto r2     = r.and_then([&]() -> VoidResult {
         called++;
         return VoidResult::ok();
     });
@@ -300,18 +300,18 @@ TEST(ResultTest, CustomErrorMapToDefault) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ResultTest, MapVoidReturnOk) {
-    auto r = Result<int>::ok(42);
-    int captured = 0;
-    auto v = r.map([&](int x) { captured = x; });
+    auto r        = Result<int>::ok(42);
+    int  captured = 0;
+    auto v        = r.map([&](int x) { captured = x; });
     static_assert(std::is_same_v<decltype(v), Result<void>>);
     EXPECT_TRUE(v.is_ok());
     EXPECT_EQ(captured, 42);
 }
 
 TEST(ResultTest, MapVoidReturnErr) {
-    auto r = Result<int>::err(Error{ErrorCode::Unknown, "fail"});
+    auto r      = Result<int>::err(Error{ErrorCode::Unknown, "fail"});
     bool called = false;
-    auto v = r.map([&](int) { called = true; });
+    auto v      = r.map([&](int) { called = true; });
     EXPECT_TRUE(v.is_err());
     EXPECT_FALSE(called);
 }
@@ -328,9 +328,9 @@ TEST(ResultTest, MapVoidReturnRvalue) {
 TEST(ErrorCodeTest, AllCodes) {
     // Verify all error codes are distinct
     std::vector<ErrorCode> codes = {
-        ErrorCode::Unknown,    ErrorCode::FileNotFound,  ErrorCode::ParseError,
-        ErrorCode::InvalidValue, ErrorCode::MissingKey,  ErrorCode::TypeMismatch,
-        ErrorCode::OutOfRange, ErrorCode::Timeout,       ErrorCode::NotConnected,
+        ErrorCode::Unknown,       ErrorCode::FileNotFound, ErrorCode::ParseError,
+        ErrorCode::InvalidValue,  ErrorCode::MissingKey,   ErrorCode::TypeMismatch,
+        ErrorCode::OutOfRange,    ErrorCode::Timeout,      ErrorCode::NotConnected,
         ErrorCode::AlreadyExists,
     };
     for (size_t i = 0; i < codes.size(); ++i) {

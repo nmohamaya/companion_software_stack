@@ -46,11 +46,9 @@ class Error {
 public:
     Error() = default;
 
-    Error(ErrorCode code, std::string message)
-        : code_(code), message_(std::move(message)) {}
+    Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
-    explicit Error(std::string message)
-        : code_(ErrorCode::Unknown), message_(std::move(message)) {}
+    explicit Error(std::string message) : code_(ErrorCode::Unknown), message_(std::move(message)) {}
 
     [[nodiscard]] ErrorCode          code() const { return code_; }
     [[nodiscard]] const std::string& message() const { return message_; }
@@ -101,9 +99,7 @@ public:
     [[nodiscard]] E&&      error() && { return std::get<1>(std::move(storage_)); }
 
     /// Return the value if ok, otherwise `fallback`.
-    [[nodiscard]] T value_or(T fallback) const& {
-        return is_ok() ? value() : std::move(fallback);
-    }
+    [[nodiscard]] T value_or(T fallback) const& { return is_ok() ? value() : std::move(fallback); }
     [[nodiscard]] T value_or(T fallback) && {
         return is_ok() ? std::move(value()) : std::move(fallback);
     }
@@ -116,7 +112,10 @@ public:
     [[nodiscard]] auto map(F&& func) const& -> Result<std::invoke_result_t<F, const T&>, E> {
         using U = std::invoke_result_t<F, const T&>;
         if constexpr (std::is_void_v<U>) {
-            if (is_ok()) { std::invoke(std::forward<F>(func), value()); return Result<void, E>::ok(); }
+            if (is_ok()) {
+                std::invoke(std::forward<F>(func), value());
+                return Result<void, E>::ok();
+            }
             return Result<void, E>::err(error());
         } else {
             if (is_ok()) return Result<U, E>::ok(std::invoke(std::forward<F>(func), value()));
@@ -128,7 +127,10 @@ public:
     [[nodiscard]] auto map(F&& func) && -> Result<std::invoke_result_t<F, T&&>, E> {
         using U = std::invoke_result_t<F, T&&>;
         if constexpr (std::is_void_v<U>) {
-            if (is_ok()) { std::invoke(std::forward<F>(func), std::move(value())); return Result<void, E>::ok(); }
+            if (is_ok()) {
+                std::invoke(std::forward<F>(func), std::move(value()));
+                return Result<void, E>::ok();
+            }
             return Result<void, E>::err(std::move(error()));
         } else {
             if (is_ok())
@@ -141,21 +143,19 @@ public:
     /// The callable must return a Result whose error type is E (or convertible to E).
     /// (flat-map / bind / and_then)
     template<typename F>
-    [[nodiscard]] auto and_then(F&& func) const&
-        -> std::invoke_result_t<F, const T&> {
+    [[nodiscard]] auto and_then(F&& func) const& -> std::invoke_result_t<F, const T&> {
         using RetResult = std::invoke_result_t<F, const T&>;
         static_assert(std::is_same_v<typename RetResult::error_type, E>,
-            "and_then: callable must return Result with the same error type E");
+                      "and_then: callable must return Result with the same error type E");
         if (is_ok()) return std::invoke(std::forward<F>(func), value());
         return RetResult::err(error());
     }
 
     template<typename F>
-    [[nodiscard]] auto and_then(F&& func) &&
-        -> std::invoke_result_t<F, T&&> {
+    [[nodiscard]] auto and_then(F&& func) && -> std::invoke_result_t<F, T&&> {
         using RetResult = std::invoke_result_t<F, T&&>;
         static_assert(std::is_same_v<typename RetResult::error_type, E>,
-            "and_then: callable must return Result with the same error type E");
+                      "and_then: callable must return Result with the same error type E");
         if (is_ok()) return std::invoke(std::forward<F>(func), std::move(value()));
         return RetResult::err(std::move(error()));
     }
