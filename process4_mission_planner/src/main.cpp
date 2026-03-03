@@ -12,6 +12,7 @@
 #include "planner/mission_fsm.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/correlation.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
@@ -31,6 +32,7 @@ static std::atomic<bool> g_running{true};
 static uint64_t fc_cmd_seq = 0;
 
 /// Publish an FC command to the FC command SHM channel.
+/// Carries the current thread-local correlation ID.
 static void send_fc_command(drone::ipc::IPublisher<drone::ipc::ShmFCCommand>& pub,
                             drone::ipc::FCCommandType cmd, float param1 = 0.0f) {
     drone::ipc::ShmFCCommand fc_cmd{};
@@ -38,10 +40,11 @@ static void send_fc_command(drone::ipc::IPublisher<drone::ipc::ShmFCCommand>& pu
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count());
-    fc_cmd.command     = cmd;
-    fc_cmd.param1      = param1;
-    fc_cmd.sequence_id = ++fc_cmd_seq;
-    fc_cmd.valid       = true;
+    fc_cmd.correlation_id = drone::util::CorrelationContext::get();
+    fc_cmd.command        = cmd;
+    fc_cmd.param1         = param1;
+    fc_cmd.sequence_id    = ++fc_cmd_seq;
+    fc_cmd.valid          = true;
     pub.publish(fc_cmd);
 }
 
@@ -184,8 +187,9 @@ int main(int argc, char* argv[]) {
     float                                 home_x = 0.0f, home_y = 0.0f, home_z = 0.0f;
     bool                                  home_recorded = false;
     std::chrono::steady_clock::time_point rtl_start_time{};
-    uint64_t last_gcs_timestamp = 0;  // dedup GCS commands by timestamp
-    auto     last_arm_time      = std::chrono::steady_clock::now() -
+    uint64_t last_gcs_timestamp    = 0;  // dedup GCS commands by timestamp
+    uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
+    auto     last_arm_time         = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
 
     // ── Main planning loop (10 Hz) ──────────────────────────
@@ -278,16 +282,20 @@ int main(int argc, char* argv[]) {
         drone::ipc::ShmGCSCommand gcs_cmd{};
         if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) && gcs_cmd.valid &&
             gcs_cmd.timestamp_ns > last_gcs_timestamp) {
-            last_gcs_timestamp = gcs_cmd.timestamp_ns;
+            last_gcs_timestamp    = gcs_cmd.timestamp_ns;
+            active_correlation_id = gcs_cmd.correlation_id;
+            // Propagate GCS correlation ID into outgoing commands
+            drone::util::ScopedCorrelation gcs_guard(gcs_cmd.correlation_id);
             switch (gcs_cmd.command) {
                 case drone::ipc::GCSCommandType::RTL:
-                    spdlog::info("[Planner] GCS command: RTL");
+                    spdlog::info("[Planner] GCS command: RTL corr={:#x}", gcs_cmd.correlation_id);
                     send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
                     // Publish invalid traj to stop comms forwarding stale velocity cmds
                     {
                         drone::ipc::ShmTrajectoryCmd stop{};
-                        stop.valid        = false;
-                        stop.timestamp_ns = static_cast<uint64_t>(
+                        stop.valid          = false;
+                        stop.correlation_id = gcs_cmd.correlation_id;
+                        stop.timestamp_ns   = static_cast<uint64_t>(
                             std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch())
                                 .count());
@@ -297,13 +305,14 @@ int main(int argc, char* argv[]) {
                     fsm.on_rtl();
                     break;
                 case drone::ipc::GCSCommandType::LAND:
-                    spdlog::info("[Planner] GCS command: LAND");
+                    spdlog::info("[Planner] GCS command: LAND corr={:#x}", gcs_cmd.correlation_id);
                     send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
                     land_sent = true;
                     {
                         drone::ipc::ShmTrajectoryCmd stop{};
-                        stop.valid        = false;
-                        stop.timestamp_ns = static_cast<uint64_t>(
+                        stop.valid          = false;
+                        stop.correlation_id = gcs_cmd.correlation_id;
+                        stop.timestamp_ns   = static_cast<uint64_t>(
                             std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch())
                                 .count());
@@ -379,11 +388,12 @@ int main(int argc, char* argv[]) {
 
                         if (wp->trigger_payload) {
                             drone::ipc::ShmPayloadCommand pay_cmd{};
-                            pay_cmd.timestamp_ns = traj.timestamp_ns;
-                            pay_cmd.action       = drone::ipc::PayloadAction::CAMERA_CAPTURE;
-                            pay_cmd.gimbal_pitch = -90.0f;
-                            pay_cmd.gimbal_yaw   = 0.0f;
-                            pay_cmd.valid        = true;
+                            pay_cmd.timestamp_ns   = traj.timestamp_ns;
+                            pay_cmd.correlation_id = active_correlation_id;
+                            pay_cmd.action         = drone::ipc::PayloadAction::CAMERA_CAPTURE;
+                            pay_cmd.gimbal_pitch   = -90.0f;
+                            pay_cmd.gimbal_yaw     = 0.0f;
+                            pay_cmd.valid          = true;
                             payload_pub->publish(pay_cmd);
                         }
 
@@ -458,6 +468,7 @@ int main(int argc, char* argv[]) {
         status.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
+        status.correlation_id   = active_correlation_id;
         status.state            = fsm.state();
         status.current_waypoint = static_cast<uint32_t>(fsm.current_wp_index());
         status.total_waypoints  = static_cast<uint32_t>(fsm.total_waypoints());

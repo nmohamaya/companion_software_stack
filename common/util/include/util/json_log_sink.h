@@ -15,7 +15,10 @@
 // For file output, wrap an std::ofstream-based sink or use JsonFileSink.
 #pragma once
 
+#include "util/correlation.h"
+
 #include <chrono>
+#include <cinttypes>
 #include <cstdio>
 #include <ctime>
 #include <mutex>
@@ -128,6 +131,17 @@ protected:
         detail::json_escape(json, std::string_view(msg.payload.data(), msg.payload.size()));
 
         json += "\"";
+
+        // Correlation ID (from thread-local context, omitted when 0)
+        auto cid = CorrelationContext::get();
+        if (cid != 0) {
+            json += ",\"correlation_id\":\"";
+            // Format as hex for readability (matches spdlog {:#x} format)
+            char cid_buf[32];
+            std::snprintf(cid_buf, sizeof(cid_buf), "0x%016" PRIx64, static_cast<uint64_t>(cid));
+            json += cid_buf;
+            json += "\"";
+        }
 
         // Source location (if available)
         if (!msg.source.empty()) {

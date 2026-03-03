@@ -32,8 +32,8 @@ using namespace drone::ipc;
 
 // ── WireHeader layout ────────────────────────────────────
 
-TEST(WireFormat, HeaderSizeIs24Bytes) {
-    EXPECT_EQ(sizeof(WireHeader), 24u);
+TEST(WireFormat, HeaderSizeIs32Bytes) {
+    EXPECT_EQ(sizeof(WireHeader), 32u);
 }
 
 TEST(WireFormat, DefaultHeaderHasMagicAndVersion) {
@@ -45,6 +45,7 @@ TEST(WireFormat, DefaultHeaderHasMagicAndVersion) {
     EXPECT_EQ(hdr.payload_size, 0u);
     EXPECT_EQ(hdr.timestamp_ns, 0u);
     EXPECT_EQ(hdr.sequence, 0u);
+    EXPECT_EQ(hdr.correlation_id, 0u);
 }
 
 TEST(WireFormat, MagicIsCorrectDRONLittleEndian) {
