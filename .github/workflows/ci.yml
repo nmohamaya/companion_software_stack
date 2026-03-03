@@ -10,7 +10,22 @@ env:
   BUILD_TYPE: Release
 
 jobs:
+  # ── Fast gate: format check ──────────────────────────────────────
+  format-check:
+    runs-on: ubuntu-24.04
+    name: format-check
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Check clang-format
+      run: |
+        find common process[1-7]_* tests -name '*.h' -o -name '*.cpp' \
+          | xargs clang-format --dry-run --Werror 2>&1
+
+  # ── Build + test matrix ──────────────────────────────────────────
   build-and-test:
+    needs: format-check
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
