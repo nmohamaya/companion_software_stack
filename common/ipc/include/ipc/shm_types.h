@@ -128,6 +128,7 @@ enum FaultType : uint32_t {
 
 struct ShmMissionStatus {
     uint64_t     timestamp_ns;
+    uint64_t     correlation_id;  // cross-process trace ID (0 = none)
     MissionState state;
     uint32_t     current_waypoint;
     uint32_t     total_waypoints;
@@ -144,6 +145,7 @@ struct ShmMissionStatus {
 // ═══════════════════════════════════════════════════════════
 struct ShmTrajectoryCmd {
     uint64_t timestamp_ns;
+    uint64_t correlation_id;                // cross-process trace ID (0 = none)
     float    target_x, target_y, target_z;  // world frame (m)
     float    target_yaw;                    // radians
     float    velocity_x, velocity_y, velocity_z;
@@ -165,6 +167,7 @@ enum class PayloadAction : uint8_t {
 
 struct ShmPayloadCommand {
     uint64_t      timestamp_ns;
+    uint64_t      correlation_id;  // cross-process trace ID (0 = none)
     PayloadAction action;
     float         gimbal_pitch, gimbal_yaw;  // degrees
     uint64_t      sequence_id;
@@ -186,6 +189,7 @@ enum class FCCommandType : uint8_t {
 
 struct ShmFCCommand {
     uint64_t      timestamp_ns;
+    uint64_t      correlation_id;  // cross-process trace ID (0 = none)
     FCCommandType command;
     float         param1;       // TAKEOFF: altitude_m; SET_MODE: mode_id
     uint64_t      sequence_id;  // monotonic, for dedup
@@ -227,6 +231,7 @@ enum class GCSCommandType : uint8_t {
 
 struct ShmGCSCommand {
     uint64_t       timestamp_ns;
+    uint64_t       correlation_id;  // cross-process trace ID (0 = none)
     GCSCommandType command;
     float          param1, param2, param3;
     uint64_t       sequence_id;

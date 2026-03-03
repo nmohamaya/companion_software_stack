@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -30,7 +31,7 @@ namespace drone::ipc {
 static constexpr uint32_t kWireMagic = 0x4E4F5244;  // "DRON" LE
 
 /// Wire format version.  Increment on breaking layout changes.
-static constexpr uint8_t kWireVersion = 1;
+static constexpr uint8_t kWireVersion = 2;
 
 /// Message type identifiers for wire format routing.
 /// Values are stable — never renumber existing entries.
@@ -66,25 +67,27 @@ enum class WireMessageType : uint16_t {
 
 /// Fixed-size wire header prepended to every network message.
 ///
-/// Layout (24 bytes, packed):
-///   [0..3]   magic         — 0x4E4F5244 ("DRON" LE)
-///   [4]      version       — wire format version (currently 1)
-///   [5]      flags         — reserved (0)
-///   [6..7]   msg_type      — WireMessageType enum
-///   [8..11]  payload_size  — size of payload following this header
-///   [12..19] timestamp_ns  — sender's steady_clock timestamp
-///   [20..23] sequence      — per-topic monotonic counter
+/// Layout (32 bytes, packed):
+///   [0..3]   magic            — 0x4E4F5244 ("DRON" LE)
+///   [4]      version          — wire format version (currently 2)
+///   [5]      flags            — reserved (0)
+///   [6..7]   msg_type         — WireMessageType enum
+///   [8..11]  payload_size     — size of payload following this header
+///   [12..19] timestamp_ns     — sender's steady_clock timestamp
+///   [20..23] sequence         — per-topic monotonic counter
+///   [24..31] correlation_id   — cross-process trace ID (v2, 0 = none)
 struct __attribute__((packed)) WireHeader {
-    uint32_t        magic        = kWireMagic;
-    uint8_t         version      = kWireVersion;
-    uint8_t         flags        = 0;
-    WireMessageType msg_type     = WireMessageType::UNKNOWN;
-    uint32_t        payload_size = 0;
-    uint64_t        timestamp_ns = 0;
-    uint32_t        sequence     = 0;
+    uint32_t        magic          = kWireMagic;
+    uint8_t         version        = kWireVersion;
+    uint8_t         flags          = 0;
+    WireMessageType msg_type       = WireMessageType::UNKNOWN;
+    uint32_t        payload_size   = 0;
+    uint64_t        timestamp_ns   = 0;
+    uint32_t        sequence       = 0;
+    uint64_t        correlation_id = 0;  // v2: cross-process trace ID
 };
 
-static_assert(sizeof(WireHeader) == 24, "WireHeader must be exactly 24 bytes (packed)");
+static_assert(sizeof(WireHeader) == 32, "WireHeader must be exactly 32 bytes (packed)");
 static_assert(std::is_trivially_copyable_v<WireHeader>, "WireHeader must be trivially copyable");
 
 // ─── Serialization helpers ──────────────────────────────────
@@ -122,26 +125,50 @@ template<typename T>
 
 /// Validate a wire header at the start of a byte buffer.
 ///
+/// Backward-compatible: accepts version 1 (24-byte header) and
+/// version 2 (32-byte header).  For v1 headers, correlation_id
+/// is set to 0 when read via wire_read_header().
+///
 /// @param  data  Pointer to the received buffer.
 /// @param  len   Length of the buffer in bytes.
 /// @return true if the header is valid (magic + version + size check).
 [[nodiscard]] inline bool wire_validate(const uint8_t* data, std::size_t len) {
-    if (len < sizeof(WireHeader)) return false;
+    // Need at least the v1 header size (24 bytes) to read magic + version.
+    static constexpr std::size_t kV1HeaderSize = 24;
+    if (len < kV1HeaderSize) return false;
 
-    WireHeader hdr;
-    std::memcpy(&hdr, data, sizeof(WireHeader));
+    uint32_t magic = 0;
+    std::memcpy(&magic, data, sizeof(magic));
+    if (magic != kWireMagic) return false;
 
-    if (hdr.magic != kWireMagic) return false;
-    if (hdr.version != kWireVersion) return false;
-    if (len < sizeof(WireHeader) + hdr.payload_size) return false;
+    uint8_t version = data[4];
+    if (version == 0 || version > kWireVersion) return false;
+
+    // Determine header size based on version.
+    std::size_t header_size = (version >= 2) ? sizeof(WireHeader) : kV1HeaderSize;
+    if (len < header_size) return false;
+
+    uint32_t payload_size = 0;
+    std::memcpy(&payload_size, data + 8, sizeof(payload_size));
+    if (len < header_size + payload_size) return false;
 
     return true;
 }
 
 /// Extract the wire header from a byte buffer (no validation).
+/// For v1 messages (24 bytes), correlation_id is set to 0.
 [[nodiscard]] inline WireHeader wire_read_header(const uint8_t* data) {
-    WireHeader hdr;
-    std::memcpy(&hdr, data, sizeof(WireHeader));
+    // Check version to handle backward compatibility.
+    uint8_t    version = data[4];
+    WireHeader hdr{};
+    if (version >= 2) {
+        std::memcpy(static_cast<void*>(&hdr), data, sizeof(WireHeader));
+    } else {
+        // v1 header: only 24 bytes — copy the first 24 and leave correlation_id = 0.
+        static constexpr std::size_t kV1HeaderSize = 24;
+        std::memcpy(static_cast<void*>(&hdr), data, kV1HeaderSize);
+        hdr.correlation_id = 0;
+    }
     return hdr;
 }
 

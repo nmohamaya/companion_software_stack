@@ -14,6 +14,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/correlation.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/signal_handler.h"
@@ -69,31 +70,34 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
         if (cmd_sub.is_connected() && cmd_sub.receive(fc_cmd) && fc_cmd.valid &&
             fc_cmd.sequence_id > last_cmd_seq) {
             last_cmd_seq = fc_cmd.sequence_id;
+            drone::util::ScopedCorrelation guard(fc_cmd.correlation_id);
 
             switch (fc_cmd.command) {
                 case drone::ipc::FCCommandType::ARM:
-                    spdlog::info("[Comms] FC cmd: ARM");
+                    spdlog::info("[Comms] FC cmd: ARM corr={:#x}", fc_cmd.correlation_id);
                     fc.send_arm(true);
                     break;
                 case drone::ipc::FCCommandType::DISARM:
-                    spdlog::info("[Comms] FC cmd: DISARM");
+                    spdlog::info("[Comms] FC cmd: DISARM corr={:#x}", fc_cmd.correlation_id);
                     fc.send_arm(false);
                     break;
                 case drone::ipc::FCCommandType::TAKEOFF:
-                    spdlog::info("[Comms] FC cmd: TAKEOFF to {:.1f}m", fc_cmd.param1);
+                    spdlog::info("[Comms] FC cmd: TAKEOFF to {:.1f}m corr={:#x}", fc_cmd.param1,
+                                 fc_cmd.correlation_id);
                     fc.send_takeoff(fc_cmd.param1);
                     break;
                 case drone::ipc::FCCommandType::SET_MODE:
-                    spdlog::info("[Comms] FC cmd: SET_MODE {}", static_cast<int>(fc_cmd.param1));
+                    spdlog::info("[Comms] FC cmd: SET_MODE {} corr={:#x}",
+                                 static_cast<int>(fc_cmd.param1), fc_cmd.correlation_id);
                     fc.send_mode(static_cast<uint8_t>(fc_cmd.param1));
                     break;
                 case drone::ipc::FCCommandType::RTL:
-                    spdlog::info("[Comms] FC cmd: RTL");
+                    spdlog::info("[Comms] FC cmd: RTL corr={:#x}", fc_cmd.correlation_id);
                     fc.send_mode(3);            // 3 = RTL
                     last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
                 case drone::ipc::FCCommandType::LAND:
-                    spdlog::info("[Comms] FC cmd: LAND");
+                    spdlog::info("[Comms] FC cmd: LAND corr={:#x}", fc_cmd.correlation_id);
                     fc.send_mode(2);            // 2 = AUTO (Hold/Land)
                     last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
@@ -121,7 +125,8 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs
         auto msg = gcs.poll_command();
         if (msg.valid) {
             drone::ipc::ShmGCSCommand shm_cmd{};
-            shm_cmd.timestamp_ns = msg.timestamp_ns;
+            shm_cmd.timestamp_ns   = msg.timestamp_ns;
+            shm_cmd.correlation_id = drone::util::CorrelationContext::generate();
             switch (msg.type) {
                 case drone::hal::GCSCommandType::RTL:
                     shm_cmd.command = drone::ipc::GCSCommandType::RTL;
@@ -132,6 +137,8 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs
                 default: shm_cmd.command = drone::ipc::GCSCommandType::NONE; break;
             }
             shm_cmd.valid = true;
+            spdlog::info("[Comms] GCS cmd received: {} corr={:#x}",
+                         static_cast<int>(shm_cmd.command), shm_cmd.correlation_id);
             pub.publish(shm_cmd);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
