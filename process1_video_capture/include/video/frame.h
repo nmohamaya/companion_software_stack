@@ -6,12 +6,18 @@
 namespace drone::video {
 
 enum class PixelFormat : uint32_t {
-    BAYER_RGGB8 = 0, BAYER_GRBG8 = 1, YUV422 = 2,
-    RGB24 = 3, NV12 = 4, GRAY8 = 5,
+    BAYER_RGGB8 = 0,
+    BAYER_GRBG8 = 1,
+    YUV422      = 2,
+    RGB24       = 3,
+    NV12        = 4,
+    GRAY8       = 5,
 };
 
 enum class CameraId : uint8_t {
-    MISSION  = 0, STEREO_L = 1, STEREO_R = 2,
+    MISSION  = 0,
+    STEREO_L = 1,
+    STEREO_R = 2,
 };
 
 struct FrameMetadata {
@@ -27,4 +33,4 @@ struct FrameMetadata {
     float       temperature_c;
 };
 
-} // namespace drone::video
+}  // namespace drone::video

@@ -1,10 +1,11 @@
 // tests/test_opencv_yolo_detector.cpp
 // Unit tests for OpenCvYoloDetector: YOLOv8-nano via OpenCV DNN.
 // Tests run with and without the ONNX model file.
-#include <gtest/gtest.h>
 #include "perception/detector_interface.h"
 #include "perception/opencv_yolo_detector.h"
 #include "util/config.h"
+
+#include <gtest/gtest.h>
 
 #ifdef HAS_OPENCV
 #include <opencv2/core.hpp>
@@ -16,8 +17,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
+
+#include <unistd.h>
 
 using namespace drone::perception;
 
@@ -42,9 +44,9 @@ TEST(CocoMappingTest, BusMapsToVehicle) {
 }
 
 TEST(CocoMappingTest, AnimalsMaps) {
-    EXPECT_EQ(coco_to_object_class(15), ObjectClass::ANIMAL); // cat
-    EXPECT_EQ(coco_to_object_class(16), ObjectClass::ANIMAL); // dog
-    EXPECT_EQ(coco_to_object_class(17), ObjectClass::ANIMAL); // horse
+    EXPECT_EQ(coco_to_object_class(15), ObjectClass::ANIMAL);  // cat
+    EXPECT_EQ(coco_to_object_class(16), ObjectClass::ANIMAL);  // dog
+    EXPECT_EQ(coco_to_object_class(17), ObjectClass::ANIMAL);  // horse
 }
 
 TEST(CocoMappingTest, UnknownClassMaps) {
@@ -87,8 +89,8 @@ struct TempCleanup {
 static TempCleanup g_cleanup;
 
 /// Create a solid-color RGB image.
-static std::vector<uint8_t> make_solid_image(uint32_t w, uint32_t h,
-                                              uint8_t r, uint8_t g, uint8_t b) {
+static std::vector<uint8_t> make_solid_image(uint32_t w, uint32_t h, uint8_t r, uint8_t g,
+                                             uint8_t b) {
     std::vector<uint8_t> img(w * h * 3);
     for (uint32_t i = 0; i < w * h; ++i) {
         img[i * 3 + 0] = r;
@@ -121,8 +123,8 @@ TEST(OpenCvYoloDetectorTest, ConstructWithMissingModelGraceful) {
 
 TEST(OpenCvYoloDetectorTest, DetectWithUnloadedModelReturnsEmpty) {
     OpenCvYoloDetector det("nonexistent_model.onnx");
-    auto img = make_solid_image(640, 480, 128, 128, 128);
-    auto result = det.detect(img.data(), 640, 480, 3);
+    auto               img    = make_solid_image(640, 480, 128, 128, 128);
+    auto               result = det.detect(img.data(), 640, 480, 3);
     EXPECT_TRUE(result.empty());
 }
 
@@ -132,14 +134,14 @@ TEST(OpenCvYoloDetectorTest, NullFrameReturnsEmpty) {
 }
 
 TEST(OpenCvYoloDetectorTest, ZeroDimensionsReturnsEmpty) {
-    OpenCvYoloDetector det("nonexistent_model.onnx");
+    OpenCvYoloDetector   det("nonexistent_model.onnx");
     std::vector<uint8_t> data(100, 0);
     EXPECT_TRUE(det.detect(data.data(), 0, 480, 3).empty());
     EXPECT_TRUE(det.detect(data.data(), 640, 0, 3).empty());
 }
 
 TEST(OpenCvYoloDetectorTest, LessThanThreeChannelsReturnsEmpty) {
-    OpenCvYoloDetector det("nonexistent_model.onnx");
+    OpenCvYoloDetector   det("nonexistent_model.onnx");
     std::vector<uint8_t> data(100, 0);
     EXPECT_TRUE(det.detect(data.data(), 10, 10, 2).empty());
     EXPECT_TRUE(det.detect(data.data(), 10, 10, 1).empty());
@@ -147,7 +149,7 @@ TEST(OpenCvYoloDetectorTest, LessThanThreeChannelsReturnsEmpty) {
 }
 
 TEST(OpenCvYoloDetectorTest, ConfigConstructionWithMissingModel) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "perception": {
             "detector": {
                 "backend": "yolov8",
@@ -182,8 +184,8 @@ TEST_F(YoloModelTest, LoadsSuccessfully) {
 
 TEST_F(YoloModelTest, BlackImageFewOrNoDetections) {
     OpenCvYoloDetector det(g_model_path, 0.5f, 0.45f, 640);
-    auto img = make_solid_image(640, 480, 0, 0, 0);
-    auto result = det.detect(img.data(), 640, 480, 3);
+    auto               img    = make_solid_image(640, 480, 0, 0, 0);
+    auto               result = det.detect(img.data(), 640, 480, 3);
     // Black image should produce very few or no detections
     EXPECT_LE(result.size(), 5u);
 }
@@ -194,7 +196,7 @@ TEST_F(YoloModelTest, DetectionsHaveValidFields) {
     std::vector<uint8_t> img(640 * 480 * 3);
     for (int y = 0; y < 480; ++y) {
         for (int x = 0; x < 640; ++x) {
-            int idx = (y * 640 + x) * 3;
+            int idx      = (y * 640 + x) * 3;
             img[idx + 0] = static_cast<uint8_t>(x % 256);
             img[idx + 1] = static_cast<uint8_t>(y % 256);
             img[idx + 2] = static_cast<uint8_t>((x + y) % 256);
@@ -216,7 +218,7 @@ TEST_F(YoloModelTest, FourChannelImageWorks) {
     OpenCvYoloDetector det(g_model_path, 0.25f, 0.45f, 640);
     // RGBA image
     std::vector<uint8_t> img(640 * 480 * 4, 128);
-    auto result = det.detect(img.data(), 640, 480, 4);
+    auto                 result = det.detect(img.data(), 640, 480, 4);
     // Just verify it runs without crashing
     SUCCEED();
 }
@@ -226,14 +228,15 @@ TEST_F(YoloModelTest, ConfigConstruction) {
         "perception": {
             "detector": {
                 "backend": "yolov8",
-                "model_path": ")") + g_model_path + R"(",
+                "model_path": ")") +
+                           g_model_path + R"(",
                 "confidence_threshold": 0.5,
                 "nms_threshold": 0.4,
                 "input_size": 640
             }
         }
     })";
-    auto path = create_temp_config(cfg_json);
+    auto          path = create_temp_config(cfg_json);
     drone::Config cfg;
     cfg.load(path);
     OpenCvYoloDetector det(cfg);
@@ -244,7 +247,7 @@ TEST_F(YoloModelTest, HighConfidenceThresholdReducesDetections) {
     OpenCvYoloDetector low_thresh(g_model_path, 0.1f, 0.45f, 640);
     OpenCvYoloDetector high_thresh(g_model_path, 0.9f, 0.45f, 640);
 
-    auto img = make_solid_image(640, 480, 100, 150, 200);
+    auto img       = make_solid_image(640, 480, 100, 150, 200);
     auto dets_low  = low_thresh.detect(img.data(), 640, 480, 3);
     auto dets_high = high_thresh.detect(img.data(), 640, 480, 3);
 
@@ -252,7 +255,7 @@ TEST_F(YoloModelTest, HighConfidenceThresholdReducesDetections) {
     EXPECT_LE(dets_high.size(), dets_low.size());
 }
 
-#endif // HAS_OPENCV
+#endif  // HAS_OPENCV
 
 // ═══════════════════════════════════════════════════════════
 // Factory tests (always run, factory handles #ifdef internally)
@@ -279,7 +282,7 @@ TEST(YoloFactoryTest, Yolov8BackendCreatesDetector) {
 }
 
 TEST(YoloFactoryTest, Yolov8BackendWithConfig) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "perception": {
             "detector": {
                 "model_path": "nonexistent.onnx",

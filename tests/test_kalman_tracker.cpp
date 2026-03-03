@@ -1,7 +1,8 @@
 // tests/test_kalman_tracker.cpp
 // Unit tests for KalmanBoxTracker, HungarianSolver, MultiObjectTracker.
-#include <gtest/gtest.h>
 #include "perception/kalman_tracker.h"
+
+#include <gtest/gtest.h>
 
 using namespace drone::perception;
 
@@ -10,7 +11,7 @@ using namespace drone::perception;
 // ═══════════════════════════════════════════════════════════
 
 TEST(KalmanBoxTrackerTest, InitFromDetection) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
 
     EXPECT_EQ(tracker.track_id, 1u);
@@ -23,7 +24,7 @@ TEST(KalmanBoxTrackerTest, InitFromDetection) {
 }
 
 TEST(KalmanBoxTrackerTest, PredictedBbox) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
 
     auto pred = tracker.predicted_bbox();
@@ -35,7 +36,7 @@ TEST(KalmanBoxTrackerTest, PredictedBbox) {
 }
 
 TEST(KalmanBoxTrackerTest, PredictIncreasesAge) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
 
     EXPECT_EQ(tracker.age, 0u);
@@ -45,7 +46,7 @@ TEST(KalmanBoxTrackerTest, PredictIncreasesAge) {
 }
 
 TEST(KalmanBoxTrackerTest, UpdateResetsConsecutiveMisses) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
 
     tracker.predict();
@@ -59,7 +60,7 @@ TEST(KalmanBoxTrackerTest, UpdateResetsConsecutiveMisses) {
 }
 
 TEST(KalmanBoxTrackerTest, ConfirmedAfter3Hits) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
     EXPECT_FALSE(tracker.is_confirmed());
 
@@ -69,11 +70,11 @@ TEST(KalmanBoxTrackerTest, ConfirmedAfter3Hits) {
 
     tracker.predict();
     tracker.update(det);
-    EXPECT_TRUE(tracker.is_confirmed());   // hits=3
+    EXPECT_TRUE(tracker.is_confirmed());  // hits=3
 }
 
 TEST(KalmanBoxTrackerTest, StaleAfter10Misses) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
 
     for (int i = 0; i < 10; ++i) {
@@ -85,7 +86,7 @@ TEST(KalmanBoxTrackerTest, StaleAfter10Misses) {
 }
 
 TEST(KalmanBoxTrackerTest, VelocityInitiallyZero) {
-    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
 
     auto vel = tracker.velocity();
@@ -99,7 +100,7 @@ TEST(KalmanBoxTrackerTest, VelocityInitiallyZero) {
 
 TEST(HungarianSolverTest, EmptyCostMatrix) {
     std::vector<std::vector<double>> cost;
-    auto result = HungarianSolver::solve(cost, 100.0);
+    auto                             result = HungarianSolver::solve(cost, 100.0);
     EXPECT_TRUE(result.assignment.empty());
     EXPECT_TRUE(result.unmatched_rows.empty());
     EXPECT_TRUE(result.unmatched_cols.empty());
@@ -107,8 +108,8 @@ TEST(HungarianSolverTest, EmptyCostMatrix) {
 }
 
 TEST(HungarianSolverTest, SingleMatch) {
-    std::vector<std::vector<double>> cost = {{5.0}};
-    auto result = HungarianSolver::solve(cost, 100.0);
+    std::vector<std::vector<double>> cost   = {{5.0}};
+    auto                             result = HungarianSolver::solve(cost, 100.0);
     ASSERT_EQ(result.assignment.size(), 1u);
     EXPECT_EQ(result.assignment[0], 0);
     EXPECT_DOUBLE_EQ(result.total_cost, 5.0);
@@ -129,16 +130,16 @@ TEST(HungarianSolverTest, PerfectAssignment) {
 }
 
 TEST(HungarianSolverTest, MaxCostRejectsExpensivePair) {
-    std::vector<std::vector<double>> cost = {{50.0, 200.0}};
-    auto result = HungarianSolver::solve(cost, 100.0);
+    std::vector<std::vector<double>> cost   = {{50.0, 200.0}};
+    auto                             result = HungarianSolver::solve(cost, 100.0);
     // Should match col 0 (cost 50 < 100), reject col 1
     EXPECT_EQ(result.assignment[0], 0);
     EXPECT_EQ(result.unmatched_cols.size(), 1u);
 }
 
 TEST(HungarianSolverTest, AllTooExpensive) {
-    std::vector<std::vector<double>> cost = {{200.0}};
-    auto result = HungarianSolver::solve(cost, 100.0);
+    std::vector<std::vector<double>> cost   = {{200.0}};
+    auto                             result = HungarianSolver::solve(cost, 100.0);
     EXPECT_EQ(result.assignment[0], -1);
     EXPECT_EQ(result.unmatched_rows.size(), 1u);
 }
@@ -149,14 +150,14 @@ TEST(HungarianSolverTest, MoreRowsThanCols) {
         {2.0},
     };
     auto result = HungarianSolver::solve(cost, 100.0);
-    EXPECT_EQ(result.assignment[0], 0);  // greedy: row 0 gets col 0
-    EXPECT_EQ(result.assignment[1], -1); // row 1 unmatched
+    EXPECT_EQ(result.assignment[0], 0);   // greedy: row 0 gets col 0
+    EXPECT_EQ(result.assignment[1], -1);  // row 1 unmatched
     EXPECT_EQ(result.unmatched_rows.size(), 1u);
 }
 
 TEST(HungarianSolverTest, TotalCostInitializedToZero) {
     std::vector<std::vector<double>> cost;
-    auto result = HungarianSolver::solve(cost, 100.0);
+    auto                             result = HungarianSolver::solve(cost, 100.0);
     EXPECT_DOUBLE_EQ(result.total_cost, 0.0);
 }
 
@@ -166,8 +167,8 @@ TEST(HungarianSolverTest, TotalCostInitializedToZero) {
 
 TEST(MultiObjectTrackerTest, EmptyDetections) {
     MultiObjectTracker tracker;
-    Detection2DList empty;
-    auto result = tracker.update(empty);
+    Detection2DList    empty;
+    auto               result = tracker.update(empty);
     EXPECT_TRUE(result.objects.empty());
 }
 
@@ -177,11 +178,10 @@ TEST(MultiObjectTrackerTest, SingleDetectionBecomesTrack) {
     // Feed the same detection 3 times — tracker should confirm after 3 hits
     for (int i = 0; i < 3; ++i) {
         Detection2DList det_list;
-        det_list.timestamp_ns = static_cast<uint64_t>(i) * 33000000;
+        det_list.timestamp_ns   = static_cast<uint64_t>(i) * 33000000;
         det_list.frame_sequence = static_cast<uint64_t>(i);
-        det_list.detections.push_back(
-            {100, 200, 50, 80, 0.9f, ObjectClass::PERSON,
-             det_list.timestamp_ns, det_list.frame_sequence});
+        det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON,
+                                       det_list.timestamp_ns, det_list.frame_sequence});
 
         auto result = tracker.update(det_list);
         if (i < 2) {
@@ -200,8 +200,7 @@ TEST(MultiObjectTrackerTest, StaleTracksRemoved) {
 
     // Create a track
     Detection2DList det_list;
-    det_list.detections.push_back(
-        {100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0});
+    det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0});
 
     tracker.update(det_list);
 

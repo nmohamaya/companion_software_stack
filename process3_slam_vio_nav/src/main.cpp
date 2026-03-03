@@ -3,24 +3,25 @@
 // Simulated: generates fake VIO pose estimates from stereo camera input.
 // Uses MessageBusFactory — backend selected at runtime via config.
 
-#include "slam/types.h"
-#include "slam/ivisual_frontend.h"
+#include "hal/hal_factory.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
 #include "ipc/shm_types.h"
-#include "util/signal_handler.h"
+#include "ipc/zenoh_liveliness.h"
+#include "slam/ivisual_frontend.h"
+#include "slam/types.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
-#include "hal/hal_factory.h"
+#include "util/signal_handler.h"
 
-#include <thread>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <random>
 #include <mutex>
+#include <random>
+#include <thread>
+
 #include <spdlog/spdlog.h>
 
 using namespace drone::slam;
@@ -30,7 +31,7 @@ using namespace drone::slam;
 class PoseDoubleBuffer {
 public:
     void write(const Pose& pose) {
-        int idx = write_idx_.load(std::memory_order_relaxed) ^ 1;
+        int idx       = write_idx_.load(std::memory_order_relaxed) ^ 1;
         buffers_[idx] = pose;
         write_idx_.store(idx, std::memory_order_release);
     }
@@ -42,13 +43,11 @@ public:
         return true;
     }
 
-    void mark_initialized() {
-        initialized_.store(true, std::memory_order_release);
-    }
+    void mark_initialized() { initialized_.store(true, std::memory_order_release); }
 
 private:
-    Pose buffers_[2];
-    std::atomic<int> write_idx_{0};
+    Pose              buffers_[2];
+    std::atomic<int>  write_idx_{0};
     std::atomic<bool> initialized_{false};
 };
 
@@ -56,12 +55,9 @@ static std::atomic<bool> g_running{true};
 
 // ── Visual Frontend thread (uses IVisualFrontend strategy) ──
 // In real system: ORB/KLT feature detection + tracking on stereo frames
-static void visual_frontend_thread(
-    drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
-    drone::slam::IVisualFrontend& frontend,
-    PoseDoubleBuffer& pose_buffer,
-    std::atomic<bool>& running)
-{
+static void visual_frontend_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
+                                   drone::slam::IVisualFrontend&                        frontend,
+                                   PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running) {
     spdlog::info("[VisualFrontend] Thread started using {}", frontend.name());
 
     uint64_t frame_count = 0;
@@ -77,9 +73,8 @@ static void visual_frontend_thread(
 
         ++frame_count;
         if (frame_count % 300 == 0) {
-            spdlog::info("[VisualFrontend] Frame {}: pos=({:.2f}, {:.2f}, {:.2f})",
-                         frame_count, p.position.x(), p.position.y(),
-                         p.position.z());
+            spdlog::info("[VisualFrontend] Frame {}: pos=({:.2f}, {:.2f}, {:.2f})", frame_count,
+                         p.position.x(), p.position.y(), p.position.z());
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
@@ -89,11 +84,9 @@ static void visual_frontend_thread(
 }
 
 // ── IMU reader thread (uses HAL IIMUSource) ─────────────────
-static void imu_reader_thread(drone::hal::IIMUSource& imu,
-                              std::atomic<bool>& running,
+static void imu_reader_thread(drone::hal::IIMUSource& imu, std::atomic<bool>& running,
                               int imu_rate_hz) {
-    spdlog::info("[IMUReader] Thread started using {} at {} Hz",
-                 imu.name(), imu_rate_hz);
+    spdlog::info("[IMUReader] Thread started using {} at {} Hz", imu.name(), imu_rate_hz);
     const int sleep_us = imu_rate_hz > 0 ? 1000000 / imu_rate_hz : 2500;
 
     uint64_t count = 0;
@@ -107,12 +100,9 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu,
 }
 
 // ── Pose publisher thread ───────────────────────────────────
-static void pose_publisher_thread(
-    drone::ipc::IPublisher<drone::ipc::ShmPose>& pose_pub,
-    PoseDoubleBuffer& pose_buffer,
-    std::atomic<bool>& running,
-    int publish_rate_hz)
-{
+static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::ShmPose>& pose_pub,
+                                  PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running,
+                                  int publish_rate_hz) {
     spdlog::info("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
 
     const int sleep_ms = publish_rate_hz > 0 ? 1000 / publish_rate_hz : 10;
@@ -121,24 +111,24 @@ static void pose_publisher_thread(
         Pose p;
         if (pose_buffer.read(p)) {
             drone::ipc::ShmPose shm_pose{};
-            shm_pose.timestamp_ns = static_cast<uint64_t>(p.timestamp * 1e9);
+            shm_pose.timestamp_ns   = static_cast<uint64_t>(p.timestamp * 1e9);
             shm_pose.translation[0] = p.position.x();
             shm_pose.translation[1] = p.position.y();
             shm_pose.translation[2] = p.position.z();
-            shm_pose.quaternion[0] = p.orientation.w();
-            shm_pose.quaternion[1] = p.orientation.x();
-            shm_pose.quaternion[2] = p.orientation.y();
-            shm_pose.quaternion[3] = p.orientation.z();
-            shm_pose.velocity[0] = 0.0;
-            shm_pose.velocity[1] = 0.0;
-            shm_pose.velocity[2] = 0.0;
+            shm_pose.quaternion[0]  = p.orientation.w();
+            shm_pose.quaternion[1]  = p.orientation.x();
+            shm_pose.quaternion[2]  = p.orientation.y();
+            shm_pose.quaternion[3]  = p.orientation.z();
+            shm_pose.velocity[0]    = 0.0;
+            shm_pose.velocity[1]    = 0.0;
+            shm_pose.velocity[2]    = 0.0;
             for (int i = 0; i < 36; ++i) {
                 shm_pose.covariance[i] = p.covariance.data()[i];
             }
             shm_pose.quality = p.quality;
             pose_pub.publish(shm_pose);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms)); // configurable
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));  // configurable
     }
     spdlog::info("[PosePublisher] Thread stopped");
 }
@@ -181,8 +171,8 @@ int main(int argc, char* argv[]) {
     }
 
     // Create pose output publisher
-    auto pose_pub = drone::ipc::bus_advertise<drone::ipc::ShmPose>(
-        bus, drone::ipc::shm_names::SLAM_POSE);
+    auto pose_pub =
+        drone::ipc::bus_advertise<drone::ipc::ShmPose>(bus, drone::ipc::shm_names::SLAM_POSE);
     if (!pose_pub->is_ready()) {
         spdlog::error("Failed to create pose publisher");
         return 1;
@@ -192,29 +182,25 @@ int main(int argc, char* argv[]) {
     PoseDoubleBuffer pose_buffer;
 
     const int imu_rate = cfg.get<int>("slam.imu_rate_hz", 400);
-    const int vio_rate  = cfg.get<int>("slam.vio_rate_hz", 100);
+    const int vio_rate = cfg.get<int>("slam.vio_rate_hz", 100);
 
     // Create IMU via HAL factory
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
     imu->init(imu_rate);
 
     // Create visual frontend via strategy factory
-    auto frontend_backend = cfg.get<std::string>(
-        "slam.visual_frontend.backend", "simulated");
-    auto frontend_gz_topic = cfg.get<std::string>(
-        "slam.visual_frontend.gz_topic", "/model/x500_companion_0/odometry");
-    auto frontend = drone::slam::create_visual_frontend(
-        frontend_backend, frontend_gz_topic);
+    auto frontend_backend  = cfg.get<std::string>("slam.visual_frontend.backend", "simulated");
+    auto frontend_gz_topic = cfg.get<std::string>("slam.visual_frontend.gz_topic",
+                                                  "/model/x500_companion_0/odometry");
+    auto frontend = drone::slam::create_visual_frontend(frontend_backend, frontend_gz_topic);
     spdlog::info("Visual frontend: {}", frontend->name());
 
     // Launch threads
-    std::thread t_frontend(visual_frontend_thread,
-        std::ref(*stereo_sub), std::ref(*frontend),
-        std::ref(pose_buffer), std::ref(g_running));
+    std::thread t_frontend(visual_frontend_thread, std::ref(*stereo_sub), std::ref(*frontend),
+                           std::ref(pose_buffer), std::ref(g_running));
     std::thread t_imu(imu_reader_thread, std::ref(*imu), std::ref(g_running), imu_rate);
-    std::thread t_publisher(pose_publisher_thread,
-        std::ref(*pose_pub), std::ref(pose_buffer), std::ref(g_running),
-        vio_rate);
+    std::thread t_publisher(pose_publisher_thread, std::ref(*pose_pub), std::ref(pose_buffer),
+                            std::ref(g_running), vio_rate);
 
     spdlog::info("All SLAM threads started — READY");
 
@@ -222,9 +208,8 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         Pose p;
         if (pose_buffer.read(p)) {
-            spdlog::info("[HealthCheck] SLAM pose: ({:.2f}, {:.2f}, {:.2f}) q={}",
-                         p.position.x(), p.position.y(), p.position.z(),
-                         p.quality);
+            spdlog::info("[HealthCheck] SLAM pose: ({:.2f}, {:.2f}, {:.2f}) q={}", p.position.x(),
+                         p.position.y(), p.position.z(), p.quality);
         }
     }
 

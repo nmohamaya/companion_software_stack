@@ -21,12 +21,12 @@
 #ifdef HAVE_ZENOH
 
 #include "ipc/ipublisher.h"
-#include "ipc/isubscriber.h"
 #include "ipc/iservice_channel.h"
+#include "ipc/isubscriber.h"
 #include "ipc/zenoh_publisher.h"
-#include "ipc/zenoh_subscriber.h"
 #include "ipc/zenoh_service_client.h"
 #include "ipc/zenoh_service_server.h"
+#include "ipc/zenoh_subscriber.h"
 
 #include <memory>
 #include <string>
@@ -41,15 +41,13 @@ namespace drone::ipc {
 /// by changing a single type (or via the MessageBusFactory).
 class ZenohMessageBus {
 public:
-    ZenohMessageBus() {
-        spdlog::info("[ZenohMessageBus] Created (Zenoh IPC backend)");
-    }
+    ZenohMessageBus() { spdlog::info("[ZenohMessageBus] Created (Zenoh IPC backend)"); }
 
     ~ZenohMessageBus() = default;
 
     /// Create a publisher for the given topic.
     /// @param topic  SHM segment name (auto-mapped) or Zenoh key expression.
-    template <typename T>
+    template<typename T>
     std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
         return std::make_unique<ZenohPublisher<T>>(to_key_expr(topic));
     }
@@ -61,12 +59,10 @@ public:
     ///                     soon as the subscriber is declared.  Data may
     ///                     arrive later when a publisher appears.
     /// @param retry_ms     Ignored.
-    template <typename T>
-    std::unique_ptr<ISubscriber<T>> subscribe(
-        const std::string& topic,
-        [[maybe_unused]] int max_retries = 50,
-        [[maybe_unused]] int retry_ms = 200)
-    {
+    template<typename T>
+    std::unique_ptr<ISubscriber<T>> subscribe(const std::string&   topic,
+                                              [[maybe_unused]] int max_retries = 50,
+                                              [[maybe_unused]] int retry_ms    = 200) {
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
@@ -75,32 +71,25 @@ public:
     /// always asynchronous, so there is no distinction between eager
     /// and lazy subscription.
     /// @param topic  SHM segment name or Zenoh key expression.
-    template <typename T>
-    std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(
-        const std::string& topic)
-    {
+    template<typename T>
+    std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(const std::string& topic) {
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
     }
 
     /// Create a service client for the given service name.
     /// @param service     Service name (e.g. "trajectory") or full key expression.
     /// @param timeout_ms  Timeout for each GET operation in milliseconds.
-    template <typename Req, typename Resp>
-    std::unique_ptr<IServiceClient<Req, Resp>> create_client(
-        const std::string& service, uint64_t timeout_ms = 5000)
-    {
-        return std::make_unique<ZenohServiceClient<Req, Resp>>(
-            to_service_key(service), timeout_ms);
+    template<typename Req, typename Resp>
+    std::unique_ptr<IServiceClient<Req, Resp>> create_client(const std::string& service,
+                                                             uint64_t           timeout_ms = 5000) {
+        return std::make_unique<ZenohServiceClient<Req, Resp>>(to_service_key(service), timeout_ms);
     }
 
     /// Create a service server for the given service name.
     /// @param service  Service name (e.g. "trajectory") or full key expression.
-    template <typename Req, typename Resp>
-    std::unique_ptr<IServiceServer<Req, Resp>> create_server(
-        const std::string& service)
-    {
-        return std::make_unique<ZenohServiceServer<Req, Resp>>(
-            to_service_key(service));
+    template<typename Req, typename Resp>
+    std::unique_ptr<IServiceServer<Req, Resp>> create_server(const std::string& service) {
+        return std::make_unique<ZenohServiceServer<Req, Resp>>(to_service_key(service));
     }
 
     /// Convert a legacy SHM segment name to a Zenoh key expression.
@@ -117,18 +106,18 @@ public:
 
         // Lookup table: legacy SHM name → Zenoh key expression
         static const std::unordered_map<std::string, std::string> mapping = {
-            {"/drone_mission_cam",  "drone/video/frame"},
-            {"/drone_stereo_cam",   "drone/video/stereo_frame"},
-            {"/detected_objects",   "drone/perception/detections"},
-            {"/slam_pose",          "drone/slam/pose"},
-            {"/mission_status",     "drone/mission/status"},
-            {"/trajectory_cmd",     "drone/mission/trajectory"},
-            {"/payload_commands",   "drone/mission/payload_command"},
-            {"/fc_commands",        "drone/comms/fc_command"},
-            {"/fc_state",           "drone/comms/fc_state"},
-            {"/gcs_commands",       "drone/comms/gcs_command"},
-            {"/payload_status",     "drone/payload/status"},
-            {"/system_health",      "drone/monitor/health"},
+            {"/drone_mission_cam", "drone/video/frame"},
+            {"/drone_stereo_cam", "drone/video/stereo_frame"},
+            {"/detected_objects", "drone/perception/detections"},
+            {"/slam_pose", "drone/slam/pose"},
+            {"/mission_status", "drone/mission/status"},
+            {"/trajectory_cmd", "drone/mission/trajectory"},
+            {"/payload_commands", "drone/mission/payload_command"},
+            {"/fc_commands", "drone/comms/fc_command"},
+            {"/fc_state", "drone/comms/fc_state"},
+            {"/gcs_commands", "drone/comms/gcs_command"},
+            {"/payload_status", "drone/payload/status"},
+            {"/system_health", "drone/monitor/health"},
         };
 
         auto it = mapping.find(name);
@@ -146,8 +135,7 @@ public:
         for (auto& c : key) {
             if (c == '_') c = '/';
         }
-        spdlog::debug("[ZenohMessageBus] Unmapped topic '{}' → '{}'",
-                      name, key);
+        spdlog::debug("[ZenohMessageBus] Unmapped topic '{}' → '{}'", name, key);
         return key;
     }
 

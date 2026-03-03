@@ -1,0 +1,92 @@
+# Clang-Tidy configuration for Drone Companion Software Stack
+# Version: clang-tidy 18 (Ubuntu 24.04)
+#
+# Philosophy: start strict on new code, suppress noisy/false-positive checks.
+# Warnings are NOT promoted to errors here — that's controlled by CI via
+# --warnings-as-errors in the workflow.
+
+# ── Checks ───────────────────────────────────────────────────────
+# Enable broad categories, then disable specific noisy ones.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  cert-*,
+  -cert-err58-cpp,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-owning-memory,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  performance-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-else-after-return,
+  -readability-convert-member-functions-to-static,
+  google-explicit-constructor,
+  google-readability-casting,
+
+# ── Check-specific options ───────────────────────────────────────
+CheckOptions:
+  # Naming conventions — match project style
+  - key:   readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key:   readability-identifier-naming.StructCase
+    value: CamelCase
+  - key:   readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key:   readability-identifier-naming.EnumConstantCase
+    value: UPPER_CASE
+  - key:   readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key:   readability-identifier-naming.MethodCase
+    value: lower_case
+  - key:   readability-identifier-naming.VariableCase
+    value: lower_case
+  - key:   readability-identifier-naming.MemberCase
+    value: lower_case
+  - key:   readability-identifier-naming.PrivateMemberSuffix
+    value: '_'
+  - key:   readability-identifier-naming.ProtectedMemberSuffix
+    value: '_'
+  - key:   readability-identifier-naming.ConstantCase
+    value: lower_case
+  - key:   readability-identifier-naming.GlobalConstantCase
+    value: UPPER_CASE
+  - key:   readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key:   readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+  - key:   readability-identifier-naming.TemplateParameterCase
+    value: CamelCase
+
+  # Braces around statements — don't enforce (project uses both styles)
+  - key:   readability-braces-around-statements.ShortStatementLines
+    value: '1'
+
+  # Misc tuning
+  - key:   modernize-use-auto.MinTypeNameLength
+    value: '5'
+  - key:   performance-unnecessary-value-param.AllowedTypes
+    value: 'std::shared_ptr;std::unique_ptr'
+  - key:   misc-include-cleaner.IgnoreHeaders
+    value: 'spdlog/.*'
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/(common|process[1-7]_|tests)/.*\.h$'
+FormatStyle: file

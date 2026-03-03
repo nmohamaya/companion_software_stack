@@ -19,10 +19,10 @@ enum class GCSCommandType : uint8_t {
 /// A command received from the GCS.
 struct GCSCommand {
     GCSCommandType type{GCSCommandType::NONE};
-    float param1{0.0f};
-    float param2{0.0f};
-    uint64_t timestamp_ns{0};
-    bool valid{false};
+    float          param1{0.0f};
+    float          param2{0.0f};
+    uint64_t       timestamp_ns{0};
+    bool           valid{false};
 };
 
 /// Abstract GCS link interface.
@@ -40,8 +40,7 @@ public:
     virtual bool is_connected() const = 0;
 
     /// Send telemetry to the GCS.
-    virtual bool send_telemetry(float lat, float lon, float alt,
-                                float battery, uint8_t state) = 0;
+    virtual bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state) = 0;
 
     /// Poll for incoming GCS commands.
     virtual GCSCommand poll_command() = 0;

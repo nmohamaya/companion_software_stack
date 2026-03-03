@@ -1,6 +1,7 @@
 // tests/test_payload_manager.cpp — Tests for GimbalController
-#include <gtest/gtest.h>
 #include "payload/gimbal_controller.h"
+
+#include <gtest/gtest.h>
 
 using namespace drone::payload;
 
@@ -107,7 +108,7 @@ TEST(GimbalController, ZeroDtNoMovement) {
 
     gimbal.set_target(-30.0f, 60.0f);
     float pitch_before = gimbal.state().pitch;
-    float yaw_before = gimbal.state().yaw;
+    float yaw_before   = gimbal.state().yaw;
 
     gimbal.update(0.0f);  // zero dt
 

@@ -10,7 +10,7 @@ namespace drone::ipc {
 
 /// Abstract typed subscriber — read latest message from a topic.
 /// Concrete implementations: ShmSubscriber<T>, (future) DdsSubscriber<T>.
-template <typename T>
+template<typename T>
 class ISubscriber {
 public:
     virtual ~ISubscriber() = default;

@@ -10,17 +10,18 @@
 //  6. Pixel format helper correctness
 //
 // NOTE: Full integration tests with a running Gazebo world are planned in Phase 4 (#11).
-#include <gtest/gtest.h>
 #include "hal/hal_factory.h"
 #include "hal/icamera.h"
 #include "util/config.h"
 
-#include <fstream>
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════
 // Helper: temp config (same pattern as other HAL tests)
@@ -29,9 +30,9 @@ static std::vector<std::string> g_gz_cam_temp_files;
 
 static std::string create_temp_config(const std::string& json_content) {
     char tmpl[] = "/tmp/test_gz_cam_XXXXXX.json";
-    int fd = mkstemps(tmpl, 5);
+    int  fd     = mkstemps(tmpl, 5);
     if (fd < 0) {
-        std::string path = "/tmp/test_gz_cam_" + std::to_string(getpid()) + ".json";
+        std::string   path = "/tmp/test_gz_cam_" + std::to_string(getpid()) + ".json";
         std::ofstream ofs(path);
         ofs << json_content;
         ofs.close();
@@ -39,7 +40,7 @@ static std::string create_temp_config(const std::string& json_content) {
         return path;
     }
     ::close(fd);
-    std::string path(tmpl);
+    std::string   path(tmpl);
     std::ofstream ofs(path);
     ofs << json_content;
     ofs.close();
@@ -124,13 +125,13 @@ TEST(GazeboCameraTest, CaptureTimesOutWithNoGazebo) {
 
 TEST(GazeboCameraTest, CaptureWhenClosedReturnsInvalid) {
     drone::hal::GazeboCameraBackend cam("/gz_closed_capture");
-    auto frame = cam.capture();
+    auto                            frame = cam.capture();
     EXPECT_FALSE(frame.valid);
 }
 
 // ── Factory creates GazeboCameraBackend ────────────────────
 TEST(GazeboCameraTest, FactoryCreatesGazeboBackend) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "video_capture": {
             "mission_cam": {
                 "backend": "gazebo",
@@ -150,7 +151,7 @@ TEST(GazeboCameraTest, FactoryCreatesGazeboBackend) {
 }
 
 TEST(GazeboCameraTest, FactoryDefaultTopicIsCameraSlash) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "video_capture": {
             "mission_cam": {
                 "backend": "gazebo",
@@ -172,18 +173,17 @@ TEST(GazeboCameraTest, FactoryDefaultTopicIsCameraSlash) {
 
 // ── When Gazebo libs are not available ─────────────────────
 TEST(GazeboCameraTest, GazeboBackendThrowsWithoutGazebo) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "video_capture": { "mission_cam": { "backend": "gazebo" } }
     })");
     drone::Config cfg;
     cfg.load(path);
 
-    EXPECT_THROW(drone::hal::create_camera(cfg, "video_capture.mission_cam"),
-                 std::runtime_error);
+    EXPECT_THROW(drone::hal::create_camera(cfg, "video_capture.mission_cam"), std::runtime_error);
 }
 
 TEST(GazeboCameraTest, SimulatedStillWorksWithoutGazebo) {
-    auto path = create_temp_config(R"({
+    auto          path = create_temp_config(R"({
         "video_capture": { "mission_cam": { "backend": "simulated" } }
     })");
     drone::Config cfg;

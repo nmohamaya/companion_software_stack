@@ -1,12 +1,14 @@
 // tests/test_shm_ipc.cpp
 // Unit tests for ShmWriter / ShmReader SeqLock-based IPC.
-#include <gtest/gtest.h>
-#include "ipc/shm_writer.h"
 #include "ipc/shm_reader.h"
 #include "ipc/shm_types.h"
-#include <thread>
+#include "ipc/shm_writer.h"
+
 #include <chrono>
 #include <cstring>
+#include <thread>
+
+#include <gtest/gtest.h>
 
 // ── Simple trivially-copyable test payload ──────────────────
 struct TestPayload {
@@ -31,10 +33,12 @@ TEST_F(ShmIPCTest, WriteAndRead) {
     ASSERT_TRUE(writer.create(TEST_SHM_NAME));
 
     TestPayload out;
-    out.sequence = 42;
-    out.values[0] = 1.0; out.values[1] = 2.0;
-    out.values[2] = 3.0; out.values[3] = 4.0;
-    out.checksum = 12345;
+    out.sequence  = 42;
+    out.values[0] = 1.0;
+    out.values[1] = 2.0;
+    out.values[2] = 3.0;
+    out.values[3] = 4.0;
+    out.checksum  = 12345;
     writer.write(out);
 
     ShmReader<TestPayload> reader;
@@ -140,7 +144,7 @@ TEST_F(ShmIPCTest, ConcurrentWriteRead) {
     ShmReader<TestPayload> reader;
     ASSERT_TRUE(reader.open(TEST_SHM_NAME));
 
-    constexpr int NUM_WRITES = 10000;
+    constexpr int    NUM_WRITES = 10000;
     std::atomic<int> writes_done{0};
     std::atomic<int> successful_reads{0};
     std::atomic<int> torn_reads{0};
@@ -190,12 +194,12 @@ TEST_F(ShmIPCTest, ShmPoseRoundTrip) {
     ASSERT_TRUE(writer.create(POSE_SHM));
 
     drone::ipc::ShmPose pose_out{};
-    pose_out.timestamp_ns = 123456789ULL;
+    pose_out.timestamp_ns   = 123456789ULL;
     pose_out.translation[0] = 1.0;
     pose_out.translation[1] = 2.0;
     pose_out.translation[2] = 3.0;
-    pose_out.quaternion[0] = 1.0;  // w
-    pose_out.quality = 2;
+    pose_out.quaternion[0]  = 1.0;  // w
+    pose_out.quality        = 2;
     writer.write(pose_out);
 
     ShmReader<drone::ipc::ShmPose> reader;

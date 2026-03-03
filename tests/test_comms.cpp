@@ -1,7 +1,8 @@
 // tests/test_comms.cpp — Tests for MavlinkSim and GCSLink
-#include <gtest/gtest.h>
-#include "comms/mavlink_sim.h"
 #include "comms/gcs_link.h"
+#include "comms/mavlink_sim.h"
+
+#include <gtest/gtest.h>
 
 using namespace drone::comms;
 
@@ -66,7 +67,7 @@ TEST(MavlinkSim, GroundSpeedReflectsTrajectory) {
     mav.open("/dev/ttyTHS1", 921600);
 
     mav.send_trajectory(3.0f, 4.0f, 0.0f, 0.0f);
-    auto hb = mav.receive_heartbeat();
+    auto  hb             = mav.receive_heartbeat();
     float expected_speed = 5.0f;  // sqrt(3^2 + 4^2)
     EXPECT_NEAR(hb.ground_speed, expected_speed, 0.01f);
 }

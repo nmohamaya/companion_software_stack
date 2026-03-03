@@ -4,16 +4,17 @@
 #pragma once
 #include <cstdint>
 #include <string>
+
 #include <Eigen/Core>
 
 namespace drone::hal {
 
 /// A single IMU measurement (accelerometer + gyroscope).
 struct ImuReading {
-    double timestamp{0.0};
-    Eigen::Vector3d accel{Eigen::Vector3d::Zero()};   // m/s²
-    Eigen::Vector3d gyro{Eigen::Vector3d::Zero()};    // rad/s
-    bool valid{false};
+    double          timestamp{0.0};
+    Eigen::Vector3d accel{Eigen::Vector3d::Zero()};  // m/s²
+    Eigen::Vector3d gyro{Eigen::Vector3d::Zero()};   // rad/s
+    bool            valid{false};
 };
 
 /// Abstract IMU source interface.

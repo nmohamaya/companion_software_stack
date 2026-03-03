@@ -5,15 +5,16 @@
 #include "ipc/isubscriber.h"
 #include "ipc/shm_reader.h"
 
-#include <string>
 #include <chrono>
+#include <string>
 #include <thread>
+
 #include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
 /// Subscribes to a POSIX shared-memory topic using SeqLock reads.
-template <typename T>
+template<typename T>
 class ShmSubscriber final : public ISubscriber<T> {
 public:
     /// Construct and attempt to open the SHM segment.
@@ -21,11 +22,8 @@ public:
     /// @param topic        The SHM name (e.g. "/drone_mission_cam").
     /// @param max_retries  Number of connection attempts (0 = try once).
     /// @param retry_ms     Milliseconds between retries.
-    explicit ShmSubscriber(const std::string& topic,
-                           int max_retries = 50,
-                           int retry_ms = 200)
-        : topic_(topic)
-    {
+    explicit ShmSubscriber(const std::string& topic, int max_retries = 50, int retry_ms = 200)
+        : topic_(topic) {
         for (int attempt = 0; attempt <= max_retries; ++attempt) {
             if (reader_.open(topic)) {
                 spdlog::info("[ShmSubscriber] Connected to topic '{}'", topic);
@@ -37,12 +35,12 @@ public:
                                  "(attempt {}/{})...",
                                  topic, attempt + 1, max_retries);
                 }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(retry_ms));
+                std::this_thread::sleep_for(std::chrono::milliseconds(retry_ms));
             }
         }
         spdlog::warn("[ShmSubscriber] Could not connect to '{}' after "
-                     "{} attempts", topic, max_retries + 1);
+                     "{} attempts",
+                     topic, max_retries + 1);
     }
 
     /// Construct without connection — call connect() later.
@@ -65,7 +63,7 @@ public:
 
 private:
     ShmReader<T> reader_;
-    std::string topic_;
+    std::string  topic_;
 };
 
 }  // namespace drone::ipc

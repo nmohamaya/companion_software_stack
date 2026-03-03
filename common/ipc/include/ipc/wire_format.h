@@ -35,33 +35,33 @@ static constexpr uint8_t kWireVersion = 1;
 /// Message type identifiers for wire format routing.
 /// Values are stable — never renumber existing entries.
 enum class WireMessageType : uint16_t {
-    UNKNOWN           = 0,
+    UNKNOWN = 0,
 
     // ── Video (Process 1) ────────────────────────────
-    VIDEO_FRAME       = 1,   // ShmVideoFrame
-    STEREO_FRAME      = 2,   // ShmStereoFrame
+    VIDEO_FRAME  = 1,  // ShmVideoFrame
+    STEREO_FRAME = 2,  // ShmStereoFrame
 
     // ── Perception (Process 2) ───────────────────────
-    DETECTIONS        = 10,  // ShmDetectedObjectList
+    DETECTIONS = 10,  // ShmDetectedObjectList
 
     // ── SLAM (Process 3) ─────────────────────────────
-    SLAM_POSE         = 20,  // ShmSlamPose
+    SLAM_POSE = 20,  // ShmSlamPose
 
     // ── Mission Planner (Process 4) ──────────────────
-    MISSION_STATUS    = 30,  // ShmMissionStatus
-    TRAJECTORY_CMD    = 31,  // ShmTrajectoryCmd
-    PAYLOAD_COMMAND   = 32,  // ShmPayloadCommand
-    FC_COMMAND        = 33,  // ShmFCCommand
+    MISSION_STATUS  = 30,  // ShmMissionStatus
+    TRAJECTORY_CMD  = 31,  // ShmTrajectoryCmd
+    PAYLOAD_COMMAND = 32,  // ShmPayloadCommand
+    FC_COMMAND      = 33,  // ShmFCCommand
 
     // ── Comms (Process 5) ────────────────────────────
-    FC_STATE          = 40,  // ShmFCState
-    GCS_COMMAND       = 41,  // ShmGCSCommand
+    FC_STATE    = 40,  // ShmFCState
+    GCS_COMMAND = 41,  // ShmGCSCommand
 
     // ── Payload Manager (Process 6) ──────────────────
-    PAYLOAD_STATUS    = 50,  // ShmPayloadStatus
+    PAYLOAD_STATUS = 50,  // ShmPayloadStatus
 
     // ── System Monitor (Process 7) ───────────────────
-    SYSTEM_HEALTH     = 60,  // ShmSystemHealth
+    SYSTEM_HEALTH = 60,  // ShmSystemHealth
 };
 
 /// Fixed-size wire header prepended to every network message.
@@ -84,10 +84,8 @@ struct __attribute__((packed)) WireHeader {
     uint32_t        sequence     = 0;
 };
 
-static_assert(sizeof(WireHeader) == 24,
-              "WireHeader must be exactly 24 bytes (packed)");
-static_assert(std::is_trivially_copyable_v<WireHeader>,
-              "WireHeader must be trivially copyable");
+static_assert(sizeof(WireHeader) == 24, "WireHeader must be exactly 24 bytes (packed)");
+static_assert(std::is_trivially_copyable_v<WireHeader>, "WireHeader must be trivially copyable");
 
 // ─── Serialization helpers ──────────────────────────────────
 
@@ -101,19 +99,13 @@ static_assert(std::is_trivially_copyable_v<WireHeader>,
 /// @param  msg_type  Wire message type identifier.
 /// @param  seq       Sequence number (caller-managed per topic).
 /// @param  ts_ns     Timestamp in nanoseconds (0 = auto from steady_clock).
-template <typename T>
-std::vector<uint8_t> wire_serialize(
-    const T& msg,
-    WireMessageType msg_type,
-    uint32_t seq = 0,
-    uint64_t ts_ns = 0)
-{
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "wire_serialize requires trivially copyable T");
+template<typename T>
+std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type, uint32_t seq = 0,
+                                    uint64_t ts_ns = 0) {
+    static_assert(std::is_trivially_copyable_v<T>, "wire_serialize requires trivially copyable T");
 
     if (ts_ns == 0) {
-        ts_ns = static_cast<uint64_t>(
-            std::chrono::steady_clock::now().time_since_epoch().count());
+        ts_ns = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
     }
 
     WireHeader hdr;
@@ -160,7 +152,7 @@ inline WireHeader wire_read_header(const uint8_t* data) {
 /// @param  len   Total length of the buffer.
 /// @param  out   Output: deserialized message.
 /// @return true if deserialization succeeded, false on size mismatch.
-template <typename T>
+template<typename T>
 bool wire_deserialize(const uint8_t* data, std::size_t len, T& out) {
     static_assert(std::is_trivially_copyable_v<T>,
                   "wire_deserialize requires trivially copyable T");
@@ -180,18 +172,18 @@ bool wire_deserialize(const uint8_t* data, std::size_t len, T& out) {
 /// in the wire header.  Returns UNKNOWN for unrecognized keys.
 inline WireMessageType key_to_wire_type(const std::string& key) {
     // Use a simple if-chain; the mapping is small and called once per pub.
-    if (key == "drone/video/frame")               return WireMessageType::VIDEO_FRAME;
-    if (key == "drone/video/stereo_frame")         return WireMessageType::STEREO_FRAME;
-    if (key == "drone/perception/detections")      return WireMessageType::DETECTIONS;
-    if (key == "drone/slam/pose")                  return WireMessageType::SLAM_POSE;
-    if (key == "drone/mission/status")             return WireMessageType::MISSION_STATUS;
-    if (key == "drone/mission/trajectory")         return WireMessageType::TRAJECTORY_CMD;
-    if (key == "drone/mission/payload_command")    return WireMessageType::PAYLOAD_COMMAND;
-    if (key == "drone/comms/fc_command")           return WireMessageType::FC_COMMAND;
-    if (key == "drone/comms/fc_state")             return WireMessageType::FC_STATE;
-    if (key == "drone/comms/gcs_command")          return WireMessageType::GCS_COMMAND;
-    if (key == "drone/payload/status")             return WireMessageType::PAYLOAD_STATUS;
-    if (key == "drone/monitor/health")             return WireMessageType::SYSTEM_HEALTH;
+    if (key == "drone/video/frame") return WireMessageType::VIDEO_FRAME;
+    if (key == "drone/video/stereo_frame") return WireMessageType::STEREO_FRAME;
+    if (key == "drone/perception/detections") return WireMessageType::DETECTIONS;
+    if (key == "drone/slam/pose") return WireMessageType::SLAM_POSE;
+    if (key == "drone/mission/status") return WireMessageType::MISSION_STATUS;
+    if (key == "drone/mission/trajectory") return WireMessageType::TRAJECTORY_CMD;
+    if (key == "drone/mission/payload_command") return WireMessageType::PAYLOAD_COMMAND;
+    if (key == "drone/comms/fc_command") return WireMessageType::FC_COMMAND;
+    if (key == "drone/comms/fc_state") return WireMessageType::FC_STATE;
+    if (key == "drone/comms/gcs_command") return WireMessageType::GCS_COMMAND;
+    if (key == "drone/payload/status") return WireMessageType::PAYLOAD_STATUS;
+    if (key == "drone/monitor/health") return WireMessageType::SYSTEM_HEALTH;
     return WireMessageType::UNKNOWN;
 }
 

@@ -10,14 +10,14 @@ namespace drone::hal {
 /// Flight controller state received from the FC heartbeat.
 struct FCState {
     uint64_t timestamp_ns{0};
-    float battery_voltage{0.0f};
-    float battery_current{0.0f};
-    float battery_percent{0.0f};
-    float altitude_rel{0.0f};  // relative (AGL) altitude in meters
-    float ground_speed{0.0f};
-    uint8_t satellites{0};
-    uint8_t flight_mode{0};   // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
-    bool armed{false};
+    float    battery_voltage{0.0f};
+    float    battery_current{0.0f};
+    float    battery_percent{0.0f};
+    float    altitude_rel{0.0f};  // relative (AGL) altitude in meters
+    float    ground_speed{0.0f};
+    uint8_t  satellites{0};
+    uint8_t  flight_mode{0};  // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
+    bool     armed{false};
 };
 
 /// Abstract flight controller link interface.

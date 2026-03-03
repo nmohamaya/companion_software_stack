@@ -32,26 +32,22 @@ class ShmMessageBus {
 public:
     /// Create a publisher for the given topic.
     /// The returned publisher owns the SHM segment and unlinks on destruction.
-    template <typename T>
+    template<typename T>
     std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
         return std::make_unique<ShmPublisher<T>>(topic);
     }
 
     /// Create a subscriber for the given topic.
     /// Retries connecting up to max_retries times.
-    template <typename T>
-    std::unique_ptr<ISubscriber<T>> subscribe(
-        const std::string& topic,
-        int max_retries = 50,
-        int retry_ms = 200)
-    {
-        return std::make_unique<ShmSubscriber<T>>(
-            topic, max_retries, retry_ms);
+    template<typename T>
+    std::unique_ptr<ISubscriber<T>> subscribe(const std::string& topic, int max_retries = 50,
+                                              int retry_ms = 200) {
+        return std::make_unique<ShmSubscriber<T>>(topic, max_retries, retry_ms);
     }
 
     /// Create a lazy subscriber (no immediate connection attempt).
     /// Call connect() on the returned subscriber when ready.
-    template <typename T>
+    template<typename T>
     std::unique_ptr<ShmSubscriber<T>> subscribe_lazy() {
         return std::make_unique<ShmSubscriber<T>>();
     }

@@ -4,20 +4,20 @@
 //
 // Note: SHM service channel tests were removed in Phase D (#49).
 //       Zenoh service channel tests are in test_zenoh_ipc.cpp (Category 5).
-#include <gtest/gtest.h>
-
 #include "ipc/ipublisher.h"
+#include "ipc/iservice_channel.h"
 #include "ipc/isubscriber.h"
+#include "ipc/shm_message_bus.h"
 #include "ipc/shm_publisher.h"
 #include "ipc/shm_subscriber.h"
-#include "ipc/shm_message_bus.h"
-#include "ipc/iservice_channel.h"
 #include "ipc/shm_types.h"
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <thread>
-#include <chrono>
+
+#include <gtest/gtest.h>
 
 using namespace drone::ipc;
 
@@ -26,8 +26,7 @@ using namespace drone::ipc;
 // ═══════════════════════════════════════════════════════════
 static std::string unique_name(const std::string& base) {
     static int counter = 0;
-    return base + "_mbus_" + std::to_string(getpid()) + "_" +
-           std::to_string(counter++);
+    return base + "_mbus_" + std::to_string(getpid()) + "_" + std::to_string(counter++);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -35,8 +34,8 @@ static std::string unique_name(const std::string& base) {
 // ═══════════════════════════════════════════════════════════
 struct TestPayload {
     uint64_t id{0};
-    float value{0.0f};
-    char tag[16]{};
+    float    value{0.0f};
+    char     tag[16]{};
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -44,7 +43,7 @@ struct TestPayload {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ShmPublisherTest, CreateAndPublish) {
-    auto name = unique_name("/test_pub");
+    auto                      name = unique_name("/test_pub");
     ShmPublisher<TestPayload> pub(name);
     ASSERT_TRUE(pub.is_ready());
     EXPECT_EQ(pub.topic_name(), name);
@@ -54,14 +53,14 @@ TEST(ShmPublisherTest, CreateAndPublish) {
 }
 
 TEST(ShmPublisherTest, TopicNameStored) {
-    auto name = unique_name("/test_pub_name");
+    auto                      name = unique_name("/test_pub_name");
     ShmPublisher<TestPayload> pub(name);
     EXPECT_EQ(pub.topic_name(), name);
 }
 
 TEST(ShmPublisherTest, ImplementsIPublisher) {
-    auto name = unique_name("/test_pub_iface");
-    auto pub = std::make_unique<ShmPublisher<TestPayload>>(name);
+    auto                     name  = unique_name("/test_pub_iface");
+    auto                     pub   = std::make_unique<ShmPublisher<TestPayload>>(name);
     IPublisher<TestPayload>* iface = pub.get();
     EXPECT_TRUE(iface->is_ready());
     EXPECT_EQ(iface->topic_name(), name);
@@ -84,7 +83,7 @@ TEST(ShmSubscriberTest, LazyConstructAndConnect) {
 }
 
 TEST(ShmSubscriberTest, ReceivePublishedData) {
-    auto name = unique_name("/test_sub_recv");
+    auto                      name = unique_name("/test_sub_recv");
     ShmPublisher<TestPayload> pub(name);
 
     ShmSubscriber<TestPayload> sub;
@@ -103,10 +102,10 @@ TEST(ShmSubscriberTest, ReceivePublishedData) {
 }
 
 TEST(ShmSubscriberTest, ImplementsISubscriber) {
-    auto name = unique_name("/test_sub_iface");
+    auto                      name = unique_name("/test_sub_iface");
     ShmPublisher<TestPayload> pub(name);
 
-    auto sub = std::make_unique<ShmSubscriber<TestPayload>>(name, 1, 10);
+    auto                      sub   = std::make_unique<ShmSubscriber<TestPayload>>(name, 1, 10);
     ISubscriber<TestPayload>* iface = sub.get();
     EXPECT_TRUE(iface->is_connected());
     EXPECT_EQ(iface->topic_name(), name);
@@ -123,7 +122,7 @@ TEST(ShmSubscriberTest, LazyConnectFails) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ShmMessageBusTest, AdvertiseAndSubscribe) {
-    auto name = unique_name("/test_bus");
+    auto          name = unique_name("/test_bus");
     ShmMessageBus bus;
 
     auto pub = bus.advertise<TestPayload>(name);
@@ -141,25 +140,25 @@ TEST(ShmMessageBusTest, AdvertiseAndSubscribe) {
 }
 
 TEST(ShmMessageBusTest, AdvReturnsIPublisher) {
-    auto name = unique_name("/test_bus_type");
-    ShmMessageBus bus;
+    auto                                     name = unique_name("/test_bus_type");
+    ShmMessageBus                            bus;
     std::unique_ptr<IPublisher<TestPayload>> pub = bus.advertise<TestPayload>(name);
     EXPECT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 }
 
 TEST(ShmMessageBusTest, SubReturnsISubscriber) {
-    auto name = unique_name("/test_bus_subtype");
-    ShmMessageBus bus;
-    auto pub = bus.advertise<TestPayload>(name);
+    auto                                      name = unique_name("/test_bus_subtype");
+    ShmMessageBus                             bus;
+    auto                                      pub = bus.advertise<TestPayload>(name);
     std::unique_ptr<ISubscriber<TestPayload>> sub = bus.subscribe<TestPayload>(name, 1, 10);
     EXPECT_NE(sub, nullptr);
 }
 
 TEST(ShmMessageBusTest, LazySubscriber) {
-    auto name = unique_name("/test_bus_lazy");
+    auto          name = unique_name("/test_bus_lazy");
     ShmMessageBus bus;
-    auto pub = bus.advertise<TestPayload>(name);
+    auto          pub = bus.advertise<TestPayload>(name);
 
     auto sub = bus.subscribe_lazy<TestPayload>();
     EXPECT_FALSE(sub->is_connected());
@@ -168,10 +167,10 @@ TEST(ShmMessageBusTest, LazySubscriber) {
 }
 
 TEST(ShmMessageBusTest, MultiplePublishOverwrites) {
-    auto name = unique_name("/test_bus_overwrite");
+    auto          name = unique_name("/test_bus_overwrite");
     ShmMessageBus bus;
-    auto pub = bus.advertise<TestPayload>(name);
-    auto sub = bus.subscribe<TestPayload>(name, 1, 10);
+    auto          pub = bus.advertise<TestPayload>(name);
+    auto          sub = bus.subscribe<TestPayload>(name, 1, 10);
 
     for (int i = 0; i < 10; ++i) {
         TestPayload msg{static_cast<uint64_t>(i), static_cast<float>(i), {}};
@@ -184,20 +183,20 @@ TEST(ShmMessageBusTest, MultiplePublishOverwrites) {
 }
 
 TEST(ShmMessageBusTest, WithShmTypes) {
-    auto name = unique_name("/test_bus_pose");
+    auto          name = unique_name("/test_bus_pose");
     ShmMessageBus bus;
-    auto pub = bus.advertise<ShmPose>(name);
+    auto          pub = bus.advertise<ShmPose>(name);
     ASSERT_TRUE(pub->is_ready());
 
     auto sub = bus.subscribe<ShmPose>(name, 1, 10);
     ASSERT_TRUE(sub->is_connected());
 
     ShmPose pose{};
-    pose.timestamp_ns = 12345678;
+    pose.timestamp_ns   = 12345678;
     pose.translation[0] = 1.0;
     pose.translation[1] = 2.0;
     pose.translation[2] = 3.0;
-    pose.quality = 2;
+    pose.quality        = 2;
     pub->publish(pose);
 
     ShmPose received{};
@@ -213,12 +212,12 @@ TEST(ShmMessageBusTest, WithShmTypes) {
 
 struct TestRequest {
     uint32_t command{0};
-    float param{0.0f};
+    float    param{0.0f};
 };
 
 struct TestResponse {
     uint32_t result{0};
-    bool success{false};
+    bool     success{false};
 };
 
 TEST(ServiceChannelInterface, ServiceStatusEnum) {
@@ -230,11 +229,11 @@ TEST(ServiceChannelInterface, ServiceStatusEnum) {
 
 TEST(ServiceChannelInterface, ServiceEnvelopeLayout) {
     ServiceEnvelope<TestRequest> env;
-    env.correlation_id = 42;
-    env.timestamp_ns = 123456;
-    env.valid = true;
+    env.correlation_id  = 42;
+    env.timestamp_ns    = 123456;
+    env.valid           = true;
     env.payload.command = 7;
-    env.payload.param = 1.5f;
+    env.payload.param   = 1.5f;
 
     EXPECT_EQ(env.correlation_id, 42u);
     EXPECT_EQ(env.timestamp_ns, 123456u);
@@ -245,11 +244,11 @@ TEST(ServiceChannelInterface, ServiceEnvelopeLayout) {
 
 TEST(ServiceChannelInterface, ServiceResponseLayout) {
     ServiceResponse<TestResponse> resp;
-    resp.correlation_id = 99;
-    resp.timestamp_ns = 789;
-    resp.status = ServiceStatus::OK;
-    resp.valid = true;
-    resp.payload.result = 100;
+    resp.correlation_id  = 99;
+    resp.timestamp_ns    = 789;
+    resp.status          = ServiceStatus::OK;
+    resp.valid           = true;
+    resp.payload.result  = 100;
     resp.payload.success = true;
 
     EXPECT_EQ(resp.correlation_id, 99u);

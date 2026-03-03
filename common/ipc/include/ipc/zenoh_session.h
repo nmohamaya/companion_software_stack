@@ -17,17 +17,16 @@
 
 #include "ipc/zenoh_network_config.h"
 
-#include <zenoh.hxx>
-
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <variant>
 
 #include <spdlog/spdlog.h>
+#include <zenoh.hxx>
 
 namespace drone::ipc {
 
@@ -67,9 +66,8 @@ public:
             return;
         }
         config_json_ = config_json;
-        configured_ = true;
-        spdlog::info("[ZenohSession] Configured ({})",
-                     config_json.empty() ? "defaults" : "custom");
+        configured_  = true;
+        spdlog::info("[ZenohSession] Configured ({})", config_json.empty() ? "defaults" : "custom");
     }
 
     /// Configure network transport before first use.
@@ -83,13 +81,12 @@ public:
                          "session already opened — ignoring");
             return;
         }
-        config_json_ = net_config.to_json();
+        config_json_     = net_config.to_json();
         network_enabled_ = true;
-        configured_ = true;
+        configured_      = true;
         spdlog::info("[ZenohSession] Network configured: mode={}, "
                      "listen_eps={}, connect_eps={}",
-                     net_config.mode,
-                     net_config.listen_endpoints.size(),
+                     net_config.mode, net_config.listen_endpoints.size(),
                      net_config.connect_endpoints.size());
     }
 
@@ -104,8 +101,7 @@ public:
             return;
         }
         shm_pool_bytes_ = pool_bytes;
-        spdlog::info("[ZenohSession] SHM pool configured: {} bytes",
-                     pool_bytes);
+        spdlog::info("[ZenohSession] SHM pool configured: {} bytes", pool_bytes);
     }
 
     /// Get the underlying Zenoh session.  Opens lazily on first call.
@@ -153,10 +149,10 @@ public:
     }
 
     // Non-copyable, non-movable
-    ZenohSession(const ZenohSession&) = delete;
+    ZenohSession(const ZenohSession&)            = delete;
     ZenohSession& operator=(const ZenohSession&) = delete;
-    ZenohSession(ZenohSession&&) = delete;
-    ZenohSession& operator=(ZenohSession&&) = delete;
+    ZenohSession(ZenohSession&&)                 = delete;
+    ZenohSession& operator=(ZenohSession&&)      = delete;
 
 private:
     ZenohSession() = default;
@@ -175,25 +171,23 @@ private:
 
     void create_shm_provider() {
         try {
-            shm_provider_ = std::make_unique<zenoh::PosixShmProvider>(
-                shm_pool_bytes_);
+            shm_provider_ = std::make_unique<zenoh::PosixShmProvider>(shm_pool_bytes_);
             spdlog::info("[ZenohSession] SHM provider created "
                          "(pool={} MB)",
                          shm_pool_bytes_ / (1024 * 1024));
         } catch (const std::exception& e) {
-            spdlog::error("[ZenohSession] Failed to create SHM provider: {}",
-                          e.what());
+            spdlog::error("[ZenohSession] Failed to create SHM provider: {}", e.what());
         }
     }
 
-    mutable std::mutex mutex_;
+    mutable std::mutex            mutex_;
     std::optional<zenoh::Session> session_;
-    std::string config_json_;
-    bool configured_ = false;
-    bool network_enabled_ = false;
+    std::string                   config_json_;
+    bool                          configured_      = false;
+    bool                          network_enabled_ = false;
 
     // SHM provider for zero-copy large-message publishing
-    std::size_t shm_pool_bytes_ = kDefaultShmPoolBytes;
+    std::size_t                              shm_pool_bytes_ = kDefaultShmPoolBytes;
     std::unique_ptr<zenoh::PosixShmProvider> shm_provider_;
 };
 

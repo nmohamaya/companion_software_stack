@@ -1,0 +1,48 @@
+# EditorConfig — https://editorconfig.org
+# Top-level config for Drone Companion Software Stack
+
+root = true
+
+# ── Default for all files ────────────────────────────────────────
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# ── C/C++ ────────────────────────────────────────────────────────
+[*.{h,hpp,c,cpp,cc,cxx}]
+indent_size = 4
+
+# ── CMake ────────────────────────────────────────────────────────
+[CMakeLists.txt]
+indent_size = 4
+
+[*.cmake]
+indent_size = 4
+
+# ── YAML / GitHub Actions ───────────────────────────────────────
+[*.{yml,yaml}]
+indent_size = 2
+
+# ── JSON configs ─────────────────────────────────────────────────
+[*.json]
+indent_size = 2
+
+# ── Markdown ─────────────────────────────────────────────────────
+[*.md]
+trim_trailing_whitespace = false
+
+# ── Shell scripts ────────────────────────────────────────────────
+[*.sh]
+indent_size = 4
+
+# ── Python ───────────────────────────────────────────────────────
+[*.py]
+indent_size = 4
+
+# ── Makefiles (must use tabs) ────────────────────────────────────
+[Makefile]
+indent_style = tab

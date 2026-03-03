@@ -8,15 +8,16 @@
 //
 // These tests verify the wire format header, serialization/deserialization,
 // network configuration generation, and config-driven bus creation.
-#include <gtest/gtest.h>
-
-#include "ipc/wire_format.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
+#include "ipc/wire_format.h"
+
+#include <gtest/gtest.h>
 
 #ifdef HAVE_ZENOH
 #include "ipc/zenoh_network_config.h"
 #include "ipc/zenoh_session.h"
+
 #include <nlohmann/json.hpp>
 #endif
 
@@ -52,7 +53,7 @@ TEST(WireFormat, MagicIsCorrectDRONLittleEndian) {
     EXPECT_EQ(kWireMagic, 0x4E4F5244u);
 
     // Verify byte representation
-    uint8_t bytes[4];
+    uint8_t  bytes[4];
     uint32_t magic = kWireMagic;
     std::memcpy(bytes, &magic, 4);
     EXPECT_EQ(bytes[0], 'D');
@@ -68,8 +69,8 @@ TEST(WireFormat, SerializeRoundTrip) {
     pose.translation[0] = 1.0;
     pose.translation[1] = 2.0;
     pose.translation[2] = 3.0;
-    pose.quaternion[0] = 1.0;  // w
-    pose.quality = 2;
+    pose.quaternion[0]  = 1.0;  // w
+    pose.quality        = 2;
 
     auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE, 7, 12345);
 
@@ -98,11 +99,11 @@ TEST(WireFormat, SerializeRoundTrip) {
 
 TEST(WireFormat, SerializeSystemHealth) {
     ShmSystemHealth health{};
-    health.cpu_usage_percent = 55.5f;
+    health.cpu_usage_percent    = 55.5f;
     health.memory_usage_percent = 42.0f;
-    health.disk_usage_percent = 75.0f;
-    health.cpu_temp_c = 68.0f;
-    health.power_watts = 11.8f;
+    health.disk_usage_percent   = 75.0f;
+    health.cpu_temp_c           = 68.0f;
+    health.power_watts          = 11.8f;
 
     auto buf = wire_serialize(health, WireMessageType::SYSTEM_HEALTH, 100);
     ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
@@ -118,12 +119,12 @@ TEST(WireFormat, SerializeSystemHealth) {
 
 TEST(WireFormat, SerializeFCState) {
     ShmFCState fc{};
-    fc.armed = true;
+    fc.armed   = true;
     fc.gps_lat = 37.7749f;
     fc.gps_lon = -122.4194f;
     fc.gps_alt = 100.0f;
-    fc.yaw = 270.0f;
-    fc.vx = 5.5f;
+    fc.yaw     = 270.0f;
+    fc.vx      = 5.5f;
 
     auto buf = wire_serialize(fc, WireMessageType::FC_STATE, 1, 99999);
     ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
@@ -140,9 +141,9 @@ TEST(WireFormat, SerializeFCState) {
 
 TEST(WireFormat, SerializeMissionStatus) {
     ShmMissionStatus ms{};
-    ms.state = MissionState::NAVIGATE;
+    ms.state            = MissionState::NAVIGATE;
     ms.current_waypoint = 3;
-    ms.total_waypoints = 10;
+    ms.total_waypoints  = 10;
     ms.progress_percent = 30.0f;
 
     auto buf = wire_serialize(ms, WireMessageType::MISSION_STATUS, 5);
@@ -165,7 +166,7 @@ TEST(WireFormat, ValidateRejectsTooSmall) {
 
 TEST(WireFormat, ValidateRejectsBadMagic) {
     ShmPose pose{};
-    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
     // Corrupt magic
     buf[0] = 0xFF;
     EXPECT_FALSE(wire_validate(buf.data(), buf.size()));
@@ -173,7 +174,7 @@ TEST(WireFormat, ValidateRejectsBadMagic) {
 
 TEST(WireFormat, ValidateRejectsBadVersion) {
     ShmPose pose{};
-    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
     // Corrupt version byte (offset 4)
     buf[4] = 99;
     EXPECT_FALSE(wire_validate(buf.data(), buf.size()));
@@ -181,14 +182,14 @@ TEST(WireFormat, ValidateRejectsBadVersion) {
 
 TEST(WireFormat, ValidateRejectsTruncatedPayload) {
     ShmPose pose{};
-    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
     // Truncate to just the header — payload is missing
     EXPECT_FALSE(wire_validate(buf.data(), sizeof(WireHeader)));
 }
 
 TEST(WireFormat, DeserializeSizeMismatch) {
     ShmPose pose{};
-    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
 
     // Try to deserialize as a different-sized struct
     ShmFCState out{};
@@ -281,14 +282,14 @@ TEST(ZenohNetworkConfig, MakeLocalIsPeerNoListeners) {
 }
 
 TEST(ZenohNetworkConfig, ToJsonContainsMode) {
-    auto cfg = ZenohNetworkConfig::make_drone();
+    auto cfg      = ZenohNetworkConfig::make_drone();
     auto json_str = cfg.to_json();
     EXPECT_NE(json_str.find("\"peer\""), std::string::npos);
     EXPECT_NE(json_str.find("listen"), std::string::npos);
 }
 
 TEST(ZenohNetworkConfig, ToJsonGCSContainsConnect) {
-    auto cfg = ZenohNetworkConfig::make_gcs("192.168.1.10");
+    auto cfg      = ZenohNetworkConfig::make_gcs("192.168.1.10");
     auto json_str = cfg.to_json();
     EXPECT_NE(json_str.find("\"client\""), std::string::npos);
     EXPECT_NE(json_str.find("192.168.1.10"), std::string::npos);
@@ -301,11 +302,11 @@ TEST(ZenohNetworkConfig, ToJsonGCSContainsConnect) {
 /// The section() method returns a nlohmann::json value, which satisfies
 /// the from_app_config() template's operator[], contains(), etc.
 struct MockConfig {
-    std::string ipc_backend = "shm";
-    std::size_t shm_pool_mb = 0;
-    bool network_enabled = false;
+    std::string ipc_backend     = "shm";
+    std::size_t shm_pool_mb     = 0;
+    bool        network_enabled = false;
 
-    template <typename T>
+    template<typename T>
     T get(const std::string& key, const T& default_val) const {
         if constexpr (std::is_same_v<T, std::string>) {
             if (key == "ipc_backend") return ipc_backend;
@@ -323,24 +324,22 @@ struct MockConfig {
     // section() returns a nlohmann::json object so that from_app_config()
     // compiles. Since our tests only use network_enabled=false, the
     // from_app_config() path is never taken at runtime.
-    nlohmann::json section(const std::string& /*key*/) const {
-        return nlohmann::json::object();
-    }
+    nlohmann::json section(const std::string& /*key*/) const { return nlohmann::json::object(); }
 };
 
 TEST(ConfigAwareFactory, ShmBackendFromMockConfig) {
     MockConfig cfg;
     cfg.ipc_backend = "shm";
-    auto bus = create_message_bus(cfg);
+    auto bus        = create_message_bus(cfg);
     EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
 }
 
 TEST(ConfigAwareFactory, ZenohBackendFromMockConfig) {
     MockConfig cfg;
-    cfg.ipc_backend = "zenoh";
-    cfg.shm_pool_mb = 0;
+    cfg.ipc_backend     = "zenoh";
+    cfg.shm_pool_mb     = 0;
     cfg.network_enabled = false;
-    auto bus = create_message_bus(cfg);
+    auto bus            = create_message_bus(cfg);
     // Should create a ZenohMessageBus (not ShmMessageBus)
     EXPECT_FALSE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
 }

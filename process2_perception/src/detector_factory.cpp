@@ -1,21 +1,22 @@
 // process2_perception/src/detector_factory.cpp
 // Factory function: creates the correct IDetector backend from config string.
 
-#include "perception/detector_interface.h"
 #include "perception/color_contour_detector.h"
+#include "perception/detector_interface.h"
 
 #ifdef HAS_OPENCV
 #include "perception/opencv_yolo_detector.h"
 #endif
 
 #include "util/config.h"
+
 #include <stdexcept>
+
 #include <spdlog/spdlog.h>
 
 namespace drone::perception {
 
-std::unique_ptr<IDetector> create_detector(const std::string& backend,
-                                            const drone::Config* cfg) {
+std::unique_ptr<IDetector> create_detector(const std::string& backend, const drone::Config* cfg) {
     if (backend == "yolov8") {
 #ifdef HAS_OPENCV
         if (cfg) {
@@ -43,4 +44,4 @@ std::unique_ptr<IDetector> create_detector(const std::string& backend,
     throw std::runtime_error("Unknown detector backend: " + backend);
 }
 
-} // namespace drone::perception
+}  // namespace drone::perception
