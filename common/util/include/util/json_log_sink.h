@@ -23,7 +23,6 @@
 #include <spdlog/details/null_mutex.h>
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/spdlog.h>
-
 #include <unistd.h>
 
 namespace drone::util {
@@ -36,7 +35,7 @@ inline void json_escape(std::string& out, const std::string& input) {
     out.reserve(out.size() + input.size() + 16);
     for (char c : input) {
         switch (c) {
-            case '"':  out += "\\\""; break;
+            case '"': out += "\\\""; break;
             case '\\': out += "\\\\"; break;
             case '\n': out += "\\n"; break;
             case '\r': out += "\\r"; break;
@@ -58,8 +57,8 @@ inline void json_escape(std::string& out, const std::string& input) {
 /// Format a time_point as ISO 8601 with microseconds.
 /// Example: "2026-03-03T12:34:56.789012"
 inline std::string format_timestamp(const std::chrono::system_clock::time_point& tp) {
-    auto        tt = std::chrono::system_clock::to_time_t(tp);
-    std::tm     tm{};
+    auto    tt = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm{};
     gmtime_r(&tt, &tm);
 
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(tp.time_since_epoch()) %
@@ -75,13 +74,13 @@ inline std::string format_timestamp(const std::chrono::system_clock::time_point&
 /// Convert spdlog level to a short string.
 inline const char* level_to_str(spdlog::level::level_enum level) {
     switch (level) {
-        case spdlog::level::trace:    return "trace";
-        case spdlog::level::debug:    return "debug";
-        case spdlog::level::info:     return "info";
-        case spdlog::level::warn:     return "warn";
-        case spdlog::level::err:      return "error";
+        case spdlog::level::trace: return "trace";
+        case spdlog::level::debug: return "debug";
+        case spdlog::level::info: return "info";
+        case spdlog::level::warn: return "warn";
+        case spdlog::level::err: return "error";
         case spdlog::level::critical: return "critical";
-        default:                      return "unknown";
+        default: return "unknown";
     }
 }
 

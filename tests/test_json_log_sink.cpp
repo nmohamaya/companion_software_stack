@@ -46,10 +46,10 @@ protected:
     /// Get the last JSON line from the sink (via accessor).
     const std::string& last_json() { return sink_->last_json(); }
 
-    std::string                              tmp_path_;
-    std::FILE*                               fp_ = nullptr;
-    std::shared_ptr<JsonLogSink_st>          sink_;
-    std::shared_ptr<spdlog::logger>          logger_;
+    std::string                     tmp_path_;
+    std::FILE*                      fp_ = nullptr;
+    std::shared_ptr<JsonLogSink_st> sink_;
+    std::shared_ptr<spdlog::logger> logger_;
 };
 
 // ── Basic structure ─────────────────────────────────────────

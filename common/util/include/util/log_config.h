@@ -1,14 +1,14 @@
 // common/util/include/util/log_config.h
 // Logging initialisation using spdlog.
 #pragma once
+#include "util/json_log_sink.h"
+
 #include <cstdlib>
 #include <string>
 
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
-
-#include "util/json_log_sink.h"
 
 namespace LogConfig {
 
@@ -32,13 +32,13 @@ inline void init(const std::string& process_name, const std::string& log_dir,
         if (json_mode) {
             // JSON mode: structured JSON on stdout, human-readable in log file
             auto json_sink = std::make_shared<drone::util::JsonLogSink_mt>();
-            logger = std::make_shared<spdlog::logger>(
+            logger         = std::make_shared<spdlog::logger>(
                 process_name, spdlog::sinks_init_list{json_sink, file_sink});
             file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] [t:%t] %v");
         } else {
             // Human mode: coloured console + rotating file
             auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-            logger = std::make_shared<spdlog::logger>(
+            logger            = std::make_shared<spdlog::logger>(
                 process_name, spdlog::sinks_init_list{console_sink, file_sink});
             logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] [t:%t] %v");
         }
