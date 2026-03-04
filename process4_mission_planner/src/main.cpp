@@ -160,7 +160,7 @@ int main(int argc, char* argv[]) {
     const float repulsive_gain = cfg.get<float>("mission_planner.obstacle_avoidance.repulsive_gain",
                                                 2.0f);
     const int   update_ms      = cfg.get<int>("mission_planner.update_rate_hz", 10);
-    const int   loop_sleep_ms  = update_ms > 0 ? 1000 / update_ms : 100;
+    const int   loop_sleep_ms  = std::max(1, update_ms > 0 ? 1000 / update_ms : 100);
 
     auto planner_backend = cfg.get<std::string>("mission_planner.path_planner.backend",
                                                 "potential_field");

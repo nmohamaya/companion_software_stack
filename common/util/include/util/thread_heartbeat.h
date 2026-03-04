@@ -7,10 +7,11 @@
 // Hot-path cost: one steady_clock read + one atomic_store(relaxed) per touch().
 #pragma once
 
+#include "util/safe_name_copy.h"
+
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -97,9 +98,7 @@ public:
         // to signal readiness.  We set last_touch_ns = 0 first (already
         // default), then write name/critical.  snapshot() callers must
         // tolerate partially-initialized name during the brief window.
-        // Use snprintf instead of strncpy to avoid -Wstringop-truncation
-        // (GCC warns when strncpy intentionally truncates, which we do).
-        std::snprintf(beats_[idx].name, sizeof(beats_[idx].name), "%s", name);
+        safe_name_copy(beats_[idx].name, name);
         beats_[idx].is_critical = critical;
         // last_touch_ns stays 0 — signals "registered but not yet started"
         return idx;

@@ -4,6 +4,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 namespace drone::ipc {
 

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "ipc/shm_types.h"
+#include "util/safe_name_copy.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
@@ -36,8 +37,7 @@ public:
     /// @param watchdog  Reference to the process's ThreadWatchdog instance.
     ThreadHealthPublisher(Publisher& pub, const char* process, const ThreadWatchdog& watchdog)
         : pub_(pub), watchdog_(watchdog) {
-        std::memset(process_name_, 0, sizeof(process_name_));
-        std::strncpy(process_name_, process, sizeof(process_name_) - 1);
+        safe_name_copy(process_name_, process);
     }
 
     /// Take a snapshot of the heartbeat registry, cross-reference with
@@ -48,11 +48,13 @@ public:
 
         // Snapshot registered heartbeats
         auto beats = ThreadHeartbeatRegistry::instance().snapshot();
-        auto count = ThreadHeartbeatRegistry::instance().count();
         auto stuck = watchdog_.get_stuck_threads();
 
+        // Use beats.size() — not a separate count() call — to avoid a
+        // TOCTOU race where a concurrent register_thread() bumps count_
+        // past beats.size(), causing an out-of-bounds read.
         health.num_threads = static_cast<uint8_t>(
-            std::min(count, static_cast<size_t>(drone::ipc::kMaxTrackedThreads)));
+            std::min(beats.size(), static_cast<size_t>(drone::ipc::kMaxTrackedThreads)));
 
         for (uint8_t i = 0; i < health.num_threads; ++i) {
             auto& dst = health.threads[i];

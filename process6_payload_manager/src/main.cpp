@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
     uint64_t last_cmd_ts = 0;
 
     const int   update_hz     = cfg.get<int>("payload_manager.update_rate_hz", 50);
-    const int   loop_sleep_ms = update_hz > 0 ? 1000 / update_hz : 20;
+    const int   loop_sleep_ms = std::max(1, update_hz > 0 ? 1000 / update_hz : 20);
     const float dt            = loop_sleep_ms / 1000.0f;
 
     // ── Thread heartbeat + watchdog + health publisher ──────
