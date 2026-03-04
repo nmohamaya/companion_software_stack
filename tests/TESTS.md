@@ -26,10 +26,12 @@
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
 | [Watchdog — Thread Heartbeat](#watchdog--thread-heartbeat) | 1 | 25 | ThreadHeartbeatRegistry, ScopedHeartbeat, ThreadWatchdog |
 | [Watchdog — Thread Health Publisher](#watchdog--thread-health-publisher) | 1 | 15 | ShmThreadHealth struct, ThreadHealthPublisher bridge |
+| [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
+| [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **30 C++ + 2 shell** | **613 + 42** | |
+| **Total** | **32 C++ + 2 shell** | **657 + 42** | |
 
 ---
 
@@ -484,6 +486,88 @@ without needing a real SHM or Zenoh backend.
 
 ---
 
+## Watchdog — Restart Policy
+
+### test_restart_policy.cpp — 17 tests
+
+**What it tests:** Phase 4 of the Process & Thread Watchdog (Epic #88,
+Issue #92).  Three components:
+
+1. **`RestartPolicy`** struct — per-process restart parameters with
+   exponential backoff calculation and thermal gate logic
+2. **`StackStatus`** enum — NOMINAL / DEGRADED / CRITICAL with string
+   conversion
+3. **`ProcessConfig`** struct — JSON-deserialisable per-process configuration
+   including policy overrides, launch dependencies, and cascade targets
+
+| Suite | Tests | What is validated | Why it catches bugs |
+|-------|-------|-------------------|--------------------|
+| `RestartPolicy` | `BackoffDoublesEachAttempt` | Backoff doubles: 500 → 1000 → 2000 → 4000ms | Validates exponential scaling |
+| | `BackoffCapsAtMax` | Backoff at attempt 20 capped at `max_backoff_ms` | Catches unbounded backoff overflow |
+| | `BackoffWithLargeInitial` | 10000ms initial → caps at 30000ms correctly | Edge case for large starting values |
+| | `BackoffFirstAttemptEqualsInitial` | Attempt 0 returns `initial_backoff_ms` | Validates off-by-one in shift |
+| | `ThermalGateBlocksAtThreshold` | `thermal_gate=3`, zone=3 → blocked | Boundary condition: "at threshold means blocked" |
+| | `ThermalGateZeroAlwaysBlocks` | `thermal_gate=0`, zone=0 → blocked | Ensures gate=0 means "always block" |
+| | `ThermalGateFourNeverBlocks` | `thermal_gate=4`, zone=3 → not blocked | Gate=4 means "never block" (max zone is 3) |
+| | `ThermalGateAtHot` | `thermal_gate=2`, zone=3 → blocked | Higher zone always exceeds lower gate |
+| | `DefaultValues` | Default-constructed policy has expected field values | Documents the compile-time defaults |
+| `StackStatus` | `ToStringCoversAllStates` | 3 enum values → correct strings | Guards against missing `to_string` cases |
+| | `EnumValues` | NOMINAL=0, DEGRADED=1, CRITICAL=2 | Stable enum encoding for SHM transmission |
+| `ProcessConfig` | `FromJsonFullConfig` | Full JSON → all fields parsed correctly | End-to-end JSON deserialization |
+| | `FromJsonMissingFieldsUseDefaults` | Empty JSON → uses `RestartPolicy` defaults | Validates fallback behaviour |
+| | `FromJsonPartialConfig` | Partial JSON with only some fields → correct merge | Selective override without breaking defaults |
+| | `FromJsonEmptyArrays` | Empty `launch_after` / `restart_cascade` arrays → empty vectors | Edge case: explicit empty arrays |
+| | `FromJsonInvalidArrayElementsIgnored` | Non-string elements in arrays → silently skipped | Robustness against bad config data |
+| | `LoadFromDefaultJsonFile` | Loads `config/default.json`, validates comms=critical, slam=critical, video=non-critical | Integration: real config matches expectations (skips if file not found) |
+
+**Key files under test:** `util/restart_policy.h`
+
+---
+
+## Watchdog — Process Graph
+
+### test_process_graph.cpp — 27 tests
+
+**What it tests:** Phase 4 of the Process & Thread Watchdog (Epic #88,
+Issue #92).  The `ProcessGraph` class implements a dual-edge directed
+graph where:
+- **`launch_after`** edges define startup ordering (topological sort)
+- **`restart_cascade`** edges define failure propagation (BFS transitive closure)
+
+| Suite | Tests | What is validated | Why it catches bugs |
+|-------|-------|-------------------|--------------------|
+| `ProcessGraph` | `EmptyGraphHasNoProcesses` | Empty graph → size 0, empty launch order | Validates zero-state |
+| | `SingleProcessLaunchOrder` | Single node → appears in launch order | Minimal graph works |
+| | `LinearChainLaunchOrder` | A→B→C chain → [A, B, C] order | Basic topological sort |
+| | `DiamondDependencyLaunchOrder` | Diamond (A→C, B→C) → A,B before C, alphabetical tiebreak | Non-trivial DAG with multiple valid orderings |
+| | `IndependentProcessesAlphabetical` | 3 independent processes → alphabetical order | Deterministic tie-breaking via `std::set` |
+| | `DirectCascadeTarget` | A cascades to B → `cascade_targets("A")` = {"B"} | Basic cascade edge query |
+| | `TransitiveCascadeTarget` | A→B→C cascade chain → targets(A) = {B, C} | BFS transitive closure |
+| | `DeepTransitiveCascade` | 3-level chain A→B→C→D → targets(A) = {B, C, D} | Deep BFS doesn't stop early |
+| | `CascadeExcludesSelf` | Source never appears in its own cascade set | Prevents infinite restart loop |
+| | `NoCascadeTargets` | Process with no cascade edges → empty set | Clean "no-op" path |
+| | `CascadeDoesNotFollowLaunchEdges` | launch_after edges not traversed during cascade | Edge-type separation: launch ≠ cascade |
+| | `LaunchDoesNotFollowCascadeEdges` | cascade edges don't affect launch ordering | Edge-type separation: cascade ≠ launch |
+| | `PerceptionCrashIsolation` | Perception crash → no cascade targets (non-critical) | ADR-004 scenario: perception isolated |
+| | `CommsCrashCascade` | Comms cascades to mission_planner + payload_manager | ADR-004 scenario: comms is critical |
+| | `SlamCrashCascade` | SLAM cascades to perception | ADR-004 scenario: SLAM→perception dependency |
+| | `LaunchCycleDetected` | A→B→A cycle → empty launch order (logs error) | Prevents infinite loop in Kahn's algorithm |
+| | `LaunchCycleValidationFails` | validate() returns false on cycles, true on DAG | Surface cycle errors to operator |
+| | `DanglingReferenceFails` | Reference to non-existent process → validate() fails | Catches typos in config |
+| | `DefaultEdgeTableLaunchOrder` | `populate_defaults()` → comms and mission_planner come after video_capture | ADR-004 §2.3 default wiring |
+| | `DefaultEdgeTableValidates` | Default graph passes `validate()` | Ensures built-in graph is acyclic |
+| | `DefaultEdgeTableHasAllProcesses` | 6 processes registered by `populate_defaults()` | Documents expected process set |
+| | `CascadeTargetsSorted` | Cascade output is alphabetically sorted | Deterministic output for testing |
+| | `MultipleCascadeSourcesSameTarget` | Two sources both cascade to same target → each source lists it | Fan-in cascade correctness |
+| | `ProcessListSorted` | `processes()` returns sorted vector | Deterministic enumeration |
+| | `LaunchDepsQuery` | `launch_deps("X")` returns correct parent set | Direct predecessor query |
+| | `HasProcess` | Registered → true, missing → false | Basic membership check |
+| | `SizeMatchesProcessCount` | `size()` equals number of `add_process` calls | Consistency check |
+
+**Key files under test:** `util/process_graph.h`
+
+---
+
 ## Utility
 
 ### test_config.cpp — 23 tests
@@ -682,4 +766,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 613 unit tests (40+ suites across 30 files) + 42 E2E checks (2 shell scripts).*
+*Last updated: March 2026 — 657 unit tests (44+ suites across 32 files) + 42 E2E checks (2 shell scripts).*
