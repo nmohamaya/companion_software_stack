@@ -137,5 +137,73 @@
             "battery_crit_percent": 10.0,
             "disk_crit_percent": 98.0
         }
+    },
+
+    "watchdog": {
+        "_comment": "Process watchdog configuration (Phase 4)",
+        "thread_stuck_threshold_ms": 5000,
+        "thread_scan_interval_ms": 1000,
+        "processes": {
+            "video_capture": {
+                "critical": false,
+                "max_restarts": 3,
+                "cooldown_s": 60,
+                "backoff_ms": 500,
+                "max_backoff_ms": 30000,
+                "thermal_gate": 3,
+                "launch_after": [],
+                "restart_cascade": []
+            },
+            "perception": {
+                "critical": false,
+                "max_restarts": 5,
+                "cooldown_s": 60,
+                "backoff_ms": 500,
+                "max_backoff_ms": 30000,
+                "thermal_gate": 3,
+                "launch_after": ["video_capture"],
+                "restart_cascade": []
+            },
+            "slam_vio_nav": {
+                "critical": true,
+                "max_restarts": 5,
+                "cooldown_s": 60,
+                "backoff_ms": 500,
+                "max_backoff_ms": 30000,
+                "thermal_gate": 3,
+                "launch_after": ["perception"],
+                "restart_cascade": ["perception"]
+            },
+            "comms": {
+                "critical": true,
+                "max_restarts": 5,
+                "cooldown_s": 60,
+                "backoff_ms": 500,
+                "max_backoff_ms": 30000,
+                "thermal_gate": 3,
+                "launch_after": [],
+                "restart_cascade": ["mission_planner", "payload_manager"]
+            },
+            "mission_planner": {
+                "critical": false,
+                "max_restarts": 5,
+                "cooldown_s": 60,
+                "backoff_ms": 500,
+                "max_backoff_ms": 30000,
+                "thermal_gate": 3,
+                "launch_after": ["comms", "slam_vio_nav"],
+                "restart_cascade": []
+            },
+            "payload_manager": {
+                "critical": false,
+                "max_restarts": 3,
+                "cooldown_s": 60,
+                "backoff_ms": 500,
+                "max_backoff_ms": 30000,
+                "thermal_gate": 3,
+                "launch_after": ["comms"],
+                "restart_cascade": []
+            }
+        }
     }
 }
