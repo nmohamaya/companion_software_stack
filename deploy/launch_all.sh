@@ -6,7 +6,7 @@
 #                  The script only manages one process.
 #   (default)      The script launches all 7 processes directly (legacy).
 #
-# Usage: ./deploy/launch_all.sh [--supervised] [--sim] [--log-level debug]
+# Usage: ./deploy/launch_all.sh [--supervised] [--config path] [--sim] [--log-level debug]
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -17,15 +17,29 @@ if [[ ! -d "$BIN_DIR" ]]; then
     exit 1
 fi
 
-# Check for --supervised flag and collect extra args in an array
+# Check for --supervised and --config flags, collect extra args in an array
 SUPERVISED=false
+CONFIG_PATH=""
 extra_args=()
-for arg in "$@"; do
-    if [[ "$arg" == "--supervised" ]]; then
-        SUPERVISED=true
-    else
-        extra_args+=("$arg")
-    fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --supervised)  SUPERVISED=true ;;
+        --config)
+            CONFIG_PATH="${2:-}"
+            if [[ -z "$CONFIG_PATH" ]]; then
+                echo "ERROR: --config requires a path argument."
+                exit 1
+            fi
+            if [[ ! -f "$CONFIG_PATH" ]]; then
+                echo "ERROR: Config file not found: ${CONFIG_PATH}"
+                exit 1
+            fi
+            extra_args+=("--config" "$CONFIG_PATH")
+            shift  # consume the path
+            ;;
+        *)  extra_args+=("$1") ;;
+    esac
+    shift
 done
 
 LOG_DIR="${PROJECT_DIR}/drone_logs"
@@ -49,7 +63,8 @@ echo "════════════════════════�
 echo "  Drone Companion Stack — Launching"
 echo "  Binaries : ${BIN_DIR}"
 echo "  Logs     : ${LOG_DIR}"
-echo "  Args     : ${extra_args[*]}"
+echo "  Args     : ${extra_args[*]:-}"
+[[ -n "$CONFIG_PATH" ]] && echo "  Config   : ${CONFIG_PATH}"
 echo "══════════════════════════════════════════"
 
 PIDS=()
@@ -84,6 +99,24 @@ if [[ "$SUPERVISED" == "true" ]]; then
     "${BIN_DIR}/system_monitor" --supervised "${extra_args[@]}" &
     PIDS+=($!)
     echo "system_monitor PID: ${PIDS[0]}"
+
+    # Health check: wait for SHM health segment to appear (up to 10s)
+    echo -n "Waiting for health segment..."
+    HEALTH_READY=false
+    for _ in $(seq 1 20); do
+        if [[ -f /dev/shm/drone_system_health || -f /dev/shm/system_health ]]; then
+            HEALTH_READY=true
+            break
+        fi
+        echo -n "."
+        sleep 0.5
+    done
+    if [[ "$HEALTH_READY" == "true" ]]; then
+        echo -e " ready!"
+    else
+        echo -e " timeout (health segment not found — supervisor may still be starting)"
+    fi
+
     echo "Press Ctrl+C to stop the stack."
     echo ""
     wait "${PIDS[0]}" 2>/dev/null || true

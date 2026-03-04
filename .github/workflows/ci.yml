@@ -202,3 +202,82 @@ jobs:
         name: coverage-report
         path: coverage-report/
         retention-days: 14
+
+  # ── Code coverage report (Zenoh) ────────────────────────────
+  coverage-zenoh:
+    runs-on: ubuntu-24.04
+    name: coverage (zenoh)
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential cmake \
+          libspdlog-dev \
+          libeigen3-dev \
+          nlohmann-json3-dev \
+          libgtest-dev \
+          lcov unzip
+
+    - name: Install Zenoh
+      run: |
+        ZENOH_VERSION="1.7.2"
+        wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip" \
+          -O /tmp/zenohc.zip
+        unzip -o /tmp/zenohc.zip -d /tmp/zenohc-debs
+        sudo dpkg -i /tmp/zenohc-debs/*.deb
+
+        git clone --depth 1 --branch "${ZENOH_VERSION}" \
+          https://github.com/eclipse-zenoh/zenoh-cpp.git /tmp/zenoh-cpp
+        cd /tmp/zenoh-cpp
+        cmake -B build -DZENOHCXX_ZENOHC=ON -DZENOHCXX_ZENOHPICO=OFF
+        sudo cmake --install build/
+
+    - name: Configure CMake (coverage + Zenoh)
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DENABLE_COVERAGE=ON \
+          -DENABLE_ZENOH=ON \
+          -DALLOW_INSECURE_ZENOH=ON
+
+    - name: Build
+      run: cmake --build build -j$(nproc)
+
+    - name: Zero counters
+      run: lcov --zerocounters --directory build
+
+    - name: Run tests
+      working-directory: build
+      run: ctest --output-on-failure -j$(nproc)
+
+    - name: Capture coverage
+      run: |
+        lcov --capture --directory build --output-file coverage-raw.info \
+          --ignore-errors mismatch \
+          --rc lcov_branch_coverage=1
+        lcov --remove coverage-raw.info \
+          '/usr/*' \
+          '*/googletest/*' \
+          '*/gtest/*' \
+          '*/test/*' \
+          '*/tests/*' \
+          '*_test.cpp' \
+          '*_test.h' \
+          --output-file coverage.info \
+          --ignore-errors unused \
+          --rc lcov_branch_coverage=1
+        lcov --list coverage.info --rc lcov_branch_coverage=1
+
+    - name: Generate HTML report
+      run: genhtml coverage.info --output-directory coverage-report-zenoh --title "Companion Stack Coverage (Zenoh)" --rc genhtml_branch_coverage=1
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report-zenoh
+        path: coverage-report-zenoh/
+        retention-days: 14

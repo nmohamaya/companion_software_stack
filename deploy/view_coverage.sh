@@ -2,10 +2,11 @@
 # deploy/view_coverage.sh — Build with coverage, run tests, generate & view HTML report.
 #
 # Usage:
-#   bash deploy/view_coverage.sh            # Full pipeline: build → test → report
-#   bash deploy/view_coverage.sh --open     # Same, but auto-open report in browser
-#   bash deploy/view_coverage.sh --report   # Skip build/test, just regenerate report
-#   bash deploy/view_coverage.sh --summary  # Print terminal summary only (no HTML)
+#   bash deploy/view_coverage.sh            # Full pipeline: build → test → report (SHM)
+#   bash deploy/view_coverage.sh --zenoh     # Full pipeline with Zenoh backend
+#   bash deploy/view_coverage.sh --open      # Same, but auto-open report in browser
+#   bash deploy/view_coverage.sh --report    # Skip build/test, just regenerate report
+#   bash deploy/view_coverage.sh --summary   # Print terminal summary only (no HTML)
 #
 # Prerequisites: gcc/g++ (gcov), lcov, genhtml (from lcov package)
 #   sudo apt install lcov
@@ -13,6 +14,10 @@
 # Output:
 #   build/coverage-report/index.html  — Full HTML coverage report
 #   build/coverage.info               — lcov tracefile (for CI upload)
+#
+# With --zenoh:
+#   build/coverage-report-zenoh/index.html
+#   build/coverage-zenoh.info
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,12 +31,14 @@ FILTERED_INFO="${BUILD_DIR}/coverage.info"
 AUTO_OPEN=0
 REPORT_ONLY=0
 SUMMARY_ONLY=0
+ENABLE_ZENOH=0
 
 for arg in "$@"; do
     case "$arg" in
         --open)     AUTO_OPEN=1 ;;
         --report)   REPORT_ONLY=1 ;;
         --summary)  SUMMARY_ONLY=1 ;;
+        --zenoh)    ENABLE_ZENOH=1 ;;
         -h|--help)
             head -15 "$0" | tail -14
             exit 0
@@ -43,6 +50,16 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# ── Zenoh-aware paths ────────────────────────────────────────
+if [[ "$ENABLE_ZENOH" -eq 1 ]]; then
+    COVERAGE_DIR="${BUILD_DIR}/coverage-report-zenoh"
+    RAW_INFO="${BUILD_DIR}/coverage-raw-zenoh.info"
+    FILTERED_INFO="${BUILD_DIR}/coverage-zenoh.info"
+    REPORT_TITLE="Companion Stack Coverage (Zenoh)"
+else
+    REPORT_TITLE="Companion Stack Coverage"
+fi
 
 # ── Dependency check ─────────────────────────────────────────
 check_deps() {
@@ -62,12 +79,23 @@ check_deps() {
 # ── Step 1: Build with coverage ──────────────────────────────
 build_with_coverage() {
     echo "══════════════════════════════════════════"
-    echo "  Step 1/4: Building with coverage"
+    if [[ "$ENABLE_ZENOH" -eq 1 ]]; then
+        echo "  Step 1/4: Building with coverage (Zenoh)"
+    else
+        echo "  Step 1/4: Building with coverage (SHM)"
+    fi
     echo "══════════════════════════════════════════"
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
+
+    local cmake_extra_flags=()
+    if [[ "$ENABLE_ZENOH" -eq 1 ]]; then
+        cmake_extra_flags+=(-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON)
+    fi
+
     cmake -DCMAKE_BUILD_TYPE=Debug \
           -DENABLE_COVERAGE=ON \
+          "${cmake_extra_flags[@]}" \
           ..
     cmake --build . -j"$(nproc)"
     echo "  Build complete."
@@ -145,7 +173,7 @@ generate_html() {
     rm -rf "$COVERAGE_DIR"
     genhtml "$FILTERED_INFO" \
             --output-directory "$COVERAGE_DIR" \
-            --title "Companion Stack Coverage" \
+            --title "$REPORT_TITLE" \
             --rc genhtml_branch_coverage=1 \
             --legend \
             --highlight \
