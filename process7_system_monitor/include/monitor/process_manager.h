@@ -18,13 +18,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include <dirent.h>
 #include <signal.h>
 #include <spdlog/spdlog.h>
 #include <sys/types.h>
@@ -132,6 +135,8 @@ public:
 
     /// Stop all managed processes.
     void stop_all(std::chrono::milliseconds kill_timeout = std::chrono::milliseconds{2000}) {
+        stopping_ = true;  // Suppress restart scheduling during shutdown
+
         // Send SIGTERM to all RUNNING processes
         for (auto& proc : processes_) {
             if (proc.state == ProcessState::RUNNING && proc.pid > 0) {
@@ -149,7 +154,7 @@ public:
                     any_running = true;
                 }
             }
-            if (!any_running) return;
+            if (!any_running) break;
             std::this_thread::sleep_for(std::chrono::milliseconds{50});
         }
 
@@ -169,6 +174,8 @@ public:
                 proc.state = ProcessState::STOPPED;
             }
         }
+
+        stopping_ = false;
     }
 
     /// Called periodically (~1 Hz): reap zombies, detect deaths, trigger restarts.
@@ -239,6 +246,12 @@ public:
                 death_cb_(proc->name, proc->last_exit_code, proc->last_signal);
             }
 
+            // During shutdown, set state to STOPPED (suppress restart scheduling)
+            if (stopping_) {
+                proc->state = ProcessState::STOPPED;
+                continue;
+            }
+
             // Schedule restart or mark FAILED
             if (proc->restart_count >= policy_.max_restarts) {
                 proc->state = ProcessState::FAILED;
@@ -281,6 +294,7 @@ private:
     std::vector<ManagedProcess> processes_;
     RestartPolicy               policy_;
     DeathCallback               death_cb_;
+    bool                        stopping_ = false;
 
     ManagedProcess* find_by_pid(pid_t pid) {
         for (auto& proc : processes_) {
@@ -383,8 +397,27 @@ private:
     }
 
     /// Close file descriptors above the given minimum.
+    /// Uses /proc/self/fd for efficient enumeration when available,
+    /// falls back to brute-force close up to _SC_OPEN_MAX.
     static void close_fds_above(int min_fd) {
-        // Use /proc/self/fd if available, otherwise brute-force
+        // Fast path: enumerate /proc/self/fd (avoids closing up to 1M fds)
+        DIR* dir = ::opendir("/proc/self/fd");
+        if (dir) {
+            int            dir_fd = ::dirfd(dir);
+            struct dirent* entry  = nullptr;
+            while ((entry = ::readdir(dir)) != nullptr) {
+                // Skip . and ..
+                if (entry->d_name[0] == '.') continue;
+                int fd = std::atoi(entry->d_name);
+                if (fd > min_fd && fd != dir_fd) {
+                    ::close(fd);
+                }
+            }
+            ::closedir(dir);
+            return;
+        }
+
+        // Fallback: brute-force close
         int max_fd = static_cast<int>(::sysconf(_SC_OPEN_MAX));
         if (max_fd < 0) max_fd = 1024;
         for (int fd = min_fd + 1; fd < max_fd; ++fd) {
@@ -392,21 +425,50 @@ private:
         }
     }
 
-    /// Simple argument splitter (space-separated, no quoting).
+    /// Argument splitter with minimal quoting/escaping support.
+    ///
+    /// - Unquoted tokens are split on spaces/tabs.
+    /// - Text wrapped in single or double quotes is treated as a single argument.
+    /// - Inside double quotes, backslash can escape the quote character and backslash.
     static void split_args(const char* args, std::vector<std::string>& out) {
+        if (!args) return;
+
         std::string current;
-        for (const char* p = args; *p; ++p) {
-            if (*p == ' ' || *p == '\t') {
-                if (!current.empty()) {
-                    out.push_back(std::move(current));
-                    current.clear();
-                }
-            } else {
-                current += *p;
+        const char* p = args;
+
+        while (*p) {
+            // Skip leading whitespace between arguments
+            while (*p == ' ' || *p == '\t') {
+                ++p;
             }
-        }
-        if (!current.empty()) {
-            out.push_back(std::move(current));
+            if (!*p) break;
+
+            current.clear();
+
+            // Handle quoted argument
+            if (*p == '"' || *p == '\'') {
+                char quote = *p++;
+                while (*p && *p != quote) {
+                    if (quote == '"' && *p == '\\') {
+                        // Minimal escaping inside double quotes
+                        ++p;
+                        if (!*p) break;
+                        current.push_back(*p++);
+                    } else {
+                        current.push_back(*p++);
+                    }
+                }
+                if (*p == quote) ++p;  // consume closing quote
+            } else {
+                // Unquoted argument
+                while (*p && *p != ' ' && *p != '\t') {
+                    current.push_back(*p++);
+                }
+            }
+
+            if (!current.empty()) {
+                out.push_back(current);
+            }
         }
     }
 

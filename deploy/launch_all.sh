@@ -17,17 +17,16 @@ if [[ ! -d "$BIN_DIR" ]]; then
     exit 1
 fi
 
-# Check for --supervised flag and remove it from EXTRA_ARGS
+# Check for --supervised flag and collect extra args in an array
 SUPERVISED=false
-EXTRA_ARGS=""
+extra_args=()
 for arg in "$@"; do
     if [[ "$arg" == "--supervised" ]]; then
         SUPERVISED=true
     else
-        EXTRA_ARGS="${EXTRA_ARGS} ${arg}"
+        extra_args+=("$arg")
     fi
 done
-EXTRA_ARGS="${EXTRA_ARGS## }"  # trim leading space
 
 LOG_DIR="${PROJECT_DIR}/drone_logs"
 
@@ -50,7 +49,7 @@ echo "════════════════════════�
 echo "  Drone Companion Stack — Launching"
 echo "  Binaries : ${BIN_DIR}"
 echo "  Logs     : ${LOG_DIR}"
-echo "  Args     : ${EXTRA_ARGS}"
+echo "  Args     : ${extra_args[*]}"
 echo "══════════════════════════════════════════"
 
 PIDS=()
@@ -82,7 +81,7 @@ if [[ "$SUPERVISED" == "true" ]]; then
     echo "══════════════════════════════════════════"
     echo ""
     echo "Starting system_monitor in supervisor mode..."
-    "${BIN_DIR}/system_monitor" --supervised ${EXTRA_ARGS} &
+    "${BIN_DIR}/system_monitor" --supervised "${extra_args[@]}" &
     PIDS+=($!)
     echo "system_monitor PID: ${PIDS[0]}"
     echo "Press Ctrl+C to stop the stack."
@@ -101,37 +100,37 @@ echo "════════════════════════�
 # Launch order matches dependency graph:
 
 echo "[1/7] Starting system_monitor..."
-"${BIN_DIR}/system_monitor" ${EXTRA_ARGS} &
+"${BIN_DIR}/system_monitor" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[2/7] Starting video_capture..."
-"${BIN_DIR}/video_capture" ${EXTRA_ARGS} &
+"${BIN_DIR}/video_capture" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[3/7] Starting comms..."
-"${BIN_DIR}/comms" ${EXTRA_ARGS} &
+"${BIN_DIR}/comms" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[4/7] Starting perception..."
-"${BIN_DIR}/perception" ${EXTRA_ARGS} &
+"${BIN_DIR}/perception" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[5/7] Starting slam_vio_nav..."
-"${BIN_DIR}/slam_vio_nav" ${EXTRA_ARGS} &
+"${BIN_DIR}/slam_vio_nav" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[6/7] Starting mission_planner..."
-"${BIN_DIR}/mission_planner" ${EXTRA_ARGS} &
+"${BIN_DIR}/mission_planner" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[7/7] Starting payload_manager..."
-"${BIN_DIR}/payload_manager" ${EXTRA_ARGS} &
+"${BIN_DIR}/payload_manager" "${extra_args[@]}" &
 PIDS+=($!)
 
 echo ""

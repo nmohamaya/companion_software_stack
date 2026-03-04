@@ -124,11 +124,18 @@ add_drone_test(test_zenoh_network   test_zenoh_network.cpp
 # just a controlled child process that exits/crashes/hangs on command.
 add_executable(test_crasher test_crasher.cpp)
 target_compile_features(test_crasher PRIVATE cxx_std_17)
+# Disable sanitizers for test_crasher: it intentionally raises SIGSEGV ("crash" mode)
+# and sanitizers intercept the signal as a DEADLYSIGNAL, changing exit behavior.
+if(ENABLE_ASAN OR ENABLE_TSAN OR ENABLE_UBSAN)
+    target_compile_options(test_crasher PRIVATE -fno-sanitize=all)
+    target_link_options(test_crasher PRIVATE -fno-sanitize=all)
+endif()
 
 # ── Process Manager tests ────────────────────────────────────
 # Fork+exec real processes — serialise to avoid PID/signal conflicts.
 add_drone_test(test_process_manager test_process_manager.cpp
     PROPERTIES RESOURCE_LOCK "fork_exec")
+add_dependencies(test_process_manager test_crasher)
 
 # ── Phase F: Liveliness token tests ──────────────────────────
 add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp

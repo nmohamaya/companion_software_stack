@@ -107,7 +107,7 @@ int main(int argc, char* argv[]) {
             }
         });
 
-        // Launch all children in order (with 0.5s stagger)
+        // Launch all children in order
         supervisor->launch_all();
         spdlog::info("[Supervisor] All child processes launched");
     }
