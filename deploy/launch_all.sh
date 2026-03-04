@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # deploy/launch_all.sh — Launch all 7 processes in correct order.
-# Usage: ./deploy/launch_all.sh [--sim] [--log-level debug]
+#
+# Two modes:
+#   --supervised   P7 (system_monitor) forks+execs P1–P6 internally.
+#                  The script only manages one process.
+#   (default)      The script launches all 7 processes directly (legacy).
+#
+# Usage: ./deploy/launch_all.sh [--supervised] [--sim] [--log-level debug]
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -11,7 +17,17 @@ if [[ ! -d "$BIN_DIR" ]]; then
     exit 1
 fi
 
-EXTRA_ARGS="${*}"
+# Check for --supervised flag and collect extra args in an array
+SUPERVISED=false
+extra_args=()
+for arg in "$@"; do
+    if [[ "$arg" == "--supervised" ]]; then
+        SUPERVISED=true
+    else
+        extra_args+=("$arg")
+    fi
+done
+
 LOG_DIR="${PROJECT_DIR}/drone_logs"
 
 # Ensure system libstdc++ is used instead of Anaconda's older version
@@ -33,7 +49,7 @@ echo "════════════════════════�
 echo "  Drone Companion Stack — Launching"
 echo "  Binaries : ${BIN_DIR}"
 echo "  Logs     : ${LOG_DIR}"
-echo "  Args     : ${EXTRA_ARGS}"
+echo "  Args     : ${extra_args[*]}"
 echo "══════════════════════════════════════════"
 
 PIDS=()
@@ -57,47 +73,64 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# ═══════════════════════════════════════════════════════════
+# Supervised mode: P7 fork+execs P1–P6 internally
+# ═══════════════════════════════════════════════════════════
+if [[ "$SUPERVISED" == "true" ]]; then
+    echo "  Mode     : SUPERVISED (P7 manages P1–P6)"
+    echo "══════════════════════════════════════════"
+    echo ""
+    echo "Starting system_monitor in supervisor mode..."
+    "${BIN_DIR}/system_monitor" --supervised "${extra_args[@]}" &
+    PIDS+=($!)
+    echo "system_monitor PID: ${PIDS[0]}"
+    echo "Press Ctrl+C to stop the stack."
+    echo ""
+    wait "${PIDS[0]}" 2>/dev/null || true
+    echo "system_monitor exited."
+    exit 0
+fi
+
+# ═══════════════════════════════════════════════════════════
+# Legacy mode: script launches all 7 processes directly
+# ═══════════════════════════════════════════════════════════
+echo "  Mode     : LEGACY (script manages all 7 processes)"
+echo "══════════════════════════════════════════"
+
 # Launch order matches dependency graph:
-# 1. System Monitor (no deps)
-# 2. Video Capture (no deps)
-# 3. Comms (no deps)
-# 4. Perception (needs Video Capture)
-# 5. SLAM/VIO/Nav (needs Video Capture)
-# 6. Mission Planner (needs SLAM, Perception, Comms)
-# 7. Payload Manager (needs Mission Planner)
 
 echo "[1/7] Starting system_monitor..."
-"${BIN_DIR}/system_monitor" ${EXTRA_ARGS} &
+"${BIN_DIR}/system_monitor" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[2/7] Starting video_capture..."
-"${BIN_DIR}/video_capture" ${EXTRA_ARGS} &
+"${BIN_DIR}/video_capture" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[3/7] Starting comms..."
-"${BIN_DIR}/comms" ${EXTRA_ARGS} &
+"${BIN_DIR}/comms" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[4/7] Starting perception..."
-"${BIN_DIR}/perception" ${EXTRA_ARGS} &
+"${BIN_DIR}/perception" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[5/7] Starting slam_vio_nav..."
-"${BIN_DIR}/slam_vio_nav" ${EXTRA_ARGS} &
+"${BIN_DIR}/slam_vio_nav" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[6/7] Starting mission_planner..."
-"${BIN_DIR}/mission_planner" ${EXTRA_ARGS} &
+"${BIN_DIR}/mission_planner" "${extra_args[@]}" &
 PIDS+=($!)
 sleep 0.5
 
 echo "[7/7] Starting payload_manager..."
-"${BIN_DIR}/payload_manager" ${EXTRA_ARGS} &
+"${BIN_DIR}/payload_manager" "${extra_args[@]}" &
 PIDS+=($!)
 
 echo ""

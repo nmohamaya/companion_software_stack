@@ -13,20 +13,23 @@
 
 | Category | Files | Tests | Description |
 |----------|-------|-------|-------------|
-| [IPC — SHM](#ipc--shm) | 2 | 25 | POSIX shared-memory primitives and message bus |
+| [IPC — SHM](#ipc--shm) | 3 | 32 | POSIX shared-memory primitives, message bus, SPSC ring buffer |
 | [IPC — Zenoh](#ipc--zenoh) | 3 | 121 | Zenoh pub/sub, services, SHM zero-copy, liveliness, network/wire format |
+| [IPC — Cross-Process Correlation](#ipc--cross-process-correlation) | 1 | 33 | Correlation IDs, ScopedCorrelation, WireHeader v2, SHM + log integration |
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 3 | 83 | Kalman tracker, fusion engine, color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 3 | 88 | Kalman tracker, fusion engine, color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 2 | 31 | Mission FSM state machine, FaultManager degradation |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
-| [P7 — System Monitor](#p7--system-monitor) | 1 | 11 | CPU/memory/thermal monitoring via `/proc` |
-| [Utility](#utility) | 3 | 77 | Config system, Result<T,E>, config schema validator |
+| [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
+| [Watchdog — Thread Heartbeat](#watchdog--thread-heartbeat) | 1 | 25 | ThreadHeartbeatRegistry, ScopedHeartbeat, ThreadWatchdog |
+| [Watchdog — Thread Health Publisher](#watchdog--thread-health-publisher) | 1 | 15 | ShmThreadHealth struct, ThreadHealthPublisher bridge |
+| [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **23 C++ + 2 shell** | **464 + 42** | |
+| **Total** | **30 C++ + 2 shell** | **613 + 42** | |
 
 ---
 
@@ -42,6 +45,25 @@ shared memory.
 | `ShmIPCTest` | 8 | Write ↔ read round-trip for `ShmPose`, concurrent producer–consumer access, move semantics (no double `shm_unlink`), segment creation/cleanup |
 
 **Key files under test:** `ipc/shm_reader.h`, `ipc/shm_writer.h`, `ipc/shm_types.h`
+
+---
+
+### test_spsc_ring.cpp — 7 tests
+
+**What it tests:** `SPSCRing<T, N>` — a lock-free single-producer
+single-consumer fixed-capacity ring buffer used for zero-allocation IPC
+message queues.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `SPSCRingTest` | 7 | Push/pop round-trip, pop on empty returns `nullopt`, full ring rejects push, index wrap-around on capacity boundary, `available()` count, concurrent producer–consumer stress test (10k items), struct payload (non-trivial types) |
+
+**Why these tests matter:** The SPSC ring is a foundational lock-free
+primitive.  A single off-by-one in the head/tail indices would silently
+corrupt messages or stall a pipeline.  The concurrent test runs a real
+producer and consumer thread to flush out memory-ordering bugs under TSan.
+
+**Key files under test:** `util/spsc_ring.h`
 
 ---
 
@@ -319,6 +341,149 @@ fault evaluation with escalation-only policy.
 
 ---
 
+### test_process_manager.cpp — 17 tests (+ test_crasher helper binary)
+
+**What it tests:** `ProcessManager` — the Phase 3 process supervisor that
+fork+exec's child processes, detects crashes via `waitpid(WNOHANG)`, and
+restarts them with exponential backoff.  This is the most complex test file
+in the project because it exercises *real OS-level process lifecycle*:
+fork, exec, signals, zombie reaping, and PID management.
+
+**test_crasher binary:**  A purpose-built ~50-line binary that behaves
+differently based on its CLI argument: `exit0` (clean exit), `exit1`
+(error exit), `crash` (raises SIGSEGV), `hang` (sleeps forever), or
+`sleep_N` (sleep N seconds then exit).  This avoids testing the
+supervisor against the real stack — every crash/exit mode is
+deterministic and fast.
+
+| Suite | Tests | What is validated | Why it catches bugs |
+|-------|-------|-------------------|--------------------|
+| `ProcessManagerTest` | `AddProcess` | Process registration, name + binary path stored correctly | Catches `safe_name_copy` truncation or buffer layout errors |
+| | `FindByName` | Name-based lookup returns correct pointer; missing name → `nullptr` | Validates the linear scan doesn't go OOB or match substrings |
+| | `NameTruncation` | 64-char name truncated to 31 + `\0` | Prevents buffer overflows in the 32-byte `name` field |
+| | `LaunchSingleCleanExit` | fork+exec, PID > 0, state RUNNING; after exit → reaped, exit code 0 | Validates the core fork+exec+waitpid path works end-to-end |
+| | `LaunchAllProcesses` | Two processes launched, distinct PIDs, both RUNNING | Catches iterator bugs when launching multiple children |
+| | `LaunchUnknownProcessFails` | `launch("nonexistent")` returns false | Prevents silent failure on typo'd process names |
+| | `StopGraceful` | SIGTERM → process exits → state STOPPED, pid reset to -1 | Validates graceful shutdown path; catches stale PID bugs |
+| | `StopAllMultipleProcesses` | `stop_all()` stops both children; all pids -1 | Catches partial-stop bugs (e.g. break after first child) |
+| | `DetectErrorExit` | Child exits with code 1 → death callback fires with code=1, state=RESTARTING | Validates `WIFEXITED` / `WEXITSTATUS` decoding in `reap_children()` |
+| | `DetectCrash` | Child raises SIGSEGV → callback fires with signal=SIGSEGV, `was_signaled=true` | Validates `WIFSIGNALED` / `WTERMSIG` decoding.  Uses polling loop (100ms × 20) because SIGSEGV + core dump can take 500ms–1.5s |
+| | `TickIgnoresAliveChild` | Long-running child still RUNNING after `tick()` | Ensures `waitpid(WNOHANG)` doesn't spuriously reap live children |
+| | `MaxRestartsExhausted` | After `max_restarts` restart attempts → state FAILED, no more restarts | Catches the bug where `restart_count` never increments (fixed: increment before state transition) |
+| | `BackoffIncreases` | After first crash → state RESTARTING; immediate `tick()` does NOT re-launch (backoff not elapsed) | Validates exponential backoff timing; catches immediate-restart storms |
+| | `ExternalKillDetected` | External `kill(pid, SIGKILL)` → supervisor detects death, records `SIGKILL` | Simulates OOM-killer or manual intervention; validates signal recording |
+| | `FullSupervisorCycle` | Launch 2 children → kill one → tick detects + schedules restart → backoff elapses → tick re-launches with new PID → stop all | End-to-end integration: exercises the full supervisor loop including restart with fresh PID |
+| | `StateToString` | `to_string()` for all 4 `ProcessState` enum values | Guards against missing cases after adding new states |
+| | `NoZombieProcesses` | Launch + reap 3 times → `pid == -1` after each reap | Validates `waitpid` is called for every child; prevents zombie accumulation |
+
+**Bugs found during development (caught by these tests):**
+
+1. **`restart_count` never incremented** — `MaxRestartsExhausted` failed
+   because `launch_one()` set state to `RUNNING` *before* checking
+   `if (state == RESTARTING)` to increment the counter.  The fix: move
+   the increment before the state transition.
+
+2. **uint64_t underflow in cooldown calculation** — `now_ns` was captured
+   once at the top of `tick()`, but `started_at_ns` was set later by
+   `launch_one()`.  The subtraction `now_ns - started_at_ns` wrapped to
+   a huge positive value, falsely triggering "stable for 60s" and
+   resetting the restart counter.  Fixed by adding a `continue` after
+   the RESTARTING→launch path and capturing `now_ns` fresh per-process.
+
+3. **DetectCrash flaky at 300ms** — SIGSEGV + core dump latency
+   exceeded the original 300ms sleep.  Fixed with a polling loop
+   (100ms × 20 = up to 2s), which is both more robust and exits early
+   in the common case (~200ms for clean SIGSEGV, ~1.3s with core dump).
+
+**Key files under test:** `monitor/process_manager.h`  
+**Test support binary:** `tests/test_crasher.cpp` (built as `bin/test_crasher`)
+
+---
+
+## Watchdog — Thread Heartbeat
+
+### test_thread_heartbeat.cpp — 25 tests
+
+**What it tests:** Phase 1 of the Process & Thread Watchdog (Epic #88,
+Issue #89).  Three layers:
+
+1. **`ThreadHeartbeat`** struct — the per-thread data record
+2. **`ThreadHeartbeatRegistry`** — singleton that manages up to
+   `kMaxThreads` heartbeat slots with atomic touch timestamps
+3. **`ScopedHeartbeat`** — RAII wrapper for register + auto-touch
+4. **`ThreadWatchdog`** — background scanner that detects stuck threads
+   (no heartbeat within `stuck_threshold`) and fires callbacks
+
+| Suite | Tests | What is validated | Why it catches bugs |
+|-------|-------|-------------------|--------------------|
+| `ThreadHeartbeatTest` | `DefaultValues` | Struct zero-initialised: name empty, timestamp 0, not critical | Catches uninitialised memory in the heartbeat slot |
+| | `CopyPreservesFields` | Copy constructor copies name, atomic timestamp, critical flag | Validates the custom copy ctor for `std::atomic<uint64_t>` (atomics are not default-copyable) |
+| | `RegisterSingle` | Returns valid handle, count = 1 | Basic registration path |
+| | `RegisterMultiple` | 3 registrations → 3 unique handles, count = 3 | Catches slot index collision |
+| | `RegisterOverflowReturnsSentinel` | After `kMaxThreads` registrations → next returns `kInvalidHandle` | Prevents OOB write when registry is full |
+| | `TouchUpdatesTimestamp` | Touch sets `last_touch_ns` > 0 | Validates the `steady_clock` timestamp path |
+| | `TouchMonotonicallyIncreases` | Two touches 1ms apart → ts2 > ts1 | Catches stale/cached clock reads |
+| | `TouchWithGraceBumpsTimestampForward` | `touch_with_grace(10s)` → timestamp jumps ~10s ahead | Validates the grace period mechanism (used for slow init phases like model loading) |
+| | `SnapshotReturnsAll` | Snapshot contains all registered threads with correct names/flags | Validates the deep-copy snapshot path |
+| | `SnapshotIsDeepCopy` | Touching after snapshot doesn't alter the returned snapshot | Catches aliased references to the live registry |
+| | `TouchInvalidHandleIsSafe` | Touch with `kInvalidHandle`, `kMaxThreads`, `kMaxThreads+100` → no crash | Bounds-check validation; run under ASan to catch OOB |
+| | `NameTruncation` | 50-char name → stored as 31 + `\0` | Prevents buffer overflow in the 32-byte name field |
+| | `CriticalFlagPreserved` | Critical vs non-critical threads retain their flag after registration | Catches flag confusion in slot assignment |
+| | `ScopedHeartbeatRegisters` | RAII wrapper registers + reports valid handle | Tests the convenience wrapper |
+| | `ScopedHeartbeatCritical` | `ScopedHeartbeat("crit", true)` → critical flag set | Validates critical-flag forwarding |
+| | `ScopedHeartbeatTouch` | `hb.touch()` → timestamp > 0 | Tests the RAII touch path |
+| | `ScopedHeartbeatTouchWithGrace` | `hb.touch_with_grace(5s)` → timestamp jumps ~5s | Tests grace period through RAII wrapper |
+| | `WatchdogHealthyThreadNotFlagged` | Actively touching thread for 500ms → callback never fires, `get_stuck_threads()` empty | Core negative test: healthy threads must not trigger alerts |
+| | `WatchdogStuckThreadTriggersCallback` | Thread not touched for 500ms (threshold=200ms) → callback fires with correct name | Core positive test: stuck thread detection |
+| | `WatchdogGracePeriodSuppressesCallback` | `touch_with_grace(5s)` → 500ms wait → no callback despite 200ms threshold | Validates that grace periods suppress false positives during slow operations |
+| | `WatchdogCriticalFlagPropagated` | Stuck critical thread → callback receives `is_critical=true` | Ensures criticality reaches restart/alert logic |
+| | `WatchdogIgnoresUnstartedThread` | Registered but never touched (ts=0) → no callback | Prevents false positives for threads that haven't started yet |
+| | `WatchdogMultipleThreadsMixed` | 1 healthy + 1 stuck → only stuck fires callback | Validates per-thread independent evaluation |
+| | `ConcurrentRegisterAndTouch` | 8 threads register + touch 100× concurrently → all registered, all timestamps > 0 | TSan-targeted: catches data races in the atomic slot array |
+| | `ConcurrentTouchAndSnapshot` | Writer thread touches rapidly while reader takes 1000 snapshots → no torn reads | TSan-targeted: validates that snapshot copies are safe under contention |
+
+**Key files under test:** `util/thread_heartbeat.h`, `util/thread_watchdog.h`
+
+---
+
+## Watchdog — Thread Health Publisher
+
+### test_thread_health_publisher.cpp — 15 tests
+
+**What it tests:** Phase 2 of the Process & Thread Watchdog (Epic #88,
+Issue #90).  Two components:
+
+1. **`ShmThreadHealth`** struct — fixed-layout SHM-transportable snapshot
+   of up to 16 thread health entries per process
+2. **`ThreadHealthPublisher`** — bridge that reads the heartbeat registry
+   + watchdog stuck list and produces `ShmThreadHealth` for cross-process
+   visibility
+
+Uses a `MockPublisher` that captures the last published `ShmThreadHealth`
+without needing a real SHM or Zenoh backend.
+
+| Suite | Tests | What is validated | Why it catches bugs |
+|-------|-------|-------------------|--------------------|
+| `ShmThreadHealthStruct` | `TrivialCopyable` | `static_assert` that struct is trivially copyable | Guarantees safe `memcpy` across SHM boundaries |
+| | `ThreadHealthEntryTrivialCopyable` | `static_assert` for `ThreadHealthEntry` | Same guarantee for the per-thread sub-struct |
+| | `DefaultValues` | Zero-initialised: `num_threads=0`, `timestamp_ns=0`, all entries healthy, names empty | Catches uninitialised SHM reads |
+| | `MaxTrackedThreadsIs16` | `kMaxTrackedThreads == 16` | Documents the compile-time contract |
+| | `ProcessNameFits31Chars` | 30-char name stored correctly in 32-byte field | Buffer size validation |
+| `ThreadHealthPublisherTest` | `ZeroThreadsPublishesEmptySnapshot` | With no registered threads → publishes `num_threads=0`, process name set, timestamp > 0 | Validates the empty path doesn't crash or leave garbage |
+| | `SingleThreadPopulatesCorrectly` | 1 critical thread → snapshot has correct name, critical flag, healthy=true, non-zero timestamp | End-to-end single-thread path |
+| | `MultipleThreadsPopulateCorrectly` | 3 threads with mixed criticality → all 3 appear in snapshot with correct flags | Validates iteration over multiple heartbeat slots |
+| | `StuckThreadMarkedUnhealthy` | Thread not touched for 120ms (threshold=50ms) → `healthy=false` in snapshot | Core integration: watchdog stuck list → publisher output |
+| | `HealthyThreadMarkedHealthy` | Thread touched recently (within 200ms threshold) → `healthy=true` | Negative case: ensures healthy threads aren't falsely flagged |
+| | `MaxThreadsSaturates` | 16 threads registered → `num_threads=16`, all timestamps set | Boundary test at `kMaxTrackedThreads` |
+| | `TimestampIsMonotonic` | Two publishes 1ms apart → `ts2 > ts1` | Catches stale snapshot timestamps |
+| | `MultiplePublishCallsWork` | 5 sequential publishes → count = 5, no crash | Validates idempotent publish path |
+| | `TwoThreadIntegration` | 1 active + 1 stuck thread → snapshot shows healthy + unhealthy correctly | Full integration: heartbeat registry + watchdog + publisher in one test |
+| | `ProcessNameTruncatesGracefully` | 52-char process name → truncated to 31 + `\0`, no overflow | Prevents buffer overflow in the SHM struct |
+
+**Key files under test:** `ipc/shm_types.h` (`ShmThreadHealth`, `ThreadHealthEntry`), `util/thread_health_publisher.h`
+
+---
+
 ## Utility
 
 ### test_config.cpp — 23 tests
@@ -333,16 +498,16 @@ fault evaluation with escalation-only policy.
 
 ---
 
-### test_result.cpp — 32 tests
+### test_result.cpp — 35 tests
 
 **What it tests:** `Result<T,E>` monadic error-handling type.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `ErrorCodeTest` | 4 | `ErrorCode` enum values, string conversion |
+| `ErrorCodeTest` | 1 | `ErrorCode` enum values, string conversion |
 | `ErrorTest` | 4 | `Error` construction, equality, message access |
-| `ResultTest` | 16 | Success/error construction, `ok()`/`value()`/`error()`, `value_or()`, `map()`, `and_then()`, `map_error()`, move semantics, `Result<string>`, `Result<vector>` |
-| `VoidResultTest` | 8 | `Result<void, E>` specialisation — success/error, `and_then()`, `map_error()` |
+| `ResultTest` | 26 | Success/error construction, `ok()`/`value()`/`error()`, `value_or()`, `map()`, `and_then()`, `map_error()`, move semantics, `Result<string>`, `Result<vector>`, custom error types, `map` with void return |
+| `VoidResultTest` | 4 | `Result<void, E>` specialisation — success/error, `and_then()`, `map_error()` |
 
 **Key files under test:** `util/result.h`
 
@@ -358,6 +523,86 @@ builder-pattern constraints.
 | `ConfigValidatorTest` | 22 | Required field missing → error, type mismatch → error, range constraint (`.range()`), one-of constraint (`.one_of()`), custom predicate (`.satisfies()`), optional fields, required sections, valid config passes, multiple errors collected in single pass, pre-built process schemas |
 
 **Key files under test:** `util/config_validator.h`
+
+---
+
+### test_json_log_sink.cpp — 36 tests
+
+**What it tests:** `JsonLogSink` — structured JSON logging sink for
+machine-parseable log output.  Each log line is a self-contained JSON
+object with ISO 8601 timestamp, level, logger name, PID, thread ID,
+and message.  Tests validate format correctness, special-character
+escaping, and integration with `LogConfig` and `ArgParser`.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `JsonSinkTest` | 23 | Output is valid JSON line (single `{…}`), required fields present (`timestamp`, `level`, `logger`, `message`, `pid`, `tid`), message content preserved, all 6 spdlog levels mapped correctly, ISO 8601 format, thread ID is numeric, PID matches `getpid()`, JSON escaping for double quotes / backslash / newline / tab / CR / control chars, file output, multi-line produces multi-line NDJSON, empty + long message handling |
+| `JsonSinkMtTest` | 1 | Multi-threaded sink variant produces output without corruption |
+| `JsonEscapeTest` | 4 | Escape utility: plain string unchanged, all special chars escaped, empty string, Unicode passthrough |
+| `FormatTimestampTest` | 2 | ISO 8601 timestamp has correct length and contains `T` separator |
+| `LevelToStrTest` | 1 | All spdlog levels → human-readable string mapping |
+| `LogConfigJsonTest` | 2 | `LogConfig::init()` with JSON mode doesn't crash; human mode still works |
+| `ArgParserJsonTest` | 3 | `--json-logs` flag parsed correctly, default is `false`, works alongside other flags |
+
+**Why these tests matter:** Log output is consumed by ELK/Grafana pipelines
+in production.  A single missing escape (e.g., a newline in a message)
+breaks every downstream JSON parser.  The escaping tests exercise each
+control character individually to prevent silent pipeline failures.
+
+**Key files under test:** `util/json_log_sink.h`, `util/log_config.h`, `util/arg_parser.h`
+
+---
+
+### test_latency_tracker.cpp — 20 tests
+
+**What it tests:** `LatencyTracker` — a fixed-capacity ring-buffer
+histogram for measuring IPC and processing latencies in real-time
+without heap allocation.  Computes P50/P90/P99 percentiles, mean,
+and min/max.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `LatencyTrackerTest` | 20 | Default construction (empty summary), custom capacity rounded to power-of-two, record increments count, ring wraps at capacity, empty tracker returns zeroed summary, single sample → all percentiles equal, uniform data → correct P50/P90/P99, outlier shifts P99, percentiles are monotonically non-decreasing, `reset()` clears state, reset allows reuse, nanosecond → µs / ms conversion helpers, `now_ns()` returns increasing values, `log_summary_due()` with too few samples → false, enough samples → true, custom `min_samples`, wrapped buffer reports most recent data, stress test with 100k records, integration with real `steady_clock` latency |
+
+**Why these tests matter:** Latency measurement is used in the main loop
+of every process to detect performance degradation.  A bug in the
+ring-buffer indexing would produce nonsensical percentiles (e.g., P50 >
+P99), misguiding performance investigations.  The power-of-two
+capacity test validates the bitwise-mask wrap-around that avoids
+expensive modulo operations.
+
+**Key files under test:** `util/latency_tracker.h`
+
+---
+
+## IPC — Cross-Process Correlation
+
+### test_correlation.cpp — 33 tests
+
+**What it tests:** Cross-process correlation ID support for end-to-end
+request tracing across the 7-process stack.  Tests cover the full
+vertical: ID generation → thread-local context → SHM message types →
+wire format → JSON log output.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `CorrelationContext` | 7 | Initial value is 0, set/get/clear, `generate()` returns non-zero, lower 32 bits monotonically increase, upper 32 bits contain PID, 1000 generated IDs are all unique |
+| `ScopedCorrelation` | 3 | RAII guard sets ID on construction and restores previous on destruction, nested guards restore correctly, restores zero when outer had none |
+| `CorrelationContext` (threads) | 2 | Thread isolation: each thread has independent correlation ID, multi-threaded `generate()` produces globally unique IDs |
+| `ShmCorrelation` | 6 | `correlation_id` field exists and defaults to 0 in all command/status SHM types: `ShmGCSCommand`, `ShmFCCommand`, `ShmTrajectoryCmd`, `ShmPayloadCommand`, `ShmMissionStatus` |
+| `WireHeaderV2` | 5 | Header is 32 bytes, version = 2, `correlation_id` defaults to 0, correlation round-trips through set/get, full serialize → deserialize with correlation preserved |
+| `WireHeaderBackcompat` | 5 | V1 (24-byte) headers still validate, V1 correlation ID = 0, V0 rejected, future version rejected, truncated V1/V2 rejected |
+| `JsonCorrelation` | 4 | Correlation ID omitted from JSON log when 0, present as hex string when non-zero, `ScopedCorrelation` affects live log output, hex format is correct |
+
+**Why these tests matter:** Correlation IDs are the primary mechanism for
+tracing a single GCS command through all 7 processes.  Bugs here are
+insidious: a broken ID generator produces duplicate IDs (cross-contaminated
+traces), a missing field silently drops tracing for an entire message type,
+and a wire format incompatibility between V1 and V2 would crash older
+processes during rolling upgrades.  The backward-compatibility tests
+explicitly guard against this.
+
+**Key files under test:** `util/correlation.h`, `ipc/shm_types.h`, `ipc/wire_format.h`, `util/json_log_sink.h`
 
 ---
 
@@ -437,4 +682,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 464 unit tests (26 suites across 23 files) + 42 E2E checks (2 shell scripts).*
+*Last updated: March 2026 — 613 unit tests (40+ suites across 30 files) + 42 E2E checks (2 shell scripts).*
