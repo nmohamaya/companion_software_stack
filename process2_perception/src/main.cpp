@@ -16,6 +16,9 @@
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
 #include "util/spsc_ring.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <atomic>
 #include <chrono>
@@ -34,8 +37,11 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>&
                              std::atomic<bool>& running, IDetector& detector) {
     spdlog::info("[Inference] Thread started — using detector: {}", detector.name());
 
+    auto hb = drone::util::ScopedHeartbeat("inference", true);
+
     uint64_t frame_count = 0;
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::ShmVideoFrame frame;
         bool                      got_frame = video_sub.receive(frame);
 
@@ -70,7 +76,10 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
     spdlog::info("[Tracker] Thread started (SORT algorithm)");
     MultiObjectTracker tracker;
 
+    auto hb = drone::util::ScopedHeartbeat("tracker", true);
+
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto det_opt = input_queue.try_pop();
         if (det_opt) {
             ScopedTimer timer("Tracker", 10.0);
@@ -90,12 +99,15 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 static void lidar_thread(drone::SPSCRing<std::vector<LiDARCluster>, 4>& output_queue,
                          std::atomic<bool>& running, const drone::Config& cfg) {
     spdlog::info("[LiDAR] Simulated LiDAR thread started");
+
+    auto                                  hb = drone::util::ScopedHeartbeat("lidar", false);
     std::mt19937                          rng(12345);
     std::uniform_real_distribution<float> pos_dist(-20.0f, 20.0f);
     std::uniform_real_distribution<float> z_dist(0.0f, 3.0f);
     std::uniform_int_distribution<int>    n_dist(0, 4);
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         int                       n = n_dist(rng);
         std::vector<LiDARCluster> clusters;
         for (int i = 0; i < n; ++i) {
@@ -117,6 +129,8 @@ static void lidar_thread(drone::SPSCRing<std::vector<LiDARCluster>, 4>& output_q
 static void radar_thread(drone::SPSCRing<RadarDetectionList, 4>& output_queue,
                          std::atomic<bool>& running, const drone::Config& cfg) {
     spdlog::info("[Radar] Simulated radar thread started");
+
+    auto                                  hb = drone::util::ScopedHeartbeat("radar", false);
     std::mt19937                          rng(67890);
     std::uniform_real_distribution<float> range_dist(5.0f, 50.0f);
     std::uniform_real_distribution<float> az_dist(-1.0f, 1.0f);
@@ -124,6 +138,7 @@ static void radar_thread(drone::SPSCRing<RadarDetectionList, 4>& output_queue,
     std::uniform_int_distribution<int>    n_dist(0, 6);
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         RadarDetectionList rdl;
         rdl.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
@@ -154,6 +169,8 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                           std::atomic<bool>& running, const drone::Config& cfg) {
     spdlog::info("[Fusion] Thread started");
 
+    auto hb = drone::util::ScopedHeartbeat("fusion", true);
+
     // Setup calibration (identity transforms for simulation)
     CalibrationData calib;
     calib.camera_intrinsics       = Eigen::Matrix3f::Identity();
@@ -172,6 +189,7 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
     uint64_t fusion_count = 0;
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         // Consume latest LiDAR & radar
         if (auto lopt = lidar_queue.try_pop()) latest_lidar = std::move(*lopt);
         if (auto ropt = radar_queue.try_pop()) latest_radar = std::move(*ropt);
@@ -288,11 +306,18 @@ int main(int argc, char* argv[]) {
                          std::ref(radar_to_fusion), std::ref(*det_pub), std::ref(g_running),
                          std::cref(cfg));
 
+    // ── Thread watchdog + health publisher ──────────────────
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_PERCEPTION);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "perception", watchdog);
+
     spdlog::info("All perception threads started — READY");
 
     // ── Main loop ───────────────────────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        health_publisher.publish_snapshot();
         spdlog::info("[HealthCheck] perception alive");
     }
 

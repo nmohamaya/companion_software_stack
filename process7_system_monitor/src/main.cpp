@@ -11,6 +11,9 @@
 #include "util/config.h"
 #include "util/log_config.h"
 #include "util/signal_handler.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <algorithm>
 #include <atomic>
@@ -102,6 +105,14 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("System Monitor READY");
 
+    // ── Thread heartbeat + watchdog + health publisher ──────
+    auto                        health_hb = drone::util::ScopedHeartbeat("health_loop", false);
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub_ch = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_SYSTEM_MONITOR);
+    drone::util::ThreadHealthPublisher thread_health_publisher(*thread_health_pub_ch,
+                                                               "system_monitor", watchdog);
+
     // Config-driven thresholds
     const float cpu_warn  = cfg.get<float>("system_monitor.thresholds.cpu_warn_percent", 90.0f);
     const float mem_warn  = cfg.get<float>("system_monitor.thresholds.mem_warn_percent", 90.0f);
@@ -128,6 +139,7 @@ int main(int argc, char* argv[]) {
 
     // ── Main loop (1 Hz) ────────────────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(health_hb.handle());
         tick++;
 
         // Incorporate battery from FC if available
@@ -186,6 +198,8 @@ int main(int argc, char* argv[]) {
                          health.cpu_usage_percent, health.memory_usage_percent, health.cpu_temp_c,
                          health.disk_usage_percent, battery, status_str);
         }
+
+        thread_health_publisher.publish_snapshot();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

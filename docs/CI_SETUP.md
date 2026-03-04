@@ -12,18 +12,27 @@
 
 ## Table of Contents
 
-- [Pipeline Overview](#pipeline-overview)
-- [Job Dependency Graph](#job-dependency-graph)
-- [Job 1 — format-check (Fast Gate)](#job-1--format-check-fast-gate)
-- [Job 2 — build-and-test (7-Leg Matrix)](#job-2--build-and-test-7-leg-matrix)
-- [Job 3 — coverage](#job-3--coverage)
-- [CMake Build Options](#cmake-build-options)
-- [Zenoh Installation on CI](#zenoh-installation-on-ci)
-- [Sanitizer Details](#sanitizer-details)
-- [Known Issues & Workarounds](#known-issues--workarounds)
-- [Adding a New CI Job](#adding-a-new-ci-job)
-- [Adding a New Matrix Leg](#adding-a-new-matrix-leg)
-- [Local Reproduction](#local-reproduction)
+- [CI Pipeline Setup Guide](#ci-pipeline-setup-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Pipeline Overview](#pipeline-overview)
+  - [Job Dependency Graph](#job-dependency-graph)
+  - [Job 1 — format-check (Fast Gate)](#job-1--format-check-fast-gate)
+  - [Job 2 — build-and-test (7-Leg Matrix)](#job-2--build-and-test-7-leg-matrix)
+    - [Why both Release (plain) and Debug (sanitizer) legs?](#why-both-release-plain-and-debug-sanitizer-legs)
+    - [Matrix naming](#matrix-naming)
+    - [Steps breakdown](#steps-breakdown)
+    - [Why `fail-fast: false`?](#why-fail-fast-false)
+  - [Job 3 — coverage](#job-3--coverage)
+  - [CMake Build Options](#cmake-build-options)
+  - [Zenoh Installation on CI](#zenoh-installation-on-ci)
+  - [Sanitizer Details](#sanitizer-details)
+    - [AddressSanitizer (ASan)](#addresssanitizer-asan)
+    - [ThreadSanitizer (TSan)](#threadsanitizer-tsan)
+    - [UndefinedBehaviorSanitizer (UBSan)](#undefinedbehaviorsanitizer-ubsan)
+  - [Known Issues \& Workarounds](#known-issues--workarounds)
+  - [Adding a New CI Job](#adding-a-new-ci-job)
+  - [Adding a New Matrix Leg](#adding-a-new-matrix-leg)
+  - [Local Reproduction](#local-reproduction)
 
 ---
 
@@ -106,6 +115,25 @@ The build matrix tests every combination of IPC backend and sanitizer that makes
 | 7 | `zenoh` | `ubsan` | Debug | UBSan on Zenoh code paths |
 
 **Why no Zenoh + TSan?** The pre-built `zenohc` library is not compiled with TSan instrumentation. TSan flags false positives in Zenoh's internal threading, making results unreliable. See [CI_ISSUES.md CI-005](../CI_ISSUES.md#ci-005-tsan-build-fails--atomic_thread_fence-not-supported-with--fsanitize-thread).
+
+### Why both Release (plain) and Debug (sanitizer) legs?
+
+The plain and sanitizer legs build in different modes and catch **different classes of problems**. Neither is a superset of the other.
+
+| Leg type | Build mode | What it catches |
+|----------|-----------|------------------|
+| **Plain** (legs 1–2) | `Release -O2` | Optimisation-triggered warnings (e.g. `-Wstringop-truncation`, `-Wmaybe-uninitialized`), Release-only codepaths (`#ifdef NDEBUG`, `assert()` removal), and ensures the **actual shipping binary** compiles cleanly |
+| **Sanitizer** (legs 3–7) | `Debug -O0` | Memory errors (ASan), data races (TSan), undefined behaviour (UBSan) — runtime correctness issues that `-O0` makes easier to diagnose with precise stack traces |
+
+**Why the difference matters:**
+
+1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](../CI_ISSUES.md)).
+
+2. **Release and Debug builds produce different binaries.** `NDEBUG` is defined in Release, disabling `assert()`. Code behind `#ifndef NDEBUG` (debug logging, extra validation) only compiles in Debug. Both paths need testing.
+
+3. **Sanitizers require `-O0`** (or `-O1` at most) for accurate diagnostics. At `-O2`, the compiler reorders, inlines, and eliminates code, making sanitizer reports harder to interpret and occasionally producing false positives.
+
+In short: plain legs answer "does our shipping binary compile and pass tests?", while sanitizer legs answer "does our code have memory/thread/UB correctness issues?". Both are necessary.
 
 ### Matrix naming
 
@@ -327,4 +355,4 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 ---
 
-*Last updated: 2026-03-03 — after Foundation Hardening Tier 1 (PRs #71, #72, #73).*
+*Last updated: 2026-03-04 — added build matrix rationale (CI-008 strncpy incident).*

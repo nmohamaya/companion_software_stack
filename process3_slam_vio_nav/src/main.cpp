@@ -14,6 +14,9 @@
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <atomic>
 #include <chrono>
@@ -60,9 +63,12 @@ static void visual_frontend_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereo
                                    PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running) {
     spdlog::info("[VisualFrontend] Thread started using {}", frontend.name());
 
+    auto hb = drone::util::ScopedHeartbeat("visual_frontend", true);
+
     uint64_t frame_count = 0;
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::ShmStereoFrame frame;
         (void)stereo_sub.receive(frame);
 
@@ -89,8 +95,11 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu, std::atomic<bool>& ru
     spdlog::info("[IMUReader] Thread started using {} at {} Hz", imu.name(), imu_rate_hz);
     const int sleep_us = imu_rate_hz > 0 ? 1000000 / imu_rate_hz : 2500;
 
+    auto hb = drone::util::ScopedHeartbeat("imu_reader", true);
+
     uint64_t count = 0;
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto sample = imu.read();
         (void)sample;  // In real system: feed to VIO pre-integrator
         ++count;
@@ -105,9 +114,12 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::ShmPose>& p
                                   int publish_rate_hz) {
     spdlog::info("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
 
+    auto hb = drone::util::ScopedHeartbeat("pose_publisher", true);
+
     const int sleep_ms = publish_rate_hz > 0 ? 1000 / publish_rate_hz : 10;
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         Pose p;
         if (pose_buffer.read(p)) {
             drone::ipc::ShmPose shm_pose{};
@@ -204,10 +216,18 @@ int main(int argc, char* argv[]) {
     std::thread t_publisher(pose_publisher_thread, std::ref(*pose_pub), std::ref(pose_buffer),
                             std::ref(g_running), vio_rate);
 
+    // ── Thread watchdog + health publisher ──────────────────
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_SLAM_VIO_NAV);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "slam_vio_nav",
+                                                        watchdog);
+
     spdlog::info("All SLAM threads started — READY");
 
     while (g_running.load(std::memory_order_relaxed)) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        health_publisher.publish_snapshot();
         Pose p;
         if (pose_buffer.read(p)) {
             spdlog::info("[HealthCheck] SLAM pose: ({:.2f}, {:.2f}, {:.2f}) q={}", p.position.x(),

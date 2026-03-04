@@ -12,6 +12,9 @@
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 #include "video/frame.h"
 
 #include <algorithm>
@@ -30,10 +33,13 @@ static void mission_cam_thread(drone::hal::ICamera&                             
                                std::atomic<bool>& running, int fps) {
     spdlog::info("[MissionCam] Thread started using {} @ {}Hz", camera.name(), fps);
 
+    auto hb = drone::util::ScopedHeartbeat("mission_cam", true);
+
     uint64_t  seq      = 0;
     const int sleep_ms = fps > 0 ? 1000 / fps : 33;
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         ScopedTimer timer("MissionCam", 50.0);
 
         auto frame = camera.capture();
@@ -75,10 +81,13 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
                               std::atomic<bool>& running, int fps) {
     spdlog::info("[StereoCam] Thread started using {} @ {}Hz", left_cam.name(), fps);
 
+    auto hb = drone::util::ScopedHeartbeat("stereo_cam", true);
+
     uint64_t  seq      = 0;
     const int sleep_ms = fps > 0 ? 1000 / fps : 33;
 
     while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto left_frame  = left_cam.capture();
         auto right_frame = right_cam.capture();
 
@@ -180,11 +189,19 @@ int main(int argc, char* argv[]) {
     std::thread t_stereo(stereo_cam_thread, std::ref(*stereo_left), std::ref(*stereo_right),
                          std::ref(*stereo_pub), std::ref(g_running), s_fps);
 
+    // ── Thread watchdog + health publisher ──────────────────
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_VIDEO_CAPTURE);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "video_capture",
+                                                        watchdog);
+
     spdlog::info("All threads started — video_capture is READY");
 
     // ── Main loop: periodic health log ──────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        health_publisher.publish_snapshot();
         spdlog::info("[HealthCheck] video_capture alive");
     }
 
