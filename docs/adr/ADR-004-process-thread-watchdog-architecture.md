@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted (Phases 1–2 implemented) |
 | **Date** | 2026-03-04 |
 | **Author** | Team |
 | **Deciders** | Project leads |
@@ -405,6 +405,49 @@ When Tier 4 (#83 systemd service units) is implemented:
 
 This design means Layer 3 is purely additive — no changes to Layers 1–2.
 
+### 2.6 Thread & Process Criticality Inventory
+
+The following table documents every thread registered with the heartbeat
+system (Phase 2, #90), its criticality designation, and the rationale.
+A **critical** thread triggers process self-termination when stuck; a
+**non-critical** thread logs a warning, marks its own thread state as
+unhealthy, and the system monitor may report the overall stack as
+DEGRADED while the process continues operating.
+
+| Process | Thread Name | Critical | Rationale |
+|---------|-------------|:--------:|-----------|
+| **P1 Video Capture** | `mission_cam` | Yes | Primary camera feed — loss means no visual data for perception or SLAM |
+| | `stereo_cam` | Yes | Stereo depth data — required for obstacle avoidance and VIO |
+| **P2 Perception** | `inference` | Yes | YOLO object detection — loss removes obstacle/target awareness |
+| | `tracker` | Yes | Object tracking continuity — stale tracks cause incorrect planning |
+| | `fusion` | Yes | Sensor fusion output — downstream consumers depend on fused detections |
+| | `lidar` | No | Supplementary range data — perception degrades gracefully without it |
+| | `radar` | No | Supplementary range data — perception degrades gracefully without it |
+| **P3 SLAM/VIO/Nav** | `visual_frontend` | Yes | Visual odometry — loss means no pose updates, navigation fails |
+| | `imu_reader` | Yes | IMU integration — loss means no attitude/velocity estimation |
+| | `pose_publisher` | Yes | Pose output — downstream (P4, P5) lose localisation |
+| **P4 Mission Planner** | `planning_loop` | Yes | Waypoint tracking and contingency logic — loss means uncontrolled flight |
+| **P5 Comms** | `fc_rx` | Yes | Flight controller telemetry — loss means no state feedback from PX4 |
+| | `fc_tx` | Yes | Flight controller commands — loss triggers PX4 link-loss failsafe |
+| | `gcs_rx` | No | Ground station commands — mission continues autonomously without GCS |
+| | `gcs_tx` | No | Ground station telemetry — loss means no operator visibility but flight is safe |
+| **P6 Payload Manager** | `payload_loop` | No | Payload actuation — non-essential for flight safety |
+| **P7 System Monitor** | `health_loop` | No | Health reporting — loss disables monitoring but does not affect flight control |
+
+**Summary:** 17 threads total — 11 critical, 6 non-critical.
+
+**Design principles applied:**
+
+1. **Flight-safety boundary** — any thread whose stall could lead to
+   loss of vehicle control or collision is marked critical. This includes
+   the entire perception→SLAM→planning→comms chain.
+2. **Graceful degradation** — supplementary sensors (lidar, radar),
+   ground station links, payload, and health monitoring are non-critical.
+   Their loss reduces capability but the vehicle can still fly safely.
+3. **Conservative default** — when in doubt, mark critical. A false
+   self-termination triggers a supervised restart (Phase 3), which is
+   safer than silently operating with a stuck critical thread.
+
 ---
 
 ## 3. Alternatives Considered
@@ -495,15 +538,35 @@ watchdog can recover from most failures without a full reboot.
 
 ## 5. Implementation Phases
 
-| Phase | Scope | Files | Depends On |
-|-------|-------|-------|-----------|
-| **Phase 1** | Thread heartbeat + watchdog library | `common/util/include/util/thread_heartbeat.h`, `common/util/include/util/thread_watchdog.h`, tests | — |
-| **Phase 2** | SHM thread health struct + per-process publishing | `shm_types.h` additions, P1–P6 integration | Phase 1 |
-| **Phase 3** | Process supervisor in System Monitor | `process7_system_monitor/`, launch script changes | Phase 2 |
-| **Phase 4** | Restart policies + dependency graph + degraded mode | Config-driven policies, stack status model | Phase 3 |
+| Phase | Scope | Files | Depends On | Status |
+|-------|-------|-------|-----------|--------|
+| **Phase 1** | Thread heartbeat + watchdog library | `thread_heartbeat.h`, `thread_watchdog.h`, `safe_name_copy.h`, tests (25) | — | ✅ PR #94 |
+| **Phase 2** | SHM thread health struct + per-process publishing | `shm_types.h`, `thread_health_publisher.h`, P1–P7 integration, tests (15) | Phase 1 | ✅ PR #96 |
+| **Phase 3** | Process supervisor in System Monitor | `process7_system_monitor/`, launch script changes | Phase 2 | 🔲 Issue #91 |
+| **Phase 4** | Restart policies + dependency graph + degraded mode | Config-driven policies, stack status model | Phase 3 | 🔲 Issue #92 |
 
 Tier 4 items (systemd, hardware WDT) are tracked separately in Issues
 #83 and the deployment epic.
+
+#### Implementation Notes (Phases 1–2)
+
+During Phase 1 and 2 implementation, several design adjustments were made:
+
+- **`safe_name_copy<N>()`** — a utility template was added to
+  `common/util/include/util/safe_name_copy.h` to replace ad-hoc
+  `strncpy` calls. It deduces buffer size from the destination array,
+  zeroes the buffer, copies at most `N-1` bytes, and explicitly
+  null-terminates. A targeted `#pragma GCC diagnostic` suppresses
+  `-Wstringop-truncation` in the one audited location, avoiding
+  build failures under `-Werror` in Release builds (see CI-008).
+- **CAS-based `register_thread()`** — the original `fetch_add` /
+  `fetch_sub` rollback pattern for thread registration had a race
+  window under concurrent registration. Replaced with a
+  compare-and-swap loop that atomically claims slots.
+- **`snapshot()` returns `std::vector`** — for Phase 1 simplicity,
+  `snapshot()` returns a vector copy. A future optimisation (Issue #97)
+  will change this to `std::array<ThreadHeartbeat, kMaxThreads>`
+  to eliminate the heap allocation.
 
 ---
 
@@ -614,3 +677,10 @@ Without `touch_with_grace()`, these would trigger false stuck-thread alerts.
 - Issue #31 — systemd service files + process supervisor
 - Issue #41 — Contingency fault tree
 - Issue #83 — systemd service units (Tier 4)
+- Issue #88 — Epic: Process & Thread Watchdog
+- Issue #89 / PR #94 — Phase 1: Thread heartbeat + watchdog library
+- Issue #90 / PR #96 — Phase 2: SHM thread health + per-process publishing
+- Issue #91 — Phase 3: Process supervisor (planned)
+- Issue #92 — Phase 4: Restart policies + dependency graph (planned)
+- Issue #97 — Tech debt: snapshot() vector → array optimisation
+- [CI_ISSUES.md](../../CI_ISSUES.md) — CI-008: strncpy truncation warning
