@@ -404,3 +404,57 @@ See [DEVELOPMENT_WORKFLOW.md § Avoiding Merge Conflicts](#avoiding-merge-confli
 2. **Use stacked PR base branches** for chained work (PR #76 base = PR #75's branch, not `main`)
 3. **Keep doc updates on `main`** — project-wide metrics files (ROADMAP.md, PROGRESS.md) are especially conflict-prone
 4. **Keep branches short-lived** — aim for <3 days, merge in order promptly
+
+---
+
+## CI-008: `-Wstringop-truncation` failure in Release builds (SHM + Zenoh)
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-03-04 |
+| **Branch** | `feature/issue-89-thread-heartbeat-watchdog` |
+| **PR** | #94 |
+| **Affected legs** | `shm, none` and `zenoh, none` (Release `-O2`) |
+| **Passed locally** | Yes (local build uses `deploy/build.sh` which doesn't pass `-Werror`) |
+
+### Symptoms
+
+```
+thread_heartbeat.h:99:21: error: 'char* __builtin___strncpy_chk(char*, const char*,
+  long unsigned int, long unsigned int)' output truncated copying 31 bytes from a
+  string of length 50 [-Werror=stringop-truncation]
+```
+
+Build failed only on the **plain** (non-sanitizer) SHM and Zenoh CI legs. All sanitizer legs (ASAN/TSAN/UBSAN) passed because they build in **Debug** mode (`-O0`).
+
+### Root Cause
+
+`ThreadHeartbeatRegistry::register_thread()` used `std::strncpy()` to copy a thread name into a fixed-size `char[32]` buffer, intentionally truncating long names to 31 chars + null terminator. This is correct behaviour — the truncation is by design.
+
+However, GCC's `-Wstringop-truncation` warning (enabled by `-Wall`) detects that `strncpy` will truncate and flags it. With `-Werror`, this becomes a hard error.
+
+This warning only fires in **Release** mode (`-O2`) because GCC's interprocedural static analysis at higher optimization levels performs deeper string length tracking. In **Debug** mode (`-O0`), the analysis is less aggressive and the warning is not triggered.
+
+### Fix Applied
+
+**Commit:** `712b63c`
+
+Replaced `strncpy` + manual null-termination with `snprintf`:
+
+```cpp
+// Before (triggers -Wstringop-truncation):
+std::strncpy(beats_[idx].name, name, sizeof(beats_[idx].name) - 1);
+beats_[idx].name[sizeof(beats_[idx].name) - 1] = '\0';
+
+// After (silent, same semantics):
+std::snprintf(beats_[idx].name, sizeof(beats_[idx].name), "%s", name);
+```
+
+`snprintf` with `%s` provides identical truncation + null-termination without triggering the warning because GCC recognises `snprintf` truncation as intentional by design.
+
+Also added `#include <cstdio>` for `snprintf`.
+
+### Prevention
+
+- Prefer `snprintf(dst, sizeof(dst), "%s", src)` over `strncpy(dst, src, n)` for intentional truncation into fixed-size char buffers.
+- Always test with Release + `-Werror -Wall -Wextra` locally before pushing, especially for new code that manipulates C strings. The `deploy/build.sh` script does NOT pass `-Werror` — CI does.
