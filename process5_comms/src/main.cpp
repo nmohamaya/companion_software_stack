@@ -18,6 +18,9 @@
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/signal_handler.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <atomic>
 #include <chrono>
@@ -33,7 +36,10 @@ static void fc_rx_thread(drone::hal::IFCLink&                            fc,
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
 
+    auto hb = drone::util::ScopedHeartbeat("fc_rx", true);
+
     while (g_running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto hb = fc.receive_state();
 
         drone::ipc::ShmFCState state{};
@@ -61,10 +67,13 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_tx thread started using {}", fc.name());
 
+    auto hb = drone::util::ScopedHeartbeat("fc_tx", true);
+
     uint64_t last_cmd_seq = 0;  // dedup FC commands by sequence_id
     uint64_t last_traj_ts = 0;  // dedup trajectory commands by timestamp
 
     while (g_running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         // ── Handle FC commands (arm, takeoff, mode) ─────────
         drone::ipc::ShmFCCommand fc_cmd{};
         if (cmd_sub.is_connected() && cmd_sub.receive(fc_cmd) && fc_cmd.valid &&
@@ -121,7 +130,10 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs
     set_thread_params("gcs_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] gcs_rx thread started using {}", gcs.name());
 
+    auto hb = drone::util::ScopedHeartbeat("gcs_rx", false);
+
     while (g_running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto msg = gcs.poll_command();
         if (msg.valid) {
             drone::ipc::ShmGCSCommand shm_cmd{};
@@ -154,6 +166,8 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                                 
     set_thread_params("gcs_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] gcs_tx thread started using {}", gcs.name());
 
+    auto hb = drone::util::ScopedHeartbeat("gcs_tx", false);
+
     // Wait for subscribers to connect
     while (g_running.load(std::memory_order_relaxed)) {
         if (pose_sub.is_connected() && status_sub.is_connected() && fc_sub.is_connected()) break;
@@ -161,6 +175,7 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                                 
     }
 
     while (g_running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::ShmPose          pose{};
         drone::ipc::ShmMissionStatus mission{};
         drone::ipc::ShmFCState       fc{};
@@ -246,6 +261,18 @@ int main(int argc, char* argv[]) {
     std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(*gcs_cmd_pub));
     std::thread t4(gcs_tx_thread, std::ref(*gcs_link), std::ref(*pose_sub), std::ref(*mission_sub),
                    std::ref(*fc_sub));
+
+    // ── Thread watchdog + health publisher ──────────────────
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_COMMS);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "comms", watchdog);
+
+    // ── Main loop: health publishing (replaces bare join) ─
+    while (g_running.load(std::memory_order_relaxed)) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        health_publisher.publish_snapshot();
+    }
 
     t1.join();
     t2.join();

@@ -4,6 +4,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 namespace drone::ipc {
 
@@ -285,6 +286,31 @@ struct ShmSystemHealth {
 };
 
 // ═══════════════════════════════════════════════════════════
+// Thread Health Entry — per-thread liveness state
+// ═══════════════════════════════════════════════════════════
+static constexpr uint8_t kMaxTrackedThreads = 16;
+
+struct ThreadHealthEntry {
+    char     name[32] = {};     // Thread name (e.g. "mission_cam")
+    bool     healthy  = true;   // false when watchdog detects stuck
+    bool     critical = false;  // true for mission-critical threads
+    uint64_t last_ns  = 0;      // Last heartbeat timestamp (ns)
+};
+
+// ═══════════════════════════════════════════════════════════
+// Thread Health SHM (each process → Process 7)
+// ═══════════════════════════════════════════════════════════
+struct ShmThreadHealth {
+    char              process_name[32]            = {};
+    ThreadHealthEntry threads[kMaxTrackedThreads] = {};
+    uint8_t           num_threads                 = 0;
+    uint64_t          timestamp_ns                = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<ShmThreadHealth>,
+              "ShmThreadHealth must be trivially copyable for SHM");
+
+// ═══════════════════════════════════════════════════════════
 // SHM Segment Names — centralised to avoid typos
 // ═══════════════════════════════════════════════════════════
 namespace shm_names {
@@ -300,6 +326,15 @@ constexpr const char* FC_STATE          = "/fc_state";
 constexpr const char* GCS_COMMANDS      = "/gcs_commands";
 constexpr const char* PAYLOAD_STATUS    = "/payload_status";
 constexpr const char* SYSTEM_HEALTH     = "/system_health";
+
+// ── Per-process thread health channels ──────────────────
+constexpr const char* THREAD_HEALTH_VIDEO_CAPTURE   = "/drone_thread_health_video_capture";
+constexpr const char* THREAD_HEALTH_PERCEPTION      = "/drone_thread_health_perception";
+constexpr const char* THREAD_HEALTH_SLAM_VIO_NAV    = "/drone_thread_health_slam_vio_nav";
+constexpr const char* THREAD_HEALTH_MISSION_PLANNER = "/drone_thread_health_mission_planner";
+constexpr const char* THREAD_HEALTH_COMMS           = "/drone_thread_health_comms";
+constexpr const char* THREAD_HEALTH_PAYLOAD_MANAGER = "/drone_thread_health_payload_manager";
+constexpr const char* THREAD_HEALTH_SYSTEM_MONITOR  = "/drone_thread_health_system_monitor";
 }  // namespace shm_names
 
 }  // namespace drone::ipc
