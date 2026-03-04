@@ -225,6 +225,26 @@ TEST(ProcessConfig, FromJsonInvalidArrayElementsIgnored) {
     EXPECT_EQ(cfg.launch_after[0], "valid_dep");
 }
 
+TEST(ProcessConfig, FromJsonNegativeValuesClampedToZero) {
+    nlohmann::json j = {
+        {"max_restarts", -1},       {"cooldown_s", -10},  {"backoff_ms", -500},
+        {"max_backoff_ms", -30000}, {"thermal_gate", -2},
+    };
+
+    auto cfg = ProcessConfig::from_json("neg", j);
+    EXPECT_EQ(cfg.policy.max_restarts, 0u);
+    EXPECT_EQ(cfg.policy.cooldown_window_s, 0u);
+    EXPECT_EQ(cfg.policy.initial_backoff_ms, 0u);
+    EXPECT_EQ(cfg.policy.max_backoff_ms, 0u);
+    EXPECT_EQ(cfg.policy.thermal_gate, 0);
+}
+
+TEST(ProcessConfig, FromJsonThermalGateClampedToFour) {
+    nlohmann::json j   = {{"thermal_gate", 99}};
+    auto           cfg = ProcessConfig::from_json("hot", j);
+    EXPECT_EQ(cfg.policy.thermal_gate, 4);
+}
+
 // ═══════════════════════════════════════════════════════════
 // ProcessConfig — loading from full default.json
 // ═══════════════════════════════════════════════════════════

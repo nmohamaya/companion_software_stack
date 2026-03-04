@@ -80,6 +80,7 @@ struct ManagedProcess {
     bool         was_signaled     = false;  // true if killed by signal
     int          last_signal      = 0;      // signal number if was_signaled
     bool         thermal_deferred = false;  // true if restart is deferred due to thermal
+    char         blocked_by[32]   = {};     // cascade: wait for this process to be RUNNING
 };
 
 // ── Death callback type ─────────────────────────────────────
@@ -114,7 +115,7 @@ public:
         drone::util::safe_name_copy(proc.binary_path, binary_path);
         drone::util::safe_name_copy(proc.args, args);
         processes_.push_back(proc);
-        policies_[name] = policy;
+        policies_[proc.name] = policy;
     }
 
     /// Set callback for death events.
@@ -216,6 +217,17 @@ public:
 
             // Check if RESTARTING processes are ready to re-launch
             if (proc.state == ProcessState::RESTARTING) {
+                // Cascade gate: wait for the source process to recover before
+                // restarting a dependant that was cascade-stopped.
+                if (proc.blocked_by[0] != '\0') {
+                    const auto* source = find(proc.blocked_by);
+                    if (source && source->state != ProcessState::RUNNING) {
+                        continue;  // Source still down — keep waiting
+                    }
+                    // Source recovered (or gone) — clear the gate
+                    proc.blocked_by[0] = '\0';
+                }
+
                 // Thermal gate: defer restart when system is overheating
                 if (policy.is_thermal_blocked(thermal_zone_)) {
                     if (!proc.thermal_deferred) {
@@ -416,9 +428,10 @@ private:
             auto* target = find(target_name.c_str());
             if (target && target->state == ProcessState::RUNNING) {
                 stop_one(*target);
-                // Mark as RESTARTING so tick() will re-launch after
-                // the source process is back up
+                // Mark as RESTARTING and record the source process name
+                // so tick() gates re-launch on the source being RUNNING.
                 target->state = ProcessState::RESTARTING;
+                drone::util::safe_name_copy(target->blocked_by, dead_process);
                 auto now_ns =
                     static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                               std::chrono::steady_clock::now().time_since_epoch())
@@ -484,6 +497,7 @@ private:
         proc.state            = ProcessState::RUNNING;
         proc.started_at_ns    = now_ns;
         proc.thermal_deferred = false;
+        proc.blocked_by[0]    = '\0';
 
         spdlog::info("[Supervisor] Launched {} (PID {})", proc.name, pid);
         return true;

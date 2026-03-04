@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -96,18 +97,18 @@ struct ProcessConfig {
 
         cfg.binary = j.value("binary", std::string{});
 
-        // Restart policy fields
-        cfg.policy.is_critical = j.value("critical", false);
-        cfg.policy.max_restarts =
-            static_cast<uint32_t>(j.value("max_restarts", static_cast<int>(5)));
+        // Restart policy fields — clamp to valid ranges to prevent
+        // negative-to-unsigned wrapping.
+        cfg.policy.is_critical  = j.value("critical", false);
+        cfg.policy.max_restarts = static_cast<uint32_t>(std::max(0, j.value("max_restarts", 5)));
         cfg.policy.cooldown_window_s =
-            static_cast<uint32_t>(j.value("cooldown_s", static_cast<int>(60)));
+            static_cast<uint32_t>(std::max(0, j.value("cooldown_s", 60)));
         cfg.policy.initial_backoff_ms =
-            static_cast<uint32_t>(j.value("backoff_ms", static_cast<int>(500)));
+            static_cast<uint32_t>(std::max(0, j.value("backoff_ms", 500)));
         cfg.policy.max_backoff_ms =
-            static_cast<uint32_t>(j.value("max_backoff_ms", static_cast<int>(30000)));
+            static_cast<uint32_t>(std::max(0, j.value("max_backoff_ms", 30000)));
         cfg.policy.thermal_gate =
-            static_cast<uint8_t>(j.value("thermal_gate", static_cast<int>(3)));
+            static_cast<uint8_t>(std::clamp(j.value("thermal_gate", 3), 0, 4));
 
         // Dependency edges
         if (j.contains("launch_after") && j["launch_after"].is_array()) {

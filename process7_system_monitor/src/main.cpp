@@ -131,8 +131,16 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (!process_graph.validate()) {
-            spdlog::error("[Supervisor] ProcessGraph validation failed — check config");
+        bool graph_valid = process_graph.validate();
+        if (!graph_valid) {
+            spdlog::error("[Supervisor] ProcessGraph validation failed — disabling "
+                          "cascade logic and using default launch order");
+            // Rebuild with populate_defaults() so launch_order() still works
+            process_graph = drone::util::ProcessGraph{};
+            for (const auto& pc : process_configs) {
+                process_graph.add_process(pc.name);
+            }
+            process_graph.populate_defaults();
         }
 
         // Register processes in topological launch order
@@ -157,7 +165,10 @@ int main(int argc, char* argv[]) {
             supervisor->add_process(name.c_str(), pc.binary.c_str(), extra_args.c_str(), pc.policy);
         }
 
-        supervisor->set_process_graph(&process_graph);
+        // Only enable cascade restarts when the graph is valid
+        if (graph_valid) {
+            supervisor->set_process_graph(&process_graph);
+        }
 
         supervisor->set_death_callback([](const char* name, int exit_code, int signal_num) {
             if (signal_num > 0) {
