@@ -119,6 +119,17 @@ add_drone_test(test_zenoh_ipc       test_zenoh_ipc.cpp
 add_drone_test(test_zenoh_network   test_zenoh_network.cpp
     PROPERTIES RESOURCE_LOCK "zenoh_session")
 
+# ── Test helper binary: test_crasher ─────────────────────────
+# Minimal binary used by ProcessManager tests. Not a test itself,
+# just a controlled child process that exits/crashes/hangs on command.
+add_executable(test_crasher test_crasher.cpp)
+target_compile_features(test_crasher PRIVATE cxx_std_17)
+
+# ── Process Manager tests ────────────────────────────────────
+# Fork+exec real processes — serialise to avoid PID/signal conflicts.
+add_drone_test(test_process_manager test_process_manager.cpp
+    PROPERTIES RESOURCE_LOCK "fork_exec")
+
 # ── Phase F: Liveliness token tests ──────────────────────────
 add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp
     PROPERTIES RESOURCE_LOCK "zenoh_session")

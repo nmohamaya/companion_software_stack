@@ -6,6 +6,7 @@
 #include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "monitor/iprocess_monitor.h"
+#include "monitor/process_manager.h"
 #include "monitor/sys_info.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
@@ -42,6 +43,74 @@ int main(int argc, char* argv[]) {
     }
 
     spdlog::info("=== System Monitor starting (PID {}) ===", getpid());
+
+    // ── Supervised mode: fork+exec child processes ──────────
+    std::unique_ptr<drone::monitor::ProcessManager> supervisor;
+    if (args.supervised) {
+        spdlog::info("[Supervisor] Mode ENABLED — will fork+exec child processes");
+        drone::monitor::RestartPolicy policy;
+        policy.max_restarts =
+            static_cast<uint32_t>(cfg.get<int>("system_monitor.supervisor.max_restarts", 5));
+        policy.cooldown_window_s =
+            static_cast<uint32_t>(cfg.get<int>("system_monitor.supervisor.cooldown_window_s", 60));
+        policy.initial_backoff_ms = static_cast<uint32_t>(
+            cfg.get<int>("system_monitor.supervisor.initial_backoff_ms", 500));
+        policy.max_backoff_ms =
+            static_cast<uint32_t>(cfg.get<int>("system_monitor.supervisor.max_backoff_ms", 30000));
+
+        supervisor = std::make_unique<drone::monitor::ProcessManager>(policy);
+
+        // Resolve binary directory from our own /proc/self/exe
+        char        self_path[1024] = {};
+        ssize_t     len     = ::readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+        std::string bin_dir = ".";
+        if (len > 0) {
+            self_path[len] = '\0';
+            std::string self(self_path);
+            auto        slash = self.rfind('/');
+            if (slash != std::string::npos) {
+                bin_dir = self.substr(0, slash);
+            }
+        }
+
+        // Build extra args string (pass through config, log-level, etc.)
+        std::string extra_args;
+        if (args.config_path != "config/default.json") {
+            extra_args += "--config " + args.config_path + " ";
+        }
+        if (args.log_level != "info") {
+            extra_args += "--log-level " + args.log_level + " ";
+        }
+        if (args.simulation) extra_args += "--sim ";
+        if (args.json_logs) extra_args += "--json-logs ";
+
+        // Register child processes in launch order
+        // (dependency graph from ADR-004 §2.3)
+        supervisor->add_process("video_capture", (bin_dir + "/video_capture").c_str(),
+                                extra_args.c_str());
+        supervisor->add_process("comms", (bin_dir + "/comms").c_str(), extra_args.c_str());
+        supervisor->add_process("perception", (bin_dir + "/perception").c_str(),
+                                extra_args.c_str());
+        supervisor->add_process("slam_vio_nav", (bin_dir + "/slam_vio_nav").c_str(),
+                                extra_args.c_str());
+        supervisor->add_process("mission_planner", (bin_dir + "/mission_planner").c_str(),
+                                extra_args.c_str());
+        supervisor->add_process("payload_manager", (bin_dir + "/payload_manager").c_str(),
+                                extra_args.c_str());
+
+        supervisor->set_death_callback([](const char* name, int exit_code, int signal_num) {
+            if (signal_num > 0) {
+                spdlog::error("[Supervisor] {} killed by signal {} ({})", name, signal_num,
+                              strsignal(signal_num));
+            } else {
+                spdlog::error("[Supervisor] {} exited with code {}", name, exit_code);
+            }
+        });
+
+        // Launch all children in order (with 0.5s stagger)
+        supervisor->launch_all();
+        spdlog::info("[Supervisor] All child processes launched");
+    }
 
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -201,7 +270,19 @@ int main(int argc, char* argv[]) {
 
         thread_health_publisher.publish_snapshot();
 
+        // ── Supervisor tick: reap zombies, detect deaths, restart ─
+        if (supervisor) {
+            supervisor->tick();
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
+    }
+
+    // ── Shutdown ─────────────────────────────────────────────
+    if (supervisor) {
+        spdlog::info("[Supervisor] Stopping all child processes...");
+        supervisor->stop_all();
+        spdlog::info("[Supervisor] All children stopped");
     }
 
     spdlog::info("=== System Monitor stopped ===");

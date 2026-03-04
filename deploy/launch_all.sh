@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # deploy/launch_all.sh — Launch all 7 processes in correct order.
-# Usage: ./deploy/launch_all.sh [--sim] [--log-level debug]
+#
+# Two modes:
+#   --supervised   P7 (system_monitor) forks+execs P1–P6 internally.
+#                  The script only manages one process.
+#   (default)      The script launches all 7 processes directly (legacy).
+#
+# Usage: ./deploy/launch_all.sh [--supervised] [--sim] [--log-level debug]
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -11,7 +17,18 @@ if [[ ! -d "$BIN_DIR" ]]; then
     exit 1
 fi
 
-EXTRA_ARGS="${*}"
+# Check for --supervised flag and remove it from EXTRA_ARGS
+SUPERVISED=false
+EXTRA_ARGS=""
+for arg in "$@"; do
+    if [[ "$arg" == "--supervised" ]]; then
+        SUPERVISED=true
+    else
+        EXTRA_ARGS="${EXTRA_ARGS} ${arg}"
+    fi
+done
+EXTRA_ARGS="${EXTRA_ARGS## }"  # trim leading space
+
 LOG_DIR="${PROJECT_DIR}/drone_logs"
 
 # Ensure system libstdc++ is used instead of Anaconda's older version
@@ -57,14 +74,31 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# ═══════════════════════════════════════════════════════════
+# Supervised mode: P7 fork+execs P1–P6 internally
+# ═══════════════════════════════════════════════════════════
+if [[ "$SUPERVISED" == "true" ]]; then
+    echo "  Mode     : SUPERVISED (P7 manages P1–P6)"
+    echo "══════════════════════════════════════════"
+    echo ""
+    echo "Starting system_monitor in supervisor mode..."
+    "${BIN_DIR}/system_monitor" --supervised ${EXTRA_ARGS} &
+    PIDS+=($!)
+    echo "system_monitor PID: ${PIDS[0]}"
+    echo "Press Ctrl+C to stop the stack."
+    echo ""
+    wait "${PIDS[0]}" 2>/dev/null || true
+    echo "system_monitor exited."
+    exit 0
+fi
+
+# ═══════════════════════════════════════════════════════════
+# Legacy mode: script launches all 7 processes directly
+# ═══════════════════════════════════════════════════════════
+echo "  Mode     : LEGACY (script manages all 7 processes)"
+echo "══════════════════════════════════════════"
+
 # Launch order matches dependency graph:
-# 1. System Monitor (no deps)
-# 2. Video Capture (no deps)
-# 3. Comms (no deps)
-# 4. Perception (needs Video Capture)
-# 5. SLAM/VIO/Nav (needs Video Capture)
-# 6. Mission Planner (needs SLAM, Perception, Comms)
-# 7. Payload Manager (needs Mission Planner)
 
 echo "[1/7] Starting system_monitor..."
 "${BIN_DIR}/system_monitor" ${EXTRA_ARGS} &
