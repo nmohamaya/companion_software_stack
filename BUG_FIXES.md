@@ -369,3 +369,114 @@ ctest --output-on-failure -j$(nproc) -E "Zenoh|Mavlink|Yolo|Liveliness"
 This exclusion is safe — the TSan leg still runs all 277 core tests (SHM IPC, SPSC ring, FaultManager, MissionFSM, config, HAL, wire format, etc.), which is where TSan provides the most value for detecting data races in **our** code.
 
 **Found by:** `cmake --build build` failing during gtest discovery on kernel 6.17 with `ENABLE_TSAN=ON`.
+
+---
+
+## Fix #12 — ProcessManager `restart_count` Never Incremented
+
+**Date:** 2026-03-04  
+**Severity:** High (correctness — supervisor never stops restarting a failing process)  
+**Affects:** `process7_system_monitor/include/monitor/process_manager.h`  
+**PR:** #101 (Phase 3 — Issue #91)
+
+**Bug:** The `RestartPolicy.max_restarts` limit was never enforced. A crashing child process would be restarted indefinitely instead of being marked `FAILED` after N attempts.
+
+**Root Cause:** In `launch_one()`, the process state was set to `RUNNING` *before* the condition that checked `if (proc.state == ProcessState::RESTARTING)` to increment `restart_count`. Since the state was already `RUNNING` by the time the check ran, the condition was always false and the counter stayed at 0.
+
+```cpp
+// BEFORE (broken):
+proc.state = ProcessState::RUNNING;       // ← state set first
+if (proc.state == ProcessState::RESTARTING) {  // ← always false!
+    proc.restart_count++;
+}
+
+// AFTER (fixed):
+if (proc.state == ProcessState::RESTARTING) {  // ← check while still RESTARTING
+    proc.restart_count++;
+}
+proc.state = ProcessState::RUNNING;       // ← state set after increment
+```
+
+**Impact:** Without this fix, `max_restarts=5` would be silently ignored. A flapping process (crash loop) would restart forever, consuming system resources and masking the real failure.
+
+**Found by:** `ProcessManagerTest.MaxRestartsExhausted` — test waited for state `FAILED` but it never arrived. Process stayed in a perpetual RESTARTING→RUNNING→crash→RESTARTING cycle.
+
+---
+
+## Fix #13 — uint64_t Underflow in ProcessManager Cooldown Calculation
+
+**Date:** 2026-03-04  
+**Severity:** Medium (correctness — restart counter resets prematurely)  
+**Affects:** `process7_system_monitor/include/monitor/process_manager.h`  
+**PR:** #101 (Phase 3 — Issue #91)
+
+**Bug:** After a restart, the `restart_count` was immediately reset to 0 (as if the process had been stable for 60 seconds), defeating the max-restart protection on fast crash loops.
+
+**Root Cause:** Two interacting issues in `tick()`:
+
+1. **Stale `now_ns`:** A single `now_ns` was captured at the top of `tick()`, but `launch_one()` (called during the RESTARTING→RUNNING transition) set `started_at_ns` to a *fresh* `steady_clock::now()`. This meant `now_ns < started_at_ns`, and the subtraction `now_ns - started_at_ns` on `uint64_t` wrapped to `~18 quintillion nanoseconds` — far exceeding the 60-second cooldown window.
+
+2. **Missing `continue`:** After the RESTARTING block launched the process, execution fell through to the cooldown check on the same iteration, using the stale `now_ns`.
+
+```cpp
+// BEFORE (broken):
+uint64_t now_ns = current_time();   // captured ONCE at top of tick
+for (auto& proc : processes_) {
+    if (proc.state == RESTARTING) {
+        launch_one(proc);           // sets started_at_ns = NOW (> now_ns)
+        // falls through to cooldown check below! ↓
+    }
+    uint64_t stable = now_ns - proc.started_at_ns;  // underflow!
+    if (stable > cooldown_ns) proc.restart_count = 0; // premature reset!
+}
+
+// AFTER (fixed):
+for (auto& proc : processes_) {
+    if (proc.state == RESTARTING) {
+        launch_one(proc);
+        continue;  // ← skip cooldown check this iteration
+    }
+    uint64_t fresh_now = current_time();  // ← fresh per-process
+    if (fresh_now > proc.started_at_ns) { // ← guard against underflow
+        uint64_t stable = fresh_now - proc.started_at_ns;
+        if (stable > cooldown_ns) proc.restart_count = 0;
+    }
+}
+```
+
+**Impact:** Combined with Fix #12, this would have allowed a crash-looping process to restart forever — the counter incremented correctly (Fix #12) but was reset to 0 on the very next tick (this bug).
+
+**Found by:** `ProcessManagerTest.MaxRestartsExhausted` — process reached `restart_count=2` (correct after Fix #12) but then reset to 0 and continued restarting instead of reaching `FAILED`.
+
+---
+
+## Fix #14 — DetectCrash Test Flaky Due to SIGSEGV + Core Dump Latency
+
+**Date:** 2026-03-04  
+**Severity:** Low (test reliability, not production code)  
+**Affects:** `tests/test_process_manager.cpp`  
+**PR:** #101 (Phase 3 — Issue #91)
+
+**Bug:** `ProcessManagerTest.DetectCrash` intermittently failed — the test expected the death callback to have fired after a fixed 300ms sleep, but SIGSEGV delivery + core dump I/O sometimes took 500ms–1.5s.
+
+**Root Cause:** When a child process crashes via `SIGSEGV`, the kernel may write a core dump before the zombie becomes reapable via `waitpid`. Core dump I/O (writing the process memory image to disk) adds significant latency beyond signal delivery itself. On a loaded system or with large `ulimit -c`, this routinely exceeds 300ms. A clean `exit(1)` completes in <50ms, but a signal-killed process is much slower.
+
+```cpp
+// BEFORE (flaky):
+mgr.launch("crasher");
+std::this_thread::sleep_for(std::chrono::milliseconds{300});  // not enough!
+mgr.tick();
+EXPECT_TRUE(signaled);  // sometimes false
+
+// AFTER (robust):
+mgr.launch("crasher");
+for (int i = 0; i < 20 && !signaled; ++i) {       // poll up to 2s
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    mgr.tick();
+}
+EXPECT_TRUE(signaled);  // reliably true (exits early, typically ~200ms–1.3s)
+```
+
+**Impact:** No production impact — the supervisor's `tick()` is called in a loop anyway. This was purely a test timing issue. The polling pattern is both more robust (2s max) and faster in the common case (exits as soon as `waitpid` succeeds).
+
+**Found by:** `ProcessManagerTest.DetectCrash` failing on first test run. Subsequent analysis showed the death callback fired at ~1.3s, well past the 300ms window.
