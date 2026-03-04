@@ -12,6 +12,9 @@
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/signal_handler.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <atomic>
 #include <chrono>
@@ -68,9 +71,18 @@ int main(int argc, char* argv[]) {
     const int   loop_sleep_ms = update_hz > 0 ? 1000 / update_hz : 20;
     const float dt            = loop_sleep_ms / 1000.0f;
 
+    // ── Thread heartbeat + watchdog + health publisher ──────
+    auto                        payload_hb = drone::util::ScopedHeartbeat("payload_loop", false);
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_PAYLOAD_MANAGER);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "payload_manager",
+                                                        watchdog);
+    uint32_t                           health_tick = 0;
+
     // ── Main loop (configurable control rate) ───────────────
     while (g_running.load(std::memory_order_relaxed)) {
-
+        drone::util::ThreadHeartbeatRegistry::instance().touch(payload_hb.handle());
         // Read commands
         drone::ipc::ShmPayloadCommand cmd{};
         if (cmd_sub->receive(cmd) && cmd.valid && cmd.timestamp_ns != last_cmd_ts) {
@@ -102,6 +114,12 @@ int main(int argc, char* argv[]) {
         status.gimbal_stabilized = g_state.stabilised;
         status.recording_video   = gimbal->is_recording();
         status_pub->publish(status);
+
+        // Publish thread health at ~1 Hz
+        ++health_tick;
+        if (health_tick % static_cast<uint32_t>(std::max(1, 1000 / loop_sleep_ms)) == 0) {
+            health_publisher.publish_snapshot();
+        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

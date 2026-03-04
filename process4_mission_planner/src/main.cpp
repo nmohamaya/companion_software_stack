@@ -16,6 +16,9 @@
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
+#include "util/thread_health_publisher.h"
+#include "util/thread_heartbeat.h"
+#include "util/thread_watchdog.h"
 
 #include <atomic>
 #include <chrono>
@@ -181,6 +184,15 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
 
+    // ── Thread heartbeat + watchdog + health publisher ──────
+    auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
+    drone::util::ThreadWatchdog watchdog;
+    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
+        bus, drone::ipc::shm_names::THREAD_HEALTH_MISSION_PLANNER);
+    drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
+                                                        watchdog);
+    uint32_t                           health_tick = 0;
+
     // Tracking variables for state machine
     bool                                  takeoff_sent = false;
     bool                                  land_sent    = false;
@@ -194,6 +206,7 @@ int main(int argc, char* argv[]) {
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
         ScopedTimer timer("PlannerLoop", 120.0);
 
         // Read inputs
@@ -479,6 +492,12 @@ int main(int argc, char* argv[]) {
         status.active_faults    = fault.active_faults;
         status.fault_action     = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);
+
+        // Publish thread health at ~1 Hz (every update_ms ticks)
+        ++health_tick;
+        if (health_tick % static_cast<uint32_t>(std::max(1, 1000 / loop_sleep_ms)) == 0) {
+            health_publisher.publish_snapshot();
+        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

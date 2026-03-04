@@ -76,6 +76,9 @@ add_drone_test(test_latency_tracker test_latency_tracker.cpp)
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
 
+# ── Thread Health Publisher tests ────────────────────────────
+add_drone_test(test_thread_health_publisher test_thread_health_publisher.cpp)
+
 # ── Comms tests ──────────────────────────────────────────────
 add_drone_test(test_comms           test_comms.cpp)
 
