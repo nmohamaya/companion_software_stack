@@ -151,6 +151,12 @@ public:
     /// Cost: one atomic store (relaxed ordering) + one clock read.
     void touch(size_t handle);
 
+    /// Touch the heartbeat with an extended grace period.
+    /// The watchdog treats the beat as live for an additional `grace`
+    /// beyond the normal stuck_threshold.  Use during known long-startup
+    /// operations (model loads, vocabulary loads, MAVLink handshake).
+    void touch_with_grace(size_t handle, std::chrono::milliseconds grace);
+
     /// Snapshot all heartbeats (used by watchdog and SHM publisher).
     std::vector<ThreadHeartbeat> snapshot() const;
 
@@ -187,6 +193,8 @@ class ScopedHeartbeat {
 public:
     ScopedHeartbeat(const char* name, bool critical = false);
     void touch();
+    /// Touch with an extended grace period (see ThreadHeartbeatRegistry::touch_with_grace).
+    void touch_with_grace(std::chrono::milliseconds grace);
 private:
     size_t handle_;
 };
@@ -237,7 +245,7 @@ struct RestartPolicy {
     uint32_t max_backoff_ms     = 30000;   // Cap at 30 s
     bool     is_critical        = false;   // If true, stack enters CRITICAL on give-up
     uint8_t  thermal_gate       = 3;       // Block restart when thermal_zone >= this value
-                                           // 0=never block, 3=block at CRITICAL (default)
+                                           // 0=always block, 3=block at CRITICAL (default), 4=never block
 };
 ```
 
@@ -281,15 +289,16 @@ restart cascading are not the same relationship:
   also stop and restart Y because Y may hold stale state."
 
 ```
-  Launch order (bottom-up):           Restart cascade (top-down):
+  Launch order / launch prerequisites (top-down):   Restart cascade (top-down):
 
-  video_capture                       comms ─ ─ ─► mission_planner
-       │                              comms ─ ─ ─► payload_manager
-  perception                          slam_vio_nav ─ ─► perception
+  video_capture                                     comms ─ ─ ─► mission_planner
+       │                                            comms ─ ─ ─► payload_manager
+  perception                                        slam_vio_nav ─ ─► perception
        │
-  slam_vio_nav ──── comms
-       │              │
-  mission_planner    payload_manager
+  slam_vio_nav          comms
+        └────┬─────────┘
+             ▼
+       mission_planner       payload_manager
 ```
 
 **Default edge table:**
@@ -388,7 +397,7 @@ When Tier 4 (#83 systemd service units) is implemented:
 
 - Process 7 becomes `system_monitor.service` with `Type=notify` and
   `WatchdogSec=10`.
-- Process 7 calls `sd_notify("WATCHDOG=1")` every 5 seconds.
+- Process 7 calls `sd_notify(0, "WATCHDOG=1")` every 5 seconds.
 - systemd restarts Process 7 if it crashes or stops notifying.
 - The six child processes are NOT separate systemd units — they are
   managed by Process 7's internal supervisor. This avoids splitting
@@ -488,7 +497,7 @@ watchdog can recover from most failures without a full reboot.
 
 | Phase | Scope | Files | Depends On |
 |-------|-------|-------|-----------|
-| **Phase 1** | Thread heartbeat + watchdog library | `common/util/include/util/thread_heartbeat.h`, tests | — |
+| **Phase 1** | Thread heartbeat + watchdog library | `common/util/include/util/thread_heartbeat.h`, `common/util/include/util/thread_watchdog.h`, tests | — |
 | **Phase 2** | SHM thread health struct + per-process publishing | `shm_types.h` additions, P1–P6 integration | Phase 1 |
 | **Phase 3** | Process supervisor in System Monitor | `process7_system_monitor/`, launch script changes | Phase 2 |
 | **Phase 4** | Restart policies + dependency graph + degraded mode | Config-driven policies, stack status model | Phase 3 |
@@ -554,7 +563,7 @@ automatically when temperature drops.
 
 See §2.3 "Restart Policy" for the updated struct definition.
 
-### OQ-3: Process 7 as Single Point of Failure (Phase 3, #91)
+### OQ-3: Process 7 as Single Point of Failure (Phase 3, #91) — ACCEPTED
 
 The supervisor lives inside Process 7 (System Monitor). If P7 crashes,
 all child processes become orphans and no restart logic runs. Mitigations:
