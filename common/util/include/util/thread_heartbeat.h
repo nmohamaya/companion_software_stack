@@ -33,12 +33,21 @@ struct ThreadHeartbeat {
     std::atomic<uint64_t> last_touch_ns{0};
     bool                  is_critical = false;
 
-    // Non-atomic copy for snapshots
+    /// Set to true (with release) after name/is_critical are fully written.
+    /// snapshot() checks this (with acquire) to skip partially-initialized
+    /// slots, eliminating the TSAN data race between register_thread()
+    /// writing name/critical and snapshot() reading them concurrently.
+    std::atomic<bool> initialized{false};
+
+    // Non-atomic copy for snapshots — only called on initialized slots
+    // (guarded by initialized.load(acquire) in snapshot()).
     ThreadHeartbeat() = default;
     ThreadHeartbeat(const ThreadHeartbeat& other) : is_critical(other.is_critical) {
         std::memcpy(name, other.name, sizeof(name));
         last_touch_ns.store(other.last_touch_ns.load(std::memory_order_relaxed),
                             std::memory_order_relaxed);
+        initialized.store(other.initialized.load(std::memory_order_relaxed),
+                          std::memory_order_relaxed);
     }
     ThreadHeartbeat& operator=(const ThreadHeartbeat& other) {
         if (this != &other) {
@@ -46,6 +55,8 @@ struct ThreadHeartbeat {
             last_touch_ns.store(other.last_touch_ns.load(std::memory_order_relaxed),
                                 std::memory_order_relaxed);
             is_critical = other.is_critical;
+            initialized.store(other.initialized.load(std::memory_order_relaxed),
+                              std::memory_order_relaxed);
         }
         return *this;
     }
@@ -90,16 +101,16 @@ public:
             }
             // idx updated with current value; retry.
         }
-        // Initialize slot BEFORE it becomes visible to snapshot().
-        // The CAS above publishes idx+1, but we write to beats_[idx]
-        // which snapshot() only reads up to count_.  Since we just
-        // incremented count_ in the CAS, a concurrent snapshot() may
-        // already see this slot — so we must use the slot's own atomic
-        // to signal readiness.  We set last_touch_ns = 0 first (already
-        // default), then write name/critical.  snapshot() callers must
-        // tolerate partially-initialized name during the brief window.
+        // Initialize slot BEFORE publishing it to snapshot().
+        // The CAS above publishes count_=idx+1, so snapshot() may already
+        // see this slot in its iteration range.  We write name/critical
+        // first, then set initialized=true with release ordering.
+        // snapshot() checks initialized with acquire ordering before
+        // copying, establishing a happens-before that makes TSAN happy
+        // and prevents reading partially-written name/is_critical.
         safe_name_copy(beats_[idx].name, name);
         beats_[idx].is_critical = critical;
+        beats_[idx].initialized.store(true, std::memory_order_release);
         // last_touch_ns stays 0 — signals "registered but not yet started"
         return idx;
     }
@@ -127,13 +138,17 @@ public:
     }
 
     /// Snapshot all registered heartbeats (deep copy of atomics).
-    /// Thread-safe to call concurrently with touch().
+    /// Thread-safe to call concurrently with touch() and register_thread().
+    /// Only includes slots where initialized is true (acquire), which
+    /// guarantees name/is_critical are fully written.
     [[nodiscard]] std::vector<ThreadHeartbeat> snapshot() const {
         const size_t                 n = count_.load(std::memory_order_acquire);
         std::vector<ThreadHeartbeat> result;
         result.reserve(n);
         for (size_t i = 0; i < n && i < kMaxThreads; ++i) {
-            result.push_back(beats_[i]);
+            if (beats_[i].initialized.load(std::memory_order_acquire)) {
+                result.push_back(beats_[i]);
+            }
         }
         return result;
     }
@@ -144,6 +159,7 @@ public:
     /// Reset all state — only for testing.  NOT thread-safe.
     void reset_for_testing() {
         for (size_t i = 0; i < kMaxThreads; ++i) {
+            beats_[i].initialized.store(false, std::memory_order_relaxed);
             std::memset(beats_[i].name, 0, sizeof(beats_[i].name));
             beats_[i].last_touch_ns.store(0, std::memory_order_relaxed);
             beats_[i].is_critical = false;
