@@ -279,6 +279,10 @@ struct ShmSystemHealth {
     float    power_watts;
     uint8_t  thermal_zone;  // 0=normal, 1=warm, 2=hot, 3=critical
 
+    // ── Stack-level status (Phase 4) ────────────────────────
+    uint8_t  stack_status   = 0;  // StackStatus enum (0=NOMINAL, 1=DEGRADED, 2=CRITICAL)
+    uint32_t total_restarts = 0;  // Cumulative restart count across all processes
+
     // ── Process health (populated by LivelinessMonitor) ─────
     ProcessHealthEntry processes[kMaxTrackedProcesses] = {};
     uint8_t            num_processes                   = 0;      // Number of tracked processes

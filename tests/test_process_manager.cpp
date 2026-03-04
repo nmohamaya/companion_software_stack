@@ -21,7 +21,7 @@
 using drone::monitor::ManagedProcess;
 using drone::monitor::ProcessManager;
 using drone::monitor::ProcessState;
-using drone::monitor::RestartPolicy;
+using drone::util::RestartPolicy;
 
 // ── Helper: locate the test_crasher binary ──────────────────
 static std::string crasher_path() {

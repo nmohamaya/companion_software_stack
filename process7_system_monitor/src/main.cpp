@@ -11,6 +11,8 @@
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/log_config.h"
+#include "util/process_graph.h"
+#include "util/restart_policy.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -46,19 +48,9 @@ int main(int argc, char* argv[]) {
 
     // ── Supervised mode: fork+exec child processes ──────────
     std::unique_ptr<drone::monitor::ProcessManager> supervisor;
+    drone::util::ProcessGraph                       process_graph;
     if (args.supervised) {
         spdlog::info("[Supervisor] Mode ENABLED — will fork+exec child processes");
-        drone::monitor::RestartPolicy policy;
-        policy.max_restarts =
-            static_cast<uint32_t>(cfg.get<int>("system_monitor.supervisor.max_restarts", 5));
-        policy.cooldown_window_s =
-            static_cast<uint32_t>(cfg.get<int>("system_monitor.supervisor.cooldown_window_s", 60));
-        policy.initial_backoff_ms = static_cast<uint32_t>(
-            cfg.get<int>("system_monitor.supervisor.initial_backoff_ms", 500));
-        policy.max_backoff_ms =
-            static_cast<uint32_t>(cfg.get<int>("system_monitor.supervisor.max_backoff_ms", 30000));
-
-        supervisor = std::make_unique<drone::monitor::ProcessManager>(policy);
 
         // Resolve binary directory from our own /proc/self/exe
         char        self_path[1024] = {};
@@ -84,19 +76,88 @@ int main(int argc, char* argv[]) {
         if (args.simulation) extra_args += "--sim ";
         if (args.json_logs) extra_args += "--json-logs ";
 
-        // Register child processes in launch order
-        // (dependency graph from ADR-004 §2.3)
-        supervisor->add_process("video_capture", (bin_dir + "/video_capture").c_str(),
-                                extra_args.c_str());
-        supervisor->add_process("comms", (bin_dir + "/comms").c_str(), extra_args.c_str());
-        supervisor->add_process("perception", (bin_dir + "/perception").c_str(),
-                                extra_args.c_str());
-        supervisor->add_process("slam_vio_nav", (bin_dir + "/slam_vio_nav").c_str(),
-                                extra_args.c_str());
-        supervisor->add_process("mission_planner", (bin_dir + "/mission_planner").c_str(),
-                                extra_args.c_str());
-        supervisor->add_process("payload_manager", (bin_dir + "/payload_manager").c_str(),
-                                extra_args.c_str());
+        // Load per-process configs from "watchdog.processes" section
+        auto proc_section = cfg.section("watchdog.processes");
+
+        // Default process list (if config section is absent or empty)
+        static const std::vector<std::string> default_process_names = {
+            "video_capture", "perception",      "slam_vio_nav",
+            "comms",         "mission_planner", "payload_manager",
+        };
+
+        // Parse per-process configs
+        std::vector<drone::util::ProcessConfig> process_configs;
+        if (proc_section.is_object() && !proc_section.empty()) {
+            for (auto& [name, block] : proc_section.items()) {
+                auto pc = drone::util::ProcessConfig::from_json(name, block);
+                // Resolve binary path: if not absolute, prefix with bin_dir
+                if (pc.binary.empty() || pc.binary[0] != '/') {
+                    pc.binary = bin_dir + "/" + (pc.binary.empty() ? name : pc.binary);
+                    // Strip "build/bin/" prefix if present (config uses relative paths)
+                    auto prefix = std::string("build/bin/");
+                    if (pc.binary.find(prefix) != std::string::npos) {
+                        auto pos  = pc.binary.find(prefix);
+                        pc.binary = bin_dir + "/" + pc.binary.substr(pos + prefix.size());
+                    }
+                }
+                process_configs.push_back(std::move(pc));
+            }
+        } else {
+            // Fallback: use defaults with hardcoded policies
+            spdlog::info("[Supervisor] No watchdog.processes config — using defaults");
+            for (const auto& name : default_process_names) {
+                drone::util::ProcessConfig pc;
+                pc.name   = name;
+                pc.binary = bin_dir + "/" + name;
+                // Use default RestartPolicy
+                process_configs.push_back(std::move(pc));
+            }
+        }
+
+        // Build the process graph and supervisor
+        supervisor = std::make_unique<drone::monitor::ProcessManager>();
+
+        for (const auto& pc : process_configs) {
+            process_graph.add_process(pc.name);
+        }
+
+        // Wire dependency edges
+        for (const auto& pc : process_configs) {
+            for (const auto& dep : pc.launch_after) {
+                process_graph.add_launch_dep(pc.name, dep);
+            }
+            for (const auto& target : pc.restart_cascade) {
+                process_graph.add_cascade(pc.name, target);
+            }
+        }
+
+        if (!process_graph.validate()) {
+            spdlog::error("[Supervisor] ProcessGraph validation failed — check config");
+        }
+
+        // Register processes in topological launch order
+        auto launch_order = process_graph.launch_order();
+        if (launch_order.empty()) {
+            spdlog::warn("[Supervisor] Empty launch order — falling back to config order");
+            for (const auto& pc : process_configs) {
+                launch_order.push_back(pc.name);
+            }
+        }
+
+        // Build name → config lookup
+        std::unordered_map<std::string, const drone::util::ProcessConfig*> config_map;
+        for (const auto& pc : process_configs) {
+            config_map[pc.name] = &pc;
+        }
+
+        for (const auto& name : launch_order) {
+            auto it = config_map.find(name);
+            if (it == config_map.end()) continue;
+            const auto& pc = *it->second;
+            supervisor->add_process(name.c_str(), pc.binary.c_str(), extra_args.c_str(), pc.policy);
+        }
+
+        supervisor->set_process_graph(&process_graph);
 
         supervisor->set_death_callback([](const char* name, int exit_code, int signal_num) {
             if (signal_num > 0) {
@@ -107,9 +168,10 @@ int main(int argc, char* argv[]) {
             }
         });
 
-        // Launch all children in order
+        // Launch all children in topological order
         supervisor->launch_all();
-        spdlog::info("[Supervisor] All child processes launched");
+        spdlog::info("[Supervisor] All child processes launched (order: {})",
+                     fmt::join(launch_order, " → "));
     }
 
     // ── Create message bus (config-driven: shm or zenoh) ───
@@ -262,17 +324,26 @@ int main(int argc, char* argv[]) {
             else if (health.thermal_zone == 3)
                 status_str = "CRITICAL";
 
-            spdlog::info("[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}°C "
-                         "DISK={:.0f}% BATT={:.0f}% => {}",
-                         health.cpu_usage_percent, health.memory_usage_percent, health.cpu_temp_c,
-                         health.disk_usage_percent, battery, status_str);
+            spdlog::info(
+                "[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}°C "
+                "DISK={:.0f}% BATT={:.0f}% stack={} => {}",
+                health.cpu_usage_percent, health.memory_usage_percent, health.cpu_temp_c,
+                health.disk_usage_percent, battery,
+                drone::util::to_string(static_cast<drone::util::StackStatus>(health.stack_status)),
+                status_str);
         }
 
         thread_health_publisher.publish_snapshot();
 
         // ── Supervisor tick: reap zombies, detect deaths, restart ─
         if (supervisor) {
+            // Feed current thermal zone to supervisor for thermal gating
+            supervisor->set_thermal_zone(health.thermal_zone);
             supervisor->tick();
+
+            // Update stack status and total restarts in health struct
+            health.stack_status   = static_cast<uint8_t>(supervisor->compute_stack_status());
+            health.total_restarts = supervisor->total_restarts();
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));

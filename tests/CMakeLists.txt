@@ -133,9 +133,17 @@ endif()
 
 # ── Process Manager tests ────────────────────────────────────
 # Fork+exec real processes — serialise to avoid PID/signal conflicts.
+# ── Process Manager tests ────────────────────────────────
+# Fork+exec real processes — serialise to avoid PID/signal conflicts.
 add_drone_test(test_process_manager test_process_manager.cpp
     PROPERTIES RESOURCE_LOCK "fork_exec")
 add_dependencies(test_process_manager test_crasher)
+
+# ── Restart Policy tests (Phase 4) ──────────────────────────
+add_drone_test(test_restart_policy  test_restart_policy.cpp)
+
+# ── Process Graph tests (Phase 4) ───────────────────────────
+add_drone_test(test_process_graph   test_process_graph.cpp)
 
 # ── Phase F: Liveliness token tests ──────────────────────────
 add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp

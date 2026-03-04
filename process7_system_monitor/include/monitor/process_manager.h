@@ -1,9 +1,17 @@
 // process7_system_monitor/include/monitor/process_manager.h
-// Phase 3 (#91) — Process supervisor: fork+exec, crash detection, restart.
+// Phase 3 (#91) + Phase 4 (#92) — Process supervisor with restart policies,
+// thermal gating, cascade restarts, and stack status.
 //
 // The ProcessManager lives inside System Monitor (P7). When launched with
 // --supervised, P7 fork+execs the other 6 processes, reaps zombies via
 // waitpid(WNOHANG) polling in tick(), and restarts dead children.
+//
+// Phase 4 additions:
+//   - Per-process RestartPolicy with is_critical + thermal_gate
+//   - ProcessGraph integration for cascade restarts
+//   - StackStatus computation (NOMINAL/DEGRADED/CRITICAL)
+//   - Structured log events with correlation IDs
+//   - Thermal gating: defers restarts when system is overheating
 //
 // Design decisions:
 //   - fork+exec (not system/popen) for proper PID tracking
@@ -14,6 +22,9 @@
 //   - No allocations in the reap/restart hot path
 #pragma once
 
+#include "util/correlation.h"
+#include "util/process_graph.h"
+#include "util/restart_policy.h"
 #include "util/safe_name_copy.h"
 
 #include <algorithm>
@@ -25,6 +36,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <dirent.h>
@@ -67,14 +79,7 @@ struct ManagedProcess {
     int          last_exit_code   = 0;      // wstatus from waitpid
     bool         was_signaled     = false;  // true if killed by signal
     int          last_signal      = 0;      // signal number if was_signaled
-};
-
-// ── Restart policy (simple for Phase 3; Phase 4 adds config-driven) ──
-struct RestartPolicy {
-    uint32_t max_restarts       = 5;
-    uint32_t cooldown_window_s  = 60;  // Reset counter after N seconds stable
-    uint32_t initial_backoff_ms = 500;
-    uint32_t max_backoff_ms     = 30000;
+    bool         thermal_deferred = false;  // true if restart is deferred due to thermal
 };
 
 // ── Death callback type ─────────────────────────────────────
@@ -84,7 +89,9 @@ using DeathCallback = std::function<void(const char* name, int exit_code, int si
 // ── ProcessManager ──────────────────────────────────────────
 class ProcessManager {
 public:
-    explicit ProcessManager(RestartPolicy policy = {}) : policy_(policy) {}
+    /// Construct with a default policy (backward-compatible Phase 3 API).
+    explicit ProcessManager(drone::util::RestartPolicy default_policy = {})
+        : default_policy_(default_policy) {}
 
     ~ProcessManager() { stop_all(); }
 
@@ -94,17 +101,33 @@ public:
     ProcessManager(ProcessManager&&)                 = delete;
     ProcessManager& operator=(ProcessManager&&)      = delete;
 
-    /// Register a process to be managed.
+    /// Register a process with the default policy (Phase 3 API).
     void add_process(const char* name, const char* binary_path, const char* args = "") {
+        add_process(name, binary_path, args, default_policy_);
+    }
+
+    /// Register a process with a specific per-process policy (Phase 4 API).
+    void add_process(const char* name, const char* binary_path, const char* args,
+                     const drone::util::RestartPolicy& policy) {
         ManagedProcess proc{};
         drone::util::safe_name_copy(proc.name, name);
         drone::util::safe_name_copy(proc.binary_path, binary_path);
         drone::util::safe_name_copy(proc.args, args);
         processes_.push_back(proc);
+        policies_[name] = policy;
     }
 
     /// Set callback for death events.
     void set_death_callback(DeathCallback cb) { death_cb_ = std::move(cb); }
+
+    /// Set the process dependency graph for cascade restarts.
+    void set_process_graph(const drone::util::ProcessGraph* graph) { graph_ = graph; }
+
+    /// Set the current thermal zone (updated each tick from ShmSystemHealth).
+    void set_thermal_zone(uint8_t zone) { thermal_zone_ = zone; }
+
+    /// Get current thermal zone.
+    [[nodiscard]] uint8_t thermal_zone() const { return thermal_zone_; }
 
     /// Fork+exec all registered processes in order.
     void launch_all() {
@@ -189,12 +212,38 @@ public:
                 std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch())
                     .count());
 
+            const auto& policy = get_policy(proc.name);
+
             // Check if RESTARTING processes are ready to re-launch
             if (proc.state == ProcessState::RESTARTING) {
-                uint64_t backoff_ns = compute_backoff_ns(proc);
+                // Thermal gate: defer restart when system is overheating
+                if (policy.is_thermal_blocked(thermal_zone_)) {
+                    if (!proc.thermal_deferred) {
+                        proc.thermal_deferred = true;
+                        auto cid              = drone::util::CorrelationContext::generate();
+                        spdlog::warn("[Supervisor] RESTART_DEFERRED_THERMAL process={} "
+                                     "thermal_zone={} thermal_gate={} cid={:#018x}",
+                                     proc.name, thermal_zone_, policy.thermal_gate, cid);
+                    }
+                    continue;  // Skip — wait for thermal to clear
+                }
+
+                // Clear thermal deferral flag if temperature dropped
+                if (proc.thermal_deferred) {
+                    proc.thermal_deferred = false;
+                    spdlog::info("[Supervisor] Thermal cleared for {} — restart proceeding",
+                                 proc.name);
+                }
+
+                uint64_t backoff_ns = compute_backoff_ns(proc, policy);
                 if (now_ns - proc.last_restart_ns >= backoff_ns) {
-                    spdlog::info("[Supervisor] Restarting {} (attempt {}/{})", proc.name,
-                                 proc.restart_count + 1, policy_.max_restarts);
+                    auto     cid      = drone::util::CorrelationContext::generate();
+                    uint32_t delay_ms = policy.backoff_ms(proc.restart_count);
+                    spdlog::warn("[Supervisor] PROCESS_RESTART process={} attempt={}/{} "
+                                 "backoff_ms={} exit_code={} signal={} cid={:#018x}",
+                                 proc.name, proc.restart_count + 1, policy.max_restarts, delay_ms,
+                                 proc.last_exit_code,
+                                 proc.was_signaled ? strsignal(proc.last_signal) : "none", cid);
                     launch_one(proc);
                 }
                 continue;  // Skip cooldown check for just-launched processes
@@ -204,11 +253,11 @@ public:
             if (proc.state == ProcessState::RUNNING && proc.restart_count > 0 &&
                 proc.started_at_ns > 0 && now_ns > proc.started_at_ns) {
                 uint64_t stable_ns   = now_ns - proc.started_at_ns;
-                uint64_t cooldown_ns = static_cast<uint64_t>(policy_.cooldown_window_s) *
+                uint64_t cooldown_ns = static_cast<uint64_t>(policy.cooldown_window_s) *
                                        1'000'000'000ULL;
                 if (stable_ns >= cooldown_ns) {
                     spdlog::info("[Supervisor] {} stable for {}s — resetting restart counter",
-                                 proc.name, policy_.cooldown_window_s);
+                                 proc.name, policy.cooldown_window_s);
                     proc.restart_count = 0;
                 }
             }
@@ -252,11 +301,20 @@ public:
                 continue;
             }
 
+            // Handle cascade stops (Phase 4): stop downstream processes
+            // that hold stale state from the dead process.
+            handle_cascade_stops(proc->name);
+
+            const auto& policy = get_policy(proc->name);
+
             // Schedule restart or mark FAILED
-            if (proc->restart_count >= policy_.max_restarts) {
+            if (proc->restart_count >= policy.max_restarts) {
                 proc->state = ProcessState::FAILED;
-                spdlog::error("[Supervisor] {} FAILED — max restarts ({}) exhausted", proc->name,
-                              policy_.max_restarts);
+                auto cid    = drone::util::CorrelationContext::generate();
+                spdlog::error("[Supervisor] PROCESS_FAILED process={} restarts_exhausted={} "
+                              "stack_status={} cid={:#018x}",
+                              proc->name, policy.max_restarts,
+                              drone::util::to_string(compute_stack_status()), cid);
             } else {
                 proc->state = ProcessState::RESTARTING;
                 auto now_ns =
@@ -268,14 +326,44 @@ public:
         }
     }
 
+    /// Compute the current stack status from process states.
+    [[nodiscard]] drone::util::StackStatus compute_stack_status() const {
+        bool has_degraded = false;
+
+        for (const auto& proc : processes_) {
+            const auto& policy = get_policy(proc.name);
+
+            if (proc.state == ProcessState::FAILED) {
+                if (policy.is_critical) {
+                    return drone::util::StackStatus::CRITICAL;
+                }
+                has_degraded = true;
+            } else if (proc.state == ProcessState::RESTARTING) {
+                has_degraded = true;
+            }
+        }
+
+        return has_degraded ? drone::util::StackStatus::DEGRADED
+                            : drone::util::StackStatus::NOMINAL;
+    }
+
+    /// Get total restart count across all managed processes.
+    [[nodiscard]] uint32_t total_restarts() const {
+        uint32_t total = 0;
+        for (const auto& proc : processes_) {
+            total += proc.restart_count;
+        }
+        return total;
+    }
+
     /// Get current state of all managed processes (copy for thread safety).
-    std::vector<ManagedProcess> get_all() const { return processes_; }
+    [[nodiscard]] std::vector<ManagedProcess> get_all() const { return processes_; }
 
     /// Get count of registered processes.
-    size_t size() const { return processes_.size(); }
+    [[nodiscard]] size_t size() const { return processes_.size(); }
 
     /// Find a process by name (const).
-    const ManagedProcess* find(const char* name) const {
+    [[nodiscard]] const ManagedProcess* find(const char* name) const {
         for (const auto& proc : processes_) {
             if (std::strcmp(proc.name, name) == 0) return &proc;
         }
@@ -290,17 +378,54 @@ public:
         return nullptr;
     }
 
+    /// Get the policy for a given process.
+    [[nodiscard]] const drone::util::RestartPolicy& get_policy(const char* name) const {
+        auto key = std::string(name);
+        auto it  = policies_.find(key);
+        if (it != policies_.end()) return it->second;
+        return default_policy_;
+    }
+
 private:
-    std::vector<ManagedProcess> processes_;
-    RestartPolicy               policy_;
-    DeathCallback               death_cb_;
-    bool                        stopping_ = false;
+    std::vector<ManagedProcess>                                 processes_;
+    drone::util::RestartPolicy                                  default_policy_;
+    std::unordered_map<std::string, drone::util::RestartPolicy> policies_;
+    DeathCallback                                               death_cb_;
+    const drone::util::ProcessGraph*                            graph_        = nullptr;
+    uint8_t                                                     thermal_zone_ = 0;
+    bool                                                        stopping_     = false;
 
     ManagedProcess* find_by_pid(pid_t pid) {
         for (auto& proc : processes_) {
             if (proc.pid == pid) return &proc;
         }
         return nullptr;
+    }
+
+    /// Handle cascade stops: when a process dies, stop all its cascade targets.
+    void handle_cascade_stops(const char* dead_process) {
+        if (!graph_) return;
+
+        auto targets = graph_->cascade_targets(dead_process);
+        if (targets.empty()) return;
+
+        spdlog::info("[Supervisor] Cascade from {} — stopping: {}", dead_process,
+                     fmt::join(targets, ", "));
+
+        for (const auto& target_name : targets) {
+            auto* target = find(target_name.c_str());
+            if (target && target->state == ProcessState::RUNNING) {
+                stop_one(*target);
+                // Mark as RESTARTING so tick() will re-launch after
+                // the source process is back up
+                target->state = ProcessState::RESTARTING;
+                auto now_ns =
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count());
+                target->last_restart_ns = now_ns;
+            }
+        }
     }
 
     /// Fork+exec a single process.  Returns true on success.
@@ -355,9 +480,10 @@ private:
             proc.restart_count++;
         }
 
-        proc.pid           = pid;
-        proc.state         = ProcessState::RUNNING;
-        proc.started_at_ns = now_ns;
+        proc.pid              = pid;
+        proc.state            = ProcessState::RUNNING;
+        proc.started_at_ns    = now_ns;
+        proc.thermal_deferred = false;
 
         spdlog::info("[Supervisor] Launched {} (PID {})", proc.name, pid);
         return true;
@@ -473,11 +599,9 @@ private:
     }
 
     /// Compute backoff in nanoseconds for the current restart attempt.
-    uint64_t compute_backoff_ns(const ManagedProcess& proc) const {
-        uint32_t backoff_ms = policy_.initial_backoff_ms;
-        for (uint32_t i = 0; i < proc.restart_count && backoff_ms < policy_.max_backoff_ms; ++i) {
-            backoff_ms = std::min(backoff_ms * 2, policy_.max_backoff_ms);
-        }
+    uint64_t compute_backoff_ns(const ManagedProcess&             proc,
+                                const drone::util::RestartPolicy& policy) const {
+        uint32_t backoff_ms = policy.backoff_ms(proc.restart_count);
         return static_cast<uint64_t>(backoff_ms) * 1'000'000ULL;
     }
 };
