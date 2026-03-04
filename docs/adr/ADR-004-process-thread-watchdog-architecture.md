@@ -401,8 +401,9 @@ This design means Layer 3 is purely additive — no changes to Layers 1–2.
 The following table documents every thread registered with the heartbeat
 system (Phase 2, #90), its criticality designation, and the rationale.
 A **critical** thread triggers process self-termination when stuck; a
-**non-critical** thread logs a warning and the process enters DEGRADED
-mode but continues operating.
+**non-critical** thread logs a warning, marks its own thread state as
+unhealthy, and the system monitor may report the overall stack as
+DEGRADED while the process continues operating.
 
 | Process | Thread Name | Critical | Rationale |
 |---------|-------------|:--------:|-----------|
