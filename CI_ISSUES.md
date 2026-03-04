@@ -458,3 +458,103 @@ Also added `#include <cstdio>` for `snprintf`.
 
 - Prefer `snprintf(dst, sizeof(dst), "%s", src)` over `strncpy(dst, src, n)` for intentional truncation into fixed-size char buffers.
 - Always test with Release + `-Werror -Wall -Wextra` locally before pushing, especially for new code that manipulates C strings. The `deploy/build.sh` script does NOT pass `-Werror` — CI does.
+
+---
+
+## CI-009: TSAN data race in `ThreadHeartbeat` snapshot vs register (SHM TSAN)
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-03-04 |
+| **Branch** | `feature/issue-90-shm-thread-health` |
+| **PR** | #96 |
+| **Affected tests** | `ThreadHealthPublisherTest.StuckThreadMarkedUnhealthy`, `HealthyThreadMarkedHealthy`, `TwoThreadIntegration` |
+| **CI matrix** | `shm-tsan` leg only (Debug `-O0 -fsanitize=thread`) |
+
+### Symptoms
+
+Three tests in `test_thread_health_publisher` failed under TSAN with two data race warnings each:
+
+```
+WARNING: ThreadSanitizer: data race (pid=246897)
+  Read of size 1 at 0x... by thread T1:
+    #0 drone::util::ThreadHeartbeat::ThreadHeartbeat(const&) thread_heartbeat.h:38
+    ...
+    #6 drone::util::ThreadHeartbeatRegistry::snapshot() const thread_heartbeat.h:136
+    #7 drone::util::ThreadWatchdog::scan_once() thread_watchdog.h:113
+
+  Previous write of size 1 at 0x... by main thread:
+    #0 drone::util::ThreadHeartbeatRegistry::register_thread() thread_heartbeat.h:102
+
+SUMMARY: ThreadSanitizer: data race in ThreadHeartbeat copy constructor
+```
+
+Two distinct races flagged:
+1. `is_critical` (bool) — read by copy ctor in `snapshot()`, written by `register_thread()`
+2. `name[32]` (memcpy vs strncpy via `safe_name_copy()`) — same concurrent access pattern
+
+### Root Cause
+
+`register_thread()` uses a CAS loop to atomically increment `count_`, claiming a slot index. However, the CAS publishes the new count **before** writing `name` and `is_critical` to the slot:
+
+```
+Thread A (main):                Thread B (watchdog):
+  CAS: count_ = idx+1             snapshot():
+  ─── slot now visible ───           n = count_.load()  // sees idx+1
+  safe_name_copy(name)               for i in 0..n:
+  is_critical = critical               copy ctor(beats_[i])  // RACE on name + is_critical
+```
+
+The copy constructor reads `is_critical` (non-atomic, line 38) and `memcpy`s `name` (line 39) while `register_thread()` is still writing them on the main thread. TSAN correctly flags this as a data race because there is no happens-before relationship between the CAS on `count_` and the reads of `name`/`is_critical` — they are separate memory locations.
+
+### Fix Applied
+
+**Commit:** `59639c9`
+
+Added a per-slot `std::atomic<bool> initialized{false}` field to `ThreadHeartbeat` with acquire/release semantics:
+
+```cpp
+struct ThreadHeartbeat {
+    char                  name[32] = {};
+    std::atomic<uint64_t> last_touch_ns{0};
+    bool                  is_critical = false;
+    std::atomic<bool>     initialized{false};  // NEW
+    // ...
+};
+```
+
+In `register_thread()` — set `initialized` with release **after** writing name/critical:
+```cpp
+safe_name_copy(beats_[idx].name, name);
+beats_[idx].is_critical = critical;
+beats_[idx].initialized.store(true, std::memory_order_release);  // publishes writes
+```
+
+In `snapshot()` — guard reads with acquire:
+```cpp
+for (size_t i = 0; i < n && i < kMaxThreads; ++i) {
+    if (beats_[i].initialized.load(std::memory_order_acquire)) {  // sees all writes
+        result.push_back(beats_[i]);
+    }
+}
+```
+
+The `release` on `initialized` in `register_thread()` and `acquire` in `snapshot()` establish a happens-before relationship, guaranteeing `name` and `is_critical` are fully written before the copy constructor reads them. TSAN recognises this as a proper synchronisation edge.
+
+Also updated:
+- `reset_for_testing()` — resets `initialized` to `false`
+- Copy ctor/assignment — copies the `initialized` flag
+
+### Verification
+
+```bash
+# TSAN build + run (zero warnings):
+TSAN_OPTIONS="halt_on_error=1" ./bin/test_thread_health_publisher  # 15/15 passed
+TSAN_OPTIONS="halt_on_error=1" ./bin/test_thread_heartbeat         # 25/25 passed
+```
+
+### Prevention
+
+- When using a counter atomic (`count_`) to gate visibility of array slots, ensure all non-atomic fields in the slot are fully written **before** any synchronisation point that makes the slot visible to readers. Prefer a per-slot `initialized` flag with release/acquire over relying on the counter alone.
+- Run TSAN locally before pushing multi-threaded code: `cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O0" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"`
+- This also resolves Issue #99 (tech debt: CAS race — per-slot ready flag).
