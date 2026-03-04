@@ -84,11 +84,19 @@ private:
         while (running_.load(std::memory_order_relaxed)) {
             scan_once();
 
-            // Sleep in small increments so we can exit quickly
+            // Sleep in small increments so we can exit quickly.
+            // Use min(remaining, 50ms) so sub-50ms scan intervals are honored.
             const auto deadline = std::chrono::steady_clock::now() + cfg_.scan_interval;
-            while (running_.load(std::memory_order_relaxed) &&
-                   std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            while (running_.load(std::memory_order_relaxed)) {
+                const auto now       = std::chrono::steady_clock::now();
+                auto       remaining = deadline - now;
+                if (remaining <= std::chrono::milliseconds::zero()) {
+                    break;
+                }
+                const auto sleep_duration = std::min(
+                    remaining, std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                   std::chrono::milliseconds(50)));
+                std::this_thread::sleep_for(sleep_duration);
             }
         }
     }
@@ -106,6 +114,13 @@ private:
 
         std::vector<std::string> new_stuck;
 
+        // Copy callback under lock, then invoke outside to avoid deadlock
+        StuckCallback cb_copy;
+        {
+            std::lock_guard<std::mutex> lock(cb_mutex_);
+            cb_copy = callback_;
+        }
+
         for (const auto& beat : beats) {
             const uint64_t last = beat.last_touch_ns.load(std::memory_order_relaxed);
 
@@ -120,17 +135,27 @@ private:
             if (delta > threshold_ns) {
                 new_stuck.emplace_back(beat.name);
 
-                spdlog::error("[Watchdog] Thread '{}' stuck for {:.1f}s "
-                              "(threshold: {:.1f}s, critical: {})",
-                              beat.name, static_cast<double>(delta) / 1e9,
-                              static_cast<double>(threshold_ns) / 1e9, beat.is_critical);
-
-                // Fire callback
+                // Log only on healthy→stuck transition to avoid log storms
+                bool was_previously_stuck = false;
                 {
-                    std::lock_guard<std::mutex> lock(cb_mutex_);
-                    if (callback_) {
-                        callback_(beat);
+                    std::lock_guard<std::mutex> lock(stuck_mutex_);
+                    for (const auto& s : stuck_names_) {
+                        if (s == beat.name) {
+                            was_previously_stuck = true;
+                            break;
+                        }
                     }
+                }
+                if (!was_previously_stuck) {
+                    spdlog::error("[Watchdog] Thread '{}' stuck for {:.1f}s "
+                                  "(threshold: {:.1f}s, critical: {})",
+                                  beat.name, static_cast<double>(delta) / 1e9,
+                                  static_cast<double>(threshold_ns) / 1e9, beat.is_critical);
+                }
+
+                // Fire callback (outside cb_mutex_ to avoid deadlock)
+                if (cb_copy) {
+                    cb_copy(beat);
                 }
             }
         }

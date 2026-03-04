@@ -23,8 +23,9 @@ static constexpr size_t kMaxThreads = 16;
 /// Sentinel returned when the registry is full.
 static constexpr size_t kInvalidHandle = static_cast<size_t>(-1);
 
-/// Per-thread heartbeat entry.  Designed to be trivially copyable so it
-/// can be safely memcpy'd into SHM structs (Phase 2).
+/// Per-thread heartbeat entry used for tracking per-thread liveness.
+/// Contains std::atomic + custom copy ctor, so NOT trivially copyable.
+/// Snapshots should be taken via the explicit copy constructor/assignment.
 struct ThreadHeartbeat {
     char                  name[32] = {};
     std::atomic<uint64_t> last_touch_ns{0};
@@ -73,13 +74,28 @@ public:
     /// @param critical  If true, a stuck thread triggers process self-termination.
     /// @return Handle for touch(), or kInvalidHandle if registry is full.
     size_t register_thread(const char* name, bool critical = false) {
-        const size_t idx = count_.fetch_add(1, std::memory_order_acq_rel);
-        if (idx >= kMaxThreads) {
-            // Rollback — we've exceeded the limit
-            count_.fetch_sub(1, std::memory_order_relaxed);
-            return kInvalidHandle;
+        // CAS loop: atomically claim a slot only if below kMaxThreads.
+        // This avoids the fetch_add/fetch_sub rollback race where concurrent
+        // overflow registrations can corrupt count_.
+        size_t idx = count_.load(std::memory_order_acquire);
+        while (true) {
+            if (idx >= kMaxThreads) {
+                return kInvalidHandle;
+            }
+            if (count_.compare_exchange_weak(idx, idx + 1, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
+                break;
+            }
+            // idx updated with current value; retry.
         }
-        // Safe: each thread writes to a unique slot (idx is unique per fetch_add)
+        // Initialize slot BEFORE it becomes visible to snapshot().
+        // The CAS above publishes idx+1, but we write to beats_[idx]
+        // which snapshot() only reads up to count_.  Since we just
+        // incremented count_ in the CAS, a concurrent snapshot() may
+        // already see this slot — so we must use the slot's own atomic
+        // to signal readiness.  We set last_touch_ns = 0 first (already
+        // default), then write name/critical.  snapshot() callers must
+        // tolerate partially-initialized name during the brief window.
         std::strncpy(beats_[idx].name, name, sizeof(beats_[idx].name) - 1);
         beats_[idx].name[sizeof(beats_[idx].name) - 1] = '\0';
         beats_[idx].is_critical                        = critical;

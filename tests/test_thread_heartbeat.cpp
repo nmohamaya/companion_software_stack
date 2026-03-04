@@ -6,6 +6,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -312,18 +314,19 @@ TEST_F(ThreadHeartbeatTest, WatchdogCriticalFlagPropagated) {
     auto handle = ThreadHeartbeatRegistry::instance().register_thread("safety_thread", true);
     ThreadHeartbeatRegistry::instance().touch(handle);
 
-    bool critical_was_set = false;
+    std::atomic<bool> critical_was_set{false};
 
     ThreadWatchdog::Config cfg;
     cfg.stuck_threshold = 200ms;
     cfg.scan_interval   = 50ms;
     ThreadWatchdog watchdog(cfg);
-    watchdog.set_stuck_callback(
-        [&](const ThreadHeartbeat& beat) { critical_was_set = beat.is_critical; });
+    watchdog.set_stuck_callback([&](const ThreadHeartbeat& beat) {
+        critical_was_set.store(beat.is_critical, std::memory_order_relaxed);
+    });
 
     std::this_thread::sleep_for(500ms);
 
-    EXPECT_TRUE(critical_was_set);
+    EXPECT_TRUE(critical_was_set.load());
 }
 
 TEST_F(ThreadHeartbeatTest, WatchdogIgnoresUnstartedThread) {
