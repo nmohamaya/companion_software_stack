@@ -59,7 +59,7 @@ to Phase D.
 > authentication. This is acceptable for development and bench testing.
 > For production / flight hardware, use `"protocol": "tls"` with mutual
 > TLS certificates and configure Zenoh authentication. See
-> [PRODUCTION_READINESS.md](../PRODUCTION_READINESS.md) items 2.1 and 2.6.
+> [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) items 2.1 and 2.6.
 
 ### Wire Format
 

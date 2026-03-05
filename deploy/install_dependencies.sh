@@ -19,7 +19,7 @@
 # After running this script, build the stack with:
 #   bash deploy/build.sh
 #
-# See INSTALL.md for detailed explanations and troubleshooting.
+# See docs/INSTALL.md for detailed explanations and troubleshooting.
 set -euo pipefail
 
 # ── Colours & helpers ─────────────────────────────────────────
@@ -720,5 +720,5 @@ if $INSTALL_GAZEBO || [[ "${INSTALLED[*]}" == *"Gazebo"* ]]; then
     echo "     SITL (Zenoh):    bash deploy/clean_build_and_run_zenoh.sh --gui"
 fi
 echo ""
-echo "  See INSTALL.md for troubleshooting and detailed documentation."
+echo "  See docs/INSTALL.md for troubleshooting and detailed documentation."
 echo ""

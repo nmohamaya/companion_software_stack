@@ -12,6 +12,8 @@
 #   bash deploy/build.sh --ubsan         # Debug + UndefinedBehaviorSanitizer
 #   bash deploy/build.sh --coverage      # Debug + gcov code coverage
 #   bash deploy/build.sh --format-check  # Check clang-format (no build)
+#   bash deploy/build.sh --test          # Build + run all tests
+#   bash deploy/build.sh --test-filter watchdog  # Build + run module tests
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -23,9 +25,11 @@ CLEAN=0
 SANITIZER=""
 ENABLE_COVERAGE="OFF"
 FORMAT_CHECK=0
+RUN_TESTS=0
+TEST_FILTER=""
 
-for arg in "$@"; do
-    case "$arg" in
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --zenoh)         ENABLE_ZENOH="ON" ;;
         --clean)         CLEAN=1 ;;
         --asan)          SANITIZER="asan" ;;
@@ -33,13 +37,34 @@ for arg in "$@"; do
         --ubsan)         SANITIZER="ubsan" ;;
         --coverage)      ENABLE_COVERAGE="ON" ;;
         --format-check)  FORMAT_CHECK=1 ;;
-        Debug|Release|RelWithDebInfo|MinSizeRel) BUILD_TYPE="$arg" ;;
+        --test)          RUN_TESTS=1 ;;
+        --test-filter)
+            RUN_TESTS=1
+            TEST_FILTER="${2:-}"
+            if [[ -z "$TEST_FILTER" ]]; then
+                echo "ERROR: --test-filter requires a module name."
+                echo "  Example: $0 --test-filter watchdog"
+                exit 1
+            fi
+            shift  # consume the module name
+            ;;
+        --test-filter=*)
+            RUN_TESTS=1
+            TEST_FILTER="${1#*=}"
+            if [[ -z "$TEST_FILTER" ]]; then
+                echo "ERROR: --test-filter requires a module name."
+                echo "  Example: $0 --test-filter watchdog"
+                exit 1
+            fi
+            ;;
+        Debug|Release|RelWithDebInfo|MinSizeRel) BUILD_TYPE="$1" ;;
         *)
-            echo "Unknown argument: $arg"
-            echo "Usage: $0 [Debug|Release] [--zenoh] [--clean] [--asan|--tsan|--ubsan] [--coverage] [--format-check]"
+            echo "Unknown argument: $1"
+            echo "Usage: $0 [Debug|Release] [--zenoh] [--clean] [--asan|--tsan|--ubsan] [--coverage] [--format-check] [--test] [--test-filter MODULE]"
             exit 1
             ;;
     esac
+    shift
 done
 
 # ── Format check (standalone — exits after) ──────────────────
@@ -127,6 +152,7 @@ fi
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
+# shellcheck disable=SC2086
 cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
       ${ZENOH_FLAGS} \
       ${SANITIZER_FLAGS} \
@@ -138,8 +164,25 @@ echo ""
 echo "Build complete! Binaries in: ${BUILD_DIR}/bin/"
 ls -la "${BUILD_DIR}/bin/"
 
+# ── Post-build: run tests if requested ───────────────────────
+if [[ "$RUN_TESTS" -eq 1 ]]; then
+    echo ""
+    echo "═══ Running tests ═══"
+    TEST_RUNNER="${PROJECT_DIR}/tests/run_tests.sh"
+    TEST_ARGS=()
+    if [[ -n "$TEST_FILTER" ]]; then
+        TEST_ARGS+=("$TEST_FILTER")
+    fi
+    # Pass --no-build to avoid a redundant rebuild — build.sh already built.
+    TEST_ARGS+=("--no-build")
+    if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
+        TEST_ARGS+=("--coverage")
+    fi
+    bash "$TEST_RUNNER" "${TEST_ARGS[@]}"
+fi
+
 # ── Post-build: coverage report helper ───────────────────────
-if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
+if [[ "$ENABLE_COVERAGE" == "ON" && "$RUN_TESTS" -eq 0 ]]; then
     echo ""
     echo "Coverage build ready.  To generate a report after running tests:"
     echo "  cd ${BUILD_DIR}"

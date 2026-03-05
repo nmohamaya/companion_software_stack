@@ -5,7 +5,83 @@
 >
 > **Framework:** Google Test 1.14.0 (`TEST()` / `TEST_F()`)  
 > **Standard:** C++17  
-> **Run all:** `ctest --test-dir build --output-on-failure -j$(nproc)`
+> **Run all:** `./tests/run_tests.sh` or `ctest --test-dir build --output-on-failure -j$(nproc)`
+
+---
+
+## Running Tests
+
+### Quick Start
+
+```bash
+# Run all tests
+./tests/run_tests.sh
+
+# Run a specific module
+./tests/run_tests.sh watchdog
+./tests/run_tests.sh perception
+./tests/run_tests.sh ipc
+
+# Fast tests only (skip fork/exec, Zenoh sessions, E2E)
+./tests/run_tests.sh quick
+
+# Zenoh end-to-end integration (launches all 7 processes)
+./tests/run_tests.sh zenoh-e2e
+
+# Gazebo SITL integration (requires PX4 + Gazebo Harmonic)
+./tests/run_tests.sh gazebo-e2e
+
+# Build with Zenoh and run E2E
+./tests/run_tests.sh zenoh-e2e --zenoh
+
+# List available modules
+./tests/run_tests.sh list
+```
+
+### Module Filters
+
+| Module | Description | Approx. Tests |
+|--------|-------------|---------------|
+| `ipc` | SHM + Zenoh IPC primitives, message bus, wire format | ~150 |
+| `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
+| `perception` | Kalman tracker, fusion engine, color contour, YOLOv8 | ~88 |
+| `mission` | Mission FSM, FaultManager degradation | ~31 |
+| `comms` | MavlinkSim and GCSLink | ~13 |
+| `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
+| `payload` | GimbalController servo simulation | ~9 |
+| `monitor` | P7 system monitor (CPU/memory/thermal) | ~28 |
+| `util` | Config, Result, latency tracker, JSON log, correlation | ~136 |
+| `interfaces` | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor | ~21 |
+| `zenoh` | All Zenoh-specific tests | ~121 |
+| `network` | Network transport, wire format, liveliness | ~50 |
+| `quick` | All fast unit tests (excludes slow/resource-heavy) | ~600 |
+| `zenoh-e2e` | Zenoh end-to-end integration smoke test (shell script) | N/A |
+| `gazebo-e2e` | Gazebo SITL integration smoke test (shell script) | N/A |
+
+### Options
+
+```bash
+./tests/run_tests.sh watchdog --verbose       # Show individual test output
+./tests/run_tests.sh --parallel 4             # Limit parallelism
+./tests/run_tests.sh ipc --repeat 5           # Stress-test (run 5x)
+./tests/run_tests.sh --build                  # Rebuild before testing
+./tests/run_tests.sh --zenoh                   # Build with Zenoh backend + run all
+./tests/run_tests.sh --asan                   # Rebuild with AddressSanitizer
+./tests/run_tests.sh --tsan                   # Rebuild with ThreadSanitizer
+./tests/run_tests.sh --coverage               # Generate coverage report after tests
+./tests/run_tests.sh --coverage --build       # Rebuild with coverage, test + report
+./tests/run_tests.sh --no-build --coverage    # Coverage report only (skip rebuild)
+```
+
+### Build + Test Shortcut
+
+```bash
+# Build and run all tests in one command
+bash deploy/build.sh --test
+
+# Build and run only watchdog tests
+bash deploy/build.sh --test-filter watchdog
+```
 
 ---
 

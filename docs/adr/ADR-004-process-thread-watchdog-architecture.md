@@ -683,4 +683,4 @@ Without `touch_with_grace()`, these would trigger false stuck-thread alerts.
 - Issue #91 — Phase 3: Process supervisor (planned)
 - Issue #92 — Phase 4: Restart policies + dependency graph (planned)
 - Issue #97 — Tech debt: snapshot() vector → array optimisation
-- [CI_ISSUES.md](../../CI_ISSUES.md) — CI-008: strncpy truncation warning
+- [CI_ISSUES.md](../CI_ISSUES.md) — CI-008: strncpy truncation warning

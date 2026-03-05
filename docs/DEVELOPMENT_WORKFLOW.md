@@ -84,13 +84,24 @@ The hook runs `clang-format` on staged `.h`/`.cpp` files, re-stages the formatte
 
 ##### 4c. Tests (100% pass rate required)
 ```bash
+# Recommended — modular test runner with color output:
+./tests/run_tests.sh                    # all tests
+./tests/run_tests.sh watchdog           # just watchdog module
+./tests/run_tests.sh quick              # fast tests (skip slow suites)
+./tests/run_tests.sh list               # show available modules
+
+# Build + test in one step:
+bash deploy/build.sh --test             # build + run all tests
+bash deploy/build.sh --test-filter ipc  # build + run IPC tests only
+
+# Or raw ctest:
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 464 across 26 suites with `ENABLE_ZENOH=ON`)
+- All tests must pass (SHM-only: ~582 tests; with Zenoh: ~659 tests)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh and SHM test binaries use `RESOURCE_LOCK` to avoid parallel collisions under `ctest -j`
-- See [`tests/TESTS.md`](tests/TESTS.md) for a full index of all test suites, what each validates, and instructions for adding new tests
+- See [`tests/TESTS.md`](tests/TESTS.md) for a full index of all test suites, module filters, and instructions for adding new tests
 
 > **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 

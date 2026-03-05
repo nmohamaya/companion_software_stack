@@ -31,7 +31,7 @@ python3 gcs_client.py --drone-ip 10.0.0.2 --stats-interval 5
 > **Security note:** The default `tcp` protocol uses plaintext with no
 > authentication — suitable for development only. For production, use
 > `--protocol tls` with proper certificates configured in the Zenoh
-> session. See [PRODUCTION_READINESS.md](../../PRODUCTION_READINESS.md)
+> session. See [PRODUCTION_READINESS.md](../../docs/PRODUCTION_READINESS.md)
 > items 2.1 and 2.6.
 
 ## Wire Format

@@ -33,18 +33,22 @@
   - [Adding a New CI Job](#adding-a-new-ci-job)
   - [Adding a New Matrix Leg](#adding-a-new-matrix-leg)
   - [Local Reproduction](#local-reproduction)
+    - [Automated: `deploy/run_ci_local.sh`](#automated-deployrun_ci_localsh)
+      - [Available Job Tags](#available-job-tags)
+    - [Manual: Reproducing a Single CI Leg](#manual-reproducing-a-single-ci-leg)
 
 ---
 
 ## Pipeline Overview
 
-The CI pipeline has **3 jobs** totalling **9 parallel runners** at peak:
+The CI pipeline has **4 jobs** totalling **10 parallel runners** at peak:
 
 | Job | Purpose | Runners | Gate? |
 |-----|---------|---------|-------|
 | `format-check` | Verify all C++ files match `.clang-format` | 1 | Yes — blocks `build-and-test` |
 | `build-and-test` | Compile + run tests for each backend × sanitizer combo | 7 | No — `fail-fast: false`, all legs run |
-| `coverage` | Build with gcov, run tests, upload lcov HTML report | 1 | No — independent |
+| `coverage` | SHM coverage: build with gcov, run tests, upload lcov report | 1 | No — independent |
+| `coverage-zenoh` | Zenoh coverage: same as above with Zenoh backend enabled | 1 | No — independent |
 
 **Total wall-clock time:** ~4–6 minutes (format-check ~30 s, then build matrix ~3–5 min in parallel).
 
@@ -64,9 +68,9 @@ The CI pipeline has **3 jobs** totalling **9 parallel runners** at peak:
    │             │ │  asan)   │ │  tsan)   │
    └─────────────┘ └──────────┘ └──────────┘
 
-   ┌────────────────┐
-   │ coverage (shm) │  ← Independent, no gate dependency
-   └────────────────┘
+   ┌────────────────┐   ┌──────────────────┐
+   │ coverage (shm) │   │ coverage (zenoh) │  ← Independent, no gate dependency
+   └────────────────┘   └──────────────────┘
 ```
 
 ---
@@ -114,7 +118,7 @@ The build matrix tests every combination of IPC backend and sanitizer that makes
 | 6 | `zenoh` | `asan` | Debug | ASan on Zenoh code paths |
 | 7 | `zenoh` | `ubsan` | Debug | UBSan on Zenoh code paths |
 
-**Why no Zenoh + TSan?** The pre-built `zenohc` library is not compiled with TSan instrumentation. TSan flags false positives in Zenoh's internal threading, making results unreliable. See [CI_ISSUES.md CI-005](../CI_ISSUES.md#ci-005-tsan-build-fails--atomic_thread_fence-not-supported-with--fsanitize-thread).
+**Why no Zenoh + TSan?** The pre-built `zenohc` library is not compiled with TSan instrumentation. TSan flags false positives in Zenoh's internal threading, making results unreliable. See [CI_ISSUES.md CI-005](CI_ISSUES.md#ci-005-tsan-build-fails--atomic_thread_fence-not-supported-with--fsanitize-thread).
 
 ### Why both Release (plain) and Debug (sanitizer) legs?
 
@@ -127,7 +131,7 @@ The plain and sanitizer legs build in different modes and catch **different clas
 
 **Why the difference matters:**
 
-1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](../CI_ISSUES.md)).
+1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](CI_ISSUES.md)).
 
 2. **Release and Debug builds produce different binaries.** `NDEBUG` is defined in Release, disabling `assert()`. Code behind `#ifndef NDEBUG` (debug logging, extra validation) only compiles in Debug. Both paths need testing.
 
@@ -219,8 +223,8 @@ genhtml coverage.info --output-directory coverage-report
 Zenoh is not available via `apt`, so the CI installs it from GitHub releases:
 
 1. **zenohc** (C library) — Pre-built `.deb` packages from [eclipse-zenoh/zenoh-c releases](https://github.com/eclipse-zenoh/zenoh-c/releases). Currently pinned to **v1.7.2**.
-   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](../CI_ISSUES.md).
-   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](../CI_ISSUES.md).
+   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](CI_ISSUES.md).
+   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](CI_ISSUES.md).
 
 2. **zenoh-cpp** (header-only C++ bindings) — Cloned from GitHub at the matching version tag, installed via `cmake --install`.
 
@@ -266,7 +270,7 @@ Test locally first — Zenoh API breaking changes are common between minor versi
 
 ## Known Issues & Workarounds
 
-These are summarized here for quick reference. Full details are in [CI_ISSUES.md](../CI_ISSUES.md).
+These are summarized here for quick reference. Full details are in [CI_ISSUES.md](CI_ISSUES.md).
 
 | ID | Issue | Workaround | Ref |
 |----|-------|-----------|-----|
@@ -327,7 +331,61 @@ To add a new backend or sanitizer combination:
 
 ## Local Reproduction
 
-To reproduce a CI failure locally, match the CI environment as closely as possible:
+### Automated: `deploy/run_ci_local.sh`
+
+The easiest way to verify CI will pass is the local CI runner script. It mirrors
+the exact same jobs, flags, and exclusions as `.github/workflows/ci.yml`.
+
+```bash
+# Quick check — format + SHM build+test (~40 s)
+bash deploy/run_ci_local.sh --quick
+
+# Full CI matrix — all 10 jobs (format + 7 build combos + 2 coverage)
+bash deploy/run_ci_local.sh
+
+# Run a single job by tag
+bash deploy/run_ci_local.sh --job ASAN        # SHM ASAN
+bash deploy/run_ci_local.sh --job ZENOH       
+bash deploy/run_ci_local.sh --job FMT         # Clang-tidy format check  
+bash deploy/run_ci_local.sh --job SHM
+bash deploy/run_ci_local.sh --job TSAN        # SHM TSAN
+bash deploy/run_ci_local.sh --job UBSAN       # SHM UBSAN
+bash deploy/run_ci_local.sh --job ASAN_Z      # Zenoh ASAN
+bash deploy/run_ci_local.sh --job UBSAN_Z     # Zenoh UBSAN
+bash deploy/run_ci_local.sh --job COV         # SHM Coverage
+bash deploy/run_ci_local.sh --job COV_Z       # Zenoh Coverage     
+```
+
+#### Available Job Tags
+
+| Tag | CI Equivalent | Description |
+|-----|---------------|-------------|
+| `FMT` | `format-check` | clang-format-18 dry-run with `--Werror` |
+| `SHM` | `build (shm)` | SHM backend, Debug build + all tests |
+| `ZENOH` | `build (zenoh)` | Zenoh backend, Debug build + all tests |
+| `ASAN` | `build (shm, asan)` | SHM + AddressSanitizer |
+| `TSAN` | `build (shm, tsan)` | SHM + ThreadSanitizer (excludes Zenoh/Mavlink/Yolo tests) |
+| `UBSAN` | `build (shm, ubsan)` | SHM + UndefinedBehaviorSanitizer |
+| `ASAN_Z` | `build (zenoh, asan)` | Zenoh + AddressSanitizer |
+| `UBSAN_Z` | `build (zenoh, ubsan)` | Zenoh + UndefinedBehaviorSanitizer |
+| `COV` | `coverage (shm)` | SHM coverage build + lcov report |
+| `COV_Z` | `coverage (zenoh)` | Zenoh coverage build + lcov report |
+
+The script prints a color-coded summary at the end:
+
+```
+  CI Summary
+  Total : 10
+  Passed: 10
+  Failed: 0
+  Time  : 312s
+
+✓ CI would PASS
+```
+
+### Manual: Reproducing a Single CI Leg
+
+To reproduce a specific CI failure manually, match the CI environment:
 
 ```bash
 # 1. Use the same Ubuntu version (or close to it)
@@ -355,4 +413,4 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 ---
 
-*Last updated: 2026-03-04 — added build matrix rationale (CI-008 strncpy incident).*
+*Last updated: 2026-03-05 — added Zenoh coverage job (COV_Z) and `deploy/run_ci_local.sh` documentation.*
