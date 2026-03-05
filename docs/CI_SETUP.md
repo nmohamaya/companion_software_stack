@@ -118,7 +118,7 @@ The build matrix tests every combination of IPC backend and sanitizer that makes
 | 6 | `zenoh` | `asan` | Debug | ASan on Zenoh code paths |
 | 7 | `zenoh` | `ubsan` | Debug | UBSan on Zenoh code paths |
 
-**Why no Zenoh + TSan?** The pre-built `zenohc` library is not compiled with TSan instrumentation. TSan flags false positives in Zenoh's internal threading, making results unreliable. See [CI_ISSUES.md CI-005](../CI_ISSUES.md#ci-005-tsan-build-fails--atomic_thread_fence-not-supported-with--fsanitize-thread).
+**Why no Zenoh + TSan?** The pre-built `zenohc` library is not compiled with TSan instrumentation. TSan flags false positives in Zenoh's internal threading, making results unreliable. See [CI_ISSUES.md CI-005](CI_ISSUES.md#ci-005-tsan-build-fails--atomic_thread_fence-not-supported-with--fsanitize-thread).
 
 ### Why both Release (plain) and Debug (sanitizer) legs?
 
@@ -131,7 +131,7 @@ The plain and sanitizer legs build in different modes and catch **different clas
 
 **Why the difference matters:**
 
-1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](../CI_ISSUES.md)).
+1. **GCC performs deeper static analysis at `-O2`.** Interprocedural optimisations like inlining and constant propagation let GCC track values across function boundaries, enabling warnings that are invisible at `-O0`. Example: `-Wstringop-truncation` fires in Release when GCC statically determines a `strncpy` source is longer than the destination — this analysis is skipped at `-O0` (see [CI_ISSUES.md CI-008](CI_ISSUES.md)).
 
 2. **Release and Debug builds produce different binaries.** `NDEBUG` is defined in Release, disabling `assert()`. Code behind `#ifndef NDEBUG` (debug logging, extra validation) only compiles in Debug. Both paths need testing.
 
@@ -223,8 +223,8 @@ genhtml coverage.info --output-directory coverage-report
 Zenoh is not available via `apt`, so the CI installs it from GitHub releases:
 
 1. **zenohc** (C library) — Pre-built `.deb` packages from [eclipse-zenoh/zenoh-c releases](https://github.com/eclipse-zenoh/zenoh-c/releases). Currently pinned to **v1.7.2**.
-   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](../CI_ISSUES.md).
-   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](../CI_ISSUES.md).
+   - These debs are built **without** the `shared-memory` Cargo feature, so `PosixShmProvider` returns `nullptr` at runtime. SHM-specific tests use `GTEST_SKIP()`. See [CI_ISSUES.md CI-001](CI_ISSUES.md).
+   - Building from source with `-DZENOHC_BUILD_WITH_SHARED_MEMORY=ON` was attempted but fails with opaque-type size mismatches. See [CI_ISSUES.md CI-003](CI_ISSUES.md).
 
 2. **zenoh-cpp** (header-only C++ bindings) — Cloned from GitHub at the matching version tag, installed via `cmake --install`.
 
@@ -270,7 +270,7 @@ Test locally first — Zenoh API breaking changes are common between minor versi
 
 ## Known Issues & Workarounds
 
-These are summarized here for quick reference. Full details are in [CI_ISSUES.md](../CI_ISSUES.md).
+These are summarized here for quick reference. Full details are in [CI_ISSUES.md](CI_ISSUES.md).
 
 | ID | Issue | Workaround | Ref |
 |----|-------|-----------|-----|
