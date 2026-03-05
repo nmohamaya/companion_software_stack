@@ -97,7 +97,7 @@ bash deploy/build.sh --test-filter ipc  # build + run IPC tests only
 # Or raw ctest:
 ctest --test-dir build --output-on-failure -j$(nproc)
 ```
-- All tests must pass (currently 659 across 34 suites with SHM backend)
+- All tests must pass (SHM-only: ~582 tests; with Zenoh: ~659 tests)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh and SHM test binaries use `RESOURCE_LOCK` to avoid parallel collisions under `ctest -j`

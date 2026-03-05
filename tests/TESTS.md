@@ -68,7 +68,9 @@
 ./tests/run_tests.sh --zenoh                   # Build with Zenoh backend + run all
 ./tests/run_tests.sh --asan                   # Rebuild with AddressSanitizer
 ./tests/run_tests.sh --tsan                   # Rebuild with ThreadSanitizer
-./tests/run_tests.sh --coverage               # Rebuild with coverage + report
+./tests/run_tests.sh --coverage               # Generate coverage report after tests
+./tests/run_tests.sh --coverage --build       # Rebuild with coverage, test + report
+./tests/run_tests.sh --no-build --coverage    # Coverage report only (skip rebuild)
 ```
 
 ### Build + Test Shortcut

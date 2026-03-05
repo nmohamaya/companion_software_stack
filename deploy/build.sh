@@ -48,7 +48,15 @@ while [[ $# -gt 0 ]]; do
             fi
             shift  # consume the module name
             ;;
-        --test-filter=*) RUN_TESTS=1; TEST_FILTER="${1#*=}" ;;
+        --test-filter=*)
+            RUN_TESTS=1
+            TEST_FILTER="${1#*=}"
+            if [[ -z "$TEST_FILTER" ]]; then
+                echo "ERROR: --test-filter requires a module name."
+                echo "  Example: $0 --test-filter watchdog"
+                exit 1
+            fi
+            ;;
         Debug|Release|RelWithDebInfo|MinSizeRel) BUILD_TYPE="$1" ;;
         *)
             echo "Unknown argument: $1"
@@ -165,6 +173,8 @@ if [[ "$RUN_TESTS" -eq 1 ]]; then
     if [[ -n "$TEST_FILTER" ]]; then
         TEST_ARGS+=("$TEST_FILTER")
     fi
+    # Pass --no-build to avoid a redundant rebuild — build.sh already built.
+    TEST_ARGS+=("--no-build")
     if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
         TEST_ARGS+=("--coverage")
     fi

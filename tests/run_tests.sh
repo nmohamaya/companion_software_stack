@@ -26,7 +26,8 @@
 #   --asan          Rebuild with AddressSanitizer, then test
 #   --tsan          Rebuild with ThreadSanitizer, then test
 #   --ubsan         Rebuild with UBSan, then test
-#   --coverage      Rebuild with coverage, test, generate report
+#   --coverage      Generate coverage report after tests (combine with --build for fresh build)
+#   --no-build      Skip rebuild even when --coverage/--asan/etc. is set
 #
 # Examples:
 #   ./tests/run_tests.sh watchdog --verbose
@@ -81,18 +82,44 @@ DO_BUILD=0
 SANITIZER=""
 COVERAGE=0
 ENABLE_ZENOH=0
+NO_BUILD=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --verbose|-v)     VERBOSE=1 ;;
-        --parallel|-j)    PARALLEL="$2"; shift ;;
-        --repeat|-r)      REPEAT="$2"; shift ;;
+        --parallel|-j)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Option $1 requires a positive integer argument.${RESET}"
+                echo "Run: $0 --help"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo -e "${RED}Invalid value for $1: $2 (expected positive integer).${RESET}"
+                exit 1
+            fi
+            PARALLEL="$2"
+            shift
+            ;;
+        --repeat|-r)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Option $1 requires a positive integer argument.${RESET}"
+                echo "Run: $0 --help"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo -e "${RED}Invalid value for $1: $2 (expected positive integer).${RESET}"
+                exit 1
+            fi
+            REPEAT="$2"
+            shift
+            ;;
         --build|-b)       DO_BUILD=1 ;;
+        --no-build)       NO_BUILD=1 ;;
         --zenoh)          ENABLE_ZENOH=1; DO_BUILD=1 ;;
         --asan)           SANITIZER="asan"; DO_BUILD=1 ;;
         --tsan)           SANITIZER="tsan"; DO_BUILD=1 ;;
         --ubsan)          SANITIZER="ubsan"; DO_BUILD=1 ;;
-        --coverage)       COVERAGE=1; DO_BUILD=1 ;;
+        --coverage)       COVERAGE=1 ;;
         --help|-h)
             head -35 "$0" | tail -33
             exit 0
@@ -146,6 +173,11 @@ if [[ -n "$MODULE" && "$MODULE" != "quick" && "$MODULE" != "zenoh-e2e" && "$MODU
 fi
 
 # ── Build if requested ───────────────────────────────────────
+# --no-build suppresses the rebuild (useful when called from build.sh which
+# already performed the build).
+if [[ "$NO_BUILD" -eq 1 ]]; then
+    DO_BUILD=0
+fi
 if [[ "$DO_BUILD" -eq 1 ]]; then
     echo -e "${BLUE}${BOLD}═══ Building ═══${RESET}"
     BUILD_ARGS=("Debug")
@@ -242,7 +274,10 @@ if [[ -n "$MODULE" ]]; then
         COUNT_ARGS+=(-R "${MODULE_FILTERS[$MODULE]}")
     fi
 fi
-TEST_COUNT=$(ctest "${COUNT_ARGS[@]}" 2>&1 | grep -oP 'Total Tests:\s*\K\d+' || echo "?")
+TEST_COUNT=$(ctest "${COUNT_ARGS[@]}" 2>&1 | awk '/Total Tests:/ {print $NF; exit}')
+if [[ -z "$TEST_COUNT" || ! "$TEST_COUNT" =~ ^[0-9]+$ ]]; then
+    TEST_COUNT="?"
+fi
 echo -e "Running ${BOLD}${TEST_COUNT}${RESET} tests..."
 echo ""
 
@@ -264,15 +299,20 @@ fi
 if [[ "$COVERAGE" -eq 1 && "$EXIT_CODE" -eq 0 ]]; then
     echo ""
     echo -e "${BLUE}${BOLD}═══ Generating coverage report ═══${RESET}"
-    cd "$BUILD_DIR"
-    lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch 2>/dev/null
-    lcov --remove coverage.info '/usr/*' '*/tests/*' '*/build/*' \
-         --output-file coverage_filtered.info 2>/dev/null
-    if command -v genhtml &>/dev/null; then
-        genhtml coverage_filtered.info --output-directory coverage_html 2>/dev/null
-        echo -e "${GREEN}Coverage report: ${BUILD_DIR}/coverage_html/index.html${RESET}"
+    if ! command -v lcov &>/dev/null; then
+        echo -e "${YELLOW}lcov not found — skipping coverage generation.${RESET}"
+        echo -e "${YELLOW}Install: sudo apt install lcov${RESET}"
     else
-        echo -e "${YELLOW}genhtml not found — raw coverage in ${BUILD_DIR}/coverage_filtered.info${RESET}"
+        cd "$BUILD_DIR"
+        lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch 2>/dev/null
+        lcov --remove coverage.info '/usr/*' '*/tests/*' '*/build/*' \
+             --output-file coverage_filtered.info 2>/dev/null
+        if command -v genhtml &>/dev/null; then
+            genhtml coverage_filtered.info --output-directory coverage_html 2>/dev/null
+            echo -e "${GREEN}Coverage report: ${BUILD_DIR}/coverage_html/index.html${RESET}"
+        else
+            echo -e "${YELLOW}genhtml not found — raw coverage in ${BUILD_DIR}/coverage_filtered.info${RESET}"
+        fi
     fi
 fi
 

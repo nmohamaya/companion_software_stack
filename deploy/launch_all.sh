@@ -104,7 +104,7 @@ if [[ "$SUPERVISED" == "true" ]]; then
     echo -n "Waiting for health segment..."
     HEALTH_READY=false
     for _ in $(seq 1 20); do
-        if [[ -f /dev/shm/drone_system_health || -f /dev/shm/system_health ]]; then
+        if [[ -f /dev/shm/system_health ]]; then
             HEALTH_READY=true
             break
         fi
