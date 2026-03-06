@@ -16,7 +16,6 @@ Type=simple
 ExecStart=/opt/drone/bin/mission_planner --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=30s
 
 # Resource limits
 MemoryMax=256M

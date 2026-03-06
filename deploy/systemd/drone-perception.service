@@ -2,7 +2,7 @@
 # Process 2 — Perception: object detection, tracking, sensor fusion.
 #
 # Depends on video_capture for camera frames.
-# If slam_vio_nav dies, perception is cascade-restarted (PartOf).
+# Restart behavior is governed by this unit's Restart= policy and drone-stack.target.
 
 [Unit]
 Description=Drone Perception (P2)
@@ -16,7 +16,6 @@ Type=simple
 ExecStart=/opt/drone/bin/perception --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=30s
 
 # Resource limits
 MemoryMax=1G

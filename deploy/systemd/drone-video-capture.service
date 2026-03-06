@@ -17,7 +17,6 @@ Type=simple
 ExecStart=/opt/drone/bin/video_capture --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=30s
 
 # Resource limits
 MemoryMax=512M

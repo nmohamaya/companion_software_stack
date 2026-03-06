@@ -14,8 +14,10 @@
 #include "util/sd_notify.h"
 
 #include <cstdlib>
+#include <string>
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════
 // 1. Basic API — must not crash regardless of build mode

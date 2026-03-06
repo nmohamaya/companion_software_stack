@@ -15,7 +15,6 @@ Type=simple
 ExecStart=/opt/drone/bin/comms --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=30s
 
 # Serial port access (Pixhawk)
 SupplementaryGroups=dialout
