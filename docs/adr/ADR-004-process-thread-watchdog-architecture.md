@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Accepted (Phases 1–2 implemented) |
+| **Status** | Accepted — fully implemented (Phases 1–4 + systemd Layer 3) |
 | **Date** | 2026-03-04 |
 | **Author** | Team |
 | **Deciders** | Project leads |

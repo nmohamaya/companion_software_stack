@@ -42,7 +42,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | **701** (31+ suites, 0 failures) |
+| Unit tests | See [tests/TESTS.md](../tests/TESTS.md) for current counts |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`, `[[nodiscard]]` enforced) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
@@ -482,4 +482,4 @@
 
 ---
 
-*Last updated after Process & Thread Watchdog (Epic #88) + systemd (Issue #83) — 701 tests, 31+ suites, 9-job CI pipeline, three-layer watchdog, systemd service units with BindsTo dependencies.*
+*Last updated after Process & Thread Watchdog (Epic #88) + systemd (Issue #83) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 9-job CI pipeline, three-layer watchdog, systemd service units with BindsTo dependencies.*

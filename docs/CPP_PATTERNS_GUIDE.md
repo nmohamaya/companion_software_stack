@@ -29,6 +29,7 @@
    - [2.7 Double Buffering](#27-double-buffering)
    - [2.8 Signal-Safe Shutdown](#28-signal-safe-shutdown)
    - [2.9 Thread Naming, CPU Pinning & RT Scheduling](#29-thread-naming-cpu-pinning--rt-scheduling)
+   - [2.10 Compare-And-Swap (CAS) Loop](#210-compare-and-swap-cas-loop)
 3. [Modern C++ Techniques](#3-modern-c-techniques)
    - [3.1 `std::variant` and `std::visit`](#31-stdvariant-and-stdvisit)
    - [3.2 `std::optional`](#32-stdoptional)
@@ -48,6 +49,8 @@
    - [4.1 POSIX Shared Memory (`shm_open` / `mmap`)](#41-posix-shared-memory-shm_open--mmap)
    - [4.2 Binary Wire Format](#42-binary-wire-format)
    - [4.3 Conditional Compilation (`#ifdef`)](#43-conditional-compilation-ifdef)
+   - [4.4 `fork` + `exec` — Process Management](#44-fork--exec--process-management)
+   - [4.5 Exponential Backoff](#45-exponential-backoff)
 5. [Concept Map — Where Patterns Intersect](#5-concept-map--where-patterns-intersect)
 6. [Glossary](#6-glossary)
 
@@ -766,6 +769,58 @@ communication.
 
 ---
 
+### 2.10 Compare-And-Swap (CAS) Loop
+
+**What:** A lock-free pattern for atomically claiming a slot in a shared array.
+Instead of `fetch_add` (which can skip slots on failure), a CAS loop retries
+until the compare-and-exchange succeeds, guaranteeing exactly one winner per slot.
+
+**Where:** `common/util/include/util/thread_heartbeat.h` — `ThreadHeartbeatRegistry::register_thread()`
+
+```cpp
+// Simplified from ThreadHeartbeatRegistry::register_thread()
+size_t register_thread(const char* name, bool critical) {
+    size_t current = count_.load(std::memory_order_relaxed);
+    while (true) {
+        if (current >= kMaxThreads) return kInvalidHandle;  // full
+
+        // Try to claim the slot at index 'current'
+        if (count_.compare_exchange_weak(current, current + 1,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_relaxed)) {
+            // Won the race — 'current' is our slot
+            safe_name_copy(beats_[current].name, name);
+            beats_[current].is_critical = critical;
+            beats_[current].initialized.store(true, std::memory_order_release);
+            return current;   // handle
+        }
+        // Lost — 'current' updated to the new count; retry
+    }
+}
+```
+
+**Why `compare_exchange_weak` over `fetch_add`?**
+
+| Approach | Guarantee | Problem |
+|----------|-----------|---------|
+| `fetch_add(1)` | Returns old value, always increments | If two threads call simultaneously, both increment past `kMaxThreads` — no bounds check is possible |
+| `compare_exchange_weak` | Only increments if the current value matches expectation | Naturally loops back with updated value on contention; bounds check inside the loop is reliable |
+
+**Memory ordering:**
+- **`acq_rel` on success:** ensures prior writes (name, critical flag) are visible
+  to snapshot readers, and subsequent writes to the slot are ordered after the claim
+- **`relaxed` on failure:** we only need the updated value of `count_`; no
+  ordering constraints for the retry path
+- **`release` on `initialized`:** snapshot readers use `acquire` load to gate
+  on this flag, ensuring they see a fully-written slot
+
+**When to use a CAS loop:**
+- Fixed-size slot arrays with bounded concurrency
+- Registration / init paths (not hot loops)
+- When you need bounds-checked atomic increment
+
+---
+
 ## 3. Modern C++ Techniques
 
 ### 3.1 `std::variant` and `std::visit`
@@ -1390,6 +1445,114 @@ using MessageBusVariant = std::variant<
 | `HAVE_ZENOH` | `-DENABLE_ZENOH=ON` | Zenoh IPC backend |
 | `HAVE_MAVSDK` | `find_package(MAVSDK)` | MAVLink flight controller |
 | `HAVE_GAZEBO` | `find_package(gz-transport13)` | Gazebo camera/IMU backends |
+| `HAVE_SYSTEMD` | `-DENABLE_SYSTEMD=ON` | systemd `sd_notify` integration |
+
+---
+
+### 4.4 `fork` + `exec` — Process Management
+
+**What:** The Unix pattern for spawning a child process: `fork()` creates
+a copy of the current process, then `execvp()` replaces that copy with a
+new program image.
+
+**Where:** `process7_system_monitor/include/monitor/process_manager.h` — `ProcessManager::launch_one()`
+
+```cpp
+// Simplified from ProcessManager::launch_one()
+bool launch_one(ManagedProcess& proc) {
+    pid_t pid = fork();
+    if (pid < 0) return false;   // fork failed
+
+    if (pid == 0) {
+        // ═══ CHILD PROCESS ═══
+        // 1. Reset signal handlers (inherited from parent)
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGINT,  SIG_DFL);
+
+        // 2. Close inherited file descriptors (security + resource hygiene)
+        close_fds_above(STDERR_FILENO);
+
+        // 3. Build argv from "binary arg1 arg2"
+        auto argv = split_args(proc.binary, proc.args);
+        std::vector<char*> c_argv;
+        for (auto& s : argv) c_argv.push_back(s.data());
+        c_argv.push_back(nullptr);
+
+        // 4. Replace this process image
+        execvp(c_argv[0], c_argv.data());
+        _exit(127);  // execvp failed — use _exit, not exit (no atexit handlers)
+    }
+
+    // ═══ PARENT PROCESS ═══
+    proc.pid = pid;
+    proc.state = ProcessState::RUNNING;
+    return true;
+}
+```
+
+**Key design decisions:**
+
+| Decision | Rationale |
+|----------|-----------|
+| Reset signal handlers | Child inherits parent's `SIG_IGN` / custom handlers — must restore defaults |
+| `close_fds_above(STDERR_FILENO)` | Prevents leaked file descriptors (SHM segments, sockets) from parent |
+| `_exit(127)` on exec failure | `exit()` calls `atexit` handlers (parent's cleanup code) — `_exit()` skips them |
+| `execvp` (not `execv`) | Searches `PATH` — binary doesn't need full path |
+| `split_args()` helper | Builds null-terminated `char*[]` from space-separated arg string |
+
+**Zombie reaping:** The parent calls `waitpid(WNOHANG)` periodically in `tick()`:
+
+```cpp
+void reap_children() {
+    int status;
+    pid_t pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        // Find the ManagedProcess with this PID → set state to RESTARTING
+    }
+}
+```
+
+---
+
+### 4.5 Exponential Backoff
+
+**What:** A retry strategy where the delay between attempts doubles each
+time, up to a maximum cap.  Prevents restart storms from overwhelming
+the system.
+
+**Where:** `common/util/include/util/restart_policy.h` — `RestartPolicy::backoff_ms()`
+
+```cpp
+uint32_t backoff_ms(uint32_t attempt) const {
+    // initial_backoff_ms × 2^attempt, capped at max_backoff_ms
+    uint32_t delay = initial_backoff_ms;
+    for (uint32_t i = 0; i < attempt && delay < max_backoff_ms; ++i) {
+        delay *= 2;
+    }
+    return std::min(delay, max_backoff_ms);
+}
+```
+
+**Default sequence** (`initial=500ms`, `max=30000ms`):
+
+| Attempt | Delay |
+|---------|-------|
+| 0 | 500 ms |
+| 1 | 1000 ms |
+| 2 | 2000 ms |
+| 3 | 4000 ms |
+| 4 | 8000 ms |
+| 5 | 16000 ms |
+| 6+ | 30000 ms (cap) |
+
+**Combined with a cooldown window:** If a process stays alive for
+`cooldown_window_s` (default 60s), the restart counter resets to zero.
+This prevents one early crash from permanently consuming the retry budget.
+
+**When to use:**
+- Process restart loops (the primary use case here)
+- Reconnection attempts to external services
+- Any scenario where repeated rapid retries would worsen the failure
 
 ---
 
@@ -1445,18 +1608,26 @@ config.json          │                     │
 |------|-----------|
 | **ABI** | Application Binary Interface — the binary-level contract between compiled code. `trivially_copyable` types have a stable ABI. |
 | **Acquire/Release** | Memory ordering semantics. A `release` store makes all prior writes visible to a thread that does an `acquire` load of the same variable. |
+| **Backoff** | A retry strategy where delays grow (typically doubling) between attempts. Prevents restart/reconnect storms. |
 | **Cache line** | The smallest unit of data transfer between CPU and cache, typically 64 bytes on modern processors. |
+| **CAS** | Compare-And-Swap — an atomic CPU instruction (`compare_exchange_weak/strong`) that sets a value only if it matches an expected value. Foundation of lock-free algorithms. |
+| **Cascade** | Transitive restart propagation: when process A crashes, all processes that depend on A's state are also stopped and restarted. |
 | **False sharing** | Performance degradation when two threads write to independent variables that happen to share a cache line. |
 | **FIFO scheduling** | `SCHED_FIFO` — a real-time scheduling policy where the highest-priority runnable thread always executes. |
+| **fork+exec** | The Unix pattern for spawning a child process: `fork()` clones the parent, `execvp()` replaces the clone with a new program. |
+| **Heartbeat** | A periodic signal from a thread or process indicating liveness. Absence beyond a threshold implies the entity is stuck or dead. |
 | **IPC** | Inter-Process Communication — mechanisms for separate processes to exchange data. |
 | **Lock-free** | A concurrency guarantee: at least one thread makes progress, even if others are suspended. SeqLock and SPSC ring are lock-free. |
 | **mmap** | Memory-map a file or shared memory object into a process's virtual address space. |
 | **RAII** | Resource Acquisition Is Initialization — tying resource lifetime to object lifetime via constructor/destructor. |
+| **Reap** | Calling `waitpid()` to collect a terminated child process's exit status, preventing zombie processes. |
+| **sd_notify** | A systemd API for Type=notify services to signal readiness, liveness (watchdog), and status to the init system. |
 | **SeqLock** | A reader-writer synchronization mechanism using an atomic sequence counter. Writers never block; readers retry on torn reads. |
 | **SHM** | Shared Memory — a region of memory visible to multiple processes. |
 | **SITL** | Software-In-The-Loop — running the real flight controller software in a simulator. |
 | **SPSC** | Single-Producer Single-Consumer — a queue with exactly one writer and one reader thread. |
 | **Trivially copyable** | A C++ type that can be safely copied with `memcpy`. No virtual functions, no non-trivial constructors/destructors, no heap pointers. |
+| **Topological sort** | Ordering nodes of a DAG so every edge points forward. Used by `ProcessGraph::launch_order()` (Kahn's algorithm) to determine safe process startup sequence. |
 | **Variant** | `std::variant` — a type-safe union that holds one of several specified types. |
 | **Wait-free** | A stronger guarantee than lock-free: every thread completes in bounded steps. |
 | **Wire format** | The binary encoding used to send messages over a network. |

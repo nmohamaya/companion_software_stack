@@ -1540,6 +1540,4 @@ All call sites fixed to properly handle return values:
 | Crash recovery | — | **Exponential backoff, dependency-aware restart cascade** |
 | OS supervisor | — | **systemd BindsTo + sd_notify watchdog** |
 
-*Last updated after Process & Thread Watchdog (Epic #88) + systemd (#83) — 701 tests, three-layer watchdog architecture, systemd service units.*
-
-*Last updated after Foundation Hardening Epic #64 complete — PRs #71–#77: 464 tests, 26 suites, 9-job CI, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers.*
+*Last updated after Process & Thread Watchdog (Epic #88) + systemd (#83). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. Three-layer watchdog architecture, systemd service units.*
