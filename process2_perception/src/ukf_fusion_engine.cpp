@@ -55,9 +55,37 @@ std::vector<ObjectUKF::StateVec> ObjectUKF::generate_sigma_points() const {
     std::vector<StateVec> sigma(2 * n + 1);
     sigma[0] = x_;
 
-    // Compute matrix square root of P_ using Cholesky
+    // Compute matrix square root of P_ using Cholesky.
+    // P_ can become numerically non-positive-definite over time,
+    // so we check the decomposition and regularize if needed.
     Eigen::LLT<StateMat> llt(P_);
-    StateMat             L = llt.matrixL();
+    StateMat             L;
+
+    if (llt.info() == Eigen::Success) {
+        L = llt.matrixL();
+    } else {
+        // Regularize P_ by adding small diagonal jitter
+        StateMat        P_reg;
+        constexpr float kBaseJitter = 1e-3f;
+        bool            success     = false;
+
+        for (int iter = 0; iter < 3 && !success; ++iter) {
+            const float jitter = kBaseJitter * std::pow(10.0f, static_cast<float>(iter));
+            P_reg              = P_;
+            P_reg.diagonal().array() += jitter;
+
+            llt.compute(P_reg);
+            if (llt.info() == Eigen::Success) {
+                L       = llt.matrixL();
+                success = true;
+            }
+        }
+
+        if (!success) {
+            // Last resort: identity to avoid NaN propagation
+            L = StateMat::Identity();
+        }
+    }
 
     for (int i = 0; i < n; ++i) {
         sigma[1 + i]     = x_ + scale * L.col(i);
@@ -150,8 +178,8 @@ void ObjectUKF::update_camera(const TrackedObject& trk, float estimated_depth) {
         Pxz += wi * (dxi * dzi.transpose());
     }
 
-    // Kalman gain
-    CrossMat K = Pxz * S.inverse();
+    // Kalman gain (solve without forming S.inverse() for numerical stability)
+    CrossMat K = (S.ldlt().solve(Pxz.transpose())).transpose();
 
     // Actual measurement
     float   bearing_x = trk.position_2d.x() * 0.001f;  // pixel → rough bearing
@@ -194,7 +222,8 @@ Eigen::Matrix3f ObjectUKF::position_covariance() const {
 UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib) : calib_(calib) {}
 
 float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
-    return calib_.camera_height_m * 500.0f / std::max(10.0f, trk.position_2d.y());
+    const float fy = calib_.camera_intrinsics(1, 1);
+    return calib_.camera_height_m * fy / std::max(10.0f, trk.position_2d.y());
 }
 
 void UKFFusionEngine::set_thermal_detections(const Detection2DList& thermal) {

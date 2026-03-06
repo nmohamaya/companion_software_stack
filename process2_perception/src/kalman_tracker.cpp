@@ -112,6 +112,15 @@ HungarianSolver::Result HungarianSolver::solve(const std::vector<std::vector<dou
     int    rows = static_cast<int>(cost.size());
     int    cols = rows > 0 ? static_cast<int>(cost[0].size()) : 0;
 
+    // Validate that all rows have the same number of columns
+    for (int r = 0; r < rows; ++r) {
+        if (static_cast<int>(cost[r].size()) != cols) {
+            throw std::invalid_argument(
+                "HungarianSolver::solve: ragged cost matrix — row 0 has " + std::to_string(cols) +
+                " cols but row " + std::to_string(r) + " has " + std::to_string(cost[r].size()));
+        }
+    }
+
     if (rows == 0 || cols == 0) {
         result.assignment.resize(rows, -1);
         for (int r = 0; r < rows; ++r) result.unmatched_rows.push_back(r);

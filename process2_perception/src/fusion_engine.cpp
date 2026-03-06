@@ -28,11 +28,11 @@ FusedObjectList CameraOnlyFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.timestamp_ns        = trk.timestamp_ns;
         fused.position_covariance = Eigen::Matrix3f::Identity() * 5.0f;
 
-        // Estimate 3D from camera (rough depth from bbox height)
-        float estimated_depth = calib_.camera_height_m * 500.0f /
-                                std::max(10.0f, trk.position_2d.y());
-        fused.position_3d = {estimated_depth, 0.0f, 0.0f};
-        fused.velocity_3d = {trk.velocity_2d.x() * 0.1f, trk.velocity_2d.y() * 0.1f, 0.0f};
+        // Estimate 3D from camera (depth from image-Y using focal length fy)
+        const float fy        = calib_.camera_intrinsics(1, 1);
+        float estimated_depth = calib_.camera_height_m * fy / std::max(10.0f, trk.position_2d.y());
+        fused.position_3d     = {estimated_depth, 0.0f, 0.0f};
+        fused.velocity_3d     = {trk.velocity_2d.x() * 0.1f, trk.velocity_2d.y() * 0.1f, 0.0f};
 
         output.objects.push_back(fused);
     }

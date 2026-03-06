@@ -56,7 +56,7 @@ TEST(FusionEngineTest, CameraOnlyFusion) {
     EXPECT_FALSE(result.objects[0].has_radar);
 }
 
-TEST(FusionEngineTest, DepthEstimationFromBboxHeight) {
+TEST(FusionEngineTest, DepthEstimationFromImageY) {
     auto         calib = make_test_calib();
     FusionEngine engine(calib);
 
@@ -76,9 +76,10 @@ TEST(FusionEngineTest, DepthEstimationFromBboxHeight) {
     auto result = engine.fuse(tracked);
 
     ASSERT_EQ(result.objects.size(), 1u);
-    // Expected depth = camera_height_m * 500 / max(10, y)
+    // Expected depth = camera_height_m * fy / max(10, y)
     // = 1.5 * 500 / 240 = 3.125
-    float expected_depth = calib.camera_height_m * 500.0f / 240.0f;
+    const float fy             = calib.camera_intrinsics(1, 1);
+    float       expected_depth = calib.camera_height_m * fy / 240.0f;
     EXPECT_FLOAT_EQ(result.objects[0].position_3d.x(), expected_depth);
     EXPECT_FLOAT_EQ(result.objects[0].position_3d.y(), 0.0f);
     EXPECT_FLOAT_EQ(result.objects[0].position_3d.z(), 0.0f);
