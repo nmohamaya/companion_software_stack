@@ -69,7 +69,7 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|------|--------------------|--------------------|----------|--------|-------|
-| 4.1 | Process supervision | systemd units + ProcessManager | systemd units with watchdog, auto-restart, dependency ordering | P0 | 🟢 | PR #107 (systemd), Epic #88 (watchdog) |
+| 4.1 | Process supervision | systemd units (production) / ProcessManager (`--supervised` mode) | systemd units with watchdog, auto-restart, dependency ordering | P0 | 🟢 | PR #107 (systemd), Epic #88 (watchdog) |
 | 4.2 | OTA updates | None — manual scp + rebuild | Mender / SWUpdate / custom updater | P2 | 🔴 | |
 | 4.3 | Log management | spdlog to files, no rotation | Log rotation (logrotate or spdlog rotating sink), remote log shipping | P1 | 🔴 | Disk will fill on long missions |
 | 4.4 | Config validation | JSON Schema validation at startup; reject invalid configs | `ConfigSchema` builder-pattern validation at startup (7 schemas) | P1 | 🟢 | PR #76 — Issue #69 |
@@ -109,9 +109,9 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Resolution | Date |
 |---|------|------------|------|
-| 4.1 | Process supervision | systemd 7-unit architecture (PR #107) + ProcessManager fork+exec supervisor (PR #100) + restart policies with dependency graph (PRs #101, #102). `BindsTo=` dependency semantics, `sd_notify(READY=1)`, `WatchdogSec=10s` on P7. | 2026-03-06 |
+| 4.1 | Process supervision | systemd 7-unit architecture (PR #107) + ProcessManager fork+exec supervisor (implementation in PRs #101, #102; ADR in PR #100) + restart policies with dependency graph. `BindsTo=` stop-propagation semantics, `sd_notify(READY=1)`, `WatchdogSec=10s` on P7. | 2026-03-06 |
 | 4.4 | Config validation | `ConfigSchema` builder-pattern validation with 7 process schemas (PR #76, Issue #69) | 2026-03-03 |
-| 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ShmThreadHealth` publisher + `ProcessManager` crash recovery (PRs #96, #100), (3) systemd `WatchdogSec` OS-level supervision (PR #107). 701 tests total. | 2026-03-06 |
+| 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ShmThreadHealth` publisher + `ProcessManager` crash recovery (PRs #96, #101, #102), (3) systemd `WatchdogSec` OS-level supervision (PR #107). See [tests/TESTS.md](../tests/TESTS.md) for test counts. | 2026-03-06 |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens — 7 tokens active, P7 monitors deaths (PR #57, Phase F) | 2026-03-01 |
 
 ---

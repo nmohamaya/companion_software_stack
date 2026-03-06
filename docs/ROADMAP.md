@@ -19,8 +19,8 @@
     - [Phase 6 — Simulation Visualization \& Flight Tuning](#phase-6--simulation-visualization--flight-tuning)
     - [Phase 7 — Real Perception Pipeline](#phase-7--real-perception-pipeline)
     - [Phase 8 — Deployment Tooling \& RTL Safety](#phase-8--deployment-tooling--rtl-safety)
-  - [Phase 9 — Process \& Thread Watchdog (Epic #88)](#phase-9--process--thread-watchdog-epic-88)
-  - [Phase 10 — Foundation Hardening \& systemd (Epic #64)](#phase-10--foundation-hardening--systemd-epic-64)
+    - [Phase 9 — Process \& Thread Watchdog (Epic #88)](#phase-9--process--thread-watchdog-epic-88)
+    - [Phase 10 — Foundation Hardening \& systemd (Epic #64)](#phase-10--foundation-hardening--systemd-epic-64)
   - [Planned Phases (Real Drone Deployment)](#planned-phases-real-drone-deployment)
     - [Phase 9 — First Safe Flight (Safety + Hardware Config)](#phase-9--first-safe-flight-safety--hardware-config)
     - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception)
@@ -210,7 +210,7 @@
 | Layer | Component | What It Does | PR(s) |
 |-------|-----------|-------------|-------|
 | **Layer 1** | `ThreadHeartbeat` + `ThreadWatchdog` | Per-thread atomic heartbeats; watchdog scans for stuck threads (configurable timeout) | #94 |
-| **Layer 2** | `ProcessManager` (in P7) | fork+exec child processes, PID management, `ShmThreadHealth` publisher | #96, #100, #101, #102 |
+| **Layer 2** | `ProcessManager` (in P7) | fork+exec child processes, PID management; supervises process lifecycle in `--supervised` mode | #101, #102 |
 | **Layer 2** | `RestartPolicy` + `ProcessGraph` | Exponential backoff, max retries, cooldown; dependency-aware restart cascades | #101, #102 |
 | **Layer 3** | systemd service units | 7 `.service` files + `drone-stack.target`; `BindsTo` dependencies; `sd_notify` watchdog | #107 |
 
@@ -218,9 +218,9 @@
 - `common/util/include/util/thread_heartbeat.h` — `ThreadHeartbeat`, `ThreadHeartbeatRegistry`, `ThreadSnapshot`
 - `common/util/include/util/thread_watchdog.h` — scans all heartbeats, reports stuck threads
 - `common/util/include/util/thread_health_publisher.h` — publishes `ShmThreadHealth` to P7
-- `monitor/process_manager.h` — fork+exec supervisor with PID tracking
-- `util/restart_policy.h` — per-process restart policy (backoff, max retries)
-- `util/process_graph.h` — dependency graph (e.g., perception depends on video_capture)
+- `process7_system_monitor/include/monitor/process_manager.h` — fork+exec supervisor with PID tracking
+- `common/util/include/util/restart_policy.h` — per-process restart policy (backoff, max retries)
+- `common/util/include/util/process_graph.h` — dependency graph (e.g., perception depends on video_capture)
 - `common/util/include/util/sd_notify.h` — thin `sd_notify()` wrapper (no-op when not under systemd)
 - `deploy/systemd/drone-*.service` — 7 service units + `drone-stack.target`
 
@@ -228,7 +228,7 @@
 1. Supervisor lives in P7 — co-located with health metrics
 2. Backend-independent — heartbeats use atomics (no Zenoh), PID polling works in SHM-only mode
 3. Lightweight — one `atomic_store(relaxed)` per loop (~1 ns on ARM)
-4. systemd uses `BindsTo=` (not `Requires=`) so dependents auto-restart when dependencies restart
+4. systemd uses `BindsTo=` (not `Requires=`) so dependents are stopped when dependencies stop or disappear; combined with `Restart=on-failure`, systemd restarts each unit independently
 
 **Issues:** #88 (epic), #89, #90, #91, #92, #83  
 **PRs:** #94, #96, #100, #101, #102, #107  
@@ -381,7 +381,7 @@
 |---|-------|-------|-------|
 | [#89](https://github.com/nmohamaya/companion_software_stack/issues/89) | ThreadHeartbeat + ThreadWatchdog | Phase 1 | **Closed** (PR #94) |
 | [#90](https://github.com/nmohamaya/companion_software_stack/issues/90) | ShmThreadHealth integration | Phase 2 | **Closed** (PR #96) |
-| [#91](https://github.com/nmohamaya/companion_software_stack/issues/91) | Process supervisor (fork+exec) | Phase 3 | **Closed** (PR #100) |
+| [#91](https://github.com/nmohamaya/companion_software_stack/issues/91) | Process supervisor (fork+exec) | Phase 3 | **Closed** (ADR in PR #100; implementation in PRs #101, #102) |
 | [#92](https://github.com/nmohamaya/companion_software_stack/issues/92) | Restart policies + dependency graph | Phase 4 | **Closed** (PRs #101, #102) |
 | [#97](https://github.com/nmohamaya/companion_software_stack/issues/97) | Tech debt: snapshot() vector→array | — | **Closed** (PR #108) |
 | [#98](https://github.com/nmohamaya/companion_software_stack/issues/98) | Tech debt: P7 div-by-zero + strncpy | — | **Closed** (PR #108) |

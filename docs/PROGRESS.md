@@ -1375,12 +1375,12 @@ All call sites fixed to properly handle return values:
 
 ---
 
-## Updated Summary (Post Foundation Hardening — Epic #64 COMPLETE)
+## Updated Summary (Post Foundation Hardening + Watchdog — Epics #64 & #88 COMPLETE)
 
 | Metric | FaultMgr | Tier 1 | Tier 2 | **Watchdog + systemd (Final)** |
 |---|---|---|---|---|
 | Bug fixes | 19 | 21 | 21 | **21** |
-| Unit tests | 400 | 400 | 464 | **701** |
+| Automated tests (unit+E2E) | 400 | 400 | 464 | **701** |
 | Test suites | 23 | 23 | 26 | **31+** |
 | Compiler warnings | 0 | 0 | 0 | **0** |
 | CI matrix legs | 2 | 9 | 9 | **9** |
@@ -1392,7 +1392,7 @@ All call sites fixed to properly handle return values:
 | Config validation | — | — | 7 schemas | **7 schemas** |
 | `[[nodiscard]]` | — | — | 26 headers | **26 headers** |
 | Thread watchdog | — | — | — | **ThreadHeartbeat + ThreadWatchdog** |
-| Process supervision | — | — | — | **systemd + ProcessManager** |
+| Process supervision | — | — | — | **systemd (production) / ProcessManager (`--supervised`)** |
 
 ---
 
@@ -1432,12 +1432,13 @@ All call sites fixed to properly handle return values:
 
 ---
 
-### Improvement #26 — Process Supervisor (Issue #91, PR #100)
+### Improvement #26 — Process Supervisor (Issue #91, ADR in PR #100)
 
 **Date:** 2026-03-05  
 **Category:** Safety — Crash Recovery  
 **Issue:** [#91](https://github.com/nmohamaya/companion_software_stack/issues/91)  
-**PR:** [#100](https://github.com/nmohamaya/companion_software_stack/pull/100)
+**PR (ADR/design):** [#100](https://github.com/nmohamaya/companion_software_stack/pull/100)  
+**Implementation PRs:** [#101](https://github.com/nmohamaya/companion_software_stack/pull/101), [#102](https://github.com/nmohamaya/companion_software_stack/pull/102)
 
 **Files Added:**
 - `process7_system_monitor/include/monitor/process_manager.h` — fork+exec supervisor with PID tracking
@@ -1487,7 +1488,7 @@ All call sites fixed to properly handle return values:
 - `common/util/include/util/sd_notify.h` — thin `sd_notify()` wrapper (no-op without `-DENABLE_SYSTEMD=ON`)
 - `tests/test_sd_notify.cpp` — 11 tests for sd_notify wrapper
 
-**What:** Layer 3 of the watchdog. Seven independent systemd service units (Option B architecture) with `BindsTo=` dependency semantics — when a dependency crashes and is restarted by systemd, all dependents are also stopped and restarted (unlike `Requires=` which only stops but doesn't restart). P7 uses `Type=notify` with `sd_notify(READY=1)` and `WatchdogSec=10s`. P1–P6 use `Type=simple`. Security hardening includes `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, resource limits.
+**What:** Layer 3 of the watchdog. Seven independent systemd service units (Option B architecture) with `BindsTo=` dependency semantics — when a dependency stops or crashes, systemd also stops all bound dependents. Each unit has `Restart=on-failure`, so systemd restarts them independently. Unlike `Requires=`, `BindsTo=` also arranges for dependents to be stopped when the dependency disappears. P7 uses `Type=notify` with `sd_notify(READY=1)` and `WatchdogSec=10s`. P1–P6 use `Type=simple`. Security hardening includes `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, resource limits.
 
 **Key design decision:** Option B (7 independent units) chosen over Option A (single P7 unit with fork+exec) to avoid the orphan re-adoption problem when systemd restarts P7 — children would become orphans adopted by PID 1 and invisible to the new P7 instance.
 

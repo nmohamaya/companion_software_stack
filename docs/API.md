@@ -433,7 +433,7 @@ FaultManager(const FaultConfig& cfg);   // Direct config (unit tests)
 
 **Header:** `common/util/include/util/thread_heartbeat.h`
 
-Process-global singleton for per-thread heartbeat tracking. Each thread registers a slot and touches it every loop iteration (~1 ns cost via atomic store + `clock_gettime`).
+Process-global singleton for per-thread heartbeat tracking. Each thread registers a slot and touches it every loop iteration (~1 ns cost via atomic store + `std::chrono::steady_clock::now()`).
 
 | Method | Signature | Description |
 |--------|-----------|-------------|

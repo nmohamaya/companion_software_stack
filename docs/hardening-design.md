@@ -60,8 +60,9 @@ Foundation hardening (Epic #64) provides the underpinning:
 | Tier | What | PRs |
 |------|------|-----|
 | **Tier 1** | ASan/TSan/UBSan sanitizers, clang-format gate, lcov coverage | #71, #72, #73 |
-| **Tier 2** | `Result<T,E>` monadic errors, config schemas, `[[nodiscard]]`, latency histograms, JSON logging, correlation IDs | #74, #75, #76, #77 |
-| **Tier 3** | systemd units (Issue #83 → PR #107), tech debt cleanup (PRs #97, #98 → #108) |
+| **Tier 2** | `Result<T,E>` monadic errors, config schemas, `[[nodiscard]]` | #74, #75, #76, #77 |
+| **Tier 3** | Latency histograms, JSON structured logging, correlation IDs | see Epic #64 |
+| **Tier 4** | systemd units (Issue #83 → PR #107), tech debt cleanup (PRs #97, #98 → #108) | #97, #98, #107, #108 |
 
 ---
 
@@ -511,12 +512,12 @@ drone::systemd::notify_stopping();  // Before exit
 
 **`BindsTo=` vs `Requires=`:**
 
-| Directive | On dependency restart | On dependency stop |
-|-----------|----------------------|-------------------|
-| `Requires=` | Dependent stays running | Dependent stopped |
-| `BindsTo=` | Dependent **also restarted** | Dependent stopped |
+| Directive | On dependency stop/disappear | On dependency restart |
+|-----------|-----------------------------|-----------------------|
+| `Requires=` | Dependent stopped | Dependent stays running |
+| `BindsTo=` | Dependent **also stopped** | Dependent stays running |
 
-`BindsTo=` was chosen over `Requires=` because when a dependency crashes and systemd restarts it, all dependents must also restart to clear stale state — matching the ProcessGraph cascade semantics.
+`BindsTo=` was chosen over `Requires=` because it provides stronger stop propagation — when a dependency crashes, systemd stops all bound dependents too. Combined with `Restart=on-failure` on each unit, systemd then restarts both the crashed dependency and its stopped dependents independently. This clears stale state in dependents, matching the `ProcessGraph` cascade semantics.
 
 ---
 
