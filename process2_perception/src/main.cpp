@@ -8,9 +8,11 @@
 #include "ipc/zenoh_liveliness.h"
 #include "perception/detector_interface.h"
 #include "perception/fusion_engine.h"
+#include "perception/ifusion_engine.h"
 #include "perception/itracker.h"
 #include "perception/kalman_tracker.h"
 #include "perception/types.h"
+#include "perception/ukf_fusion_engine.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/log_config.h"
@@ -97,21 +99,10 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 // ── Fusion thread ───────────────────────────────────────────
 static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                     tracked_queue,
                           drone::ipc::IPublisher<drone::ipc::ShmDetectedObjectList>& det_pub,
-                          std::atomic<bool>& running, const drone::Config& cfg) {
-    spdlog::info("[Fusion] Thread started");
+                          std::atomic<bool>& running, IFusionEngine& engine) {
+    spdlog::info("[Fusion] Thread started — backend: {}", engine.name());
 
     auto hb = drone::util::ScopedHeartbeat("fusion", true);
-
-    // Setup calibration (identity transforms for simulation)
-    CalibrationData calib;
-    calib.camera_intrinsics       = Eigen::Matrix3f::Identity();
-    calib.camera_intrinsics(0, 0) = cfg.get<float>("perception.fusion.fx", 500.0f);
-    calib.camera_intrinsics(1, 1) = cfg.get<float>("perception.fusion.fy", 500.0f);
-    calib.camera_intrinsics(0, 2) = cfg.get<float>("perception.fusion.cx", 960.0f);
-    calib.camera_intrinsics(1, 2) = cfg.get<float>("perception.fusion.cy", 540.0f);
-
-
-    FusionEngine engine(calib);
 
     uint64_t fusion_count = 0;
 
@@ -133,21 +124,22 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                          static_cast<uint32_t>(drone::ipc::MAX_DETECTED_OBJECTS));
 
             for (uint32_t i = 0; i < shm_list.num_objects; ++i) {
-                auto& src      = fused.objects[i];
-                auto& dst      = shm_list.objects[i];
-                dst.track_id   = src.track_id;
-                dst.class_id   = static_cast<drone::ipc::ObjectClass>(src.class_id);
-                dst.confidence = src.confidence;
-                dst.position_x = src.position_3d.x();
-                dst.position_y = src.position_3d.y();
-                dst.position_z = src.position_3d.z();
-                dst.velocity_x = src.velocity_3d.x();
-                dst.velocity_y = src.velocity_3d.y();
-                dst.velocity_z = src.velocity_3d.z();
-                dst.heading    = src.heading;
-                dst.has_camera = src.has_camera;
-                dst.has_lidar  = src.has_lidar;
-                dst.has_radar  = src.has_radar;
+                auto& src       = fused.objects[i];
+                auto& dst       = shm_list.objects[i];
+                dst.track_id    = src.track_id;
+                dst.class_id    = static_cast<drone::ipc::ObjectClass>(src.class_id);
+                dst.confidence  = src.confidence;
+                dst.position_x  = src.position_3d.x();
+                dst.position_y  = src.position_3d.y();
+                dst.position_z  = src.position_3d.z();
+                dst.velocity_x  = src.velocity_3d.x();
+                dst.velocity_y  = src.velocity_3d.y();
+                dst.velocity_z  = src.velocity_3d.z();
+                dst.heading     = src.heading;
+                dst.has_camera  = src.has_camera;
+                dst.has_thermal = src.has_thermal;
+                dst.has_lidar   = src.has_lidar;
+                dst.has_radar   = src.has_radar;
             }
             det_pub.publish(shm_list);
             ++fusion_count;
@@ -212,6 +204,18 @@ int main(int argc, char* argv[]) {
     auto        tracker         = create_tracker(tracker_backend, &cfg);
     spdlog::info("[Perception] Tracker  backend: {} ({})", tracker_backend, tracker->name());
 
+    // ── Create fusion engine from config ────────────────────
+    CalibrationData calib;
+    calib.camera_intrinsics       = Eigen::Matrix3f::Identity();
+    calib.camera_intrinsics(0, 0) = cfg.get<float>("perception.fusion.fx", 500.0f);
+    calib.camera_intrinsics(1, 1) = cfg.get<float>("perception.fusion.fy", 500.0f);
+    calib.camera_intrinsics(0, 2) = cfg.get<float>("perception.fusion.cx", 960.0f);
+    calib.camera_intrinsics(1, 2) = cfg.get<float>("perception.fusion.cy", 540.0f);
+
+    std::string fusion_backend = cfg.get<std::string>("perception.fusion.backend", "camera_only");
+    auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);
+    spdlog::info("[Perception] Fusion   backend: {} ({})", fusion_backend, fusion_engine->name());
+
     // ── Internal SPSC queues ────────────────────────────────
     drone::SPSCRing<Detection2DList, 4>   inference_to_tracker;
     drone::SPSCRing<TrackedObjectList, 4> tracker_to_fusion;
@@ -224,7 +228,7 @@ int main(int argc, char* argv[]) {
                           std::ref(tracker_to_fusion), std::ref(g_running), std::ref(*tracker));
 
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
-                         std::ref(g_running), std::cref(cfg));
+                         std::ref(g_running), std::ref(*fusion_engine));
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;

@@ -1,6 +1,7 @@
 // process2_perception/src/fusion_engine.cpp
 // Camera-only fusion implementation.
 // LiDAR/radar paths removed (Phase 1A, Issue #112).
+// Phase 1C: renamed FusionEngine → CameraOnlyFusionEngine (IFusionEngine).
 #include "perception/fusion_engine.h"
 
 #include <algorithm>
@@ -10,7 +11,7 @@
 
 namespace drone::perception {
 
-FusedObjectList FusionEngine::fuse(const TrackedObjectList& tracked) {
+FusedObjectList CameraOnlyFusionEngine::fuse(const TrackedObjectList& tracked) {
     FusedObjectList output;
     output.timestamp_ns   = tracked.timestamp_ns;
     output.frame_sequence = tracked.frame_sequence;

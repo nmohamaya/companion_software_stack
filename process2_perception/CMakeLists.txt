@@ -5,6 +5,7 @@ add_executable(perception
     src/detector_factory.cpp
     src/kalman_tracker.cpp
     src/fusion_engine.cpp
+    src/ukf_fusion_engine.cpp
     src/opencv_yolo_detector.cpp
 )
 target_include_directories(perception PRIVATE

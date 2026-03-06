@@ -89,6 +89,7 @@ struct FusedObject {
     Eigen::Vector3f velocity_3d         = Eigen::Vector3f::Zero();
     float           heading             = 0.0f;
     bool            has_camera          = false;
+    bool            has_thermal         = false;
     bool            has_lidar           = false;
     bool            has_radar           = false;
     Eigen::Matrix3f position_covariance = Eigen::Matrix3f::Identity();
@@ -99,6 +100,19 @@ struct FusedObjectList {
     std::vector<FusedObject> objects;
     uint64_t                 timestamp_ns   = 0;
     uint32_t                 frame_sequence = 0;
+};
+
+}  // namespace drone::perception
+
+// ═══════════════════════════════════════════════════════════
+// Calibration Data (shared between fusion engines)
+// ═══════════════════════════════════════════════════════════
+namespace drone::perception {
+
+/// Calibration data for camera-based depth estimation.
+struct CalibrationData {
+    Eigen::Matrix3f camera_intrinsics = Eigen::Matrix3f::Identity();
+    float           camera_height_m   = 1.5f;  // camera height above ground
 };
 
 }  // namespace drone::perception

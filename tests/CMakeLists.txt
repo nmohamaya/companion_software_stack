@@ -58,6 +58,7 @@ add_drone_test(test_fault_manager   test_fault_manager.cpp)
 # ── Fusion engine tests ──────────────────────────────────────
 add_drone_test(test_fusion_engine   test_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/fusion_engine.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/ukf_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
 )
 

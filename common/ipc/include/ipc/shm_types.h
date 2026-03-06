@@ -30,6 +30,15 @@ struct ShmStereoFrame {
     uint8_t  right_data[640 * 480];  // GRAY8
 };
 
+/// LWIR thermal camera frame (640×512, GRAY8 — 8-bit pseudo-radiometric).
+struct ShmThermalFrame {
+    uint64_t timestamp_ns;
+    uint64_t sequence_number;
+    uint32_t width;
+    uint32_t height;
+    uint8_t  pixel_data[640 * 512];  // GRAY8 — 1 byte per pixel
+};
+
 // ═══════════════════════════════════════════════════════════
 // Detected Objects SHM (Process 2 → Process 4)
 // ═══════════════════════════════════════════════════════════
@@ -54,7 +63,7 @@ struct ShmDetectedObject {
     float       velocity_x, velocity_y, velocity_z;  // m/s
     float       heading;                             // radians
     float       bbox_x, bbox_y, bbox_w, bbox_h;      // image-space
-    bool        has_camera, has_lidar, has_radar;
+    bool        has_camera, has_thermal, has_lidar, has_radar;
 };
 
 struct ShmDetectedObjectList {
@@ -320,6 +329,7 @@ static_assert(std::is_trivially_copyable_v<ShmThreadHealth>,
 namespace shm_names {
 constexpr const char* VIDEO_MISSION_CAM = "/drone_mission_cam";
 constexpr const char* VIDEO_STEREO_CAM  = "/drone_stereo_cam";
+constexpr const char* VIDEO_THERMAL_CAM = "/drone_thermal_cam";
 constexpr const char* DETECTED_OBJECTS  = "/detected_objects";
 constexpr const char* SLAM_POSE         = "/slam_pose";
 constexpr const char* MISSION_STATUS    = "/mission_status";
