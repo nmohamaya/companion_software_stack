@@ -232,26 +232,22 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("comms");
 
     // ── Publishers ──────────────────────────────────────────
-    auto fc_pub =
-        drone::ipc::bus_advertise<drone::ipc::ShmFCState>(bus, drone::ipc::shm_names::FC_STATE);
-    auto gcs_cmd_pub = drone::ipc::bus_advertise<drone::ipc::ShmGCSCommand>(
-        bus, drone::ipc::shm_names::GCS_COMMANDS);
+    auto fc_pub = bus.advertise<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
+    auto gcs_cmd_pub =
+        bus.advertise<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS);
     if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready()) {
         spdlog::error("Failed to create Comms publishers");
         return 1;
     }
 
     // ── Subscribers ─────────────────────────────────────────
-    auto traj_sub = drone::ipc::bus_subscribe<drone::ipc::ShmTrajectoryCmd>(
-        bus, drone::ipc::shm_names::TRAJECTORY_CMD);
-    auto fc_cmd_sub = drone::ipc::bus_subscribe<drone::ipc::ShmFCCommand>(
-        bus, drone::ipc::shm_names::FC_COMMANDS);
-    auto pose_sub =
-        drone::ipc::bus_subscribe<drone::ipc::ShmPose>(bus, drone::ipc::shm_names::SLAM_POSE);
-    auto mission_sub = drone::ipc::bus_subscribe<drone::ipc::ShmMissionStatus>(
-        bus, drone::ipc::shm_names::MISSION_STATUS);
-    auto fc_sub =
-        drone::ipc::bus_subscribe<drone::ipc::ShmFCState>(bus, drone::ipc::shm_names::FC_STATE);
+    auto traj_sub =
+        bus.subscribe<drone::ipc::ShmTrajectoryCmd>(drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto fc_cmd_sub = bus.subscribe<drone::ipc::ShmFCCommand>(drone::ipc::shm_names::FC_COMMANDS);
+    auto pose_sub   = bus.subscribe<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
+    auto mission_sub =
+        bus.subscribe<drone::ipc::ShmMissionStatus>(drone::ipc::shm_names::MISSION_STATUS);
+    auto fc_sub = bus.subscribe<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
 
     spdlog::info("Comms READY");
 
@@ -264,8 +260,8 @@ int main(int argc, char* argv[]) {
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
-    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
-        bus, drone::ipc::shm_names::THREAD_HEALTH_COMMS);
+    auto                        thread_health_pub =
+        bus.advertise<drone::ipc::ShmThreadHealth>(drone::ipc::shm_names::THREAD_HEALTH_COMMS);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "comms", watchdog);
 
     // ── Main loop: health publishing (replaces bare join) ─

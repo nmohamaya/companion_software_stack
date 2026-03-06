@@ -126,12 +126,12 @@ TEST(ZenohTopicMapping, FallbackUnmappedShmName) {
 
 TEST(MessageBusFactory, DefaultCreatesShmBus) {
     auto bus = create_message_bus();
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
+    EXPECT_EQ(bus.backend_name(), "shm");
 }
 
 TEST(MessageBusFactory, ExplicitShmCreatesShmBus) {
     auto bus = create_message_bus("shm");
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
+    EXPECT_EQ(bus.backend_name(), "shm");
 }
 
 TEST(MessageBusFactory, ZenohRequestWithoutBuild) {
@@ -140,27 +140,27 @@ TEST(MessageBusFactory, ZenohRequestWithoutBuild) {
     // create a ZenohMessageBus.
     auto bus = create_message_bus("zenoh");
 #ifdef HAVE_ZENOH
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ZenohMessageBus>>(bus));
+    EXPECT_EQ(bus.backend_name(), "zenoh");
 #else
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
+    EXPECT_EQ(bus.backend_name(), "shm");
 #endif
 }
 
-TEST(MessageBusFactory, BusAdvertiseViaVariant) {
+TEST(MessageBusFactory, BusAdvertiseViaMessageBus) {
     auto bus = create_message_bus("shm");
-    auto pub = bus_advertise<ShmPose>(bus, "/test_factory_pub_" + std::to_string(getpid()));
+    auto pub = bus.advertise<ShmPose>("/test_factory_pub_" + std::to_string(getpid()));
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 }
 
-TEST(MessageBusFactory, BusSubscribeViaVariant) {
+TEST(MessageBusFactory, BusSubscribeViaMessageBus) {
     // Create publisher first so subscriber can connect
     auto bus   = create_message_bus("shm");
     auto topic = "/test_factory_sub_" + std::to_string(getpid());
-    auto pub   = bus_advertise<ShmPose>(bus, topic);
+    auto pub   = bus.advertise<ShmPose>(topic);
     ASSERT_NE(pub, nullptr);
 
-    auto sub = bus_subscribe<ShmPose>(bus, topic, 5, 50);
+    auto sub = bus.subscribe<ShmPose>(topic, 5, 50);
     ASSERT_NE(sub, nullptr);
     EXPECT_TRUE(sub->is_connected());
 }
@@ -843,7 +843,7 @@ TEST(ZenohMigration, FactorySubscribeOptional) {
     // may publish on GCS_COMMANDS.
     std::string unique_key = std::string("/factory_opt_test_") + std::to_string(::getpid());
     auto        bus        = create_message_bus("zenoh");
-    auto        sub        = bus_subscribe_optional<ShmGCSCommand>(bus, unique_key);
+    auto        sub        = bus.subscribe_optional<ShmGCSCommand>(unique_key);
     ASSERT_NE(sub, nullptr);
     // No publisher exists — receive should return false but not crash
     ShmGCSCommand cmd{};
@@ -1023,8 +1023,8 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
 TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
     // End-to-end: factory → advertise ShmVideoFrame → subscribe → roundtrip
     auto bus = create_message_bus("zenoh");
-    auto pub = bus_advertise<ShmVideoFrame>(bus, shm_names::VIDEO_MISSION_CAM);
-    auto sub = bus_subscribe<ShmVideoFrame>(bus, shm_names::VIDEO_MISSION_CAM);
+    auto pub = bus.advertise<ShmVideoFrame>(shm_names::VIDEO_MISSION_CAM);
+    auto sub = bus.subscribe<ShmVideoFrame>(shm_names::VIDEO_MISSION_CAM);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
@@ -1059,8 +1059,8 @@ TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
 
 TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
     auto bus = create_message_bus("zenoh");
-    auto pub = bus_advertise<ShmStereoFrame>(bus, shm_names::VIDEO_STEREO_CAM);
-    auto sub = bus_subscribe<ShmStereoFrame>(bus, shm_names::VIDEO_STEREO_CAM);
+    auto pub = bus.advertise<ShmStereoFrame>(shm_names::VIDEO_STEREO_CAM);
+    auto sub = bus.subscribe<ShmStereoFrame>(shm_names::VIDEO_STEREO_CAM);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
@@ -1427,20 +1427,20 @@ TEST(ZenohServiceChannel, ServiceKeyMapping) {
 }
 
 // ---------------------------------------------------------------------------
-// 5.11 — bus_create_client / bus_create_server via variant factory
+// 5.11 — bus.create_client / bus.create_server via MessageBus
 // ---------------------------------------------------------------------------
 
-TEST(ZenohServiceChannel, ViaBusVariantFactory) {
+TEST(ZenohServiceChannel, ViaMessageBus) {
     auto bus = create_message_bus("zenoh");
 
     auto server =
-        bus_create_server<SvcTestRequest, SvcTestResponse>(bus, "drone/service/test_variant_svc");
+        bus.create_server<SvcTestRequest, SvcTestResponse>("drone/service/test_variant_svc");
     ASSERT_NE(server, nullptr);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     auto client =
-        bus_create_client<SvcTestRequest, SvcTestResponse>(bus, "drone/service/test_variant_svc");
+        bus.create_client<SvcTestRequest, SvcTestResponse>("drone/service/test_variant_svc");
     ASSERT_NE(client, nullptr);
 
     auto cid     = client->send_request(SvcTestRequest{99, 0.0f});
@@ -1476,7 +1476,7 @@ struct SvcTestResponse {
 
 TEST(MessageBusFactory, ShmBusServiceClientReturnsNull) {
     auto bus    = create_message_bus("shm");
-    auto client = bus_create_client<SvcTestRequest, SvcTestResponse>(bus, "test_no_svc");
+    auto client = bus.create_client<SvcTestRequest, SvcTestResponse>("test_no_svc");
 #ifdef HAVE_ZENOH
     // Under HAVE_ZENOH the variant has both alternatives, but we selected SHM
     EXPECT_EQ(client, nullptr);
@@ -1487,6 +1487,6 @@ TEST(MessageBusFactory, ShmBusServiceClientReturnsNull) {
 
 TEST(MessageBusFactory, ShmBusServiceServerReturnsNull) {
     auto bus    = create_message_bus("shm");
-    auto server = bus_create_server<SvcTestRequest, SvcTestResponse>(bus, "test_no_svc");
+    auto server = bus.create_server<SvcTestRequest, SvcTestResponse>("test_no_svc");
     EXPECT_EQ(server, nullptr);
 }

@@ -332,7 +332,7 @@ TEST(ConfigAwareFactory, ShmBackendFromMockConfig) {
     MockConfig cfg;
     cfg.ipc_backend = "shm";
     auto bus        = create_message_bus(cfg);
-    EXPECT_TRUE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
+    EXPECT_EQ(bus.backend_name(), "shm");
 }
 
 TEST(ConfigAwareFactory, ZenohBackendFromMockConfig) {
@@ -342,7 +342,7 @@ TEST(ConfigAwareFactory, ZenohBackendFromMockConfig) {
     cfg.network_enabled = false;
     auto bus            = create_message_bus(cfg);
     // Should create a ZenohMessageBus (not ShmMessageBus)
-    EXPECT_FALSE(std::holds_alternative<std::unique_ptr<ShmMessageBus>>(bus));
+    EXPECT_EQ(bus.backend_name(), "zenoh");
 }
 
 #endif  // HAVE_ZENOH

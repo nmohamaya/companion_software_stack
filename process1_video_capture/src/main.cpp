@@ -169,15 +169,15 @@ int main(int argc, char* argv[]) {
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
     drone::ipc::LivelinessToken liveliness_token("video_capture");
 
-    auto mission_pub = drone::ipc::bus_advertise<drone::ipc::ShmVideoFrame>(
-        bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    auto mission_pub =
+        bus.advertise<drone::ipc::ShmVideoFrame>(drone::ipc::shm_names::VIDEO_MISSION_CAM);
     if (!mission_pub->is_ready()) {
         spdlog::error("Failed to create publisher: {}", drone::ipc::shm_names::VIDEO_MISSION_CAM);
         return 1;
     }
 
-    auto stereo_pub = drone::ipc::bus_advertise<drone::ipc::ShmStereoFrame>(
-        bus, drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    auto stereo_pub =
+        bus.advertise<drone::ipc::ShmStereoFrame>(drone::ipc::shm_names::VIDEO_STEREO_CAM);
     if (!stereo_pub->is_ready()) {
         spdlog::error("Failed to create publisher: {}", drone::ipc::shm_names::VIDEO_STEREO_CAM);
         return 1;
@@ -191,8 +191,8 @@ int main(int argc, char* argv[]) {
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
-    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
-        bus, drone::ipc::shm_names::THREAD_HEALTH_VIDEO_CAPTURE);
+    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
+        drone::ipc::shm_names::THREAD_HEALTH_VIDEO_CAPTURE);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "video_capture",
                                                         watchdog);
 

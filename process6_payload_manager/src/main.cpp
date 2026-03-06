@@ -50,15 +50,15 @@ int main(int argc, char* argv[]) {
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
     drone::ipc::LivelinessToken liveliness_token("payload_manager");
 
-    auto cmd_sub = drone::ipc::bus_subscribe<drone::ipc::ShmPayloadCommand>(
-        bus, drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    auto cmd_sub =
+        bus.subscribe<drone::ipc::ShmPayloadCommand>(drone::ipc::shm_names::PAYLOAD_COMMANDS);
     if (!cmd_sub->is_connected()) {
         spdlog::error("Cannot open payload commands channel");
         return 1;
     }
 
-    auto status_pub = drone::ipc::bus_advertise<drone::ipc::ShmPayloadStatus>(
-        bus, drone::ipc::shm_names::PAYLOAD_STATUS);
+    auto status_pub =
+        bus.advertise<drone::ipc::ShmPayloadStatus>(drone::ipc::shm_names::PAYLOAD_STATUS);
     if (!status_pub->is_ready()) {
         spdlog::error("Failed to create payload status publisher");
         return 1;
@@ -74,8 +74,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        payload_hb = drone::util::ScopedHeartbeat("payload_loop", false);
     drone::util::ThreadWatchdog watchdog;
-    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
-        bus, drone::ipc::shm_names::THREAD_HEALTH_PAYLOAD_MANAGER);
+    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
+        drone::ipc::shm_names::THREAD_HEALTH_PAYLOAD_MANAGER);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "payload_manager",
                                                         watchdog);
     uint32_t                           health_tick = 0;

@@ -76,15 +76,14 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("mission_planner");
 
     // ── Subscribe to inputs ─────────────────────────────────
-    auto pose_sub =
-        drone::ipc::bus_subscribe<drone::ipc::ShmPose>(bus, drone::ipc::shm_names::SLAM_POSE);
+    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
     if (!pose_sub->is_connected()) {
         spdlog::error("Cannot connect to SLAM pose");
         return 1;
     }
 
-    auto obj_sub = drone::ipc::bus_subscribe<drone::ipc::ShmDetectedObjectList>(
-        bus, drone::ipc::shm_names::DETECTED_OBJECTS);
+    auto obj_sub =
+        bus.subscribe<drone::ipc::ShmDetectedObjectList>(drone::ipc::shm_names::DETECTED_OBJECTS);
     if (!obj_sub->is_connected()) {
         spdlog::error("Cannot connect to detected objects");
         return 1;
@@ -93,8 +92,7 @@ int main(int argc, char* argv[]) {
     // FC state is *critical* for the FSM (armed check, altitude feedback).
     // Subscribe with retries first so we wait for comms to create the segment,
     // ensuring the SHM backend has the segment available before we proceed.
-    auto fc_state_sub =
-        drone::ipc::bus_subscribe<drone::ipc::ShmFCState>(bus, drone::ipc::shm_names::FC_STATE);
+    auto fc_state_sub = bus.subscribe<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
     if (!fc_state_sub->is_connected()) {
         spdlog::error("Cannot connect to FC state — comms may not be running");
         return 1;
@@ -103,22 +101,21 @@ int main(int argc, char* argv[]) {
     // GCS commands are optional (may never be published).
     // Placed after FC-state so that the SHM backend's blocking retry above
     // gives comms time to initialise, improving GCS segment availability.
-    auto gcs_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmGCSCommand>(
-        bus, drone::ipc::shm_names::GCS_COMMANDS);
+    auto gcs_sub =
+        bus.subscribe_optional<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS);
 
     // System health from Process 7 (optional — monitor may not be running)
-    auto health_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmSystemHealth>(
-        bus, drone::ipc::shm_names::SYSTEM_HEALTH);
+    auto health_sub =
+        bus.subscribe_optional<drone::ipc::ShmSystemHealth>(drone::ipc::shm_names::SYSTEM_HEALTH);
 
     // ── Create publishers ───────────────────────────────────
-    auto status_pub = drone::ipc::bus_advertise<drone::ipc::ShmMissionStatus>(
-        bus, drone::ipc::shm_names::MISSION_STATUS);
-    auto traj_pub = drone::ipc::bus_advertise<drone::ipc::ShmTrajectoryCmd>(
-        bus, drone::ipc::shm_names::TRAJECTORY_CMD);
-    auto payload_pub = drone::ipc::bus_advertise<drone::ipc::ShmPayloadCommand>(
-        bus, drone::ipc::shm_names::PAYLOAD_COMMANDS);
-    auto fc_cmd_pub = drone::ipc::bus_advertise<drone::ipc::ShmFCCommand>(
-        bus, drone::ipc::shm_names::FC_COMMANDS);
+    auto status_pub =
+        bus.advertise<drone::ipc::ShmMissionStatus>(drone::ipc::shm_names::MISSION_STATUS);
+    auto traj_pub =
+        bus.advertise<drone::ipc::ShmTrajectoryCmd>(drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto payload_pub =
+        bus.advertise<drone::ipc::ShmPayloadCommand>(drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    auto fc_cmd_pub = bus.advertise<drone::ipc::ShmFCCommand>(drone::ipc::shm_names::FC_COMMANDS);
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() || !payload_pub->is_ready() ||
         !fc_cmd_pub->is_ready()) {
@@ -187,8 +184,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
     drone::util::ThreadWatchdog watchdog;
-    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
-        bus, drone::ipc::shm_names::THREAD_HEALTH_MISSION_PLANNER);
+    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
+        drone::ipc::shm_names::THREAD_HEALTH_MISSION_PLANNER);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
                                                         watchdog);
     uint32_t                           health_tick = 0;

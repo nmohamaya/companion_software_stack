@@ -263,16 +263,16 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("perception");
 
     // ── Subscribe to video frames from Process 1 ────────────
-    auto video_sub = drone::ipc::bus_subscribe<drone::ipc::ShmVideoFrame>(
-        bus, drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    auto video_sub =
+        bus.subscribe<drone::ipc::ShmVideoFrame>(drone::ipc::shm_names::VIDEO_MISSION_CAM);
     if (!video_sub->is_connected()) {
         spdlog::error("Cannot connect to video channel — is video_capture running?");
         return 1;
     }
 
     // ── Create publisher for detected objects → Process 4 ───
-    auto det_pub = drone::ipc::bus_advertise<drone::ipc::ShmDetectedObjectList>(
-        bus, drone::ipc::shm_names::DETECTED_OBJECTS);
+    auto det_pub =
+        bus.advertise<drone::ipc::ShmDetectedObjectList>(drone::ipc::shm_names::DETECTED_OBJECTS);
     if (!det_pub->is_ready()) {
         spdlog::error("Failed to create publisher: {}", drone::ipc::shm_names::DETECTED_OBJECTS);
         return 1;
@@ -308,8 +308,8 @@ int main(int argc, char* argv[]) {
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
-    auto thread_health_pub = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
-        bus, drone::ipc::shm_names::THREAD_HEALTH_PERCEPTION);
+    auto                        thread_health_pub =
+        bus.advertise<drone::ipc::ShmThreadHealth>(drone::ipc::shm_names::THREAD_HEALTH_PERCEPTION);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "perception", watchdog);
 
     spdlog::info("All perception threads started — READY");

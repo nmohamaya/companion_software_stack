@@ -193,16 +193,15 @@ int main(int argc, char* argv[]) {
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
     drone::ipc::LivelinessToken liveliness_token("system_monitor");
 
-    auto health_pub = drone::ipc::bus_advertise<drone::ipc::ShmSystemHealth>(
-        bus, drone::ipc::shm_names::SYSTEM_HEALTH);
+    auto health_pub =
+        bus.advertise<drone::ipc::ShmSystemHealth>(drone::ipc::shm_names::SYSTEM_HEALTH);
     if (!health_pub->is_ready()) {
         spdlog::error("Failed to create system health publisher");
         return 1;
     }
 
     // ── Optional: subscribe to FC state for battery info ────
-    auto fc_sub = drone::ipc::bus_subscribe_optional<drone::ipc::ShmFCState>(
-        bus, drone::ipc::shm_names::FC_STATE);
+    auto fc_sub = bus.subscribe_optional<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
 
     // ── Process health monitoring via liveliness tokens ─────
     // Critical processes: if these die, flag critical_failure.
@@ -260,8 +259,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        health_hb = drone::util::ScopedHeartbeat("health_loop", false);
     drone::util::ThreadWatchdog watchdog;
-    auto thread_health_pub_ch = drone::ipc::bus_advertise<drone::ipc::ShmThreadHealth>(
-        bus, drone::ipc::shm_names::THREAD_HEALTH_SYSTEM_MONITOR);
+    auto                        thread_health_pub_ch = bus.advertise<drone::ipc::ShmThreadHealth>(
+        drone::ipc::shm_names::THREAD_HEALTH_SYSTEM_MONITOR);
     drone::util::ThreadHealthPublisher thread_health_publisher(*thread_health_pub_ch,
                                                                "system_monitor", watchdog);
 
