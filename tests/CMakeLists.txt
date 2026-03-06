@@ -149,6 +149,10 @@ add_drone_test(test_process_graph   test_process_graph.cpp)
 add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp
     PROPERTIES RESOURCE_LOCK "zenoh_session")
 
+# ── Zenoh branch-coverage tests ─────────────────────────────
+add_drone_test(test_zenoh_coverage  test_zenoh_coverage.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
+
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)
 
