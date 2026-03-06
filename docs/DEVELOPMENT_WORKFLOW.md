@@ -105,7 +105,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 > **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 
-##### 4c. Local CI Check (required before push)
+##### 4d. Local CI Check (required before push)
 
 Run the same checks that GitHub Actions CI will run, **before** committing and pushing:
 ```bash
