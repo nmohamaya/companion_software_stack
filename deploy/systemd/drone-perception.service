@@ -2,14 +2,15 @@
 # Process 2 — Perception: object detection, tracking, sensor fusion.
 #
 # Depends on video_capture for camera frames.
-# Restart behavior is governed by this unit's Restart= policy and drone-stack.target.
+# BindsTo ensures perception is stopped when video_capture stops, AND
+# restarted when video_capture restarts (unlike Requires, which only stops).
 
 [Unit]
 Description=Drone Perception (P2)
 Documentation=https://github.com/nmohamaya/companion_software_stack
 PartOf=drone-stack.target
 After=network-online.target drone-video-capture.service
-Requires=drone-video-capture.service
+BindsTo=drone-video-capture.service
 
 [Service]
 Type=simple

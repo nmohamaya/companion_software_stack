@@ -26,7 +26,9 @@ CPUQuota=100%
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/dev/shm /tmp /var/log/drone /dev/ttyUSB0 /dev/ttyACM0
+# Note: /dev nodes are on devtmpfs, not affected by ProtectSystem=strict.
+# Serial ports are accessible via SupplementaryGroups=dialout above.
+ReadWritePaths=/dev/shm /tmp /var/log/drone
 PrivateTmp=yes
 
 # Logging

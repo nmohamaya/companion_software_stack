@@ -24,11 +24,11 @@
 #pragma once
 
 #include <cstdint>
+
+#ifdef HAVE_SYSTEMD
 #include <string>
 
 #include <spdlog/spdlog.h>
-
-#ifdef HAVE_SYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
 

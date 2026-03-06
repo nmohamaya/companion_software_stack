@@ -2,14 +2,14 @@
 # Process 6 — Payload Manager: gimbal, camera trigger, payload actuation.
 #
 # Depends on comms for FC commands.
-# PartOf=drone-comms.service → cascade restart when comms dies.
+# BindsTo ensures payload_manager stops AND restarts with comms.
 
 [Unit]
 Description=Drone Payload Manager (P6)
 Documentation=https://github.com/nmohamaya/companion_software_stack
-PartOf=drone-stack.target drone-comms.service
+PartOf=drone-stack.target
 After=network-online.target drone-comms.service
-Requires=drone-comms.service
+BindsTo=drone-comms.service
 
 [Service]
 Type=simple

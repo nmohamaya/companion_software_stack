@@ -2,14 +2,15 @@
 # Process 3 — SLAM / VIO / Navigation: visual-inertial odometry, pose estimation.
 #
 # Depends on perception for fused detections.
-# Relationship: slam_vio_nav requires perception (Requires/After), but does not restart perception if it dies.
+# BindsTo ensures slam_vio_nav is stopped when perception stops, AND
+# restarted when perception restarts (unlike Requires, which only stops).
 
 [Unit]
 Description=Drone SLAM/VIO/Nav (P3)
 Documentation=https://github.com/nmohamaya/companion_software_stack
 PartOf=drone-stack.target
 After=network-online.target drone-perception.service
-Requires=drone-perception.service
+BindsTo=drone-perception.service
 
 [Service]
 Type=simple

@@ -2,14 +2,14 @@
 # Process 4 — Mission Planner: waypoint tracking, contingency logic.
 #
 # Depends on comms (FC link) and slam_vio_nav (pose).
-# PartOf=drone-comms.service → cascade restart when comms dies.
+# BindsTo ensures mission_planner stops AND restarts with its dependencies.
 
 [Unit]
 Description=Drone Mission Planner (P4)
 Documentation=https://github.com/nmohamaya/companion_software_stack
-PartOf=drone-stack.target drone-comms.service
+PartOf=drone-stack.target
 After=network-online.target drone-comms.service drone-slam-vio-nav.service
-Requires=drone-comms.service drone-slam-vio-nav.service
+BindsTo=drone-comms.service drone-slam-vio-nav.service
 
 [Service]
 Type=simple
