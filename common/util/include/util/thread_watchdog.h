@@ -110,7 +110,7 @@ private:
         const auto threshold_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(cfg_.stuck_threshold).count());
 
-        auto beats = ThreadHeartbeatRegistry::instance().snapshot();
+        auto snap = ThreadHeartbeatRegistry::instance().snapshot();
 
         std::vector<std::string> new_stuck;
 
@@ -121,7 +121,8 @@ private:
             cb_copy = callback_;
         }
 
-        for (const auto& beat : beats) {
+        for (size_t i = 0; i < snap.count; ++i) {
+            const auto&    beat = snap[i];
             const uint64_t last = beat.last_touch_ns.load(std::memory_order_relaxed);
 
             // Skip threads that haven't started yet (last_touch_ns == 0)

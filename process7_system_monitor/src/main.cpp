@@ -13,6 +13,7 @@
 #include "util/log_config.h"
 #include "util/process_graph.h"
 #include "util/restart_policy.h"
+#include "util/safe_name_copy.h"
 #include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
@@ -274,7 +275,7 @@ int main(int argc, char* argv[]) {
     const float disk_crit = cfg.get<float>("system_monitor.thresholds.disk_crit_percent", 98.0f);
     const int   disk_check_s  = cfg.get<int>("system_monitor.disk_check_interval_s", 10);
     const int   update_rate   = cfg.get<int>("system_monitor.update_rate_hz", 1);
-    const int   loop_sleep_ms = update_rate > 0 ? 1000 / update_rate : 1000;
+    const int   loop_sleep_ms = std::max(1, update_rate > 0 ? 1000 / update_rate : 1000);
 
     // Convert disk check interval from seconds to ticks (calls)
     const int disk_interval_ticks = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
@@ -321,8 +322,7 @@ int main(int argc, char* argv[]) {
         for (auto& [name, state] : process_alive_map) {
             if (health.num_processes < drone::ipc::kMaxTrackedProcesses) {
                 auto& entry = health.processes[health.num_processes];
-                std::memset(entry.name, 0, sizeof(entry.name));
-                std::strncpy(entry.name, name.c_str(), sizeof(entry.name) - 1);
+                drone::util::safe_name_copy(entry.name, name.c_str());
                 entry.alive        = state.alive;
                 entry.last_seen_ns = state.last_seen_ns;
                 health.num_processes++;

@@ -105,7 +105,29 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 > **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 
-##### 4c. Smoke Test (for IPC/process changes)
+##### 4d. Local CI Check (required before push)
+
+Run the same checks that GitHub Actions CI will run, **before** committing and pushing:
+```bash
+# Full CI pipeline (format + SHM + Zenoh + sanitizers + coverage):
+bash deploy/run_ci_local.sh
+
+# Quick check (format + SHM build + tests — fastest, good for most changes):
+bash deploy/run_ci_local.sh --quick
+
+# Run a single CI job by tag:
+bash deploy/run_ci_local.sh --job FMT        # format check only
+bash deploy/run_ci_local.sh --job SHM        # SHM build + tests
+bash deploy/run_ci_local.sh --job ZENOH      # Zenoh build + tests
+bash deploy/run_ci_local.sh --job ASAN       # AddressSanitizer
+bash deploy/run_ci_local.sh --job COV        # coverage report
+```
+- **At minimum, run `--quick` before every push** to catch build failures and test regressions early
+- Run the full suite (`bash deploy/run_ci_local.sh`) before creating a PR to avoid CI failures
+- The script mirrors the exact CI matrix in `.github/workflows/ci.yml`
+- See `bash deploy/run_ci_local.sh --help` for all available job tags
+
+##### 4d. Smoke Test (for IPC/process changes)
 ```bash
 # Quick manual test:
 cd build/bin
@@ -126,7 +148,7 @@ bash deploy/clean_build_and_run_zenoh.sh --gui  # with Gazebo GUI
 - No segfaults or assertion failures
 - Both SHM and Zenoh backends should be tested when IPC-related code changes
 
-##### 4d. Integration / Simulation Tests (when applicable)
+##### 4e. Integration / Simulation Tests (when applicable)
 For changes that interact with external simulators or hardware:
 ```bash
 # Gazebo SITL via deploy scripts (recommended):
