@@ -1,5 +1,6 @@
 // tests/test_fusion_engine.cpp
-// Unit tests for FusionEngine multi-sensor fusion.
+// Unit tests for FusionEngine camera-only fusion.
+// LiDAR/radar tests removed (Phase 1A, Issue #112).
 #include "perception/fusion_engine.h"
 #include "perception/kalman_tracker.h"
 
@@ -14,19 +15,15 @@ static CalibrationData make_test_calib() {
     calib.camera_intrinsics(1, 1) = 500.0f;  // fy
     calib.camera_intrinsics(0, 2) = 320.0f;  // cx
     calib.camera_intrinsics(1, 2) = 240.0f;  // cy
-    calib.T_cam_lidar             = Eigen::Matrix4f::Identity();
-    calib.T_cam_radar             = Eigen::Matrix4f::Identity();
     calib.camera_height_m         = 1.5f;
     return calib;
 }
 
 TEST(FusionEngineTest, EmptyInputsProduceEmptyOutput) {
-    FusionEngine              engine(make_test_calib());
-    TrackedObjectList         empty_tracked;
-    std::vector<LiDARCluster> empty_lidar;
-    RadarDetectionList        empty_radar;
+    FusionEngine      engine(make_test_calib());
+    TrackedObjectList empty_tracked;
 
-    auto result = engine.fuse(empty_tracked, empty_lidar, empty_radar);
+    auto result = engine.fuse(empty_tracked);
     EXPECT_TRUE(result.objects.empty());
 }
 
@@ -46,7 +43,7 @@ TEST(FusionEngineTest, CameraOnlyFusion) {
     obj.timestamp_ns = 1000;
     tracked.objects.push_back(obj);
 
-    auto result = engine.fuse(tracked, {}, {});
+    auto result = engine.fuse(tracked);
 
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_EQ(result.objects[0].track_id, 1u);
@@ -56,81 +53,59 @@ TEST(FusionEngineTest, CameraOnlyFusion) {
     EXPECT_FALSE(result.objects[0].has_radar);
 }
 
-TEST(FusionEngineTest, LiDARBoostsConfidence) {
+TEST(FusionEngineTest, DepthEstimationFromBboxHeight) {
+    auto         calib = make_test_calib();
+    FusionEngine engine(calib);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 2000;
+    tracked.frame_sequence = 2;
+
+    TrackedObject obj;
+    obj.track_id     = 1;
+    obj.class_id     = ObjectClass::PERSON;
+    obj.confidence   = 0.9f;
+    obj.position_2d  = {320.0f, 240.0f};  // center of image
+    obj.velocity_2d  = Eigen::Vector2f::Zero();
+    obj.timestamp_ns = 2000;
+    tracked.objects.push_back(obj);
+
+    auto result = engine.fuse(tracked);
+
+    ASSERT_EQ(result.objects.size(), 1u);
+    // Expected depth = camera_height_m * 500 / max(10, y)
+    // = 1.5 * 500 / 240 = 3.125
+    float expected_depth = calib.camera_height_m * 500.0f / 240.0f;
+    EXPECT_FLOAT_EQ(result.objects[0].position_3d.x(), expected_depth);
+    EXPECT_FLOAT_EQ(result.objects[0].position_3d.y(), 0.0f);
+    EXPECT_FLOAT_EQ(result.objects[0].position_3d.z(), 0.0f);
+}
+
+TEST(FusionEngineTest, MultipleTrackedObjectsProduceMultipleFused) {
     FusionEngine engine(make_test_calib());
 
     TrackedObjectList tracked;
-    TrackedObject     obj;
-    obj.track_id     = 1;
-    obj.class_id     = ObjectClass::VEHICLE_CAR;
-    obj.confidence   = 0.7f;
-    obj.position_2d  = {320.0f, 240.0f};
-    obj.velocity_2d  = Eigen::Vector2f::Zero();
-    obj.timestamp_ns = 1000;
-    tracked.objects.push_back(obj);
+    tracked.timestamp_ns   = 3000;
+    tracked.frame_sequence = 3;
 
-    // LiDAR cluster near the estimated camera position
-    LiDARCluster cluster;
-    cluster.centroid = {3.0f, 0.0f, 0.0f};
-    cluster.bbox_min = {2.5f, -0.5f, -0.5f};
-    cluster.bbox_max = {3.5f, 0.5f, 0.5f};
-    cluster.distance = 3.0f;
+    for (uint32_t i = 0; i < 5; ++i) {
+        TrackedObject obj;
+        obj.track_id     = i + 1;
+        obj.class_id     = ObjectClass::PERSON;
+        obj.confidence   = 0.7f + static_cast<float>(i) * 0.05f;
+        obj.position_2d  = {100.0f * static_cast<float>(i + 1), 200.0f};
+        obj.velocity_2d  = Eigen::Vector2f::Zero();
+        obj.timestamp_ns = 3000;
+        tracked.objects.push_back(obj);
+    }
 
-    auto result = engine.fuse(tracked, {cluster}, {});
+    auto result = engine.fuse(tracked);
 
-    ASSERT_EQ(result.objects.size(), 1u);
-    EXPECT_TRUE(result.objects[0].has_lidar);
-    EXPECT_GT(result.objects[0].confidence, 0.7f);  // boosted
-}
-
-TEST(FusionEngineTest, UnmatchedLiDARBecomeUnknown) {
-    FusionEngine engine(make_test_calib());
-
-    TrackedObjectList empty_tracked;
-
-    // A lone LiDAR cluster with no camera track match
-    LiDARCluster cluster;
-    cluster.centroid = {10.0f, 5.0f, 0.0f};
-    cluster.bbox_min = {9.5f, 4.5f, -0.5f};
-    cluster.bbox_max = {10.5f, 5.5f, 0.5f};
-    cluster.distance = 11.18f;  // < 50m so included
-
-    auto result = engine.fuse(empty_tracked, {cluster}, {});
-
-    ASSERT_EQ(result.objects.size(), 1u);
-    EXPECT_EQ(result.objects[0].class_id, ObjectClass::UNKNOWN);
-    EXPECT_FALSE(result.objects[0].has_camera);
-    EXPECT_TRUE(result.objects[0].has_lidar);
-    EXPECT_FLOAT_EQ(result.objects[0].confidence, 0.4f);
-}
-
-TEST(FusionEngineTest, RadarProvidesVelocity) {
-    FusionEngine engine(make_test_calib());
-
-    TrackedObjectList tracked;
-    TrackedObject     obj;
-    obj.track_id     = 1;
-    obj.class_id     = ObjectClass::VEHICLE_CAR;
-    obj.confidence   = 0.8f;
-    obj.position_2d  = {320.0f, 240.0f};
-    obj.velocity_2d  = Eigen::Vector2f::Zero();
-    obj.timestamp_ns = 1000;
-    tracked.objects.push_back(obj);
-
-    // Radar detection close to estimated position
-    RadarDetectionList radar;
-    RadarDetection     rdet;
-    rdet.range           = 3.0f;
-    rdet.azimuth         = 0.0f;
-    rdet.elevation       = 0.0f;
-    rdet.velocity_radial = 5.0f;
-    rdet.rcs             = 10.0f;
-    rdet.timestamp_ns    = 1000;
-    radar.detections.push_back(rdet);
-
-    auto result = engine.fuse(tracked, {}, radar);
-
-    ASSERT_EQ(result.objects.size(), 1u);
-    EXPECT_TRUE(result.objects[0].has_radar);
-    EXPECT_GT(result.objects[0].confidence, 0.8f);
+    ASSERT_EQ(result.objects.size(), 5u);
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(result.objects[i].track_id, i + 1);
+        EXPECT_TRUE(result.objects[i].has_camera);
+        EXPECT_FALSE(result.objects[i].has_lidar);
+        EXPECT_FALSE(result.objects[i].has_radar);
+    }
 }

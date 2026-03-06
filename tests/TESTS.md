@@ -44,7 +44,7 @@
 |--------|-------------|---------------|
 | `ipc` | SHM + Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
-| `perception` | Kalman tracker, fusion engine, color contour, YOLOv8 | ~88 |
+| `perception` | Kalman tracker, fusion engine, color contour, YOLOv8 | ~87 |
 | `mission` | Mission FSM, FaultManager degradation | ~31 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
@@ -95,7 +95,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 3 | 88 | Kalman tracker, fusion engine, color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 3 | 87 | Kalman tracker, fusion engine, color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 2 | 31 | Mission FSM state machine, FaultManager degradation |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -107,7 +107,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **32 C++ + 2 shell** | **657 + 42** | |
+| **Total** | **32 C++ + 2 shell** | **656 + 42** | |
 
 ---
 
@@ -300,13 +300,13 @@ assignment, and multi-object tracker lifecycle.
 
 ---
 
-### test_fusion_engine.cpp — 5 tests
+### test_fusion_engine.cpp — 4 tests
 
-**What it tests:** Multi-sensor fusion engine — camera, LiDAR, radar data fusion.
+**What it tests:** Camera-only fusion engine — 2D tracked objects → 3D fused output.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `FusionEngineTest` | 5 | Empty inputs → empty output, camera-only fusion, LiDAR confidence boosting, unmatched LiDAR clusters, radar velocity integration |
+| `FusionEngineTest` | 4 | Empty inputs → empty output, camera-only fusion, depth estimation from bbox height, multiple tracked objects |
 
 **Key files under test:** `perception/fusion_engine.h`
 

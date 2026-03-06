@@ -40,108 +40,65 @@ inline const char* object_class_name(ObjectClass c) {
 // 2D Detections (Camera)
 // ═══════════════════════════════════════════════════════════
 struct Detection2D {
-    float       x, y, w, h;  // bounding box in pixel coords
-    float       confidence;
-    ObjectClass class_id;
-    uint64_t    timestamp_ns;
-    uint64_t    frame_sequence;
+    float       x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;  // bounding box in pixel coords
+    float       confidence     = 0.0f;
+    ObjectClass class_id       = ObjectClass::UNKNOWN;
+    uint64_t    timestamp_ns   = 0;
+    uint64_t    frame_sequence = 0;
 
     Eigen::Vector2f center() const { return {x + w / 2.0f, y + h / 2.0f}; }
 };
 
 struct Detection2DList {
     std::vector<Detection2D> detections;
-    uint64_t                 timestamp_ns;
-    uint64_t                 frame_sequence;
-};
-
-// ═══════════════════════════════════════════════════════════
-// 3D Point Cloud (LiDAR)
-// ═══════════════════════════════════════════════════════════
-struct Point3D {
-    float   x, y, z;
-    float   intensity;
-    uint8_t ring;
-};
-
-struct PointCloud {
-    std::vector<Point3D> points;
-    uint64_t             timestamp_ns;
-    uint32_t             scan_id;
-    void                 reserve(size_t n) { points.reserve(n); }
-    void                 clear() { points.clear(); }
-    size_t               size() const { return points.size(); }
-};
-
-struct LiDARCluster {
-    std::vector<Point3D> points;
-    Eigen::Vector3f      centroid = Eigen::Vector3f::Zero();
-    Eigen::Vector3f      bbox_min = Eigen::Vector3f::Zero();
-    Eigen::Vector3f      bbox_max = Eigen::Vector3f::Zero();
-    float                distance = 0.0f;
-};
-
-// ═══════════════════════════════════════════════════════════
-// Radar Detections
-// ═══════════════════════════════════════════════════════════
-struct RadarDetection {
-    float    range;
-    float    azimuth;
-    float    elevation;
-    float    velocity_radial;
-    float    rcs;
-    uint64_t timestamp_ns;
-};
-
-struct RadarDetectionList {
-    std::vector<RadarDetection> detections;
-    uint64_t                    timestamp_ns;
+    uint64_t                 timestamp_ns   = 0;
+    uint64_t                 frame_sequence = 0;
 };
 
 // ═══════════════════════════════════════════════════════════
 // Tracked Objects (after Kalman filtering)
 // ═══════════════════════════════════════════════════════════
 struct TrackedObject {
-    uint32_t        track_id;
-    ObjectClass     class_id;
-    float           confidence;
-    Eigen::Vector2f position_2d;
-    Eigen::Vector2f velocity_2d;
-    uint32_t        age;
-    uint32_t        hits;
-    uint32_t        misses;
-    uint64_t        timestamp_ns;
-    enum class State { TENTATIVE, CONFIRMED, LOST };
-    State state;
+    uint32_t        track_id     = 0;
+    ObjectClass     class_id     = ObjectClass::UNKNOWN;
+    float           confidence   = 0.0f;
+    Eigen::Vector2f position_2d  = Eigen::Vector2f::Zero();
+    Eigen::Vector2f velocity_2d  = Eigen::Vector2f::Zero();
+    uint32_t        age          = 0;
+    uint32_t        hits         = 0;
+    uint32_t        misses       = 0;
+    uint64_t        timestamp_ns = 0;
+    enum class State : uint8_t { TENTATIVE, CONFIRMED, LOST };
+    State state = State::TENTATIVE;
 };
 
 struct TrackedObjectList {
     std::vector<TrackedObject> objects;
-    uint64_t                   timestamp_ns;
-    uint64_t                   frame_sequence;
+    uint64_t                   timestamp_ns   = 0;
+    uint64_t                   frame_sequence = 0;
 };
 
 // ═══════════════════════════════════════════════════════════
 // Fused Objects (multi-sensor fusion output)
 // ═══════════════════════════════════════════════════════════
 struct FusedObject {
-    uint32_t        track_id;
-    ObjectClass     class_id;
-    float           confidence;
-    Eigen::Vector3f position_3d;
-    Eigen::Vector3f velocity_3d;
-    float           heading;
-    bool            has_camera;
-    bool            has_lidar;
-    bool            has_radar;
-    Eigen::Matrix3f position_covariance;
-    uint64_t        timestamp_ns;
+    uint32_t        track_id            = 0;
+    ObjectClass     class_id            = ObjectClass::UNKNOWN;
+    float           confidence          = 0.0f;
+    Eigen::Vector3f position_3d         = Eigen::Vector3f::Zero();
+    Eigen::Vector3f velocity_3d         = Eigen::Vector3f::Zero();
+    float           heading             = 0.0f;
+    bool            has_camera          = false;
+    bool            has_lidar           = false;
+    bool            has_radar           = false;
+    Eigen::Matrix3f position_covariance = Eigen::Matrix3f::Identity();
+    uint64_t        timestamp_ns        = 0;
 };
 
 struct FusedObjectList {
     std::vector<FusedObject> objects;
-    uint64_t                 timestamp_ns;
-    uint32_t                 frame_sequence;
+    uint64_t                 timestamp_ns   = 0;
+    uint32_t                 frame_sequence = 0;
 };
 
 }  // namespace drone::perception
