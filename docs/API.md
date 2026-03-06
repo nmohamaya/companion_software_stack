@@ -1,7 +1,7 @@
 # Interface API Reference
 
 > **Issue:** #4 — API-Driven Development  
-> **Status:** All 7 processes wired through abstract interfaces; 308 tests pass (including 44 Zenoh IPC tests)  
+> **Status:** All 7 processes wired through abstract interfaces  
 > **IPC Migration:** Zenoh Phase A+B done — [ADR-001](adr/ADR-001-ipc-framework-selection.md), Epic [#45](https://github.com/nmohamaya/companion_software_stack/issues/45), PRs [#52](https://github.com/nmohamaya/companion_software_stack/pull/52) + [#53](https://github.com/nmohamaya/companion_software_stack/pull/53)
 
 ---
@@ -424,7 +424,196 @@ FaultManager(const FaultConfig& cfg);   // Direct config (unit tests)
 
 ---
 
-## 4. How Processes Use These Interfaces
+## 4. Watchdog & Hardening APIs
+
+> **Design doc:** [hardening-design.md](hardening-design.md) — full architecture, deployment modes, thread criticality inventory  
+> **ADR:** [ADR-004](adr/ADR-004-process-thread-watchdog-architecture.md) — decision record and alternatives
+
+### `ThreadHeartbeatRegistry` — `drone::util`
+
+**Header:** `common/util/include/util/thread_heartbeat.h`
+
+Process-global singleton for per-thread heartbeat tracking. Each thread registers a slot and touches it every loop iteration (~1 ns cost via atomic store + `std::chrono::steady_clock::now()`).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `instance` | `static ThreadHeartbeatRegistry& instance()` | Singleton access |
+| `register_thread` | `size_t register_thread(const char* name, bool critical = false)` | Claim next slot via CAS loop; returns handle or `kInvalidHandle` |
+| `touch` | `void touch(size_t handle)` | Update `last_touch_ns` atomically |
+| `touch_with_grace` | `void touch_with_grace(size_t handle, milliseconds grace)` | Touch with future timestamp (covers long ops like model loading) |
+| `snapshot` | `[[nodiscard]] ThreadSnapshot snapshot() const` | Stack-allocated copy of all registered heartbeats |
+| `count` | `[[nodiscard]] size_t count() const` | Number of registered beats |
+
+**Constants:** `kMaxThreads = 16`, `kInvalidHandle` (sentinel).
+
+### `ScopedHeartbeat` — `drone::util`
+
+**Header:** `common/util/include/util/thread_heartbeat.h`
+
+RAII wrapper — registers on construction, provides `touch()` in the loop body.
+
+```cpp
+ScopedHeartbeat hb("inference", /*critical=*/true);
+hb.touch_with_grace(std::chrono::seconds{30});  // model loading
+load_model();
+while (running_) {
+    hb.touch();
+    // ... work ...
+}
+```
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `touch` | `void touch()` | Forward to registry |
+| `touch_with_grace` | `void touch_with_grace(milliseconds grace)` | Forward with grace |
+| `is_valid` | `[[nodiscard]] bool is_valid() const` | True if registration succeeded |
+| `handle` | `[[nodiscard]] size_t handle() const` | The registered slot handle |
+
+### `ThreadWatchdog` — `drone::util`
+
+**Header:** `common/util/include/util/thread_watchdog.h`
+
+Background scanner thread that detects stuck threads via heartbeat age comparison.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| constructor | `ThreadWatchdog(Config cfg = {})` | Start scan thread with config |
+| `set_stuck_callback` | `void set_stuck_callback(StuckCallback cb)` | Called on healthy→stuck transition |
+| `get_stuck_threads` | `[[nodiscard]] vector<string> get_stuck_threads() const` | Names of currently stuck threads |
+
+**Config:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `stuck_threshold` | 5000 ms | Duration without touch before "stuck" |
+| `scan_interval` | 1000 ms | Polling period |
+
+### `ThreadHealthPublisher<Publisher>` — `drone::util`
+
+**Header:** `common/util/include/util/thread_health_publisher.h`
+
+Template that bridges heartbeat registry + watchdog → `ShmThreadHealth` → `IPublisher`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| constructor | `ThreadHealthPublisher(Publisher& pub, const char* process, const ThreadWatchdog& wd)` | Bind to publisher and watchdog |
+| `publish_snapshot` | `void publish_snapshot()` | Take snapshot, cross-reference stuck list, publish health |
+
+### `RestartPolicy` — `drone::util`
+
+**Header:** `common/util/include/util/restart_policy.h`
+
+Per-process restart rules with exponential backoff and thermal gating.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_restarts` | `uint32_t` | 5 | Max restarts before FAILED |
+| `cooldown_window_s` | `uint32_t` | 60 | Seconds of stability to reset counter |
+| `initial_backoff_ms` | `uint32_t` | 500 | First retry delay |
+| `max_backoff_ms` | `uint32_t` | 30000 | Backoff cap (30 s) |
+| `is_critical` | `bool` | false | Stack → CRITICAL on exhaustion |
+| `thermal_gate` | `uint8_t` | 3 | Block restarts at this thermal zone |
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `backoff_ms` | `[[nodiscard]] uint32_t backoff_ms(uint32_t attempt) const` | `min(initial × 2^attempt, max)` |
+| `is_thermal_blocked` | `[[nodiscard]] bool is_thermal_blocked(uint8_t zone) const` | True if zone ≥ gate |
+
+**`StackStatus`** enum: `NOMINAL`, `DEGRADED`, `CRITICAL`
+
+### `ProcessConfig` — `drone::util`
+
+**Header:** `common/util/include/util/restart_policy.h`
+
+Loads per-process config from JSON (name, binary, policy, launch_after, restart_cascade).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `from_json` | `static ProcessConfig from_json(const string& name, const json& j)` | Parse JSON object into config |
+
+### `ProcessGraph` — `drone::util`
+
+**Header:** `common/util/include/util/process_graph.h`
+
+Dual-edge dependency graph: `launch_after` (data dependency) + `restart_cascade` (stale-state dependency).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add_process` | `void add_process(const string& name)` | Register a process node |
+| `add_launch_dep` | `void add_launch_dep(const string& child, const string& parent)` | Child waits for parent before launch |
+| `add_cascade` | `void add_cascade(const string& source, const string& target)` | If source dies, stop+restart target |
+| `launch_order` | `[[nodiscard]] vector<string> launch_order() const` | Topological sort (Kahn's algorithm) |
+| `cascade_targets` | `[[nodiscard]] vector<string> cascade_targets(const string& proc) const` | BFS transitive cascade set |
+| `validate` | `[[nodiscard]] bool validate() const` | Cycle + dangling reference check |
+| `populate_defaults` | `void populate_defaults()` | Standard 6-process graph |
+
+### `ProcessManager` — `drone::monitor`
+
+**Header:** `process7_system_monitor/include/monitor/process_manager.h`
+
+Fork+exec process supervisor with automatic restart, cascade stops, and thermal gating.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add_process` | `void add_process(name, binary, args, policy)` | Register a managed child |
+| `launch_all` | `void launch_all()` | Fork+exec all processes in graph order |
+| `launch` | `bool launch(const char* name)` | Launch a single process |
+| `stop` | `bool stop(const char* name, milliseconds timeout)` | SIGTERM → wait → SIGKILL |
+| `stop_all` | `void stop_all(milliseconds timeout)` | Stop all in reverse order |
+| `tick` | `void tick()` | Reap zombies, detect deaths, trigger restarts (call at ~1 Hz) |
+| `set_process_graph` | `void set_process_graph(const ProcessGraph* graph)` | Wire cascade dependencies |
+| `set_thermal_zone` | `void set_thermal_zone(uint8_t zone)` | Update thermal gate input |
+| `compute_stack_status` | `[[nodiscard]] StackStatus compute_stack_status() const` | NOMINAL / DEGRADED / CRITICAL |
+| `total_restarts` | `[[nodiscard]] uint32_t total_restarts() const` | Sum across all processes |
+
+### `sd_notify` wrappers — `drone::systemd`
+
+**Header:** `common/util/include/util/sd_notify.h`
+
+Thin inline wrappers around `sd_notify()`. All are no-ops when built without `-DENABLE_SYSTEMD=ON`.
+
+| Function | Description |
+|----------|-------------|
+| `notify_ready()` | Sends `READY=1` (Type=notify handshake) |
+| `notify_watchdog()` | Sends `WATCHDOG=1` (pet the WatchdogSec timer) |
+| `notify_stopping()` | Sends `STOPPING=1` (graceful shutdown) |
+| `notify_status(msg)` | Sends `STATUS=msg` (visible in `systemctl status`) |
+| `watchdog_enabled()` | Returns true if `WatchdogSec` is active |
+| `watchdog_usec()` | Returns watchdog interval in µs (0 if inactive) |
+
+### `Result<T,E>` — `drone::util`
+
+**Header:** `common/util/include/util/result.h`
+
+Monadic error type replacing exceptions on the hot path. See [CPP_PATTERNS_GUIDE.md §3.13](CPP_PATTERNS_GUIDE.md#313-resultte--monadic-error-handling) for usage patterns.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `ok` | `static Result ok(T value)` | Success constructor |
+| `err` | `static Result err(E error)` | Error constructor |
+| `is_ok` / `is_err` | `bool` | Status check |
+| `value` / `error` | `const T&` / `const E&` | Accessors (UB if wrong state) |
+| `value_or` | `T value_or(T fallback) const` | Safe fallback |
+| `map` | `auto map(F&& f) const` | Transform T → U on success |
+| `and_then` | `auto and_then(F&& f) const` | Chain T → Result\<U,E\> |
+| `map_error` | `auto map_error(F&& f) const` | Transform E → E2 on error |
+
+**Error codes:** `Unknown`, `FileNotFound`, `ParseError`, `InvalidValue`, `MissingKey`, `TypeMismatch`, `OutOfRange`, `Timeout`, `NotConnected`, `AlreadyExists`
+
+### `safe_name_copy<N>` — `drone::util`
+
+**Header:** `common/util/include/util/safe_name_copy.h`
+
+Template replacing raw `strncpy` for fixed-size SHM name buffers. Deduces buffer size, zeroes, copies, null-terminates.
+
+```cpp
+char buf[32];
+safe_name_copy(buf, "inference_thread");
+```
+
+---
+
+## 5. How Processes Use These Interfaces
 
 Every process creates a message bus via the config-driven factory and obtains typed publishers/subscribers:
 
@@ -474,7 +663,7 @@ auto avoider = create_obstacle_avoider(
 
 ---
 
-## 5. Adding a New Implementation
+## 6. Adding a New Implementation
 
 1. Create a class inheriting the abstract interface (e.g., `class OrbSlam3Frontend : public IVisualFrontend`)
 2. Implement all pure virtual methods
@@ -485,25 +674,13 @@ No process code changes needed — only the factory + new implementation file.
 
 ---
 
-## 6. Test Coverage
+## 7. Test Coverage
 
-| Test File | Tests | What's Covered |
-|-----------|-------|----------------|
-| `test_message_bus.cpp` | 23 | IPublisher, ISubscriber, ShmMessageBus, ShmServiceChannel |
-| `test_process_interfaces.cpp` | 19 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
-| `test_shm_ipc.cpp` | 25 | SeqLock ShmWriter/ShmReader, SPSC ring |
-| `test_zenoh_ipc.cpp` | 44 | MessageBusFactory (5), ZenohTopicMapping (15), ZenohSession/Publisher/Subscriber (3), ZenohPubSub round-trips (5), ZenohMessageBus (4), ZenohMigration (13: 10 per-channel round-trips, multi-channel, high-rate pose, factory subscribe_optional) |
-| `test_mission_fsm.cpp` | 7 | MissionFSM state transitions, waypoint loading, state names |
-| `test_fault_manager.cpp` | 23 | FaultManager: nominal, 8 fault conditions, escalation-only, loiter timeout, reset, simultaneous faults, edge cases ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61)) |
-| `test_zenoh_service.cpp` | *(planned)* | ZenohServiceClient, ZenohServiceServer ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) |
-| `test_zenoh_liveliness.cpp` | *(planned)* | LivelinessToken, LivelinessMonitor ([#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) |
-| `bench_zenoh_video.cpp` | *(planned)* | Video frame zero-copy benchmarks ([#48](https://github.com/nmohamaya/companion_software_stack/issues/48)) |
-
-Total: **400 tests** (23 suites).
+For the full test index (test files, suite names, counts, and how to run them), see **[tests/TESTS.md](../tests/TESTS.md)** — the single source of truth for test documentation.
 
 ---
 
-## 7. Planned: Zenoh IPC Migration
+## 8. Zenoh IPC Migration
 
 > **Epic:** [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) — Zenoh IPC Migration  
 > **Decision:** [ADR-001](adr/ADR-001-ipc-framework-selection.md)  

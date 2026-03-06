@@ -19,6 +19,8 @@
     - [Phase 6 — Simulation Visualization \& Flight Tuning](#phase-6--simulation-visualization--flight-tuning)
     - [Phase 7 — Real Perception Pipeline](#phase-7--real-perception-pipeline)
     - [Phase 8 — Deployment Tooling \& RTL Safety](#phase-8--deployment-tooling--rtl-safety)
+    - [Phase 9 — Process \& Thread Watchdog (Epic #88)](#phase-9--process--thread-watchdog-epic-88)
+    - [Phase 10 — Foundation Hardening \& systemd (Epic #64)](#phase-10--foundation-hardening--systemd-epic-64)
   - [Planned Phases (Real Drone Deployment)](#planned-phases-real-drone-deployment)
     - [Phase 9 — First Safe Flight (Safety + Hardware Config)](#phase-9--first-safe-flight-safety--hardware-config)
     - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception)
@@ -40,7 +42,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | **464** (26 suites, 0 failures) |
+| Unit tests | See [tests/TESTS.md](../tests/TESTS.md) for current counts |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`, `[[nodiscard]]` enforced) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
@@ -59,6 +61,10 @@
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
 | IPC framework | **POSIX SHM + Zenoh 1.7.2** — All 6 phases complete ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52–#57) |
 | E2E testing | **42/42** Zenoh smoke-test checks passing (`tests/test_zenoh_e2e.sh`) |
+| Process supervision | **systemd** service units (7 services + target) with `BindsTo` dependencies |
+| Thread watchdog | **ThreadHeartbeat + ThreadWatchdog** — per-thread stuck detection via atomics |
+| Process watchdog | **ProcessManager** — fork+exec, dependency graph, exponential backoff |
+| Observability | JSON logging + IPC latency histograms + cross-process correlation IDs |
 
 ---
 
@@ -195,6 +201,76 @@
 
 ---
 
+### Phase 9 — Process & Thread Watchdog (Epic #88)
+
+**Key Deliverables:**
+
+**Three-layer watchdog architecture** ([ADR-004](docs/adr/ADR-004-process-thread-watchdog-architecture.md)):
+
+| Layer | Component | What It Does | PR(s) |
+|-------|-----------|-------------|-------|
+| **Layer 1** | `ThreadHeartbeat` + `ThreadWatchdog` | Per-thread atomic heartbeats; watchdog scans for stuck threads (configurable timeout) | #94 |
+| **Layer 2** | `ProcessManager` (in P7) | fork+exec child processes, PID management; supervises process lifecycle in `--supervised` mode | #101, #102 |
+| **Layer 2** | `RestartPolicy` + `ProcessGraph` | Exponential backoff, max retries, cooldown; dependency-aware restart cascades | #101, #102 |
+| **Layer 3** | systemd service units | 7 `.service` files + `drone-stack.target`; `BindsTo` dependencies; `sd_notify` watchdog | #107 |
+
+**Key files:**
+- `common/util/include/util/thread_heartbeat.h` — `ThreadHeartbeat`, `ThreadHeartbeatRegistry`, `ThreadSnapshot`
+- `common/util/include/util/thread_watchdog.h` — scans all heartbeats, reports stuck threads
+- `common/util/include/util/thread_health_publisher.h` — publishes `ShmThreadHealth` to P7
+- `process7_system_monitor/include/monitor/process_manager.h` — fork+exec supervisor with PID tracking
+- `common/util/include/util/restart_policy.h` — per-process restart policy (backoff, max retries)
+- `common/util/include/util/process_graph.h` — dependency graph (e.g., perception depends on video_capture)
+- `common/util/include/util/sd_notify.h` — thin `sd_notify()` wrapper (no-op when not under systemd)
+- `deploy/systemd/drone-*.service` — 7 service units + `drone-stack.target`
+
+**Design decisions:**
+1. Supervisor lives in P7 — co-located with health metrics
+2. Backend-independent — heartbeats use atomics (no Zenoh), PID polling works in SHM-only mode
+3. Lightweight — one `atomic_store(relaxed)` per loop (~1 ns on ARM)
+4. systemd uses `BindsTo=` (not `Requires=`) so dependents are stopped when dependencies stop or disappear; combined with `Restart=on-failure`, systemd restarts each unit independently
+
+**Issues:** #88 (epic), #89, #90, #91, #92, #83  
+**PRs:** #94, #96, #100, #101, #102, #107  
+**Tech debt:** #97 (snapshot vector→array), #98 (P7 div-by-zero + strncpy) → PR #108  
+**Tests:** 464 → 701  
+
+---
+
+### Phase 10 — Foundation Hardening & systemd (Epic #64)
+
+> Tiers 1–3 of Epic #64 were completed as a batch before the watchdog epic.
+> Phase numbering here reflects chronological order of completion.
+
+**Tier 1 — Build with Confidence:**
+- Sanitizers (ASan/TSan/UBSan) + 7-leg CI matrix (PR #71)
+- clang-tidy + clang-format + .editorconfig (PR #72)
+- Code coverage (gcov/lcov, 75.1% line coverage) (PR #73)
+
+**Tier 2 — Error Handling & Safety:**
+- `Result<T,E>` monadic error type (PR #75)
+- Config schema validation at startup — 7 process schemas (PR #76)
+- `[[nodiscard]]` audit — 26 headers (PR #77)
+
+**Tier 3 — Observability & Debugging:**
+- IPC latency histograms (PR #78)
+- Structured JSON logging (PR #79)
+- Cross-process correlation IDs (PR #80)
+
+**Tier 4 — Deployment Readiness (partial):**
+- systemd service units (PR #107) ✅
+- Dockerfile (#81) — deferred to closer to deployment
+- Cross-compilation (#82) — deferred, depends on #81
+
+**Additional:**
+- Deploy scripts + modular test runners (PR #104)
+- Local CI script `run_ci_local.sh` added to workflow
+
+**Issues:** #64 (epic), #65–#70, #78–#80, #83, #103  
+**Tests:** 400 → 701
+
+---
+
 ## Planned Phases (Real Drone Deployment)
 
 > **Epic:** [#25 — Real Drone Deployment — From Simulation to Flight](https://github.com/nmohamaya/companion_software_stack/issues/25)
@@ -210,7 +286,7 @@
 | [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) | FC heartbeat timeout + link-loss contingency | P0 | Detect MAVLink heartbeat loss → hold / RTL after timeout; reconnection logic |
 | [#29](https://github.com/nmohamaya/companion_software_stack/issues/29) | Geofencing (polygon + altitude ceiling) | P1 | Config-defined polygon + altitude ceiling; auto-RTL on breach |
 | [#30](https://github.com/nmohamaya/companion_software_stack/issues/30) | Pre-flight check script | P0 | Verify FC link, GPS fix, battery level, disk space, process health before ARM |
-| [#31](https://github.com/nmohamaya/companion_software_stack/issues/31) | systemd service files + process supervisor | P1 | Auto-start on boot, auto-restart on crash, ordered dependencies, journal logging |
+| ~~[#31](https://github.com/nmohamaya/companion_software_stack/issues/31)~~ | ~~systemd service files + process supervisor~~ | ~~P1~~ | ✅ Done — superseded by #83 (PR #107) + Epic #88 (watchdog) |
 
 **Exit Criteria:** Safe tethered flight with real FC; manual override tested; battery RTL tested.
 
@@ -280,6 +356,7 @@
 | [#25](https://github.com/nmohamaya/companion_software_stack/issues/25) | [Epic] Real Drone Deployment — From Simulation to Flight | Open |
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | **Closed** ✅ |
 | [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening — CI, Error Handling, Code Quality | **Closed** ✅ |
+| [#88](https://github.com/nmohamaya/companion_software_stack/issues/88) | [Epic] Process & Thread Watchdog — Crash Recovery & Stuck-Thread Detection | **Closed** ✅ |
 
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
@@ -291,17 +368,35 @@
 | [#68](https://github.com/nmohamaya/companion_software_stack/issues/68) | Result<T,E> error type | Tier 2 | **Closed** (PR #75) |
 | [#69](https://github.com/nmohamaya/companion_software_stack/issues/69) | Config schema validation | Tier 2 | **Closed** (PR #76) |
 | [#70](https://github.com/nmohamaya/companion_software_stack/issues/70) | [[nodiscard]] audit | Tier 2 | **Closed** (PR #77) |
+| [#78](https://github.com/nmohamaya/companion_software_stack/issues/78) | IPC latency histograms | Tier 3 | **Closed** |
+| [#79](https://github.com/nmohamaya/companion_software_stack/issues/79) | Structured JSON logging | Tier 3 | **Closed** |
+| [#80](https://github.com/nmohamaya/companion_software_stack/issues/80) | Cross-process correlation IDs | Tier 3 | **Closed** |
+| [#83](https://github.com/nmohamaya/companion_software_stack/issues/83) | systemd service units | Tier 4 | **Closed** (PR #107) |
+| [#81](https://github.com/nmohamaya/companion_software_stack/issues/81) | Dockerfile for reproducible builds | Tier 4 | Open (deferred) |
+| [#82](https://github.com/nmohamaya/companion_software_stack/issues/82) | Cross-compilation toolchain | Tier 4 | Open (deferred) |
+
+### Process & Thread Watchdog (Epic #88) — ✅ COMPLETE
+
+| # | Title | Phase | State |
+|---|-------|-------|-------|
+| [#89](https://github.com/nmohamaya/companion_software_stack/issues/89) | ThreadHeartbeat + ThreadWatchdog | Phase 1 | **Closed** (PR #94) |
+| [#90](https://github.com/nmohamaya/companion_software_stack/issues/90) | ShmThreadHealth integration | Phase 2 | **Closed** (PR #96) |
+| [#91](https://github.com/nmohamaya/companion_software_stack/issues/91) | Process supervisor (fork+exec) | Phase 3 | **Closed** (ADR in PR #100; implementation in PRs #101, #102) |
+| [#92](https://github.com/nmohamaya/companion_software_stack/issues/92) | Restart policies + dependency graph | Phase 4 | **Closed** (PRs #101, #102) |
+| [#97](https://github.com/nmohamaya/companion_software_stack/issues/97) | Tech debt: snapshot() vector→array | — | **Closed** (PR #108) |
+| [#98](https://github.com/nmohamaya/companion_software_stack/issues/98) | Tech debt: P7 div-by-zero + strncpy | — | **Closed** (PR #108) |
+| [#103](https://github.com/nmohamaya/companion_software_stack/issues/103) | Deploy scripts + test runners | — | **Closed** (PR #104) |
 
 ### Phase 9 — First Safe Flight
 
 | # | Title | State |
 |---|-------|-------|
-| [#26](https://github.com/nmohamaya/companion_software_stack/issues/26) | Hardware config + launch script | **Closed** (PR #43) |
+| ~~[#26](https://github.com/nmohamaya/companion_software_stack/issues/26)~~ | ~~Hardware config + launch script~~ | **Closed** (PR #43) |
 | [#27](https://github.com/nmohamaya/companion_software_stack/issues/27) | Battery-critical auto-RTL + temperature failsafe | Open |
 | [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) | FC heartbeat timeout + link-loss contingency | Open |
 | [#29](https://github.com/nmohamaya/companion_software_stack/issues/29) | Geofencing (polygon + altitude ceiling) | Open |
 | [#30](https://github.com/nmohamaya/companion_software_stack/issues/30) | Pre-flight check script | Open |
-| [#31](https://github.com/nmohamaya/companion_software_stack/issues/31) | systemd service files + process supervisor | Open |
+| ~~[#31](https://github.com/nmohamaya/companion_software_stack/issues/31)~~ | ~~systemd service files + process supervisor~~ | **Closed** — superseded by #83 + Epic #88 |
 
 ### Phase 10 — Real Cameras & Perception
 
@@ -346,30 +441,32 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | **Hardening (Current)** |
-|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | **464** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | **26** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | **21** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | **95+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | **7** |
-| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | **Yes** |
-| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **9** |
-| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | **8** |
-| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **ASan, TSan, UBSan** |
-| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **26** |
-| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **7** |
-| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | **Result<T,E>** |
-| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **75.1%** |
-| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **enforced (clang-format-18)** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | **Watchdog + systemd (Current)** |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | **701** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | **31+** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | **21** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | **95+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | **9** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | **8** |
+| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | **Result<T,E>** |
+| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | **75.1%** |
+| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | **enforced** |
+| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **systemd + ProcessManager** |
 
 ### Process Activity During Simulation
 
@@ -385,4 +482,4 @@
 
 ---
 
-*Last updated after Foundation Hardening (Epic #64) — 464 tests, 26 suites, 9-job CI pipeline, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers, 75.1% line coverage.*
+*Last updated after Process & Thread Watchdog (Epic #88) + systemd (Issue #83) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 9-job CI pipeline, three-layer watchdog, systemd service units with BindsTo dependencies.*

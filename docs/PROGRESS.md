@@ -1375,21 +1375,170 @@ All call sites fixed to properly handle return values:
 
 ---
 
-## Updated Summary (Post Foundation Hardening — Epic #64 COMPLETE)
+## Updated Summary (Post Foundation Hardening + Watchdog — Epics #64 & #88 COMPLETE)
 
-| Metric | FaultMgr | Tier 1 | **Tier 2 (Final)** |
-|---|---|---|---|
-| Bug fixes | 19 | 21 | **21** |
-| Unit tests | 400 | 400 | **464** |
-| Test suites | 23 | 23 | **26** |
-| Compiler warnings | 0 | 0 | **0** |
-| CI matrix legs | 2 | 9 (7 build + format + coverage) | **9** |
-| Line coverage | — | 75.1% | **75.1%** |
-| Function coverage | — | 84.9% | **84.9%** |
-| Code style | — | enforced (clang-format-18) | **enforced** |
-| Sanitizers | — | ASan, TSan, UBSan | **ASan, TSan, UBSan** |
-| Error handling | exceptions | exceptions | **Result<T,E> monadic** |
-| Config validation | — | — | **7 schemas** |
-| `[[nodiscard]]` | — | — | **26 headers** |
+| Metric | FaultMgr | Tier 1 | Tier 2 | **Watchdog + systemd (Final)** |
+|---|---|---|---|---|
+| Bug fixes | 19 | 21 | 21 | **21** |
+| Automated tests (unit+E2E) | 400 | 400 | 464 | **701** |
+| Test suites | 23 | 23 | 26 | **31+** |
+| Compiler warnings | 0 | 0 | 0 | **0** |
+| CI matrix legs | 2 | 9 | 9 | **9** |
+| Line coverage | — | 75.1% | 75.1% | **75.1%** |
+| Function coverage | — | 84.9% | 84.9% | **84.9%** |
+| Code style | — | enforced | enforced | **enforced** |
+| Sanitizers | — | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| Error handling | exceptions | exceptions | Result<T,E> | **Result<T,E>** |
+| Config validation | — | — | 7 schemas | **7 schemas** |
+| `[[nodiscard]]` | — | — | 26 headers | **26 headers** |
+| Thread watchdog | — | — | — | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | — | — | — | **systemd (production) / ProcessManager (`--supervised`)** |
 
-*Last updated after Foundation Hardening Epic #64 complete — PRs #71–#77: 464 tests, 26 suites, 9-job CI, Result<T,E>, 7 config schemas, 26 [[nodiscard]] headers.*
+---
+
+## Phase 11 — Process & Thread Watchdog (Epic #88)
+
+### Improvement #24 — ThreadHeartbeat + ThreadWatchdog Library (Issue #89, PR #94)
+
+**Date:** 2026-03-04  
+**Category:** Safety — Stuck Thread Detection  
+**Issue:** [#89](https://github.com/nmohamaya/companion_software_stack/issues/89)  
+**PR:** [#94](https://github.com/nmohamaya/companion_software_stack/pull/94)
+
+**Files Added:**
+- `common/util/include/util/thread_heartbeat.h` — `ThreadHeartbeat` (atomic per-thread), `ThreadHeartbeatRegistry` (global registry), `ThreadSnapshot` (stack-allocated snapshot)
+- `common/util/include/util/thread_watchdog.h` — `ThreadWatchdog` scans all heartbeats, reports stuck threads
+
+**What:** Layer 1 of the three-layer watchdog architecture. Each thread gets a `ThreadHeartbeat` that calls `beat()` (a single `atomic_store(relaxed)`, ~1 ns on ARM) every loop iteration. `ThreadWatchdog::scan_once()` compares timestamps against a configurable timeout and reports stuck threads. Entirely lock-free and backend-independent (works with both SHM and Zenoh). See [ADR-004](docs/adr/ADR-004-process-thread-watchdog-architecture.md).
+
+**Tests:** ~40 new tests covering heartbeat lifecycle, registry, snapshot, watchdog scanning, timeout detection
+
+---
+
+### Improvement #25 — ShmThreadHealth + Process Integration (Issue #90, PR #96)
+
+**Date:** 2026-03-05  
+**Category:** Safety — Health Publishing  
+**Issue:** [#90](https://github.com/nmohamaya/companion_software_stack/issues/90)  
+**PR:** [#96](https://github.com/nmohamaya/companion_software_stack/pull/96)
+
+**Files Added:**
+- `common/util/include/util/thread_health_publisher.h` — publishes `ShmThreadHealth` to shared memory for P7 consumption
+- `common/util/include/util/safe_name_copy.h` — `strncpy` replacement that null-terminates safely
+
+**What:** Layer 1–2 bridge. `ThreadHealthPublisher` takes a snapshot of all thread heartbeats and publishes them as `ShmThreadHealth` for the system monitor (P7) to consume. All 7 process `main.cpp` files were updated to register their worker threads with `ThreadHeartbeat` and call `beat()` in hot loops. Added `safe_name_copy()` utility to replace all raw `strncpy` calls.
+
+**Tests:** ~20 new tests for health publisher, safe_name_copy, ShmThreadHealth struct
+
+---
+
+### Improvement #26 — Process Supervisor (Issue #91, ADR in PR #100)
+
+**Date:** 2026-03-05  
+**Category:** Safety — Crash Recovery  
+**Issue:** [#91](https://github.com/nmohamaya/companion_software_stack/issues/91)  
+**PR (ADR/design):** [#100](https://github.com/nmohamaya/companion_software_stack/pull/100)  
+**Implementation PRs:** [#101](https://github.com/nmohamaya/companion_software_stack/pull/101), [#102](https://github.com/nmohamaya/companion_software_stack/pull/102)
+
+**Files Added:**
+- `process7_system_monitor/include/monitor/process_manager.h` — fork+exec supervisor with PID tracking
+- `process7_system_monitor/include/monitor/iprocess_monitor.h` — interface for process lifecycle
+
+**What:** Layer 2 of the watchdog. P7 can now fork+exec child processes (P1–P6), track their PIDs, detect crashes via `waitpid()`, and restart them. When run with `--supervised` flag, P7 launches all other processes as children. Without the flag, P7 runs in monitor-only mode (for systemd deployments where systemd manages individual processes).
+
+**Tests:** ~30 tests for ProcessManager (fork, exec, PID tracking, crash detection, supervised mode)
+
+---
+
+### Improvement #27 — Restart Policies + Dependency Graph (Issues #92, PRs #101, #102)
+
+**Date:** 2026-03-05  
+**Category:** Safety — Intelligent Recovery  
+**Issues:** [#92](https://github.com/nmohamaya/companion_software_stack/issues/92)  
+**PRs:** [#101](https://github.com/nmohamaya/companion_software_stack/pull/101), [#102](https://github.com/nmohamaya/companion_software_stack/pull/102)
+
+**Files Added:**
+- `common/util/include/util/restart_policy.h` — per-process restart policy with exponential backoff, max retries, cooldown
+- `common/util/include/util/process_graph.h` — dependency graph (e.g., perception depends on video_capture; restarting video_capture also restarts perception)
+
+**What:** Layer 2 policies. `RestartPolicy` controls when and how often a crashed process is restarted — configurable max retries, initial delay, backoff multiplier, and cooldown period. `ProcessGraph` models inter-process dependencies so that restarting a dependency cascades to all dependents. Stack status is computed from process health: NOMINAL (all alive), DEGRADED (non-critical process down), CRITICAL (critical process exhausted retries).
+
+**Tests:** ~50 tests for restart policy (backoff, cooldown, max retries), process graph (dependency cascade, critical process detection), stack status computation
+
+---
+
+### Improvement #28 — systemd Service Units (Issue #83, PR #107)
+
+**Date:** 2026-03-06  
+**Category:** Deployment — OS-Level Supervision  
+**Issue:** [#83](https://github.com/nmohamaya/companion_software_stack/issues/83)  
+**PR:** [#107](https://github.com/nmohamaya/companion_software_stack/pull/107)
+
+**Files Added:**
+- `deploy/systemd/drone-video-capture.service` — P1
+- `deploy/systemd/drone-perception.service` — P2, `BindsTo=drone-video-capture.service`
+- `deploy/systemd/drone-slam-vio-nav.service` — P3, `BindsTo=drone-perception.service`
+- `deploy/systemd/drone-comms.service` — P5
+- `deploy/systemd/drone-mission-planner.service` — P4, `BindsTo=drone-comms.service drone-slam-vio-nav.service`
+- `deploy/systemd/drone-payload-manager.service` — P6, `BindsTo=drone-comms.service`
+- `deploy/systemd/drone-system-monitor.service` — P7, `Type=notify`, `WatchdogSec=10s`
+- `deploy/systemd/drone-stack.target` — groups all 7 units
+- `deploy/install_systemd.sh` — installs service files, config, binaries to system paths
+- `deploy/uninstall_systemd.sh` — removes installed service files and config
+- `common/util/include/util/sd_notify.h` — thin `sd_notify()` wrapper (no-op without `-DENABLE_SYSTEMD=ON`)
+- `tests/test_sd_notify.cpp` — 11 tests for sd_notify wrapper
+
+**What:** Layer 3 of the watchdog. Seven independent systemd service units (Option B architecture) with `BindsTo=` dependency semantics — when a dependency stops or crashes, systemd also stops all bound dependents. Each unit has `Restart=on-failure`, so systemd restarts them independently. Unlike `Requires=`, `BindsTo=` also arranges for dependents to be stopped when the dependency disappears. P7 uses `Type=notify` with `sd_notify(READY=1)` and `WatchdogSec=10s`. P1–P6 use `Type=simple`. Security hardening includes `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, resource limits.
+
+**Key design decision:** Option B (7 independent units) chosen over Option A (single P7 unit with fork+exec) to avoid the orphan re-adoption problem when systemd restarts P7 — children would become orphans adopted by PID 1 and invisible to the new P7 instance.
+
+**Tests:** 11 new sd_notify tests
+
+---
+
+### Improvement #29 — Tech Debt Cleanup (Issues #97, #98, PR #108)
+
+**Date:** 2026-03-06  
+**Category:** Code Quality — Tech Debt  
+**Issues:** [#97](https://github.com/nmohamaya/companion_software_stack/issues/97), [#98](https://github.com/nmohamaya/companion_software_stack/issues/98)  
+**PR:** [#108](https://github.com/nmohamaya/companion_software_stack/pull/108)
+
+**What:**
+- #97: Changed `ThreadHeartbeatRegistry::snapshot()` from returning `std::vector<ThreadHeartbeat>` (heap-allocated) to `ThreadSnapshot` struct with `std::array<ThreadHeartbeat, kMaxThreads>` + count (stack-allocated). Zero heap allocations in the monitoring hot path.
+- #98: Added `std::max(1, ...)` clamp to P7's `loop_sleep_ms` to prevent busy-spin when `update_rate > 1000`. Replaced remaining raw `strncpy` with `drone::util::safe_name_copy()`.
+
+---
+
+### Improvement #30 — Deploy Scripts + Test Runners (Issue #103, PR #104)
+
+**Date:** 2026-03-05  
+**Category:** Infrastructure — Developer Experience  
+**Issue:** [#103](https://github.com/nmohamaya/companion_software_stack/issues/103)  
+**PR:** [#104](https://github.com/nmohamaya/companion_software_stack/pull/104)
+
+**What:** Updated `deploy/build.sh` with `--test` and `--test-filter` flags. Created `tests/run_tests.sh` modular test runner with module-based filtering (`watchdog`, `ipc`, `perception`, `hal`, `util`, `quick`). Created `deploy/run_ci_local.sh` for local CI simulation. Updated `TESTS.md` and `DEVELOPMENT_WORKFLOW.md`.
+
+---
+
+## Updated Summary (Post Watchdog + systemd — All Hardening Complete)
+
+| Metric | Hardening (Tiers 1-2) | **Watchdog + systemd (Final)** |
+|---|---|---|
+| Bug fixes | 21 | **21** |
+| Unit tests | 464 | **701** |
+| Test suites | 26 | **31+** |
+| Compiler warnings | 0 | **0** |
+| CI matrix legs | 9 | **9** |
+| Line coverage | 75.1% | **75.1%** |
+| Code style | enforced | **enforced** |
+| Sanitizers | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| Error handling | Result<T,E> | **Result<T,E>** |
+| Config schemas | 7 | **7** |
+| `[[nodiscard]]` headers | 26 | **26** |
+| Thread watchdog | — | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | — | **systemd + ProcessManager** |
+| Stuck thread detection | — | **Configurable timeout, per-thread atomic heartbeats** |
+| Crash recovery | — | **Exponential backoff, dependency-aware restart cascade** |
+| OS supervisor | — | **systemd BindsTo + sd_notify watchdog** |
+
+*Last updated after Process & Thread Watchdog (Epic #88) + systemd (#83). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. Three-layer watchdog architecture, systemd service units.*
