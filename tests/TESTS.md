@@ -44,7 +44,7 @@
 |--------|-------------|---------------|
 | `ipc` | SHM + Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
-| `perception` | Kalman tracker, fusion engine, color contour, YOLOv8 | ~88 |
+| `perception` | Kalman tracker, fusion engine (UKF+camera), color contour, YOLOv8 | ~102 |
 | `mission` | Mission FSM, FaultManager degradation | ~31 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
@@ -95,7 +95,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 3 | 88 | Kalman tracker, fusion engine, color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 4 | 102 | Kalman tracker (Munkres), fusion (UKF+camera), color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 2 | 31 | Mission FSM state machine, FaultManager degradation |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -107,7 +107,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **32 C++ + 2 shell** | **657 + 42** | |
+| **Total** | **32 C++ + 2 shell** | **673 + 42** | |
 
 ---
 
@@ -285,30 +285,36 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ## P2 — Perception
 
-### test_kalman_tracker.cpp — 17 tests
+### test_kalman_tracker.cpp — 22 tests
 
-**What it tests:** Multi-object tracking pipeline — Kalman filter, Hungarian
-assignment, and multi-object tracker lifecycle.
+**What it tests:** Multi-object tracking pipeline — Kalman filter, O(n³) Munkres
+Hungarian assignment, SortTracker lifecycle, ITracker factory.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `KalmanBoxTrackerTest` | 7 | Init from detection, predict step, update step, age increment, `is_confirmed()` after N updates, `is_stale()` after M misses |
-| `HungarianSolverTest` | 5 | Cost matrix assignment, empty input, perfect match, unequal rows/cols, edge cases |
-| `MultiObjectTrackerTest` | 5 | Track creation from detections, track pruning after staleness, continuous tracking across frames |
+| `HungarianSolverTest` | 8 | Empty input, single match, perfect diagonal, max-cost gating, all-too-expensive, rectangular matrices, Munkres optimality (greedy-beats cases) |
+| `MultiObjectTrackerTest` | 3 | Track creation from detections, track pruning after staleness, continuous tracking across frames |
+| `SortTrackerTest` | 2 | `name()` returns "sort", `reset()` clears tracks and resets ID counter |
+| `TrackerFactoryTest` | 2 | Factory creates `SortTracker`, unknown backend throws |
 
-**Key files under test:** `perception/kalman_tracker.h`
+**Key files under test:** `perception/kalman_tracker.h`, `perception/itracker.h`
 
 ---
 
-### test_fusion_engine.cpp — 5 tests
+### test_fusion_engine.cpp — 14 tests
 
-**What it tests:** Multi-sensor fusion engine — camera, LiDAR, radar data fusion.
+**What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF),
+IFusionEngine factory, thermal measurement update.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `FusionEngineTest` | 5 | Empty inputs → empty output, camera-only fusion, LiDAR confidence boosting, unmatched LiDAR clusters, radar velocity integration |
+| `FusionEngineTest` | 4 | Empty inputs → empty output, camera-only fusion, depth estimation from bbox height, multiple tracked objects |
+| `FusionFactoryTest` | 3 | Factory creates `camera_only` and `ukf` backends, unknown backend throws |
+| `UKFFusionEngineTest` | 6 | Empty input, 3D position estimate, covariance convergence, thermal flag, reset clears state, name |
+| `CameraOnlyFusionEngineTest` | 1 | Name returns "camera_only" |
 
-**Key files under test:** `perception/fusion_engine.h`
+**Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
 
 ---
 

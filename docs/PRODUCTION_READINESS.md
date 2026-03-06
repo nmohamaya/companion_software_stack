@@ -57,10 +57,10 @@ Production requires implementing the real backend behind each interface.
 
 | # | Component | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|-----------|--------------------|--------------------|----------|--------|-------|
-| 3.1 | Kalman tracker | Linear KF, 8D constant-velocity | EKF/UKF with constant-turn-rate model, or IMM | P2 | 🔴 | |
-| 3.2 | Track association | Greedy nearest-neighbor | Hungarian (Munkres) O(n³) optimal assignment | P2 | 🔴 | |
+| 3.1 | Kalman tracker | Linear KF, 8D constant-velocity | EKF/UKF with constant-turn-rate model, or IMM | P2 | � | UKFFusionEngine implemented (PR #117); KalmanBoxTracker still linear KF |
+| 3.2 | Track association | Greedy nearest-neighbor | Hungarian (Munkres) O(n³) optimal assignment | P2 | 🟢 | O(n³) Kuhn-Munkres in `HungarianSolver` (PR #117) |
 | 3.3 | Appearance features | None — position-only matching | DeepSORT / ByteTrack Re-ID vectors | P2 | 🔴 | Reduces ID switches by ~45% |
-| 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | 🔴 | |
+| 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | � | `UKFFusionEngine` with per-object UKF (PR #117); thermal end-to-end wiring pending |
 | 3.5 | ISP pipeline | Raw RGB24 passthrough | Bayer demosaic → white balance → gamma → NV12 | P1 | 🔴 | Use NVIDIA ISP on Jetson |
 
 ---
@@ -100,6 +100,33 @@ Production requires implementing the real backend behind each interface.
 | 6.1 | Flight logging | Custom spdlog files | MAVLink-compatible `.ulg` / `.tlog` format for post-flight analysis | P1 | 🔴 | Required for flight review tools |
 | 6.2 | Parameter system | JSON config, cold-reboot only | Runtime parameter tuning (MAVLink param protocol) | P2 | 🔴 | |
 | 6.3 | Regulatory docs | None | Risk assessment, CONOPS, if targeting Part 107 waiver / BVLOS | P2 | 🔴 | Depends on operational scope |
+
+---
+
+## 7. Sanitizer & Runtime Analysis Coverage
+
+| # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
+|---|------|--------------------|--------------------|----------|--------|-------|
+| 7.1 | ASan coverage | All 717 tests pass under ASan | All tests pass under ASan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,asan` + `zenoh,asan` |
+| 7.2 | UBSan coverage | All 717 tests pass under UBSan | All tests pass under UBSan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,ubsan` + `zenoh,ubsan` |
+| 7.3 | TSan coverage — own code | 560/560 own-code tests pass under TSan | All own-code tests pass under TSan | P1 | 🟢 | SPSC, seqlock, watchdog, process manager all clean |
+| 7.4 | TSan coverage — third-party libs | 157 tests excluded (Zenoh/MAVSDK/OpenCV/Liveliness) — pre-built libs not TSan-instrumented | Run all tests under TSan with instrumented libs or targeted suppressions | P1 | 🔴 | See details below |
+| 7.5 | Valgrind / Helgrind soak tests | Not implemented | Multi-hour soak runs under Valgrind + Helgrind for leak/race detection | P2 | 🔴 | Catches different bug classes than sanitizers |
+| 7.6 | Fault injection testing | Not implemented | Kill/restart processes mid-flight, saturate IPC queues, simulate sensor dropouts | P1 | 🔴 | |
+
+### 7.4 — TSan Third-Party Library Plan
+
+TSan instruments memory accesses at **compile time**. Pre-built shared libraries (zenohc, MAVSDK, OpenCV, gz-transport) are not instrumented, causing:
+- **False positives**: TSan sees gaps in the happens-before graph when data crosses the instrumented/uninstrumented boundary
+- **False negatives**: Real races inside the library are invisible
+
+**Production resolution path (in priority order):**
+
+1. **Create `tsan_suppressions.txt`** — Document each suppression with rationale. Run TSan on **all** tests with suppressions instead of blanket `-E` exclusions. This catches races in *our* code at library boundaries.
+2. **Build MAVSDK from source with TSan** — C++ CMake project, straightforward. Most critical: handles FC comms. (~1 day)
+3. **Build gz-transport from source with TSan** — C++ CMake project. Fix or suppress known init races. (~1 day)
+4. **Zenoh (Rust)** — Requires `RUSTFLAGS="-Zsanitizer=thread"` + nightly toolchain. Previously attempted (CI-003 in CI_ISSUES.md) — produced opaque-type size mismatches. Revisit when zenohc upstream provides TSan-instrumented builds.
+5. **OpenCV** — Massive build (~30 min). DNN thread pool internals are upstream's responsibility. Suppress and rely on our single-threaded detector call pattern.
 
 ---
 

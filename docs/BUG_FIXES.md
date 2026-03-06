@@ -480,3 +480,53 @@ EXPECT_TRUE(signaled);  // reliably true (exits early, typically ~200ms–1.3s)
 **Impact:** No production impact — the supervisor's `tick()` is called in a loop anyway. This was purely a test timing issue. The polling pattern is both more robust (2s max) and faster in the common case (exits as soon as `waitpid` succeeds).
 
 **Found by:** `ProcessManagerTest.DetectCrash` failing on first test run. Subsequent analysis showed the death callback fired at ~1.3s, well past the 300ms window.
+
+---
+
+## Fix #15 — Uninitialized POD Members in Perception Structs
+
+**Date:** 2026-03-06
+**Severity:** Medium
+**Files:** `process2_perception/include/perception/types.h`
+
+**Bug:** `TrackedObject`, `Detection2D`, and `FusedObject` structs had no default member initializers on their scalar/enum fields (`track_id`, `confidence`, `class_id`, `age`, `hits`, `misses`, `state`, `heading`, `has_camera`, `has_lidar`, `has_radar`, etc.). Default-constructing any of these structs and then copying them (e.g., via `vector::push_back`) triggered `-Werror=maybe-uninitialized` under GCC 13 with `-O3`. In production, the `MultiObjectTracker::update()` method happened to initialize every field explicitly before publishing, masking the defect — but any new code path constructing these structs without full manual initialization would silently introduce undefined behavior.
+
+**Root Cause:** C++ aggregate structs with POD members are not zero-initialized by default construction (`TrackedObject obj;` leaves all scalar members indeterminate). The struct definitions relied on all callers remembering to initialize every field, which is fragile and violates the principle of safe defaults.
+
+**Fix:** Added default member initializers to all scalar/enum/Eigen fields across all three structs:
+
+```cpp
+// BEFORE (unsafe default construction):
+struct TrackedObject {
+    uint32_t    track_id;
+    ObjectClass class_id;
+    float       confidence;
+    uint32_t    age;
+    uint32_t    hits;
+    uint32_t    misses;
+    uint64_t    timestamp_ns;
+    enum class State { TENTATIVE, CONFIRMED, LOST };
+    State state;
+    // ...
+};
+
+// AFTER (safe defaults):
+struct TrackedObject {
+    uint32_t    track_id     = 0;
+    ObjectClass class_id     = ObjectClass::UNKNOWN;
+    float       confidence   = 0.0f;
+    uint32_t    age          = 0;
+    uint32_t    hits         = 0;
+    uint32_t    misses       = 0;
+    uint64_t    timestamp_ns = 0;
+    enum class State : uint8_t { TENTATIVE, CONFIRMED, LOST };
+    State state = State::TENTATIVE;
+    // ...
+};
+```
+
+Same treatment applied to `Detection2D` (8 fields) and `FusedObject` (11 fields).
+
+**Impact:** Eliminates a class of UB that was latent in production code. Any future code constructing these structs without full initialization is now safe by default. Existing explicit initializations (e.g., in `kalman_tracker.cpp`) remain correct and are now simply redundant with the defaults.
+
+**Found by:** New `FusionEngineTest.MultipleTrackedObjectsProduceMultipleFused` test triggering `-Werror=maybe-uninitialized` during Phase 1A (LiDAR/radar removal). Root-cause analysis traced the issue to the struct definitions rather than the test code.
