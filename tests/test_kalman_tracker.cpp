@@ -1,5 +1,6 @@
 // tests/test_kalman_tracker.cpp
-// Unit tests for KalmanBoxTracker, HungarianSolver, MultiObjectTracker.
+// Unit tests for KalmanBoxTracker, HungarianSolver (Munkres), SortTracker, ITracker.
+#include "perception/itracker.h"
 #include "perception/kalman_tracker.h"
 
 #include <gtest/gtest.h>
@@ -95,7 +96,7 @@ TEST(KalmanBoxTrackerTest, VelocityInitiallyZero) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// HungarianSolver (greedy) tests
+// HungarianSolver (O(n³) Munkres) tests
 // ═══════════════════════════════════════════════════════════
 
 TEST(HungarianSolverTest, EmptyCostMatrix) {
@@ -150,7 +151,7 @@ TEST(HungarianSolverTest, MoreRowsThanCols) {
         {2.0},
     };
     auto result = HungarianSolver::solve(cost, 100.0);
-    EXPECT_EQ(result.assignment[0], 0);   // greedy: row 0 gets col 0
+    EXPECT_EQ(result.assignment[0], 0);   // optimal: row 0 gets col 0 (cost 1)
     EXPECT_EQ(result.assignment[1], -1);  // row 1 unmatched
     EXPECT_EQ(result.unmatched_rows.size(), 1u);
 }
@@ -162,7 +163,7 @@ TEST(HungarianSolverTest, TotalCostInitializedToZero) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// MultiObjectTracker tests
+// SortTracker / MultiObjectTracker tests
 // ═══════════════════════════════════════════════════════════
 
 TEST(MultiObjectTrackerTest, EmptyDetections) {
@@ -212,4 +213,100 @@ TEST(MultiObjectTrackerTest, StaleTracksRemoved) {
 
     auto result = tracker.update(empty);
     EXPECT_TRUE(result.objects.empty());
+}
+
+// ═══════════════════════════════════════════════════════════
+// Hungarian optimality tests (Munkres vs greedy)
+// ═══════════════════════════════════════════════════════════
+
+TEST(HungarianSolverTest, MunkresBeatsGreedy) {
+    // A greedy row-scan would assign row 0→col 0 (cost 1), then row 1→col 1 (cost 100).
+    // Optimal Hungarian: row 0→col 1 (cost 2), row 1→col 0 (cost 3), total 5 vs 101.
+    std::vector<std::vector<double>> cost = {
+        {1.0, 2.0},
+        {3.0, 100.0},
+    };
+    auto result = HungarianSolver::solve(cost, 200.0);
+    ASSERT_EQ(result.assignment.size(), 2u);
+    EXPECT_EQ(result.assignment[0], 1);  // row 0 → col 1 (cost 2)
+    EXPECT_EQ(result.assignment[1], 0);  // row 1 → col 0 (cost 3)
+    EXPECT_DOUBLE_EQ(result.total_cost, 5.0);
+}
+
+TEST(HungarianSolverTest, MunkresLarger3x3) {
+    // Classic assignment problem — optimal is NOT the row-greedy scan
+    std::vector<std::vector<double>> cost = {
+        {10, 5, 13},
+        {3, 7, 8},
+        {6, 9, 4},
+    };
+    auto result = HungarianSolver::solve(cost, 100.0);
+    // Optimal: (0→1, 1→0, 2→2) → 5+3+4 = 12
+    ASSERT_EQ(result.assignment.size(), 3u);
+    EXPECT_DOUBLE_EQ(result.total_cost, 12.0);
+    EXPECT_EQ(result.assignment[0], 1);
+    EXPECT_EQ(result.assignment[1], 0);
+    EXPECT_EQ(result.assignment[2], 2);
+}
+
+TEST(HungarianSolverTest, MoreColsThanRows) {
+    // 2 rows × 3 cols
+    std::vector<std::vector<double>> cost = {
+        {5.0, 1.0, 8.0},
+        {7.0, 9.0, 2.0},
+    };
+    auto result = HungarianSolver::solve(cost, 100.0);
+    ASSERT_EQ(result.assignment.size(), 2u);
+    EXPECT_EQ(result.assignment[0], 1);  // cost 1
+    EXPECT_EQ(result.assignment[1], 2);  // cost 2
+    EXPECT_DOUBLE_EQ(result.total_cost, 3.0);
+    EXPECT_EQ(result.unmatched_cols.size(), 1u);  // col 0 unmatched
+}
+
+// ═══════════════════════════════════════════════════════════
+// SortTracker name() + reset() tests
+// ═══════════════════════════════════════════════════════════
+
+TEST(SortTrackerTest, NameReturnsSort) {
+    SortTracker tracker;
+    EXPECT_EQ(tracker.name(), "sort");
+}
+
+TEST(SortTrackerTest, ResetClearsState) {
+    SortTracker tracker;
+
+    // Feed a detection to create tracks
+    Detection2DList det_list;
+    det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0});
+    (void)tracker.update(det_list);
+
+    // Internal state should have tracks now — reset clears it
+    tracker.reset();
+
+    // After reset, feeding the same detection should create a NEW track (fresh ID)
+    auto result = tracker.update(det_list);
+    // No confirmed tracks yet (needs 3 hits) — but at least it didn't crash
+    EXPECT_TRUE(result.objects.empty());
+
+    // Feed 2 more to confirm
+    for (int i = 0; i < 2; ++i) {
+        result = tracker.update(det_list);
+    }
+    ASSERT_EQ(result.objects.size(), 1u);
+    // After reset, next_id_ starts back at 1
+    EXPECT_EQ(result.objects[0].track_id, 1u);
+}
+
+// ═══════════════════════════════════════════════════════════
+// ITracker factory tests
+// ═══════════════════════════════════════════════════════════
+
+TEST(TrackerFactoryTest, CreateSortTracker) {
+    auto tracker = create_tracker("sort", nullptr);
+    ASSERT_NE(tracker, nullptr);
+    EXPECT_EQ(tracker->name(), "sort");
+}
+
+TEST(TrackerFactoryTest, UnknownBackendThrows) {
+    EXPECT_THROW(create_tracker("nonexistent", nullptr), std::invalid_argument);
 }

@@ -44,7 +44,7 @@
 |--------|-------------|---------------|
 | `ipc` | SHM + Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
-| `perception` | Kalman tracker, fusion engine, color contour, YOLOv8 | ~87 |
+| `perception` | Kalman tracker, fusion engine, color contour, YOLOv8 | ~92 |
 | `mission` | Mission FSM, FaultManager degradation | ~31 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
@@ -95,7 +95,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 3 | 87 | Kalman tracker, fusion engine, color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 4 | 92 | Kalman tracker (Munkres), fusion engine, color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 2 | 31 | Mission FSM state machine, FaultManager degradation |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -107,7 +107,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **32 C++ + 2 shell** | **656 + 42** | |
+| **Total** | **32 C++ + 2 shell** | **663 + 42** | |
 
 ---
 
@@ -285,18 +285,20 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ## P2 — Perception
 
-### test_kalman_tracker.cpp — 17 tests
+### test_kalman_tracker.cpp — 22 tests
 
-**What it tests:** Multi-object tracking pipeline — Kalman filter, Hungarian
-assignment, and multi-object tracker lifecycle.
+**What it tests:** Multi-object tracking pipeline — Kalman filter, O(n³) Munkres
+Hungarian assignment, SortTracker lifecycle, ITracker factory.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `KalmanBoxTrackerTest` | 7 | Init from detection, predict step, update step, age increment, `is_confirmed()` after N updates, `is_stale()` after M misses |
-| `HungarianSolverTest` | 5 | Cost matrix assignment, empty input, perfect match, unequal rows/cols, edge cases |
-| `MultiObjectTrackerTest` | 5 | Track creation from detections, track pruning after staleness, continuous tracking across frames |
+| `HungarianSolverTest` | 8 | Empty input, single match, perfect diagonal, max-cost gating, all-too-expensive, rectangular matrices, Munkres optimality (greedy-beats cases) |
+| `MultiObjectTrackerTest` | 3 | Track creation from detections, track pruning after staleness, continuous tracking across frames |
+| `SortTrackerTest` | 2 | `name()` returns "sort", `reset()` clears tracks and resets ID counter |
+| `TrackerFactoryTest` | 2 | Factory creates `SortTracker`, unknown backend throws |
 
-**Key files under test:** `perception/kalman_tracker.h`
+**Key files under test:** `perception/kalman_tracker.h`, `perception/itracker.h`
 
 ---
 

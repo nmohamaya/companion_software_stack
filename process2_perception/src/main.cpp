@@ -8,6 +8,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "perception/detector_interface.h"
 #include "perception/fusion_engine.h"
+#include "perception/itracker.h"
 #include "perception/kalman_tracker.h"
 #include "perception/types.h"
 #include "util/arg_parser.h"
@@ -71,9 +72,8 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>&
 // ── Tracker thread ──────────────────────────────────────────
 static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
                            drone::SPSCRing<TrackedObjectList, 4>& output_queue,
-                           std::atomic<bool>&                     running) {
-    spdlog::info("[Tracker] Thread started (SORT algorithm)");
-    MultiObjectTracker tracker;
+                           std::atomic<bool>& running, ITracker& tracker) {
+    spdlog::info("[Tracker] Thread started — backend: {}", tracker.name());
 
     auto hb = drone::util::ScopedHeartbeat("tracker", true);
 
@@ -207,6 +207,11 @@ int main(int argc, char* argv[]) {
     auto        detector         = create_detector(detector_backend, &cfg);
     spdlog::info("[Perception] Detector backend: {} ({})", detector_backend, detector->name());
 
+    // ── Create tracker from config ────────────────────────────
+    std::string tracker_backend = cfg.get<std::string>("perception.tracker.backend", "sort");
+    auto        tracker         = create_tracker(tracker_backend, &cfg);
+    spdlog::info("[Perception] Tracker  backend: {} ({})", tracker_backend, tracker->name());
+
     // ── Internal SPSC queues ────────────────────────────────
     drone::SPSCRing<Detection2DList, 4>   inference_to_tracker;
     drone::SPSCRing<TrackedObjectList, 4> tracker_to_fusion;
@@ -216,7 +221,7 @@ int main(int argc, char* argv[]) {
                             std::ref(g_running), std::ref(*detector));
 
     std::thread t_tracker(tracker_thread, std::ref(inference_to_tracker),
-                          std::ref(tracker_to_fusion), std::ref(g_running));
+                          std::ref(tracker_to_fusion), std::ref(g_running), std::ref(*tracker));
 
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(g_running), std::cref(cfg));

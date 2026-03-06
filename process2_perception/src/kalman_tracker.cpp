@@ -1,10 +1,14 @@
 // process2_perception/src/kalman_tracker.cpp
-// KalmanBoxTracker + HungarianSolver + MultiObjectTracker implementation.
+// KalmanBoxTracker + HungarianSolver (Munkres) + SortTracker implementation.
+// Phase 1B (Issue #113): proper O(n³) Hungarian, ITracker interface.
 #include "perception/kalman_tracker.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <numeric>
+#include <stdexcept>
 
 namespace drone::perception {
 
@@ -99,7 +103,8 @@ Eigen::Vector2f KalmanBoxTracker::velocity() const {
 }
 
 // ═══════════════════════════════════════════════════════════
-// HungarianSolver (greedy nearest neighbor for simplicity)
+// HungarianSolver — O(n³) Kuhn-Munkres algorithm
+// Replaces the previous greedy nearest-neighbor (Phase 1B).
 // ═══════════════════════════════════════════════════════════
 HungarianSolver::Result HungarianSolver::solve(const std::vector<std::vector<double>>& cost,
                                                double                                  max_cost) {
@@ -107,23 +112,88 @@ HungarianSolver::Result HungarianSolver::solve(const std::vector<std::vector<dou
     int    rows = static_cast<int>(cost.size());
     int    cols = rows > 0 ? static_cast<int>(cost[0].size()) : 0;
 
+    if (rows == 0 || cols == 0) {
+        result.assignment.resize(rows, -1);
+        for (int r = 0; r < rows; ++r) result.unmatched_rows.push_back(r);
+        for (int c = 0; c < cols; ++c) result.unmatched_cols.push_back(c);
+        return result;
+    }
+
+    // Pad to square matrix (n×n) with max_cost fill for dummy entries
+    int n = std::max(rows, cols);
+
+    // u[i], v[j]: dual variables (potentials) for rows and cols (1-indexed)
+    std::vector<double> u(n + 1, 0.0);
+    std::vector<double> v(n + 1, 0.0);
+    // p[j]: row assigned to column j (1-indexed, 0 = unassigned)
+    std::vector<int> p(n + 1, 0);
+    // way[j]: predecessor column on the augmenting path
+    std::vector<int> way(n + 1, 0);
+
+    // Process each row
+    for (int i = 1; i <= n; ++i) {
+        // Start augmenting path from virtual column 0
+        p[0]                   = i;
+        int                 j0 = 0;  // current column in path (starts at virtual)
+        std::vector<double> minv(n + 1, std::numeric_limits<double>::infinity());
+        std::vector<bool>   used(n + 1, false);
+
+        do {
+            used[j0]     = true;
+            int    i0    = p[j0];
+            double delta = std::numeric_limits<double>::infinity();
+            int    j1    = 0;
+
+            for (int j = 1; j <= n; ++j) {
+                if (used[j]) continue;
+                // Cost for (i0-1, j-1) — use max_cost for padded entries
+                double c   = (i0 <= rows && j <= cols) ? cost[i0 - 1][j - 1] : max_cost;
+                double cur = c - u[i0] - v[j];
+                if (cur < minv[j]) {
+                    minv[j] = cur;
+                    way[j]  = j0;
+                }
+                if (minv[j] < delta) {
+                    delta = cur < minv[j] ? cur : minv[j];
+                    j1    = j;
+                }
+            }
+
+            // Update potentials
+            for (int j = 0; j <= n; ++j) {
+                if (used[j]) {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    minv[j] -= delta;
+                }
+            }
+
+            j0 = j1;
+        } while (p[j0] != 0);
+
+        // Unwind augmenting path
+        do {
+            int j1 = way[j0];
+            p[j0]  = p[j1];
+            j0     = j1;
+        } while (j0 != 0);
+    }
+
+    // Extract assignment: p[j] = row assigned to column j (1-indexed)
+    // Convert to: assignment[row] = col
     result.assignment.resize(rows, -1);
     std::vector<bool> col_used(cols, false);
 
-    // Greedy nearest-neighbor matching
-    for (int r = 0; r < rows; ++r) {
-        double best   = max_cost;
-        int    best_c = -1;
-        for (int c = 0; c < cols; ++c) {
-            if (!col_used[c] && cost[r][c] < best) {
-                best   = cost[r][c];
-                best_c = c;
+    for (int j = 1; j <= cols; ++j) {
+        if (p[j] >= 1 && p[j] <= rows) {
+            int r = p[j] - 1;
+            int c = j - 1;
+            if (cost[r][c] < max_cost) {
+                result.assignment[r] = c;
+                col_used[c]          = true;
+                result.total_cost += cost[r][c];
             }
-        }
-        if (best_c >= 0) {
-            result.assignment[r] = best_c;
-            col_used[best_c]     = true;
-            result.total_cost += best;
         }
     }
 
@@ -137,9 +207,18 @@ HungarianSolver::Result HungarianSolver::solve(const std::vector<std::vector<dou
 }
 
 // ═══════════════════════════════════════════════════════════
-// MultiObjectTracker (SORT algorithm)
+// SortTracker (SORT algorithm) — implements ITracker
 // ═══════════════════════════════════════════════════════════
-std::vector<std::vector<double>> MultiObjectTracker::compute_cost_matrix(
+std::string SortTracker::name() const {
+    return "sort";
+}
+
+void SortTracker::reset() {
+    tracks_.clear();
+    next_id_ = 1;
+}
+
+std::vector<std::vector<double>> SortTracker::compute_cost_matrix(
     const std::vector<Detection2D>& detections) const {
     std::vector<std::vector<double>> cost(tracks_.size(),
                                           std::vector<double>(detections.size(), 0.0));
@@ -156,7 +235,7 @@ std::vector<std::vector<double>> MultiObjectTracker::compute_cost_matrix(
     return cost;
 }
 
-TrackedObjectList MultiObjectTracker::update(const Detection2DList& det_list) {
+TrackedObjectList SortTracker::update(const Detection2DList& det_list) {
     // Step 1: Predict all existing tracks
     for (auto& track : tracks_) {
         track.predict();
@@ -214,6 +293,17 @@ TrackedObjectList MultiObjectTracker::update(const Detection2DList& det_list) {
         output.objects.push_back(obj);
     }
     return output;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Tracker factory  (ITracker)
+// ═══════════════════════════════════════════════════════════
+std::unique_ptr<ITracker> create_tracker(const std::string&                    backend,
+                                         [[maybe_unused]] const drone::Config* cfg) {
+    if (backend == "sort") {
+        return std::make_unique<SortTracker>();
+    }
+    throw std::invalid_argument("Unknown tracker backend: " + backend);
 }
 
 }  // namespace drone::perception
