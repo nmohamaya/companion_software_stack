@@ -391,19 +391,32 @@ Each process publishes this on a per-process SHM topic:
 The supervisor subscribes to all seven and uses thread health as an
 additional signal alongside liveliness tokens and PID polling.
 
-### 2.5 Layer 3 — OS Supervisor (Deferred to Tier 4)
+### 2.5 Layer 3 — OS Supervisor (Issue #83)
 
-When Tier 4 (#83 systemd service units) is implemented:
+**Revised (2026-03-06):** The original design had P7 as the sole systemd
+unit with P1–P6 as fork+exec children. This was changed to 7 independent
+service units to avoid the **orphan re-adoption problem**: if P7 crashes
+and systemd restarts it, the old P1–P6 processes are orphaned under PID 1
+and a restarted P7 cannot re-attach to them — it would launch duplicates.
 
-- Process 7 becomes `system_monitor.service` with `Type=notify` and
-  `WatchdogSec=10`.
-- Process 7 calls `sd_notify(0, "WATCHDOG=1")` every 5 seconds.
-- systemd restarts Process 7 if it crashes or stops notifying.
-- The six child processes are NOT separate systemd units — they are
-  managed by Process 7's internal supervisor. This avoids splitting
-  supervision logic between two places.
+**Current architecture — 7 independent units + 1 target:**
 
-This design means Layer 3 is purely additive — no changes to Layers 1–2.
+- Each process is a separate systemd service: `drone-video-capture.service`,
+  `drone-perception.service`, etc.
+- Services use `After=` directives matching the dependency graph.
+- `Restart=on-failure` + `RestartSec=2s` for all services.
+- `drone-stack.target` groups all 7 for `systemctl start/stop drone-stack.target`.
+- Process 7 (`drone-system-monitor.service`) uses `Type=notify` and
+  `WatchdogSec=10` with `sd_notify(0, "WATCHDOG=1")` in the health loop.
+- P7 runs in **monitor-only** mode (no `--supervised`): health telemetry,
+  liveliness monitoring, `ShmSystemHealth` publishing. It does NOT
+  fork+exec child processes when deployed under systemd.
+- Cascade restarts are expressed via `PartOf=` directives.
+
+The `--supervised` fork+exec mode remains available for non-systemd
+deployments (development, `launch_all.sh`, containers without systemd).
+
+Layer 3 is purely additive — no changes to Layers 1–2.
 
 ### 2.6 Thread & Process Criticality Inventory
 
@@ -628,22 +641,27 @@ See §2.3 "Restart Policy" for the updated struct definition.
 
 ### OQ-3: Process 7 as Single Point of Failure (Phase 3, #91) — ACCEPTED
 
-The supervisor lives inside Process 7 (System Monitor). If P7 crashes,
-all child processes become orphans and no restart logic runs. Mitigations:
+**Revised (2026-03-06):** The original design had P7 as the sole systemd
+unit managing P1–P6 via fork+exec. Analysis revealed an **orphan
+re-adoption problem**: when systemd restarts a crashed P7, the old P1–P6
+processes are orphaned under PID 1. The restarted P7 has no record of
+their PIDs and would launch duplicates.
 
-1. **Layer 3 (systemd)** — Issue #83 will make P7 a `Type=notify` systemd
-   unit with `Restart=always`. systemd restarts P7, which re-adopts or
-   restarts its children.
-2. **Minimal P7 complexity** — keep the supervisor code path simple: no
-   heavy allocations, no external library calls in the watchdog loop.
+**Resolution:** All 7 processes are independent systemd units. P7 is no
+longer a single point of failure for process lifecycle — systemd manages
+restart independently for each process. P7's crash only loses health
+telemetry temporarily (2-second restart gap).
+
+Mitigations (still apply):
+
+1. **Layer 3 (systemd)** — Each process has its own `Restart=on-failure`
+   service unit. `drone-stack.target` groups all 7.
+2. **Minimal P7 complexity** — the health loop remains simple: read
+   sensors, publish `ShmSystemHealth`, call `sd_notify(WATCHDOG=1)`.
 3. **Self-monitoring** — P7 registers its own `health_loop` thread in
    the heartbeat registry and runs its own watchdog. If the health loop
-   stalls, the watchdog thread logs and (when systemd is available)
-   stops calling `sd_notify()`, triggering a systemd restart.
-
-Until Layer 3 is implemented, P7 crashing is an unrecoverable event. This
-is an accepted risk for the current phase and the same as the status quo
-(today the entire stack dies on any process crash).
+   stalls, the watchdog thread logs and stops calling `sd_notify()`,
+   triggering a systemd restart of P7 only.
 
 ### OQ-4: `touch_with_grace()` for Startup and Long Operations (Phase 1, #89)
 

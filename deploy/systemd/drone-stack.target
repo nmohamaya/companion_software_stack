@@ -1,0 +1,21 @@
+# deploy/systemd/drone-stack.target
+# Grouping target for all 7 drone companion processes.
+#
+# Usage:
+#   sudo systemctl start  drone-stack.target   # launch all
+#   sudo systemctl stop   drone-stack.target   # stop all
+#   sudo systemctl status drone-stack.target   # health check
+#   sudo systemctl enable drone-stack.target   # auto-start on boot
+#
+# Individual services can still be managed independently:
+#   sudo systemctl restart drone-perception
+#   journalctl -u drone-comms -f
+
+[Unit]
+Description=Drone Companion Software Stack
+Documentation=https://github.com/nmohamaya/companion_software_stack
+Requires=drone-video-capture.service drone-perception.service drone-slam-vio-nav.service drone-comms.service drone-mission-planner.service drone-payload-manager.service drone-system-monitor.service
+After=drone-video-capture.service drone-perception.service drone-slam-vio-nav.service drone-comms.service drone-mission-planner.service drone-payload-manager.service drone-system-monitor.service
+
+[Install]
+WantedBy=multi-user.target
