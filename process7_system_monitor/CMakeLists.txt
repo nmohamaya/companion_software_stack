@@ -6,3 +6,9 @@ target_include_directories(system_monitor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(system_monitor PRIVATE drone_ipc drone_util)
 target_compile_features(system_monitor PRIVATE cxx_std_17)
+
+# Optional systemd watchdog support (sd_notify)
+if(ENABLE_SYSTEMD)
+    target_include_directories(system_monitor PRIVATE ${SYSTEMD_INCLUDE_DIRS})
+    target_link_libraries(system_monitor PRIVATE ${SYSTEMD_LIBRARIES})
+endif()

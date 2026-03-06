@@ -13,6 +13,7 @@
 #include "util/log_config.h"
 #include "util/process_graph.h"
 #include "util/restart_policy.h"
+#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -247,6 +248,14 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("System Monitor READY");
 
+    // ── systemd readiness + watchdog ─────────────────────────────
+    drone::systemd::notify_ready();
+    if (drone::systemd::watchdog_enabled()) {
+        auto wdog_us = drone::systemd::watchdog_usec();
+        spdlog::info("[systemd] Watchdog active: interval={}us ({}s)", wdog_us,
+                     wdog_us / 1'000'000);
+    }
+
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        health_hb = drone::util::ScopedHeartbeat("health_loop", false);
     drone::util::ThreadWatchdog watchdog;
@@ -282,6 +291,7 @@ int main(int argc, char* argv[]) {
     // ── Main loop (1 Hz) ────────────────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(health_hb.handle());
+        drone::systemd::notify_watchdog();
         tick++;
 
         // Incorporate battery from FC if available
@@ -361,6 +371,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Shutdown ─────────────────────────────────────────────
+    drone::systemd::notify_stopping();
     if (supervisor) {
         spdlog::info("[Supervisor] Stopping all child processes...");
         supervisor->stop_all();
