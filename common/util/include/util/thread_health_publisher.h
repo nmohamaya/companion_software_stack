@@ -46,19 +46,19 @@ public:
         drone::ipc::ShmThreadHealth health{};
         std::memcpy(health.process_name, process_name_, sizeof(health.process_name));
 
-        // Snapshot registered heartbeats
-        auto beats = ThreadHeartbeatRegistry::instance().snapshot();
+        // Snapshot registered heartbeats (stack-allocated — no heap)
+        auto snap  = ThreadHeartbeatRegistry::instance().snapshot();
         auto stuck = watchdog_.get_stuck_threads();
 
-        // Use beats.size() — not a separate count() call — to avoid a
+        // Use snap.count — not a separate count() call — to avoid a
         // TOCTOU race where a concurrent register_thread() bumps count_
-        // past beats.size(), causing an out-of-bounds read.
+        // past the snapshot size, causing an out-of-bounds read.
         health.num_threads = static_cast<uint8_t>(
-            std::min(beats.size(), static_cast<size_t>(drone::ipc::kMaxTrackedThreads)));
+            std::min(snap.count, static_cast<size_t>(drone::ipc::kMaxTrackedThreads)));
 
         for (uint8_t i = 0; i < health.num_threads; ++i) {
             auto& dst = health.threads[i];
-            auto& src = beats[i];
+            auto& src = snap[i];
 
             std::memset(dst.name, 0, sizeof(dst.name));
             std::memcpy(dst.name, src.name, sizeof(dst.name));

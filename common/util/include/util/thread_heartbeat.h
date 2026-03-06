@@ -13,7 +13,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
-#include <vector>
 
 namespace drone::util {
 
@@ -60,6 +59,20 @@ struct ThreadHeartbeat {
         }
         return *this;
     }
+};
+
+/// Stack-allocated snapshot of all registered heartbeats.
+/// Returned by ThreadHeartbeatRegistry::snapshot() — no heap allocation.
+struct ThreadSnapshot {
+    std::array<ThreadHeartbeat, kMaxThreads> beats{};
+    size_t                                   count = 0;
+
+    /// Convenience: iterate over the valid entries.
+    [[nodiscard]] const ThreadHeartbeat* begin() const { return beats.data(); }
+    [[nodiscard]] const ThreadHeartbeat* end() const { return beats.data() + count; }
+    [[nodiscard]] size_t                 size() const { return count; }
+    [[nodiscard]] bool                   empty() const { return count == 0; }
+    const ThreadHeartbeat&               operator[](size_t i) const { return beats[i]; }
 };
 
 // ─── ThreadHeartbeatRegistry ────────────────────────────────────────
@@ -141,13 +154,14 @@ public:
     /// Thread-safe to call concurrently with touch() and register_thread().
     /// Only includes slots where initialized is true (acquire), which
     /// guarantees name/is_critical are fully written.
-    [[nodiscard]] std::vector<ThreadHeartbeat> snapshot() const {
-        const size_t                 n = count_.load(std::memory_order_acquire);
-        std::vector<ThreadHeartbeat> result;
-        result.reserve(n);
+    /// Returns a stack-allocated ThreadSnapshot (no heap allocation).
+    [[nodiscard]] ThreadSnapshot snapshot() const {
+        const size_t   n = count_.load(std::memory_order_acquire);
+        ThreadSnapshot result{};
         for (size_t i = 0; i < n && i < kMaxThreads; ++i) {
             if (beats_[i].initialized.load(std::memory_order_acquire)) {
-                result.push_back(beats_[i]);
+                result.beats[result.count] = beats_[i];
+                ++result.count;
             }
         }
         return result;
