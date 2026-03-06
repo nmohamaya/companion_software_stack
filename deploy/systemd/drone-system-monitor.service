@@ -1,0 +1,38 @@
+# deploy/systemd/drone-system-monitor.service
+# Process 7 — System Monitor: health telemetry, liveliness monitoring.
+#
+# Type=notify — calls sd_notify(READY=1) after initialization.
+# WatchdogSec=10 — must call sd_notify(WATCHDOG=1) every 10s or get restarted.
+# Starts after all other services to monitor the full stack.
+
+[Unit]
+Description=Drone System Monitor (P7)
+Documentation=https://github.com/nmohamaya/companion_software_stack
+PartOf=drone-stack.target
+After=network-online.target drone-video-capture.service drone-perception.service drone-slam-vio-nav.service drone-comms.service drone-mission-planner.service drone-payload-manager.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/opt/drone/bin/system_monitor --config /etc/drone/config.json --json-logs
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=10s
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=50%
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /tmp /var/log/drone /proc
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=drone-system-monitor
+
+[Install]
+WantedBy=drone-stack.target

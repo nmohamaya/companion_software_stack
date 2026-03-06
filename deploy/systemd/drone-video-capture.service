@@ -1,0 +1,38 @@
+# deploy/systemd/drone-video-capture.service
+# Process 1 — Video Capture: camera acquisition and frame distribution.
+#
+# Install: sudo cp deploy/systemd/*.service deploy/systemd/*.target /etc/systemd/system/
+#          sudo systemctl daemon-reload
+# Start:   sudo systemctl start drone-stack.target
+# Logs:    journalctl -u drone-video-capture -f
+
+[Unit]
+Description=Drone Video Capture (P1)
+Documentation=https://github.com/nmohamaya/companion_software_stack
+PartOf=drone-stack.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/drone/bin/video_capture --config /etc/drone/config.json --json-logs
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=100%
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /tmp /var/log/drone
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=drone-video-capture
+
+[Install]
+WantedBy=drone-stack.target

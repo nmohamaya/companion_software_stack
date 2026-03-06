@@ -152,6 +152,13 @@ add_drone_test(test_zenoh_liveliness test_zenoh_liveliness.cpp
 # ── Process Strategy Interface tests ─────────────────────────
 add_drone_test(test_process_interfaces test_process_interfaces.cpp)
 
+# ── systemd sd_notify wrapper tests ─────────────────────────
+add_drone_test(test_sd_notify test_sd_notify.cpp)
+if(ENABLE_SYSTEMD)
+    target_include_directories(test_sd_notify PRIVATE ${SYSTEMD_INCLUDE_DIRS})
+    target_link_libraries(test_sd_notify PRIVATE ${SYSTEMD_LIBRARIES})
+endif()
+
 # ── ColorContourDetector tests ───────────────────────────────
 add_drone_test(test_color_contour_detector test_color_contour_detector.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp

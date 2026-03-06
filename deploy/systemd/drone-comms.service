@@ -1,0 +1,39 @@
+# deploy/systemd/drone-comms.service
+# Process 5 — Comms: flight controller link (MAVLink), ground station telemetry.
+#
+# No launch dependencies — can start independently.
+# Cascade: if comms dies, mission_planner and payload_manager are restarted.
+
+[Unit]
+Description=Drone Communications (P5)
+Documentation=https://github.com/nmohamaya/companion_software_stack
+PartOf=drone-stack.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/drone/bin/comms --config /etc/drone/config.json --json-logs
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+
+# Serial port access (Pixhawk)
+SupplementaryGroups=dialout
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=100%
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /tmp /var/log/drone /dev/ttyUSB0 /dev/ttyACM0
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=drone-comms
+
+[Install]
+WantedBy=drone-stack.target

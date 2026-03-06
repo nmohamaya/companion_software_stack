@@ -92,6 +92,21 @@ find_package(nlohmann_json REQUIRED)
 # ── Optional: Zenoh IPC backend ─────────────────────────────
 option(ENABLE_ZENOH "Build with Zenoh IPC backend (requires zenohc + zenoh-cpp)" OFF)
 
+# ── Optional: systemd integration ───────────────────────────
+# When enabled, P7 (system_monitor) calls sd_notify() for watchdog support.
+# Requires libsystemd-dev.  Harmless to enable on non-systemd systems at
+# build time — the binary simply never receives WATCHDOG_USEC at runtime.
+option(ENABLE_SYSTEMD "Build with systemd sd_notify() watchdog support" OFF)
+
+if(ENABLE_SYSTEMD)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SYSTEMD REQUIRED libsystemd)
+    add_compile_definitions(HAVE_SYSTEMD=1)
+    message(STATUS "  systemd      : ENABLED (libsystemd ${SYSTEMD_VERSION})")
+else()
+    message(STATUS "  systemd      : DISABLED")
+endif()
+
 # Security: require a Zenoh config with TLS/auth for production builds.
 # Pass -DZENOH_CONFIG_PATH=/path/to/zenoh.json5 for a secure config.
 # Pass -DALLOW_INSECURE_ZENOH=ON to bypass (development/testing only).
@@ -180,4 +195,5 @@ message(STATUS "  MAVSDK       : ${MAVSDK_FOUND}")
 message(STATUS "  Gazebo       : ${GAZEBO_FOUND}")
 message(STATUS "  OpenCV       : ${OPENCV_FOUND}")
 message(STATUS "  Zenoh        : ${ENABLE_ZENOH}")
+message(STATUS "  systemd      : ${ENABLE_SYSTEMD}")
 message(STATUS "════════════════════════════════════════════")

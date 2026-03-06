@@ -1,0 +1,37 @@
+# deploy/systemd/drone-payload-manager.service
+# Process 6 — Payload Manager: gimbal, camera trigger, payload actuation.
+#
+# Depends on comms for FC commands.
+# PartOf=drone-comms.service → cascade restart when comms dies.
+
+[Unit]
+Description=Drone Payload Manager (P6)
+Documentation=https://github.com/nmohamaya/companion_software_stack
+PartOf=drone-stack.target drone-comms.service
+After=network-online.target drone-comms.service
+Requires=drone-comms.service
+
+[Service]
+Type=simple
+ExecStart=/opt/drone/bin/payload_manager --config /etc/drone/config.json --json-logs
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=100%
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /tmp /var/log/drone
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=drone-payload-manager
+
+[Install]
+WantedBy=drone-stack.target
