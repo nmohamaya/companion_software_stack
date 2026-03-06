@@ -97,6 +97,8 @@ graph TB
 
 **Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction — backed by lock-free POSIX shared memory (SeqLock, default) or **Zenoh** zero-copy SHM + network transport (`-DENABLE_ZENOH=ON`, [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45)). The backend is selected via `ipc_backend` in the JSON config. Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
 
+**Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. `ProcessManager` handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` dependency semantics + `WatchdogSec` on P7) provide OS-level supervision. 701 unit tests, sanitizer-clean (ASan/TSan/UBSan). See [Epic #88](https://github.com/nmohamaya/companion_software_stack/issues/88) and [docs/process-health-monitoring.md](docs/process-health-monitoring.md).
+
 ### IPC Channel Map
 
 All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The backend is selected via `ipc_backend` in the JSON config (`"shm"` or `"zenoh"`). SHM uses POSIX segment names; Zenoh uses key expressions.
@@ -1270,4 +1272,4 @@ See [DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the full develop
 - Pre-merge checklist
 - Quick reference commands
 
-**CI Pipeline:** 9-job GitHub Actions pipeline — format gate (clang-format-18) → 7-leg build matrix (shm/zenoh × ASan/TSan/UBSan) → coverage report (lcov). See [docs/CI_SETUP.md](docs/CI_SETUP.md) for the full DevOps guide.
+**CI Pipeline:** 9-job GitHub Actions pipeline — format gate (clang-format-18) → 7-leg build matrix (shm/zenoh × ASan/TSan/UBSan) → coverage report (lcov). **701 unit tests** (all passing), 75.1% line coverage. See [docs/CI_SETUP.md](docs/CI_SETUP.md) for the full DevOps guide.

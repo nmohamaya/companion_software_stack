@@ -69,7 +69,7 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|------|--------------------|--------------------|----------|--------|-------|
-| 4.1 | Process supervision | `launch_all.sh` — bash script, manual restart | systemd units with watchdog, auto-restart, dependency ordering | P0 | 🔴 | |
+| 4.1 | Process supervision | systemd units + ProcessManager | systemd units with watchdog, auto-restart, dependency ordering | P0 | 🟢 | PR #107 (systemd), Epic #88 (watchdog) |
 | 4.2 | OTA updates | None — manual scp + rebuild | Mender / SWUpdate / custom updater | P2 | 🔴 | |
 | 4.3 | Log management | spdlog to files, no rotation | Log rotation (logrotate or spdlog rotating sink), remote log shipping | P1 | 🔴 | Disk will fill on long missions |
 | 4.4 | Config validation | JSON Schema validation at startup; reject invalid configs | `ConfigSchema` builder-pattern validation at startup (7 schemas) | P1 | 🟢 | PR #76 — Issue #69 |
@@ -86,7 +86,7 @@ Production requires implementing the real backend behind each interface.
 |---|------|--------------------|--------------------|----------|--------|-------|
 | 5.1 | Failsafe logic | Basic RTL on battery low / link loss | Comprehensive failsafe: GPS loss, IMU failure, motor fault, geofence breach | P0 | 🔴 | |
 | 5.2 | Geofencing | None | Configurable geofence polygons + altitude limits | P0 | 🔴 | |
-| 5.3 | Health watchdog | `ShmSystemHealth` published at 1 Hz | Hardware watchdog timer (WDT) + software heartbeat monitoring | P1 | 🔴 | |
+| 5.3 | Health watchdog | ThreadHeartbeat + ThreadWatchdog + systemd WatchdogSec | Hardware watchdog timer (WDT) + software heartbeat monitoring | P1 | 🟢 | PRs #94, #96, #107; per-thread atomic heartbeats, 3-layer architecture |
 | 5.4 | Error recovery | Most errors → `spdlog::error()` + exit | Graceful degradation: retry, fallback, safe-state transition | P1 | � | `Result<T,E>` (PR #75), `FaultManager` (PR #63) provide structured error handling; full recovery chains TBD |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens (Phase F, #51) | Zenoh liveliness tokens (Phase F, #51) | P2 | 🟢 | PR #57 — 7 tokens active, P7 monitors |
 | 5.6 | Redundancy | Single IMU, single GPS | Dual IMU + dual GPS with voting / consistency checks | P2 | 🔴 | |
@@ -109,7 +109,9 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Resolution | Date |
 |---|------|------------|------|
+| 4.1 | Process supervision | systemd 7-unit architecture (PR #107) + ProcessManager fork+exec supervisor (PR #100) + restart policies with dependency graph (PRs #101, #102). `BindsTo=` dependency semantics, `sd_notify(READY=1)`, `WatchdogSec=10s` on P7. | 2026-03-06 |
 | 4.4 | Config validation | `ConfigSchema` builder-pattern validation with 7 process schemas (PR #76, Issue #69) | 2026-03-03 |
+| 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ShmThreadHealth` publisher + `ProcessManager` crash recovery (PRs #96, #100), (3) systemd `WatchdogSec` OS-level supervision (PR #107). 701 tests total. | 2026-03-06 |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens — 7 tokens active, P7 monitors deaths (PR #57, Phase F) | 2026-03-01 |
 
 ---
