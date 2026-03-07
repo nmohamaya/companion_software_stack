@@ -62,10 +62,30 @@
         "takeoff_altitude_m": 5.0,
         "acceptance_radius_m": 1.0,
         "cruise_speed_mps": 2.0,
+        "rtl_acceptance_radius_m": 1.5,
+        "landed_altitude_m": 0.5,
+        "rtl_min_dwell_seconds": 5,
+        "path_planner": {
+            "backend": "potential_field"
+        },
+        "obstacle_avoider": {
+            "backend": "potential_field"
+        },
         "obstacle_avoidance": {
             "min_distance_m": 2.0,
             "influence_radius_m": 5.0,
             "repulsive_gain": 2.0
+        },
+        "geofence": {
+            "polygon": [
+                {"x": -50, "y": -50},
+                {"x":  50, "y": -50},
+                {"x":  50, "y":  50},
+                {"x": -50, "y":  50}
+            ],
+            "altitude_floor_m": 0.0,
+            "altitude_ceiling_m": 120.0,
+            "warning_margin_m": 5.0
         },
         "waypoints": [
             {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
@@ -105,9 +125,11 @@
 
     "fault_manager": {
         "pose_stale_timeout_ms": 500,
-        "battery_warn_percent": 20.0,
+        "battery_warn_percent": 30.0,
+        "battery_rtl_percent": 20.0,
         "battery_crit_percent": 10.0,
         "fc_link_lost_timeout_ms": 3000,
+        "fc_link_rtl_timeout_ms": 15000,
         "loiter_escalation_timeout_s": 30
     },
 

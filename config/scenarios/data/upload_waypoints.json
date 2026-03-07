@@ -1,0 +1,8 @@
+{
+    "_comment": "Mid-flight mission upload waypoints for Scenario 6",
+    "waypoints": [
+        {"x": 5,  "y": 5,  "z": 8, "yaw": 0.78,  "radius": 2.0, "speed": 1.5, "trigger_payload": true},
+        {"x": 15, "y": 5,  "z": 8, "yaw": 0,      "radius": 2.0, "speed": 1.5, "trigger_payload": false},
+        {"x": 10, "y": 10, "z": 5, "yaw": 1.57,   "radius": 2.0, "speed": 2.0, "trigger_payload": true}
+    ]
+}

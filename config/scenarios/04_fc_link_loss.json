@@ -1,0 +1,55 @@
+{
+    "_comment": "Scenario 4: FC Link Loss — LOITER → RTL contingency",
+    "scenario": {
+        "name": "fc_link_loss",
+        "description": "Simulate flight controller link loss during mission. Verifies FaultManager's FC link-loss contingency: LOITER after 3s timeout, then automatic RTL after 15s if link not restored.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "fc_link_lost_timeout_ms": 3000,
+            "fc_link_rtl_timeout_ms": 15000,
+            "loiter_escalation_timeout_s": 30
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 10,
+                "action": "fc_disconnect",
+                "_comment": "Disconnect FC — expect LOITER after 3s"
+            },
+            {
+                "delay_s": 20,
+                "action": "fc_reconnect",
+                "_comment": "Reconnect FC after 20s (past RTL timeout of 15s, should have triggered RTL)"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "FAULT_FC_LINK_LOST",
+            "LOITER"
+        ],
+        "log_must_not_contain": [
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable FC link timing parameters",
+        "fc_link_lost_timeout_ms_range": {"min": 1000, "max": 10000, "default": 3000, "unit": "ms"},
+        "fc_link_rtl_timeout_ms_range": {"min": 5000, "max": 60000, "default": 15000, "unit": "ms"},
+        "disconnect_duration_editable": true,
+        "notes": "Modify delay_s of fc_reconnect step to test: (a) quick reconnect before RTL timeout, (b) late reconnect after RTL. Set fc_reconnect delay < 15s to test recovery before RTL."
+    }
+}

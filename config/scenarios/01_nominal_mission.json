@@ -1,0 +1,73 @@
+{
+    "_comment": "Scenario 1: Nominal Mission — takeoff, fly 4 waypoints, land",
+    "scenario": {
+        "name": "nominal_mission",
+        "description": "Fly a 4-waypoint rectangular pattern at 5m altitude. No faults injected. Validates basic mission execution, waypoint acceptance, payload triggering, and landing.",
+        "tier": 1,
+        "timeout_s": 120,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "potential_field"},
+            "obstacle_avoider": {"backend": "potential_field"},
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": true},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14,  "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57, "speed": 2.0, "payload_trigger": true}
+            ]
+        },
+        "fault_manager": {
+            "battery_warn_percent": 30.0,
+            "battery_rtl_percent": 20.0,
+            "battery_crit_percent": 10.0
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "IDLE",
+            "PREFLIGHT",
+            "TAKEOFF",
+            "EXECUTING",
+            "COMPLETE"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ],
+        "shm_segments_exist": [
+            "drone_mission_cam", "slam_pose", "mission_status", "fc_state", "system_health"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable parameters for manual testing",
+        "waypoints_editable": true,
+        "speed_range": {"min": 0.5, "max": 5.0, "default": 2.0, "unit": "m/s"},
+        "altitude_range": {"min": 2.0, "max": 50.0, "default": 5.0, "unit": "m"},
+        "acceptance_radius_range": {"min": 0.5, "max": 5.0, "default": 1.0, "unit": "m"}
+    }
+}

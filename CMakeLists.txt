@@ -180,6 +180,9 @@ add_subdirectory(process5_comms)
 add_subdirectory(process6_payload_manager)
 add_subdirectory(process7_system_monitor)
 
+# ── Tools ────────────────────────────────────────────────────
+add_subdirectory(tools/fault_injector)
+
 # ── Tests ────────────────────────────────────────────────────
 enable_testing()
 add_subdirectory(tests)

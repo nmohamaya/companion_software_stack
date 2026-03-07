@@ -1,0 +1,116 @@
+{
+    "_comment": "Scenario 8: Full Stack Stress — end-to-end timing validation",
+    "scenario": {
+        "name": "full_stack_stress",
+        "description": "Launch the full stack and validate end-to-end timing, SHM throughput, and inter-process communication under sustained load. Injects multiple concurrent faults to stress all subsystems simultaneously.",
+        "tier": 1,
+        "timeout_s": 180,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "video_capture": {
+            "mission_cam": {"fps": 60},
+            "stereo_cam": {"fps": 60}
+        },
+        "perception": {
+            "detector": {"confidence_threshold": 0.2, "max_detections": 64}
+        },
+        "slam": {
+            "vio_rate_hz": 200,
+            "visual_frontend_rate_hz": 60,
+            "imu_rate_hz": 400
+        },
+        "mission_planner": {
+            "update_rate_hz": 20,
+            "takeoff_altitude_m": 5.0,
+            "path_planner": {"backend": "astar"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 3.0, "payload_trigger": false},
+                {"x": 20, "y": 10, "z": 8, "yaw": 0.78,  "speed": 3.0, "payload_trigger": true},
+                {"x": 10, "y": 20, "z": 5, "yaw": 1.57,  "speed": 3.0, "payload_trigger": false},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14,  "speed": 3.0, "payload_trigger": true}
+            ]
+        },
+        "comms": {
+            "mavlink": {"heartbeat_rate_hz": 2, "tx_rate_hz": 50, "rx_rate_hz": 20}
+        },
+        "system_monitor": {
+            "update_rate_hz": 5
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 15,
+                "action": "thermal_zone",
+                "value": 1,
+                "_comment": "Warm up the system"
+            },
+            {
+                "delay_s": 10,
+                "action": "battery",
+                "value": 40.0,
+                "_comment": "Normal battery — no fault yet"
+            },
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 2,
+                "_comment": "Hot thermal zone"
+            },
+            {
+                "delay_s": 5,
+                "action": "battery",
+                "value": 28.0,
+                "_comment": "Battery WARN triggered concurrently with hot thermal"
+            },
+            {
+                "delay_s": 10,
+                "action": "fc_disconnect",
+                "_comment": "FC disconnect during battery warn + thermal stress"
+            },
+            {
+                "delay_s": 5,
+                "action": "fc_reconnect",
+                "_comment": "Reconnect quickly — test recovery under stress"
+            },
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 0,
+                "_comment": "Cool down"
+            },
+            {
+                "delay_s": 5,
+                "action": "battery",
+                "value": 80.0,
+                "_comment": "Restore battery to normal"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "FAULT_BATTERY_LOW",
+            "FAULT_FC_LINK_LOST"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND"
+        ],
+        "processes_alive": [
+            "mission_planner", "comms", "slam_vio_nav", "system_monitor"
+        ],
+        "shm_segments_exist": [
+            "drone_mission_cam", "drone_stereo_cam", "detected_objects",
+            "slam_pose", "mission_status", "fc_state", "system_health"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable stress test parameters",
+        "camera_fps_range": {"min": 30, "max": 120, "default": 60},
+        "planner_rate_range": {"min": 1, "max": 50, "default": 20, "unit": "Hz"},
+        "comms_tx_rate_range": {"min": 10, "max": 100, "default": 50, "unit": "Hz"},
+        "fault_sequence_editable": true,
+        "notes": "This scenario intentionally pushes high update rates and concurrent faults. Useful for identifying race conditions, IPC throughput bottlenecks, and fault handling under load."
+    }
+}

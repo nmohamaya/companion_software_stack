@@ -1,0 +1,75 @@
+{
+    "_comment": "Scenario 3: Battery Degradation — 3-tier WARN → RTL → EMERGENCY_LAND",
+    "scenario": {
+        "name": "battery_degradation",
+        "description": "Inject progressive battery drain during flight. Verifies FaultManager's 3-tier battery escalation: WARN at 30%, RTL at 20%, EMERGENCY_LAND at 10%.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
+                {"x": 20, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
+                {"x": 30, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
+                {"x": 40, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "battery_warn_percent": 30.0,
+            "battery_rtl_percent": 20.0,
+            "battery_crit_percent": 10.0,
+            "fc_link_lost_timeout_ms": 3000,
+            "fc_link_rtl_timeout_ms": 15000
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 10,
+                "action": "battery",
+                "value": 50.0,
+                "_comment": "Nominal battery — no action expected"
+            },
+            {
+                "delay_s": 5,
+                "action": "battery",
+                "value": 28.0,
+                "_comment": "Below 30% — WARN expected"
+            },
+            {
+                "delay_s": 10,
+                "action": "battery",
+                "value": 18.0,
+                "_comment": "Below 20% — RTL expected"
+            },
+            {
+                "delay_s": 15,
+                "action": "battery",
+                "value": 8.0,
+                "_comment": "Below 10% — EMERGENCY_LAND expected"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "FAULT_BATTERY_LOW",
+            "FAULT_BATTERY_RTL",
+            "FAULT_BATTERY_CRITICAL"
+        ],
+        "log_must_not_contain": [
+            "FAULT_GEOFENCE_BREACH"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable battery thresholds and injection timing",
+        "battery_warn_percent_range": {"min": 10.0, "max": 50.0, "default": 30.0},
+        "battery_rtl_percent_range": {"min": 5.0, "max": 40.0, "default": 20.0},
+        "battery_crit_percent_range": {"min": 1.0, "max": 30.0, "default": 10.0},
+        "injection_levels_editable": true,
+        "injection_timing_editable": true,
+        "notes": "Adjust delay_s values in fault_sequence to control injection timing. Adjust battery_*_percent in config_overrides to change thresholds."
+    }
+}

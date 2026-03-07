@@ -38,6 +38,25 @@ public:
         return true;
     }
 
+    /// Open an existing SHM segment for writing without creating or
+    /// taking ownership.  Unlike create(), this will NOT truncate, reset
+    /// the sequence counter, or shm_unlink() on destruction — making it
+    /// safe for external tools (e.g. fault_injector) to inject data into
+    /// a live segment owned by another process.
+    [[nodiscard]] bool attach(const std::string& name) {
+        name_ = name;
+        fd_   = shm_open(name.c_str(), O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        ptr_ = static_cast<ShmBlock*>(
+            mmap(nullptr, sizeof(ShmBlock), PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) {
+            ptr_ = nullptr;
+            return false;
+        }
+        owns_ = false;
+        return true;
+    }
+
     void write(const T& data) {
         if (!ptr_) return;
         uint64_t s = ptr_->seq.load(std::memory_order_relaxed);
@@ -50,7 +69,7 @@ public:
     ~ShmWriter() {
         if (ptr_) munmap(ptr_, sizeof(ShmBlock));
         if (fd_ >= 0) {
-            shm_unlink(name_.c_str());
+            if (owns_) shm_unlink(name_.c_str());
             close(fd_);
         }
     }
@@ -59,23 +78,26 @@ public:
     ShmWriter& operator=(const ShmWriter&) = delete;
 
     ShmWriter(ShmWriter&& other) noexcept
-        : fd_(other.fd_), ptr_(other.ptr_), name_(std::move(other.name_)) {
-        other.fd_  = -1;
-        other.ptr_ = nullptr;
+        : fd_(other.fd_), ptr_(other.ptr_), name_(std::move(other.name_)), owns_(other.owns_) {
+        other.fd_   = -1;
+        other.ptr_  = nullptr;
+        other.owns_ = false;
     }
 
     ShmWriter& operator=(ShmWriter&& other) noexcept {
         if (this != &other) {
             if (ptr_) munmap(ptr_, sizeof(ShmBlock));
             if (fd_ >= 0) {
-                shm_unlink(name_.c_str());
+                if (owns_) shm_unlink(name_.c_str());
                 close(fd_);
             }
-            fd_        = other.fd_;
-            ptr_       = other.ptr_;
-            name_      = std::move(other.name_);
-            other.fd_  = -1;
-            other.ptr_ = nullptr;
+            fd_         = other.fd_;
+            ptr_        = other.ptr_;
+            name_       = std::move(other.name_);
+            owns_       = other.owns_;
+            other.fd_   = -1;
+            other.ptr_  = nullptr;
+            other.owns_ = false;
         }
         return *this;
     }
@@ -86,6 +108,7 @@ private:
     int         fd_  = -1;
     ShmBlock*   ptr_ = nullptr;
     std::string name_;
+    bool        owns_ = true;
 
     static uint64_t now_ns() {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(

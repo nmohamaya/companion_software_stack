@@ -357,6 +357,7 @@
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | **Closed** ✅ |
 | [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening — CI, Error Handling, Code Quality | **Closed** ✅ |
 | [#88](https://github.com/nmohamaya/companion_software_stack/issues/88) | [Epic] Process & Thread Watchdog — Crash Recovery & Stuck-Thread Detection | **Closed** ✅ |
+| [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Mission Planner — Full Flight Pipeline | Open |
 
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
@@ -436,6 +437,12 @@
 | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Phase D — Service channel migration + SHM removal | **Closed** (PR #55) |
 | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Phase E — Network transport (drone↔GCS) | **Closed** (PR #56) |
 | [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Phase F — Liveliness tokens (process health) | **Closed** (PR #57) |
+
+### Integration Testing (#120)
+
+| # | Title | State |
+|---|-------|-------|
+| [#120](https://github.com/nmohamaya/companion_software_stack/issues/120) | Scenario-Driven Simulation Harness | Open |
 
 ---
 
