@@ -1,0 +1,92 @@
+{
+    "_comment": "Scenario 7: Thermal Throttle — thermal zone escalation",
+    "scenario": {
+        "name": "thermal_throttle",
+        "description": "Inject progressive thermal zone escalation (normal → warm → hot → critical). Verifies system monitor reporting, watchdog thermal gates, and process thermal throttling behavior.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "system_monitor": {
+            "update_rate_hz": 2,
+            "thresholds": {
+                "cpu_warn_percent": 90.0,
+                "mem_warn_percent": 90.0,
+                "temp_warn_c": 80.0,
+                "temp_crit_c": 95.0,
+                "battery_warn_percent": 20.0,
+                "battery_crit_percent": 10.0
+            }
+        },
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "watchdog": {
+            "processes": {
+                "video_capture":   {"thermal_gate": 2},
+                "perception":      {"thermal_gate": 2},
+                "payload_manager": {"thermal_gate": 3}
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 0,
+                "_comment": "Normal — no throttling"
+            },
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 1,
+                "_comment": "Warm — informational"
+            },
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 2,
+                "_comment": "Hot — non-critical processes may be suspended"
+            },
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 3,
+                "_comment": "Critical — aggressive throttling"
+            },
+            {
+                "delay_s": 10,
+                "action": "thermal_zone",
+                "value": 0,
+                "_comment": "Cool down — back to normal"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "thermal_zone"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_GEOFENCE_BREACH"
+        ],
+        "processes_alive": [
+            "mission_planner", "comms", "slam_vio_nav", "system_monitor"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable thermal parameters",
+        "thermal_zone_range": {"min": 0, "max": 3, "default": 0},
+        "temp_warn_range": {"min": 60.0, "max": 90.0, "default": 80.0, "unit": "°C"},
+        "temp_crit_range": {"min": 85.0, "max": 110.0, "default": 95.0, "unit": "°C"},
+        "thermal_gate_options": [0, 1, 2, 3],
+        "injection_timing_editable": true,
+        "notes": "Modify thermal_gate in watchdog.processes to control which processes are suspended at each zone. Adjust delay_s to control escalation speed."
+    }
+}

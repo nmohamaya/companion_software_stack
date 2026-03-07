@@ -886,6 +886,45 @@ gz-transport, and MAVLink.
 
 ---
 
+### run_scenario.sh — Scenario-Driven Integration Runner
+
+**What it tests:** Parameterized scenario execution with automated fault injection
+and verification. Launches the full stack, merges scenario-specific config overrides,
+injects timed faults via the `fault_injector` CLI tool, and verifies pass criteria
+(log patterns, process liveness, SHM segment existence).
+
+| Scenario | Tier | Gazebo | Description |
+|----------|------|--------|-------------|
+| 01 — Nominal Mission | 1 | No | 4-waypoint rectangular flight, no faults |
+| 02 — Obstacle Avoidance | 2 | Yes | A* planner navigates obstacle field |
+| 03 — Battery Degradation | 1 | No | 3-tier battery escalation (WARN→RTL→CRIT) |
+| 04 — FC Link Loss | 1 | No | FC disconnect → LOITER → RTL contingency |
+| 05 — Geofence Breach | 1 | No | Tight geofence polygon → RTL on violation |
+| 06 — Mission Upload | 1 | No | Mid-flight 3-waypoint upload via GCS command |
+| 07 — Thermal Throttle | 1 | No | Thermal zone escalation 0→1→2→3→0 |
+| 08 — Full Stack Stress | 1 | No | Concurrent faults, high-rate stress test |
+
+**Run:**
+```bash
+./tests/run_scenario.sh --list                          # list all scenarios
+./tests/run_scenario.sh config/scenarios/01_nominal_mission.json  # run one
+./tests/run_scenario.sh --all                           # run all scenarios
+./tests/run_scenario.sh --all --tier 1                  # Tier 1 only (no Gazebo)
+./tests/run_scenario.sh --dry-run config/scenarios/03_battery_degradation.json
+```
+
+**Manual controls:** Each scenario JSON defines adjustable parameters (battery levels,
+timeouts, thermal zones, waypoints) in a `manual_controls` section. Edit these values
+before running to explore edge cases.
+
+**Requires:** `fault_injector` built (`cmake --build build --target fault_injector`);
+Tier 2 scenarios additionally require Gazebo Harmonic + PX4 SITL.
+
+See [docs/SIMULATION_ARCHITECTURE.md](../docs/SIMULATION_ARCHITECTURE.md) for architecture
+diagrams and detailed setup instructions.
+
+---
+
 ## Conditional Compilation Guards
 
 Some tests require optional dependencies.  The build system uses compile-time
@@ -911,4 +950,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 737 unit tests (49+ suites across 37 files) + 42 E2E checks (2 shell scripts).*
+*Last updated: March 2026 — 737 unit tests (49+ suites across 37 files) + 42 E2E checks (2 shell scripts) + 8 scenario-driven integration tests (run_scenario.sh).*

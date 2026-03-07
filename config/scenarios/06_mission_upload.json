@@ -1,0 +1,56 @@
+{
+    "_comment": "Scenario 6: Mid-Flight Mission Upload — GCS sends new waypoints during active mission",
+    "scenario": {
+        "name": "mission_upload",
+        "description": "Start a 2-waypoint mission, then inject a MISSION_UPLOAD GCS command with 3 new waypoints mid-flight. Verifies that the mission planner accepts the new mission and transitions smoothly.",
+        "tier": 1,
+        "timeout_s": 120,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
+                {"x": 20, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 15,
+                "action": "mission_upload",
+                "file": "config/scenarios/data/upload_waypoints.json",
+                "_comment": "Upload 3 new waypoints mid-flight after 15 seconds"
+            }
+        ]
+    },
+    "upload_waypoints": {
+        "_comment": "These waypoints are also defined in data/upload_waypoints.json",
+        "waypoints": [
+            {"x": 5,  "y": 5,  "z": 8, "yaw": 0.78, "speed": 1.5, "trigger_payload": true},
+            {"x": 15, "y": 5,  "z": 8, "yaw": 0,    "speed": 1.5, "trigger_payload": false},
+            {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "trigger_payload": true}
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "MISSION_UPLOAD",
+            "EXECUTING"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "EMERGENCY_LAND"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable upload timing and waypoints",
+        "upload_delay_range": {"min": 5, "max": 60, "default": 15, "unit": "s"},
+        "upload_waypoints_editable": true,
+        "initial_waypoints_editable": true,
+        "notes": "Change delay_s in fault_sequence to inject at different mission phases. Edit data/upload_waypoints.json to change the uploaded mission."
+    }
+}

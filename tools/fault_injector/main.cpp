@@ -1,0 +1,460 @@
+// tools/fault_injector/main.cpp
+// ═══════════════════════════════════════════════════════════════════
+// Fault Injection CLI — writes directly to SHM IPC channels to
+// simulate faults and GCS commands for integration testing.
+//
+// Usage:
+//   fault_injector battery <percent>          — override FC battery %
+//   fault_injector fc_disconnect              — set FC state to disconnected
+//   fault_injector fc_reconnect               — set FC state to connected
+//   fault_injector gcs_command <cmd> [params] — inject GCS command
+//   fault_injector thermal_zone <0-3>         — override thermal zone
+//   fault_injector mission_upload <json_file> — upload new waypoints
+//   fault_injector health <json>              — override system health
+//   fault_injector sequence <json_file>       — timed sequence of faults
+//
+// The tool opens existing SHM segments (created by running processes)
+// and writes data directly, simulating the producing process.
+// ═══════════════════════════════════════════════════════════════════
+#include "ipc/shm_types.h"
+#include "ipc/shm_writer.h"
+
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
+// ── Timing helper ────────────────────────────────────────────
+static uint64_t now_ns() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
+}
+
+// ── Colour helpers ───────────────────────────────────────────
+static constexpr const char* GREEN  = "\033[0;32m";
+static constexpr const char* RED    = "\033[0;31m";
+static constexpr const char* YELLOW = "\033[1;33m";
+static constexpr const char* CYAN   = "\033[0;36m";
+static constexpr const char* NC     = "\033[0m";
+
+static void print_ok(const std::string& msg) {
+    std::cout << GREEN << "[OK] " << NC << msg << std::endl;
+}
+
+static void print_err(const std::string& msg) {
+    std::cerr << RED << "[ERR] " << NC << msg << std::endl;
+}
+
+static void print_info(const std::string& msg) {
+    std::cout << CYAN << "[INJ] " << NC << msg << std::endl;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: battery <percent>
+// Writes to /fc_state with battery_remaining set to <percent>.
+// ═══════════════════════════════════════════════════════════════
+static int cmd_battery(float percent) {
+    ShmWriter<drone::ipc::ShmFCState> writer;
+    if (!writer.create(drone::ipc::shm_names::FC_STATE)) {
+        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::FC_STATE));
+        return 1;
+    }
+
+    drone::ipc::ShmFCState state{};
+    state.timestamp_ns       = now_ns();
+    state.battery_remaining  = percent;
+    state.battery_voltage    = 12.0f + percent * 0.048f;
+    state.connected          = true;
+    state.armed              = true;
+    state.flight_mode        = 1;  // GUIDED
+    state.rel_alt            = 5.0f;
+    state.satellites_visible = 12;
+
+    writer.write(state);
+
+    std::ostringstream oss;
+    oss << "Battery override: " << percent << "% (voltage=" << state.battery_voltage << "V)";
+    print_ok(oss.str());
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: fc_disconnect / fc_reconnect
+// Writes FC state with connected=false/true.
+// ═══════════════════════════════════════════════════════════════
+static int cmd_fc_link(bool connected) {
+    ShmWriter<drone::ipc::ShmFCState> writer;
+    if (!writer.create(drone::ipc::shm_names::FC_STATE)) {
+        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::FC_STATE));
+        return 1;
+    }
+
+    drone::ipc::ShmFCState state{};
+    state.timestamp_ns       = connected ? now_ns() : 0;  // stale = old timestamp
+    state.connected          = connected;
+    state.armed              = true;
+    state.battery_remaining  = 80.0f;
+    state.battery_voltage    = 15.84f;
+    state.flight_mode        = 1;
+    state.rel_alt            = 5.0f;
+    state.satellites_visible = connected ? 12 : 0;
+
+    writer.write(state);
+    print_ok(connected ? "FC link restored" : "FC link disconnected (stale timestamp)");
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: gcs_command <cmd> [p1] [p2] [p3]
+// Injects a GCS command via /gcs_commands channel.
+// ═══════════════════════════════════════════════════════════════
+static drone::ipc::GCSCommandType parse_gcs_cmd(const std::string& cmd) {
+    if (cmd == "arm") return drone::ipc::GCSCommandType::ARM;
+    if (cmd == "disarm") return drone::ipc::GCSCommandType::DISARM;
+    if (cmd == "takeoff") return drone::ipc::GCSCommandType::TAKEOFF;
+    if (cmd == "land") return drone::ipc::GCSCommandType::LAND;
+    if (cmd == "rtl") return drone::ipc::GCSCommandType::RTL;
+    if (cmd == "mission_start") return drone::ipc::GCSCommandType::MISSION_START;
+    if (cmd == "mission_pause") return drone::ipc::GCSCommandType::MISSION_PAUSE;
+    if (cmd == "mission_abort") return drone::ipc::GCSCommandType::MISSION_ABORT;
+    if (cmd == "mission_upload") return drone::ipc::GCSCommandType::MISSION_UPLOAD;
+    return drone::ipc::GCSCommandType::NONE;
+}
+
+static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3) {
+    auto gcs_type = parse_gcs_cmd(cmd);
+    if (gcs_type == drone::ipc::GCSCommandType::NONE && cmd != "none") {
+        print_err("Unknown GCS command: " + cmd);
+        std::cerr << "  Valid commands: arm, disarm, takeoff, land, rtl, "
+                     "mission_start, mission_pause, mission_abort, mission_upload"
+                  << std::endl;
+        return 1;
+    }
+
+    ShmWriter<drone::ipc::ShmGCSCommand> writer;
+    if (!writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
+        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::GCS_COMMANDS));
+        return 1;
+    }
+
+    static uint64_t           seq = 0;
+    drone::ipc::ShmGCSCommand shm_cmd{};
+    shm_cmd.timestamp_ns   = now_ns();
+    shm_cmd.correlation_id = now_ns();  // simple unique ID
+    shm_cmd.command        = gcs_type;
+    shm_cmd.param1         = p1;
+    shm_cmd.param2         = p2;
+    shm_cmd.param3         = p3;
+    shm_cmd.sequence_id    = ++seq;
+    shm_cmd.valid          = true;
+
+    writer.write(shm_cmd);
+
+    std::ostringstream oss;
+    oss << "GCS command injected: " << cmd << " (type=" << static_cast<int>(gcs_type)
+        << ", p1=" << p1 << ", p2=" << p2 << ", p3=" << p3 << ", seq=" << seq << ")";
+    print_ok(oss.str());
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: thermal_zone <0-3>
+// Writes system health with thermal_zone override.
+// ═══════════════════════════════════════════════════════════════
+static int cmd_thermal_zone(uint8_t zone) {
+    if (zone > 3) {
+        print_err("Thermal zone must be 0-3");
+        return 1;
+    }
+
+    ShmWriter<drone::ipc::ShmSystemHealth> writer;
+    if (!writer.create(drone::ipc::shm_names::SYSTEM_HEALTH)) {
+        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::SYSTEM_HEALTH));
+        return 1;
+    }
+
+    drone::ipc::ShmSystemHealth health{};
+    health.timestamp_ns         = now_ns();
+    health.thermal_zone         = zone;
+    health.cpu_usage_percent    = 50.0f;
+    health.memory_usage_percent = 40.0f;
+    health.disk_usage_percent   = 30.0f;
+    // Map thermal zone to temperature
+    float temps[]     = {50.0f, 75.0f, 88.0f, 98.0f};
+    health.cpu_temp_c = temps[zone];
+    health.max_temp_c = temps[zone];
+
+    writer.write(health);
+
+    std::ostringstream oss;
+    oss << "Thermal zone override: " << static_cast<int>(zone) << " (temp=" << temps[zone] << "°C)";
+    print_ok(oss.str());
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: mission_upload <json_file>
+// Uploads new waypoints via /mission_upload channel.
+// JSON format: {"waypoints": [{"x":..,"y":..,"z":..,"yaw":..},...]}
+// ═══════════════════════════════════════════════════════════════
+static int cmd_mission_upload(const std::string& json_file) {
+    std::ifstream ifs(json_file);
+    if (!ifs) {
+        print_err("Cannot open file: " + json_file);
+        return 1;
+    }
+
+    json j;
+    try {
+        ifs >> j;
+    } catch (const json::exception& e) {
+        print_err("JSON parse error: " + std::string(e.what()));
+        return 1;
+    }
+
+    if (!j.contains("waypoints") || !j["waypoints"].is_array()) {
+        print_err("JSON must contain a 'waypoints' array");
+        return 1;
+    }
+
+    auto& wps = j["waypoints"];
+    if (wps.size() > drone::ipc::kMaxUploadWaypoints) {
+        print_err("Too many waypoints (max " + std::to_string(drone::ipc::kMaxUploadWaypoints) +
+                  ")");
+        return 1;
+    }
+
+    ShmWriter<drone::ipc::ShmMissionUpload> writer;
+    if (!writer.create(drone::ipc::shm_names::MISSION_UPLOAD)) {
+        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::MISSION_UPLOAD));
+        return 1;
+    }
+
+    drone::ipc::ShmMissionUpload upload{};
+    upload.timestamp_ns   = now_ns();
+    upload.correlation_id = now_ns();
+    upload.num_waypoints  = static_cast<uint8_t>(wps.size());
+    upload.valid          = true;
+
+    for (size_t i = 0; i < wps.size(); ++i) {
+        auto& wp                            = wps[i];
+        upload.waypoints[i].x               = wp.value("x", 0.0f);
+        upload.waypoints[i].y               = wp.value("y", 0.0f);
+        upload.waypoints[i].z               = wp.value("z", 5.0f);
+        upload.waypoints[i].yaw             = wp.value("yaw", 0.0f);
+        upload.waypoints[i].radius          = wp.value("radius", 2.0f);
+        upload.waypoints[i].speed           = wp.value("speed", 2.0f);
+        upload.waypoints[i].trigger_payload = wp.value("trigger_payload", false);
+    }
+
+    writer.write(upload);
+
+    // Also inject a MISSION_UPLOAD GCS command to trigger the planner
+    ShmWriter<drone::ipc::ShmGCSCommand> gcs_writer;
+    if (gcs_writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
+        drone::ipc::ShmGCSCommand shm_cmd{};
+        shm_cmd.timestamp_ns   = now_ns();
+        shm_cmd.correlation_id = upload.correlation_id;
+        shm_cmd.command        = drone::ipc::GCSCommandType::MISSION_UPLOAD;
+        shm_cmd.param1         = static_cast<float>(upload.num_waypoints);
+        shm_cmd.sequence_id    = 1;
+        shm_cmd.valid          = true;
+        gcs_writer.write(shm_cmd);
+    }
+
+    std::ostringstream oss;
+    oss << "Mission uploaded: " << wps.size() << " waypoints from " << json_file;
+    print_ok(oss.str());
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: sequence <json_file>
+// Executes a timed sequence of fault injections.
+// JSON format:
+// {
+//   "steps": [
+//     {"delay_s": 0, "action": "battery", "value": 50.0},
+//     {"delay_s": 5, "action": "battery", "value": 25.0},
+//     {"delay_s": 5, "action": "fc_disconnect"},
+//     {"delay_s": 10, "action": "fc_reconnect"},
+//     {"delay_s": 2, "action": "gcs_command", "command": "rtl"}
+//   ]
+// }
+// ═══════════════════════════════════════════════════════════════
+static int execute_step(const json& step) {
+    std::string action = step.value("action", "");
+
+    if (action == "battery") {
+        return cmd_battery(step.value("value", 50.0f));
+    } else if (action == "fc_disconnect") {
+        return cmd_fc_link(false);
+    } else if (action == "fc_reconnect") {
+        return cmd_fc_link(true);
+    } else if (action == "gcs_command") {
+        return cmd_gcs_command(step.value("command", "none"), step.value("param1", 0.0f),
+                               step.value("param2", 0.0f), step.value("param3", 0.0f));
+    } else if (action == "thermal_zone") {
+        return cmd_thermal_zone(step.value("value", 0));
+    } else if (action == "mission_upload") {
+        return cmd_mission_upload(step.value("file", ""));
+    } else {
+        print_err("Unknown action in sequence: " + action);
+        return 1;
+    }
+}
+
+static int cmd_sequence(const std::string& json_file) {
+    std::ifstream ifs(json_file);
+    if (!ifs) {
+        print_err("Cannot open sequence file: " + json_file);
+        return 1;
+    }
+
+    json j;
+    try {
+        ifs >> j;
+    } catch (const json::exception& e) {
+        print_err("JSON parse error: " + std::string(e.what()));
+        return 1;
+    }
+
+    if (!j.contains("steps") || !j["steps"].is_array()) {
+        print_err("Sequence JSON must contain a 'steps' array");
+        return 1;
+    }
+
+    auto& steps = j["steps"];
+    print_info("Executing fault sequence: " + std::to_string(steps.size()) + " steps");
+
+    int errors = 0;
+    for (size_t i = 0; i < steps.size(); ++i) {
+        auto& step    = steps[i];
+        float delay_s = step.value("delay_s", 0.0f);
+
+        if (delay_s > 0) {
+            std::ostringstream oss;
+            oss << "Waiting " << delay_s << "s before step " << (i + 1);
+            print_info(oss.str());
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(static_cast<int>(delay_s * 1000)));
+        }
+
+        std::ostringstream oss;
+        oss << "Step " << (i + 1) << "/" << steps.size() << ": " << step.value("action", "???");
+        print_info(oss.str());
+
+        if (execute_step(step) != 0) {
+            ++errors;
+        }
+    }
+
+    if (errors == 0) {
+        print_ok("Sequence completed: " + std::to_string(steps.size()) + " steps, 0 errors");
+    } else {
+        print_err("Sequence completed with " + std::to_string(errors) + " errors");
+    }
+    return errors > 0 ? 1 : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Usage / Help
+// ═══════════════════════════════════════════════════════════════
+static void print_usage(const char* argv0) {
+    std::cout << YELLOW << "Fault Injector — IPC-based fault injection for integration testing\n"
+              << NC << "\nUsage:\n"
+              << "  " << argv0 << " battery <percent>            Override FC battery level\n"
+              << "  " << argv0 << " fc_disconnect                 Simulate FC link loss\n"
+              << "  " << argv0 << " fc_reconnect                  Restore FC link\n"
+              << "  " << argv0 << " gcs_command <cmd> [p1 p2 p3]  Inject GCS command\n"
+              << "  " << argv0 << " thermal_zone <0-3>            Override thermal zone\n"
+              << "  " << argv0 << " mission_upload <json_file>     Upload new waypoints\n"
+              << "  " << argv0 << " sequence <json_file>           Timed fault sequence\n"
+              << "\nGCS commands: arm, disarm, takeoff, land, rtl,\n"
+              << "              mission_start, mission_pause, mission_abort, mission_upload\n"
+              << "\nExamples:\n"
+              << "  " << argv0 << " battery 25           # Trigger battery WARN\n"
+              << "  " << argv0 << " battery 15           # Trigger battery RTL\n"
+              << "  " << argv0 << " battery 5            # Trigger EMERGENCY_LAND\n"
+              << "  " << argv0 << " fc_disconnect         # Trigger FC link loss → LOITER\n"
+              << "  " << argv0 << " gcs_command rtl       # Send RTL via GCS\n"
+              << "  " << argv0 << " thermal_zone 3        # Critical thermal zone\n"
+              << "  " << argv0 << " sequence fault_seq.json  # Run timed sequence\n"
+              << std::endl;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Main entry
+// ═══════════════════════════════════════════════════════════════
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    std::string cmd = argv[1];
+
+    if (cmd == "battery") {
+        if (argc < 3) {
+            print_err("Usage: fault_injector battery <percent>");
+            return 1;
+        }
+        return cmd_battery(std::stof(argv[2]));
+
+    } else if (cmd == "fc_disconnect") {
+        return cmd_fc_link(false);
+
+    } else if (cmd == "fc_reconnect") {
+        return cmd_fc_link(true);
+
+    } else if (cmd == "gcs_command") {
+        if (argc < 3) {
+            print_err("Usage: fault_injector gcs_command <cmd> [p1 p2 p3]");
+            return 1;
+        }
+        float p1 = argc > 3 ? std::stof(argv[3]) : 0.0f;
+        float p2 = argc > 4 ? std::stof(argv[4]) : 0.0f;
+        float p3 = argc > 5 ? std::stof(argv[5]) : 0.0f;
+        return cmd_gcs_command(argv[2], p1, p2, p3);
+
+    } else if (cmd == "thermal_zone") {
+        if (argc < 3) {
+            print_err("Usage: fault_injector thermal_zone <0-3>");
+            return 1;
+        }
+        return cmd_thermal_zone(static_cast<uint8_t>(std::stoi(argv[2])));
+
+    } else if (cmd == "mission_upload") {
+        if (argc < 3) {
+            print_err("Usage: fault_injector mission_upload <json_file>");
+            return 1;
+        }
+        return cmd_mission_upload(argv[2]);
+
+    } else if (cmd == "sequence") {
+        if (argc < 3) {
+            print_err("Usage: fault_injector sequence <json_file>");
+            return 1;
+        }
+        return cmd_sequence(argv[2]);
+
+    } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
+        print_usage(argv[0]);
+        return 0;
+
+    } else {
+        print_err("Unknown command: " + cmd);
+        print_usage(argv[0]);
+        return 1;
+    }
+}

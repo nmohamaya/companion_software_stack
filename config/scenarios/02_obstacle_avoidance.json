@@ -1,0 +1,75 @@
+{
+    "_comment": "Scenario 2: Obstacle Avoidance — A* planner through obstacle field",
+    "scenario": {
+        "name": "obstacle_avoidance",
+        "description": "Navigate through an obstacle field using the A* path planner and 3D potential-field obstacle avoider. Tier 2 requires Gazebo SITL with the test_world.sdf obstacles.",
+        "tier": 2,
+        "timeout_s": 180,
+        "requires_gazebo": true
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 2.0,
+            "cruise_speed_mps": 1.5,
+            "path_planner": {"backend": "astar"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 2.0,
+                "influence_radius_m": 5.0,
+                "repulsive_gain": 3.0
+            },
+            "geofence": {
+                "polygon": [
+                    {"x": -20, "y": -20},
+                    {"x":  30, "y": -20},
+                    {"x":  30, "y":  30},
+                    {"x": -20, "y":  30}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 50.0,
+                "warning_margin_m": 3.0
+            },
+            "waypoints": [
+                {"x": 5,  "y": 0,  "z": 5, "yaw": 0,    "speed": 1.5, "payload_trigger": false},
+                {"x": 15, "y": 5,  "z": 5, "yaw": 0.5,   "speed": 1.5, "payload_trigger": false},
+                {"x": 20, "y": 10, "z": 5, "yaw": 1.57,  "speed": 1.5, "payload_trigger": true},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57, "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "perception": {
+            "detector": {
+                "backend": "simulated",
+                "confidence_threshold": 0.3,
+                "max_detections": 64
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "Path planner: astar",
+            "Obstacle avoider: potential_field_3d",
+            "TAKEOFF",
+            "EXECUTING"
+        ],
+        "log_must_not_contain": [
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable obstacle avoidance parameters",
+        "influence_radius_range": {"min": 1.0, "max": 10.0, "default": 5.0, "unit": "m"},
+        "repulsive_gain_range": {"min": 0.5, "max": 5.0, "default": 3.0},
+        "cruise_speed_range": {"min": 0.5, "max": 3.0, "default": 1.5, "unit": "m/s"},
+        "waypoints_editable": true,
+        "planner_backend_options": ["potential_field", "astar"]
+    }
+}

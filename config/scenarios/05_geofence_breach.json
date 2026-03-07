@@ -1,0 +1,61 @@
+{
+    "_comment": "Scenario 5: Geofence Breach — polygon violation triggers RTL",
+    "scenario": {
+        "name": "geofence_breach",
+        "description": "Configure a tight geofence polygon. Waypoints intentionally placed near the boundary. The simulated pose will drift outside, triggering geofence violation and automatic RTL.",
+        "tier": 1,
+        "timeout_s": 60,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "geofence": {
+                "polygon": [
+                    {"x": -5,  "y": -5},
+                    {"x":  12, "y": -5},
+                    {"x":  12, "y":  12},
+                    {"x": -5,  "y":  12}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 15.0,
+                "warning_margin_m": 2.0
+            },
+            "waypoints": [
+                {"x": 5,  "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 11, "y": 5,  "z": 5, "yaw": 0.5,  "speed": 2.0, "payload_trigger": false},
+                {"x": 11, "y": 11, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 15, "y": 15, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "battery_warn_percent": 30.0,
+            "battery_rtl_percent": 20.0,
+            "battery_crit_percent": 10.0
+        }
+    },
+    "fault_sequence": {
+        "_comment": "No explicit fault injection. The 4th waypoint (15,15) is outside the geofence polygon (max 12,12). The geofence check runs every tick and should trigger BREACH before reaching that waypoint.",
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "FAULT_GEOFENCE_BREACH",
+            "Geofence: VIOLATED"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST"
+        ],
+        "fault_actions_in_order": ["RTL"]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable geofence parameters",
+        "geofence_polygon_editable": true,
+        "altitude_ceiling_range": {"min": 5.0, "max": 200.0, "default": 15.0, "unit": "m"},
+        "warning_margin_range": {"min": 0.5, "max": 10.0, "default": 2.0, "unit": "m"},
+        "waypoints_editable": true,
+        "notes": "Place waypoints outside the geofence polygon to trigger breach. Adjust geofence.polygon vertices to change boundary. The 4th waypoint at (15,15) is deliberately outside the polygon boundary (12,12)."
+    }
+}

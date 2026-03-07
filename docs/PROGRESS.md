@@ -1542,3 +1542,41 @@ All call sites fixed to properly handle return values:
 | OS supervisor | — | **systemd BindsTo + sd_notify watchdog** |
 
 *Last updated after Process & Thread Watchdog (Epic #88) + systemd (#83). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. Three-layer watchdog architecture, systemd service units.*
+
+---
+
+### Improvement #31 — Integration Testing — Scenario-Driven Simulation Harness (Issue #120)
+
+**Date:** 2026-03  
+**Category:** Testing & Simulation Infrastructure  
+**Issue:** [#120](https://github.com/nmohamaya/companion_software_stack/issues/120)
+
+**Files Added:**
+- `tools/fault_injector/main.cpp` — CLI tool for runtime fault injection via SHM IPC
+- `tools/fault_injector/CMakeLists.txt` — Build config for fault injector
+- `config/scenarios/01_nominal_mission.json` — Nominal 4-waypoint flight scenario
+- `config/scenarios/02_obstacle_avoidance.json` — A* planner obstacle avoidance (Tier 2, Gazebo)
+- `config/scenarios/03_battery_degradation.json` — 3-tier battery escalation scenario
+- `config/scenarios/04_fc_link_loss.json` — FC link loss LOITER→RTL contingency
+- `config/scenarios/05_geofence_breach.json` — Geofence polygon breach → RTL
+- `config/scenarios/06_mission_upload.json` — Mid-flight waypoint upload
+- `config/scenarios/07_thermal_throttle.json` — Thermal zone escalation 0→1→2→3→0
+- `config/scenarios/08_full_stack_stress.json` — Concurrent faults, high rate stress test
+- `config/scenarios/data/upload_waypoints.json` — Waypoint data for scenario 6
+- `tests/run_scenario.sh` — Scenario runner (list, dry-run, single, all, merge, verify)
+- `docs/SIMULATION_ARCHITECTURE.md` — Architecture diagram (Mermaid), setup/run docs
+
+**Files Modified:**
+- `config/default.json` — Added Phase 3 knobs (geofence polygon, path_planner/obstacle_avoider backend, RTL params, battery thresholds, FC link RTL timeout)
+- `config/gazebo_sitl.json` — Same Phase 3 knobs
+- `CMakeLists.txt` — Added `add_subdirectory(tools/fault_injector)`
+
+**What:**
+- Created a fault injection CLI tool (`fault_injector`) that writes directly to POSIX SHM IPC channels to simulate battery drain, FC link loss/recovery, GCS commands, thermal zone escalation, and mission upload — without requiring Gazebo or PX4.
+- Designed 8 parameterized test scenarios (JSON configs) covering nominal flight, obstacle avoidance, battery degradation, FC link loss, geofence breach, mission upload, thermal throttle, and full-stack stress. Each scenario includes config overrides, timed fault sequences, pass criteria (log patterns, process liveness, SHM segments), and manual control knobs.
+- Built a scenario runner script (`run_scenario.sh`) that orchestrates launch → config merge → fault injection → verification → report, supporting `--list`, `--dry-run`, `--all`, `--tier`, `--verbose`, and `--timeout`.
+- Introduced a two-tier testing model: Tier 1 (SHM-only, no simulator required) and Tier 2 (Gazebo SITL, full closed-loop).
+- Created architecture documentation with Mermaid diagrams showing simulated vs. actual components and the full test flow.
+- Updated default and Gazebo SITL configs with all Phase 3 planning & safety knobs (geofence, path planner, obstacle avoidance, RTL parameters).
+
+**Test impact:** No new unit tests (tool is an integration/manual test harness). 844 existing tests unchanged.
