@@ -103,14 +103,15 @@ done
 # ── Helpers ───────────────────────────────────────────────────
 
 # JSON query helper (uses python3 since jq may not be installed)
+# Variables are passed via sys.argv to avoid shell injection into Python code.
 json_get() {
     local file="$1"
     local query="$2"
-    python3 -c "
+    python3 - "$file" "$query" <<'PYEOF'
 import json, sys
-with open('$file') as f:
+with open(sys.argv[1]) as f:
     data = json.load(f)
-keys = '$query'.split('.')
+keys = sys.argv[2].split('.')
 val = data
 for k in keys:
     if isinstance(val, dict) and k in val:
@@ -119,17 +120,17 @@ for k in keys:
         val = ''
         break
 print(val if not isinstance(val, (dict, list)) else json.dumps(val))
-" 2>/dev/null
+PYEOF
 }
 
 json_get_array() {
     local file="$1"
     local query="$2"
-    python3 -c "
-import json
-with open('$file') as f:
+    python3 - "$file" "$query" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
     data = json.load(f)
-keys = '$query'.split('.')
+keys = sys.argv[2].split('.')
 val = data
 for k in keys:
     if isinstance(val, dict) and k in val:
@@ -143,7 +144,7 @@ if isinstance(val, list):
             print(json.dumps(item))
         else:
             print(item)
-" 2>/dev/null
+PYEOF
 }
 
 # Merge scenario config_overrides into base config
@@ -151,7 +152,7 @@ merge_configs() {
     local base="$1"
     local scenario="$2"
     local output="$3"
-    python3 -c "
+    python3 - "$base" "$scenario" "$output" <<'PYEOF'
 import json, sys
 
 def deep_merge(base, override):
@@ -163,17 +164,17 @@ def deep_merge(base, override):
             result[key] = value
     return result
 
-with open('$base') as f:
+with open(sys.argv[1]) as f:
     base_cfg = json.load(f)
-with open('$scenario') as f:
+with open(sys.argv[2]) as f:
     scenario_cfg = json.load(f)
 
 overrides = scenario_cfg.get('config_overrides', {})
 merged = deep_merge(base_cfg, overrides)
 
-with open('$output', 'w') as f:
+with open(sys.argv[3], 'w') as f:
     json.dump(merged, f, indent=4)
-" 2>/dev/null
+PYEOF
 }
 
 check() {
@@ -307,6 +308,17 @@ REQUIRES_GAZEBO=$(json_get "$SCENARIO_FILE" "scenario.requires_gazebo")
 
 [[ -n "$TIMEOUT_OVERRIDE" ]] && SCENARIO_TIMEOUT="$TIMEOUT_OVERRIDE"
 
+# Sanitize SCENARIO_NAME — allow only [A-Za-z0-9_-] to prevent path-traversal
+SCENARIO_NAME_SAFE=$(echo "$SCENARIO_NAME" | tr -cd 'A-Za-z0-9_-')
+if [[ "$SCENARIO_NAME_SAFE" != "$SCENARIO_NAME" ]]; then
+    echo -e "${YELLOW}WARNING: Scenario name sanitized: '${SCENARIO_NAME}' → '${SCENARIO_NAME_SAFE}'${NC}"
+    SCENARIO_NAME="$SCENARIO_NAME_SAFE"
+fi
+if [[ -z "$SCENARIO_NAME" ]]; then
+    echo -e "${RED}ERROR: Scenario name is empty after sanitization${NC}"
+    exit 2
+fi
+
 SCENARIO_LOG_DIR="${LOG_DIR}/${SCENARIO_NAME}"
 rm -rf "$SCENARIO_LOG_DIR"
 mkdir -p "$SCENARIO_LOG_DIR"
@@ -423,7 +435,23 @@ fi
 # Brief stabilisation delay
 sleep 3
 
+# ── Timeout enforcement ──────────────────────────────────────
+# Record the scenario start time.  Before each phase we check whether
+# the configured timeout has been exceeded.
+SCENARIO_START=$SECONDS
+
+check_deadline() {
+    if [[ -n "$SCENARIO_TIMEOUT" && "$SCENARIO_TIMEOUT" -gt 0 ]] 2>/dev/null; then
+        local elapsed=$(( SECONDS - SCENARIO_START ))
+        if [[ $elapsed -ge $SCENARIO_TIMEOUT ]]; then
+            echo -e "${RED}TIMEOUT: scenario exceeded ${SCENARIO_TIMEOUT}s (elapsed ${elapsed}s)${NC}"
+            exit 2
+        fi
+    fi
+}
+
 # ── Phase 3: Fault injection ─────────────────────────────────
+check_deadline
 echo ""
 echo "Phase 3: Executing fault injection sequence..."
 
@@ -432,14 +460,14 @@ if [[ "$STEPS_JSON" != "[]" && -n "$STEPS_JSON" ]]; then
     if [[ -x "$FAULT_INJECTOR" ]]; then
         # Write the fault sequence to a temp file for the fault_injector to process
         FAULT_SEQ_FILE="${SCENARIO_LOG_DIR}/fault_sequence.json"
-        python3 -c "
-import json
-with open('$SCENARIO_FILE') as f:
+        python3 - "$SCENARIO_FILE" "$FAULT_SEQ_FILE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
     data = json.load(f)
 seq = data.get('fault_sequence', {})
-with open('$FAULT_SEQ_FILE', 'w') as f:
+with open(sys.argv[2], 'w') as f:
     json.dump(seq, f, indent=2)
-"
+PYEOF
         echo -e "  Fault sequence: ${FAULT_SEQ_FILE}"
         "${FAULT_INJECTOR}" sequence "$FAULT_SEQ_FILE" 2>&1 | tee "${SCENARIO_LOG_DIR}/fault_injector.log"
         check "Fault injection sequence completed" $?
@@ -453,6 +481,7 @@ else
 fi
 
 # ── Phase 4: Collection window ────────────────────────────────
+check_deadline
 COLLECTION_TIME=5
 echo ""
 echo "Phase 4: Post-injection collection (${COLLECTION_TIME}s)..."
@@ -462,75 +491,82 @@ sleep "$COLLECTION_TIME"
 # In legacy mode, all output goes to launcher.log
 
 # ── Phase 5: Verification ────────────────────────────────────
+check_deadline
 echo ""
 echo "Phase 5: Verification..."
 
 # All log output is in launcher.log
 COMBINED_LOG="${SCENARIO_LOG_DIR}/launcher.log"
 
+# Use process substitution (< <(...)) instead of pipes so that
+# PASS/FAIL/TOTAL counters are updated in the current shell.
+
 # Check log_contains
 echo ""
 echo "Log-contains checks:"
-json_get_array "$SCENARIO_FILE" "pass_criteria.log_contains" | while read -r pattern; do
+while read -r pattern; do
     [[ -z "$pattern" ]] && continue
     if grep -qi "$pattern" "$COMBINED_LOG" 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} Log contains: ${pattern}"
+        check "Log contains: ${pattern}" 0
     else
-        echo -e "  ${RED}✗${NC} Log missing: ${pattern}"
+        check "Log missing: ${pattern}" 1
     fi
-done
+done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_contains")
 
 # Check log_must_not_contain
 echo ""
 echo "Log-must-not-contain checks:"
-json_get_array "$SCENARIO_FILE" "pass_criteria.log_must_not_contain" | while read -r pattern; do
+while read -r pattern; do
     [[ -z "$pattern" ]] && continue
     if grep -qi "$pattern" "$COMBINED_LOG" 2>/dev/null; then
-        echo -e "  ${RED}✗${NC} Log unexpectedly contains: ${pattern}"
+        check "Log unexpectedly contains: ${pattern}" 1
     else
-        echo -e "  ${GREEN}✓${NC} Log correctly does NOT contain: ${pattern}"
+        check "Log correctly does NOT contain: ${pattern}" 0
     fi
-done
+done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_must_not_contain")
 
 # Check processes alive
 echo ""
 echo "Process liveness checks:"
-json_get_array "$SCENARIO_FILE" "pass_criteria.processes_alive" | while read -r proc; do
+while read -r proc; do
     [[ -z "$proc" ]] && continue
     if pgrep -f "build/bin/${proc}" > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} Process alive: ${proc}"
+        check "Process alive: ${proc}" 0
     else
-        echo -e "  ${RED}✗${NC} Process NOT alive: ${proc}"
+        check "Process NOT alive: ${proc}" 1
     fi
-done
+done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.processes_alive")
 
 # Check SHM segments
 echo ""
 echo "SHM segment checks:"
-json_get_array "$SCENARIO_FILE" "pass_criteria.shm_segments_exist" | while read -r seg; do
+while read -r seg; do
     [[ -z "$seg" ]] && continue
     if [[ -f "/dev/shm/${seg}" ]]; then
-        echo -e "  ${GREEN}✓${NC} SHM: ${seg}"
+        check "SHM: ${seg}" 0
     else
-        echo -e "  ${RED}✗${NC} SHM missing: ${seg}"
+        check "SHM missing: ${seg}" 1
     fi
-done
+done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.shm_segments_exist")
 
 # ── Results ───────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
 echo -e "  ${BOLD}Scenario: ${SCENARIO_NAME}${NC}"
 echo -e "  Logs: ${SCENARIO_LOG_DIR}"
-
-# Note: check() updates PASS/FAIL/TOTAL in subshells (piped while loops)
-# so we re-count from the log output for the final summary
-TOTAL_CHECKS=$(grep -c '✓\|✗' <<< "$(cat /dev/null)" 2>/dev/null || echo "0")
-echo -e "  See verification output above for detailed results."
+echo -e "  Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total"
+if [[ $FAIL -gt 0 ]]; then
+    echo -e "  ${RED}FAILED${NC}"
+else
+    echo -e "  ${GREEN}PASSED${NC}"
+fi
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
 
-# Success if launcher is still running (no crash)
-if kill -0 "$LAUNCHER_PID" 2>/dev/null; then
-    exit 0
-else
+# Exit based on verification results + launcher health
+if [[ $FAIL -gt 0 ]]; then
     exit 1
-fi
+elif ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+    echo -e "${RED}Launcher process died unexpectedly${NC}"
+    exit 1
+else
+    exit 0

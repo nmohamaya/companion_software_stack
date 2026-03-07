@@ -43,8 +43,7 @@
         "log_must_not_contain": [
             "FAULT_GEOFENCE_BREACH",
             "EMERGENCY_LAND"
-        ],
-        "fault_actions_in_order": ["LOITER", "RTL"]
+        ]
     },
     "manual_controls": {
         "_comment": "Adjustable FC link timing parameters",

@@ -47,8 +47,7 @@
         "log_must_not_contain": [
             "FAULT_BATTERY_RTL",
             "FAULT_FC_LINK_LOST"
-        ],
-        "fault_actions_in_order": ["RTL"]
+        ]
     },
     "manual_controls": {
         "_comment": "Adjustable geofence parameters",

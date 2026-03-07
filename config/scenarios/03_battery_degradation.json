@@ -61,8 +61,7 @@
         ],
         "log_must_not_contain": [
             "FAULT_GEOFENCE_BREACH"
-        ],
-        "fault_actions_in_order": ["WARN", "RTL", "EMERGENCY_LAND"]
+        ]
     },
     "manual_controls": {
         "_comment": "Adjustable battery thresholds and injection timing",

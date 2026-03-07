@@ -10,11 +10,10 @@
 //   fault_injector gcs_command <cmd> [params] — inject GCS command
 //   fault_injector thermal_zone <0-3>         — override thermal zone
 //   fault_injector mission_upload <json_file> — upload new waypoints
-//   fault_injector health <json>              — override system health
 //   fault_injector sequence <json_file>       — timed sequence of faults
 //
-// The tool opens existing SHM segments (created by running processes)
-// and writes data directly, simulating the producing process.
+// The tool attaches to existing SHM segments (created by running processes)
+// and writes data directly without taking ownership (no shm_unlink on exit).
 // ═══════════════════════════════════════════════════════════════════
 #include "ipc/shm_types.h"
 #include "ipc/shm_writer.h"
@@ -25,6 +24,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -64,9 +64,15 @@ static void print_info(const std::string& msg) {
 // Writes to /fc_state with battery_remaining set to <percent>.
 // ═══════════════════════════════════════════════════════════════
 static int cmd_battery(float percent) {
+    if (percent < 0.0f || percent > 100.0f) {
+        print_err("Battery percent must be 0-100 (got " + std::to_string(percent) + ")");
+        return 1;
+    }
+
     ShmWriter<drone::ipc::ShmFCState> writer;
-    if (!writer.create(drone::ipc::shm_names::FC_STATE)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::FC_STATE));
+    if (!writer.attach(drone::ipc::shm_names::FC_STATE)) {
+        print_err("Cannot attach to SHM segment " + std::string(drone::ipc::shm_names::FC_STATE) +
+                  " (is the stack running?)");
         return 1;
     }
 
@@ -94,13 +100,17 @@ static int cmd_battery(float percent) {
 // ═══════════════════════════════════════════════════════════════
 static int cmd_fc_link(bool connected) {
     ShmWriter<drone::ipc::ShmFCState> writer;
-    if (!writer.create(drone::ipc::shm_names::FC_STATE)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::FC_STATE));
+    if (!writer.attach(drone::ipc::shm_names::FC_STATE)) {
+        print_err("Cannot attach to SHM segment " + std::string(drone::ipc::shm_names::FC_STATE) +
+                  " (is the stack running?)");
         return 1;
     }
 
     drone::ipc::ShmFCState state{};
-    state.timestamp_ns       = connected ? now_ns() : 0;  // stale = old timestamp
+    // For disconnect: write a valid timestamp (now) so FaultManager's
+    // age-based timeout can elapse.  The timestamp stays frozen while
+    // disconnected, causing fc_age to grow past the LOITER/RTL thresholds.
+    state.timestamp_ns       = now_ns();
     state.connected          = connected;
     state.armed              = true;
     state.battery_remaining  = 80.0f;
@@ -142,8 +152,9 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
     }
 
     ShmWriter<drone::ipc::ShmGCSCommand> writer;
-    if (!writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::GCS_COMMANDS));
+    if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
+        print_err("Cannot attach to SHM segment " +
+                  std::string(drone::ipc::shm_names::GCS_COMMANDS) + " (is the stack running?)");
         return 1;
     }
 
@@ -178,8 +189,9 @@ static int cmd_thermal_zone(uint8_t zone) {
     }
 
     ShmWriter<drone::ipc::ShmSystemHealth> writer;
-    if (!writer.create(drone::ipc::shm_names::SYSTEM_HEALTH)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::SYSTEM_HEALTH));
+    if (!writer.attach(drone::ipc::shm_names::SYSTEM_HEALTH)) {
+        print_err("Cannot attach to SHM segment " +
+                  std::string(drone::ipc::shm_names::SYSTEM_HEALTH) + " (is the stack running?)");
         return 1;
     }
 
@@ -235,8 +247,9 @@ static int cmd_mission_upload(const std::string& json_file) {
     }
 
     ShmWriter<drone::ipc::ShmMissionUpload> writer;
-    if (!writer.create(drone::ipc::shm_names::MISSION_UPLOAD)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::MISSION_UPLOAD));
+    if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD)) {
+        print_err("Cannot attach to SHM segment " +
+                  std::string(drone::ipc::shm_names::MISSION_UPLOAD) + " (is the stack running?)");
         return 1;
     }
 
@@ -261,7 +274,7 @@ static int cmd_mission_upload(const std::string& json_file) {
 
     // Also inject a MISSION_UPLOAD GCS command to trigger the planner
     ShmWriter<drone::ipc::ShmGCSCommand> gcs_writer;
-    if (gcs_writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
+    if (gcs_writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
         drone::ipc::ShmGCSCommand shm_cmd{};
         shm_cmd.timestamp_ns   = now_ns();
         shm_cmd.correlation_id = upload.correlation_id;
@@ -394,6 +407,33 @@ static void print_usage(const char* argv0) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Numeric parse helpers — return nonzero exit on invalid input
+// ═══════════════════════════════════════════════════════════════
+static bool safe_stof(const char* s, float& out, const char* label) {
+    try {
+        size_t pos = 0;
+        out        = std::stof(s, &pos);
+        if (pos != std::string(s).size()) throw std::invalid_argument("trailing chars");
+        return true;
+    } catch (const std::exception&) {
+        print_err(std::string("Invalid ") + label + ": '" + s + "' (expected a number)");
+        return false;
+    }
+}
+
+static bool safe_stoi(const char* s, int& out, const char* label) {
+    try {
+        size_t pos = 0;
+        out        = std::stoi(s, &pos);
+        if (pos != std::string(s).size()) throw std::invalid_argument("trailing chars");
+        return true;
+    } catch (const std::exception&) {
+        print_err(std::string("Invalid ") + label + ": '" + s + "' (expected an integer)");
+        return false;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Main entry
 // ═══════════════════════════════════════════════════════════════
 int main(int argc, char* argv[]) {
@@ -409,7 +449,9 @@ int main(int argc, char* argv[]) {
             print_err("Usage: fault_injector battery <percent>");
             return 1;
         }
-        return cmd_battery(std::stof(argv[2]));
+        float pct = 0.0f;
+        if (!safe_stof(argv[2], pct, "battery percent")) return 1;
+        return cmd_battery(pct);
 
     } else if (cmd == "fc_disconnect") {
         return cmd_fc_link(false);
@@ -422,9 +464,10 @@ int main(int argc, char* argv[]) {
             print_err("Usage: fault_injector gcs_command <cmd> [p1 p2 p3]");
             return 1;
         }
-        float p1 = argc > 3 ? std::stof(argv[3]) : 0.0f;
-        float p2 = argc > 4 ? std::stof(argv[4]) : 0.0f;
-        float p3 = argc > 5 ? std::stof(argv[5]) : 0.0f;
+        float p1 = 0.0f, p2 = 0.0f, p3 = 0.0f;
+        if (argc > 3 && !safe_stof(argv[3], p1, "param1")) return 1;
+        if (argc > 4 && !safe_stof(argv[4], p2, "param2")) return 1;
+        if (argc > 5 && !safe_stof(argv[5], p3, "param3")) return 1;
         return cmd_gcs_command(argv[2], p1, p2, p3);
 
     } else if (cmd == "thermal_zone") {
@@ -432,7 +475,9 @@ int main(int argc, char* argv[]) {
             print_err("Usage: fault_injector thermal_zone <0-3>");
             return 1;
         }
-        return cmd_thermal_zone(static_cast<uint8_t>(std::stoi(argv[2])));
+        int zone = 0;
+        if (!safe_stoi(argv[2], zone, "thermal zone")) return 1;
+        return cmd_thermal_zone(static_cast<uint8_t>(zone));
 
     } else if (cmd == "mission_upload") {
         if (argc < 3) {
