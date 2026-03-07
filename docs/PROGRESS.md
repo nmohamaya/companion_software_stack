@@ -1580,3 +1580,36 @@ All call sites fixed to properly handle return values:
 - Updated default and Gazebo SITL configs with all Phase 3 planning & safety knobs (geofence, path planner, obstacle avoidance, RTL parameters).
 
 **Test impact:** No new unit tests (tool is an integration/manual test harness). 844 existing tests unchanged.
+
+---
+
+## Updated Summary (Post Epic #110 — Core Autonomy & Safety Complete)
+
+| Metric | Watchdog + systemd | **Epic #110 (Current)** |
+|---|---|---|
+| Bug fixes | 21 | **21** |
+| Unit tests (SHM) | 701 | **735** |
+| Unit tests (SHM+Zenoh) | — | **844** |
+| Test suites | 31+ | **42** |
+| Compiler warnings | 0 | **0** |
+| CI matrix legs | 9 | **9** |
+| Line coverage | 75.1% | **75.1%** |
+| Code style | enforced | **enforced** |
+| Sanitizers | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| Error handling | Result<T,E> | **Result<T,E>** |
+| Config tunables | 95+ | **110+** |
+| Config schemas | 7 | **7** |
+| `[[nodiscard]]` headers | 26 | **26** |
+| HAL backends | 8 | **9** (+ SimulatedThermalCamera) |
+| Thread watchdog | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | systemd + ProcessManager | **systemd + ProcessManager** |
+| Planning | — | **A* 3D grid + potential field fallback** |
+| Safety subsystems | — | **Geofence + 3-tier battery RTL + FC link contingency** |
+| Perception fusion | weighted merge | **UKF (RGB + thermal)** |
+| Tracker | greedy IOU | **O(n³) Hungarian (Kuhn-Munkres)** |
+| VIO infrastructure | — | **Feature extraction + stereo matching + IMU pre-integration** |
+| Fault conditions | 8 | **11** (+ geofence, battery tiers, FC link RTL) |
+| Integration scenarios | — | **8** (Tier 1 SHM-only + Tier 2 Gazebo SITL) |
+| Fault injector | — | **CLI tool (battery, FC link, GCS, thermal, mission)** |
+
+*Last updated after Epic #110 (Core Autonomy & Safety). All 7 sub-issues closed. See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*

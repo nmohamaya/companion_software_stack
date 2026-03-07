@@ -21,6 +21,7 @@
     - [Phase 8 — Deployment Tooling \& RTL Safety](#phase-8--deployment-tooling--rtl-safety)
     - [Phase 9 — Process \& Thread Watchdog (Epic #88)](#phase-9--process--thread-watchdog-epic-88)
     - [Phase 10 — Foundation Hardening \& systemd (Epic #64)](#phase-10--foundation-hardening--systemd-epic-64)
+    - [Phase 11 — Core Autonomy \& Safety (Epic #110)](#phase-11--core-autonomy--safety-epic-110)
   - [Planned Phases (Real Drone Deployment)](#planned-phases-real-drone-deployment)
     - [Phase 9 — First Safe Flight (Safety + Hardware Config)](#phase-9--first-safe-flight-safety--hardware-config)
     - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception)
@@ -65,6 +66,12 @@
 | Thread watchdog | **ThreadHeartbeat + ThreadWatchdog** — per-thread stuck detection via atomics |
 | Process watchdog | **ProcessManager** — fork+exec, dependency graph, exponential backoff |
 | Observability | JSON logging + IPC latency histograms + cross-process correlation IDs |
+| Planning | **A* 3D grid planner** + 3D obstacle avoidance + potential field fallback |
+| Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
+| Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian |
+| VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
+| Integration testing | **8 scenarios**, fault injector CLI, two-tier model (SHM-only + Gazebo) |
+| Test scenarios | 8 parameterized JSON configs with fault sequences + pass criteria |
 
 ---
 
@@ -271,6 +278,58 @@
 
 ---
 
+### Phase 11 — Core Autonomy & Safety (Epic #110)
+
+> Multi-phase epic: transport-agnostic IPC, perception overhaul, VIO foundation, planning & safety, integration testing.
+
+**Phase 0 — Transport-Agnostic IMessageBus (#111, PR #117):**
+- Type-erased `MessageBus` wrapper class hiding `std::variant`
+- `bus.advertise()` / `bus.subscribe()` API — all 7 processes migrated
+- Adding a new backend (iceoryx, DDS) requires one file change — zero process code changes
+
+**Phase 1A — Remove Simulated LiDAR/Radar (#112, PR #117):**
+- Removed `lidar_thread()`, `radar_thread()`, `LiDARCluster`, `RadarDetection`, `PointCloud`
+- FusionEngine cleaned to camera-only input path
+
+**Phase 1B — ITracker + Hungarian (#113, PR #117):**
+- `ITracker` interface + factory pattern (`"sort"` → `MultiObjectTracker`)
+- O(n³) Kuhn-Munkres Hungarian algorithm replacing greedy IOU matching
+
+**Phase 1C — Thermal Camera + UKF Fusion (#114, PR #117):**
+- `SimulatedThermalCamera` HAL backend (LWIR grayscale, thermal noise model)
+- Per-object UKF fusion engine (RGB + thermal → 3D position + velocity)
+- `IFusionEngine` interface + factory
+
+**Phase 2A — VIO Foundation (#115, PR #118):**
+- ORB/FAST feature extraction + stereo matching (disparity-based depth)
+- IMU pre-integration (rotation, velocity, position delta accumulation)
+- `IVIOBackend` interface + factory
+- Error handling & diagnostics rolled out to all 7 processes
+
+**Phase 3 — Planning & Safety (#116, PR #119):**
+- A* 3D grid path planner with 26-connected search, obstacle inflation, Euclidean heuristic
+- 3D obstacle avoider (XYZ repulsive field, velocity-based prediction)
+- Geofence (ray-casting point-in-polygon + altitude bounds + warning margin)
+- FaultManager: 3-tier battery (WARN/RTL/LAND), FC link-loss (LOITER→RTL), geofence breach
+- GCS mission upload mid-flight
+
+**Integration Testing (#120, PR #121):**
+- Fault injection CLI tool (`tools/fault_injector/`) — battery, FC link, GCS commands, thermal, mission upload
+- 8 parameterized test scenarios (JSON configs with fault sequences + pass criteria)
+- Scenario runner (`tests/run_scenario.sh`) — two-tier model (Tier 1: SHM-only, Tier 2: Gazebo SITL)
+- Architecture documentation with Mermaid diagrams (`docs/SIMULATION_ARCHITECTURE.md`)
+
+**Cross-Epic Deliveries (Epic #25):**
+- #27 Battery-critical auto-RTL ✅
+- #28 FC heartbeat timeout + link-loss contingency ✅
+- #29 Geofencing (polygon + altitude ceiling) ✅
+
+**Issues:** #110 (epic), #111–#116, #120  
+**PRs:** #117, #118, #119, #121  
+**Tests:** 701 → 844 (SHM: 735, SHM+Zenoh: 844)
+
+---
+
 ## Planned Phases (Real Drone Deployment)
 
 > **Epic:** [#25 — Real Drone Deployment — From Simulation to Flight](https://github.com/nmohamaya/companion_software_stack/issues/25)
@@ -282,9 +341,9 @@
 | Issue | Task | Priority | Description |
 |-------|------|----------|-------------|
 | ~~[#26](https://github.com/nmohamaya/companion_software_stack/issues/26)~~ | ~~Hardware config + launch script~~ | ~~P0~~ | ✅ Done (PR #43) — `config/hardware.json` + `deploy/launch_hardware.sh` |
-| [#27](https://github.com/nmohamaya/companion_software_stack/issues/27) | Battery-critical auto-RTL + temp failsafe | P0 | Voltage/percentage thresholds trigger RTL; SoC thermal throttle monitoring |
-| [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) | FC heartbeat timeout + link-loss contingency | P0 | Detect MAVLink heartbeat loss → hold / RTL after timeout; reconnection logic |
-| [#29](https://github.com/nmohamaya/companion_software_stack/issues/29) | Geofencing (polygon + altitude ceiling) | P1 | Config-defined polygon + altitude ceiling; auto-RTL on breach |
+| ~~[#27](https://github.com/nmohamaya/companion_software_stack/issues/27)~~ | ~~Battery-critical auto-RTL + temp failsafe~~ | ~~P0~~ | ✅ Done (Epic #110 Phase 3, PR #119) — 3-tier battery escalation (WARN/RTL/LAND) |
+| ~~[#28](https://github.com/nmohamaya/companion_software_stack/issues/28)~~ | ~~FC heartbeat timeout + link-loss contingency~~ | ~~P0~~ | ✅ Done (Epic #110 Phase 3, PR #119) — LOITER→RTL contingency with configurable timeout |
+| ~~[#29](https://github.com/nmohamaya/companion_software_stack/issues/29)~~ | ~~Geofencing (polygon + altitude ceiling)~~ | ~~P1~~ | ✅ Done (Epic #110 Phase 3, PR #119) — Ray-casting polygon + altitude bounds + warning margin |
 | [#30](https://github.com/nmohamaya/companion_software_stack/issues/30) | Pre-flight check script | P0 | Verify FC link, GPS fix, battery level, disk space, process health before ARM |
 | ~~[#31](https://github.com/nmohamaya/companion_software_stack/issues/31)~~ | ~~systemd service files + process supervisor~~ | ~~P1~~ | ✅ Done — superseded by #83 (PR #107) + Epic #88 (watchdog) |
 
@@ -357,7 +416,7 @@
 | [#45](https://github.com/nmohamaya/companion_software_stack/issues/45) | [Epic] Zenoh IPC Migration — From POSIX SHM to Zero-Copy Network-Transparent IPC | **Closed** ✅ |
 | [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening — CI, Error Handling, Code Quality | **Closed** ✅ |
 | [#88](https://github.com/nmohamaya/companion_software_stack/issues/88) | [Epic] Process & Thread Watchdog — Crash Recovery & Stuck-Thread Detection | **Closed** ✅ |
-| [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Mission Planner — Full Flight Pipeline | Open |
+| [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Core Autonomy & Safety — IPC, Perception, VIO, Planning | **Closed** ✅ |
 
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
@@ -393,9 +452,9 @@
 | # | Title | State |
 |---|-------|-------|
 | ~~[#26](https://github.com/nmohamaya/companion_software_stack/issues/26)~~ | ~~Hardware config + launch script~~ | **Closed** (PR #43) |
-| [#27](https://github.com/nmohamaya/companion_software_stack/issues/27) | Battery-critical auto-RTL + temperature failsafe | Open |
-| [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) | FC heartbeat timeout + link-loss contingency | Open |
-| [#29](https://github.com/nmohamaya/companion_software_stack/issues/29) | Geofencing (polygon + altitude ceiling) | Open |
+| ~~[#27](https://github.com/nmohamaya/companion_software_stack/issues/27)~~ | ~~Battery-critical auto-RTL + temperature failsafe~~ | **Closed** (Epic #110, PR #119) |
+| ~~[#28](https://github.com/nmohamaya/companion_software_stack/issues/28)~~ | ~~FC heartbeat timeout + link-loss contingency~~ | **Closed** (Epic #110, PR #119) |
+| ~~[#29](https://github.com/nmohamaya/companion_software_stack/issues/29)~~ | ~~Geofencing (polygon + altitude ceiling)~~ | **Closed** (Epic #110, PR #119) |
 | [#30](https://github.com/nmohamaya/companion_software_stack/issues/30) | Pre-flight check script | Open |
 | ~~[#31](https://github.com/nmohamaya/companion_software_stack/issues/31)~~ | ~~systemd service files + process supervisor~~ | **Closed** — superseded by #83 + Epic #88 |
 
@@ -422,7 +481,7 @@
 | # | Title | State |
 |---|-------|-------|
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | Open |
-| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Partial** ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61) PR #63) |
+| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Mostly complete** — FaultManager (#61 PR #63) + geofence/battery/FC-link (Epic #110 PR #119). Remaining: motor failure, SLAM divergence |
 | [#61](https://github.com/nmohamaya/companion_software_stack/issues/61) | FaultManager — graceful degradation | **Closed** (PR #63) |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
 
@@ -438,42 +497,53 @@
 | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Phase E — Network transport (drone↔GCS) | **Closed** (PR #56) |
 | [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Phase F — Liveliness tokens (process health) | **Closed** (PR #57) |
 
-### Integration Testing (#120)
+### Core Autonomy & Safety (Epic #110) — ✅ COMPLETE
 
-| # | Title | State |
-|---|-------|-------|
-| [#120](https://github.com/nmohamaya/companion_software_stack/issues/120) | Scenario-Driven Simulation Harness | Open |
+| # | Title | Phase | State |
+|---|-------|-------|-------|
+| [#111](https://github.com/nmohamaya/companion_software_stack/issues/111) | Transport-Agnostic IMessageBus | Phase 0 | **Closed** (PR #117) |
+| [#112](https://github.com/nmohamaya/companion_software_stack/issues/112) | Remove LiDAR/Radar | Phase 1A | **Closed** (PR #117) |
+| [#113](https://github.com/nmohamaya/companion_software_stack/issues/113) | ITracker + Hungarian | Phase 1B | **Closed** (PR #117) |
+| [#114](https://github.com/nmohamaya/companion_software_stack/issues/114) | Thermal Camera + UKF Fusion | Phase 1C | **Closed** (PR #117) |
+| [#115](https://github.com/nmohamaya/companion_software_stack/issues/115) | Stereo VIO Foundation | Phase 2A | **Closed** (PR #118) |
+| [#116](https://github.com/nmohamaya/companion_software_stack/issues/116) | Planning & Safety (A*, Geofence, FaultMgr) | Phase 3 | **Closed** (PR #119) |
+| [#120](https://github.com/nmohamaya/companion_software_stack/issues/120) | Integration Testing — Scenario Harness | Testing | **Closed** (PR #121) |
 
 ---
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | **Watchdog + systemd (Current)** |
-|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | **701** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | **31+** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | **21** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | **95+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **8** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | **7** |
-| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | **Yes** |
-| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | **9** |
-| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | **8** |
-| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
-| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | **26** |
-| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | **7** |
-| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | **Result<T,E>** |
-| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | **75.1%** |
-| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | **enforced** |
-| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **ThreadHeartbeat + ThreadWatchdog** |
-| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **systemd + ProcessManager** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | **Epic #110 (Current)** |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|
+| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **735** |
+| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **844** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | **42** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **21** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **9** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | **9** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | **11** |
+| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | **Result<T,E>** |
+| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | **75.1%** |
+| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | **enforced** |
+| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | **systemd + ProcessManager** |
+| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **A* 3D + potential field** |
+| Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
+| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (Tier 1 + Tier 2)** |
 
 ### Process Activity During Simulation
 
@@ -489,4 +559,4 @@
 
 ---
 
-*Last updated after Process & Thread Watchdog (Epic #88) + systemd (Issue #83) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 9-job CI pipeline, three-layer watchdog, systemd service units with BindsTo dependencies.*
+*Last updated after Epic #110 (Core Autonomy & Safety) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, A* planner, geofence, UKF fusion, 8 integration scenarios, fault injector CLI.*
