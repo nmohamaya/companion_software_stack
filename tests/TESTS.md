@@ -105,9 +105,11 @@ bash deploy/build.sh --test-filter watchdog
 | [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
 | [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
+| [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 41 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend |
+| [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **32 C++ + 2 shell** | **673 + 42** | |
+| **Total** | **37 C++ + 2 shell** | **737 + 42** | |
 
 ---
 
@@ -790,6 +792,67 @@ processes — tested via their simulated backends.
 
 ---
 
+## P3 — SLAM / VIO
+
+### test_feature_extractor.cpp — 11 tests
+
+**What it tests:** `IFeatureExtractor` interface and `SimulatedFeatureExtractor` implementation.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `FeatureExtractorTest` | 11 | Feature count, image bounds, unique IDs, deterministic replay, different-frame variation, zero-dim error path, not-triangulated initial state, diagnostics recording, factory create/throw, frame_id propagation |
+
+**Key files under test:** `slam/ifeature_extractor.h`
+
+### test_stereo_matcher.cpp — 14 tests
+
+**What it tests:** `IStereoMatcher` interface, `SimulatedStereoMatcher`, and `StereoCalibration` depth model.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `StereoMatcherTest` | 11 | Match production, match rate, depth range, empty features error, positive disparity, mean depth + stddev, diagnostics, calibration effect on depth, factory, feature ID references |
+| `StereoCalibrationTest` | 3 | `depth_from_disparity()` happy path, zero-disparity → negative-depth sentinel, negative-disparity → negative-depth sentinel |
+
+**Key files under test:** `slam/istereo_matcher.h`, `slam/vio_types.h`
+
+### test_imu_preintegrator.cpp — 12 tests
+
+**What it tests:** `ImuPreintegrator` — Forster et al. on-manifold pre-integration.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `ImuPreintegratorTest` | 12 | No/single sample errors, stationary IMU → zero velocity, constant accel → correct velocity, constant rotation → correct angle, PSD covariance, finite bias Jacobian, reset clears state, gap detection, gyro saturation warning, integration interval, sample count tracking |
+
+**Key files under test:** `slam/imu_preintegrator.h`, `imu_preintegrator.cpp`
+
+### test_vio_backend.cpp — 15 tests
+
+**What it tests:** `IVIOBackend` and `SimulatedVIOBackend` — full VIO pipeline and health state machine.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `VIOBackendTest` | 13 | Frame processing, INITIALIZING→NOMINAL health transition, valid pose, IMU consumption, zero-IMU fallback, frame_id propagation, feature/match counts, advancing trajectory, timing recorded, factory create/throw, invalid frame dimensions |
+| `VIOHealthTest` | 1 | Health enum name strings |
+| `VIOErrorTest` | 1 | `VIOError::to_string()` format |
+
+**Key files under test:** `slam/ivio_backend.h`, `slam/vio_types.h`
+
+---
+
+## Utility — Diagnostics
+
+### test_diagnostic.cpp — 12 tests
+
+**What it tests:** `FrameDiagnostics` pipeline-level error/metric collector and `ScopedDiagTimer`.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `DiagnosticTest` | 12 | Empty state, add_error/warning/fatal counts, add_metric value, add_timing entry, worst_severity ordering, merge combines entries, reset clears state, ScopedDiagTimer RAII elapsed, log_summary no-throw, severity strings |
+
+**Key files under test:** `util/diagnostic.h`
+
+---
+
 ## Integration Tests
 
 ### test_zenoh_e2e.sh — 42 checks
@@ -848,4 +911,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 657 unit tests (44+ suites across 32 files) + 42 E2E checks (2 shell scripts).*
+*Last updated: March 2026 — 737 unit tests (49+ suites across 37 files) + 42 E2E checks (2 shell scripts).*

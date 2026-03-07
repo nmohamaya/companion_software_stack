@@ -10,6 +10,7 @@
 #include "monitor/sys_info.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/process_graph.h"
 #include "util/restart_policy.h"
@@ -304,7 +305,25 @@ int main(int argc, char* argv[]) {
 
         // Collect health via IProcessMonitor strategy
         // (battery thresholds are applied inside the strategy)
-        auto health = monitor->collect();
+        drone::util::FrameDiagnostics diag(tick);
+        auto                          health = [&]() {
+            drone::util::ScopedDiagTimer timer(diag, "Collect");
+            return monitor->collect();
+        }();
+
+        // Flag slow collection cycles (>200ms is suspicious at 1Hz)
+        // The ScopedDiagTimer already recorded the timing; check it.
+        constexpr double kCollectWarnMs = 200.0;
+        for (const auto& entry : diag.entries()) {
+            if (entry.component == "Collect" && entry.value > kCollectWarnMs) {
+                diag.add_warning("Collect", "Slow health collection: " +
+                                                std::to_string(static_cast<int>(entry.value)) +
+                                                "ms");
+            }
+        }
+        if (diag.has_warnings() || diag.has_errors()) {
+            diag.log_summary("SystemMonitor");
+        }
 
         // ── Merge liveliness events into health struct ──────
         {

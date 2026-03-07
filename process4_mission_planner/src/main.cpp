@@ -13,6 +13,7 @@
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/correlation.h"
+#include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
@@ -202,9 +203,15 @@ int main(int argc, char* argv[]) {
                          std::chrono::seconds(10);  // allow immediate first ARM
 
     // ── Main planning loop (10 Hz) ──────────────────────────
+    // Pose staleness threshold (500ms = 5× planning period)
+    constexpr uint64_t kPoseStaleThresholdNs = 500'000'000ULL;
+    uint64_t           pose_stale_count      = 0;
+    uint64_t           loop_tick             = 0;
+
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
-        ScopedTimer timer("PlannerLoop", 120.0);
+        drone::util::FrameDiagnostics diag(loop_tick);
+        drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
 
         // Read inputs
         drone::ipc::ShmPose pose{};
@@ -229,6 +236,27 @@ int main(int argc, char* argv[]) {
         auto now_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                 std::chrono::steady_clock::now().time_since_epoch())
                                                 .count());
+
+        // ── Pose staleness check (SAFETY CRITICAL) ──────────
+        // If pose data is older than threshold, we may be flying
+        // with stale position — warn loudly.
+        if (pose.timestamp_ns > 0 && (now_ns - pose.timestamp_ns) > kPoseStaleThresholdNs) {
+            ++pose_stale_count;
+            double age_ms = static_cast<double>(now_ns - pose.timestamp_ns) / 1e6;
+            diag.add_warning("PoseInput",
+                             "Stale pose: " + std::to_string(static_cast<int>(age_ms)) +
+                                 "ms old (threshold: " +
+                                 std::to_string(kPoseStaleThresholdNs / 1'000'000) + "ms)");
+            if (pose_stale_count == 1 || pose_stale_count % 50 == 0) {
+                spdlog::warn("[Planner] STALE POSE detected "
+                             "(#{}, age={:.0f}ms) — position may be unreliable!",
+                             pose_stale_count, age_ms);
+            }
+        } else if (pose_stale_count > 0) {
+            spdlog::info("[Planner] Pose freshness restored after {} stale readings",
+                         pose_stale_count);
+            pose_stale_count = 0;
+        }
 
         auto fault = fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
 
@@ -385,9 +413,15 @@ int main(int argc, char* argv[]) {
                 const Waypoint* wp = fsm.current_waypoint();
                 if (wp) {
                     // Plan trajectory via IPathPlanner
-                    auto planned = path_planner->plan(pose, *wp);
+                    auto planned = [&]() {
+                        drone::util::ScopedDiagTimer t(diag, "PathPlan");
+                        return path_planner->plan(pose, *wp);
+                    }();
                     // Apply obstacle avoidance via IObstacleAvoider
-                    auto traj = avoider->avoid(planned, pose, objects);
+                    auto traj = [&]() {
+                        drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");
+                        return avoider->avoid(planned, pose, objects);
+                    }();
                     traj_pub->publish(traj);
 
                     // Check if waypoint reached
@@ -496,6 +530,12 @@ int main(int argc, char* argv[]) {
             health_publisher.publish_snapshot();
         }
 
+        // Log diagnostics if issues detected this tick
+        if (diag.has_errors() || diag.has_warnings()) {
+            diag.log_summary("MissionPlanner");
+        }
+
+        ++loop_tick;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }
 

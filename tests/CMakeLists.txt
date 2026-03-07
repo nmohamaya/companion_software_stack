@@ -183,3 +183,22 @@ if(OPENCV_FOUND)
     target_link_libraries(test_opencv_yolo_detector PRIVATE ${OpenCV_LIBS})
     target_compile_definitions(test_opencv_yolo_detector PRIVATE HAS_OPENCV=1)
 endif()
+
+# ── Diagnostic Collector tests ──────────────────────────────
+add_drone_test(test_diagnostic      test_diagnostic.cpp)
+
+# ── VIO Feature Extractor tests ─────────────────────────────
+add_drone_test(test_feature_extractor test_feature_extractor.cpp)
+
+# ── VIO Stereo Matcher tests ────────────────────────────────
+add_drone_test(test_stereo_matcher  test_stereo_matcher.cpp)
+
+# ── IMU Pre-integrator tests ────────────────────────────────
+add_drone_test(test_imu_preintegrator test_imu_preintegrator.cpp
+    ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
+)
+
+# ── VIO Backend tests ───────────────────────────────────────
+add_drone_test(test_vio_backend     test_vio_backend.cpp
+    ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
+)

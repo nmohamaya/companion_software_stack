@@ -9,6 +9,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
@@ -35,15 +36,27 @@ static void mission_cam_thread(drone::hal::ICamera&                             
 
     auto hb = drone::util::ScopedHeartbeat("mission_cam", true);
 
-    uint64_t  seq      = 0;
-    const int sleep_ms = fps > 0 ? 1000 / fps : 33;
+    uint64_t  seq             = 0;
+    uint64_t  drop_count      = 0;
+    uint64_t  null_data_count = 0;
+    const int sleep_ms        = fps > 0 ? 1000 / fps : 33;
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        ScopedTimer timer("MissionCam", 50.0);
+        drone::util::FrameDiagnostics diag(seq);
 
-        auto frame = camera.capture();
+        auto frame = [&]() {
+            drone::util::ScopedDiagTimer timer(diag, "Capture");
+            return camera.capture();
+        }();
+
         if (!frame.valid) {
+            ++drop_count;
+            diag.add_warning("Camera", "Invalid frame (drop #" + std::to_string(drop_count) + ")");
+            // Rate-limited logging
+            if (drop_count == 1 || drop_count % 100 == 0) {
+                diag.log_summary("MissionCam");
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
             continue;
         }
@@ -61,40 +74,88 @@ static void mission_cam_thread(drone::hal::ICamera&                             
                                     sizeof(shm_frame.pixel_data));
         if (frame.data) {
             std::memcpy(shm_frame.pixel_data, frame.data, copy_size);
+        } else {
+            ++null_data_count;
+            ++drop_count;
+            diag.add_error("Camera", "Frame marked valid but data is nullptr (null #" +
+                                         std::to_string(null_data_count) + ")");
+            if (null_data_count == 1 || null_data_count % 100 == 0) {
+                diag.log_summary("MissionCam");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            continue;
         }
 
+        diag.add_metric("Camera", "copy_bytes", static_cast<double>(copy_size));
         publisher.publish(shm_frame);
 
         ++seq;
-        if (seq % 300 == 0) {
-            spdlog::info("[MissionCam] Published frame #{}", seq);
+        if (diag.has_errors() || diag.has_warnings()) {
+            diag.log_summary("MissionCam");
+        } else if (seq % 300 == 0) {
+            spdlog::info("[MissionCam] Published frame #{} ({} drops, {} null-data)", seq,
+                         drop_count, null_data_count);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
-    spdlog::info("[MissionCam] Thread stopped after {} frames", seq);
+    spdlog::info("[MissionCam] Thread stopped — {} frames, {} drops, {} null-data", seq, drop_count,
+                 null_data_count);
 }
 
 // ── Stereo camera thread ────────────────────────────────────
 static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera& right_cam,
                               drone::ipc::IPublisher<drone::ipc::ShmStereoFrame>& publisher,
                               std::atomic<bool>& running, int fps) {
-    spdlog::info("[StereoCam] Thread started using {} @ {}Hz", left_cam.name(), fps);
+    spdlog::info("[StereoCam] Thread started using {} + {} @ {}Hz", left_cam.name(),
+                 right_cam.name(), fps);
 
     auto hb = drone::util::ScopedHeartbeat("stereo_cam", true);
 
-    uint64_t  seq      = 0;
-    const int sleep_ms = fps > 0 ? 1000 / fps : 33;
+    uint64_t  seq             = 0;
+    uint64_t  drop_count      = 0;
+    uint64_t  sync_warn_count = 0;
+    const int sleep_ms        = fps > 0 ? 1000 / fps : 33;
+
+    // Stereo sync threshold: if left/right timestamps differ by more than
+    // this, the pair may be temporally misaligned.
+    constexpr uint64_t kSyncThresholdNs = 5'000'000;  // 5 ms
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        auto left_frame  = left_cam.capture();
-        auto right_frame = right_cam.capture();
+        drone::util::FrameDiagnostics diag(seq);
+
+        auto left_frame = [&]() {
+            drone::util::ScopedDiagTimer timer(diag, "CaptureLeft");
+            return left_cam.capture();
+        }();
+        auto right_frame = [&]() {
+            drone::util::ScopedDiagTimer timer(diag, "CaptureRight");
+            return right_cam.capture();
+        }();
 
         // Ensure both frames are valid before publishing
         if (!left_frame.valid || !right_frame.valid) {
+            ++drop_count;
+            if (!left_frame.valid) diag.add_warning("CameraLeft", "Invalid frame");
+            if (!right_frame.valid) diag.add_warning("CameraRight", "Invalid frame");
+            if (drop_count == 1 || drop_count % 100 == 0) {
+                diag.log_summary("StereoCam");
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
             continue;
+        }
+
+        // Check stereo pair temporal synchronization
+        uint64_t ts_delta = (left_frame.timestamp_ns > right_frame.timestamp_ns)
+                                ? (left_frame.timestamp_ns - right_frame.timestamp_ns)
+                                : (right_frame.timestamp_ns - left_frame.timestamp_ns);
+        if (ts_delta > kSyncThresholdNs) {
+            ++sync_warn_count;
+            diag.add_warning("StereoSync",
+                             "L/R timestamp delta = " + std::to_string(ts_delta / 1'000'000.0) +
+                                 "ms (threshold " + std::to_string(kSyncThresholdNs / 1'000'000.0) +
+                                 "ms)");
         }
 
         drone::ipc::ShmStereoFrame shm_frame{};
@@ -109,23 +170,44 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
         size_t copy_size_right =
             std::min(static_cast<size_t>(right_frame.height) * right_frame.stride,
                      sizeof(shm_frame.right_data));
-        if (left_frame.data) {
-            std::memcpy(shm_frame.left_data, left_frame.data, copy_size_left);
+
+        // Treat null data pointers as a dropped pair — don't publish corrupted
+        // frames into SLAM.
+        const bool left_has_data  = (left_frame.data != nullptr);
+        const bool right_has_data = (right_frame.data != nullptr);
+        if (!left_has_data) diag.add_error("CameraLeft", "Valid frame but null data pointer");
+        if (!right_has_data) diag.add_error("CameraRight", "Valid frame but null data pointer");
+
+        if (!left_has_data || !right_has_data) {
+            ++drop_count;
+            if (diag.has_errors() || diag.has_warnings()) {
+                diag.log_summary("StereoCam");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            continue;
         }
-        if (right_frame.data) {
-            std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
-        }
+
+        std::memcpy(shm_frame.left_data, left_frame.data, copy_size_left);
+        std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
 
         publisher.publish(shm_frame);
 
         ++seq;
-        if (seq % 300 == 0) {
-            spdlog::info("[StereoCam] Published stereo pair #{}", seq);
+        if (diag.has_errors() || diag.has_warnings()) {
+            // Rate-limit: don't log every frame if sync warnings persist
+            if (seq <= 1 || seq % 100 == 0) {
+                diag.log_summary("StereoCam");
+            }
+        } else if (seq % 300 == 0) {
+            spdlog::info("[StereoCam] Published stereo pair #{} "
+                         "({} drops, {} sync warnings)",
+                         seq, drop_count, sync_warn_count);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
-    spdlog::info("[StereoCam] Thread stopped after {} frames", seq);
+    spdlog::info("[StereoCam] Thread stopped — {} pairs, {} drops, {} sync warnings", seq,
+                 drop_count, sync_warn_count);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -150,15 +232,20 @@ int main(int argc, char* argv[]) {
     const auto m_w         = cfg.get<uint32_t>("video_capture.mission_cam.width", 1920);
     const auto m_h         = cfg.get<uint32_t>("video_capture.mission_cam.height", 1080);
     const auto m_fps       = cfg.get<int>("video_capture.mission_cam.fps", 30);
-    mission_cam->open(m_w, m_h, m_fps);
+    if (!mission_cam->open(m_w, m_h, m_fps)) {
+        spdlog::error("Failed to open mission camera ({}x{} @ {}fps)", m_w, m_h, m_fps);
+        return 1;
+    }
 
     auto       stereo_left  = drone::hal::create_camera(cfg, "video_capture.stereo_cam");
     auto       stereo_right = drone::hal::create_camera(cfg, "video_capture.stereo_cam");
     const auto s_w          = cfg.get<uint32_t>("video_capture.stereo_cam.width", 640);
     const auto s_h          = cfg.get<uint32_t>("video_capture.stereo_cam.height", 480);
     const auto s_fps        = cfg.get<int>("video_capture.stereo_cam.fps", 30);
-    stereo_left->open(s_w, s_h, s_fps);
-    stereo_right->open(s_w, s_h, s_fps);
+    if (!stereo_left->open(s_w, s_h, s_fps) || !stereo_right->open(s_w, s_h, s_fps)) {
+        spdlog::error("Failed to open stereo cameras ({}x{} @ {}fps)", s_w, s_h, s_fps);
+        return 1;
+    }
 
     spdlog::info("Cameras: mission={}, stereo_l={}, stereo_r={}", mission_cam->name(),
                  stereo_left->name(), stereo_right->name());
