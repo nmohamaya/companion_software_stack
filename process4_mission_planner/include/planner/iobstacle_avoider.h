@@ -106,14 +106,4 @@ private:
     float repulsive_gain_;
 };
 
-/// Factory — creates the appropriate avoider based on config.
-inline std::unique_ptr<IObstacleAvoider> create_obstacle_avoider(
-    const std::string& backend = "potential_field", float influence_radius = 5.0f,
-    float repulsive_gain = 2.0f) {
-    if (backend == "potential_field") {
-        return std::make_unique<PotentialFieldAvoider>(influence_radius, repulsive_gain);
-    }
-    throw std::runtime_error("Unknown obstacle avoider: " + backend);
-}
-
 }  // namespace drone::planner

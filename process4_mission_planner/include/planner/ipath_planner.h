@@ -102,13 +102,4 @@ private:
     float smooth_vz_{0.0f};
 };
 
-/// Factory — creates the appropriate planner based on config.
-inline std::unique_ptr<IPathPlanner> create_path_planner(
-    const std::string& backend = "potential_field") {
-    if (backend == "potential_field") {
-        return std::make_unique<PotentialFieldPlanner>();
-    }
-    throw std::runtime_error("Unknown path planner: " + backend);
-}
-
 }  // namespace drone::planner

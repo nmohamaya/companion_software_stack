@@ -55,6 +55,15 @@ add_drone_test(test_mission_fsm     test_mission_fsm.cpp)
 # ── Fault Manager tests ─────────────────────────────────────
 add_drone_test(test_fault_manager   test_fault_manager.cpp)
 
+# ── Geofence tests ──────────────────────────────────────────
+add_drone_test(test_geofence        test_geofence.cpp)
+
+# ── A* Path Planner tests ───────────────────────────────────
+add_drone_test(test_astar_planner   test_astar_planner.cpp)
+
+# ── 3D Obstacle Avoider tests ───────────────────────────────
+add_drone_test(test_obstacle_avoider_3d test_obstacle_avoider_3d.cpp)
+
 # ── Fusion engine tests ──────────────────────────────────────
 add_drone_test(test_fusion_engine   test_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/fusion_engine.cpp
