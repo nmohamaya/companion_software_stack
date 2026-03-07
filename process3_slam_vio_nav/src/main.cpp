@@ -128,39 +128,66 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFra
 
     uint64_t frame_count     = 0;
     uint64_t error_count     = 0;
+    uint64_t no_frame_count  = 0;
     uint64_t last_drop_count = 0;
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+        drone::util::FrameDiagnostics diag(frame_count);
 
         // ── Receive stereo frame ────────────────────────────
         drone::ipc::ShmStereoFrame frame;
-        (void)stereo_sub.receive(frame);
+        bool                       got_stereo = stereo_sub.receive(frame);
+        if (!got_stereo) {
+            ++no_frame_count;
+            if (no_frame_count == 1 || no_frame_count % 300 == 0) {
+                spdlog::warn("[VIOPipeline] No stereo frame received "
+                             "(#{} consecutive)",
+                             no_frame_count);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
+            continue;
+        }
+        // Reset no-frame counter on successful receive
+        if (no_frame_count > 0) {
+            spdlog::info("[VIOPipeline] Stereo frames resumed after {} misses", no_frame_count);
+            no_frame_count = 0;
+        }
 
         // ── Drain IMU buffer ────────────────────────────────
         std::vector<ImuSample> imu_samples;
         imu_samples.reserve(64);
         imu_buffer.drain(imu_samples);
+        diag.add_metric("IMU", "n_samples", static_cast<double>(imu_samples.size()));
 
         // Check for IMU buffer overflows (samples were dropped)
         uint64_t drops = imu_buffer.drop_count();
         if (drops > last_drop_count) {
-            spdlog::warn("[VIOPipeline] IMU buffer overflow: {} samples dropped "
-                         "(total {} dropped)",
-                         drops - last_drop_count, drops);
+            diag.add_warning("IMU", "Buffer overflow: " + std::to_string(drops - last_drop_count) +
+                                        " samples dropped (total " + std::to_string(drops) + ")");
             last_drop_count = drops;
         }
 
         // ── Run VIO backend ─────────────────────────────────
-        auto result = backend.process_frame(frame, imu_samples);
+        auto result = [&]() {
+            drone::util::ScopedDiagTimer timer(diag, "VIOProcess");
+            return backend.process_frame(frame, imu_samples);
+        }();
 
         if (result.is_ok()) {
             auto& output = result.value();
             pose_buffer.write(output.pose);
             pose_buffer.mark_initialized();
 
+            diag.add_metric("VIO", "features", static_cast<double>(output.num_features));
+            diag.add_metric("VIO", "stereo_matches",
+                            static_cast<double>(output.num_stereo_matches));
+            diag.add_metric("VIO", "imu_used", static_cast<double>(output.imu_samples_used));
+
             ++frame_count;
-            if (frame_count % 300 == 0) {
+            if (diag.has_warnings()) {
+                diag.log_summary("VIOPipeline");
+            } else if (frame_count % 300 == 0) {
                 spdlog::info("[VIOPipeline] Frame {}: pos=({:.2f}, {:.2f}, {:.2f}) "
                              "health={} feat={} matches={} imu={}",
                              frame_count, output.pose.position.x(), output.pose.position.y(),
@@ -171,9 +198,10 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFra
         } else {
             ++error_count;
             auto& err = result.error();
-            spdlog::error("[VIOPipeline] Frame processing failed: {}", err.to_string());
+            diag.add_error("VIO", err.to_string());
+            diag.log_summary("VIOPipeline");
 
-            // Rate-limit error logging (don't spam if tracking is lost)
+            // Rate-limit repeated error logging
             if (error_count % 100 == 1) {
                 spdlog::error("[VIOPipeline] Total errors so far: {} "
                               "(last: {})",

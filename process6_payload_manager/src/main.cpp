@@ -9,6 +9,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/signal_handler.h"
@@ -41,7 +42,10 @@ int main(int argc, char* argv[]) {
 
     // ── Init gimbal via HAL factory ─────────────────────────
     auto gimbal = drone::hal::create_gimbal(cfg, "payload_manager.gimbal");
-    gimbal->init();
+    if (!gimbal->init()) {
+        spdlog::error("Failed to initialise gimbal ({})", gimbal->name());
+        return 1;
+    }
     spdlog::info("Gimbal: {}", gimbal->name());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
@@ -65,7 +69,10 @@ int main(int argc, char* argv[]) {
     }
 
     spdlog::info("Payload Manager READY");
-    uint64_t last_cmd_ts = 0;
+    uint64_t last_cmd_ts   = 0;
+    uint64_t cycle_count   = 0;
+    uint64_t capture_count = 0;
+    uint64_t cmd_count     = 0;
 
     const int   update_hz     = cfg.get<int>("payload_manager.update_rate_hz", 50);
     const int   loop_sleep_ms = std::max(1, update_hz > 0 ? 1000 / update_hz : 20);
@@ -83,19 +90,34 @@ int main(int argc, char* argv[]) {
     // ── Main loop (configurable control rate) ───────────────
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(payload_hb.handle());
+        drone::util::FrameDiagnostics diag(cycle_count);
+
         // Read commands
         drone::ipc::ShmPayloadCommand cmd{};
         if (cmd_sub->receive(cmd) && cmd.valid && cmd.timestamp_ns != last_cmd_ts) {
             last_cmd_ts = cmd.timestamp_ns;
+            ++cmd_count;
 
             gimbal->set_target(cmd.gimbal_pitch, cmd.gimbal_yaw);
+            diag.add_metric("Gimbal", "target_pitch", static_cast<double>(cmd.gimbal_pitch));
+            diag.add_metric("Gimbal", "target_yaw", static_cast<double>(cmd.gimbal_yaw));
 
             switch (cmd.action) {
-                case drone::ipc::PayloadAction::CAMERA_CAPTURE: gimbal->capture_image(); break;
+                case drone::ipc::PayloadAction::CAMERA_CAPTURE: {
+                    auto img_id = gimbal->capture_image();
+                    ++capture_count;
+                    diag.add_metric("Camera", "capture_id", static_cast<double>(img_id));
+                    spdlog::info("[Payload] Captured image #{} (id={})", capture_count, img_id);
+                    break;
+                }
                 case drone::ipc::PayloadAction::CAMERA_START_VIDEO:
                     gimbal->start_recording();
+                    spdlog::info("[Payload] Started video recording");
                     break;
-                case drone::ipc::PayloadAction::CAMERA_STOP_VIDEO: gimbal->stop_recording(); break;
+                case drone::ipc::PayloadAction::CAMERA_STOP_VIDEO:
+                    gimbal->stop_recording();
+                    spdlog::info("[Payload] Stopped video recording");
+                    break;
                 default: break;
             }
         }
@@ -121,6 +143,11 @@ int main(int argc, char* argv[]) {
             health_publisher.publish_snapshot();
         }
 
+        if (diag.has_errors() || diag.has_warnings()) {
+            diag.log_summary("PayloadManager");
+        }
+
+        ++cycle_count;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }
 

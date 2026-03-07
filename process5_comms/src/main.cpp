@@ -15,6 +15,7 @@
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/correlation.h"
+#include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/signal_handler.h"
@@ -69,8 +70,10 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
 
     auto hb = drone::util::ScopedHeartbeat("fc_tx", true);
 
-    uint64_t last_cmd_seq = 0;  // dedup FC commands by sequence_id
-    uint64_t last_traj_ts = 0;  // dedup trajectory commands by timestamp
+    uint64_t last_cmd_seq    = 0;  // dedup FC commands by sequence_id
+    uint64_t last_traj_ts    = 0;  // dedup trajectory commands by timestamp
+    uint64_t send_fail_count = 0;
+    uint64_t traj_send_fail  = 0;
 
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -80,37 +83,44 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
             fc_cmd.sequence_id > last_cmd_seq) {
             last_cmd_seq = fc_cmd.sequence_id;
             drone::util::ScopedCorrelation guard(fc_cmd.correlation_id);
+            bool                           cmd_ok = true;
 
             switch (fc_cmd.command) {
                 case drone::ipc::FCCommandType::ARM:
                     spdlog::info("[Comms] FC cmd: ARM corr={:#x}", fc_cmd.correlation_id);
-                    fc.send_arm(true);
+                    cmd_ok = fc.send_arm(true);
                     break;
                 case drone::ipc::FCCommandType::DISARM:
                     spdlog::info("[Comms] FC cmd: DISARM corr={:#x}", fc_cmd.correlation_id);
-                    fc.send_arm(false);
+                    cmd_ok = fc.send_arm(false);
                     break;
                 case drone::ipc::FCCommandType::TAKEOFF:
                     spdlog::info("[Comms] FC cmd: TAKEOFF to {:.1f}m corr={:#x}", fc_cmd.param1,
                                  fc_cmd.correlation_id);
-                    fc.send_takeoff(fc_cmd.param1);
+                    cmd_ok = fc.send_takeoff(fc_cmd.param1);
                     break;
                 case drone::ipc::FCCommandType::SET_MODE:
                     spdlog::info("[Comms] FC cmd: SET_MODE {} corr={:#x}",
                                  static_cast<int>(fc_cmd.param1), fc_cmd.correlation_id);
-                    fc.send_mode(static_cast<uint8_t>(fc_cmd.param1));
+                    cmd_ok = fc.send_mode(static_cast<uint8_t>(fc_cmd.param1));
                     break;
                 case drone::ipc::FCCommandType::RTL:
                     spdlog::info("[Comms] FC cmd: RTL corr={:#x}", fc_cmd.correlation_id);
-                    fc.send_mode(3);            // 3 = RTL
+                    cmd_ok       = fc.send_mode(3);  // 3 = RTL
                     last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
                 case drone::ipc::FCCommandType::LAND:
                     spdlog::info("[Comms] FC cmd: LAND corr={:#x}", fc_cmd.correlation_id);
-                    fc.send_mode(2);            // 2 = AUTO (Hold/Land)
+                    cmd_ok       = fc.send_mode(2);  // 2 = AUTO (Hold/Land)
                     last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
                 default: break;
+            }
+            if (!cmd_ok) {
+                ++send_fail_count;
+                spdlog::warn("[Comms] FC command send FAILED: cmd={} seq={} "
+                             "(total failures: {})",
+                             static_cast<int>(fc_cmd.command), fc_cmd.sequence_id, send_fail_count);
             }
         }
 
@@ -118,7 +128,15 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
         drone::ipc::ShmTrajectoryCmd cmd{};
         if (traj_sub.receive(cmd) && cmd.valid && cmd.timestamp_ns > last_traj_ts) {
             last_traj_ts = cmd.timestamp_ns;
-            fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z, cmd.target_yaw);
+            if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z,
+                                    cmd.target_yaw)) {
+                ++traj_send_fail;
+                if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
+                    spdlog::warn("[Comms] Trajectory send failed (#{}) — "
+                                 "FC link may be degraded",
+                                 traj_send_fail);
+                }
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -168,6 +186,8 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                                 
 
     auto hb = drone::util::ScopedHeartbeat("gcs_tx", false);
 
+    uint64_t telem_fail_count = 0;
+
     // Wait for subscribers to connect
     while (g_running.load(std::memory_order_relaxed)) {
         if (pose_sub.is_connected() && status_sub.is_connected() && fc_sub.is_connected()) break;
@@ -184,10 +204,17 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                                 
         status_sub.receive(mission);
         fc_sub.receive(fc);
 
-        gcs.send_telemetry(static_cast<float>(pose.translation[0]),
-                           static_cast<float>(pose.translation[1]),
-                           static_cast<float>(pose.translation[2]), fc.battery_remaining,
-                           static_cast<uint8_t>(mission.state));
+        if (!gcs.send_telemetry(static_cast<float>(pose.translation[0]),
+                                static_cast<float>(pose.translation[1]),
+                                static_cast<float>(pose.translation[2]), fc.battery_remaining,
+                                static_cast<uint8_t>(mission.state))) {
+            ++telem_fail_count;
+            if (telem_fail_count == 1 || telem_fail_count % 100 == 0) {
+                spdlog::warn("[Comms] GCS telemetry send failed (#{}) — "
+                             "GCS link may be down",
+                             telem_fail_count);
+            }
+        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -211,17 +238,26 @@ int main(int argc, char* argv[]) {
     // ── Create links via HAL factory ────────────────────────
     auto fc_link    = drone::hal::create_fc_link(cfg, "comms.mavlink");
     auto fc_backend = cfg.get<std::string>("comms.mavlink.backend", "simulated");
+    bool fc_open_ok = false;
     if (fc_backend == "mavlink") {
         // MavlinkFCLink: "port" = connection URI, "baud" = timeout_ms
-        fc_link->open(cfg.get<std::string>("comms.mavlink.uri", "udp://:14540"),
-                      cfg.get<int>("comms.mavlink.timeout_ms", 8000));
+        fc_open_ok = fc_link->open(cfg.get<std::string>("comms.mavlink.uri", "udp://:14540"),
+                                   cfg.get<int>("comms.mavlink.timeout_ms", 8000));
     } else {
-        fc_link->open(cfg.get<std::string>("comms.mavlink.serial_port", "/dev/ttyTHS1"),
-                      cfg.get<int>("comms.mavlink.baud_rate", 921600));
+        fc_open_ok =
+            fc_link->open(cfg.get<std::string>("comms.mavlink.serial_port", "/dev/ttyTHS1"),
+                          cfg.get<int>("comms.mavlink.baud_rate", 921600));
+    }
+    if (!fc_open_ok) {
+        spdlog::error("Failed to open FC link (backend: {})", fc_backend);
+        return 1;
     }
 
     auto gcs_link = drone::hal::create_gcs_link(cfg, "comms.gcs");
-    gcs_link->open("0.0.0.0", cfg.get<int>("comms.gcs.udp_port", 14550));
+    if (!gcs_link->open("0.0.0.0", cfg.get<int>("comms.gcs.udp_port", 14550))) {
+        spdlog::error("Failed to open GCS link");
+        return 1;
+    }
 
     spdlog::info("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
