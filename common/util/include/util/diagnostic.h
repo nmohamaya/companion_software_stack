@@ -54,7 +54,8 @@ struct DiagnosticEntry {
     std::string  message;
     double       value;  // optional numeric metric (NaN = not set)
 
-    DiagnosticEntry(std::string comp, DiagSeverity sev, std::string msg, double val = 0.0)
+    DiagnosticEntry(std::string comp, DiagSeverity sev, std::string msg,
+                    double val = std::numeric_limits<double>::quiet_NaN())
         : component(std::move(comp)), severity(sev), message(std::move(msg)), value(val) {}
 };
 
@@ -129,18 +130,16 @@ public:
 
         // Log each entry at appropriate level
         for (const auto& e : entries_) {
-            auto entry_level = spdlog::level::debug;
+            auto entry_level = spdlog::level::info;
             switch (e.severity) {
                 case DiagSeverity::WARN: entry_level = spdlog::level::warn; break;
                 case DiagSeverity::ERROR: entry_level = spdlog::level::err; break;
                 case DiagSeverity::FATAL: entry_level = spdlog::level::critical; break;
-                default: break;
+                default: break;  // DiagSeverity::INFO stays at info level
             }
 
-            if (entry_level >= spdlog::level::warn) {
-                spdlog::log(entry_level, "[{}] Frame {} [{}] {}: {}", pipeline_name, frame_id_,
-                            diag_severity_str(e.severity), e.component, e.message);
-            }
+            spdlog::log(entry_level, "[{}] Frame {} [{}] {}: {}", pipeline_name, frame_id_,
+                        diag_severity_str(e.severity), e.component, e.message);
         }
     }
 

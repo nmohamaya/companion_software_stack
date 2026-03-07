@@ -18,6 +18,7 @@
 #include "util/diagnostic.h"
 
 #include <cmath>
+#include <random>
 #include <set>
 #include <string>
 

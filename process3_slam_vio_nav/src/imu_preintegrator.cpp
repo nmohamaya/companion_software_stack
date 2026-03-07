@@ -80,9 +80,9 @@ VIOResult<PreintegratedMeasurement> ImuPreintegrator::integrate(
     if (expected_dt <= 0) expected_dt = 1.0 / 400.0;  // fallback 400 Hz
 
     // ── Noise covariance per sample ─────────────────────────
-    // Q_d = diag(σ_g², σ_g², σ_g², σ_a², σ_a², σ_a²) * dt
+    // Q_d is the per-sample discrete noise covariance
+    // (entries computed below using the σ²/dt convention).
     Eigen::Matrix<double, 6, 6> Q_d = Eigen::Matrix<double, 6, 6>::Zero();
-    // Filled per-sample below (depends on dt)
 
     // ── Main integration loop ───────────────────────────────
     for (size_t i = 1; i < samples_.size(); ++i) {
@@ -106,17 +106,20 @@ VIOResult<PreintegratedMeasurement> ImuPreintegrator::integrate(
         // Check for sensor saturation on RAW readings (before averaging).
         // Saturation is a hardware property: if any single reading exceeds
         // the sensor's physical range the value is clipped and unreliable.
-        if (samples_[i].gyro.norm() > kMaxGyro_rad_s) {
-            ++saturation_count;
-            diag.add_warning("ImuPreintegrator",
-                             "Gyro saturation at sample " + std::to_string(i) +
-                                 ": |ω|=" + std::to_string(samples_[i].gyro.norm()) + " rad/s");
-        }
-        if (samples_[i].accel.norm() > kMaxAccel_m_s2) {
-            ++saturation_count;
-            diag.add_warning("ImuPreintegrator",
-                             "Accel saturation at sample " + std::to_string(i) +
-                                 ": |a|=" + std::to_string(samples_[i].accel.norm()) + " m/s²");
+        // Check BOTH endpoints of the midpoint interval.
+        for (size_t k : {i - 1, i}) {
+            if (samples_[k].gyro.norm() > kMaxGyro_rad_s) {
+                ++saturation_count;
+                diag.add_warning("ImuPreintegrator",
+                                 "Gyro saturation at sample " + std::to_string(k) +
+                                     ": |ω|=" + std::to_string(samples_[k].gyro.norm()) + " rad/s");
+            }
+            if (samples_[k].accel.norm() > kMaxAccel_m_s2) {
+                ++saturation_count;
+                diag.add_warning("ImuPreintegrator",
+                                 "Accel saturation at sample " + std::to_string(k) +
+                                     ": |a|=" + std::to_string(samples_[k].accel.norm()) + " m/s²");
+            }
         }
 
         // Use midpoint values for better accuracy (trapezoidal integration)

@@ -321,6 +321,9 @@ int main(int argc, char* argv[]) {
                                                 "ms");
             }
         }
+        if (diag.has_warnings() || diag.has_errors()) {
+            diag.log_summary("SystemMonitor");
+        }
 
         // ── Merge liveliness events into health struct ──────
         {

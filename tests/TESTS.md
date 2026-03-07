@@ -811,7 +811,7 @@ processes — tested via their simulated backends.
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `StereoMatcherTest` | 11 | Match production, match rate, depth range, empty features error, positive disparity, mean depth + stddev, diagnostics, calibration effect on depth, factory, feature ID references |
-| `StereoCalibrationTest` | 3 | `depth_from_disparity()` happy path, zero-disparity → infinity, negative-disparity → infinity |
+| `StereoCalibrationTest` | 3 | `depth_from_disparity()` happy path, zero-disparity → negative-depth sentinel, negative-disparity → negative-depth sentinel |
 
 **Key files under test:** `slam/istereo_matcher.h`, `slam/vio_types.h`
 

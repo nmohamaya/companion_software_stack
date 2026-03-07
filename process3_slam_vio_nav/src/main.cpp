@@ -33,6 +33,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -71,14 +72,14 @@ private:
 // Bounded capacity prevents unbounded growth if VIO stalls.
 class ImuRingBuffer {
 public:
-    explicit ImuRingBuffer(size_t capacity = 2048) { buffer_.reserve(capacity); }
+    explicit ImuRingBuffer(size_t capacity = 2048) : capacity_(capacity) {}
 
     /// Push a sample (IMU reader thread).
     void push(const ImuSample& s) {
         std::lock_guard<std::mutex> lk(mtx_);
-        if (buffer_.size() >= buffer_.capacity()) {
+        if (buffer_.size() >= capacity_) {
             ++drop_count_;
-            buffer_.erase(buffer_.begin());  // drop oldest
+            buffer_.pop_front();  // O(1) with std::deque
         }
         buffer_.push_back(s);
         ++total_pushed_;
@@ -107,10 +108,11 @@ public:
     }
 
 private:
-    mutable std::mutex     mtx_;
-    std::vector<ImuSample> buffer_;
-    uint64_t               total_pushed_ = 0;
-    uint64_t               drop_count_   = 0;
+    mutable std::mutex    mtx_;
+    std::deque<ImuSample> buffer_;
+    size_t                capacity_;
+    uint64_t              total_pushed_ = 0;
+    uint64_t              drop_count_   = 0;
 };
 
 static std::atomic<bool> g_running{true};
@@ -130,10 +132,12 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFra
     uint64_t error_count     = 0;
     uint64_t no_frame_count  = 0;
     uint64_t last_drop_count = 0;
+    uint64_t vio_loop_tick   = 0;
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        drone::util::FrameDiagnostics diag(frame_count);
+        drone::util::FrameDiagnostics diag(vio_loop_tick);
+        ++vio_loop_tick;
 
         // ── Receive stereo frame ────────────────────────────
         drone::ipc::ShmStereoFrame frame;

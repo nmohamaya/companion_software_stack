@@ -76,8 +76,14 @@ static void mission_cam_thread(drone::hal::ICamera&                             
             std::memcpy(shm_frame.pixel_data, frame.data, copy_size);
         } else {
             ++null_data_count;
+            ++drop_count;
             diag.add_error("Camera", "Frame marked valid but data is nullptr (null #" +
                                          std::to_string(null_data_count) + ")");
+            if (null_data_count == 1 || null_data_count % 100 == 0) {
+                diag.log_summary("MissionCam");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            continue;
         }
 
         diag.add_metric("Camera", "copy_bytes", static_cast<double>(copy_size));
@@ -164,22 +170,34 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
         size_t copy_size_right =
             std::min(static_cast<size_t>(right_frame.height) * right_frame.stride,
                      sizeof(shm_frame.right_data));
-        if (left_frame.data) {
-            std::memcpy(shm_frame.left_data, left_frame.data, copy_size_left);
-        } else {
-            diag.add_error("CameraLeft", "Valid frame but null data pointer");
+
+        // Treat null data pointers as a dropped pair — don't publish corrupted
+        // frames into SLAM.
+        const bool left_has_data  = (left_frame.data != nullptr);
+        const bool right_has_data = (right_frame.data != nullptr);
+        if (!left_has_data) diag.add_error("CameraLeft", "Valid frame but null data pointer");
+        if (!right_has_data) diag.add_error("CameraRight", "Valid frame but null data pointer");
+
+        if (!left_has_data || !right_has_data) {
+            ++drop_count;
+            if (diag.has_errors() || diag.has_warnings()) {
+                diag.log_summary("StereoCam");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            continue;
         }
-        if (right_frame.data) {
-            std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
-        } else {
-            diag.add_error("CameraRight", "Valid frame but null data pointer");
-        }
+
+        std::memcpy(shm_frame.left_data, left_frame.data, copy_size_left);
+        std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
 
         publisher.publish(shm_frame);
 
         ++seq;
         if (diag.has_errors() || diag.has_warnings()) {
-            diag.log_summary("StereoCam");
+            // Rate-limit: don't log every frame if sync warnings persist
+            if (seq <= 1 || seq % 100 == 0) {
+                diag.log_summary("StereoCam");
+            }
         } else if (seq % 300 == 0) {
             spdlog::info("[StereoCam] Published stereo pair #{} "
                          "({} drops, {} sync warnings)",

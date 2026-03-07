@@ -18,6 +18,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 
 namespace drone::slam {

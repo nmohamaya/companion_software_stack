@@ -26,6 +26,8 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 

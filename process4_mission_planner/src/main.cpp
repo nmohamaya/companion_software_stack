@@ -211,6 +211,7 @@ int main(int argc, char* argv[]) {
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
         drone::util::FrameDiagnostics diag(loop_tick);
+        drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
 
         // Read inputs
         drone::ipc::ShmPose pose{};

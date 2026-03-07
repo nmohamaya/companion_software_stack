@@ -1,17 +1,7 @@
 // tests/test_feature_extractor.cpp
-// Unit tests for IFeatureExtractor implementations.
-//
-// Tests:
-//   1. SimulatedFeatureExtractor produces expected feature count
-//   2. Features have valid pixel coordinates within image bounds
-//   3. Feature IDs are unique within a frame
-//   4. Deterministic output for same frame sequence number
-//   5. Different features for different frame sequences
-//   6. Zero-dimension frame returns error
-//   7. Factory creates correct backend
-//   8. Factory throws on unknown backend
-//   9. Diagnostics are recorded on success
-//  10. Diagnostics record error on invalid input
+// Unit tests for SimulatedFeatureExtractor: feature count, pixel
+// coordinate bounds, uniqueness, determinism, error handling,
+// factory correctness, and diagnostics recording.
 
 #include "slam/ifeature_extractor.h"
 #include "util/diagnostic.h"

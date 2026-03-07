@@ -17,6 +17,7 @@
 #include <cmath>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <string>
 
 namespace drone::slam {
@@ -83,11 +84,15 @@ public:
 
         // Seed RNG from frame sequence for deterministic-per-frame behaviour
         // but different features every frame (simulates camera motion)
-        std::mt19937                          rng(static_cast<uint32_t>(seq * 7919 + 42));
-        std::uniform_real_distribution<float> u_x(margin_,
-                                                  static_cast<float>(image_width_ - margin_));
-        std::uniform_real_distribution<float> u_y(margin_,
-                                                  static_cast<float>(image_height_ - margin_));
+        std::mt19937 rng(static_cast<uint32_t>(seq * 7919 + 42));
+        // Use actual frame dimensions (not constructor defaults) so
+        // features stay within the real image no matter the resolution.
+        const int                             fw = static_cast<int>(frame.width);
+        const int                             fh = static_cast<int>(frame.height);
+        std::uniform_real_distribution<float> u_x(
+            margin_, static_cast<float>(fw - static_cast<int>(margin_)));
+        std::uniform_real_distribution<float> u_y(
+            margin_, static_cast<float>(fh - static_cast<int>(margin_)));
         std::uniform_real_distribution<float> u_response(20.0f, 100.0f);
 
         for (int i = 0; i < num_features_; ++i) {

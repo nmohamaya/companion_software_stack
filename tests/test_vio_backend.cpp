@@ -1,19 +1,7 @@
 // tests/test_vio_backend.cpp
-// Unit tests for IVIOBackend implementations.
-//
-// Tests:
-//   1.  SimulatedVIOBackend processes frames successfully
-//   2.  Health transitions: INITIALIZING → NOMINAL
-//   3.  Pose output has valid position and orientation
-//   4.  IMU samples are consumed and pre-integrated
-//   5.  Zero IMU samples still produces a pose (visual-only fallback)
-//   6.  Diagnostics accumulate across pipeline stages
-//   7.  Frame ID is propagated to output
-//   8.  Feature count is non-zero on success
-//   9.  Factory creates simulated backend
-//  10.  Factory throws on unknown backend
-//  11.  Multiple frames produce advancing trajectory
-//  12.  Invalid stereo frame dimensions degrade health
+// Unit tests for SimulatedVIOBackend: frame processing, health state
+// transitions, pose output, IMU consumption, diagnostics, factory,
+// and multi-frame trajectory behaviour.
 
 #include "slam/ivio_backend.h"
 #include "slam/vio_types.h"

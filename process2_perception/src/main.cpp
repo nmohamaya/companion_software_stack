@@ -50,7 +50,7 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>&
         bool                      got_frame = video_sub.receive(frame);
 
         if (got_frame) {
-            drone::util::FrameDiagnostics diag(frame_count);
+            drone::util::FrameDiagnostics diag(frame.sequence_number);
 
             auto dets = [&]() {
                 drone::util::ScopedDiagTimer timer(diag, "Detect");
@@ -100,7 +100,7 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto det_opt = input_queue.try_pop();
         if (det_opt) {
-            drone::util::FrameDiagnostics diag(cycle_count);
+            drone::util::FrameDiagnostics diag(det_opt->frame_sequence);
 
             auto tracked = [&]() {
                 drone::util::ScopedDiagTimer timer(diag, "Track");

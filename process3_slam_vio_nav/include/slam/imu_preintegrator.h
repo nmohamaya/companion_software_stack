@@ -33,8 +33,9 @@ namespace drone::slam {
 ///   4. Call reset() to begin a new interval
 ///
 /// Thread safety: NOT thread-safe. Call from the VIO pipeline thread only.
-/// The IMU reader thread pushes samples into a lock-free queue; the VIO
-/// thread drains that queue and calls add_sample() sequentially.
+/// The IMU reader thread pushes samples into a shared buffer (with appropriate
+/// synchronization); the VIO thread drains that buffer and calls add_sample()
+/// sequentially.
 class ImuPreintegrator {
 public:
     /// @param params  IMU noise parameters (from datasheet / calibration).
