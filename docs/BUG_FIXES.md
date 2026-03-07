@@ -530,3 +530,17 @@ Same treatment applied to `Detection2D` (8 fields) and `FusedObject` (11 fields)
 **Impact:** Eliminates a class of UB that was latent in production code. Any future code constructing these structs without full initialization is now safe by default. Existing explicit initializations (e.g., in `kalman_tracker.cpp`) remain correct and are now simply redundant with the defaults.
 
 **Found by:** New `FusionEngineTest.MultipleTrackedObjectsProduceMultipleFused` test triggering `-Werror=maybe-uninitialized` during Phase 1A (LiDAR/radar removal). Root-cause analysis traced the issue to the struct definitions rather than the test code.
+
+---
+
+## Fix #16 — IMU Saturation Check Applied to Midpoint Average Instead of Raw Readings
+
+**File:** `process3_slam_vio_nav/src/imu_preintegrator.cpp`
+**Severity:** Medium (silent data quality masking)
+**Bug:** The `ImuPreintegrator::integrate()` loop checked gyro/accel norms for sensor saturation *after* computing midpoint averages of consecutive samples. This is incorrect because saturation is a hardware property of individual readings — if a single sample reports 40 rad/s on a gyro rated for 34.9 rad/s, that reading is clipped by the sensor regardless of what the adjacent sample was. The midpoint average (e.g., `(0 + 40)/2 = 20`) could hide genuine saturation events, letting unreliable data silently corrupt the pre-integrated measurement.
+
+**Fix:** Moved saturation checks to operate on `samples_[i].gyro` and `samples_[i].accel` (raw readings) before computing midpoint values. The midpoint averaging now only feeds the Forster integration, not the data quality assessment.
+
+**Impact:** Saturation warnings now fire correctly when any individual IMU reading exceeds the sensor's physical range, enabling proper diagnostics during simulation testing.
+
+**Found by:** `ImuPreintegratorTest.DetectsGyroSaturation` — test correctly set one sample to 0 rad/s and the next to 40 rad/s, expecting a saturation warning. The test exposed that the implementation's averaging was masking the event.

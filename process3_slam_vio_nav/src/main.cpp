@@ -1,16 +1,28 @@
 // process3_slam_vio_nav/src/main.cpp
 // Process 3 — SLAM/VIO/Nav: visual-inertial odometry + pose estimation.
-// Simulated: generates fake VIO pose estimates from stereo camera input.
-// Uses MessageBusFactory — backend selected at runtime via config.
+//
+// Architecture (Phase 2A):
+//   IMU reader thread  →  ImuRingBuffer  →  VIO pipeline thread
+//   Stereo subscriber  →─────────────────→  VIO pipeline thread
+//   VIO pipeline thread →  PoseDoubleBuffer  →  Pose publisher thread
+//
+// The VIO pipeline (IVIOBackend) processes stereo frames fused with
+// buffered IMU data.  Every component returns VIOResult<T> with
+// structured diagnostics so that simulation failures are immediately
+// actionable.
+//
+// Uses MessageBusFactory — IPC backend selected at runtime via config.
 
 #include "hal/hal_factory.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
-#include "slam/ivisual_frontend.h"
+#include "slam/ivio_backend.h"
 #include "slam/types.h"
+#include "slam/vio_types.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/signal_handler.h"
@@ -22,8 +34,8 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
-#include <random>
 #include <thread>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -54,58 +66,164 @@ private:
     std::atomic<bool> initialized_{false};
 };
 
+// ── Thread-safe IMU ring buffer ─────────────────────────────
+// The IMU reader thread pushes samples; the VIO thread drains them.
+// Bounded capacity prevents unbounded growth if VIO stalls.
+class ImuRingBuffer {
+public:
+    explicit ImuRingBuffer(size_t capacity = 2048) { buffer_.reserve(capacity); }
+
+    /// Push a sample (IMU reader thread).
+    void push(const ImuSample& s) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (buffer_.size() >= buffer_.capacity()) {
+            ++drop_count_;
+            buffer_.erase(buffer_.begin());  // drop oldest
+        }
+        buffer_.push_back(s);
+        ++total_pushed_;
+    }
+
+    /// Drain all buffered samples into `out` (VIO thread).
+    /// Returns the number of samples drained.
+    size_t drain(std::vector<ImuSample>& out) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        size_t                      n = buffer_.size();
+        out.insert(out.end(), buffer_.begin(), buffer_.end());
+        buffer_.clear();
+        return n;
+    }
+
+    /// Total samples pushed since construction.
+    uint64_t total_pushed() const {
+        std::lock_guard<std::mutex> lk(mtx_);
+        return total_pushed_;
+    }
+
+    /// Total samples dropped due to buffer overflow.
+    uint64_t drop_count() const {
+        std::lock_guard<std::mutex> lk(mtx_);
+        return drop_count_;
+    }
+
+private:
+    mutable std::mutex     mtx_;
+    std::vector<ImuSample> buffer_;
+    uint64_t               total_pushed_ = 0;
+    uint64_t               drop_count_   = 0;
+};
+
 static std::atomic<bool> g_running{true};
 
-// ── Visual Frontend thread (uses IVisualFrontend strategy) ──
-// In real system: ORB/KLT feature detection + tracking on stereo frames
-static void visual_frontend_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
-                                   drone::slam::IVisualFrontend&                        frontend,
-                                   PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running) {
-    spdlog::info("[VisualFrontend] Thread started using {}", frontend.name());
+// ── VIO pipeline thread ─────────────────────────────────────
+// Replaces the old visual_frontend_thread.  Now runs the full
+// VIO backend: feature extraction → stereo matching → IMU
+// pre-integration → pose output.
+static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
+                                drone::slam::IVIOBackend& backend, ImuRingBuffer& imu_buffer,
+                                PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running) {
+    spdlog::info("[VIOPipeline] Thread started using {}", backend.name());
 
-    auto hb = drone::util::ScopedHeartbeat("visual_frontend", true);
+    auto hb = drone::util::ScopedHeartbeat("vio_pipeline", true);
 
-    uint64_t frame_count = 0;
+    uint64_t frame_count     = 0;
+    uint64_t error_count     = 0;
+    uint64_t last_drop_count = 0;
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        // ── Receive stereo frame ────────────────────────────
         drone::ipc::ShmStereoFrame frame;
         (void)stereo_sub.receive(frame);
 
-        auto p = frontend.process_frame(frame);
+        // ── Drain IMU buffer ────────────────────────────────
+        std::vector<ImuSample> imu_samples;
+        imu_samples.reserve(64);
+        imu_buffer.drain(imu_samples);
 
-        pose_buffer.write(p);
-        pose_buffer.mark_initialized();
+        // Check for IMU buffer overflows (samples were dropped)
+        uint64_t drops = imu_buffer.drop_count();
+        if (drops > last_drop_count) {
+            spdlog::warn("[VIOPipeline] IMU buffer overflow: {} samples dropped "
+                         "(total {} dropped)",
+                         drops - last_drop_count, drops);
+            last_drop_count = drops;
+        }
 
-        ++frame_count;
-        if (frame_count % 300 == 0) {
-            spdlog::info("[VisualFrontend] Frame {}: pos=({:.2f}, {:.2f}, {:.2f})", frame_count,
-                         p.position.x(), p.position.y(), p.position.z());
+        // ── Run VIO backend ─────────────────────────────────
+        auto result = backend.process_frame(frame, imu_samples);
+
+        if (result.is_ok()) {
+            auto& output = result.value();
+            pose_buffer.write(output.pose);
+            pose_buffer.mark_initialized();
+
+            ++frame_count;
+            if (frame_count % 300 == 0) {
+                spdlog::info("[VIOPipeline] Frame {}: pos=({:.2f}, {:.2f}, {:.2f}) "
+                             "health={} feat={} matches={} imu={}",
+                             frame_count, output.pose.position.x(), output.pose.position.y(),
+                             output.pose.position.z(), vio_health_name(output.health),
+                             output.num_features, output.num_stereo_matches,
+                             output.imu_samples_used);
+            }
+        } else {
+            ++error_count;
+            auto& err = result.error();
+            spdlog::error("[VIOPipeline] Frame processing failed: {}", err.to_string());
+
+            // Rate-limit error logging (don't spam if tracking is lost)
+            if (error_count % 100 == 1) {
+                spdlog::error("[VIOPipeline] Total errors so far: {} "
+                              "(last: {})",
+                              error_count, err.to_string());
+            }
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
-    spdlog::info("[VisualFrontend] Thread stopped after {} frames", frame_count);
+    spdlog::info("[VIOPipeline] Thread stopped — {} frames processed, {} errors", frame_count,
+                 error_count);
 }
 
 // ── IMU reader thread (uses HAL IIMUSource) ─────────────────
-static void imu_reader_thread(drone::hal::IIMUSource& imu, std::atomic<bool>& running,
-                              int imu_rate_hz) {
+// Now pushes samples into the shared ImuRingBuffer instead of discarding.
+static void imu_reader_thread(drone::hal::IIMUSource& imu, ImuRingBuffer& imu_buffer,
+                              std::atomic<bool>& running, int imu_rate_hz) {
     spdlog::info("[IMUReader] Thread started using {} at {} Hz", imu.name(), imu_rate_hz);
     const int sleep_us = imu_rate_hz > 0 ? 1000000 / imu_rate_hz : 2500;
 
     auto hb = drone::util::ScopedHeartbeat("imu_reader", true);
 
-    uint64_t count = 0;
+    uint64_t count         = 0;
+    uint64_t invalid_count = 0;
+
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        auto sample = imu.read();
-        (void)sample;  // In real system: feed to VIO pre-integrator
-        ++count;
+        auto reading = imu.read();
+
+        if (reading.valid) {
+            ImuSample sample;
+            sample.timestamp = reading.timestamp;
+            sample.accel     = reading.accel;
+            sample.gyro      = reading.gyro;
+            imu_buffer.push(sample);
+            ++count;
+        } else {
+            ++invalid_count;
+            // Rate-limited warning for invalid readings
+            if (invalid_count == 1 || invalid_count % 1000 == 0) {
+                spdlog::warn("[IMUReader] Invalid IMU reading #{} — "
+                             "sensor may not be ready",
+                             invalid_count);
+            }
+        }
+
         std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
     }
-    spdlog::info("[IMUReader] Thread stopped after {} samples", count);
+    spdlog::info("[IMUReader] Thread stopped — {} valid samples, {} invalid", count, invalid_count);
 }
 
 // ── Pose publisher thread ───────────────────────────────────
@@ -191,27 +309,48 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Thread-safe double-buffer for pose exchange (replaces raw pointer pattern)
+    // Thread-safe double-buffer for pose exchange
     PoseDoubleBuffer pose_buffer;
+
+    // Thread-safe IMU ring buffer (IMU reader → VIO pipeline)
+    ImuRingBuffer imu_ring_buffer(2048);
 
     const int imu_rate = cfg.get<int>("slam.imu_rate_hz", 400);
     const int vio_rate = cfg.get<int>("slam.vio_rate_hz", 100);
 
     // Create IMU via HAL factory
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
-    imu->init(imu_rate);
+    if (!imu->init(imu_rate)) {
+        spdlog::error("Failed to initialise IMU source — check config");
+        return 1;
+    }
+    spdlog::info("IMU source: {} at {} Hz", imu->name(), imu_rate);
 
-    // Create visual frontend via strategy factory
-    auto frontend_backend  = cfg.get<std::string>("slam.visual_frontend.backend", "simulated");
-    auto frontend_gz_topic = cfg.get<std::string>("slam.visual_frontend.gz_topic",
-                                                  "/model/x500_companion_0/odometry");
-    auto frontend = drone::slam::create_visual_frontend(frontend_backend, frontend_gz_topic);
-    spdlog::info("Visual frontend: {}", frontend->name());
+    // Create VIO backend via factory
+    auto              vio_backend_name = cfg.get<std::string>("slam.vio.backend", "simulated");
+    StereoCalibration calib;
+    calib.fx       = cfg.get<double>("slam.stereo.fx", 350.0);
+    calib.fy       = cfg.get<double>("slam.stereo.fy", 350.0);
+    calib.cx       = cfg.get<double>("slam.stereo.cx", 320.0);
+    calib.cy       = cfg.get<double>("slam.stereo.cy", 240.0);
+    calib.baseline = cfg.get<double>("slam.stereo.baseline", 0.12);
+
+    ImuNoiseParams imu_params;
+    imu_params.gyro_noise_density  = cfg.get<double>("slam.imu.gyro_noise_density", 0.004);
+    imu_params.gyro_random_walk    = cfg.get<double>("slam.imu.gyro_random_walk", 2.2e-5);
+    imu_params.accel_noise_density = cfg.get<double>("slam.imu.accel_noise_density", 0.012);
+    imu_params.accel_random_walk   = cfg.get<double>("slam.imu.accel_random_walk", 8.0e-5);
+
+    auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params);
+    spdlog::info("VIO backend: {}", vio->name());
+    spdlog::info("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m", calib.fx,
+                 calib.fy, calib.cx, calib.cy, calib.baseline);
 
     // Launch threads
-    std::thread t_frontend(visual_frontend_thread, std::ref(*stereo_sub), std::ref(*frontend),
-                           std::ref(pose_buffer), std::ref(g_running));
-    std::thread t_imu(imu_reader_thread, std::ref(*imu), std::ref(g_running), imu_rate);
+    std::thread t_vio(vio_pipeline_thread, std::ref(*stereo_sub), std::ref(*vio),
+                      std::ref(imu_ring_buffer), std::ref(pose_buffer), std::ref(g_running));
+    std::thread t_imu(imu_reader_thread, std::ref(*imu), std::ref(imu_ring_buffer),
+                      std::ref(g_running), imu_rate);
     std::thread t_publisher(pose_publisher_thread, std::ref(*pose_pub), std::ref(pose_buffer),
                             std::ref(g_running), vio_rate);
 
@@ -222,20 +361,29 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "slam_vio_nav",
                                                         watchdog);
 
-    spdlog::info("All SLAM threads started — READY");
+    spdlog::info("All SLAM/VIO threads started — READY");
 
     while (g_running.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
+
+        // ── Periodic health report ──────────────────────────
         Pose p;
         if (pose_buffer.read(p)) {
-            spdlog::info("[HealthCheck] SLAM pose: ({:.2f}, {:.2f}, {:.2f}) q={}", p.position.x(),
-                         p.position.y(), p.position.z(), p.quality);
+            spdlog::info("[HealthCheck] VIO pose: ({:.2f}, {:.2f}, {:.2f}) q={} health={}",
+                         p.position.x(), p.position.y(), p.position.z(), p.quality,
+                         vio_health_name(vio->health()));
+        }
+
+        // Report IMU buffer stats
+        uint64_t drops = imu_ring_buffer.drop_count();
+        if (drops > 0) {
+            spdlog::warn("[HealthCheck] IMU buffer drops: {} total", drops);
         }
     }
 
     spdlog::info("Shutting down...");
-    t_frontend.join();
+    t_vio.join();
     t_imu.join();
     t_publisher.join();
 

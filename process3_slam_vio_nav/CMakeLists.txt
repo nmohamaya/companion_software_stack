@@ -1,5 +1,8 @@
 # process3_slam_vio_nav/CMakeLists.txt
-add_executable(slam_vio_nav src/main.cpp)
+add_executable(slam_vio_nav
+    src/main.cpp
+    src/imu_preintegrator.cpp
+)
 target_include_directories(slam_vio_nav PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
