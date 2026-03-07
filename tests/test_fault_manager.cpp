@@ -601,8 +601,9 @@ TEST(FaultManagerTest, GeofenceViolationClearedAfterReset) {
     auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now);
     EXPECT_TRUE(r1.active_faults & FAULT_GEOFENCE_BREACH);
 
+    // reset() alone should clear the geofence flag — no explicit
+    // set_geofence_violation(false) needed.
     mgr.reset();
-    mgr.set_geofence_violation(false);
 
     auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S);
     EXPECT_FALSE(r2.active_faults & FAULT_GEOFENCE_BREACH);

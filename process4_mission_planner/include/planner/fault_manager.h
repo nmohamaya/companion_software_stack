@@ -106,8 +106,8 @@ public:
             1'000'000'000ULL;
 
         spdlog::info("[FaultMgr] Thresholds: pose_stale={}ms, "
-                     "batt_warn={}% batt_rtl={}% batt_crit={}%, "
-                     "fc_lost={}ms fc_rtl={}ms, loiter_esc={}s",
+                     "batt_warn={}%, batt_rtl={}%, batt_crit={}%, "
+                     "fc_lost={}ms, fc_rtl={}ms, loiter_esc={}s",
                      config_.pose_stale_timeout_ns / 1'000'000, config_.battery_warn_percent,
                      config_.battery_rtl_percent, config_.battery_crit_percent,
                      config_.fc_link_lost_timeout_ns / 1'000'000,
@@ -194,7 +194,7 @@ public:
             escalate(result, FaultAction::RTL, "geofence breach");
         }
 
-        // ── 7. Enforce escalation-only policy ───────────────
+        // ── 8. Enforce escalation-only policy ───────────────
         // Once we've escalated to a higher action, never downgrade.
         // Applied BEFORE the loiter timer so that a cleared LOITER
         // cause still counts toward the escalation timeout.
@@ -206,7 +206,7 @@ public:
             high_water_reason_ = result.reason;
         }
 
-        // ── 8. Loiter escalation to RTL ─────────────────────
+        // ── 9. Loiter escalation to RTL ─────────────────────
         // If the effective action (post high-water mark) has been
         // LOITER for too long, escalate to RTL.
         if (result.recommended_action == FaultAction::LOITER) {
@@ -232,6 +232,7 @@ public:
         high_water_mark_   = FaultAction::NONE;
         high_water_reason_ = "nominal";
         loiter_start_ns_   = 0;
+        geofence_violated_ = false;
     }
 
     /// Current high-water mark (highest action ever returned).

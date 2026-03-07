@@ -290,12 +290,8 @@ int main(int argc, char* argv[]) {
             pose_stale_count = 0;
         }
 
-        auto fault = [&]() {
-            drone::util::ScopedDiagTimer t(diag, "FaultEval");
-            return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
-        }();
-
         // ── Geofence check (every tick, airborne only) ──────
+        // Runs BEFORE evaluate() so a breach triggers RTL in the same cycle.
         {
             drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
             if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
@@ -306,17 +302,22 @@ int main(int argc, char* argv[]) {
                 fault_mgr.set_geofence_violation(fence_result.violated);
                 if (fence_result.violated) {
                     diag.add_warning("Geofence", fence_result.message);
-                } else if (fence_result.margin_m < geofence.warning_margin() &&
-                           fence_result.margin_m >= 0.0f) {
-                    diag.add_warning("Geofence",
-                                     "Approaching boundary — margin " +
-                                         std::to_string(static_cast<int>(fence_result.margin_m)) +
-                                         "m");
+                } else if (fence_result.margin_m < 0.0f &&
+                           std::abs(fence_result.margin_m) < geofence.warning_margin()) {
+                    diag.add_warning("Geofence", "Approaching boundary — margin " +
+                                                     std::to_string(static_cast<int>(
+                                                         std::abs(fence_result.margin_m))) +
+                                                     "m");
                 }
             } else {
                 fault_mgr.set_geofence_violation(false);
             }
         }  // GeofenceCheck timer scope
+
+        auto fault = [&]() {
+            drone::util::ScopedDiagTimer t(diag, "FaultEval");
+            return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
+        }();
 
         // Apply fault action if escalated (only in airborne states)
         if (fault.recommended_action > last_fault_action &&
