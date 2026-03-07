@@ -2,8 +2,10 @@
 // Tests for internal process strategy interfaces:
 //   IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor
 #include "monitor/iprocess_monitor.h"
+#include "planner/astar_planner.h"
 #include "planner/iobstacle_avoider.h"
 #include "planner/ipath_planner.h"
+#include "planner/obstacle_avoider_3d.h"
 #include "slam/ivisual_frontend.h"
 
 #include <chrono>

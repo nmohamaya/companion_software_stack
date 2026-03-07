@@ -134,6 +134,7 @@ enum FaultType : uint32_t {
     FAULT_THERMAL_CRITICAL = 1 << 5,  // thermal zone 3 (critical)
     FAULT_PERCEPTION_DEAD  = 1 << 6,  // perception process died
     FAULT_FC_LINK_LOST     = 1 << 7,  // FC not connected for >timeout
+    FAULT_GEOFENCE_BREACH  = 1 << 8,  // outside geofence boundary
 };
 
 struct ShmMissionStatus {
@@ -228,15 +229,16 @@ struct ShmFCState {
 // GCS Commands SHM (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
 enum class GCSCommandType : uint8_t {
-    NONE          = 0,
-    ARM           = 1,
-    DISARM        = 2,
-    TAKEOFF       = 3,
-    LAND          = 4,
-    RTL           = 5,
-    MISSION_START = 6,
-    MISSION_PAUSE = 7,
-    MISSION_ABORT = 8
+    NONE           = 0,
+    ARM            = 1,
+    DISARM         = 2,
+    TAKEOFF        = 3,
+    LAND           = 4,
+    RTL            = 5,
+    MISSION_START  = 6,
+    MISSION_PAUSE  = 7,
+    MISSION_ABORT  = 8,
+    MISSION_UPLOAD = 9  // Upload new waypoints mid-flight
 };
 
 struct ShmGCSCommand {
@@ -247,6 +249,33 @@ struct ShmGCSCommand {
     uint64_t       sequence_id;
     bool           valid;
 };
+
+// ═══════════════════════════════════════════════════════════
+// Mission Upload SHM (Process 5 → Process 4)  — mid-flight
+// waypoint upload.  The GCS sends MISSION_UPLOAD, then the
+// planner reads waypoints from this segment.
+// ═══════════════════════════════════════════════════════════
+static constexpr uint8_t kMaxUploadWaypoints = 32;
+
+struct ShmWaypoint {
+    float x{}, y{}, z{};           // world-frame position
+    float yaw{};                   // heading (rad)
+    float radius{2.0f};            // acceptance radius (m)
+    float speed{2.0f};             // cruise speed (m/s)
+    bool  trigger_payload{false};  // capture at this waypoint
+};
+static_assert(std::is_trivially_copyable_v<ShmWaypoint>,
+              "ShmWaypoint must be trivially copyable for SHM");
+
+struct ShmMissionUpload {
+    uint64_t    timestamp_ns{};
+    uint64_t    correlation_id{};
+    uint8_t     num_waypoints{};
+    ShmWaypoint waypoints[kMaxUploadWaypoints]{};
+    bool        valid{false};
+};
+static_assert(std::is_trivially_copyable_v<ShmMissionUpload>,
+              "ShmMissionUpload must be trivially copyable for SHM");
 
 // ═══════════════════════════════════════════════════════════
 // Payload Status SHM (Process 6 → Process 4, Process 7)
@@ -338,6 +367,7 @@ constexpr const char* PAYLOAD_COMMANDS  = "/payload_commands";
 constexpr const char* FC_COMMANDS       = "/fc_commands";
 constexpr const char* FC_STATE          = "/fc_state";
 constexpr const char* GCS_COMMANDS      = "/gcs_commands";
+constexpr const char* MISSION_UPLOAD    = "/mission_upload";
 constexpr const char* PAYLOAD_STATUS    = "/payload_status";
 constexpr const char* SYSTEM_HEALTH     = "/system_health";
 

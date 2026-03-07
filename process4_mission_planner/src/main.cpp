@@ -6,10 +6,13 @@
 #include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
+#include "planner/astar_planner.h"
 #include "planner/fault_manager.h"
+#include "planner/geofence.h"
 #include "planner/iobstacle_avoider.h"
 #include "planner/ipath_planner.h"
 #include "planner/mission_fsm.h"
+#include "planner/obstacle_avoider_3d.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/correlation.h"
@@ -105,6 +108,10 @@ int main(int argc, char* argv[]) {
     auto gcs_sub =
         bus.subscribe_optional<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS);
 
+    // Mission upload channel (optional — used for mid-flight waypoint upload)
+    auto mission_upload_sub =
+        bus.subscribe_optional<drone::ipc::ShmMissionUpload>(drone::ipc::shm_names::MISSION_UPLOAD);
+
     // System health from Process 7 (optional — monitor may not be running)
     auto health_sub =
         bus.subscribe_optional<drone::ipc::ShmSystemHealth>(drone::ipc::shm_names::SYSTEM_HEALTH);
@@ -164,12 +171,36 @@ int main(int argc, char* argv[]) {
                                                 "potential_field");
     auto path_planner    = drone::planner::create_path_planner(planner_backend);
     spdlog::info("Path planner: {}", path_planner->name());
+    // Cache pointer for A* obstacle-grid updates (null if not A*)
+    auto* astar_planner = dynamic_cast<drone::planner::AStarPathPlanner*>(path_planner.get());
 
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
                                                            repulsive_gain);
     spdlog::info("Obstacle avoider: {}", avoider->name());
+
+    // ── Geofence setup ─────────────────────────────────────
+    Geofence geofence;
+    auto     fence_json = cfg.section("mission_planner.geofence.polygon");
+    if (fence_json.is_array() && fence_json.size() >= 3) {
+        std::vector<GeoVertex> vertices;
+        for (const auto& v : fence_json) {
+            vertices.push_back({v.value("x", 0.0f), v.value("y", 0.0f)});
+        }
+        geofence.set_polygon(vertices);
+        float alt_floor   = cfg.get<float>("mission_planner.geofence.altitude_floor_m", 0.0f);
+        float alt_ceiling = cfg.get<float>("mission_planner.geofence.altitude_ceiling_m", 120.0f);
+        geofence.set_altitude_limits(alt_floor, alt_ceiling);
+        geofence.set_warning_margin(
+            cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
+        geofence.enable(true);
+        spdlog::info("Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m",
+                     vertices.size(), alt_floor, alt_ceiling,
+                     cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
+    } else {
+        spdlog::info("Geofence: disabled (no polygon configured)");
+    }
 
     // RTL/landing tuning
     const float rtl_acceptance_m = cfg.get<float>("mission_planner.rtl_acceptance_radius_m", 1.5f);
@@ -198,6 +229,7 @@ int main(int argc, char* argv[]) {
     bool                                  home_recorded = false;
     std::chrono::steady_clock::time_point rtl_start_time{};
     uint64_t last_gcs_timestamp    = 0;  // dedup GCS commands by timestamp
+    uint64_t last_upload_timestamp = 0;  // dedup mission uploads by timestamp
     uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
     auto     last_arm_time         = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
@@ -258,7 +290,34 @@ int main(int argc, char* argv[]) {
             pose_stale_count = 0;
         }
 
-        auto fault = fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
+        // ── Geofence check (every tick, airborne only) ──────
+        // Runs BEFORE evaluate() so a breach triggers RTL in the same cycle.
+        {
+            drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
+            if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
+                fsm.state() != MissionState::PREFLIGHT) {
+                auto fence_result = geofence.check(static_cast<float>(pose.translation[0]),
+                                                   static_cast<float>(pose.translation[1]),
+                                                   fc_state.rel_alt);
+                fault_mgr.set_geofence_violation(fence_result.violated);
+                if (fence_result.violated) {
+                    diag.add_warning("Geofence", fence_result.message);
+                } else if (fence_result.margin_m < 0.0f &&
+                           std::abs(fence_result.margin_m) < geofence.warning_margin()) {
+                    diag.add_warning("Geofence", "Approaching boundary — margin " +
+                                                     std::to_string(static_cast<int>(
+                                                         std::abs(fence_result.margin_m))) +
+                                                     "m");
+                }
+            } else {
+                fault_mgr.set_geofence_violation(false);
+            }
+        }  // GeofenceCheck timer scope
+
+        auto fault = [&]() {
+            drone::util::ScopedDiagTimer t(diag, "FaultEval");
+            return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
+        }();
 
         // Apply fault action if escalated (only in airborne states)
         if (fault.recommended_action > last_fault_action &&
@@ -358,6 +417,38 @@ int main(int argc, char* argv[]) {
                     }
                     fsm.on_land();
                     break;
+                case drone::ipc::GCSCommandType::MISSION_UPLOAD: {
+                    // Read waypoints from the mission upload channel
+                    drone::ipc::ShmMissionUpload upload{};
+                    if (mission_upload_sub->is_connected() && mission_upload_sub->receive(upload) &&
+                        upload.valid && upload.timestamp_ns > last_upload_timestamp &&
+                        upload.num_waypoints > 0) {
+                        last_upload_timestamp = upload.timestamp_ns;
+                        std::vector<Waypoint> new_wps;
+                        for (uint8_t i = 0;
+                             i < upload.num_waypoints && i < drone::ipc::kMaxUploadWaypoints; ++i) {
+                            const auto& sw = upload.waypoints[i];
+                            new_wps.push_back({sw.x, sw.y, sw.z, sw.yaw, sw.radius, sw.speed,
+                                               sw.trigger_payload});
+                        }
+                        fsm.load_mission(new_wps);
+                        spdlog::info("[Planner] GCS MISSION_UPLOAD: {} waypoints loaded "
+                                     "corr={:#x}",
+                                     new_wps.size(), gcs_cmd.correlation_id);
+                        diag.add_warning("MissionUpload", "Mid-flight waypoint upload: " +
+                                                              std::to_string(new_wps.size()) +
+                                                              " waypoints");
+                        // If currently navigating, start the new mission immediately
+                        if (fsm.state() == MissionState::NAVIGATE ||
+                            fsm.state() == MissionState::LOITER) {
+                            fsm.on_navigate();
+                        }
+                    } else {
+                        spdlog::warn("[Planner] MISSION_UPLOAD command but no valid "
+                                     "upload data available");
+                    }
+                    break;
+                }
                 default: break;
             }
         }
@@ -410,6 +501,11 @@ int main(int argc, char* argv[]) {
             }
 
             case MissionState::NAVIGATE: {
+                // Update A* obstacle grid if applicable
+                if (astar_planner) {
+                    drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");
+                    astar_planner->update_obstacles(objects, pose);
+                }
                 const Waypoint* wp = fsm.current_waypoint();
                 if (wp) {
                     // Plan trajectory via IPathPlanner
@@ -417,6 +513,11 @@ int main(int argc, char* argv[]) {
                         drone::util::ScopedDiagTimer t(diag, "PathPlan");
                         return path_planner->plan(pose, *wp);
                     }();
+                    // Flag if A* fell back to direct line (no obstacle-free path found)
+                    if (astar_planner && astar_planner->using_direct_fallback()) {
+                        diag.add_warning("PathPlan", "A* fallback: no obstacle-free path — using "
+                                                     "direct line");
+                    }
                     // Apply obstacle avoidance via IObstacleAvoider
                     auto traj = [&]() {
                         drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");

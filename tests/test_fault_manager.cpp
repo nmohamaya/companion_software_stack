@@ -55,9 +55,11 @@ void add_process(ShmSystemHealth& h, const char* name, bool alive) {
 FaultConfig default_cfg() {
     FaultConfig c;
     c.pose_stale_timeout_ns        = 500 * MS;  // 500 ms
-    c.battery_warn_percent         = 20.0f;
+    c.battery_warn_percent         = 30.0f;
+    c.battery_rtl_percent          = 20.0f;
     c.battery_crit_percent         = 10.0f;
     c.fc_link_lost_timeout_ns      = 3 * S;   // 3 s
+    c.fc_link_rtl_timeout_ns       = 15 * S;  // 15 s
     c.loiter_escalation_timeout_ns = 30 * S;  // 30 s
     return c;
 }
@@ -132,7 +134,7 @@ TEST(FaultManagerTest, BatteryLowTriggersRTL) {
     FaultManager mgr(default_cfg());
     auto         health  = make_healthy();
     auto         fc      = make_fc_ok();
-    fc.battery_remaining = 15.0f;  // below 20% warn
+    fc.battery_remaining = 15.0f;  // below 20% RTL threshold
     uint64_t now         = 1'000 * S;
 
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
@@ -476,8 +478,133 @@ TEST(FaultManagerTest, FCDisconnectedNoTimestampNoFault) {
 TEST(FaultManagerTest, DefaultConfigValues) {
     FaultConfig cfg;
     EXPECT_EQ(cfg.pose_stale_timeout_ns, 500'000'000ULL);
-    EXPECT_FLOAT_EQ(cfg.battery_warn_percent, 20.0f);
+    EXPECT_FLOAT_EQ(cfg.battery_warn_percent, 30.0f);
+    EXPECT_FLOAT_EQ(cfg.battery_rtl_percent, 20.0f);
     EXPECT_FLOAT_EQ(cfg.battery_crit_percent, 10.0f);
     EXPECT_EQ(cfg.fc_link_lost_timeout_ns, 3'000'000'000ULL);
+    EXPECT_EQ(cfg.fc_link_rtl_timeout_ns, 15'000'000'000ULL);
     EXPECT_EQ(cfg.loiter_escalation_timeout_ns, 30'000'000'000ULL);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 3: Three-tier battery escalation
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, BatteryWarnTierTriggersWarnOnly) {
+    // Battery between warn (30%) and rtl (20%) → WARN, not RTL
+    FaultManager mgr(default_cfg());
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 25.0f;  // between 30% warn and 20% rtl
+    uint64_t now         = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::WARN);
+    EXPECT_TRUE(result.active_faults & FAULT_BATTERY_LOW);
+    EXPECT_FALSE(result.active_faults & FAULT_BATTERY_CRITICAL);
+}
+
+TEST(FaultManagerTest, BatteryAboveWarnNoFault) {
+    // Battery above warn (30%) → no battery fault
+    FaultManager mgr(default_cfg());
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 50.0f;
+    uint64_t now         = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(result.active_faults & FAULT_BATTERY_LOW);
+    EXPECT_FALSE(result.active_faults & FAULT_BATTERY_CRITICAL);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 3: FC link-loss RTL contingency
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, FCLinkLostLoiterThenRTL) {
+    // FC disconnected for 4s → LOITER (above 3s)
+    // FC disconnected for 16s → RTL (above 15s contingency)
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    fc.connected        = false;
+    fc.timestamp_ns     = 1'000 * S;                // last seen at t=1000s
+    uint64_t now_loiter = fc.timestamp_ns + 4 * S;  // 4s after disconnect
+
+    auto r1 = mgr.evaluate(health, fc, now_loiter - 10 * MS, now_loiter);
+    EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
+    EXPECT_TRUE(r1.active_faults & FAULT_FC_LINK_LOST);
+
+    // Now 16s after disconnect → should escalate to RTL
+    uint64_t now_rtl = fc.timestamp_ns + 16 * S;
+    auto     r2      = mgr.evaluate(health, fc, now_rtl - 10 * MS, now_rtl);
+    EXPECT_EQ(r2.recommended_action, FaultAction::RTL);
+    EXPECT_TRUE(r2.active_faults & FAULT_FC_LINK_LOST);
+}
+
+TEST(FaultManagerTest, FCLinkLostBelowRTLTimeoutLoiters) {
+    // FC disconnected for 10s → should still LOITER (below 15s contingency)
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    fc.connected        = false;
+    fc.timestamp_ns     = 1'000 * S;
+    uint64_t now        = fc.timestamp_ns + 10 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
+    EXPECT_EQ(result.recommended_action, FaultAction::LOITER);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 3: Geofence breach
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, GeofenceBreachTriggersRTL) {
+    FaultManager mgr(default_cfg());
+    mgr.set_geofence_violation(true);
+
+    auto     health = make_healthy();
+    auto     fc     = make_fc_ok();
+    uint64_t now    = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::RTL);
+    EXPECT_TRUE(result.active_faults & FAULT_GEOFENCE_BREACH);
+}
+
+TEST(FaultManagerTest, GeofenceNoViolationNoFault) {
+    FaultManager mgr(default_cfg());
+    mgr.set_geofence_violation(false);
+
+    auto     health = make_healthy();
+    auto     fc     = make_fc_ok();
+    uint64_t now    = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(result.active_faults & FAULT_GEOFENCE_BREACH);
+}
+
+TEST(FaultManagerTest, GeofenceViolationClearedAfterReset) {
+    FaultManager mgr(default_cfg());
+    mgr.set_geofence_violation(true);
+
+    auto     health = make_healthy();
+    auto     fc     = make_fc_ok();
+    uint64_t now    = 1'000 * S;
+
+    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now);
+    EXPECT_TRUE(r1.active_faults & FAULT_GEOFENCE_BREACH);
+
+    // reset() alone should clear the geofence flag — no explicit
+    // set_geofence_violation(false) needed.
+    mgr.reset();
+
+    auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S);
+    EXPECT_FALSE(r2.active_faults & FAULT_GEOFENCE_BREACH);
 }
