@@ -177,7 +177,11 @@ private:
         double t = static_cast<double>(seq) * 0.033;  // ~30Hz
 
         Pose p;
-        p.timestamp   = t;
+        // Use steady_clock so the timestamp is in the same epoch as
+        // FaultManager's now_ns — prevents false "pose stale" faults.
+        p.timestamp =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
         p.position    = Eigen::Vector3d(5.0 * std::cos(t * 0.5) + noise_(rng_),
                                         5.0 * std::sin(t * 0.5) + noise_(rng_),
                                         2.0 + 0.1 * std::sin(t) + noise_(rng_));

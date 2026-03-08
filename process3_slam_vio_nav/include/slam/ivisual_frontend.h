@@ -10,6 +10,7 @@
 #include "ipc/shm_types.h"
 #include "slam/types.h"
 
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <random>
@@ -52,7 +53,11 @@ public:
         t_ += dt_;
 
         Pose p;
-        p.timestamp   = t_;
+        // Use steady_clock so the timestamp is in the same epoch as
+        // FaultManager's now_ns — prevents false "pose stale" faults.
+        p.timestamp =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
         p.position    = Eigen::Vector3d(5.0 * std::cos(t_ * 0.5) + noise_(rng_),
                                         5.0 * std::sin(t_ * 0.5) + noise_(rng_),
                                         2.0 + 0.1 * std::sin(t_) + noise_(rng_));
@@ -109,8 +114,12 @@ public:
 private:
     void on_odom(const gz::msgs::Odometry& msg) {
         Pose p;
-        // Use monotonic counter as timestamp (same units as SimulatedFrontend)
-        p.timestamp = count_.fetch_add(1, std::memory_order_relaxed) * 0.01;
+        // Use steady_clock so the timestamp is in the same epoch as
+        // FaultManager's now_ns — prevents false "pose stale" faults.
+        p.timestamp =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        count_.fetch_add(1, std::memory_order_relaxed);  // keep frame counter for stats
 
         if (msg.has_pose()) {
             const auto& pose = msg.pose();

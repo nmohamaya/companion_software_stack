@@ -544,3 +544,99 @@ Same treatment applied to `Detection2D` (8 fields) and `FusedObject` (11 fields)
 **Impact:** Saturation warnings now fire correctly when any individual IMU reading exceeds the sensor's physical range, enabling proper diagnostics during simulation testing.
 
 **Found by:** `ImuPreintegratorTest.DetectsGyroSaturation` — test correctly set one sample to 0 rad/s and the next to 40 rad/s, expecting a saturation warning. The test exposed that the implementation's averaging was masking the event.
+
+---
+
+## Fix #17 — VIO Backend Pose Timestamp Uses Counter Instead of Wall Clock
+
+**Date:** 2026-03-08
+**Issue:** #122
+**File:** `process3_slam_vio_nav/include/slam/ivio_backend.h`
+**Severity:** Critical (breaks all scenario validation)
+**Bug:** `SimulatedVIOBackend::generate_simulated_pose()` set `p.timestamp = t` where `t = seq * 0.033` — an internal frame counter starting near zero. The mission planner's FaultManager compared this against `steady_clock::now()` (epoch-relative nanoseconds), seeing every pose as billions of milliseconds stale, triggering immediate LOITER on every run.
+**Fix:** Changed to `p.timestamp = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count()` so the pose timestamp is in the same epoch as the consumer.
+**Impact:** All 7 Tier 1 integration scenarios were failing due to immediate stale-pose faults. Same fix applied to `SimulatedVisualFrontend::process_frame()` in `ivisual_frontend.h`.
+
+---
+
+## Fix #18 — Fault Flags Never Logged on Escalation
+
+**Date:** 2026-03-08
+**Issue:** #122
+**File:** `common/ipc/include/ipc/shm_types.h`, `process4_mission_planner/src/main.cpp`
+**Severity:** Medium (observability gap)
+**Bug:** The FaultManager's escalation log printed the reason and action level but never named the active fault flags. Scenario pass criteria checking for strings like `FAULT_BATTERY_LOW` or `FAULT_FC_LINK_LOST` could never match.
+**Fix:** Added `fault_flags_string(uint32_t)` helper that converts the bitmask to pipe-separated names (e.g., `FAULT_BATTERY_LOW|FAULT_THERMAL_WARNING`). Escalation log now includes `active_faults=[...]`. Also added a separate log line when new fault flags appear without an action-level change.
+**Impact:** All fault-injection scenarios now produce the expected log strings for verification.
+
+---
+
+## Fix #19 — Comms Process Missing mission_upload SHM Publisher
+
+**Date:** 2026-03-08
+**Issue:** #122
+**File:** `process5_comms/src/main.cpp`
+**Severity:** Medium (mission upload feature broken)
+**Bug:** Process 5 (comms) never advertised the `ShmMissionUpload` topic. The mission planner's subscriber for `/mission_upload` had no publisher to connect to, so in-flight mission uploads were silently dropped.
+**Fix:** Added `mission_upload_pub` advertiser in comms main.
+**Impact:** Mission upload scenario now works end-to-end.
+
+---
+
+## Fix #20 — System Monitor Missing thermal_zone in Log Output
+
+**Date:** 2026-03-08
+**Issue:** #122
+**File:** `process7_system_monitor/src/main.cpp`
+**Severity:** Low (observability gap)
+**Bug:** The system monitor's health log line did not include the `thermal_zone` field. Scenario pass criteria checking for the string `thermal_zone` never matched.
+**Fix:** Added `thermal_zone={}` to the health log format string.
+**Impact:** Thermal throttle scenario verification now passes.
+
+---
+
+## Fix #21 — Fault Injector Race Condition — Direct SHM Overwrite
+
+**Date:** 2026-03-08
+**Issue:** #122
+**Files:** `common/ipc/include/ipc/shm_types.h`, `tools/fault_injector/main.cpp`, `process5_comms/src/main.cpp`, `process7_system_monitor/src/main.cpp`
+**Severity:** Critical (architectural design flaw)
+**Bug:** The fault injector wrote directly to `/fc_state` and `/system_health` SHM segments, which were also written by comms (every 100ms) and system_monitor (every 1s). The owning process's next publish cycle overwrote the injected values within one cycle, so injected faults lasted at most ~100ms — too brief for the FaultManager's 3-second timeout to detect.
+**Fix:** Introduced a dedicated `ShmFaultOverrides` sideband SHM segment (`/fault_overrides`) with sentinel values (-1 = no override). The fault injector writes overrides there. Comms and system_monitor read overrides each cycle and apply them to their published state before `publish()`. This eliminates the race: the owning process is the one that applies the override, so it persists across all publish cycles.
+**Impact:** Battery degradation, FC link loss, thermal throttle, and stress test scenarios all depend on sustained fault injection — none could pass before this fix.
+
+---
+
+## Fix #22 — FC Link Loss Override Doesn't Freeze Timestamp
+
+**Date:** 2026-03-08
+**Issue:** #122
+**File:** `process5_comms/src/main.cpp`
+**Severity:** High (FC link loss scenario broken)
+**Bug:** When the fault injector set `fc_connected = 0` via the override, comms set `state.connected = false` but continued publishing fresh `timestamp_ns` every 100ms. The FaultManager detects FC link loss by checking if `fc_state.timestamp_ns` is stale (>3s old). With fresh timestamps, the stale check never fired.
+**Fix:** Added a `frozen_ts` variable. When `fc_connected` override is 0, the timestamp is frozen to the last live value, simulating genuine link loss where no new heartbeats arrive. On reconnect (`fc_connected == 1`), the freeze is released.
+**Impact:** FC link loss scenario now correctly triggers LOITER → RTL escalation.
+
+---
+
+## Fix #23 — Missing FAULT_BATTERY_RTL Enum Value
+
+**Date:** 2026-03-08
+**Issue:** #122
+**Files:** `common/ipc/include/ipc/shm_types.h`, `process4_mission_planner/include/planner/fault_manager.h`
+**Severity:** Medium (incorrect fault classification)
+**Bug:** The FaultManager's battery RTL level (< 20%) used `FAULT_BATTERY_LOW`, same as the warning level (< 30%). This made it impossible to distinguish between a battery warning and a battery-triggered RTL in logs or telemetry.
+**Fix:** Added `FAULT_BATTERY_RTL = 1 << 9` to the `FaultType` enum. FaultManager now uses `FAULT_BATTERY_RTL` for the RTL threshold.
+**Impact:** Battery faults are now correctly classified at each severity tier.
+
+---
+
+## Fix #24 — Obstacle Avoider Factory Rejects "potential_field_3d" Backend Name
+
+**Date:** 2026-03-08
+**Issue:** #122
+**File:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`
+**Severity:** High (crashes mission planner)
+**Bug:** `create_obstacle_avoider()` accepted `"potential_field"`, `"3d"`, and `"obstacle_avoider_3d"` but not `"potential_field_3d"`. The stress test scenario config specified `"potential_field_3d"`, causing an unhandled `std::runtime_error` that crashed the mission planner. Due to `wait -n` in `launch_all.sh`, this cascaded to the entire stack.
+**Fix:** Added `"potential_field_3d"` as an accepted alias for `ObstacleAvoider3D`.
+**Impact:** Full stack stress test no longer crashes on startup.

@@ -11,14 +11,16 @@
 #   ./tests/run_scenario.sh --list                  # list available scenarios
 #   ./tests/run_scenario.sh --all                   # run all Tier 1 scenarios
 #   ./tests/run_scenario.sh --all --tier 2          # run all (requires Gazebo)
+#   ./tests/run_scenario.sh --all --ipc zenoh       # run all Tier 1 over Zenoh
 #
 # Options:
 #   --base-config <path>    Base config to merge with (default: config/default.json)
-#   --log-dir <path>        Log output directory (default: /tmp/drone_scenario_logs)
+#   --log-dir <path>        Log output directory (default: drone_logs/scenarios)
 #   --timeout <seconds>     Override scenario timeout
 #   --dry-run               Parse scenario, show plan, but don't execute
 #   --verbose               Extra verbose output
 #   --tier <1|2>            Filter by tier when using --all
+#   --ipc <shm|zenoh>       Override IPC backend (default: from base config)
 #
 # Exit codes:
 #   0  All checks passed
@@ -34,7 +36,7 @@ SCENARIOS_DIR="${PROJECT_DIR}/config/scenarios"
 DEPLOY_DIR="${PROJECT_DIR}/deploy"
 FAULT_INJECTOR="${BIN_DIR}/fault_injector"
 DEFAULT_BASE_CONFIG="${PROJECT_DIR}/config/default.json"
-DEFAULT_LOG_DIR="/tmp/drone_scenario_logs"
+DEFAULT_LOG_DIR="${PROJECT_DIR}/drone_logs/scenarios"
 
 # ── Colours ───────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -61,6 +63,7 @@ VERBOSE=false
 RUN_ALL=false
 TIER_FILTER=""
 LIST_ONLY=false
+IPC_BACKEND=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -72,6 +75,13 @@ while [[ $# -gt 0 ]]; do
         --dry-run)      DRY_RUN=true ;;
         --verbose)      VERBOSE=true ;;
         --tier)         TIER_FILTER="$2"; shift ;;
+        --ipc)
+            IPC_BACKEND="$2"
+            if [[ "$IPC_BACKEND" != "shm" && "$IPC_BACKEND" != "zenoh" ]]; then
+                echo -e "${RED}ERROR: --ipc must be 'shm' or 'zenoh'${NC}"
+                exit 2
+            fi
+            shift ;;
         -h|--help)
             echo "Usage: $0 <scenario_json> [options]"
             echo "       $0 --list"
@@ -79,11 +89,12 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --base-config <path>  Base config (default: config/default.json)"
-            echo "  --log-dir <path>      Log directory (default: /tmp/drone_scenario_logs)"
+            echo "  --log-dir <path>      Log directory (default: drone_logs/scenarios)"
             echo "  --timeout <seconds>   Override scenario timeout"
             echo "  --dry-run             Parse and show plan only"
             echo "  --verbose             Extra output"
             echo "  --tier <1|2>          Filter by tier"
+            echo "  --ipc <shm|zenoh>     Override IPC transport backend"
             echo "  --list                List available scenarios"
             echo "  --all                 Run all matching scenarios"
             exit 0
@@ -263,6 +274,7 @@ if [[ "$RUN_ALL" == "true" ]]; then
         # Run each scenario in a subshell so state is isolated
         args=("$f" --base-config "$BASE_CONFIG" --log-dir "$LOG_DIR")
         [[ -n "$TIMEOUT_OVERRIDE" ]] && args+=(--timeout "$TIMEOUT_OVERRIDE")
+        [[ -n "$IPC_BACKEND" ]] && args+=(--ipc "$IPC_BACKEND")
         [[ "$DRY_RUN" == "true" ]] && args+=(--dry-run)
         [[ "$VERBOSE" == "true" ]] && args+=(--verbose)
 
@@ -346,7 +358,25 @@ MERGED_CONFIG="${SCENARIO_LOG_DIR}/merged_config.json"
 echo ""
 echo "Phase 1: Merging configs..."
 merge_configs "$BASE_CONFIG" "$SCENARIO_FILE" "$MERGED_CONFIG"
-echo -e "  ${GREEN}✓${NC} Config merged → ${MERGED_CONFIG}"
+
+# Apply --ipc override (after merge so it takes top priority)
+if [[ -n "$IPC_BACKEND" ]]; then
+    python3 - "$MERGED_CONFIG" "$IPC_BACKEND" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+cfg['ipc_backend'] = sys.argv[2]
+with open(sys.argv[1], 'w') as f:
+    json.dump(cfg, f, indent=4)
+PYEOF
+fi
+echo -e "  ${GREEN}✓${NC} Config merged → ${MERGED_CONFIG} (ipc=${IPC_BACKEND:-default})"
+
+# Resolve effective IPC backend for transport-aware checks.
+EFFECTIVE_IPC="${IPC_BACKEND}"
+if [[ -z "$EFFECTIVE_IPC" ]]; then
+    EFFECTIVE_IPC=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('ipc_backend','shm'))" "$MERGED_CONFIG" 2>/dev/null || echo "shm")
+fi
 
 # ── Dry run ───────────────────────────────────────────────────
 if [[ "$DRY_RUN" == "true" ]]; then
@@ -388,7 +418,8 @@ echo "Phase 2: Launching companion stack..."
 rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
       /dev/shm/mission_status /dev/shm/trajectory_cmd /dev/shm/payload_commands \
       /dev/shm/fc_state /dev/shm/gcs_commands /dev/shm/payload_status \
-      /dev/shm/system_health /dev/shm/fc_commands /dev/shm/mission_upload 2>/dev/null || true
+      /dev/shm/system_health /dev/shm/fc_commands /dev/shm/mission_upload \
+      /dev/shm/fault_overrides 2>/dev/null || true
 
 cleanup_scenario() {
     echo ""
@@ -412,23 +443,35 @@ LAUNCHER_PID=$!
 
 echo -e "  Launcher PID: ${LAUNCHER_PID}"
 
-# Wait for the stack to start (check for SHM segments)
-echo -n "  Waiting for SHM segments."
+# Wait for the stack to start
+echo -n "  Waiting for stack startup."
 STARTUP_OK=false
-for _ in $(seq 1 30); do
-    if [[ -f /dev/shm/fc_state ]] && [[ -f /dev/shm/system_health ]]; then
-        STARTUP_OK=true
-        break
-    fi
-    echo -n "."
-    sleep 1
-done
+if [[ "$EFFECTIVE_IPC" == "zenoh" ]]; then
+    # Zenoh doesn't use POSIX SHM — wait for processes via log output.
+    for _ in $(seq 1 30); do
+        if grep -q "READY\|ready\|Main loop" "${SCENARIO_LOG_DIR}/launcher.log" 2>/dev/null; then
+            STARTUP_OK=true
+            break
+        fi
+        echo -n "."
+        sleep 1
+    done
+else
+    for _ in $(seq 1 30); do
+        if [[ -f /dev/shm/fc_state ]] && [[ -f /dev/shm/system_health ]]; then
+            STARTUP_OK=true
+            break
+        fi
+        echo -n "."
+        sleep 1
+    done
+fi
 echo ""
 
 if [[ "$STARTUP_OK" == "true" ]]; then
-    check "Stack started (SHM segments ready)" 0
+    check "Stack started" 0
 else
-    check "Stack started (SHM segments ready)" 1
+    check "Stack started" 1
     echo -e "${RED}  Stack failed to start. Check ${SCENARIO_LOG_DIR}/launcher.log${NC}"
 fi
 
@@ -537,17 +580,21 @@ while read -r proc; do
     fi
 done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.processes_alive")
 
-# Check SHM segments
+# Check SHM segments (only meaningful for SHM backend)
 echo ""
 echo "SHM segment checks:"
-while read -r seg; do
-    [[ -z "$seg" ]] && continue
-    if [[ -f "/dev/shm/${seg}" ]]; then
-        check "SHM: ${seg}" 0
-    else
-        check "SHM missing: ${seg}" 1
-    fi
-done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.shm_segments_exist")
+if [[ "$EFFECTIVE_IPC" == "zenoh" ]]; then
+    echo "  (skipped — Zenoh transport does not use POSIX SHM)"
+else
+    while read -r seg; do
+        [[ -z "$seg" ]] && continue
+        if [[ -f "/dev/shm/${seg}" ]]; then
+            check "SHM: ${seg}" 0
+        else
+            check "SHM missing: ${seg}" 1
+        fi
+    done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.shm_segments_exist")
+fi
 
 # ── Results ───────────────────────────────────────────────────
 echo ""
@@ -570,3 +617,4 @@ elif ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
     exit 1
 else
     exit 0
+fi

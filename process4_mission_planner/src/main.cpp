@@ -209,7 +209,8 @@ int main(int argc, char* argv[]) {
 
     // ── Create fault manager (config-driven thresholds) ────
     FaultManager fault_mgr(cfg);
-    FaultAction  last_fault_action = FaultAction::NONE;
+    FaultAction  last_fault_action  = FaultAction::NONE;
+    uint32_t     last_active_faults = 0;
 
     spdlog::info("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
 
@@ -301,6 +302,7 @@ int main(int argc, char* argv[]) {
                                                    fc_state.rel_alt);
                 fault_mgr.set_geofence_violation(fence_result.violated);
                 if (fence_result.violated) {
+                    spdlog::warn("Geofence: VIOLATED — {}", fence_result.message);
                     diag.add_warning("Geofence", fence_result.message);
                 } else if (fence_result.margin_m < 0.0f &&
                            std::abs(fence_result.margin_m) < geofence.warning_margin()) {
@@ -324,9 +326,11 @@ int main(int argc, char* argv[]) {
             fault.recommended_action > FaultAction::NONE && fsm.state() != MissionState::IDLE &&
             fsm.state() != MissionState::PREFLIGHT) {
 
-            spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {})",
+            spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {}) "
+                         "active_faults=[{}]",
                          fault_action_name(last_fault_action),
-                         fault_action_name(fault.recommended_action), fault.reason);
+                         fault_action_name(fault.recommended_action), fault.reason,
+                         drone::ipc::fault_flags_string(fault.active_faults));
 
             switch (fault.recommended_action) {
                 case FaultAction::WARN:
@@ -374,6 +378,15 @@ int main(int argc, char* argv[]) {
             }
             last_fault_action = fault.recommended_action;
         }
+
+        // Log when new fault flags appear (even without action-level change).
+        uint32_t new_flags = fault.active_faults & ~last_active_faults;
+        if (new_flags != 0) {
+            spdlog::warn("[FaultMgr] New faults: [{}] active_faults=[{}]",
+                         drone::ipc::fault_flags_string(new_flags),
+                         drone::ipc::fault_flags_string(fault.active_faults));
+        }
+        last_active_faults = fault.active_faults;
 
         // Check GCS commands (dedup by timestamp to ignore stale values)
         drone::ipc::ShmGCSCommand gcs_cmd{};
@@ -496,6 +509,8 @@ int main(int argc, char* argv[]) {
                     spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE",
                                  fc_state.rel_alt);
                     fsm.on_navigate();
+                    spdlog::info("[FSM] EXECUTING — navigating {} waypoints",
+                                 fsm.total_waypoints());
                 }
                 break;
             }
