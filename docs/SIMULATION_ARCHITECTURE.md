@@ -37,6 +37,7 @@ flowchart TB
         SHM8["/trajectory_cmd"]
         SHM9["/fc_commands"]
         SHM10["/mission_upload"]
+        SHM11["/fault_overrides"]
     end
 
     subgraph HAL["Hardware Abstraction Layer (Swappable Backends)"]
@@ -61,15 +62,15 @@ flowchart TB
     end
 
     subgraph TOOLS["Test Tooling"]
-        FI["fault_injector CLI<br/><i>Writes to SHM channels<br/>Battery, FC, GCS, Thermal</i>"]
-        SR["run_scenario.sh<br/><i>Launch → Inject → Verify</i>"]
+        FI["fault_injector CLI<br/><i>Writes to /fault_overrides<br/>sideband channel</i>"]
+        SR["run_scenario.sh<br/><i>Launch → Inject → Verify<br/>Transport-aware (SHM / Zenoh)</i>"]
         SCEN["Scenario Configs<br/><i>8 JSON scenario files</i>"]
     end
 
     subgraph EXTERNAL["External Systems (Tier 2 only)"]
         PX4["PX4 SITL<br/><i>Autopilot simulation</i>"]
         GZ["Gazebo Harmonic<br/><i>Physics + Sensors</i>"]
-        WORLD["test_world.sdf<br/><i>Obstacles: 3 boxes + cylinder</i>"]
+        WORLD["test_world.sdf<br/><i>6 obstacles (boxes, cylinder, wall)</i>"]
     end
 
     P1 -->|frames| SHM1
@@ -97,10 +98,9 @@ flowchart TB
     P6 ---|HAL| SGim
     P2 ---|HAL| SD
 
-    FI -.->|inject| SHM5
-    FI -.->|inject| SHM6
-    FI -.->|inject| SHM7
-    FI -.->|inject| SHM10
+    FI -.->|inject| SHM11
+    SHM11 -.->|override| P5
+    SHM11 -.->|override| P7
     SR -.->|orchestrate| FI
     SCEN -.->|configure| SR
 
@@ -156,13 +156,13 @@ These run identically in sim and on hardware:
 | Component | Process | Description |
 |---|---|---|
 | Mission FSM | P4 | State machine: IDLE → PREFLIGHT → TAKEOFF → EXECUTING → RTL → LANDING → COMPLETE |
-| FaultManager | P4 | 3-tier battery, FC link loss, geofence breach detection |
+| FaultManager | P4 | Battery: WARN / RTL / CRIT (3-tier with `FAULT_BATTERY_RTL`), FC link loss, geofence breach |
 | Geofence | P4 | Point-in-polygon + altitude checks with warning margin |
 | A* Path Planner | P4 | 3D occupancy grid, A* search, path smoothing |
 | ObstacleAvoider3D | P4 | Velocity-space potential field with prediction |
 | Kalman Tracker | P2 | Multi-object tracking with Hungarian assignment |
 | Fusion Engine | P2 | UKF sensor fusion (LiDAR + camera + radar) |
-| VIO Backend | P3 | Visual-inertial odometry with sliding window |
+| VIO Backend | P3 | Visual-inertial odometry with sliding window (sim uses `steady_clock` timestamps) |
 | IMU Pre-integrator | P3 | IMU measurement integration between keyframes |
 | Watchdog | P7 | Thread heartbeat monitoring, process management |
 | IPC Layer | All | SHM SeqLock pub/sub or Zenoh transport |
@@ -236,7 +236,7 @@ Backend selection is **config-driven**. All backends read from a single JSON:
     },
     "mission_planner": {
         "path_planner":      { "backend": "potential_field" },  // or "astar"
-        "obstacle_avoider":  { "backend": "potential_field" },  // or "potential_field_3d"
+        "obstacle_avoider":  { "backend": "potential_field" },  // or "potential_field_3d" (3D variant)
         "geofence": {
             "polygon": [
                 {"x": -50, "y": -50},
@@ -282,14 +282,20 @@ Config files in `config/`:
 # List available scenarios
 ./tests/run_scenario.sh --list
 
-# Run a single scenario
+# Run a single scenario (uses SHM transport by default)
 ./tests/run_scenario.sh config/scenarios/01_nominal_mission.json
+
+# Run with explicit Zenoh transport
+./tests/run_scenario.sh config/scenarios/01_nominal_mission.json --ipc zenoh
 
 # Dry-run (show plan without executing)
 ./tests/run_scenario.sh config/scenarios/03_battery_degradation.json --dry-run
 
-# Run all Tier 1 scenarios
+# Run all Tier 1 scenarios (SHM)
 ./tests/run_scenario.sh --all --tier 1
+
+# Run all Tier 1 scenarios (Zenoh)
+./tests/run_scenario.sh --all --tier 1 --ipc zenoh
 ```
 
 **Option C: Manual fault injection (while stack is running)**
@@ -323,19 +329,60 @@ PX4_DIR=~/PX4-Autopilot ./deploy/launch_gazebo.sh
 
 ## Fault Injection Tool
 
-The `fault_injector` CLI writes directly to POSIX SHM IPC channels,
-simulating the producing process. This lets you test fault handling
-without modifying any application code.
+The `fault_injector` CLI uses a **sideband override channel**
+(`/fault_overrides`) rather than writing directly to production SHM
+segments. This avoids race conditions — the producing processes (P5
+Comms, P7 System Monitor) continue their normal publish loops and
+**merge** overrides into the values they publish.
+
+### How It Works
+
+```mermaid
+flowchart LR
+    FI[fault_injector] -->|write| FO["/fault_overrides<br/>(ShmFaultOverrides)"]
+    FO -->|read| P5[P5 Comms]
+    FO -->|read| P7[P7 System Monitor]
+    P5 -->|publish| FC["/fc_state<br/>(merged)"]
+    P7 -->|publish| SH["/system_health<br/>(merged)"]
+    FC --> P4[P4 Mission Planner]
+    SH --> P4
+
+    style FO fill:#4a2d6a,color:#fff
+```
+
+- **Sentinel values**: Override fields default to `-1` (no override).
+  Only non-sentinel fields are applied.
+- **Sequence counter**: Incremented on each write so consumers can
+  detect fresh overrides vs stale values.
+- **FC link loss**: When `fc_connected = 0`, P5 freezes the FC
+  heartbeat timestamp so the FaultManager's stale-heartbeat check
+  fires correctly.
+- **Transport-agnostic**: The `/fault_overrides` segment is always
+  POSIX SHM (even when the main transport is Zenoh), so fault
+  injection works identically across transports.
+
+### ShmFaultOverrides Struct
+
+```cpp
+struct alignas(64) ShmFaultOverrides {
+    float    battery_percent;   // <0 = no override
+    float    battery_voltage;   // <0 = no override
+    int32_t  fc_connected;      // <0 = no override, 0/1 = state
+    int32_t  thermal_zone;      // <0 = no override, 0-3 = zone
+    float    cpu_temp_override;  // <0 = no override
+    uint64_t sequence;          // incremented by injector
+};
+```
 
 ### Available Commands
 
-| Command | SHM Channel | Description |
+| Command | Override Field | Description |
 |---|---|---|
-| `battery <percent>` | `/fc_state` | Override FC battery level |
-| `fc_disconnect` | `/fc_state` | Set FC to disconnected (stale timestamp) |
-| `fc_reconnect` | `/fc_state` | Restore FC connection |
-| `gcs_command <cmd> [p1 p2 p3]` | `/gcs_commands` | Inject GCS command |
-| `thermal_zone <0-3>` | `/system_health` | Override thermal zone |
+| `battery <percent>` | `battery_percent` | Override FC battery level |
+| `fc_disconnect` | `fc_connected = 0` | Freeze FC heartbeat → link-loss detection |
+| `fc_reconnect` | `fc_connected = 1` | Release frozen timestamp |
+| `gcs_command <cmd> [p1 p2 p3]` | `/gcs_commands` (direct) | Inject GCS command |
+| `thermal_zone <0-3>` | `thermal_zone` | Override thermal zone |
 | `mission_upload <json>` | `/mission_upload` + `/gcs_commands` | Upload new waypoints |
 | `sequence <json>` | Various | Execute timed fault sequence |
 
@@ -410,6 +457,10 @@ which parameters can be adjusted for manual testing:
 - **Geofence polygon**: Modify vertices in `geofence.polygon`
 - **Backend selection**: Switch `path_planner.backend` between
   `"potential_field"` and `"astar"`
+- **Obstacle avoider backend**: `"potential_field"` or
+  `"potential_field_3d"` (3D variant used by stress test)
+- **IPC transport**: `--ipc shm` or `--ipc zenoh` on the
+  `run_scenario.sh` command line (default: from base config)
 
 ---
 
@@ -420,28 +471,35 @@ sequenceDiagram
     participant Runner as run_scenario.sh
     participant Stack as Companion Stack<br/>(7 processes)
     participant FI as fault_injector
-    participant SHM as POSIX SHM
+    participant FO as /fault_overrides
 
     Runner->>Runner: Merge base config + scenario overrides
-    Runner->>Stack: Launch with merged config
-    Stack->>SHM: Create SHM segments
-    Runner->>Runner: Wait for SHM segments
+    Runner->>Runner: Resolve effective IPC (SHM or Zenoh)
+    Runner->>Stack: Launch with merged config + --ipc flag
+
+    alt SHM transport
+        Runner->>Runner: Wait for /dev/shm segments
+    else Zenoh transport
+        Runner->>Runner: Wait for process log output
+    end
 
     Note over Runner,FI: Fault Injection Phase
 
     Runner->>FI: Execute fault sequence
-    FI->>SHM: Write battery=28% to /fc_state
-    SHM-->>Stack: P5→P4 reads stale battery
+    FI->>FO: Write battery_percent=28
+    FO-->>Stack: P5 reads override, publishes merged /fc_state
     Stack->>Stack: FaultManager: WARN
 
-    FI->>SHM: Write battery=18% to /fc_state
-    SHM-->>Stack: P4 reads low battery
-    Stack->>Stack: FaultManager: RTL
+    FI->>FO: Write battery_percent=18
+    FO-->>Stack: P5 reads override, publishes merged /fc_state
+    Stack->>Stack: FaultManager: RTL (FAULT_BATTERY_RTL)
 
     Note over Runner: Verification Phase
 
     Runner->>Runner: Check logs for expected patterns
-    Runner->>Runner: Check SHM segments exist
+    alt SHM transport
+        Runner->>Runner: Check SHM segments exist
+    end
     Runner->>Runner: Check processes alive
     Runner->>Runner: Report PASS/FAIL
 ```
@@ -474,10 +532,12 @@ companion_software_stack/
 ├── tools/
 │   └── fault_injector/
 │       ├── CMakeLists.txt
-│       └── main.cpp                  # Fault injection CLI
+│       └── main.cpp                  # Fault injection CLI (sideband /fault_overrides)
 ├── tests/
-│   ├── run_scenario.sh               # Scenario runner
+│   ├── run_scenario.sh               # Scenario runner (transport-aware, --ipc flag)
 │   └── test_gazebo_integration.sh    # Gazebo smoke test
+├── drone_logs/
+│   └── scenarios/                    # Scenario runner output logs
 └── docs/
     └── SIMULATION_ARCHITECTURE.md    # This file
 ```
