@@ -51,7 +51,7 @@ drone/{domain}/{topic}
 | 10 | `drone/monitor/health` | `/system_health` | `ShmSystemHealth` | ~512 B | 1 Hz | P7 | P4 | B |
 | 11 | `drone/video/frame` | `/drone_mission_cam` | `ShmVideoFrame` | ~6 MB | 30 Hz | P1 | P2 | C |
 | 12 | `drone/video/stereo_frame` | `/drone_stereo_cam` | `ShmStereoFrame` | ~600 KB | 30 Hz | P1 | P3 | C |
-| 13 | `drone/comms/mission_upload` | `/mission_upload` | `ShmMissionUpload` | ~2 KB | event | P5 | P4 | B |
+| 13 | `mission/upload` | `/mission_upload` | `ShmMissionUpload` | ~2 KB | event | P5 | P4 | B |
 | 14 | — (always POSIX SHM) | `/fault_overrides` | `ShmFaultOverrides` | 64 B | event | fault_injector | P5, P7 | — |
 
 **Total low-bandwidth:** ~100 KB/s (channels 1–10)

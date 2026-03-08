@@ -4,6 +4,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <type_traits>
 
@@ -159,11 +160,20 @@ inline std::string fault_flags_string(uint32_t flags) {
         {FAULT_GEOFENCE_BREACH, "FAULT_GEOFENCE_BREACH"},
         {FAULT_BATTERY_RTL, "FAULT_BATTERY_RTL"},
     };
+    uint32_t known = 0;
     for (const auto& f : kFlags) {
         if (flags & f.bit) {
             if (!result.empty()) result += '|';
             result += f.name;
+            known |= f.bit;
         }
+    }
+    uint32_t unknown = flags & ~known;
+    if (unknown) {
+        if (!result.empty()) result += '|';
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "FAULT_UNKNOWN(0x%X)", unknown);
+        result += buf;
     }
     return result;
 }

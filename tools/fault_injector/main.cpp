@@ -75,8 +75,13 @@ static ShmWriter<drone::ipc::ShmFaultOverrides>& get_override_writer() {
     static bool                                     initialised = false;
     if (!initialised) {
         // Try attach first (segment may already exist), then create.
-        if (!writer.attach(drone::ipc::shm_names::FAULT_OVERRIDES)) {
-            (void)writer.create(drone::ipc::shm_names::FAULT_OVERRIDES);
+        bool ok = writer.attach(drone::ipc::shm_names::FAULT_OVERRIDES);
+        if (!ok) {
+            ok = writer.create(drone::ipc::shm_names::FAULT_OVERRIDES);
+        }
+        if (!ok) {
+            print_err("Failed to attach to or create fault override SHM segment");
+            throw std::runtime_error("fault_injector: unable to open fault override SHM segment");
         }
         writer.write(g_overrides);
         initialised = true;
@@ -151,9 +156,10 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
     }
 
     ShmWriter<drone::ipc::ShmGCSCommand> writer;
-    if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS) &&
-        !writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::GCS_COMMANDS));
+    if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
+        print_err("Cannot attach to SHM segment " +
+                  std::string(drone::ipc::shm_names::GCS_COMMANDS) +
+                  ". Ensure the stack is running.");
         return 1;
     }
 
@@ -232,9 +238,10 @@ static int cmd_mission_upload(const std::string& json_file) {
     }
 
     ShmWriter<drone::ipc::ShmMissionUpload> writer;
-    if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD) &&
-        !writer.create(drone::ipc::shm_names::MISSION_UPLOAD)) {
-        print_err("Cannot open SHM segment " + std::string(drone::ipc::shm_names::MISSION_UPLOAD));
+    if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD)) {
+        print_err("Cannot attach to SHM segment " +
+                  std::string(drone::ipc::shm_names::MISSION_UPLOAD) +
+                  ". Ensure the stack is running.");
         return 1;
     }
 
@@ -259,8 +266,7 @@ static int cmd_mission_upload(const std::string& json_file) {
 
     // Also inject a MISSION_UPLOAD GCS command to trigger the planner
     ShmWriter<drone::ipc::ShmGCSCommand> gcs_writer;
-    if (gcs_writer.attach(drone::ipc::shm_names::GCS_COMMANDS) ||
-        gcs_writer.create(drone::ipc::shm_names::GCS_COMMANDS)) {
+    if (gcs_writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
         drone::ipc::ShmGCSCommand shm_cmd{};
         shm_cmd.timestamp_ns   = now_ns();
         shm_cmd.correlation_id = upload.correlation_id;
