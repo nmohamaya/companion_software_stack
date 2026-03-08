@@ -1583,33 +1583,82 @@ All call sites fixed to properly handle return values:
 
 ---
 
-## Updated Summary (Post Epic #110 — Core Autonomy & Safety Complete)
+### Improvement #32 — Integration Scenario Bug Fixes — 8 Root Causes (Issue #122, PR #123)
 
-| Metric | Watchdog + systemd | **Epic #110 (Current)** |
-|---|---|---|
-| Bug fixes | 21 | **21** |
-| Unit tests (SHM) | 701 | **735** |
-| Unit tests (SHM+Zenoh) | — | **844** |
-| Test suites | 31+ | **42** |
-| Compiler warnings | 0 | **0** |
-| CI matrix legs | 9 | **9** |
-| Line coverage | 75.1% | **75.1%** |
-| Code style | enforced | **enforced** |
-| Sanitizers | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
-| Error handling | Result<T,E> | **Result<T,E>** |
-| Config tunables | 95+ | **110+** |
-| Config schemas | 7 | **7** |
-| `[[nodiscard]]` headers | 26 | **26** |
-| HAL backends | 8 | **9** (+ SimulatedThermalCamera) |
-| Thread watchdog | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
-| Process supervision | systemd + ProcessManager | **systemd + ProcessManager** |
-| Planning | — | **A* 3D grid + potential field fallback** |
-| Safety subsystems | — | **Geofence + 3-tier battery RTL + FC link contingency** |
-| Perception fusion | weighted merge | **UKF (RGB + thermal)** |
-| Tracker | greedy IOU | **O(n³) Hungarian (Kuhn-Munkres)** |
-| VIO infrastructure | — | **Feature extraction + stereo matching + IMU pre-integration** |
-| Fault conditions | 8 | **11** (+ geofence, battery tiers, FC link RTL) |
-| Integration scenarios | — | **8** (Tier 1 SHM-only + Tier 2 Gazebo SITL) |
-| Fault injector | — | **CLI tool (battery, FC link, GCS, thermal, mission)** |
+**Date:** 2026-03-08  
+**Category:** Bug Fix / Integration Testing  
+**Issue:** [#122](https://github.com/nmohamaya/companion_software_stack/issues/122)  
+**PR:** [#123](https://github.com/nmohamaya/companion_software_stack/pull/123)
+
+**Files Modified:**
+- `common/ipc/include/ipc/shm_types.h` — `ShmFaultOverrides` struct, `FAULT_BATTERY_RTL`, `fault_flags_string()`, `/fault_overrides` SHM name
+- `process3_slam_vio_nav/include/slam/ivio_backend.h` — VIO timestamp fix (`steady_clock`)
+- `process3_slam_vio_nav/include/slam/ivisual_frontend.h` — Visual frontend timestamp fix
+- `process4_mission_planner/src/main.cpp` — Fault flag logging, EXECUTING log, geofence violation log, new-fault-flags tracker
+- `process4_mission_planner/include/planner/fault_manager.h` — `FAULT_BATTERY_RTL` usage
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — `potential_field_3d` factory alias
+- `process5_comms/src/main.cpp` — Mission upload publisher, fault override reader, FC timestamp freeze
+- `process7_system_monitor/src/main.cpp` — Thermal zone log, fault override reader
+- `tools/fault_injector/main.cpp` — Sideband `/fault_overrides` writer, create-or-attach pattern
+- `tests/run_scenario.sh` — `--ipc` flag, transport-aware startup, log path consolidation
+- `tests/test_fault_manager.cpp` — Updated for `FAULT_BATTERY_RTL`
+- `docs/BUG_FIXES.md` — Fix #17–#24
+- `docs/SIMULATION_ARCHITECTURE.md` — Sideband fault injection architecture, transport-aware docs
+- `docs/ipc-key-expressions.md` — Added `/fault_overrides` and `/mission_upload` channels
+
+**Root Causes Fixed:**
+
+| RC | Severity | Component | Issue | Fix |
+|---|---|---|---|---|
+| 1 | Critical | P3 VIO backend | Pose timestamp used frame counter (epoch ~0), causing 4.7M ms stale-pose rejection | Use `steady_clock::now()` in `generate_simulated_pose()` |
+| 2 | Medium | P4 Mission Planner | Fault flag bitmask names never logged — impossible to verify fault handling | Added `fault_flags_string()` and active_faults logging |
+| 3 | Medium | P5 Comms | `/mission_upload` SHM never published — mission upload scenario fails | Added mission_upload publisher in comms |
+| 4 | Low | P7 System Monitor | `"thermal_zone"` string never logged — thermal scenario grep fails | Added thermal_zone to log output |
+| 5 | Low | Scenario runner | Missing closing `fi` in `run_scenario.sh` | Fixed syntax |
+| 6 | Critical | Fault injector | Race condition: injector writes directly to `/fc_state` and `/system_health`, but comms/sysmon overwrite every 100 ms | Sideband `/fault_overrides` channel with `ShmFaultOverrides` struct; producers merge overrides |
+| 7 | High | P5 Comms | FC link-loss: comms sets `connected=false` but keeps publishing fresh timestamps — FaultManager stale-heartbeat never fires | Freeze timestamp when `fc_connected` override is 0 |
+| 8 | Medium | P4 Mission Planner | `create_obstacle_avoider("potential_field_3d")` throws `std::runtime_error` — stress test crashes | Added `potential_field_3d` as accepted factory alias |
+
+**Additional Fixes:**
+- `FAULT_BATTERY_RTL` enum (distinct from `FAULT_BATTERY_LOW`) for RTL-level escalation
+- FSM logs "EXECUTING" state after takeoff (previously only "NAVIGATE")
+- Explicit "Geofence: VIOLATED" log line for scenario verification
+- New-fault-flags log when flags change without action-level change
+- Transport-aware scenario runner: Zenoh uses log grep for startup, SHM segment checks skipped
+- Fault injector create-or-attach pattern for all SHM writers (works with Zenoh transport)
+- Scenario logs moved from `/tmp/drone_scenario_logs/` to `drone_logs/scenarios/`
+
+**Result:** 7/7 Tier 1 scenarios passing on SHM, 7/7 on Zenoh. 844/844 unit tests unchanged.
+
+---
+
+## Updated Summary (Post Issue #122 Fix — Integration Scenarios Passing)
+
+| Metric | Watchdog + systemd | Epic #110 | **#122 Fix (Current)** |
+|---|---|---|---|
+| Bug fixes | 21 | 21 | **29** |
+| Unit tests (SHM) | 701 | 735 | **735** |
+| Unit tests (SHM+Zenoh) | — | 844 | **844** |
+| Test suites | 31+ | 42 | **42** |
+| Compiler warnings | 0 | 0 | **0** |
+| CI matrix legs | 9 | 9 | **9** |
+| Line coverage | 75.1% | 75.1% | **75.1%** |
+| Code style | enforced | enforced | **enforced** |
+| Sanitizers | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| Error handling | Result<T,E> | Result<T,E> | **Result<T,E>** |
+| Config tunables | 95+ | 110+ | **110+** |
+| Config schemas | 7 | 7 | **7** |
+| `[[nodiscard]]` headers | 26 | 26 | **26** |
+| HAL backends | 8 | 9 | **9** |
+| Thread watchdog | ThreadHeartbeat + ThreadWatchdog | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | systemd + ProcessManager | systemd + ProcessManager | **systemd + ProcessManager** |
+| Planning | — | A* 3D grid + potential field fallback | **A* 3D + potential field + potential_field_3d** |
+| Safety subsystems | — | Geofence + 3-tier battery RTL + FC link contingency | **Geofence + FAULT_BATTERY_RTL + FC link freeze** |
+| Perception fusion | weighted merge | UKF (RGB + thermal) | **UKF (RGB + thermal)** |
+| Tracker | greedy IOU | O(n³) Hungarian (Kuhn-Munkres) | **O(n³) Hungarian (Kuhn-Munkres)** |
+| VIO infrastructure | — | Feature extraction + stereo matching + IMU pre-integration | **+ steady_clock timestamps** |
+| Fault conditions | 8 | 11 | **12** (+ FAULT_BATTERY_RTL) |
+| Integration scenarios | — | 8 (0/7 passing) | **8 (7/7 SHM + 7/7 Zenoh passing)** |
+| Fault injector | — | CLI tool (direct SHM write) | **Sideband /fault_overrides channel** |
 
 *Last updated after Epic #110 (Core Autonomy & Safety). All 7 sub-issues closed. See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
