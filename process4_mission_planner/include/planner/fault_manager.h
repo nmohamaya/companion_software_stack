@@ -36,6 +36,7 @@ using drone::ipc::FAULT_CRITICAL_PROCESS;
 using drone::ipc::FAULT_POSE_STALE;
 using drone::ipc::FAULT_BATTERY_LOW;
 using drone::ipc::FAULT_BATTERY_CRITICAL;
+using drone::ipc::FAULT_BATTERY_RTL;
 using drone::ipc::FAULT_THERMAL_WARNING;
 using drone::ipc::FAULT_THERMAL_CRITICAL;
 using drone::ipc::FAULT_PERCEPTION_DEAD;
@@ -151,7 +152,7 @@ public:
                 result.active_faults |= FAULT_BATTERY_CRITICAL;
                 escalate(result, FaultAction::EMERGENCY_LAND, "battery critical");
             } else if (fc_state.battery_remaining < config_.battery_rtl_percent) {
-                result.active_faults |= FAULT_BATTERY_LOW;
+                result.active_faults |= FAULT_BATTERY_RTL;
                 escalate(result, FaultAction::RTL, "battery low — RTL");
             } else if (fc_state.battery_remaining < config_.battery_warn_percent) {
                 result.active_faults |= FAULT_BATTERY_LOW;

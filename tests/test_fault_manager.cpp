@@ -140,7 +140,7 @@ TEST(FaultManagerTest, BatteryLowTriggersRTL) {
     auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
 
     EXPECT_EQ(result.recommended_action, FaultAction::RTL);
-    EXPECT_TRUE(result.active_faults & FAULT_BATTERY_LOW);
+    EXPECT_TRUE(result.active_faults & FAULT_BATTERY_RTL);
     EXPECT_FALSE(result.active_faults & FAULT_BATTERY_CRITICAL);
 }
 

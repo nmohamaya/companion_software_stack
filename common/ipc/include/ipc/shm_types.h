@@ -4,6 +4,8 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <string>
 #include <type_traits>
 
 namespace drone::ipc {
@@ -135,7 +137,46 @@ enum FaultType : uint32_t {
     FAULT_PERCEPTION_DEAD  = 1 << 6,  // perception process died
     FAULT_FC_LINK_LOST     = 1 << 7,  // FC not connected for >timeout
     FAULT_GEOFENCE_BREACH  = 1 << 8,  // outside geofence boundary
+    FAULT_BATTERY_RTL      = 1 << 9,  // battery below RTL threshold
 };
+
+/// Convert active fault bitmask to a human-readable pipe-separated string.
+inline std::string fault_flags_string(uint32_t flags) {
+    if (flags == 0) return "FAULT_NONE";
+    std::string result;
+    struct Flag {
+        uint32_t    bit;
+        const char* name;
+    };
+    static constexpr Flag kFlags[] = {
+        {FAULT_CRITICAL_PROCESS, "FAULT_CRITICAL_PROCESS"},
+        {FAULT_POSE_STALE, "FAULT_POSE_STALE"},
+        {FAULT_BATTERY_LOW, "FAULT_BATTERY_LOW"},
+        {FAULT_BATTERY_CRITICAL, "FAULT_BATTERY_CRITICAL"},
+        {FAULT_THERMAL_WARNING, "FAULT_THERMAL_WARNING"},
+        {FAULT_THERMAL_CRITICAL, "FAULT_THERMAL_CRITICAL"},
+        {FAULT_PERCEPTION_DEAD, "FAULT_PERCEPTION_DEAD"},
+        {FAULT_FC_LINK_LOST, "FAULT_FC_LINK_LOST"},
+        {FAULT_GEOFENCE_BREACH, "FAULT_GEOFENCE_BREACH"},
+        {FAULT_BATTERY_RTL, "FAULT_BATTERY_RTL"},
+    };
+    uint32_t known = 0;
+    for (const auto& f : kFlags) {
+        if (flags & f.bit) {
+            if (!result.empty()) result += '|';
+            result += f.name;
+            known |= f.bit;
+        }
+    }
+    uint32_t unknown = flags & ~known;
+    if (unknown) {
+        if (!result.empty()) result += '|';
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "FAULT_UNKNOWN(0x%X)", unknown);
+        result += buf;
+    }
+    return result;
+}
 
 struct ShmMissionStatus {
     uint64_t     timestamp_ns;
@@ -353,6 +394,27 @@ static_assert(std::is_trivially_copyable_v<ShmThreadHealth>,
               "ShmThreadHealth must be trivially copyable for SHM");
 
 // ═══════════════════════════════════════════════════════════
+// Fault Injection Overrides SHM — written by the fault_injector tool
+// and read by the processes that own the overridden resources.
+// Each field uses a sentinel value (<0) to indicate "no override".
+// ═══════════════════════════════════════════════════════════
+struct alignas(64) ShmFaultOverrides {
+    // FC state overrides (consumed by Process 5 comms)
+    float   battery_percent;  // <0 = no override
+    float   battery_voltage;  // <0 = no override
+    int32_t fc_connected;     // <0 = no override, 0 = disconnected, 1 = connected
+    // System health overrides (consumed by Process 7 system monitor)
+    int32_t thermal_zone;       // <0 = no override, 0-3 = zone
+    float   cpu_temp_override;  // <0 = no override
+    // Sequence counter – incremented by the injector so consumers can
+    // detect new writes vs stale values.
+    uint64_t sequence;
+};
+
+static_assert(std::is_trivially_copyable_v<ShmFaultOverrides>,
+              "ShmFaultOverrides must be trivially copyable for SHM");
+
+// ═══════════════════════════════════════════════════════════
 // SHM Segment Names — centralised to avoid typos
 // ═══════════════════════════════════════════════════════════
 namespace shm_names {
@@ -370,6 +432,7 @@ constexpr const char* GCS_COMMANDS      = "/gcs_commands";
 constexpr const char* MISSION_UPLOAD    = "/mission_upload";
 constexpr const char* PAYLOAD_STATUS    = "/payload_status";
 constexpr const char* SYSTEM_HEALTH     = "/system_health";
+constexpr const char* FAULT_OVERRIDES   = "/fault_overrides";
 
 // ── Per-process thread health channels ──────────────────
 constexpr const char* THREAD_HEALTH_VIDEO_CAPTURE   = "/drone_thread_health_video_capture";

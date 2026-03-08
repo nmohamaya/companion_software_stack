@@ -3,6 +3,7 @@
 // watchdog.  Publishes ShmSystemHealth.
 
 #include "ipc/message_bus_factory.h"
+#include "ipc/shm_reader.h"
 #include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "monitor/iprocess_monitor.h"
@@ -287,6 +288,10 @@ int main(int argc, char* argv[]) {
         disk_interval_ticks);
     spdlog::info("Process monitor: {}", monitor->name());
 
+    // Optional fault-injection override reader.
+    ShmReader<drone::ipc::ShmFaultOverrides> override_reader;
+    (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);  // may not exist yet
+
     uint32_t tick = 0;
 
     // ── Main loop (1 Hz) ────────────────────────────────────
@@ -353,6 +358,23 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Apply fault-injection overrides (if any).
+        {
+            drone::ipc::ShmFaultOverrides ovr{};
+            if (!override_reader.is_open()) {
+                (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);
+            }
+            if (override_reader.is_open() && override_reader.read(ovr)) {
+                if (ovr.thermal_zone >= 0) {
+                    health.thermal_zone = static_cast<uint8_t>(ovr.thermal_zone);
+                }
+                if (ovr.cpu_temp_override >= 0.0f) {
+                    health.cpu_temp_c = ovr.cpu_temp_override;
+                    health.max_temp_c = ovr.cpu_temp_override;
+                }
+            }
+        }
+
         health_pub->publish(health);
 
         // Log summary
@@ -365,9 +387,9 @@ int main(int argc, char* argv[]) {
 
             spdlog::info(
                 "[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}°C "
-                "DISK={:.0f}% BATT={:.0f}% stack={} => {}",
+                "DISK={:.0f}% BATT={:.0f}% thermal_zone={} stack={} => {}",
                 health.cpu_usage_percent, health.memory_usage_percent, health.cpu_temp_c,
-                health.disk_usage_percent, battery,
+                health.disk_usage_percent, battery, health.thermal_zone,
                 drone::util::to_string(static_cast<drone::util::StackStatus>(health.stack_status)),
                 status_str);
         }

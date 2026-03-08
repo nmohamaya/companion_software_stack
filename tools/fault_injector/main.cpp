@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -60,8 +61,44 @@ static void print_info(const std::string& msg) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Helpers — fault override SHM segment
+// ═══════════════════════════════════════════════════════════════
+
+/// Process-local mirror of the current override state.
+static drone::ipc::ShmFaultOverrides g_overrides = {
+    /*.battery_percent=*/-1.0f,   /*.battery_voltage=*/-1.0f,
+    /*.fc_connected=*/-1,         /*.thermal_zone=*/-1,
+    /*.cpu_temp_override=*/-1.0f, /*.sequence=*/0};
+
+static ShmWriter<drone::ipc::ShmFaultOverrides>& get_override_writer() {
+    static ShmWriter<drone::ipc::ShmFaultOverrides> writer;
+    static bool                                     initialised = false;
+    if (!initialised) {
+        // Try attach first (segment may already exist), then create.
+        bool ok = writer.attach(drone::ipc::shm_names::FAULT_OVERRIDES);
+        if (!ok) {
+            ok = writer.create(drone::ipc::shm_names::FAULT_OVERRIDES);
+        }
+        if (!ok) {
+            print_err("Failed to attach to or create fault override SHM segment");
+            throw std::runtime_error("fault_injector: unable to open fault override SHM segment");
+        }
+        writer.write(g_overrides);
+        initialised = true;
+    }
+    return writer;
+}
+
+/// Mutate the process-local override state and flush to SHM.
+static void update_overrides(std::function<void(drone::ipc::ShmFaultOverrides&)> mutator) {
+    mutator(g_overrides);
+    ++g_overrides.sequence;
+    get_override_writer().write(g_overrides);
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Command: battery <percent>
-// Writes to /fc_state with battery_remaining set to <percent>.
+// Sets battery override in /fault_overrides.
 // ═══════════════════════════════════════════════════════════════
 static int cmd_battery(float percent) {
     if (percent < 0.0f || percent > 100.0f) {
@@ -69,57 +106,24 @@ static int cmd_battery(float percent) {
         return 1;
     }
 
-    ShmWriter<drone::ipc::ShmFCState> writer;
-    if (!writer.attach(drone::ipc::shm_names::FC_STATE)) {
-        print_err("Cannot attach to SHM segment " + std::string(drone::ipc::shm_names::FC_STATE) +
-                  " (is the stack running?)");
-        return 1;
-    }
-
-    drone::ipc::ShmFCState state{};
-    state.timestamp_ns       = now_ns();
-    state.battery_remaining  = percent;
-    state.battery_voltage    = 12.0f + percent * 0.048f;
-    state.connected          = true;
-    state.armed              = true;
-    state.flight_mode        = 1;  // GUIDED
-    state.rel_alt            = 5.0f;
-    state.satellites_visible = 12;
-
-    writer.write(state);
+    update_overrides([&](drone::ipc::ShmFaultOverrides& ovr) {
+        ovr.battery_percent = percent;
+        ovr.battery_voltage = 12.0f + percent * 0.048f;
+    });
 
     std::ostringstream oss;
-    oss << "Battery override: " << percent << "% (voltage=" << state.battery_voltage << "V)";
+    oss << "Battery override: " << percent << "% (voltage=" << (12.0f + percent * 0.048f) << "V)";
     print_ok(oss.str());
     return 0;
 }
 
 // ═══════════════════════════════════════════════════════════════
 // Command: fc_disconnect / fc_reconnect
-// Writes FC state with connected=false/true.
+// Sets FC connected override in /fault_overrides.
 // ═══════════════════════════════════════════════════════════════
 static int cmd_fc_link(bool connected) {
-    ShmWriter<drone::ipc::ShmFCState> writer;
-    if (!writer.attach(drone::ipc::shm_names::FC_STATE)) {
-        print_err("Cannot attach to SHM segment " + std::string(drone::ipc::shm_names::FC_STATE) +
-                  " (is the stack running?)");
-        return 1;
-    }
-
-    drone::ipc::ShmFCState state{};
-    // For disconnect: write a valid timestamp (now) so FaultManager's
-    // age-based timeout can elapse.  The timestamp stays frozen while
-    // disconnected, causing fc_age to grow past the LOITER/RTL thresholds.
-    state.timestamp_ns       = now_ns();
-    state.connected          = connected;
-    state.armed              = true;
-    state.battery_remaining  = 80.0f;
-    state.battery_voltage    = 15.84f;
-    state.flight_mode        = 1;
-    state.rel_alt            = 5.0f;
-    state.satellites_visible = connected ? 12 : 0;
-
-    writer.write(state);
+    update_overrides(
+        [&](drone::ipc::ShmFaultOverrides& ovr) { ovr.fc_connected = connected ? 1 : 0; });
     print_ok(connected ? "FC link restored" : "FC link disconnected (stale timestamp)");
     return 0;
 }
@@ -154,7 +158,8 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
     ShmWriter<drone::ipc::ShmGCSCommand> writer;
     if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
         print_err("Cannot attach to SHM segment " +
-                  std::string(drone::ipc::shm_names::GCS_COMMANDS) + " (is the stack running?)");
+                  std::string(drone::ipc::shm_names::GCS_COMMANDS) +
+                  ". Ensure the stack is running.");
         return 1;
     }
 
@@ -180,7 +185,7 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
 
 // ═══════════════════════════════════════════════════════════════
 // Command: thermal_zone <0-3>
-// Writes system health with thermal_zone override.
+// Sets thermal zone override in /fault_overrides.
 // ═══════════════════════════════════════════════════════════════
 static int cmd_thermal_zone(uint8_t zone) {
     if (zone > 3) {
@@ -188,25 +193,11 @@ static int cmd_thermal_zone(uint8_t zone) {
         return 1;
     }
 
-    ShmWriter<drone::ipc::ShmSystemHealth> writer;
-    if (!writer.attach(drone::ipc::shm_names::SYSTEM_HEALTH)) {
-        print_err("Cannot attach to SHM segment " +
-                  std::string(drone::ipc::shm_names::SYSTEM_HEALTH) + " (is the stack running?)");
-        return 1;
-    }
-
-    drone::ipc::ShmSystemHealth health{};
-    health.timestamp_ns         = now_ns();
-    health.thermal_zone         = zone;
-    health.cpu_usage_percent    = 50.0f;
-    health.memory_usage_percent = 40.0f;
-    health.disk_usage_percent   = 30.0f;
-    // Map thermal zone to temperature
-    float temps[]     = {50.0f, 75.0f, 88.0f, 98.0f};
-    health.cpu_temp_c = temps[zone];
-    health.max_temp_c = temps[zone];
-
-    writer.write(health);
+    float temps[] = {50.0f, 75.0f, 88.0f, 98.0f};
+    update_overrides([&](drone::ipc::ShmFaultOverrides& ovr) {
+        ovr.thermal_zone      = static_cast<int32_t>(zone);
+        ovr.cpu_temp_override = temps[zone];
+    });
 
     std::ostringstream oss;
     oss << "Thermal zone override: " << static_cast<int>(zone) << " (temp=" << temps[zone] << "°C)";
@@ -249,7 +240,8 @@ static int cmd_mission_upload(const std::string& json_file) {
     ShmWriter<drone::ipc::ShmMissionUpload> writer;
     if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD)) {
         print_err("Cannot attach to SHM segment " +
-                  std::string(drone::ipc::shm_names::MISSION_UPLOAD) + " (is the stack running?)");
+                  std::string(drone::ipc::shm_names::MISSION_UPLOAD) +
+                  ". Ensure the stack is running.");
         return 1;
     }
 

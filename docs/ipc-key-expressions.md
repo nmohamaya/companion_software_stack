@@ -51,6 +51,8 @@ drone/{domain}/{topic}
 | 10 | `drone/monitor/health` | `/system_health` | `ShmSystemHealth` | ~512 B | 1 Hz | P7 | P4 | B |
 | 11 | `drone/video/frame` | `/drone_mission_cam` | `ShmVideoFrame` | ~6 MB | 30 Hz | P1 | P2 | C |
 | 12 | `drone/video/stereo_frame` | `/drone_stereo_cam` | `ShmStereoFrame` | ~600 KB | 30 Hz | P1 | P3 | C |
+| 13 | `mission/upload` | `/mission_upload` | `ShmMissionUpload` | ~2 KB | event | P5 | P4 | B |
+| 14 | — (always POSIX SHM) | `/fault_overrides` | `ShmFaultOverrides` | 64 B | event | fault_injector | P5, P7 | — |
 
 **Total low-bandwidth:** ~100 KB/s (channels 1–10)
 **Total high-bandwidth:** ~190 MB/s (channels 11–12, Phase C with Zenoh SHM zero-copy)
@@ -141,6 +143,12 @@ When `ipc_backend=zenoh`:
 | P2 Perception | `perception/detections` | `video/frame` |
 | P3 SLAM/VIO/Nav | `slam/pose` | `video/stereo_frame` |
 | P4 Mission Planner | `mission/status`, `mission/trajectory`, `mission/payload_command`, `comms/fc_command` | `slam/pose`, `perception/detections`, `comms/fc_state`, `comms/gcs_command`, `payload/status`, `monitor/health` |
-| P5 Comms | `comms/fc_state`, `comms/gcs_command` | `mission/trajectory`, `comms/fc_command`, `slam/pose`, `mission/status` |
+| P5 Comms | `comms/fc_state`, `comms/gcs_command`, `comms/mission_upload` | `mission/trajectory`, `comms/fc_command`, `slam/pose`, `mission/status` |
 | P6 Payload Manager | `payload/status` | `mission/payload_command` |
 | P7 System Monitor | `monitor/health` | `comms/fc_state` (optional) |
+
+> **Note:** `/fault_overrides` is always POSIX SHM (never Zenoh). The
+> `fault_injector` tool writes to it; P5 (Comms) and P7 (System Monitor)
+> read overrides and merge them into `/fc_state` and `/system_health`
+> respectively. See [SIMULATION_ARCHITECTURE.md](SIMULATION_ARCHITECTURE.md)
+> for details.

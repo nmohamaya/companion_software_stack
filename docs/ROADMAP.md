@@ -70,8 +70,9 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
-| Integration testing | **8 scenarios**, fault injector CLI, two-tier model (SHM-only + Gazebo) |
+| Integration testing | **7/7 Tier 1 scenarios passing** on both SHM and Zenoh; sideband fault injector CLI |
 | Test scenarios | 8 parameterized JSON configs with fault sequences + pass criteria |
+| Bug fixes | **29** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
 ---
 
@@ -319,13 +320,23 @@
 - Scenario runner (`tests/run_scenario.sh`) — two-tier model (Tier 1: SHM-only, Tier 2: Gazebo SITL)
 - Architecture documentation with Mermaid diagrams (`docs/SIMULATION_ARCHITECTURE.md`)
 
+**Integration Scenario Fixes (#122, PR #123):**
+- 8 root-cause bug fixes to make all 7 Tier 1 scenarios pass (Fix #17–#24 in BUG_FIXES.md)
+- Sideband `/fault_overrides` channel — fault injector no longer races with producer processes
+- `FAULT_BATTERY_RTL` enum — distinct flag for RTL-level battery escalation
+- VIO backend timestamp fix — `steady_clock::now()` instead of frame-counter epoch
+- FC link-loss timestamp freeze — stale-heartbeat detection works correctly
+- `potential_field_3d` obstacle avoider factory alias
+- Transport-aware scenario runner (`--ipc shm|zenoh`) — 7/7 on both transports
+- Scenario logs consolidated to `drone_logs/scenarios/`
+
 **Cross-Epic Deliveries (Epic #25):**
 - #27 Battery-critical auto-RTL ✅
 - #28 FC heartbeat timeout + link-loss contingency ✅
 - #29 Geofencing (polygon + altitude ceiling) ✅
 
-**Issues:** #110 (epic), #111–#116, #120  
-**PRs:** #117, #118, #119, #121  
+**Issues:** #110 (epic), #111–#116, #120, #122  
+**PRs:** #117, #118, #119, #121, #123  
 **Tests:** 701 → 844 (SHM: 735, SHM+Zenoh: 844)
 
 ---
@@ -508,6 +519,7 @@
 | [#115](https://github.com/nmohamaya/companion_software_stack/issues/115) | Stereo VIO Foundation | Phase 2A | **Closed** (PR #118) |
 | [#116](https://github.com/nmohamaya/companion_software_stack/issues/116) | Planning & Safety (A*, Geofence, FaultMgr) | Phase 3 | **Closed** (PR #119) |
 | [#120](https://github.com/nmohamaya/companion_software_stack/issues/120) | Integration Testing — Scenario Harness | Testing | **Closed** (PR #121) |
+| [#122](https://github.com/nmohamaya/companion_software_stack/issues/122) | Integration scenario failures — 8 root causes | Bug fix | **Open** (PR #123) |
 
 ---
 
@@ -518,7 +530,7 @@
 | Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **735** |
 | Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **844** |
 | Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | **42** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **21** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **29** |
 | Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
 | HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **9** |
 | IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
@@ -543,7 +555,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (Tier 1 + Tier 2)** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** |
 
 ### Process Activity During Simulation
 
@@ -559,4 +571,4 @@
 
 ---
 
-*Last updated after Epic #110 (Core Autonomy & Safety) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, A* planner, geofence, UKF fusion, 8 integration scenarios, fault injector CLI.*
+*Last updated after Issue #122 fix (PR #123) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 29 bug fixes, sideband fault injector.*

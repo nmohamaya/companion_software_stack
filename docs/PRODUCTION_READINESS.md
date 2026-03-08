@@ -33,10 +33,10 @@ Production requires implementing the real backend behind each interface.
 | 1.7 | Gimbal | `SimulatedGimbal` — rate-limited slew model | UART / PWM / SBUS gimbal protocol | P1 | 🔴 | `IGimbal` interface exists |
 | 1.8 | IMU | `SimulatedIMU` — noisy synthetic data | SPI/I2C driver (BMI088, ICM-42688-P, etc.) | P0 | 🔴 | `IIMUSource` interface exists; Gazebo backend works |
 | 1.9 | Visual frontend | `SimulatedVisualFrontend` — circular trajectory | ORB-SLAM3 / VINS-Fusion integration | P1 | 🔴 | `IVisualFrontend` interface exists |
-| 1.10 | Path planner | `PotentialFieldPlanner` — attractive force + EMA | RRT* / D* Lite | P2 | 🔴 | Current planner is functional but basic |
-| 1.11 | Obstacle avoider | `PotentialFieldAvoider` — repulsive force | VFH+ / 3D-VFH | P2 | 🔴 | |
-| 1.12 | LiDAR | Simulated random clusters in P2 | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface |
-| 1.13 | Radar | Simulated random detections in P2 | mmWave radar driver (TI AWR, etc.) | P2 | 🔴 | Need HAL `IRadar` interface |
+| 1.10 | Path planner | `AStarPathPlanner` — 3D grid, 26-connected search, obstacle inflation | RRT* / D* Lite | P2 | 🟡 | A* functional for sim + basic autonomy; upgrade for dynamic environments |
+| 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field` / `potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) |
+| 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; simulated code removed |
+| 1.13 | Radar | Removed (Phase 1A, PR #117) | mmWave radar driver (TI AWR, etc.) | P2 | 🔴 | Need HAL `IRadar` interface; simulated code removed |
 
 ---
 
@@ -71,7 +71,7 @@ Production requires implementing the real backend behind each interface.
 |---|------|--------------------|--------------------|----------|--------|-------|
 | 4.1 | Process supervision | systemd units (production) / ProcessManager (`--supervised` mode) | systemd units with watchdog, auto-restart, dependency ordering | P0 | 🟢 | PR #107 (systemd), Epic #88 (watchdog) |
 | 4.2 | OTA updates | None — manual scp + rebuild | Mender / SWUpdate / custom updater | P2 | 🔴 | |
-| 4.3 | Log management | spdlog to files, no rotation | Log rotation (logrotate or spdlog rotating sink), remote log shipping | P1 | 🔴 | Disk will fill on long missions |
+| 4.3 | Log management | spdlog rotating file sink + console/JSON sink; scenario logs in `drone_logs/scenarios/` | Log rotation (logrotate or spdlog rotating sink), remote log shipping | P1 | 🟡 | Rotating sink done; remote shipping TBD |
 | 4.4 | Config validation | JSON Schema validation at startup; reject invalid configs | `ConfigSchema` builder-pattern validation at startup (7 schemas) | P1 | 🟢 | PR #76 — Issue #69 |
 | 4.5 | Crash reporting | Process exits with return 1 | Core dump collection, crash telemetry upload | P2 | 🔴 | |
 | 4.6 | Cross-compilation | Native x86 build only | Cross-compile for aarch64 (Jetson) | P0 | 🔴 | Need CMake toolchain file |
@@ -84,10 +84,10 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|------|--------------------|--------------------|----------|--------|-------|
-| 5.1 | Failsafe logic | Basic RTL on battery low / link loss | Comprehensive failsafe: GPS loss, IMU failure, motor fault, geofence breach | P0 | 🔴 | |
-| 5.2 | Geofencing | None | Configurable geofence polygons + altitude limits | P0 | 🔴 | |
+| 5.1 | Failsafe logic | FaultManager: 3-tier battery (WARN/RTL/LAND with `FAULT_BATTERY_RTL`), FC link-loss (LOITER→RTL with timestamp freeze), geofence breach → RTL | Comprehensive failsafe: GPS loss, IMU failure, motor fault, sensor dropout | P0 | 🟡 | Battery + FC link + geofence done (PRs #119, #123); GPS/IMU/motor TBD |
+| 5.2 | Geofencing | Ray-casting point-in-polygon + altitude ceiling + warning margin | Configurable geofence polygons + altitude limits | P0 | 🟢 | PR #119 (Phase 3); verified via scenario 05 (PR #123) |
 | 5.3 | Health watchdog | ThreadHeartbeat + ThreadWatchdog + systemd WatchdogSec | Hardware watchdog timer (WDT) + software heartbeat monitoring | P1 | 🟢 | PRs #94, #96, #107; per-thread atomic heartbeats, 3-layer architecture |
-| 5.4 | Error recovery | Most errors → `spdlog::error()` + exit | Graceful degradation: retry, fallback, safe-state transition | P1 | � | `Result<T,E>` (PR #75), `FaultManager` (PR #63) provide structured error handling; full recovery chains TBD |
+| 5.4 | Error recovery | Most errors → `spdlog::error()` + exit | Graceful degradation: retry, fallback, safe-state transition | P1 | 🟡 | `Result<T,E>` (PR #75), `FaultManager` (PR #63, #119, #123) provide structured error handling; full recovery chains TBD |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens (Phase F, #51) | Zenoh liveliness tokens (Phase F, #51) | P2 | 🟢 | PR #57 — 7 tokens active, P7 monitors |
 | 5.6 | Redundancy | Single IMU, single GPS | Dual IMU + dual GPS with voting / consistency checks | P2 | 🔴 | |
 
@@ -112,7 +112,7 @@ Production requires implementing the real backend behind each interface.
 | 7.3 | TSan coverage — own code | 560/560 own-code tests pass under TSan | All own-code tests pass under TSan | P1 | 🟢 | SPSC, seqlock, watchdog, process manager all clean |
 | 7.4 | TSan coverage — third-party libs | 157 tests excluded (Zenoh/MAVSDK/OpenCV/Liveliness) — pre-built libs not TSan-instrumented | Run all tests under TSan with instrumented libs or targeted suppressions | P1 | 🔴 | See details below |
 | 7.5 | Valgrind / Helgrind soak tests | Not implemented | Multi-hour soak runs under Valgrind + Helgrind for leak/race detection | P2 | 🔴 | Catches different bug classes than sanitizers |
-| 7.6 | Fault injection testing | Not implemented | Kill/restart processes mid-flight, saturate IPC queues, simulate sensor dropouts | P1 | 🔴 | |
+| 7.6 | Fault injection testing | `fault_injector` CLI with sideband `/fault_overrides` channel; 7/7 Tier 1 scenarios on SHM + Zenoh | Kill/restart processes mid-flight, saturate IPC queues, simulate sensor dropouts | P1 | 🟡 | Fault injection done (PR #123); process-kill + IPC saturation TBD |
 
 ### 7.4 — TSan Third-Party Library Plan
 
@@ -139,6 +139,7 @@ TSan instruments memory accesses at **compile time**. Pre-built shared libraries
 | 4.1 | Process supervision | systemd 7-unit architecture (PR #107) + ProcessManager fork+exec supervisor (implementation in PRs #101, #102; ADR in PR #100) + restart policies with dependency graph. `BindsTo=` stop-propagation semantics, `sd_notify(READY=1)`, `WatchdogSec=10s` on P7. | 2026-03-06 |
 | 4.4 | Config validation | `ConfigSchema` builder-pattern validation with 7 process schemas (PR #76, Issue #69) | 2026-03-03 |
 | 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ShmThreadHealth` publisher + `ProcessManager` crash recovery (PRs #96, #101, #102), (3) systemd `WatchdogSec` OS-level supervision (PR #107). See [tests/TESTS.md](../tests/TESTS.md) for test counts. | 2026-03-06 |
+| 5.2 | Geofencing | Ray-casting point-in-polygon + altitude ceiling + warning margin (PR #119, Phase 3). Verified end-to-end via geofence breach scenario (PR #123). | 2026-03-08 |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens — 7 tokens active, P7 monitors deaths (PR #57, Phase F) | 2026-03-01 |
 
 ---

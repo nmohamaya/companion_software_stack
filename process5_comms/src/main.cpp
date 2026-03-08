@@ -10,6 +10,7 @@
 
 #include "hal/hal_factory.h"
 #include "ipc/message_bus_factory.h"
+#include "ipc/shm_reader.h"
 #include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
@@ -37,6 +38,14 @@ static void fc_rx_thread(drone::hal::IFCLink&                            fc,
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
 
+    // Optional fault-injection override reader.
+    ShmReader<drone::ipc::ShmFaultOverrides> override_reader;
+    (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);  // may fail — that's fine
+
+    // When FC link is overridden to disconnected, freeze the timestamp
+    // so the FaultManager sees a stale heartbeat (simulates real link loss).
+    uint64_t frozen_ts = 0;
+
     auto hb = drone::util::ScopedHeartbeat("fc_rx", true);
 
     while (g_running.load(std::memory_order_relaxed)) {
@@ -53,6 +62,32 @@ static void fc_rx_thread(drone::hal::IFCLink&                            fc,
         state.flight_mode        = hb.flight_mode;
         state.armed              = hb.armed;
         state.connected          = true;
+
+        // Apply fault-injection overrides (if any).
+        drone::ipc::ShmFaultOverrides ovr{};
+        if (!override_reader.is_open()) {
+            // Retry open — the fault_injector may create it later.
+            (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);
+        }
+        if (override_reader.is_open() && override_reader.read(ovr)) {
+            if (ovr.battery_percent >= 0.0f) {
+                state.battery_remaining = ovr.battery_percent;
+                state.battery_voltage   = ovr.battery_voltage;
+            }
+            if (ovr.fc_connected >= 0) {
+                if (ovr.fc_connected == 0) {
+                    // Simulate real link loss: freeze the timestamp so
+                    // the FaultManager sees stale heartbeat data.
+                    if (frozen_ts == 0) frozen_ts = state.timestamp_ns;
+                    state.timestamp_ns = frozen_ts;
+                    state.connected    = false;
+                } else {
+                    frozen_ts       = 0;  // link restored — resume live timestamps
+                    state.connected = true;
+                }
+            }
+        }
+
         pub.publish(state);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -271,7 +306,9 @@ int main(int argc, char* argv[]) {
     auto fc_pub = bus.advertise<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
     auto gcs_cmd_pub =
         bus.advertise<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS);
-    if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready()) {
+    auto mission_upload_pub =
+        bus.advertise<drone::ipc::ShmMissionUpload>(drone::ipc::shm_names::MISSION_UPLOAD);
+    if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready() || !mission_upload_pub->is_ready()) {
         spdlog::error("Failed to create Comms publishers");
         return 1;
     }
