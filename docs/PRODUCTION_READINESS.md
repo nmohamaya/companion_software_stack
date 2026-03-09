@@ -33,8 +33,8 @@ Production requires implementing the real backend behind each interface.
 | 1.7 | Gimbal | `SimulatedGimbal` — rate-limited slew model | UART / PWM / SBUS gimbal protocol | P1 | 🔴 | `IGimbal` interface exists |
 | 1.8 | IMU | `SimulatedIMU` — noisy synthetic data | SPI/I2C driver (BMI088, ICM-42688-P, etc.) | P0 | 🔴 | `IIMUSource` interface exists; Gazebo backend works |
 | 1.9 | Visual frontend | `SimulatedVisualFrontend` — circular trajectory | ORB-SLAM3 / VINS-Fusion integration | P1 | 🔴 | `IVisualFrontend` interface exists |
-| 1.10 | Path planner | `AStarPathPlanner` — 3D grid, 26-connected search, obstacle inflation | RRT* / D* Lite | P2 | 🟡 | A* functional for sim + basic autonomy; upgrade for dynamic environments |
-| 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field` / `potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) |
+| 1.10 | Path planner | `AStarPathPlanner` — 3D grid, 26-connected search, obstacle inflation, two-layer occupancy (HD-map static + camera TTL 3 s), BFS start-escape | RRT* / D* Lite | P2 | 🟡 | A* + HD-map verified in Gazebo SITL scenario 02 (7/7 WP, 0 collisions); upgrade for dynamic environments |
+| 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field` / `potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) + scenario 02 with HD-map (Fix #35) |
 | 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; simulated code removed |
 | 1.13 | Radar | Removed (Phase 1A, PR #117) | mmWave radar driver (TI AWR, etc.) | P2 | 🔴 | Need HAL `IRadar` interface; simulated code removed |
 
@@ -140,6 +140,8 @@ TSan instruments memory accesses at **compile time**. Pre-built shared libraries
 | 4.4 | Config validation | `ConfigSchema` builder-pattern validation with 7 process schemas (PR #76, Issue #69) | 2026-03-03 |
 | 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ShmThreadHealth` publisher + `ProcessManager` crash recovery (PRs #96, #101, #102), (3) systemd `WatchdogSec` OS-level supervision (PR #107). See [tests/TESTS.md](../tests/TESTS.md) for test counts. | 2026-03-06 |
 | 5.2 | Geofencing | Ray-casting point-in-polygon + altitude ceiling + warning margin (PR #119, Phase 3). Verified end-to-end via geofence breach scenario (PR #123). | 2026-03-08 |
+| 5.6 | HD-map obstacle avoidance | Two-layer A* occupancy grid (permanent HD-map static layer + 3 s TTL camera confirmation layer). Verified in Gazebo SITL scenario 02: 7/7 waypoints reached, 0 collisions (Fix #35). | 2026-03-09 |
+| 5.7 | Proximity collision detection | NAVIGATE loop checks drone ENU position against all HD-map obstacles each tick (`radius_m + 0.5 m` XY, `height_m + 0.5 m` Z). Throttled 2 s cooldown. Supplements disarm-based crash check (Fix #36). | 2026-03-09 |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens — 7 tokens active, P7 monitors deaths (PR #57, Phase F) | 2026-03-01 |
 
 ---

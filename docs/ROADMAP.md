@@ -519,7 +519,11 @@
 | [#115](https://github.com/nmohamaya/companion_software_stack/issues/115) | Stereo VIO Foundation | Phase 2A | **Closed** (PR #118) |
 | [#116](https://github.com/nmohamaya/companion_software_stack/issues/116) | Planning & Safety (A*, Geofence, FaultMgr) | Phase 3 | **Closed** (PR #119) |
 | [#120](https://github.com/nmohamaya/companion_software_stack/issues/120) | Integration Testing — Scenario Harness | Testing | **Closed** (PR #121) |
-| [#122](https://github.com/nmohamaya/companion_software_stack/issues/122) | Integration scenario failures — 8 root causes | Bug fix | **Open** (PR #123) |
+| [#122](https://github.com/nmohamaya/companion_software_stack/issues/122) | Integration scenario failures — 8 root causes | Bug fix | **Closed** (PR #123) |
+| [#125](https://github.com/nmohamaya/companion_software_stack/issues/125) | Scenario 02 Obstacle Avoidance: SITL Fixes (TTL grid, goal snap, thermal, geofence, BFS escape, HD-map) | Bug fix / Feature | **Closed** (Fixes #30–35) |
+| [#126](https://github.com/nmohamaya/companion_software_stack/issues/126) | HD-Map Two-Layer Occupancy Grid (static + camera TTL) | Feature | **Closed** (Fix #35) |
+| [#127](https://github.com/nmohamaya/companion_software_stack/issues/127) | Proximity-Based Collision Detection in NAVIGATE Loop | Feature | **Closed** (Fix #36) |
+| [#129](https://github.com/nmohamaya/companion_software_stack/issues/129) | PX4 exit tears down companion stack and GUI (launch_gazebo.sh) | Bug | **Open** (Bug #29 — FIXME in launch_gazebo.sh) |
 
 ---
 
@@ -571,4 +575,4 @@
 
 ---
 
-*Last updated after Issue #122 fix (PR #123) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 29 bug fixes, sideband fault injector.*
+*Last updated after Improvement #33 (Scenario 02 obstacle avoidance full pass, HD-map two-layer grid, proximity collision detection) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 36 bug fixes total. Gazebo SITL scenario 02: 7/7 WP reached, 0 collisions. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

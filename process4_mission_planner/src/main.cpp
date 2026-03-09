@@ -174,6 +174,27 @@ int main(int argc, char* argv[]) {
     // Cache pointer for A* obstacle-grid updates (null if not A*)
     auto* astar_planner = dynamic_cast<drone::planner::AStarPathPlanner*>(path_planner.get());
 
+    // ── HD-map: pre-populate A* grid with known static obstacles ────────────
+    // These cells are permanent (no TTL). The camera pipeline independently
+    // confirms these obstacles via live detections (TTL layer). A* sees both.
+    struct StaticObstacleRecord {
+        float x, y, radius_m, height_m;
+    };
+    std::vector<StaticObstacleRecord> static_obstacles;
+    {
+        auto obs_json = cfg.section("mission_planner.static_obstacles");
+        if (obs_json.is_array() && !obs_json.empty()) {
+            for (const auto& o : obs_json) {
+                StaticObstacleRecord rec{o.value("x", 0.0f), o.value("y", 0.0f),
+                                         o.value("radius_m", 0.75f), o.value("height_m", 3.0f)};
+                static_obstacles.push_back(rec);
+                if (astar_planner)
+                    astar_planner->add_static_obstacle(rec.x, rec.y, rec.radius_m, rec.height_m);
+            }
+            spdlog::info("[HD-map] Loaded {} static obstacles into A* grid", obs_json.size());
+        }
+    }
+
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
@@ -181,9 +202,10 @@ int main(int argc, char* argv[]) {
     spdlog::info("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
-    Geofence geofence;
-    auto     fence_json = cfg.section("mission_planner.geofence.polygon");
-    if (fence_json.is_array() && fence_json.size() >= 3) {
+    Geofence   geofence;
+    const bool geofence_cfg_enabled = cfg.get<bool>("mission_planner.geofence.enabled", true);
+    auto       fence_json           = cfg.section("mission_planner.geofence.polygon");
+    if (geofence_cfg_enabled && fence_json.is_array() && fence_json.size() >= 3) {
         std::vector<GeoVertex> vertices;
         for (const auto& v : fence_json) {
             vertices.push_back({v.value("x", 0.0f), v.value("y", 0.0f)});
@@ -199,7 +221,8 @@ int main(int argc, char* argv[]) {
                      vertices.size(), alt_floor, alt_ceiling,
                      cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
     } else {
-        spdlog::info("Geofence: disabled (no polygon configured)");
+        spdlog::info("Geofence: disabled ({})",
+                     geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
     }
 
     // RTL/landing tuning
@@ -234,7 +257,9 @@ int main(int argc, char* argv[]) {
     uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
     auto     last_arm_time         = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
-    bool nav_was_armed_ = false;                    // tracks armed state across NAVIGATE ticks
+    bool nav_was_armed_            = false;         // tracks armed state across NAVIGATE ticks
+    auto last_collision_warn_time_ = std::chrono::steady_clock::now() -
+                                     std::chrono::seconds(300);  // allow immediate first warn
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Pose staleness threshold (500ms = 5× planning period)
@@ -528,6 +553,34 @@ int main(int argc, char* argv[]) {
                                  "disarmed during navigation");
                 }
                 nav_was_armed_ = fc_state.armed;
+
+                // Proximity-based collision detection using HD-map obstacle positions.
+                // Fires if the drone centre enters within (radius_m + 0.5 m) of any known
+                // static obstacle while at or below its height.  Throttled to once per 2 s.
+                {
+                    constexpr float kCollisionMarginM = 0.5f;  // drone body + safety margin
+                    constexpr float kCooldownSeconds  = 2.0f;
+                    const float     px                = static_cast<float>(pose.translation[0]);
+                    const float     py                = static_cast<float>(pose.translation[1]);
+                    const float     pz                = static_cast<float>(pose.translation[2]);
+                    auto            now_c             = std::chrono::steady_clock::now();
+                    if (std::chrono::duration<float>(now_c - last_collision_warn_time_).count() >
+                        kCooldownSeconds) {
+                        for (const auto& obs : static_obstacles) {
+                            const float dx   = px - obs.x;
+                            const float dy   = py - obs.y;
+                            const float dist = std::sqrt(dx * dx + dy * dy);
+                            if (dist < obs.radius_m + kCollisionMarginM &&
+                                pz <= obs.height_m + kCollisionMarginM) {
+                                spdlog::warn("[Planner] OBSTACLE COLLISION detected — drone {:.2f}m"
+                                             " from obstacle at ({:.1f},{:.1f})",
+                                             dist, obs.x, obs.y);
+                                last_collision_warn_time_ = now_c;
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 // Update A* obstacle grid if applicable
                 if (astar_planner) {

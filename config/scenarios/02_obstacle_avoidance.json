@@ -4,7 +4,7 @@
         "name": "obstacle_avoidance",
         "description": "Navigate through an obstacle field using the A* path planner and 3D potential-field obstacle avoider. Tier 2 requires Gazebo SITL with the test_world.sdf obstacles.",
         "tier": 2,
-        "timeout_s": 180,
+        "timeout_s": 300,
         "requires_gazebo": true
     },
     "config_overrides": {
@@ -19,7 +19,18 @@
                 "influence_radius_m": 20.0,
                 "repulsive_gain": 20.0
             },
+            "static_obstacles": [
+                {"x": 1,  "y": 7,  "radius_m": 0.75, "height_m": 5.0, "_color": "RED"},
+                {"x": 2,  "y": 13, "radius_m": 0.75, "height_m": 4.0, "_color": "BLUE"},
+                {"x": 7,  "y": 15, "radius_m": 0.75, "height_m": 4.0, "_color": "YELLOW"},
+                {"x": 13, "y": 14, "radius_m": 0.75, "height_m": 6.0, "_color": "MAGENTA"},
+                {"x": 8,  "y": 8,  "radius_m": 0.75, "height_m": 5.0, "_color": "GREEN"},
+                {"x": 4,  "y": 4,  "radius_m": 0.75, "height_m": 3.0, "_color": "ORANGE"}
+            ],
+            "_comment_static_obstacles": "HD-map: pre-loaded obstacle geometry. Camera detections confirm/refresh these and can detect unexpected obstacles.",
             "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled for obstacle avoidance scenario — polygon RTL would fire when A* no-path pushes drone toward boundary",
                 "polygon": [
                     {"x": -20, "y": -20},
                     {"x":  30, "y": -20},

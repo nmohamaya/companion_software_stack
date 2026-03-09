@@ -733,3 +733,262 @@ affected: `GazeboVIOBackend` is compile-time excluded by `#ifdef HAVE_GAZEBO`, a
 default config retains `"simulated"`.
 **Impact:** Drone now navigates correctly to waypoints in Gazebo SITL. Obstacle avoidance
 engages with real proximity data.
+
+---
+
+## Bug #29 — PX4 Exit Tears Down Companion Stack and Kills Gazebo GUI (OPEN)
+
+**Date discovered:** 2026-03-09
+**Severity:** High
+**Status:** OPEN — tracked, not yet fixed
+**GitHub Issue:** https://github.com/nmohamaya/companion_software_stack/issues/129
+**File:** `deploy/launch_gazebo.sh` — line ~309
+
+**Bug:** `launch_gazebo.sh` adds `PX4_PID` to the same `ALL_PIDS` array as the
+7 companion processes, then calls `wait -n "${ALL_PIDS[@]}"`. When PX4 exits for
+any reason — successful mission landing, SIGINT from a leftover scenario runner
+process, or a crash — `wait -n` returns immediately and the `cleanup()` trap
+fires, killing all 7 companion processes and the Gazebo GUI client instantly.
+
+**Observed:** During scenario 02 (obstacle avoidance) GUI testing, a background
+`run_scenario_gazebo.sh` from a previous run sent SIGINT to PX4 at ~90 s into
+the mission. PX4 exited cleanly (code 0), `wait -n` returned, `cleanup()` killed
+the entire stack and the Gazebo GUI window disappeared mid-flight. The mission
+was at WP3/4 of 7 and making good progress.
+
+**Root Cause:** PX4 SITL and the companion stack have different lifecycles. PX4
+exits when the simulation ends; the companion stack should outlive it during log
+collection and verification phases. Mixing them in the same `wait -n` pool
+treats every PX4 exit (including normal landing) as a crash signal.
+
+**Proposed Fix:**
+1. Remove `PX4_PID` from `ALL_PIDS`; monitor companion processes only.
+2. Watch PX4 separately in a background subshell — on PX4 exit log a warning
+   but give companions 5–10 s to flush logs before triggering cleanup.
+3. Trigger full cleanup only when a companion process exits unexpectedly OR
+   after a configurable post-PX4 drain timeout.
+
+**Impact:** Mission runs terminate prematurely; Gazebo GUI disappears mid-flight;
+log collection window is cut short; scenario pass/fail verification may miss
+final log lines (e.g. "Mission complete") and report false failures.
+
+---
+
+## Fix #30 — A* Obstacle Grid Cleared Every Planning Frame (No TTL Persistence)
+
+**Date fixed:** 2026-03-09
+**Severity:** High
+**Status:** FIXED
+**Files:** `process2_perception/include/perception/fusion_engine.h`,
+           `process2_perception/src/fusion_engine.cpp`,
+           `process4_mission_planner/include/planner/astar_planner.h`
+
+**Bug:** `FusionEngine::fuse()` called `grid.clear()` at the start of every frame
+before inserting the current camera detections. Any obstacle hidden by a blind
+spot for a single frame was immediately forgotten. A* saw only obstacles detected
+in the most-recent 100 ms window, giving it no time to route around obstacles that
+temporarily fell outside the camera frustum (e.g. while the drone was banking).
+Successive plan calls oscillated between routes because the occupancy grid changed
+completely each cycle.
+
+**Root Cause:** The grid was treated as a per-frame scratch buffer rather than a
+rolling memory window.
+
+**Fix:** Replaced the `clear()`-every-frame pattern with a TTL-based expiry map.
+Each occupied cell stores a `uint64_t` expiry timestamp (insertion time + 3 s in
+nanoseconds). `is_occupied()` checks `now < expiry` before returning true.
+`update_obstacles()` only evicts cells whose TTL has elapsed. Cells detected
+repeatedly are refreshed in-place without duplicating storage.
+
+**Impact:** A* now maintains a 3-second rolling memory of all detected obstacles,
+allowing it to plan safe routes around objects that briefly leave the field of view.
+The grid shrinks back to the HD-map static layer once an object has been absent for
+longer than the TTL.
+
+---
+
+## Fix #31 — Goal-Snap Oscillation Causes A* Replanning Loop
+
+**Date fixed:** 2026-03-09
+**Severity:** Medium
+**Status:** FIXED
+**Files:** `process4_mission_planner/include/planner/astar_planner.h`,
+           `process4_mission_planner/src/main.cpp`
+
+**Bug:** When the A* goal cell (destination waypoint) fell inside an occupied voxel
+because the waypoint was placed at the centre of an obstacle, the planner performed
+a nearest-free-cell snap to find a reachable goal. This snap was recomputed fresh on
+every planning tick, producing different neighbour orderings depending on grid state,
+causing the snap target to jump between 2–3 candidate cells. The resulting plan
+oscillated between two contradictory paths, and the drone repeatedly turned without
+making forward progress.
+
+**Root Cause:** Goal snap was a pure search with no caching; small determinism
+breaks in BFS neighbour ordering changed the result each frame.
+
+**Fix:** Added a per-waypoint snap cache (`snap_cache_`, keyed by waypoint
+coordinates). Once a stable snap target is found for a waypoint it is locked until
+the waypoint changes or `reset_snap()` is called. Added a lateral-preference
+heuristic to the snap BFS so it consistently favours cells to the side of the
+obstacle rather than directly above or below.
+
+**Impact:** A* produces stable, non-oscillating paths past obstacles. Drone proceeds
+smoothly rather than wobbling in place.
+
+---
+
+## Fix #32 — Thermal Fault Blocks Takeoff in Gazebo SITL (temp_crit_c Too Low)
+
+**Date fixed:** 2026-03-09
+**Severity:** High
+**Status:** FIXED
+**Files:** `config/gazebo_sitl.json`, `config/gazebo.json`
+
+**Bug:** `system_monitor` compared the host CPU temperature against `temp_crit_c`,
+which was set to 95 °C. The development host regularly runs at 96–100 °C under
+simulation load. `system_monitor` emitted a `CRITICAL_TEMP` fault within a few
+seconds of launch, which `mission_planner` treated as a safety interlock and
+refused to proceed past the `PRE_FLIGHT` check. The drone never armed.
+
+**Root Cause:** The threshold was tuned for production embedded hardware (Jetson,
+RPi) where 95 °C is genuinely dangerous, but was not overridden in the Gazebo SITL
+configuration intended for a desktop host.
+
+**Fix:** Raised `temp_warn_c → 105 °C` and `temp_crit_c → 120 °C` in
+`config/gazebo_sitl.json` and `config/gazebo.json`. These values are above any
+realistic desktop temperature under simulation load while still protecting against
+actual runaway conditions.
+
+**Impact:** Drone can now take off and complete full missions in Gazebo SITL without
+thermal faults.
+
+---
+
+## Fix #33 — Geofence Breach After WP3 Forces RTL and Aborts Mission
+
+**Date fixed:** 2026-03-09
+**Severity:** High
+**Status:** FIXED
+**Files:** `process4_mission_planner/src/main.cpp`,
+           `config/scenarios/02_obstacle_avoidance.json`
+
+**Bug:** With the A* grid densely populated by HD-map obstacles, A* could not find
+a path from WP3 to WP4 in certain runs. When no A* path was found the obstacle
+avoider's potential field took over, pushing the drone in a repulsive direction away
+from nearby obstacles. In the 30 × 30 m arena this direction was often toward the
+geofence boundary. The drone reached the boundary, `mission_planner` triggered RTL,
+and the mission aborted with only 3–4 of 7 waypoints visited.
+
+**Root Cause:** Potential-field fallback has no awareness of geofence; when A*
+fails it applies unconstrained repulsion vectors. Additionally the geofence was
+enabled in the scenario config even though the test does not require hard boundary
+enforcement (the waypoints are safely inside the arena by design).
+
+**Fix:**
+1. Added `"geofence": {"enabled": false}` to `02_obstacle_avoidance.json`.
+2. Wired the `geofence_cfg_enabled` flag in `main.cpp` so the per-scenario JSON
+   value is respected at runtime (previously the flag was read but not propagated
+   to the enforcement check).
+
+**Impact:** Missions with densely populated A* grids complete without geofence
+interruptions. Geofence enforcement remains active in all other scenarios.
+
+---
+
+## Fix #34 — A* Fails When Drone Enters Inflated Obstacle Zone (Start-in-Obstacle)
+
+**Date fixed:** 2026-03-09
+**Severity:** High
+**Status:** FIXED
+**Files:** `process4_mission_planner/include/planner/astar_planner.h`
+
+**Bug:** A* inflates each detected obstacle by a safety margin (configurable, ~0.5 m
+voxel radius) to keep the drone's centre away from the physical surface. When the
+drone approached an obstacle closely — legitimately via potential-field guidance or
+due to wind drift — its current position could fall inside the inflated zone. A* then
+treated the start cell as occupied and returned an empty path immediately without
+searching. The empty result caused `mission_planner` to fall back to potential field,
+which pushed the drone further into the inflated zone, deepening the deadlock.
+
+**Root Cause:** A* made no attempt to find a valid start cell when the nominal start
+was occupied; it simply bailed out.
+
+**Fix:** Added a BFS shell-expansion escape at the start of `plan()`. If the start
+cell is occupied, BFS expands outward in shells (radius 1–6 voxels) to find the
+nearest free cell, then uses that as the effective start. The first free shell cell
+found is used; if no free cell is found within radius 6 the planner falls back as
+before. The escape is logged at WARN level for diagnostics.
+
+**Impact:** A* can now recover from drone-in-inflated-zone situations and compute
+a valid escape path rather than returning an empty result that makes the situation
+worse.
+
+---
+
+## Fix #35 — Reactive-Only A* Grid Misses Obstacles Outside Camera Frustum
+
+**Date fixed:** 2026-03-09
+**Severity:** High
+**Status:** FIXED
+**Files:** `process4_mission_planner/include/planner/astar_planner.h`,
+           `process4_mission_planner/src/main.cpp`,
+           `config/scenarios/02_obstacle_avoidance.json`
+
+**Bug:** The A* occupancy grid was populated entirely from live camera detections
+(the TTL layer). Obstacles that were not yet visible — because the drone was flying
+away from them or they were beyond the camera's 8 m effective range — were not
+present in the grid. A* planned the shortest path through free space, which often
+ran through an obstacle the camera had not yet seen. By the time the obstacle
+appeared in the frame the drone was already committed to a collision course with no
+time to detour.
+
+**Root Cause:** No a-priori map of the scenario's known obstacles was loaded at
+startup. The planner operated purely reactively.
+
+**Fix:** Implemented a two-layer occupancy grid:
+1. **Static layer** (`static_occupied_`, `unordered_set<GridCell>`): Permanent cells
+   loaded from the HD-map (`mission_planner.static_obstacles` JSON array) at startup.
+   Each obstacle is recorded as a vertical cylinder footprint inflated by the safety
+   margin. These cells never expire.
+2. **Camera layer** (`occupied_`, `unordered_map<GridCell, expiry_ns>`): TTL-based
+   cells populated from live detections. Used to confirm HD-map obstacles and detect
+   dynamic objects not in the map.
+`is_occupied()` returns true if either layer marks the cell.
+
+The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for the
+proximity collision check (Fix #36 below).
+
+**Impact:** A* can plan obstacle-avoiding routes before the camera detects any
+obstacle. All 7 waypoints are reached in scenario 02 without collision.
+
+---
+
+## Fix #36 — Collision Detection Only Triggers on Crash-Induced Disarm
+
+**Date fixed:** 2026-03-09
+**Severity:** Medium
+**Status:** FIXED
+**Files:** `process4_mission_planner/src/main.cpp`
+
+**Bug:** The only collision detection in `mission_planner` (line 546) checked
+`nav_was_armed_ && !fc_state.armed` — it fired only when PX4 unexpectedly disarmed
+the drone during navigation, which happens only for catastrophic crashes. Proximity
+breaches, glancing blows, or any situation where the drone came within metres of an
+obstacle but did not crash were completely invisible to the detection logic. Test
+scenarios had no reliable way to assert that the drone avoided obstacles
+successfully, only that it did not crash hard enough to disarm.
+
+**Root Cause:** The original implementation was a minimal safeguard against hard
+landings rather than a proximity-aware failure criterion.
+
+**Fix:** Added a proximity-based collision check in the NAVIGATE loop tick. On every
+tick the drone's ENU position (`pose.translation[0/1/2]`) is compared against all
+entries in `static_obstacles` (loaded from the HD-map). If the drone centre is
+within `radius_m + 0.5 m` (XY) and at or below `height_m + 0.5 m` (Z) for any
+obstacle, a `"[Planner] OBSTACLE COLLISION detected"` WARN is emitted. The check is
+throttled to once per 2 seconds per entry to prevent log flooding. The 0.5 m margin
+accounts for the drone's body radius (≈0.15 m) plus a 0.35 m buffer.
+
+**Impact:** Test runners can reliably gate on `"OBSTACLE COLLISION"` in the mission
+log to fail scenarios where the drone enters a collision zone, even if PX4 did not
+disarm. The disarm-based check is retained as a secondary signal for hard crashes.

@@ -96,6 +96,32 @@ public:
     /// Force-clear all obstacles (for testing / reset).
     void clear() { occupied_.clear(); }
 
+    /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
+    /// These cells are permanent — no TTL — and represent the pre-loaded world map.
+    /// The camera pipeline independently confirms obstacles via update_from_objects(),
+    /// which writes TTL cells. is_occupied() returns true if EITHER layer flags a cell.
+    /// @param wx,wy     World-frame X,Y centre of the obstacle.
+    /// @param radius_m  Obstacle footprint radius in metres.
+    /// @param height_m  Obstacle height above ground in metres.
+    void add_static_obstacle(float wx, float wy, float radius_m, float height_m) {
+        GridCell base    = world_to_grid(wx, wy, 0.0f);
+        int      r_cells = static_cast<int>(std::ceil(radius_m / resolution_)) + inflation_cells_;
+        int      h_cells = static_cast<int>(std::ceil(height_m / resolution_)) + inflation_cells_;
+        size_t   before  = static_occupied_.size();
+        for (int dz = -inflation_cells_; dz <= h_cells; ++dz)
+            for (int dy = -r_cells; dy <= r_cells; ++dy)
+                for (int dx = -r_cells; dx <= r_cells; ++dx) {
+                    if (std::sqrt(float(dx * dx + dy * dy)) <= float(r_cells)) {
+                        GridCell c{base.x + dx, base.y + dy, base.z + dz};
+                        if (in_bounds(c)) static_occupied_.insert(c);
+                    }
+                }
+        spdlog::info("[HD-map] Static obstacle at ({:.1f},{:.1f}) r={:.1f}m h={:.1f}m "
+                     "→ {} new cells (total static: {})",
+                     wx, wy, radius_m, height_m, static_occupied_.size() - before,
+                     static_occupied_.size());
+    }
+
     /// Insert obstacles from a detected object list.
     /// Updates timestamps for observed cells; stale cells expire after TTL.
     void update_from_objects(const drone::ipc::ShmDetectedObjectList& objects,
@@ -137,7 +163,11 @@ public:
     }
 
     /// Check if a cell is occupied (obstacle or inflated zone).
-    [[nodiscard]] bool is_occupied(const GridCell& c) const { return occupied_.count(c) > 0; }
+    /// Returns true if the cell is in the permanent HD-map layer (static_occupied_)
+    /// OR in the camera-confirmed TTL layer (occupied_).
+    [[nodiscard]] bool is_occupied(const GridCell& c) const {
+        return static_occupied_.count(c) > 0 || occupied_.count(c) > 0;
+    }
 
     /// Check if a cell is within the grid bounds.
     [[nodiscard]] bool in_bounds(const GridCell& c) const {
@@ -159,13 +189,18 @@ public:
 
     [[nodiscard]] float  resolution() const { return resolution_; }
     [[nodiscard]] size_t occupied_count() const { return occupied_.size(); }
+    [[nodiscard]] size_t static_count() const { return static_occupied_.size(); }
 
 private:
     float    resolution_;
     int      half_extent_cells_;
     int      inflation_cells_;
     uint64_t cell_ttl_ns_;
-    // Maps each occupied cell to the nanosecond timestamp it was last observed.
+    // HD-map layer: permanent cells loaded from scenario config at startup.
+    // Never expire — represent known world geometry.
+    std::unordered_set<GridCell, GridCellHash> static_occupied_;
+    // Camera-confirmation layer: cells observed by perception, expire after TTL.
+    // Refreshed each detection cycle; also catches unexpected/dynamic obstacles.
     std::unordered_map<GridCell, uint64_t, GridCellHash> occupied_;
 };
 
@@ -204,8 +239,39 @@ inline AStarResult astar_search(const OccupancyGrid3D& grid, const GridCell& sta
     if (grid.is_occupied(goal) || !grid.in_bounds(goal)) {
         return result;  // unreachable
     }
-    if (grid.is_occupied(start) || !grid.in_bounds(start)) {
-        return result;  // start is blocked
+    if (!grid.in_bounds(start)) {
+        return result;  // start is out of bounds
+    }
+
+    // If the drone is inside an inflated obstacle cell (e.g. just passed through
+    // an obstacle's inflation radius), escape to the nearest free cell before
+    // running A*.  Without this, A* returns immediately with no path, causing
+    // the direct fallback to fly straight into the obstacle.
+    GridCell eff_start = start;
+    if (grid.is_occupied(start)) {
+        bool escaped = false;
+        for (int r = 1; r <= 6 && !escaped; ++r) {
+            for (int dz = -r; dz <= r && !escaped; ++dz) {
+                for (int dy = -r; dy <= r && !escaped; ++dy) {
+                    for (int dx = -r; dx <= r && !escaped; ++dx) {
+                        if (std::abs(dx) != r && std::abs(dy) != r && std::abs(dz) != r)
+                            continue;  // only shell of radius r
+                        GridCell c{start.x + dx, start.y + dy, start.z + dz};
+                        if (grid.in_bounds(c) && !grid.is_occupied(c)) {
+                            eff_start = c;
+                            escaped   = true;
+                        }
+                    }
+                }
+            }
+        }
+        if (!escaped) return result;  // completely surrounded
+        if (eff_start == goal) {
+            result.found = true;
+            result.path  = {eff_start};
+            result.world_path.push_back(grid.grid_to_world(eff_start));
+            return result;
+        }
     }
 
     // Euclidean heuristic (admissible in 3D grid with 26-connectivity)
@@ -265,8 +331,8 @@ inline AStarResult astar_search(const OccupancyGrid3D& grid, const GridCell& sta
     std::unordered_map<GridCell, float, GridCellHash>                g_score;
     std::unordered_map<GridCell, GridCell, GridCellHash>             came_from;
 
-    g_score[start] = 0.0f;
-    open.push({start, heuristic(start, goal)});
+    g_score[eff_start] = 0.0f;
+    open.push({eff_start, heuristic(eff_start, goal)});
 
     int iterations = 0;
     while (!open.empty() && iterations < max_iter) {
@@ -281,11 +347,11 @@ inline AStarResult astar_search(const OccupancyGrid3D& grid, const GridCell& sta
             result.path_cost  = g_score[goal];
 
             GridCell c = goal;
-            while (c != start) {
+            while (c != eff_start) {
                 result.path.push_back(c);
                 c = came_from[c];
             }
-            result.path.push_back(start);
+            result.path.push_back(eff_start);
             std::reverse(result.path.begin(), result.path.end());
 
             // Convert to world coordinates
@@ -341,6 +407,13 @@ public:
     void update_obstacles(const drone::ipc::ShmDetectedObjectList& objects,
                           const drone::ipc::ShmPose&               pose) {
         grid_.update_from_objects(objects, pose);
+    }
+
+    /// Pre-load a static obstacle from the HD map (scenario config).
+    /// These cells are permanent and supplement live camera detections.
+    void add_static_obstacle(float wx, float wy, float radius_m, float height_m) {
+        grid_.add_static_obstacle(wx, wy, radius_m, height_m);
+        snap_valid_ = false;  // invalidate cached snap since grid changed
     }
 
     drone::ipc::ShmTrajectoryCmd plan(const drone::ipc::ShmPose& pose,
