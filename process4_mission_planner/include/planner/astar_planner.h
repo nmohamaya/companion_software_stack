@@ -78,39 +78,59 @@ struct AStarConfig {
     int   max_iterations     = 50000;  // A* iteration limit (prevents runaway)
 };
 
-/// 3D occupancy grid backed by a hash set of occupied cells.
-/// Sparse representation — only occupied cells use memory.
+/// 3D occupancy grid backed by a hash map of occupied cells with TTL.
+///
+/// Key design: obstacles are NEVER cleared unless they have not been
+/// observed for `cell_ttl_s` seconds (default 3 s).  This prevents a
+/// single missed detection frame from wiping the grid and causing A* to
+/// re-route straight through a known obstacle.
 class OccupancyGrid3D {
 public:
-    explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f)
+    explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
+                             float cell_ttl_s = 3.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
-        , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution)))) {}
+        , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
+        , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f)) {}
 
-    /// Clear all obstacles.
+    /// Force-clear all obstacles (for testing / reset).
     void clear() { occupied_.clear(); }
 
     /// Insert obstacles from a detected object list.
-    /// Each object's 3D position is mapped to grid cells and inflated.
+    /// Updates timestamps for observed cells; stale cells expire after TTL.
     void update_from_objects(const drone::ipc::ShmDetectedObjectList& objects,
                              const drone::ipc::ShmPose& /* drone_pose */) {
-        clear();
+        const auto     now    = std::chrono::steady_clock::now();
+        const uint64_t now_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+
+        // Stamp newly detected cells
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
-            if (obj.confidence < 0.3f) continue;  // skip low-confidence
+            if (obj.confidence < 0.3f) continue;
 
-            // Object position in world frame → grid cell
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
 
-            // Inflate a sphere of cells around the obstacle
             for (int dz = -inflation_cells_; dz <= inflation_cells_; ++dz) {
                 for (int dy = -inflation_cells_; dy <= inflation_cells_; ++dy) {
                     for (int dx = -inflation_cells_; dx <= inflation_cells_; ++dx) {
                         if (dx * dx + dy * dy + dz * dz <= inflation_cells_ * inflation_cells_) {
                             GridCell c{center.x + dx, center.y + dy, center.z + dz};
-                            if (in_bounds(c)) occupied_.insert(c);
+                            if (in_bounds(c)) occupied_[c] = now_ns;
                         }
                     }
+                }
+            }
+        }
+
+        // Expire stale cells (only when we actually have new data to avoid
+        // running the prune loop with no benefit on empty-detection frames)
+        if (objects.num_objects > 0 || !occupied_.empty()) {
+            for (auto it = occupied_.begin(); it != occupied_.end();) {
+                if (now_ns - it->second > cell_ttl_ns_) {
+                    it = occupied_.erase(it);
+                } else {
+                    ++it;
                 }
             }
         }
@@ -141,10 +161,12 @@ public:
     [[nodiscard]] size_t occupied_count() const { return occupied_.size(); }
 
 private:
-    float                                      resolution_;
-    int                                        half_extent_cells_;
-    int                                        inflation_cells_;
-    std::unordered_set<GridCell, GridCellHash> occupied_;
+    float    resolution_;
+    int      half_extent_cells_;
+    int      inflation_cells_;
+    uint64_t cell_ttl_ns_;
+    // Maps each occupied cell to the nanosecond timestamp it was last observed.
+    std::unordered_map<GridCell, uint64_t, GridCellHash> occupied_;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -344,6 +366,133 @@ public:
             GridCell start = grid_.world_to_grid(px, py, pz);
             GridCell goal  = grid_.world_to_grid(target.x, target.y, target.z);
 
+            // ── Goal snapping — cached per waypoint ──────────
+            // If the waypoint maps to an occupied cell we snap to the nearest
+            // free cell in the horizontal plane.  CRITICALLY this snap is only
+            // recomputed when the target waypoint coords change.  If we re-snap
+            // every replanning cycle the drone oscillates: deflecting sideways
+            // makes a different cell the "nearest free", which redirects the
+            // drone back toward the obstacle, causing the reversal the user sees.
+            bool target_changed = (target.x != last_target_x_ || target.y != last_target_y_ ||
+                                   target.z != last_target_z_);
+
+            if (target_changed) {
+                // New waypoint — discard any previous snap.
+                snap_valid_    = false;
+                last_target_x_ = target.x;
+                last_target_y_ = target.y;
+                last_target_z_ = target.z;
+            }
+
+            if (!snap_valid_ && (grid_.is_occupied(goal) || !grid_.in_bounds(goal))) {
+
+                const GridCell orig_goal = goal;
+                bool           snapped   = false;
+
+                // ── Lateral-preferring snap ──────────────────────────────
+                // Walk perpendicular to the approach direction (drone→obstacle)
+                // to find a free cell on the SIDE of the obstacle, not behind it.
+                // Prefers the side the drone is already deflecting toward
+                // (determined by cross-product of offset from obstacle to drone
+                //  against the approach direction).
+                //
+                // WHY: a nearest-free scan can choose a cell on the far side of
+                // the obstacle, forcing A* to route THROUGH it.  Walking
+                // perpendicular always places the snap goal beside the obstacle.
+                const float adx  = static_cast<float>(orig_goal.x - start.x);
+                const float ady  = static_cast<float>(orig_goal.y - start.y);
+                const float amag = std::sqrt(adx * adx + ady * ady);
+
+                if (amag > 0.5f) {
+                    // Normalised approach unit vector (drone → obstacle)
+                    const float ax = adx / amag, ay = ady / amag;
+                    // Perpendiculars: left (CCW 90°) and right (CW 90°)
+                    const float lx = -ay, ly = ax;
+                    const float rx = ay, ry = -ax;
+
+                    // Cross product: (drone - obstacle) × approach_dir
+                    // Positive → drone is to the LEFT of the approach line.
+                    // Prefer that side first — less additional deflection needed.
+                    const float cross = static_cast<float>(start.x - orig_goal.x) * ay -
+                                        static_cast<float>(start.y - orig_goal.y) * ax;
+                    const bool first_left = (cross >= 0.0f);
+
+                    for (int r = 1; r <= 8 && !snapped; ++r) {
+                        for (int side = 0; side < 2 && !snapped; ++side) {
+                            const bool  try_left = (side == 0) ? first_left : !first_left;
+                            const float fx       = try_left ? lx : rx;
+                            const float fy       = try_left ? ly : ry;
+                            GridCell    c{orig_goal.x + static_cast<int>(std::round(fx * r)),
+                                       orig_goal.y + static_cast<int>(std::round(fy * r)),
+                                       orig_goal.z};
+                            if (grid_.in_bounds(c) && !grid_.is_occupied(c)) {
+                                goal    = c;
+                                snapped = true;
+                            }
+                        }
+                    }
+
+                    // Reachability check: warn if the drone may not have
+                    // enough time to deflect to the snapped side before
+                    // reaching the obstacle at cruise speed.
+                    if (snapped) {
+                        const float snap_cells = std::sqrt(
+                            static_cast<float>((goal.x - orig_goal.x) * (goal.x - orig_goal.x) +
+                                               (goal.y - orig_goal.y) * (goal.y - orig_goal.y)));
+                        const float snap_dist_m     = snap_cells * grid_.resolution();
+                        const float approach_dist_m = amag * grid_.resolution();
+                        const float cruise_spd      = std::max(0.5f, config_.path_speed_mps);
+                        const float time_to_obs_s   = approach_dist_m / cruise_spd;
+                        // Assume 3 m/s max lateral correction (avoider cap)
+                        const float time_to_deflect = snap_dist_m / 3.0f;
+                        if (time_to_obs_s - time_to_deflect < 0.5f) {
+                            spdlog::warn("[A*] Snap {:.1f} m lateral but only {:.1f}s to "
+                                         "obstacle (need {:.1f}s) — tight margin",
+                                         snap_dist_m, time_to_obs_s, time_to_deflect);
+                        }
+                    }
+                }
+
+                // Fallback: no lateral snap found (both sides blocked or no
+                // approach direction) — fall back to nearest horizontal free cell.
+                if (!snapped) {
+                    float best_dist_sq = 1e9f;
+                    for (int dy = -8; dy <= 8; ++dy) {
+                        for (int dx = -8; dx <= 8; ++dx) {
+                            const float dist_sq = static_cast<float>(dx * dx + dy * dy);
+                            if (dist_sq == 0.0f || dist_sq >= best_dist_sq) continue;
+                            GridCell c{orig_goal.x + dx, orig_goal.y + dy, orig_goal.z};
+                            if (grid_.in_bounds(c) && !grid_.is_occupied(c)) {
+                                best_dist_sq = dist_sq;
+                                goal         = c;
+                                snapped      = true;
+                            }
+                        }
+                    }
+                }
+
+                if (snapped) {
+                    auto wc               = grid_.grid_to_world(goal);
+                    snapped_world_x_      = wc[0];
+                    snapped_world_y_      = wc[1];
+                    snapped_world_z_      = wc[2];
+                    snap_valid_           = true;
+                    const float snap_dist = std::sqrt(static_cast<float>(
+                                                (goal.x - orig_goal.x) * (goal.x - orig_goal.x) +
+                                                (goal.y - orig_goal.y) * (goal.y - orig_goal.y))) *
+                                            grid_.resolution();
+                    spdlog::info("[A*] WP({:.1f},{:.1f},{:.1f}) occupied — snapped lateral"
+                                 " to ({:.1f},{:.1f},{:.1f}) offset={:.2f} m",
+                                 target.x, target.y, target.z, snapped_world_x_, snapped_world_y_,
+                                 snapped_world_z_, snap_dist);
+                }
+                // If no free cell found, A* will fail and use direct fallback.
+            } else if (snap_valid_) {
+                // Reuse the previously computed snap — convert cached world
+                // coords back to grid for this replan.
+                goal = grid_.world_to_grid(snapped_world_x_, snapped_world_y_, snapped_world_z_);
+            }
+
             auto result = astar_search(grid_, start, goal, config_.max_iterations);
             if (result.found && result.world_path.size() >= 2) {
                 cached_path_     = std::move(result.world_path);
@@ -363,7 +512,11 @@ public:
         }
 
         // ── Follow path or go direct ────────────────────────
-        float goal_x = target.x, goal_y = target.y, goal_z = target.z;
+        // When using direct fallback, prefer the cached snapped position over
+        // the raw waypoint (obstacle centre) to avoid flying straight into it.
+        float goal_x = snap_valid_ ? snapped_world_x_ : target.x;
+        float goal_y = snap_valid_ ? snapped_world_y_ : target.y;
+        float goal_z = snap_valid_ ? snapped_world_z_ : target.z;
 
         if (!cached_path_.empty() && path_index_ < cached_path_.size()) {
             auto& wp = cached_path_[path_index_];
@@ -443,6 +596,13 @@ private:
     size_t                                path_index_      = 0;
     bool                                  direct_fallback_ = false;
     std::chrono::steady_clock::time_point last_plan_time_{};
+
+    // Cached snapped goal — persists across replans for the same waypoint so the
+    // drone does not oscillate as it deflects around an obstacle.
+    // Only recomputed when the target waypoint changes.
+    float last_target_x_ = 1e9f, last_target_y_ = 1e9f, last_target_z_ = 1e9f;
+    float snapped_world_x_ = 0.0f, snapped_world_y_ = 0.0f, snapped_world_z_ = 0.0f;
+    bool  snap_valid_ = false;
 
     // Velocity smoothing state
     float smooth_vx_ = 0.0f;

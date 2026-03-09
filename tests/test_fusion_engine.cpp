@@ -57,32 +57,68 @@ TEST(FusionEngineTest, CameraOnlyFusion) {
 }
 
 TEST(FusionEngineTest, DepthEstimationFromImageY) {
+    // Bug fix #129: fusion now uses pinhole unproject (not raw pixel-Y depth formula).
+    // camera frame: X=forward, Y=right, Z=down.
+    // calib: fx=fy=500, cx=320, cy=240, camera_height=1.5m.
     auto         calib = make_test_calib();
     FusionEngine engine(calib);
 
-    TrackedObjectList tracked;
-    tracked.timestamp_ns   = 2000;
-    tracked.frame_sequence = 2;
+    const float fx = calib.camera_intrinsics(0, 0);
+    const float fy = calib.camera_intrinsics(1, 1);
+    const float cx = calib.camera_intrinsics(0, 2);
+    const float cy = calib.camera_intrinsics(1, 2);
 
-    TrackedObject obj;
-    obj.track_id     = 1;
-    obj.class_id     = ObjectClass::PERSON;
-    obj.confidence   = 0.9f;
-    obj.position_2d  = {320.0f, 240.0f};  // center of image
-    obj.velocity_2d  = Eigen::Vector2f::Zero();
-    obj.timestamp_ns = 2000;
-    tracked.objects.push_back(obj);
+    // ── Case 1: pixel below the horizon (v > cy) ─────────────
+    // position_2d = {320, 340} → ray_down = (340-240)/500 = 0.2 > 0
+    // depth = camera_height_m / ray_down = 1.5 / 0.2 = 7.5m
+    // position_3d = {depth, 0, depth*ray_down} = {7.5, 0.0, 1.5}
+    {
+        TrackedObjectList tracked;
+        tracked.timestamp_ns   = 2000;
+        tracked.frame_sequence = 2;
+        TrackedObject obj;
+        obj.track_id     = 1;
+        obj.class_id     = ObjectClass::PERSON;
+        obj.confidence   = 0.9f;
+        obj.position_2d  = {320.0f, 340.0f};  // below horizon, on boresight column
+        obj.velocity_2d  = Eigen::Vector2f::Zero();
+        obj.timestamp_ns = 2000;
+        tracked.objects.push_back(obj);
 
-    auto result = engine.fuse(tracked);
+        auto result = engine.fuse(tracked);
+        ASSERT_EQ(result.objects.size(), 1u);
 
-    ASSERT_EQ(result.objects.size(), 1u);
-    // Expected depth = camera_height_m * fy / max(10, y)
-    // = 1.5 * 500 / 240 = 3.125
-    const float fy             = calib.camera_intrinsics(1, 1);
-    float       expected_depth = calib.camera_height_m * fy / 240.0f;
-    EXPECT_FLOAT_EQ(result.objects[0].position_3d.x(), expected_depth);
-    EXPECT_FLOAT_EQ(result.objects[0].position_3d.y(), 0.0f);
-    EXPECT_FLOAT_EQ(result.objects[0].position_3d.z(), 0.0f);
+        const float ray_down     = (340.0f - cy) / fy;                // = 0.2
+        const float expected_d   = calib.camera_height_m / ray_down;  // = 7.5
+        const float expected_fwd = expected_d * 1.0f;
+        const float expected_rgt = expected_d * ((320.0f - cx) / fx);  // = 0 (on-axis)
+        const float expected_dwn = expected_d * ray_down;              // = 1.5
+
+        EXPECT_NEAR(result.objects[0].position_3d.x(), expected_fwd, 0.01f);
+        EXPECT_NEAR(result.objects[0].position_3d.y(), expected_rgt, 0.01f);
+        EXPECT_NEAR(result.objects[0].position_3d.z(), expected_dwn, 0.01f);
+    }
+
+    // ── Case 2: pixel at/above horizon (v <= cy) — fallback depth = 20m ─
+    {
+        TrackedObjectList tracked;
+        tracked.timestamp_ns   = 3000;
+        tracked.frame_sequence = 3;
+        TrackedObject obj;
+        obj.track_id     = 2;
+        obj.class_id     = ObjectClass::PERSON;
+        obj.confidence   = 0.7f;
+        obj.position_2d  = {320.0f, 240.0f};  // exactly at horizon
+        obj.velocity_2d  = Eigen::Vector2f::Zero();
+        obj.timestamp_ns = 3000;
+        tracked.objects.push_back(obj);
+
+        auto result = engine.fuse(tracked);
+        ASSERT_EQ(result.objects.size(), 1u);
+        // ray_down = 0 → else branch → depth = 20m
+        EXPECT_NEAR(result.objects[0].position_3d.x(), 20.0f, 0.01f);
+        EXPECT_NEAR(result.objects[0].position_3d.y(), 0.0f, 0.01f);
+    }
 }
 
 TEST(FusionEngineTest, MultipleTrackedObjectsProduceMultipleFused) {

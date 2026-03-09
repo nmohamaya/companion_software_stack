@@ -234,6 +234,7 @@ int main(int argc, char* argv[]) {
     uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
     auto     last_arm_time         = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
+    bool nav_was_armed_ = false;                    // tracks armed state across NAVIGATE ticks
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Pose staleness threshold (500ms = 5× planning period)
@@ -293,10 +294,12 @@ int main(int argc, char* argv[]) {
 
         // ── Geofence check (every tick, airborne only) ──────
         // Runs BEFORE evaluate() so a breach triggers RTL in the same cycle.
+        // Skip during TAKEOFF — the drone is climbing from ground level and
+        // altitude will legitimately be at or near 0m (the floor).
         {
             drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
             if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
-                fsm.state() != MissionState::PREFLIGHT) {
+                fsm.state() != MissionState::PREFLIGHT && fsm.state() != MissionState::TAKEOFF) {
                 auto fence_result = geofence.check(static_cast<float>(pose.translation[0]),
                                                    static_cast<float>(pose.translation[1]),
                                                    fc_state.rel_alt);
@@ -516,6 +519,16 @@ int main(int argc, char* argv[]) {
             }
 
             case MissionState::NAVIGATE: {
+                // Detect unexpected disarm mid-navigation (obstacle collision / crash landing).
+                // PX4 triggers a landing-detected + disarm event when the drone is knocked down.
+                // We catch that here and emit a distinct log string that the test runner can
+                // match with log_must_not_contain to fail the scenario.
+                if (nav_was_armed_ && !fc_state.armed) {
+                    spdlog::warn("[Planner] OBSTACLE COLLISION detected — vehicle unexpectedly "
+                                 "disarmed during navigation");
+                }
+                nav_was_armed_ = fc_state.armed;
+
                 // Update A* obstacle grid if applicable
                 if (astar_planner) {
                     drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");

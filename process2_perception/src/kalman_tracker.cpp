@@ -294,6 +294,8 @@ TrackedObjectList SortTracker::update(const Detection2DList& det_list) {
         auto pred        = track.predicted_bbox();
         obj.position_2d  = pred.center();
         obj.velocity_2d  = track.velocity();
+        obj.bbox_w       = pred.w;
+        obj.bbox_h       = pred.h;
         obj.age          = track.age;
         obj.hits         = track.hits;
         obj.misses       = track.consecutive_misses;

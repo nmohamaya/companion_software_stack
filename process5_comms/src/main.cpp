@@ -163,8 +163,10 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
         drone::ipc::ShmTrajectoryCmd cmd{};
         if (traj_sub.receive(cmd) && cmd.valid && cmd.timestamp_ns > last_traj_ts) {
             last_traj_ts = cmd.timestamp_ns;
-            if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z,
-                                    cmd.target_yaw)) {
+            // target_yaw is stored in radians (ShmTrajectoryCmd contract);
+            // MavlinkFCLink::send_trajectory expects degrees (PX4 VelocityNedYaw).
+            const float yaw_deg = cmd.target_yaw * (180.0f / static_cast<float>(M_PI));
+            if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z, yaw_deg)) {
                 ++traj_send_fail;
                 if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
                     spdlog::warn("[Comms] Trajectory send failed (#{}) — "

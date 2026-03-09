@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
-# tests/run_scenario.sh
+# tests/run_scenario_gazebo.sh
 # ═══════════════════════════════════════════════════════════════
-# Scenario-Driven Integration Test Runner
+# Tier 2 Gazebo SITL Scenario Runner
 #
-# Orchestrates: launch → inject faults → verify → report
+# Launches PX4 SITL + Gazebo + companion stack, injects faults,
+# and verifies pass criteria against real MAVLink + Gazebo sensors.
 #
 # Usage:
-#   ./tests/run_scenario.sh <scenario_json>
-#   ./tests/run_scenario.sh config/scenarios/03_battery_degradation.json
-#   ./tests/run_scenario.sh --list                  # list available scenarios
-#   ./tests/run_scenario.sh --all                   # run all Tier 1 scenarios
-#   ./tests/run_scenario.sh --all --tier 2          # run all (requires Gazebo)
-#   ./tests/run_scenario.sh --all --ipc zenoh       # run all Tier 1 over Zenoh
+#   ./tests/run_scenario_gazebo.sh <scenario_json>
+#   ./tests/run_scenario_gazebo.sh config/scenarios/01_nominal_mission.json
+#   ./tests/run_scenario_gazebo.sh --list
+#   ./tests/run_scenario_gazebo.sh --all
+#   ./tests/run_scenario_gazebo.sh --all --gui       # with Gazebo 3D window
 #
 # Options:
-#   --base-config <path>    Base config to merge with (default: config/default.json)
-#   --log-dir <path>        Log output directory (default: drone_logs/scenarios)
+#   --base-config <path>    Base config (default: config/gazebo_sitl.json)
+#   --log-dir <path>        Log output directory (default: drone_logs/scenarios_gazebo)
 #   --timeout <seconds>     Override scenario timeout
-#   --dry-run               Parse scenario, show plan, but don't execute
+#   --dry-run               Parse scenario, show plan, don't execute
 #   --verbose               Extra verbose output
-#   --tier <1|2>            Filter by tier when using --all
+#   --gui                   Launch Gazebo GUI (3D visualisation)
 #   --ipc <shm|zenoh>       Override IPC backend (default: from base config)
+#
+# Environment variables:
+#   PX4_DIR                 Path to PX4-Autopilot (default: ~/PX4-Autopilot)
+#   GZ_WORLD                Path to world SDF (default: sim/worlds/test_world.sdf)
 #
 # Exit codes:
 #   0  All checks passed
@@ -35,8 +39,12 @@ BIN_DIR="${PROJECT_DIR}/build/bin"
 SCENARIOS_DIR="${PROJECT_DIR}/config/scenarios"
 DEPLOY_DIR="${PROJECT_DIR}/deploy"
 FAULT_INJECTOR="${BIN_DIR}/fault_injector"
-DEFAULT_BASE_CONFIG="${PROJECT_DIR}/config/default.json"
-DEFAULT_LOG_DIR="${PROJECT_DIR}/drone_logs/scenarios"
+DEFAULT_BASE_CONFIG="${PROJECT_DIR}/config/gazebo_sitl.json"
+DEFAULT_LOG_DIR="${PROJECT_DIR}/drone_logs/scenarios_gazebo"
+
+# ── PX4 / Gazebo paths ───────────────────────────────────────
+PX4_DIR="${PX4_DIR:-${HOME}/PX4-Autopilot}"
+GZ_WORLD="${GZ_WORLD:-${PROJECT_DIR}/sim/worlds/test_world.sdf}"
 
 # ── Colours ───────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -61,8 +69,8 @@ TIMEOUT_OVERRIDE=""
 DRY_RUN=false
 VERBOSE=false
 RUN_ALL=false
-TIER_FILTER=""
 LIST_ONLY=false
+GUI_FLAG=""
 IPC_BACKEND=""
 
 while [[ $# -gt 0 ]]; do
@@ -74,7 +82,7 @@ while [[ $# -gt 0 ]]; do
         --timeout)      TIMEOUT_OVERRIDE="$2"; shift ;;
         --dry-run)      DRY_RUN=true ;;
         --verbose)      VERBOSE=true ;;
-        --tier)         TIER_FILTER="$2"; shift ;;
+        --gui)          GUI_FLAG="--gui" ;;
         --ipc)
             IPC_BACKEND="$2"
             if [[ "$IPC_BACKEND" != "shm" && "$IPC_BACKEND" != "zenoh" ]]; then
@@ -85,18 +93,18 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             echo "Usage: $0 <scenario_json> [options]"
             echo "       $0 --list"
-            echo "       $0 --all [--tier 1]"
+            echo "       $0 --all [--gui]"
             echo ""
             echo "Options:"
-            echo "  --base-config <path>  Base config (default: config/default.json)"
-            echo "  --log-dir <path>      Log directory (default: drone_logs/scenarios)"
+            echo "  --base-config <path>  Base config (default: config/gazebo_sitl.json)"
+            echo "  --log-dir <path>      Log directory (default: drone_logs/scenarios_gazebo)"
             echo "  --timeout <seconds>   Override scenario timeout"
             echo "  --dry-run             Parse and show plan only"
             echo "  --verbose             Extra output"
-            echo "  --tier <1|2>          Filter by tier"
+            echo "  --gui                 Launch Gazebo 3D GUI"
             echo "  --ipc <shm|zenoh>     Override IPC transport backend"
             echo "  --list                List available scenarios"
-            echo "  --all                 Run all matching scenarios"
+            echo "  --all                 Run all Tier 2 scenarios"
             exit 0
             ;;
         *)
@@ -201,30 +209,55 @@ check() {
     fi
 }
 
+# ── Prerequisite checks ──────────────────────────────────────
+check_prerequisites() {
+    local ok=true
+    PX4_BIN="${PX4_DIR}/build/px4_sitl_default/bin/px4"
+    if [[ ! -x "$PX4_BIN" ]]; then
+        echo -e "${RED}ERROR: PX4 SITL binary not found at ${PX4_BIN}${NC}"
+        echo -e "${RED}       Build PX4: cd ${PX4_DIR} && make px4_sitl_default${NC}"
+        ok=false
+    fi
+    if ! command -v gz &>/dev/null; then
+        echo -e "${RED}ERROR: 'gz' command not found — install Gazebo Harmonic${NC}"
+        ok=false
+    fi
+    if [[ ! -f "$GZ_WORLD" ]]; then
+        echo -e "${RED}ERROR: World file not found: ${GZ_WORLD}${NC}"
+        ok=false
+    fi
+    if [[ ! -d "$BIN_DIR" ]]; then
+        echo -e "${RED}ERROR: Build directory not found. Build the project first.${NC}"
+        ok=false
+    fi
+    if [[ ! -f "$BASE_CONFIG" ]]; then
+        echo -e "${RED}ERROR: Base config not found: ${BASE_CONFIG}${NC}"
+        ok=false
+    fi
+    [[ "$ok" == "false" ]] && exit 2
+}
+
 # ── List scenarios ────────────────────────────────────────────
 list_scenarios() {
-    echo -e "${BOLD}Available Scenarios:${NC}"
+    echo -e "${BOLD}Available Scenarios (Tier 2 — Gazebo SITL):${NC}"
     echo ""
-    printf "%-4s %-30s %-6s %-8s %s\n" "#" "Name" "Tier" "Gazebo" "Description"
+    printf "%-4s %-30s %-6s %s\n" "#" "Name" "Tier" "Description"
     echo "───────────────────────────────────────────────────────────────────────────────────"
     for f in "${SCENARIOS_DIR}"/[0-9]*.json; do
         [[ -f "$f" ]] || continue
-        local name tier requires_gazebo desc
+        local name tier desc
         name=$(json_get "$f" "scenario.name")
         tier=$(json_get "$f" "scenario.tier")
-        requires_gazebo=$(json_get "$f" "scenario.requires_gazebo")
         desc=$(json_get "$f" "scenario.description")
         local num
         num=$(basename "$f" | cut -d_ -f1)
-        local gazebo_str
-        gazebo_str=$([[ "$requires_gazebo" == "True" ]] && echo "yes" || echo "no")
-
-        # Truncate description
         if [[ ${#desc} -gt 50 ]]; then
             desc="${desc:0:47}..."
         fi
-        printf "%-4s %-30s %-6s %-8s %s\n" "$num" "$name" "$tier" "$gazebo_str" "$desc"
+        printf "%-4s %-30s %-6s %s\n" "$num" "$name" "$tier" "$desc"
     done
+    echo ""
+    echo "All scenarios run in Gazebo SITL mode (PX4 + MAVLink + Gazebo sensors)."
     echo ""
 }
 
@@ -240,16 +273,15 @@ if [[ "$RUN_ALL" == "false" && -z "$SCENARIO_FILE" ]]; then
     exit 2
 fi
 
-if [[ ! -d "$BIN_DIR" ]]; then
-    echo -e "${RED}ERROR: Build directory not found. Build the project first.${NC}"
-    exit 2
-fi
+check_prerequisites
 
 # ── Run all scenarios ─────────────────────────────────────────
 if [[ "$RUN_ALL" == "true" ]]; then
     echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
-    echo -e "${BOLD}  Scenario Runner — Running All Scenarios${NC}"
-    [[ -n "$TIER_FILTER" ]] && echo -e "  Tier filter: ${TIER_FILTER}"
+    echo -e "${BOLD}  Gazebo SITL Scenario Runner — All Scenarios${NC}"
+    echo -e "  PX4    : ${PX4_DIR}"
+    echo -e "  World  : ${GZ_WORLD}"
+    echo -e "  Config : ${BASE_CONFIG}"
     echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
     echo ""
 
@@ -260,21 +292,16 @@ if [[ "$RUN_ALL" == "true" ]]; then
     for f in "${SCENARIOS_DIR}"/[0-9]*.json; do
         [[ -f "$f" ]] || continue
 
-        if [[ -n "$TIER_FILTER" ]]; then
-            tier=$(json_get "$f" "scenario.tier")
-            [[ "$tier" != "$TIER_FILTER" ]] && continue
-        fi
-
         TOTAL_SCENARIOS=$((TOTAL_SCENARIOS + 1))
         scenario_name=$(json_get "$f" "scenario.name")
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${BOLD}  Running: ${scenario_name}${NC}"
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-        # Run each scenario in a subshell so state is isolated
         args=("$f" --base-config "$BASE_CONFIG" --log-dir "$LOG_DIR")
         [[ -n "$TIMEOUT_OVERRIDE" ]] && args+=(--timeout "$TIMEOUT_OVERRIDE")
         [[ -n "$IPC_BACKEND" ]] && args+=(--ipc "$IPC_BACKEND")
+        [[ -n "$GUI_FLAG" ]] && args+=("$GUI_FLAG")
         [[ "$DRY_RUN" == "true" ]] && args+=(--dry-run)
         [[ "$VERBOSE" == "true" ]] && args+=(--verbose)
 
@@ -302,7 +329,6 @@ fi
 # ═══════════════════════════════════════════════════════════════
 
 if [[ ! -f "$SCENARIO_FILE" ]]; then
-    # Try relative to SCENARIOS_DIR
     if [[ -f "${SCENARIOS_DIR}/${SCENARIO_FILE}" ]]; then
         SCENARIO_FILE="${SCENARIOS_DIR}/${SCENARIO_FILE}"
     else
@@ -316,11 +342,17 @@ SCENARIO_NAME=$(json_get "$SCENARIO_FILE" "scenario.name")
 SCENARIO_DESC=$(json_get "$SCENARIO_FILE" "scenario.description")
 SCENARIO_TIER=$(json_get "$SCENARIO_FILE" "scenario.tier")
 SCENARIO_TIMEOUT=$(json_get "$SCENARIO_FILE" "scenario.timeout_s")
-REQUIRES_GAZEBO=$(json_get "$SCENARIO_FILE" "scenario.requires_gazebo")
 
 [[ -n "$TIMEOUT_OVERRIDE" ]] && SCENARIO_TIMEOUT="$TIMEOUT_OVERRIDE"
 
-# Sanitize SCENARIO_NAME — allow only [A-Za-z0-9_-] to prevent path-traversal
+# Gazebo scenarios need longer timeouts (PX4 boot + takeoff = ~20s)
+# Enforce a minimum of 120s unless explicitly overridden
+if [[ -z "$TIMEOUT_OVERRIDE" ]] && [[ -n "$SCENARIO_TIMEOUT" ]] && [[ "$SCENARIO_TIMEOUT" -lt 120 ]] 2>/dev/null; then
+    echo -e "  ${YELLOW}Bumping timeout from ${SCENARIO_TIMEOUT}s to 120s (Gazebo minimum)${NC}"
+    SCENARIO_TIMEOUT=120
+fi
+
+# Sanitize SCENARIO_NAME
 SCENARIO_NAME_SAFE=$(echo "$SCENARIO_NAME" | tr -cd 'A-Za-z0-9_-')
 if [[ "$SCENARIO_NAME_SAFE" != "$SCENARIO_NAME" ]]; then
     echo -e "${YELLOW}WARNING: Scenario name sanitized: '${SCENARIO_NAME}' → '${SCENARIO_NAME_SAFE}'${NC}"
@@ -337,21 +369,15 @@ mkdir -p "$SCENARIO_LOG_DIR"
 
 echo ""
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
-echo -e "  ${BOLD}Scenario: ${SCENARIO_NAME}${NC}"
+echo -e "  ${BOLD}Scenario: ${SCENARIO_NAME}  (Gazebo SITL)${NC}"
 echo -e "  ${SCENARIO_DESC}"
 echo -e "  Tier     : ${SCENARIO_TIER}"
 echo -e "  Timeout  : ${SCENARIO_TIMEOUT}s"
-echo -e "  Gazebo   : ${REQUIRES_GAZEBO}"
+echo -e "  PX4      : ${PX4_DIR}"
+echo -e "  World    : $(basename "$GZ_WORLD")"
+echo -e "  GUI      : ${GUI_FLAG:-off}"
 echo -e "  Logs     : ${SCENARIO_LOG_DIR}"
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
-
-# ── Gazebo requirement check ─────────────────────────────────
-if [[ "$REQUIRES_GAZEBO" == "True" ]]; then
-    echo ""
-    echo -e "${YELLOW}SKIP: Scenario requires Gazebo SITL (Tier 2).${NC}"
-    echo -e "${YELLOW}      Use tests/run_scenario_gazebo.sh for Tier 2 tests.${NC}"
-    exit 0
-fi
 
 # ── Merge configs ─────────────────────────────────────────────
 MERGED_CONFIG="${SCENARIO_LOG_DIR}/merged_config.json"
@@ -359,7 +385,7 @@ echo ""
 echo "Phase 1: Merging configs..."
 merge_configs "$BASE_CONFIG" "$SCENARIO_FILE" "$MERGED_CONFIG"
 
-# Apply --ipc override (after merge so it takes top priority)
+# Apply --ipc override
 if [[ -n "$IPC_BACKEND" ]]; then
     python3 - "$MERGED_CONFIG" "$IPC_BACKEND" <<'PYEOF'
 import json, sys
@@ -372,7 +398,7 @@ PYEOF
 fi
 echo -e "  ${GREEN}✓${NC} Config merged → ${MERGED_CONFIG} (ipc=${IPC_BACKEND:-default})"
 
-# Resolve effective IPC backend for transport-aware checks.
+# Resolve effective IPC backend
 EFFECTIVE_IPC="${IPC_BACKEND}"
 if [[ -z "$EFFECTIVE_IPC" ]]; then
     EFFECTIVE_IPC=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('ipc_backend','shm'))" "$MERGED_CONFIG" 2>/dev/null || echo "shm")
@@ -386,6 +412,8 @@ if [[ "$DRY_RUN" == "true" ]]; then
     echo "Base config    : ${BASE_CONFIG}"
     echo "Scenario file  : ${SCENARIO_FILE}"
     echo "Merged config  : ${MERGED_CONFIG}"
+    echo "Launcher       : deploy/launch_gazebo.sh"
+    echo "PX4 model      : x500_companion"
     echo ""
     echo "Fault injection sequence:"
     json_get_array "$SCENARIO_FILE" "fault_sequence.steps" | while read -r step; do
@@ -410,9 +438,9 @@ fi
 # Ensure system libstdc++ is used
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# ── Launch the stack ──────────────────────────────────────────
+# ── Launch PX4 + Gazebo + companion stack ─────────────────────
 echo ""
-echo "Phase 2: Launching companion stack..."
+echo "Phase 2: Launching PX4 SITL + Gazebo + companion stack..."
 
 # Clean stale SHM
 rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
@@ -421,66 +449,94 @@ rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
       /dev/shm/system_health /dev/shm/fc_commands /dev/shm/mission_upload \
       /dev/shm/fault_overrides 2>/dev/null || true
 
+# Kill any leftover PX4/Gazebo processes from a previous run
+pkill -9 -f "gz sim" 2>/dev/null || true
+pkill -9 -f "ruby.*gz" 2>/dev/null || true
+# Only kill PX4 process if it's our SITL instance (not system services)
+pkill -9 -f "px4.*sitl" 2>/dev/null || true
+sleep 1
+
 cleanup_scenario() {
     echo ""
-    echo "Cleaning up scenario..."
+    echo "Cleaning up Gazebo scenario..."
     if [[ -n "$LAUNCHER_PID" ]] && kill -0 "$LAUNCHER_PID" 2>/dev/null; then
         kill -SIGINT "$LAUNCHER_PID" 2>/dev/null || true
-        sleep 2
+        sleep 3
         if kill -0 "$LAUNCHER_PID" 2>/dev/null; then
             kill -SIGKILL "$LAUNCHER_PID" 2>/dev/null || true
         fi
     fi
-    # Also kill any child processes
+    # Kill PX4, Gazebo, and companion processes
     pkill -f "build/bin/(video_capture|perception|slam_vio_nav|mission_planner|comms|payload_manager|system_monitor)" 2>/dev/null || true
+    pkill -f "gz sim" 2>/dev/null || true
+    pkill -f "ruby.*gz" 2>/dev/null || true
+    pkill -f "px4.*sitl" 2>/dev/null || true
+    sleep 1
+    # Force kill stragglers
+    pkill -9 -f "gz sim" 2>/dev/null || true
+    pkill -9 -f "px4" 2>/dev/null || true
     wait "$LAUNCHER_PID" 2>/dev/null || true
+    # Wait until UDP port 14540 is fully released (prevents stale-socket race)
+    for _pw in $(seq 1 30); do
+        if ! ss -ulnp 2>/dev/null | grep -q ":14540"; then
+            break
+        fi
+        sleep 0.5
+    done
+    # Clean SHM
+    rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
+          /dev/shm/mission_status /dev/shm/trajectory_cmd /dev/shm/payload_commands \
+          /dev/shm/fc_state /dev/shm/gcs_commands /dev/shm/payload_status \
+          /dev/shm/system_health /dev/shm/fc_commands /dev/shm/mission_upload \
+          /dev/shm/fault_overrides 2>/dev/null || true
 }
 trap cleanup_scenario EXIT INT TERM
 
-# Launch via deploy script with merged config
-"${DEPLOY_DIR}/launch_all.sh" --config "$MERGED_CONFIG" > "${SCENARIO_LOG_DIR}/launcher.log" 2>&1 &
+# Launch via launch_gazebo.sh with merged config
+LOG_DIR="$SCENARIO_LOG_DIR" \
+CONFIG_FILE="$MERGED_CONFIG" \
+PX4_DIR="$PX4_DIR" \
+GZ_WORLD="$GZ_WORLD" \
+    "${DEPLOY_DIR}/launch_gazebo.sh" $GUI_FLAG \
+    > "${SCENARIO_LOG_DIR}/launcher.log" 2>&1 &
 LAUNCHER_PID=$!
 
 echo -e "  Launcher PID: ${LAUNCHER_PID}"
 
-# Wait for the stack to start
-echo -n "  Waiting for stack startup."
+# Wait for PX4 MAVLink + companion stack startup
+echo -n "  Waiting for PX4 + stack startup"
 STARTUP_OK=false
-if [[ "$EFFECTIVE_IPC" == "zenoh" ]]; then
-    # Zenoh doesn't use POSIX SHM — wait for processes via log output.
-    for _ in $(seq 1 30); do
-        if grep -q "READY\|ready\|Main loop" "${SCENARIO_LOG_DIR}/launcher.log" 2>/dev/null; then
-            STARTUP_OK=true
-            break
-        fi
-        echo -n "."
-        sleep 1
-    done
-else
-    for _ in $(seq 1 30); do
-        if [[ -f /dev/shm/fc_state ]] && [[ -f /dev/shm/system_health ]]; then
-            STARTUP_OK=true
-            break
-        fi
-        echo -n "."
-        sleep 1
-    done
-fi
+for _ in $(seq 1 60); do
+    if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+        echo ""
+        echo -e "  ${RED}Launcher exited prematurely${NC}"
+        break
+    fi
+    # Check if all 7 companion processes are running
+    if pgrep -f "build/bin/mission_planner" > /dev/null 2>&1 && \
+       pgrep -f "build/bin/comms" > /dev/null 2>&1 && \
+       pgrep -f "build/bin/system_monitor" > /dev/null 2>&1; then
+        STARTUP_OK=true
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
 echo ""
 
 if [[ "$STARTUP_OK" == "true" ]]; then
-    check "Stack started" 0
+    check "PX4 + Gazebo + Stack started" 0
+    # Extra settle time for PX4 to fully boot and start publishing telemetry
+    echo -e "  ${CYAN}Settling (5s) — waiting for MAVLink telemetry...${NC}"
+    sleep 5
 else
-    check "Stack started" 1
-    echo -e "${RED}  Stack failed to start. Check ${SCENARIO_LOG_DIR}/launcher.log${NC}"
+    check "PX4 + Gazebo + Stack started" 1
+    echo -e "${RED}  Stack failed to start. Check:${NC}"
+    echo -e "${RED}    ${SCENARIO_LOG_DIR}/launcher.log${NC}"
+    echo -e "${RED}    ${SCENARIO_LOG_DIR}/px4_sitl.log${NC}"
 fi
 
-# Brief stabilisation delay
-sleep 3
-
 # ── Timeout enforcement ──────────────────────────────────────
-# Record the scenario start time.  Before each phase we check whether
-# the configured timeout has been exceeded.
 SCENARIO_START=$SECONDS
 
 check_deadline() {
@@ -501,7 +557,6 @@ echo "Phase 3: Executing fault injection sequence..."
 STEPS_JSON=$(json_get "$SCENARIO_FILE" "fault_sequence.steps")
 if [[ "$STEPS_JSON" != "[]" && -n "$STEPS_JSON" ]]; then
     if [[ -x "$FAULT_INJECTOR" ]]; then
-        # Write the fault sequence to a temp file for the fault_injector to process
         FAULT_SEQ_FILE="${SCENARIO_LOG_DIR}/fault_sequence.json"
         python3 - "$SCENARIO_FILE" "$FAULT_SEQ_FILE" <<'PYEOF'
 import json, sys
@@ -516,7 +571,6 @@ PYEOF
         check "Fault injection sequence completed" $?
     else
         echo -e "  ${YELLOW}WARNING: fault_injector not found at ${FAULT_INJECTOR}${NC}"
-        echo -e "  ${YELLOW}Build with: cmake --build build --target fault_injector${NC}"
         check "Fault injector available" 1
     fi
 else
@@ -525,34 +579,41 @@ fi
 
 # ── Phase 4: Collection window ────────────────────────────────
 check_deadline
-COLLECTION_TIME=5
+COLLECTION_TIME=10
+# Use remaining timeout budget for collection (leave 10s for verification)
+if [[ -n "$SCENARIO_TIMEOUT" && "$SCENARIO_TIMEOUT" -gt 0 ]] 2>/dev/null; then
+    ELAPSED=$(( SECONDS - SCENARIO_START ))
+    REMAINING=$(( SCENARIO_TIMEOUT - ELAPSED - 10 ))
+    if [[ $REMAINING -gt $COLLECTION_TIME ]]; then
+        COLLECTION_TIME=$REMAINING
+    fi
+fi
 echo ""
 echo "Phase 4: Post-injection collection (${COLLECTION_TIME}s)..."
 sleep "$COLLECTION_TIME"
-
-# Capture process logs from launcher output
-# In legacy mode, all output goes to launcher.log
 
 # ── Phase 5: Verification ────────────────────────────────────
 check_deadline
 echo ""
 echo "Phase 5: Verification..."
 
-# All log output is in launcher.log
-COMBINED_LOG="${SCENARIO_LOG_DIR}/launcher.log"
-
-# Use process substitution (< <(...)) instead of pipes so that
-# PASS/FAIL/TOTAL counters are updated in the current shell.
+# Gazebo launcher writes individual log files.  Combine them for
+# pattern matching.  Also include the launcher wrapper log.
+COMBINED_LOG="${SCENARIO_LOG_DIR}/combined.log"
+cat "${SCENARIO_LOG_DIR}"/*.log > "$COMBINED_LOG" 2>/dev/null || true
 
 # Check log_contains
 echo ""
 echo "Log-contains checks:"
 while read -r pattern; do
     [[ -z "$pattern" ]] && continue
-    if grep -qi "$pattern" "$COMBINED_LOG" 2>/dev/null; then
+    if grep -qai "$pattern" "$COMBINED_LOG" 2>/dev/null; then
         check "Log contains: ${pattern}" 0
     else
         check "Log missing: ${pattern}" 1
+        if [[ "$VERBOSE" == "true" ]]; then
+            echo -e "    ${YELLOW}(searched $(wc -l < "$COMBINED_LOG") lines across all logs)${NC}"
+        fi
     fi
 done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_contains")
 
@@ -561,8 +622,12 @@ echo ""
 echo "Log-must-not-contain checks:"
 while read -r pattern; do
     [[ -z "$pattern" ]] && continue
-    if grep -qi "$pattern" "$COMBINED_LOG" 2>/dev/null; then
+    if grep -qai "$pattern" "$COMBINED_LOG" 2>/dev/null; then
         check "Log unexpectedly contains: ${pattern}" 1
+        if [[ "$VERBOSE" == "true" ]]; then
+            echo -e "    ${YELLOW}First match:${NC}"
+            grep -ai "$pattern" "$COMBINED_LOG" | head -1 | sed 's/^/    /'
+        fi
     else
         check "Log correctly does NOT contain: ${pattern}" 0
     fi
@@ -596,10 +661,19 @@ else
     done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.shm_segments_exist")
 fi
 
+# PX4-specific checks
+echo ""
+echo "PX4 SITL checks:"
+if pgrep -f "px4" > /dev/null 2>&1; then
+    check "PX4 process alive" 0
+else
+    check "PX4 process alive" 1
+fi
+
 # ── Results ───────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
-echo -e "  ${BOLD}Scenario: ${SCENARIO_NAME}${NC}"
+echo -e "  ${BOLD}Scenario: ${SCENARIO_NAME}  (Gazebo SITL)${NC}"
 echo -e "  Logs: ${SCENARIO_LOG_DIR}"
 echo -e "  Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total"
 if [[ $FAIL -gt 0 ]]; then
@@ -609,7 +683,6 @@ else
 fi
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
 
-# Exit based on verification results + launcher health
 if [[ $FAIL -gt 0 ]]; then
     exit 1
 elif ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then

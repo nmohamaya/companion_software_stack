@@ -130,8 +130,11 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 }
 
 // ── Fusion thread ───────────────────────────────────────────
+// pose_sub  — Zenoh subscriber for drone/slam/pose (ShmPose).
+//             Used to rotate camera-frame detections into world frame.
 static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                     tracked_queue,
                           drone::ipc::IPublisher<drone::ipc::ShmDetectedObjectList>& det_pub,
+                          drone::ipc::ISubscriber<drone::ipc::ShmPose>&              pose_sub,
                           std::atomic<bool>& running, IFusionEngine& engine) {
     spdlog::info("[Fusion] Thread started — backend: {}", engine.name());
 
@@ -139,8 +142,21 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
 
     uint64_t fusion_count = 0;
 
+    // Cached latest drone pose (world frame: North, East, Up)
+    drone::ipc::ShmPose latest_pose{};
+    bool                has_pose = false;
+
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        // Drain latest pose (non-blocking — keep the most recent)
+        {
+            drone::ipc::ShmPose p{};
+            while (pose_sub.receive(p)) {
+                latest_pose = p;
+                has_pose    = true;
+            }
+        }
 
         // Fuse when tracking data arrives
         if (auto topt = tracked_queue.try_pop()) {
@@ -153,7 +169,50 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
 
             diag.add_metric("Fuse", "n_fused_objects", static_cast<double>(fused.objects.size()));
 
-            // Publish to SHM
+            // ── Camera-frame → World-frame transform ──────────────
+            // fusion_engine returns position_3d in camera body frame:
+            //   cam.x = forward (along boresight)
+            //   cam.y = right
+            //   cam.z = down
+            // Our world frame: translation[0]=North, [1]=East, [2]=Up.
+            // Drone heading = yaw extracted from quaternion (w,x,y,z).
+            // Camera boresight = drone body +X = world North when yaw=0.
+            //
+            // Rotation (yaw only — ignore small pitch/roll for range estimation):
+            //   world_north = cam.x * cos(yaw) - cam.y * sin(yaw)  + drone_north
+            //   world_east  = cam.x * sin(yaw) + cam.y * cos(yaw)  + drone_east
+            //   world_up    = drone_up - cam.z   (cam Z down = world -Z)
+            if (has_pose) {
+                // Extract yaw from quaternion (w, x, y, z)
+                const double qw  = latest_pose.quaternion[0];
+                const double qx  = latest_pose.quaternion[1];
+                const double qy  = latest_pose.quaternion[2];
+                const double qz  = latest_pose.quaternion[3];
+                const float  yaw = static_cast<float>(
+                    std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+                const float cos_y = std::cos(yaw);
+                const float sin_y = std::sin(yaw);
+
+                const float dn = static_cast<float>(latest_pose.translation[0]);
+                const float de = static_cast<float>(latest_pose.translation[1]);
+                const float du = static_cast<float>(latest_pose.translation[2]);
+
+                for (auto& obj : fused.objects) {
+                    const float cx      = obj.position_3d.x();           // camera forward
+                    const float cy      = obj.position_3d.y();           // camera right
+                    const float cz      = obj.position_3d.z();           // camera down
+                    obj.position_3d.x() = dn + cx * cos_y - cy * sin_y;  // world North
+                    obj.position_3d.y() = de + cx * sin_y + cy * cos_y;  // world East
+                    obj.position_3d.z() = du - cz;                       // world Up
+                    // Rotate velocity the same way
+                    const float vx      = obj.velocity_3d.x();
+                    const float vy      = obj.velocity_3d.y();
+                    obj.velocity_3d.x() = vx * cos_y - vy * sin_y;
+                    obj.velocity_3d.y() = vx * sin_y + vy * cos_y;
+                }
+            }
+
+            // Publish to SHM (world-frame positions)
             drone::ipc::ShmDetectedObjectList shm_list{};
             shm_list.timestamp_ns   = fused.timestamp_ns;
             shm_list.frame_sequence = fused.frame_sequence;
@@ -246,11 +305,14 @@ int main(int argc, char* argv[]) {
 
     // ── Create fusion engine from config ────────────────────
     CalibrationData calib;
-    calib.camera_intrinsics       = Eigen::Matrix3f::Identity();
-    calib.camera_intrinsics(0, 0) = cfg.get<float>("perception.fusion.fx", 500.0f);
-    calib.camera_intrinsics(1, 1) = cfg.get<float>("perception.fusion.fy", 500.0f);
-    calib.camera_intrinsics(0, 2) = cfg.get<float>("perception.fusion.cx", 960.0f);
-    calib.camera_intrinsics(1, 2) = cfg.get<float>("perception.fusion.cy", 540.0f);
+    calib.camera_intrinsics         = Eigen::Matrix3f::Identity();
+    calib.camera_intrinsics(0, 0)   = cfg.get<float>("perception.fusion.fx", 500.0f);
+    calib.camera_intrinsics(1, 1)   = cfg.get<float>("perception.fusion.fy", 500.0f);
+    calib.camera_intrinsics(0, 2)   = cfg.get<float>("perception.fusion.cx", 960.0f);
+    calib.camera_intrinsics(1, 2)   = cfg.get<float>("perception.fusion.cy", 540.0f);
+    calib.camera_height_m           = cfg.get<float>("perception.fusion.camera_height_m", 1.5f);
+    calib.assumed_obstacle_height_m = cfg.get<float>("perception.fusion.assumed_obstacle_height_m",
+                                                     3.0f);
 
     std::string fusion_backend = cfg.get<std::string>("perception.fusion.backend", "camera_only");
     auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);
@@ -267,8 +329,11 @@ int main(int argc, char* argv[]) {
     std::thread t_tracker(tracker_thread, std::ref(inference_to_tracker),
                           std::ref(tracker_to_fusion), std::ref(g_running), std::ref(*tracker));
 
+    // Subscribe to drone pose for the camera→world transform in the fusion thread
+    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
+
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
-                         std::ref(g_running), std::ref(*fusion_engine));
+                         std::ref(*pose_sub), std::ref(g_running), std::ref(*fusion_engine));
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
