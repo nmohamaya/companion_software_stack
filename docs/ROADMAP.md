@@ -524,6 +524,10 @@
 | [#126](https://github.com/nmohamaya/companion_software_stack/issues/126) | HD-Map Two-Layer Occupancy Grid (static + camera TTL) | Feature | **Closed** (Fix #35) |
 | [#127](https://github.com/nmohamaya/companion_software_stack/issues/127) | Proximity-Based Collision Detection in NAVIGATE Loop | Feature | **Closed** (Fix #36) |
 | [#129](https://github.com/nmohamaya/companion_software_stack/issues/129) | PX4 exit tears down companion stack and GUI (launch_gazebo.sh) | Bug | **Open** (Bug #29 — FIXME in launch_gazebo.sh) |
+| *(this session)* | RTL disarm detection: `nav_was_armed_` gap at fault/GCS/complete RTL entry points | Bug fix | **Closed** (Fix #39 — main.cpp) |
+| *(this session)* | OBSTACLE COLLISION guard missing from 6/8 scenario pass criteria | Config fix | **Closed** (Fix #40 — all 8 scenarios) |
+| *(this session)* | Scenario 07 thermal false-fail: `temp_crit_c` override below host CPU temp | Bug fix | **Closed** (Fix #38 — scenario 07 config) |
+| *(this session)* | Scenario 05 geofence: WP4 clips magenta cylinder + floor flood + RTL lock | Bug fix | **Closed** (Fix #37 — scenario 05 config + main.cpp) |
 
 ---
 
@@ -559,7 +563,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅** |
 
 ### Process Activity During Simulation
 

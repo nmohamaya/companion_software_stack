@@ -1719,4 +1719,74 @@ Six distinct bugs were fixed to reach a full 7/7 pass (Fixes #30–35 in BUG_FIX
 
 _Last updated after Improvement #33 (Scenario 02 pass, HD-map, proximity collision detection)_
 
-*Last updated after Epic #110 (Core Autonomy & Safety). All 7 sub-issues closed. See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
+*Last updated after Epic #110 (Core Autonomy & Safety). All 7 sub-issues closed.
+
+---
+
+## Improvement #34 — Full 8-Scenario Suite Green (Gazebo SITL + Zenoh)
+
+**Branch:** `feat/scenario-02-obstacle-avoidance-pass`  
+**PR:** [#130](https://github.com/nmohamaya/companion_software_stack/pull/130)  
+**Date:** 2026-03-10
+
+### What Changed
+
+This session closed the remaining scenario reliability gaps and ran the first full **8/8 scenario green suite** on Gazebo SITL with Zenoh IPC.
+
+#### RTL Disarm Detection — `nav_was_armed_` Gap (Fix #39)
+
+`nav_was_armed_` was only updated inside `MissionState::NAVIGATE`. If RTL was triggered from `TAKEOFF` (e.g. fast battery drain in scenario 03, thermal fault in scenario 07), the flag stayed `false` and the disarm detection added in the previous session silently never fired — the FSM would stay locked in `MissionState::RTL` indefinitely after the drone grounded and PX4 disarmed.
+
+**Fix:** `nav_was_armed_ = true` seeded immediately before every `fsm.on_rtl()` call — all three entry points:
+- Fault escalation (`FaultAction::RTL`) — can fire from TAKEOFF or NAVIGATE
+- GCS RTL command (`GCSCommandType::RTL`) — can fire from any state
+- Mission complete (inside NAVIGATE) — already safe, made explicit for symmetry
+
+#### OBSTACLE COLLISION Guard — All Scenarios (Fix #40)
+
+All 8 scenarios run in `test_world.sdf` which contains 6 physical obstacles. Previously only scenarios 02 and 05 had `"OBSTACLE COLLISION"` in `log_must_not_contain`. A collision in any scenario would silently not fail the test. Added to all 8.
+
+#### Scenario 05 Geofence Breach — Three Root Causes Fixed (this session — Fix #37 partial)
+
+See BUG_FIXES.md Fix #37 (previously documented). Three root causes: WP4(15,15) clipped magenta cylinder, `altitude_floor_m: 0.0` flooded log, RTL disarm check never fired. All three resolved.
+
+#### Scenario 07 Thermal Throttle — Temp Threshold Regression (Fix #38)
+
+Scenario 07 had `temp_crit_c: 95°C` override. Host CPU runs at ~100°C under simulation. `FAULT_THERMAL_CRITICAL` fired at PREFLIGHT before arming → RTL → unconverged SLAM pose → spurious `FAULT_GEOFENCE_BREACH` → false FAIL. Fixed by removing the temp override — thermal escalation is exercised via the zone-override injector which bypasses temperature calculation entirely. See BUG_FIXES.md Fix #38.
+
+### Full Suite Results
+
+| # | Scenario | Checks | Result |
+|---|---|---|---|
+| 01 | nominal_mission | 19/19 | ✅ PASS |
+| 02 | obstacle_avoidance | 16/16 | ✅ PASS |
+| 03 | battery_degradation | 8/8 | ✅ PASS |
+| 04 | fc_link_loss | 8/8 | ✅ PASS |
+| 05 | geofence_breach | 7/7 | ✅ PASS |
+| 06 | mission_upload | 9/9 | ✅ PASS |
+| 07 | thermal_throttle | 11/11 | ✅ PASS |
+| 08 | full_stack_stress | 11/11 | ✅ PASS |
+| **Total** | | **89/89** | **✅ 8/8 GREEN** |
+
+### Documents Updated
+
+- `docs/BUG_FIXES.md` — Fix #38, Known Issue #30 added
+- `docs/PROGRESS.md` — this entry
+- `docs/ROADMAP.md` — metrics updated, new issues listed
+
+---
+
+## Updated Summary (Post Improvement #34 — Full Suite Green)
+
+| Metric | Improvement #33 | **#34 (Current)** |
+|---|---|---|
+| Bug fixes | 36 | **38 + 2 known issues** |
+| Integration scenarios (Gazebo SITL + Zenoh) | 7/8 (scenario 07 failing) | **8/8 ✅ all green** |
+| Total scenario checks passing | ~72/89 | **89/89** |
+| RTL disarm detection coverage | NAVIGATE only | **All 3 entry points** |
+| OBSTACLE COLLISION guard | 2/8 scenarios | **8/8 scenarios** |
+| Geofence scenario correctness | False-pass (crash hidden) | **True-pass (RTL + clean land)** |
+| Thermal scenario flakiness | Hot-hardware false-fail | **Stable** |
+| Compiler warnings | 0 | **0** |
+
+_Last updated after Improvement #34 (Full 8-scenario Gazebo SITL + Zenoh suite green — 89/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
