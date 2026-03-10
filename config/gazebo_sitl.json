@@ -1,6 +1,7 @@
 {
     "_comment": "Gazebo SITL configuration — uses MAVLink FC link and Gazebo cameras",
     "log_level": "info",
+    "ipc_backend": "zenoh",
 
     "video_capture": {
         "mission_cam": {

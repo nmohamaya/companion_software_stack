@@ -1,6 +1,7 @@
 {
     "_comment": "Gazebo integration-test config — full closed-loop with PX4 SITL",
     "log_level": "info",
+    "ipc_backend": "zenoh",
 
     "video_capture": {
         "mission_cam": {
