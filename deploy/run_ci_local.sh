@@ -19,7 +19,7 @@
 #   COV_Z     Coverage build + lcov report (Zenoh)
 #
 # The script mirrors the CI matrix in .github/workflows/ci.yml.
-# If you want to save the results, pipe to a file: bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log
+# If you want to save the results, pipe to a file: bash deploy/run_ci_local.sh 2>&1 | tee /deploy/ci_results.log
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
