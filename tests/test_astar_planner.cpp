@@ -179,6 +179,8 @@ TEST(AStarSearchTest, UnreachableGoal) {
 }
 
 TEST(AStarSearchTest, StartBlocked) {
+    // Fix #22: BFS start-escape finds the nearest free cell when the start is
+    // occupied, so a path *is* found despite the start cell being blocked.
     OccupancyGrid3D grid(1.0f, 10.0f, 0.5f);
 
     drone::ipc::ShmDetectedObjectList objects{};
@@ -192,7 +194,11 @@ TEST(AStarSearchTest, StartBlocked) {
     grid.update_from_objects(objects, pose);
 
     auto result = astar_search(grid, {0, 0, 0}, {5, 0, 0});
-    EXPECT_FALSE(result.found);
+    EXPECT_TRUE(result.found);          // BFS escapes to adjacent free cell
+    EXPECT_FALSE(result.path.empty());  // valid path returned
+    // The effective start should differ from the blocked (0,0,0) cell
+    auto first = result.path.front();
+    EXPECT_FALSE(first.x == 0 && first.y == 0 && first.z == 0);
 }
 
 TEST(AStarSearchTest, GoalOutOfBounds) {
@@ -252,6 +258,8 @@ TEST(AStarPathPlannerTest, PlanReturnsValidCmd) {
 }
 
 TEST(AStarPathPlannerTest, FallbackWhenObstacleBlocks) {
+    // Goal-snap logic redirects occupied waypoints to the nearest lateral
+    // free cell, so A* succeeds instead of falling back to direct flight.
     AStarConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 10.0f;
@@ -276,9 +284,9 @@ TEST(AStarPathPlannerTest, FallbackWhenObstacleBlocks) {
     Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
-    // Should still return a valid command (direct fallback)
+    // Goal snap finds a nearby free cell → A* succeeds without direct fallback
     EXPECT_TRUE(cmd.valid);
-    EXPECT_TRUE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.using_direct_fallback());
 }
 
 TEST(AStarPathPlannerTest, NameIsCorrect) {

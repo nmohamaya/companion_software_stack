@@ -115,8 +115,9 @@ TEST(FusionEngineTest, DepthEstimationFromImageY) {
 
         auto result = engine.fuse(tracked);
         ASSERT_EQ(result.objects.size(), 1u);
-        // ray_down = 0 → else branch → depth = 20m
-        EXPECT_NEAR(result.objects[0].position_3d.x(), 20.0f, 0.01f);
+        // ray_down = 0 → else branch → near-horizon conservative depth = 8m
+        // (changed from 20m so obstacles fall inside the 5m influence radius)
+        EXPECT_NEAR(result.objects[0].position_3d.x(), 8.0f, 0.01f);
         EXPECT_NEAR(result.objects[0].position_3d.y(), 0.0f, 0.01f);
     }
 }
