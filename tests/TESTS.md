@@ -31,6 +31,11 @@
 # Gazebo SITL integration (requires PX4 + Gazebo Harmonic)
 ./tests/run_tests.sh gazebo-e2e
 
+# Gazebo SITL scenario runner (all 8 scenarios with PX4 + Gazebo + Zenoh)
+./tests/run_scenario_gazebo.sh --all --ipc zenoh
+./tests/run_scenario_gazebo.sh --all --ipc zenoh --gui   # with 3D window
+./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json --ipc zenoh
+
 # Build with Zenoh and run E2E
 ./tests/run_tests.sh zenoh-e2e --zenoh
 
@@ -109,7 +114,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| **Total** | **37 C++ + 2 shell** | **737 + 42** | |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
+| **Total** | **37 C++ + 4 shell** | **735 + 42 + 80** | |
 
 ---
 
@@ -893,18 +899,18 @@ and verification. Launches the full stack, merges scenario-specific config overr
 injects timed faults via the `fault_injector` CLI tool, and verifies pass criteria
 (log patterns, process liveness, SHM segment existence).
 
-| Scenario | Tier | Gazebo | Description |
-|----------|------|--------|-------------|
-| 01 — Nominal Mission | 1 | No | 4-waypoint rectangular flight, no faults |
-| 02 — Obstacle Avoidance | 2 | Yes | A* planner navigates obstacle field |
-| 03 — Battery Degradation | 1 | No | 3-tier battery escalation (WARN→RTL→CRIT) |
-| 04 — FC Link Loss | 1 | No | FC disconnect → LOITER → RTL contingency |
-| 05 — Geofence Breach | 1 | No | Tight geofence polygon → RTL on violation |
-| 06 — Mission Upload | 1 | No | Mid-flight 3-waypoint upload via GCS command |
-| 07 — Thermal Throttle | 1 | No | Thermal zone escalation 0→1→2→3→0 |
-| 08 — Full Stack Stress | 1 | No | Concurrent faults, high-rate stress test |
+| Scenario | Tier | Gazebo | Checks | Description |
+|----------|------|--------|--------|-------------|
+| 01 — Nominal Mission | 1 | No | 22 | 4-waypoint rectangular flight, no faults; verifies all 7 processes alive + 5 SHM segments |
+| 02 — Obstacle Avoidance | 2 | Yes | 14 | HD-map two-layer A* planner navigates 7-WP obstacle field with proximity collision detection |
+| 03 — Battery Degradation | 1 | No | 5 | 3-tier battery escalation (WARN→RTL→CRIT) |
+| 04 — FC Link Loss | 1 | No | 5 | FC disconnect → LOITER → RTL contingency |
+| 05 — Geofence Breach | 1 | No | 5 | Tight geofence polygon → RTL on violation (WP4 exits eastern boundary) |
+| 06 — Mission Upload | 1 | No | 6 | Mid-flight 3-waypoint upload via GCS command |
+| 07 — Thermal Throttle | 1 | No | 8 | Thermal zone escalation with 4 critical processes alive check |
+| 08 — Full Stack Stress | 1 | No | 15 | Concurrent faults, high-rate stress; 4 procs alive + 7 SHM segments |
 
-**Run:**
+**Run (Tier 1 — simulated, no Gazebo):**
 ```bash
 ./tests/run_scenario.sh --list                          # list all scenarios
 ./tests/run_scenario.sh config/scenarios/01_nominal_mission.json  # run one
@@ -922,6 +928,45 @@ Tier 2 scenarios additionally require Gazebo Harmonic + PX4 SITL.
 
 See [docs/SIMULATION_ARCHITECTURE.md](../docs/SIMULATION_ARCHITECTURE.md) for architecture
 diagrams and detailed setup instructions.
+
+---
+
+### run_scenario_gazebo.sh — Gazebo SITL Scenario Runner
+
+**What it tests:** All 8 scenarios running on PX4 SITL + Gazebo Harmonic with real
+MAVLink telemetry, Gazebo camera/IMU sensors, and configurable IPC backend (SHM or Zenoh).
+Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
+via `fault_injector`, and verifies pass criteria against actual process logs.
+
+**Pass criteria per scenario (80 total checks across 8 scenarios):**
+- `log_contains` — required log patterns (FSM states, fault flags)
+- `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
+- `processes_alive` — processes that must survive to end of scenario
+- `shm_segments_exist` — SHM segments that must be present at verification time
+
+All 8 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
+to catch unexpected collisions (Fix #40).
+
+**Run (Tier 2 — Gazebo SITL):**
+```bash
+./tests/run_scenario_gazebo.sh --list                                    # list
+./tests/run_scenario_gazebo.sh config/scenarios/01_nominal_mission.json   # one
+./tests/run_scenario_gazebo.sh --all --ipc zenoh                         # all 8 with Zenoh
+./tests/run_scenario_gazebo.sh --all --ipc zenoh --gui                   # with 3D window
+./tests/run_scenario_gazebo.sh --dry-run config/scenarios/02_obstacle_avoidance.json
+```
+
+**Options:**
+- `--ipc <shm|zenoh>` — override IPC backend (default: from `config/gazebo_sitl.json`)
+- `--gui` — launch Gazebo GUI (3D visualisation)
+- `--base-config <path>` — override base config
+- `--timeout <seconds>` — override scenario timeout (default: 120s minimum)
+- `--verbose` — extra verbose output
+
+**Requires:** PX4 SITL (`$PX4_DIR`, default `~/PX4-Autopilot`), Gazebo Harmonic,
+`fault_injector` built. Logs output to `drone_logs/scenarios_gazebo/<scenario_name>/`.
+
+**Status (March 2026):** 8/8 scenarios passing, 80 checks green (Gazebo SITL + Zenoh).
 
 ---
 
@@ -950,4 +995,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 737 unit tests (49+ suites across 37 files) + 42 E2E checks (2 shell scripts) + 8 scenario-driven integration tests (run_scenario.sh).*
+*Last updated: March 2026 — 735 unit tests (SHM) / 844 (SHM+Zenoh) across 49+ suites in 37 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green.*
