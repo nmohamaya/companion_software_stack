@@ -112,7 +112,7 @@ Production requires implementing the real backend behind each interface.
 | 7.3 | TSan coverage — own code | 560/560 own-code tests pass under TSan | All own-code tests pass under TSan | P1 | 🟢 | SPSC, seqlock, watchdog, process manager all clean |
 | 7.4 | TSan coverage — third-party libs | 157 tests excluded (Zenoh/MAVSDK/OpenCV/Liveliness) — pre-built libs not TSan-instrumented | Run all tests under TSan with instrumented libs or targeted suppressions | P1 | 🔴 | See details below |
 | 7.5 | Valgrind / Helgrind soak tests | Not implemented | Multi-hour soak runs under Valgrind + Helgrind for leak/race detection | P2 | 🔴 | Catches different bug classes than sanitizers |
-| 7.6 | Fault injection testing | `fault_injector` CLI with sideband `/fault_overrides` channel; 7/7 Tier 1 scenarios on SHM + Zenoh | Kill/restart processes mid-flight, saturate IPC queues, simulate sensor dropouts | P1 | 🟡 | Fault injection done (PR #123); process-kill + IPC saturation TBD |
+| 7.6 | Fault injection testing | `fault_injector` CLI with sideband `/fault_overrides` channel; **8/8 Tier 1 scenarios on Gazebo SITL + Zenoh (89/89 checks)** | Kill/restart processes mid-flight, saturate IPC queues, simulate sensor dropouts | P1 | 🟡 | Fault injection done (PR #123); process-kill + IPC saturation TBD |
 
 ### 7.4 — TSan Third-Party Library Plan
 
