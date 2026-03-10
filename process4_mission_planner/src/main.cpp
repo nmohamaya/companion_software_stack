@@ -177,8 +177,12 @@ int main(int argc, char* argv[]) {
     // ── HD-map: pre-populate A* grid with known static obstacles ────────────
     // These cells are permanent (no TTL). The camera pipeline independently
     // confirms these obstacles via live detections (TTL layer). A* sees both.
+    // confirmed / confirm_count track camera cross-checks (see main loop below).
     struct StaticObstacleRecord {
-        float x, y, radius_m, height_m;
+        float    x, y, radius_m, height_m;
+        bool     confirmed{false};       // true once camera has seen this obstacle
+        int      confirm_count{0};       // raw detection hit count (need ≥2 to confirm)
+        uint64_t first_confirmed_ns{0};  // loop timestamp of first confirmation
     };
     std::vector<StaticObstacleRecord> static_obstacles;
     {
@@ -194,6 +198,26 @@ int main(int argc, char* argv[]) {
             spdlog::info("[HD-map] Loaded {} static obstacles into A* grid", obs_json.size());
         }
     }
+
+    // Helper: rotate a vehicle-frame point to world ENU, then add world translation.
+    // Uses pose.quaternion[0..3] = (qw, qx, qy, qz) and pose.translation[0..2].
+    auto vehicle_to_world = [](double qw, double qx, double qy, double qz, double tx, double ty,
+                               double tz, float vx, float vy, float vz, float& out_x, float& out_y,
+                               float& out_z) {
+        // Standard quaternion rotation matrix (body → world)
+        const double r00 = 1.0 - 2.0 * (qy * qy + qz * qz);
+        const double r01 = 2.0 * (qx * qy - qw * qz);
+        const double r02 = 2.0 * (qx * qz + qw * qy);
+        const double r10 = 2.0 * (qx * qy + qw * qz);
+        const double r11 = 1.0 - 2.0 * (qx * qx + qz * qz);
+        const double r12 = 2.0 * (qy * qz - qw * qx);
+        const double r20 = 2.0 * (qx * qz - qw * qy);
+        const double r21 = 2.0 * (qy * qz + qw * qx);
+        const double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
+        out_x            = static_cast<float>(r00 * vx + r01 * vy + r02 * vz + tx);
+        out_y            = static_cast<float>(r10 * vx + r11 * vy + r12 * vz + ty);
+        out_z            = static_cast<float>(r20 * vx + r21 * vy + r22 * vz + tz);
+    };
 
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
@@ -260,6 +284,8 @@ int main(int argc, char* argv[]) {
     bool nav_was_armed_            = false;         // tracks armed state across NAVIGATE ticks
     auto last_collision_warn_time_ = std::chrono::steady_clock::now() -
                                      std::chrono::seconds(300);  // allow immediate first warn
+    auto last_unconfirmed_approach_warn_ = std::chrono::steady_clock::now() -
+                                           std::chrono::seconds(300);  // throttle at 10 s
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Pose staleness threshold (500ms = 5× planning period)
@@ -315,6 +341,42 @@ int main(int argc, char* argv[]) {
             spdlog::info("[Planner] Pose freshness restored after {} stale readings",
                          pose_stale_count);
             pose_stale_count = 0;
+        }
+
+        // ── Camera cross-check of HD-map static obstacles (every tick) ──────
+        // For each camera detection transform vehicle-frame position to world ENU
+        // using the current pose quaternion.  If the world position falls within
+        // (radius_m + 1 m) of a known HD-map obstacle it counts as a hit.
+        // After 2 independent hits the obstacle is marked confirmed and logged.
+        // This lets the scenario runner (and downstream logic) verify that every
+        // map obstacle was camera-sighted at least once during the mission.
+        if (!static_obstacles.empty() && objects.num_objects > 0 && pose.quality >= 1) {
+            const double qw = pose.quaternion[0], qx = pose.quaternion[1];
+            const double qy = pose.quaternion[2], qz = pose.quaternion[3];
+            const double tx = pose.translation[0], ty = pose.translation[1],
+                         tz = pose.translation[2];
+            for (uint32_t i = 0; i < objects.num_objects; ++i) {
+                const auto& det = objects.objects[i];
+                float       wx{}, wy{}, wz{};
+                vehicle_to_world(qw, qx, qy, qz, tx, ty, tz, det.position_x, det.position_y,
+                                 det.position_z, wx, wy, wz);
+                for (auto& obs : static_obstacles) {
+                    if (obs.confirmed) continue;
+                    const float dx   = wx - obs.x;
+                    const float dy   = wy - obs.y;
+                    const float dist = std::sqrt(dx * dx + dy * dy);
+                    if (dist < obs.radius_m + 1.0f && wz <= obs.height_m + 0.5f) {
+                        obs.confirm_count++;
+                        if (obs.confirm_count >= 2) {
+                            obs.confirmed          = true;
+                            obs.first_confirmed_ns = now_ns;
+                            spdlog::info("[HD-map] Obstacle at ({:.1f},{:.1f}) CONFIRMED by camera "
+                                         "(world det ({:.2f},{:.2f},{:.2f}), dist={:.2f}m)",
+                                         obs.x, obs.y, wx, wy, wz, dist);
+                        }
+                    }
+                }
+            }
         }
 
         // ── Geofence check (every tick, airborne only) ──────
@@ -587,6 +649,36 @@ int main(int argc, char* argv[]) {
                     drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");
                     astar_planner->update_obstacles(objects, pose);
                 }
+
+                // Warn if approaching an HD-map obstacle that the camera has not yet confirmed.
+                // This is informational — A* will still route around unconfirmed obstacles
+                // (conservative default).  Useful for diagnosing map/reality mismatches.
+                // Throttled to once per 10 s to avoid log flooding.
+                {
+                    constexpr float kApproachWarnM     = 3.0f;
+                    constexpr float kApproachCooldownS = 10.0f;
+                    const float     px                 = static_cast<float>(pose.translation[0]);
+                    const float     py                 = static_cast<float>(pose.translation[1]);
+                    auto            now_a              = std::chrono::steady_clock::now();
+                    if (std::chrono::duration<float>(now_a - last_unconfirmed_approach_warn_)
+                            .count() > kApproachCooldownS) {
+                        for (const auto& obs : static_obstacles) {
+                            if (obs.confirmed) continue;
+                            const float dx   = px - obs.x;
+                            const float dy   = py - obs.y;
+                            const float dist = std::sqrt(dx * dx + dy * dy);
+                            if (dist < obs.radius_m + kApproachWarnM) {
+                                spdlog::warn(
+                                    "[HD-map] Approaching UNCONFIRMED obstacle at ({:.1f},{:.1f}) "
+                                    "dist={:.2f}m — camera has not verified this obstacle yet",
+                                    obs.x, obs.y, dist);
+                                last_unconfirmed_approach_warn_ = now_a;
+                                break;  // one warn per cooldown window is enough
+                            }
+                        }
+                    }
+                }
+
                 const Waypoint* wp = fsm.current_waypoint();
                 if (wp) {
                     // Plan trajectory via IPathPlanner
