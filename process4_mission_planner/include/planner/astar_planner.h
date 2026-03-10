@@ -93,8 +93,15 @@ public:
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
         , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f)) {}
 
-    /// Force-clear all obstacles (for testing / reset).
-    void clear() { occupied_.clear(); }
+    /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
+    /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
+    void clear() { clear_dynamic(); }
+
+    /// Clear only the dynamic / TTL-based obstacle layer.
+    void clear_dynamic() { occupied_.clear(); }
+
+    /// Clear only the static HD-map obstacle layer.
+    void clear_static() { static_occupied_.clear(); }
 
     /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
     /// These cells are permanent — no TTL — and represent the pre-loaded world map.

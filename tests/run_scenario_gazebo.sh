@@ -435,8 +435,16 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
-# Ensure system libstdc++ is used
-export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Ensure system libstdc++ is used (arch-conditional for cross-platform support)
+SYS_ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+case "$SYS_ARCH" in
+    amd64|x86_64)  SYS_LIB_DIR="/usr/lib/x86_64-linux-gnu" ;;
+    arm64|aarch64) SYS_LIB_DIR="/usr/lib/aarch64-linux-gnu" ;;
+    *)             SYS_LIB_DIR="" ;;
+esac
+if [[ -n "$SYS_LIB_DIR" ]]; then
+    export LD_LIBRARY_PATH="${SYS_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 # ── Launch PX4 + Gazebo + companion stack ─────────────────────
 echo ""
@@ -474,7 +482,7 @@ cleanup_scenario() {
     sleep 1
     # Force kill stragglers
     pkill -9 -f "gz sim" 2>/dev/null || true
-    pkill -9 -f "px4" 2>/dev/null || true
+    pkill -9 -f "px4.*sitl" 2>/dev/null || true
     wait "$LAUNCHER_PID" 2>/dev/null || true
     # Wait until UDP port 14540 is fully released (prevents stale-socket race)
     for _pw in $(seq 1 30); do

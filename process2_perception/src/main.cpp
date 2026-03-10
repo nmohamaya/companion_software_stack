@@ -130,7 +130,7 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 }
 
 // ── Fusion thread ───────────────────────────────────────────
-// pose_sub  — Zenoh subscriber for drone/slam/pose (ShmPose).
+// pose_sub  — IPC subscriber for drone/slam/pose (ShmPose).
 //             Used to rotate camera-frame detections into world frame.
 static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                     tracked_queue,
                           drone::ipc::IPublisher<drone::ipc::ShmDetectedObjectList>& det_pub,
@@ -210,6 +210,13 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                     obj.velocity_3d.x() = vx * cos_y - vy * sin_y;
                     obj.velocity_3d.y() = vx * sin_y + vy * cos_y;
                 }
+            }
+
+            // Only publish once we have a valid pose — positions are meaningless
+            // in camera frame and would produce incorrect avoidance reactions.
+            if (!has_pose) {
+                spdlog::debug("[Fusion] Skipping publish — no pose available yet");
+                continue;
             }
 
             // Publish to SHM (world-frame positions)

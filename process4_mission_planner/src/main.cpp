@@ -199,26 +199,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Helper: rotate a vehicle-frame point to world ENU, then add world translation.
-    // Uses pose.quaternion[0..3] = (qw, qx, qy, qz) and pose.translation[0..2].
-    auto vehicle_to_world = [](double qw, double qx, double qy, double qz, double tx, double ty,
-                               double tz, float vx, float vy, float vz, float& out_x, float& out_y,
-                               float& out_z) {
-        // Standard quaternion rotation matrix (body → world)
-        const double r00 = 1.0 - 2.0 * (qy * qy + qz * qz);
-        const double r01 = 2.0 * (qx * qy - qw * qz);
-        const double r02 = 2.0 * (qx * qz + qw * qy);
-        const double r10 = 2.0 * (qx * qy + qw * qz);
-        const double r11 = 1.0 - 2.0 * (qx * qx + qz * qz);
-        const double r12 = 2.0 * (qy * qz - qw * qx);
-        const double r20 = 2.0 * (qx * qz - qw * qy);
-        const double r21 = 2.0 * (qy * qz + qw * qx);
-        const double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
-        out_x            = static_cast<float>(r00 * vx + r01 * vy + r02 * vz + tx);
-        out_y            = static_cast<float>(r10 * vx + r11 * vy + r12 * vz + ty);
-        out_z            = static_cast<float>(r20 * vx + r21 * vy + r22 * vz + tz);
-    };
-
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
@@ -344,22 +324,19 @@ int main(int argc, char* argv[]) {
         }
 
         // ── Camera cross-check of HD-map static obstacles (every tick) ──────
-        // For each camera detection transform vehicle-frame position to world ENU
-        // using the current pose quaternion.  If the world position falls within
-        // (radius_m + 1 m) of a known HD-map obstacle it counts as a hit.
-        // After 2 independent hits the obstacle is marked confirmed and logged.
-        // This lets the scenario runner (and downstream logic) verify that every
-        // map obstacle was camera-sighted at least once during the mission.
+        // Detected object positions are already in world frame (perception's
+        // fusion thread applies the camera→world rotation before publishing).
+        // If a detection falls within (radius_m + 1 m) of a known HD-map obstacle
+        // it counts as a hit.  After 2 independent hits the obstacle is marked
+        // confirmed and logged.  This lets the scenario runner (and downstream
+        // logic) verify that every map obstacle was camera-sighted at least once.
         if (!static_obstacles.empty() && objects.num_objects > 0 && pose.quality >= 1) {
-            const double qw = pose.quaternion[0], qx = pose.quaternion[1];
-            const double qy = pose.quaternion[2], qz = pose.quaternion[3];
-            const double tx = pose.translation[0], ty = pose.translation[1],
-                         tz = pose.translation[2];
             for (uint32_t i = 0; i < objects.num_objects; ++i) {
                 const auto& det = objects.objects[i];
-                float       wx{}, wy{}, wz{};
-                vehicle_to_world(qw, qx, qy, qz, tx, ty, tz, det.position_x, det.position_y,
-                                 det.position_z, wx, wy, wz);
+                // Detected positions are already world-frame — use directly.
+                const float wx = det.position_x;
+                const float wy = det.position_y;
+                const float wz = det.position_z;
                 for (auto& obs : static_obstacles) {
                     if (obs.confirmed) continue;
                     const float dx   = wx - obs.x;

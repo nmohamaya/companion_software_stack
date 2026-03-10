@@ -57,7 +57,7 @@ TEST(FusionEngineTest, CameraOnlyFusion) {
 }
 
 TEST(FusionEngineTest, DepthEstimationFromImageY) {
-    // Bug fix #129: fusion now uses pinhole unproject (not raw pixel-Y depth formula).
+    // Fusion uses pinhole unproject (not raw pixel-Y depth formula).
     // camera frame: X=forward, Y=right, Z=down.
     // calib: fx=fy=500, cx=320, cy=240, camera_height=1.5m.
     auto         calib = make_test_calib();
