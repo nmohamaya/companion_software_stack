@@ -327,7 +327,7 @@
 - VIO backend timestamp fix — `steady_clock::now()` instead of frame-counter epoch
 - FC link-loss timestamp freeze — stale-heartbeat detection works correctly
 - `potential_field_3d` obstacle avoider factory alias
-- Transport-aware scenario runner (`--ipc shm|zenoh`) — 7/7 on both transports
+- Transport-aware scenario runner (`--ipc shm|zenoh`) — **8/8 on Gazebo SITL + Zenoh (89/89 checks)** *(updated: scenarios 02/05 fixed post-merge, PR #130)*
 - Scenario logs consolidated to `drone_logs/scenarios/`
 
 **Cross-Epic Deliveries (Epic #25):**
