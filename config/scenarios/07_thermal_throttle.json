@@ -74,7 +74,8 @@
         ],
         "log_must_not_contain": [
             "FAULT_BATTERY_RTL",
-            "FAULT_GEOFENCE_BREACH"
+            "FAULT_GEOFENCE_BREACH",
+            "OBSTACLE COLLISION"
         ],
         "processes_alive": [
             "mission_planner", "comms", "slam_vio_nav", "system_monitor"

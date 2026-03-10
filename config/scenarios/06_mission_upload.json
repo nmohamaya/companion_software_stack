@@ -43,7 +43,8 @@
         "log_must_not_contain": [
             "FAULT_BATTERY_RTL",
             "FAULT_FC_LINK_LOST",
-            "EMERGENCY_LAND"
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
         ]
     },
     "manual_controls": {

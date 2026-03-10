@@ -4,7 +4,7 @@
         "name": "fc_link_loss",
         "description": "Simulate flight controller link loss during mission. Verifies FaultManager's FC link-loss contingency: LOITER after 3s timeout, then automatic RTL after 15s if link not restored.",
         "tier": 1,
-        "timeout_s": 90,
+        "timeout_s": 60,
         "requires_gazebo": false
     },
     "config_overrides": {
@@ -42,7 +42,8 @@
         ],
         "log_must_not_contain": [
             "FAULT_GEOFENCE_BREACH",
-            "EMERGENCY_LAND"
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
         ]
     },
     "manual_controls": {

@@ -449,6 +449,8 @@ int main(int argc, char* argv[]) {
                         traj_pub->publish(stop);
                     }
                     rtl_start_time = std::chrono::steady_clock::now();
+                    nav_was_armed_ =
+                        true;  // seed so RTL disarm detection works from any origin state
                     fsm.on_rtl();
                     fsm.set_fault_triggered(true);
                     break;
@@ -502,6 +504,8 @@ int main(int argc, char* argv[]) {
                         traj_pub->publish(stop);
                     }
                     rtl_start_time = std::chrono::steady_clock::now();
+                    nav_was_armed_ =
+                        true;  // seed so RTL disarm detection works from any origin state
                     fsm.on_rtl();
                     break;
                 case drone::ipc::GCSCommandType::LAND:
@@ -729,6 +733,8 @@ int main(int argc, char* argv[]) {
                                 traj_pub->publish(stop);
                             }
                             rtl_start_time = std::chrono::steady_clock::now();
+                            nav_was_armed_ =
+                                true;  // already true from NAVIGATE, but explicit for clarity
                             fsm.on_rtl();
                         }
                     }
@@ -737,6 +743,16 @@ int main(int argc, char* argv[]) {
             }
 
             case MissionState::RTL: {
+                // Detect unexpected disarm during RTL (crash into an obstacle, or
+                // PX4 auto-disarming after a successful autonomous landing before
+                // the mission planner issues LAND). Both cases should terminate RTL.
+                if (nav_was_armed_ && !fc_state.armed) {
+                    spdlog::warn("[Planner] Vehicle disarmed during RTL — mission IDLE");
+                    fsm.on_landed();
+                    break;
+                }
+                nav_was_armed_ = fc_state.armed;
+
                 // Monitor position — when near home, send LAND to bypass
                 // PX4's RTL loiter delay (RTL_LAND_DELAY).
                 // Only override if we have a valid home fix; otherwise let
