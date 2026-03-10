@@ -18,7 +18,7 @@
                     {"x":  12, "y":  12},
                     {"x": -5,  "y":  12}
                 ],
-                "altitude_floor_m": 0.0,
+                "altitude_floor_m": -5.0,
                 "altitude_ceiling_m": 15.0,
                 "warning_margin_m": 2.0
             },
@@ -26,7 +26,7 @@
                 {"x": 5,  "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
                 {"x": 11, "y": 5,  "z": 5, "yaw": 0.5,  "speed": 2.0, "payload_trigger": false},
                 {"x": 11, "y": 11, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
-                {"x": 15, "y": 15, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false}
+                {"x": 16, "y":  5, "z": 5, "yaw": 0.0,  "speed": 2.0, "payload_trigger": false}
             ]
         },
         "fault_manager": {
@@ -36,7 +36,7 @@
         }
     },
     "fault_sequence": {
-        "_comment": "No explicit fault injection. The 4th waypoint (15,15) is outside the geofence polygon (max 12,12). The geofence check runs every tick and should trigger BREACH before reaching that waypoint.",
+        "_comment": "No explicit fault injection. The 4th waypoint (16,5) is outside the geofence polygon (max x=12). The drone exits the eastern boundary on the WP3(11,11)→WP4(16,5) leg, triggering FAULT_GEOFENCE_BREACH and RTL. WP4 is placed at y=5 (not y=15) to avoid the magenta cylinder at (14,13) — the original (15,15) diagonal passed within 0.1m of its surface.",
         "steps": []
     },
     "pass_criteria": {
@@ -46,7 +46,8 @@
         ],
         "log_must_not_contain": [
             "FAULT_BATTERY_RTL",
-            "FAULT_FC_LINK_LOST"
+            "FAULT_FC_LINK_LOST",
+            "OBSTACLE COLLISION"
         ]
     },
     "manual_controls": {
@@ -55,6 +56,6 @@
         "altitude_ceiling_range": {"min": 5.0, "max": 200.0, "default": 15.0, "unit": "m"},
         "warning_margin_range": {"min": 0.5, "max": 10.0, "default": 2.0, "unit": "m"},
         "waypoints_editable": true,
-        "notes": "Place waypoints outside the geofence polygon to trigger breach. Adjust geofence.polygon vertices to change boundary. The 4th waypoint at (15,15) is deliberately outside the polygon boundary (12,12)."
+        "notes": "Place waypoints outside the geofence polygon to trigger breach. Adjust geofence.polygon vertices to change boundary. WP4 at (16,5) exits the eastern boundary (x=12) cleanly, avoiding the magenta cylinder at (14,13). altitude_floor_m=-5.0 prevents spurious floor violations during normal landing (drone at z=0 would otherwise trigger the 0m floor check)."
     }
 }
