@@ -377,6 +377,43 @@ The fix was straightforward (keep both sets of tests), but the conflict could ha
    - Document install steps in `docs/` for developers who need the backend
    - Use `HAVE_<LIB>` naming convention for all compile guards
 
+### CI Validation for Concurrent Branches
+
+When working on multiple related issues simultaneously (each on its own branch per the workflow), running a full local CI on every branch is prohibitively slow. Use this integration-branch strategy instead:
+
+1. **Create a temporary integration branch** from the most feature-complete branch
+2. **Merge all other branches** into it
+3. **Run full CI once** on the combined superset
+4. If the superset passes, this is a strong signal that each individual branch will also pass CI, assuming:
+   - All branches share the same base commit (no hidden merge/rebase differences)
+   - No branch depends on changes from another branch in the integration set
+   - CI configuration and inputs are identical for the integration branch and the individual branches
+
+```bash
+# Example: 4 branches from the same sprint
+git checkout feature/issue-137-main-change
+git checkout -b ci/integration-test
+git merge fix/issue-141-bugfix --no-edit
+git merge feature/issue-142-config --no-edit
+git merge fix/issue-143-test-fix --no-edit
+
+# Run full CI once on the superset
+bash deploy/run_ci_local.sh
+
+# If green, push and PR each original branch individually
+# Delete the integration branch — it was only for validation
+git branch -D ci/integration-test
+```
+
+**When to use this:**
+- You have 3+ branches that all need CI validation before pushing
+- The branches don't conflict with each other (clean merges)
+- Full CI takes >10 minutes per run
+
+**When NOT to use this:**
+- Branches have merge conflicts (resolve conflicts first, then test individually)
+- Branches modify the same C++ translation units in incompatible ways (interaction bugs won't be caught by testing the superset)
+
 ### Review Comment Handling
 
 Batch review comments by severity:

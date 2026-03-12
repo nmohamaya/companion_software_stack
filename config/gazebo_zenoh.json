@@ -89,16 +89,35 @@
         "update_rate_hz": 10,
         "takeoff_altitude_m": 5.0,
         "acceptance_radius_m": 2.0,
-        "cruise_speed_mps": 5.0,
+        "cruise_speed_mps": 3.0,
+        "path_planner": {
+            "backend": "astar"
+        },
+        "obstacle_avoider": {
+            "backend": "potential_field_3d"
+        },
         "obstacle_avoidance": {
             "min_distance_m": 2.0,
-            "influence_radius_m": 5.0,
-            "repulsive_gain": 2.0
+            "influence_radius_m": 4.0,
+            "repulsive_gain": 3.0
         },
+        "static_obstacles": [
+            {"x": 1,  "y": 7,  "radius_m": 0.75, "height_m": 5.0, "_color": "RED"},
+            {"x": 2,  "y": 13, "radius_m": 0.75, "height_m": 4.0, "_color": "BLUE"},
+            {"x": 7,  "y": 15, "radius_m": 0.75, "height_m": 4.0, "_color": "YELLOW"},
+            {"x": 13, "y": 14, "radius_m": 0.75, "height_m": 6.0, "_color": "MAGENTA"},
+            {"x": 8,  "y": 8,  "radius_m": 0.75, "height_m": 5.0, "_color": "GREEN"},
+            {"x": 4,  "y": 4,  "radius_m": 0.75, "height_m": 3.0, "_color": "ORANGE"}
+        ],
+        "_comment_static_obstacles": "HD-map: obstacle geometry from sim/worlds/test_world.sdf. Coords use internal nav frame (X=North=Gazebo Y, Y=East=Gazebo X). radius_m=0.75 is a conservative uniform footprint vs actual SDF radii (0.6/0.8/1.0).",
         "waypoints": [
-            {"x": 15, "y": 0,  "z": 5, "yaw": 0,    "speed": 5.0, "payload_trigger": false},
-            {"x": 15, "y": 15, "z": 5, "yaw": 1.57,  "speed": 5.0, "payload_trigger": true},
-            {"x": 0,  "y": 0,  "z": 5, "yaw": 0,     "speed": 5.0, "payload_trigger": false}
+            {"x": 1,  "y": 7,  "z": 3, "yaw": 1.43,  "speed": 3.0, "payload_trigger": false},
+            {"x": 2,  "y": 13, "z": 3, "yaw": 1.41,  "speed": 3.0, "payload_trigger": false},
+            {"x": 7,  "y": 15, "z": 3, "yaw": 0.38,  "speed": 3.0, "payload_trigger": false},
+            {"x": 13, "y": 14, "z": 4, "yaw": -0.17, "speed": 3.0, "payload_trigger": true},
+            {"x": 8,  "y": 8,  "z": 3, "yaw": -2.27, "speed": 3.0, "payload_trigger": false},
+            {"x": 4,  "y": 4,  "z": 2, "yaw": -2.36, "speed": 3.0, "payload_trigger": false},
+            {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36, "speed": 3.0, "payload_trigger": false}
         ]
     },
 

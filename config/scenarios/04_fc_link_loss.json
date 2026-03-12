@@ -10,6 +10,7 @@
     "config_overrides": {
         "mission_planner": {
             "takeoff_altitude_m": 5.0,
+            "static_obstacles": [],
             "waypoints": [
                 {"x": 10, "y": 0,  "z": 5, "yaw": 0,   "speed": 2.0, "payload_trigger": false},
                 {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false}

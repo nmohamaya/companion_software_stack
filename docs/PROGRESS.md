@@ -1879,4 +1879,32 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 
 ---
 
-_Last updated after Improvement #37 (fault_injector IPC fixes #124/#125). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
+## Improvement #38 — Upgrade Gazebo Configs to Full Avoidance Stack (Issue #137)
+
+**Date:** 2026-03-12
+**Category:** Configuration / Simulation
+**Branch:** `feature/issue-137-gazebo-full-avoidance-stack`
+
+**What:** The Gazebo SITL world (`test_world.sdf`) contains 6 physical obstacles, but all three Gazebo configs used the simple 2D `potential_field` planner/avoider — meaning `launch_gazebo.sh` flew through obstacles without avoidance. Updated all Gazebo configs to use the A* planner + 3D potential-field avoider + HD-map static obstacles, so every Gazebo run exercises the full avoidance stack (previously only Scenario 02 did).
+
+**Why:** Only Scenario 02 previously exercised the full avoidance stack. Standard Gazebo launches flew through obstacles, leaving the core planning/avoidance code untested in normal simulation runs.
+
+**Files Modified (3):**
+- `config/gazebo_sitl.json` — A* planner, 3D avoider, 6 static obstacles, obstacle-threading waypoints, cruise speed 2.0→3.0
+- `config/gazebo.json` — Added `path_planner`/`obstacle_avoider` backends (previously missing), same avoidance upgrades, cruise speed 5.0→3.0
+- `config/gazebo_zenoh.json` — Same mission_planner upgrades as `gazebo.json`, cruise speed 5.0→3.0
+
+**Key parameter changes (all three configs):**
+- `path_planner.backend`: `potential_field` → `astar`
+- `obstacle_avoider.backend`: `potential_field` → `potential_field_3d`
+- `repulsive_gain`: 2.0 → 3.0
+- `influence_radius_m`: 5.0 → 4.0
+- `acceptance_radius_m`: 1.0/2.0 → 2.0 (A* paths don't hit exact waypoint centers)
+- Added `static_obstacles[]` with 6 entries corresponding to `test_world.sdf` (coords in internal nav frame: X=North=Gazebo Y, Y=East=Gazebo X; radii are conservative ~0.75m footprints)
+- Waypoints updated to thread through/near obstacles (reused Scenario 02's tuned waypoints)
+
+**Test additions:** None (config-only change). All existing tests pass.
+
+---
+
+_Last updated after Improvement #38 (Gazebo full avoidance stack config #137). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
