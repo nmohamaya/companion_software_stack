@@ -99,7 +99,8 @@
             "OBSTACLE COLLISION"
         ],
         "processes_alive": [
-            "mission_planner", "comms", "slam_vio_nav", "system_monitor"
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
         ]
     },
     "manual_controls": {
