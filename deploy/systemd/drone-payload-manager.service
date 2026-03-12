@@ -12,10 +12,13 @@ After=network-online.target drone-comms.service
 BindsTo=drone-comms.service
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/opt/drone/bin/payload_manager --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
+StartLimitBurst=5
+WatchdogSec=10s
 
 # Resource limits
 MemoryMax=256M

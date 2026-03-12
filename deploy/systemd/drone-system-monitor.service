@@ -18,6 +18,7 @@ ExecStart=/opt/drone/bin/system_monitor --config /etc/drone/config.json --json-l
 Restart=on-failure
 RestartSec=2s
 WatchdogSec=10s
+StartLimitBurst=5
 
 # Resource limits
 MemoryMax=256M

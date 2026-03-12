@@ -13,10 +13,13 @@ PartOf=drone-stack.target
 After=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/opt/drone/bin/video_capture --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
+StartLimitBurst=5
+WatchdogSec=10s
 
 # Resource limits
 MemoryMax=512M
