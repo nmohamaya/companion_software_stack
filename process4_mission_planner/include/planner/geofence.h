@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <vector>
@@ -144,16 +145,15 @@ public:
             result.violated = true;
             result.reason   = GeofenceViolation::ABOVE_CEILING;
             result.margin_m = alt - alt_ceiling_;
-            result.message  = "Above ceiling: " + std::to_string(static_cast<int>(alt)) + "m > " +
-                             std::to_string(static_cast<int>(alt_ceiling_)) + "m";
+            result.message  = "Above ceiling: " + fmt_alt(alt) + "m > " + fmt_alt(alt_ceiling_) +
+                             "m";
             return result;
         }
         if (alt < alt_floor_ - kAltTolerance) {
             result.violated = true;
             result.reason   = GeofenceViolation::BELOW_FLOOR;
             result.margin_m = alt_floor_ - alt;
-            result.message  = "Below floor: " + std::to_string(static_cast<int>(alt)) + "m < " +
-                             std::to_string(static_cast<int>(alt_floor_)) + "m";
+            result.message  = "Below floor: " + fmt_alt(alt) + "m < " + fmt_alt(alt_floor_) + "m";
             return result;
         }
 
@@ -185,6 +185,13 @@ private:
     float                  alt_ceiling_    = 120.0f;  // AGL metres
     float                  warning_margin_ = 10.0f;   // metres
     bool                   enabled_        = false;
+
+    /// Format altitude with 1 decimal place (avoids misleading int truncation).
+    static std::string fmt_alt(float v) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(v));
+        return buf;
+    }
 
     // ── Ray-casting point-in-polygon ────────────────────────
     // Classic even-odd rule.  Casts a ray along +X and counts
