@@ -12,7 +12,6 @@
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
-#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -285,17 +284,14 @@ int main(int argc, char* argv[]) {
                                                         watchdog);
 
     spdlog::info("All threads started — video_capture is READY");
-    drone::systemd::notify_ready();
 
     // ── Main loop: periodic health log ──────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
-        drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
         spdlog::info("[HealthCheck] video_capture alive");
     }
 
-    drone::systemd::notify_stopping();
     spdlog::info("Shutting down...");
     if (t_mission.joinable()) t_mission.join();
     if (t_stereo.joinable()) t_stereo.join();

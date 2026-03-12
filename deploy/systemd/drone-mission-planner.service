@@ -12,12 +12,10 @@ After=network-online.target drone-comms.service drone-slam-vio-nav.service
 BindsTo=drone-comms.service drone-slam-vio-nav.service
 
 [Service]
-Type=notify
-NotifyAccess=main
+Type=simple
 ExecStart=/opt/drone/bin/mission_planner --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=10s
 
 # Resource limits
 MemoryMax=256M

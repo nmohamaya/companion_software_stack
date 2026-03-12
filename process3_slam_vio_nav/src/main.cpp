@@ -25,7 +25,6 @@
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
-#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -397,10 +396,8 @@ int main(int argc, char* argv[]) {
                                                         watchdog);
 
     spdlog::info("All SLAM/VIO threads started — READY");
-    drone::systemd::notify_ready();
 
     while (g_running.load(std::memory_order_relaxed)) {
-        drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
 
@@ -419,7 +416,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    drone::systemd::notify_stopping();
     spdlog::info("Shutting down...");
     t_vio.join();
     t_imu.join();

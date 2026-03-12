@@ -19,7 +19,6 @@
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
-#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -241,7 +240,6 @@ int main(int argc, char* argv[]) {
     uint32_t     last_active_faults = 0;
 
     spdlog::info("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
-    drone::systemd::notify_ready();
 
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
@@ -277,7 +275,6 @@ int main(int argc, char* argv[]) {
 
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
-        drone::systemd::notify_watchdog();
         drone::util::FrameDiagnostics diag(loop_tick);
         drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
 
@@ -809,7 +806,6 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }
 
-    drone::systemd::notify_stopping();
     spdlog::info("=== Mission Planner stopped ===");
     return 0;
 }

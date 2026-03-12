@@ -13,12 +13,10 @@ After=network-online.target drone-perception.service
 BindsTo=drone-perception.service
 
 [Service]
-Type=notify
-NotifyAccess=main
+Type=simple
 ExecStart=/opt/drone/bin/slam_vio_nav --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=10s
 
 # Resource limits
 MemoryMax=1G

@@ -11,16 +11,12 @@ Description=Drone Video Capture (P1)
 Documentation=https://github.com/nmohamaya/companion_software_stack
 PartOf=drone-stack.target
 After=network-online.target
-StartLimitBurst=5
-StartLimitIntervalSec=30s
 
 [Service]
-Type=notify
-NotifyAccess=main
+Type=simple
 ExecStart=/opt/drone/bin/video_capture --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
-WatchdogSec=10s
 
 # Resource limits
 MemoryMax=512M

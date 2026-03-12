@@ -18,7 +18,6 @@
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
-#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/spsc_ring.h"
 #include "util/thread_health_publisher.h"
@@ -350,17 +349,14 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "perception", watchdog);
 
     spdlog::info("All perception threads started — READY");
-    drone::systemd::notify_ready();
 
     // ── Main loop ───────────────────────────────────────────
     while (g_running.load(std::memory_order_relaxed)) {
-        drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
         spdlog::info("[HealthCheck] perception alive");
     }
 
-    drone::systemd::notify_stopping();
     spdlog::info("Shutting down...");
     t_inference.join();
     t_tracker.join();

@@ -19,7 +19,6 @@
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
-#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -327,7 +326,6 @@ int main(int argc, char* argv[]) {
     auto fc_sub = bus.subscribe<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
 
     spdlog::info("Comms READY");
-    drone::systemd::notify_ready();
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t1(fc_rx_thread, std::ref(*fc_link), std::ref(*fc_pub));
@@ -344,7 +342,6 @@ int main(int argc, char* argv[]) {
 
     // ── Main loop: health publishing (replaces bare join) ─
     while (g_running.load(std::memory_order_relaxed)) {
-        drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
     }
@@ -357,7 +354,6 @@ int main(int argc, char* argv[]) {
     fc_link->close();
     gcs_link->close();
 
-    drone::systemd::notify_stopping();
     spdlog::info("=== Comms stopped ===");
     return 0;
 }
