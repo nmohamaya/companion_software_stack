@@ -49,7 +49,7 @@
 |--------|-------------|---------------|
 | `ipc` | SHM + Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
-| `perception` | Kalman tracker, fusion engine (UKF+camera), color contour, YOLOv8 | ~102 |
+| `perception` | Kalman tracker, fusion engine (UKF+camera), color contour, YOLOv8 | ~112 |
 | `mission` | Mission FSM, FaultManager degradation | ~31 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 4 | 102 | Kalman tracker (Munkres), fusion (UKF+camera), color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 4 | 112 | Kalman tracker (Munkres), fusion (UKF+camera), color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 2 | 31 | Mission FSM state machine, FaultManager degradation |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -115,7 +115,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **37 C++ + 4 shell** | **735 + 42 + 80** | |
+| **Total** | **37 C++ + 4 shell** | **745 + 42 + 80** | |
 
 ---
 
@@ -326,7 +326,7 @@ IFusionEngine factory, thermal measurement update.
 
 ---
 
-### test_color_contour_detector.cpp — 42 tests
+### test_color_contour_detector.cpp — 52 tests
 
 **What it tests:** `ColorContourDetector` — HSV-based object detection using
 synthetic test images with known colored rectangles.
@@ -337,7 +337,7 @@ synthetic test images with known colored rectangles.
 | `RgbToHsvTest` | 6 | RGB→HSV conversion accuracy for pure colors and edge cases |
 | `UnionFindTest` | 6 | Connected-component labeling (union-find data structure) |
 | `ComponentBBoxTest` | 6 | Bounding box extraction from labeled components |
-| `ColorContourDetectorTest` | 12 | Detection on synthetic images: single/multi object, config-driven thresholds, minimum area filtering |
+| `ColorContourDetectorTest` | 22 | Detection on synthetic images: single/multi object, config thresholds, area filtering, subsampling (stride 1 + 2), single-pass multi-color, max_fps config, `subsample=0` clamping, `kNoColor` sentinel |
 | `DetectorFactoryTest` | 6 | Factory creates `ColorContourDetector` from config |
 
 **Key files under test:** `perception/color_contour_detector.h`, `perception/detector_interface.h`
@@ -995,4 +995,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 735 unit tests (SHM) / 844 (SHM+Zenoh) across 49+ suites in 37 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green.*
+*Last updated: March 2026 — 745 unit tests (SHM) / 745 (SHM+Zenoh) across 49+ suites in 37 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. PR #135: ColorContourDetector single-pass + 2× subsampling + max_fps cap (Issue #128).*

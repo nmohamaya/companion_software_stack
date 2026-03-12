@@ -1824,4 +1824,34 @@ Scenario 07 had `temp_crit_c: 95°C` override. Host CPU runs at ~100°C under si
 
 ---
 
-_Last updated after Improvement #34 (Full 8-scenario Gazebo SITL + Zenoh suite green — 89/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
+_Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, PR #132/#133 — 735/735 SHM, 844/844 Zenoh)_
+
+## Improvement #36 — ColorContourDetector Pipeline Optimisation (Issue #128, PR #135)
+
+**Date:** 2026-03-12
+**Category:** Performance / Perception
+**Branch:** `feature/issue-128-perception-pipeline-optimisation`
+**Commit:** `844bafc`
+
+**What:** Eliminated the per-color-class redundant pixel scan bottleneck in `ColorContourDetector`. Previously, detecting N color classes required N independent W×H image passes (one full RGB→HSV conversion per color per pixel). Three optimisations applied:
+
+1. **Single-pass classification (Opt 1):** `build_color_map()` converts each pixel to HSV exactly once and stores the winning color index (or `kNoColor = 0xFF`) in a compact `uint8_t color_map_`. `extract_bboxes()` then runs union-find on `color_map_` per color class — O(W·H) total regardless of N.
+2. **Spatial subsampling (Opt 2):** `subsample_` stride (default 2, config key `perception.detector.subsample`) halves both image dimensions before classification, reducing pixel work by up to 4×. Bounding box coordinates are scaled back to full resolution on output.
+3. **Frame-rate cap (Opt 6):** Optional `max_fps_` sleep throttle (config key `perception.detector.max_fps`, default 0 = unlimited) via `std::this_thread::sleep_for` to free CPU headroom on hardware.
+
+**Files Modified (6):**
+- `process2_perception/include/perception/color_contour_detector.h` — single-pass `build_color_map()` + `extract_bboxes()`, `color_map_` replaces `mask_buf_`, `subsample_`/`max_fps_` members, `<thread>` added
+- `tests/test_color_contour_detector.cpp` — 10 new tests added (42 → 52 total)
+- `config/gazebo_sitl.json` — `"subsample": 2, "max_fps": 0` added to `perception.detector`
+- `config/gazebo.json` — same
+- `config/gazebo_zenoh.json` — same
+- `config/hardware.json` — same
+
+**CI Results:**
+- SHM backend: 745/745 tests passed
+- Zenoh backend: 745/745 tests passed
+- clang-format-18: clean
+
+---
+
+_Last updated after Improvement #36 (ColorContourDetector single-pass + 2× subsampling + max_fps cap, PR #135 — 745/745 SHM, 745/745 Zenoh)_/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*

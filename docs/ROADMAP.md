@@ -539,8 +539,8 @@
 
 | Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | **Epic #110 (Current)** |
 |--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|
-| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **735** |
-| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **844** |
+| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **745** |
+| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **745** |
 | Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | **42** |
 | Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **29** |
 | Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
@@ -583,4 +583,4 @@
 
 ---
 
-*Last updated after Improvement #33 (Scenario 02 obstacle avoidance full pass, HD-map two-layer grid, proximity collision detection) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 36 bug fixes total. Gazebo SITL scenario 02: 7/7 WP reached, 0 collisions. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #36 (ColorContourDetector single-pass + 2× subsampling + max_fps cap, Issue #128, PR #135) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 745 tests (SHM and Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 36 bug fixes total. Gazebo SITL scenario 02: 7/7 WP reached, 0 collisions. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
