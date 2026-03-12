@@ -100,10 +100,6 @@
         ],
         "processes_alive": [
             "mission_planner", "comms", "slam_vio_nav", "system_monitor"
-        ],
-        "shm_segments_exist": [
-            "drone_mission_cam", "drone_stereo_cam", "detected_objects",
-            "slam_pose", "mission_status", "fc_state", "system_health"
         ]
     },
     "manual_controls": {
