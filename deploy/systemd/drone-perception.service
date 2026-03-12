@@ -11,6 +11,8 @@ Documentation=https://github.com/nmohamaya/companion_software_stack
 PartOf=drone-stack.target
 After=network-online.target drone-video-capture.service
 BindsTo=drone-video-capture.service
+StartLimitBurst=5
+StartLimitIntervalSec=30s
 
 [Service]
 Type=notify
