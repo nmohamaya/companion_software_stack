@@ -532,6 +532,8 @@
 | *(this session)* | Scenario 07 thermal false-fail: `temp_crit_c` override below host CPU temp | Bug fix | **Closed** (Fix #38 — scenario 07 config) |
 | *(this session)* | Scenario 05 geofence: WP4 clips magenta cylinder + floor flood + RTL lock | Bug fix | **Closed** (Fix #37 — scenario 05 config + main.cpp) |
 | [#131](https://github.com/nmohamaya/companion_software_stack/issues/131) | sd_notify/WatchdogSec missing from processes 1–6; StartLimitBurst=5 missing all 7 service files | Reliability fix | **Closed** (PR #132, commit `7ace87c`) |
+| *(fault_injector Zenoh fix)* | ~~fault_injector GCS/mission commands invisible to Zenoh subscribers~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
+| *(fault_injector shm_unlink fix)* | ~~fault_injector shm_unlink on exit breaks subsequent runs~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
 
 ---
 

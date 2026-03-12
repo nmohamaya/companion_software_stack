@@ -1854,4 +1854,29 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 
 ---
 
-_Last updated after Improvement #36 (ColorContourDetector single-pass + 2× subsampling + max_fps cap, PR #135 — 746/746 SHM, 746/746 Zenoh)_/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
+---
+
+## Improvement #37 — Fix fault_injector IPC: Non-Owning SHM + Zenoh Support (Issues #124, #125)
+
+**Date:** 2026-03-12
+**Category:** Bug Fix / IPC
+**Branch:** `fix/issue-124-125-fault-injector-ipc`
+
+**What:** Two fault_injector bugs fixed in one PR:
+
+1. **#125 — shm_unlink on exit:** `get_override_writer()` fell back to `ShmWriter::create()` which set `owns_=true`, causing `shm_unlink("/fault_overrides")` on destructor. Fixed by adding `ShmWriter::create_non_owning()` method and using it in the fallback path.
+
+2. **#124 — Zenoh-invisible writes:** `cmd_gcs_command()` and `cmd_mission_upload()` wrote directly via `ShmWriter::attach()`, invisible to Zenoh subscribers. Added `--ipc <shm|zenoh>` CLI flag that routes writes through the transport-agnostic `MessageBus` when using Zenoh. Also added missing `/mission_upload` → `drone/mission/upload` Zenoh key mapping.
+
+**Files Modified (5):**
+- `common/ipc/include/ipc/shm_writer.h` — added `create_non_owning()` method
+- `common/ipc/include/ipc/zenoh_message_bus.h` — added `/mission_upload` key mapping
+- `tools/fault_injector/main.cpp` — non-owning create, `--ipc` flag, `publish_via_bus<T>()`
+- `tests/run_scenario.sh` — passes `--ipc` to fault_injector when not using SHM
+- `tests/test_shm_ipc.cpp` — added `ShmWriterNonOwning_SegmentSurvivesDestruction` test
+
+**Test additions:** 1 new test (`ShmWriterNonOwning_SegmentSurvivesDestruction`)
+
+---
+
+_Last updated after Improvement #37 (fault_injector IPC fixes #124/#125). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._

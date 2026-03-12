@@ -15,6 +15,8 @@
 // The tool attaches to existing SHM segments (created by running processes)
 // and writes data directly without taking ownership (no shm_unlink on exit).
 // ═══════════════════════════════════════════════════════════════════
+#include "ipc/message_bus.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/shm_types.h"
 #include "ipc/shm_writer.h"
 
@@ -28,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -60,6 +63,38 @@ static void print_info(const std::string& msg) {
     std::cout << CYAN << "[INJ] " << NC << msg << std::endl;
 }
 
+// ── IPC backend selection ───────────────────────────────────
+static std::string g_ipc_backend = "shm";
+
+/// Publish a message via the transport-agnostic MessageBus.
+/// Lazily creates the bus and caches publishers per topic.
+template<typename T>
+static void publish_via_bus(const std::string& topic, const T& msg) {
+    static auto bus = drone::ipc::create_message_bus(g_ipc_backend);
+    static std::unordered_map<std::string, std::unique_ptr<drone::ipc::IPublisher<T>>> pubs;
+    static std::unordered_map<std::string, bool> first_advertise;
+
+    auto it = pubs.find(topic);
+    if (it == pubs.end()) {
+        auto pub = bus.advertise<T>(topic);
+        if (!pub) {
+            print_err("Failed to advertise on topic: " + topic);
+            return;
+        }
+        pubs[topic]            = std::move(pub);
+        first_advertise[topic] = true;
+        it                     = pubs.find(topic);
+    }
+
+    // Zenoh needs a brief delay after first advertise for discovery
+    if (first_advertise[topic] && g_ipc_backend == "zenoh") {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        first_advertise[topic] = false;
+    }
+
+    it->second->publish(msg);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Helpers — fault override SHM segment
 // ═══════════════════════════════════════════════════════════════
@@ -77,7 +112,7 @@ static ShmWriter<drone::ipc::ShmFaultOverrides>& get_override_writer() {
         // Try attach first (segment may already exist), then create.
         bool ok = writer.attach(drone::ipc::shm_names::FAULT_OVERRIDES);
         if (!ok) {
-            ok = writer.create(drone::ipc::shm_names::FAULT_OVERRIDES);
+            ok = writer.create_non_owning(drone::ipc::shm_names::FAULT_OVERRIDES);
         }
         if (!ok) {
             print_err("Failed to attach to or create fault override SHM segment");
@@ -155,14 +190,6 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
         return 1;
     }
 
-    ShmWriter<drone::ipc::ShmGCSCommand> writer;
-    if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
-        print_err("Cannot attach to SHM segment " +
-                  std::string(drone::ipc::shm_names::GCS_COMMANDS) +
-                  ". Ensure the stack is running.");
-        return 1;
-    }
-
     static uint64_t           seq = 0;
     drone::ipc::ShmGCSCommand shm_cmd{};
     shm_cmd.timestamp_ns   = now_ns();
@@ -174,7 +201,18 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
     shm_cmd.sequence_id    = ++seq;
     shm_cmd.valid          = true;
 
-    writer.write(shm_cmd);
+    if (g_ipc_backend != "shm") {
+        publish_via_bus<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS, shm_cmd);
+    } else {
+        ShmWriter<drone::ipc::ShmGCSCommand> writer;
+        if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
+            print_err("Cannot attach to SHM segment " +
+                      std::string(drone::ipc::shm_names::GCS_COMMANDS) +
+                      ". Ensure the stack is running.");
+            return 1;
+        }
+        writer.write(shm_cmd);
+    }
 
     std::ostringstream oss;
     oss << "GCS command injected: " << cmd << " (type=" << static_cast<int>(gcs_type)
@@ -237,14 +275,6 @@ static int cmd_mission_upload(const std::string& json_file) {
         return 1;
     }
 
-    ShmWriter<drone::ipc::ShmMissionUpload> writer;
-    if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD)) {
-        print_err("Cannot attach to SHM segment " +
-                  std::string(drone::ipc::shm_names::MISSION_UPLOAD) +
-                  ". Ensure the stack is running.");
-        return 1;
-    }
-
     drone::ipc::ShmMissionUpload upload{};
     upload.timestamp_ns   = now_ns();
     upload.correlation_id = now_ns();
@@ -262,19 +292,33 @@ static int cmd_mission_upload(const std::string& json_file) {
         upload.waypoints[i].trigger_payload = wp.value("trigger_payload", false);
     }
 
-    writer.write(upload);
-
     // Also inject a MISSION_UPLOAD GCS command to trigger the planner
-    ShmWriter<drone::ipc::ShmGCSCommand> gcs_writer;
-    if (gcs_writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
-        drone::ipc::ShmGCSCommand shm_cmd{};
-        shm_cmd.timestamp_ns   = now_ns();
-        shm_cmd.correlation_id = upload.correlation_id;
-        shm_cmd.command        = drone::ipc::GCSCommandType::MISSION_UPLOAD;
-        shm_cmd.param1         = static_cast<float>(upload.num_waypoints);
-        shm_cmd.sequence_id    = 1;
-        shm_cmd.valid          = true;
-        gcs_writer.write(shm_cmd);
+    drone::ipc::ShmGCSCommand shm_cmd{};
+    shm_cmd.timestamp_ns   = now_ns();
+    shm_cmd.correlation_id = upload.correlation_id;
+    shm_cmd.command        = drone::ipc::GCSCommandType::MISSION_UPLOAD;
+    shm_cmd.param1         = static_cast<float>(upload.num_waypoints);
+    shm_cmd.sequence_id    = 1;
+    shm_cmd.valid          = true;
+
+    if (g_ipc_backend != "shm") {
+        publish_via_bus<drone::ipc::ShmMissionUpload>(drone::ipc::shm_names::MISSION_UPLOAD,
+                                                      upload);
+        publish_via_bus<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS, shm_cmd);
+    } else {
+        ShmWriter<drone::ipc::ShmMissionUpload> writer;
+        if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD)) {
+            print_err("Cannot attach to SHM segment " +
+                      std::string(drone::ipc::shm_names::MISSION_UPLOAD) +
+                      ". Ensure the stack is running.");
+            return 1;
+        }
+        writer.write(upload);
+
+        ShmWriter<drone::ipc::ShmGCSCommand> gcs_writer;
+        if (gcs_writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
+            gcs_writer.write(shm_cmd);
+        }
     }
 
     std::ostringstream oss;
@@ -378,23 +422,23 @@ static int cmd_sequence(const std::string& json_file) {
 static void print_usage(const char* argv0) {
     std::cout << YELLOW << "Fault Injector — IPC-based fault injection for integration testing\n"
               << NC << "\nUsage:\n"
-              << "  " << argv0 << " battery <percent>            Override FC battery level\n"
-              << "  " << argv0 << " fc_disconnect                 Simulate FC link loss\n"
-              << "  " << argv0 << " fc_reconnect                  Restore FC link\n"
-              << "  " << argv0 << " gcs_command <cmd> [p1 p2 p3]  Inject GCS command\n"
-              << "  " << argv0 << " thermal_zone <0-3>            Override thermal zone\n"
-              << "  " << argv0 << " mission_upload <json_file>     Upload new waypoints\n"
-              << "  " << argv0 << " sequence <json_file>           Timed fault sequence\n"
+              << "  " << argv0 << " [--ipc <shm|zenoh>] <command> [args...]\n"
+              << "\nCommands:\n"
+              << "  battery <percent>            Override FC battery level\n"
+              << "  fc_disconnect                 Simulate FC link loss\n"
+              << "  fc_reconnect                  Restore FC link\n"
+              << "  gcs_command <cmd> [p1 p2 p3]  Inject GCS command\n"
+              << "  thermal_zone <0-3>            Override thermal zone\n"
+              << "  mission_upload <json_file>     Upload new waypoints\n"
+              << "  sequence <json_file>           Timed fault sequence\n"
+              << "\nOptions:\n"
+              << "  --ipc <shm|zenoh>  IPC backend (default: shm)\n"
               << "\nGCS commands: arm, disarm, takeoff, land, rtl,\n"
               << "              mission_start, mission_pause, mission_abort, mission_upload\n"
               << "\nExamples:\n"
-              << "  " << argv0 << " battery 25           # Trigger battery WARN\n"
-              << "  " << argv0 << " battery 15           # Trigger battery RTL\n"
-              << "  " << argv0 << " battery 5            # Trigger EMERGENCY_LAND\n"
-              << "  " << argv0 << " fc_disconnect         # Trigger FC link loss → LOITER\n"
-              << "  " << argv0 << " gcs_command rtl       # Send RTL via GCS\n"
-              << "  " << argv0 << " thermal_zone 3        # Critical thermal zone\n"
-              << "  " << argv0 << " sequence fault_seq.json  # Run timed sequence\n"
+              << "  " << argv0 << " battery 25                # Trigger battery WARN\n"
+              << "  " << argv0 << " --ipc zenoh gcs_command rtl  # Send RTL via Zenoh\n"
+              << "  " << argv0 << " sequence fault_seq.json      # Run timed sequence\n"
               << std::endl;
 }
 
@@ -433,6 +477,36 @@ int main(int argc, char* argv[]) {
         print_usage(argv[0]);
         return 1;
     }
+
+    // Parse --ipc <backend> before command dispatch
+    const char* argv0      = argv[0];  // preserve for usage output after argv shift
+    int         arg_offset = 1;
+    if (std::string(argv[1]) == "--ipc") {
+        if (argc < 3) {
+            print_err("--ipc requires an argument: shm or zenoh");
+            return 1;
+        }
+        g_ipc_backend = argv[2];
+        if (g_ipc_backend != "shm" && g_ipc_backend != "zenoh") {
+            print_err("Invalid IPC backend '" + g_ipc_backend + "' (must be 'shm' or 'zenoh')");
+            return 1;
+        }
+#ifndef HAVE_ZENOH
+        if (g_ipc_backend == "zenoh") {
+            print_err("Zenoh backend requested but not compiled in (HAVE_ZENOH not defined)");
+            return 1;
+        }
+#endif
+        arg_offset = 3;
+        if (argc < 4) {
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    // Shift argv/argc past --ipc <backend>
+    argc -= (arg_offset - 1);
+    argv += (arg_offset - 1);
 
     std::string cmd = argv[1];
 
@@ -486,12 +560,12 @@ int main(int argc, char* argv[]) {
         return cmd_sequence(argv[2]);
 
     } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
-        print_usage(argv[0]);
+        print_usage(argv0);
         return 0;
 
     } else {
         print_err("Unknown command: " + cmd);
-        print_usage(argv[0]);
+        print_usage(argv0);
         return 1;
     }
 }

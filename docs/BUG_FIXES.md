@@ -19,6 +19,40 @@ Sections:
 
 ---
 
+### Fix #39 — fault_injector shm_unlink on Exit Breaks Subsequent Runs (#125)
+
+**Date:** 2026-03-12
+**Severity:** Medium
+**File:** `tools/fault_injector/main.cpp`, `common/ipc/include/ipc/shm_writer.h`
+
+**Bug:** `get_override_writer()` falls back to `ShmWriter::create()` when `attach()` fails (first run or segment doesn't exist). `create()` sets `owns_=true`, causing `shm_unlink("/fault_overrides")` on exit. Subsequent fault_injector runs find the segment gone and must recreate it, losing any state.
+
+**Root Cause:** No ShmWriter method existed that could create a segment without taking ownership. The only options were `create()` (owns) or `attach()` (no-create).
+
+**Fix:** Added `ShmWriter::create_non_owning()` — creates the segment via `shm_open(O_CREAT|O_RDWR)` but sets `owns_=false`. Changed `get_override_writer()` to call `create_non_owning()` instead of `create()`.
+
+**Found by:** Code review (issue #125)
+
+**Regression test:** `ShmWriterNonOwning_SegmentSurvivesDestruction` in `test_shm_ipc.cpp`
+
+---
+
+### Fix #40 — fault_injector GCS/Mission Commands Invisible to Zenoh Subscribers (#124)
+
+**Date:** 2026-03-12
+**Severity:** Medium
+**File:** `tools/fault_injector/main.cpp`, `common/ipc/include/ipc/zenoh_message_bus.h`
+
+**Bug:** `cmd_gcs_command()` and `cmd_mission_upload()` write directly via `ShmWriter::attach()` to POSIX SHM segments. When the stack runs on Zenoh, these writes are invisible to Zenoh subscribers — the fault injector's GCS commands and mission uploads silently do nothing.
+
+**Root Cause:** The fault injector was written before Zenoh support existed and was never updated to use the transport-agnostic MessageBus.
+
+**Fix:** Added `--ipc <shm|zenoh>` CLI flag. When backend is not SHM, routes GCS command and mission upload writes through `publish_via_bus<T>()` which uses the `MessageBusFactory`. Also added missing `/mission_upload` → `drone/mission/upload` mapping in `ZenohMessageBus::to_key_expr()`.
+
+**Found by:** Code review (issue #124)
+
+---
+
 ### Fix #2 — ShmWriter Broken Move Constructor
 
 **Date:** 2026-02-23
