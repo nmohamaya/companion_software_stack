@@ -10,6 +10,8 @@ Description=Drone System Monitor (P7)
 Documentation=https://github.com/nmohamaya/companion_software_stack
 PartOf=drone-stack.target
 After=network-online.target drone-video-capture.service drone-perception.service drone-slam-vio-nav.service drone-comms.service drone-mission-planner.service drone-payload-manager.service
+StartLimitBurst=5
+StartLimitIntervalSec=30s
 
 [Service]
 Type=notify
@@ -18,7 +20,6 @@ ExecStart=/opt/drone/bin/system_monitor --config /etc/drone/config.json --json-l
 Restart=on-failure
 RestartSec=2s
 WatchdogSec=10s
-StartLimitBurst=5
 
 # Resource limits
 MemoryMax=256M
