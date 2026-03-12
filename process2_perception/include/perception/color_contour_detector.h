@@ -179,18 +179,8 @@ public:
             return {};
         }
 
-        // Optional: throttle call rate to preserve CPU headroom.
-        if (max_fps_ > 0) {
-            auto    now = std::chrono::steady_clock::now();
-            int64_t elapsed_ns =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_detect_time_)
-                    .count();
-            int64_t min_interval_ns = 1'000'000'000LL / max_fps_;
-            if (elapsed_ns < min_interval_ns) {
-                std::this_thread::sleep_for(std::chrono::nanoseconds(min_interval_ns - elapsed_ns));
-            }
-            last_detect_time_ = std::chrono::steady_clock::now();
-        }
+        // Capture start time for optional max_fps throttle applied at the end of detect().
+        const auto detect_start = std::chrono::steady_clock::now();
 
         const int w      = static_cast<int>(width);
         const int h      = static_cast<int>(height);
@@ -208,23 +198,35 @@ public:
 
         std::vector<Detection2D> all_detections;
 
-        for (uint8_t ci = 0; ci < static_cast<uint8_t>(color_ranges_.size()); ++ci) {
+        // Cap at kNoColor (0xFF is the sentinel) so color indices always fit in uint8_t.
+        const auto n_colors =
+            static_cast<uint8_t>(std::min(color_ranges_.size(), static_cast<size_t>(kNoColor)));
+        for (uint8_t ci = 0; ci < n_colors; ++ci) {
             auto bboxes = extract_bboxes(ws, hs, ci);
             for (const auto& bbox : bboxes) {
                 if (bbox.area() < min_contour_area_) continue;
 
+                // Clamp to image bounds: ceiling-division of ws/hs can push the last
+                // subsampled cell's right/bottom edge beyond the actual frame extent.
+                const int x_min_c = std::max(0, bbox.x_min);
+                const int y_min_c = std::max(0, bbox.y_min);
+                const int x_max_c = std::min(bbox.x_max, w - 1);
+                const int y_max_c = std::min(bbox.y_max, h - 1);
+
                 Detection2D det;
-                det.x              = static_cast<float>(bbox.x_min);
-                det.y              = static_cast<float>(bbox.y_min);
-                det.w              = static_cast<float>(bbox.width());
-                det.h              = static_cast<float>(bbox.height());
+                det.x              = static_cast<float>(x_min_c);
+                det.y              = static_cast<float>(y_min_c);
+                det.w              = static_cast<float>(x_max_c - x_min_c + 1);
+                det.h              = static_cast<float>(y_max_c - y_min_c + 1);
                 det.class_id       = color_ranges_[ci].class_id;
                 det.timestamp_ns   = now_ns;
                 det.frame_sequence = 0;
 
                 // Confidence based on area: larger objects → higher confidence.
+                // Cast each dimension separately to float before multiplying to avoid
+                // uint32_t overflow on large frames (e.g. > ~4K resolution).
                 float area_ratio = static_cast<float>(bbox.area()) /
-                                   static_cast<float>(width * height);
+                                   (static_cast<float>(width) * static_cast<float>(height));
                 det.confidence = std::min(0.95f, 0.5f + area_ratio * 50.0f);
 
                 all_detections.push_back(det);
@@ -237,6 +239,19 @@ public:
             [](const Detection2D& a, const Detection2D& b) { return a.confidence > b.confidence; });
         if (static_cast<int>(all_detections.size()) > max_detections_) {
             all_detections.resize(max_detections_);
+        }
+
+        // Optional: sleep the remainder of the frame interval so the per-call CPU budget
+        // is bounded.  Sleeping *after* detection ensures the elapsed detection time is
+        // accounted for, so the effective call rate never exceeds max_fps.
+        if (max_fps_ > 0) {
+            const int64_t min_interval_ns = 1'000'000'000LL / max_fps_;
+            const int64_t elapsed_ns      = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now() - detect_start)
+                                           .count();
+            if (elapsed_ns < min_interval_ns) {
+                std::this_thread::sleep_for(std::chrono::nanoseconds(min_interval_ns - elapsed_ns));
+            }
         }
 
         return all_detections;
@@ -256,8 +271,6 @@ private:
     int                   max_detections_   = 20;
     int                   subsample_        = 2;
     int                   max_fps_          = 0;
-
-    std::chrono::steady_clock::time_point last_detect_time_{};
 
     // Reusable per-frame buffers (avoid heap churn on every detect() call).
     // color_map_: subsampled grid; each cell holds a color index or kNoColor.
@@ -295,7 +308,9 @@ private:
         const size_t npix_sub = static_cast<size_t>(ws) * static_cast<size_t>(hs);
         color_map_.assign(npix_sub, kNoColor);
 
-        const auto n_colors = static_cast<uint8_t>(color_ranges_.size());
+        // Cap at kNoColor (0xFF = sentinel) so stored indices always fit in uint8_t.
+        const auto n_colors =
+            static_cast<uint8_t>(std::min(color_ranges_.size(), static_cast<size_t>(kNoColor)));
         for (int y = 0; y < h; y += subsample_) {
             for (int x = 0; x < w; x += subsample_) {
                 const int  px  = (y * w + x) * stride;

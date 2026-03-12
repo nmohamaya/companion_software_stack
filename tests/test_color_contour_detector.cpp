@@ -757,3 +757,40 @@ TEST(ColorContourDetectorTest, Subsample2SmallBlobFilteredByArea) {
 TEST(ColorContourDetectorTest, kNoColorConstantIsCorrectValue) {
     EXPECT_EQ(ColorContourDetector::kNoColor, static_cast<uint8_t>(0xFF));
 }
+
+// Regression: odd frame dimensions (not multiples of subsample) must not produce
+// bbox coordinates that exceed the image bounds after the scale-back from subsampled
+// space to full-resolution space.
+TEST(ColorContourDetectorTest, Subsample2OddDimsBboxWithinBounds) {
+    ColorContourDetector det;  // default subsample=2
+    ASSERT_EQ(det.subsample(), 2);
+
+    // 301×299 — neither dimension is divisible by 2.
+    const uint32_t W   = 301;
+    const uint32_t H   = 299;
+    auto           img = make_solid_image(W, H, 0, 0, 0);
+
+    // Red rectangle that intentionally extends to the very right/bottom edge so the
+    // last partial subsampled cell (the boundary cell) is exercised.
+    fill_rect(img, W, 240, 240, 61, 59, 255, 0, 0);  // rect reaches pixel (300,298)
+
+    auto               result = det.detect(img.data(), W, H, 3);
+    const Detection2D* found  = nullptr;
+    for (const auto& d : result) {
+        if (d.class_id == ObjectClass::PERSON) {
+            found = &d;
+            break;
+        }
+    }
+    ASSERT_NE(found, nullptr) << "Expected red blob to be detected";
+
+    // Coordinates must be non-negative.
+    EXPECT_GE(found->x, 0.0f);
+    EXPECT_GE(found->y, 0.0f);
+    EXPECT_GE(found->w, 0.0f);
+    EXPECT_GE(found->h, 0.0f);
+
+    // Right / bottom edge of bbox must not exceed the image dimensions.
+    EXPECT_LE(found->x + found->w, static_cast<float>(W) + 1.0f);
+    EXPECT_LE(found->y + found->h, static_cast<float>(H) + 1.0f);
+}

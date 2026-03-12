@@ -1848,10 +1848,10 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 - `config/hardware.json` — same
 
 **CI Results:**
-- SHM backend: 745/745 tests passed
-- Zenoh backend: 745/745 tests passed
+- SHM backend: 746/746 tests passed
+- Zenoh backend: 746/746 tests passed
 - clang-format-18: clean
 
 ---
 
-_Last updated after Improvement #36 (ColorContourDetector single-pass + 2× subsampling + max_fps cap, PR #135 — 745/745 SHM, 745/745 Zenoh)_/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
+_Last updated after Improvement #36 (ColorContourDetector single-pass + 2× subsampling + max_fps cap, PR #135 — 746/746 SHM, 746/746 Zenoh)_/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*
