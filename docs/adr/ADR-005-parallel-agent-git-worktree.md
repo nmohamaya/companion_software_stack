@@ -22,7 +22,7 @@ branches independently.
 | Problem | Impact |
 |---------|--------|
 | **Branch collision** | Agent A has unstaged edits on branch X; agent B runs `git checkout Y` → agent A's work is lost or conflicts arise |
-| **Build interference** | Both share `build/`; a cmake reconfigure by one agent can silently reset feature flags (e.g. `ENABLE_ZENOH=OFF`), dropping ~109 tests with no warning |
+| **Build interference** | Both share `build/`; a cmake reconfigure by one agent can silently reset feature flags (e.g. `ENABLE_ZENOH=OFF`), dropping a large portion of the test suite with no warning |
 | **File contention** | Shared doc files (`PROGRESS.md`, `ROADMAP.md`, `TESTS.md`, `BUG_FIXES.md`) are updated at the end of every PR cycle, causing merge conflicts |
 | **Stale object files** | Mixing build types (Release vs Coverage) in a single `build/` directory causes `__gcov_init` linker errors |
 
@@ -32,13 +32,13 @@ Use `git worktree` to give each agent its own checkout directory, sharing a
 single `.git` object store:
 
 ```
-/home/user/NM/Projects/
+<project-parent>/
 ├── companion_software_stack/      ← Agent 1 (primary checkout)
 │   ├── .git/                      ← single shared repo
 │   └── build/                     ← Agent 1's build artifacts
 │
 └── companion_stack_wt/            ← Agent 2 (worktree)
-    ├── .git  (file → symlink back to main .git)
+    ├── .git  (file with "gitdir: ..." pointer into main repo's .git/worktrees/)
     └── build/                     ← Agent 2's build artifacts
 ```
 
@@ -47,7 +47,7 @@ single `.git` object store:
 1. **One branch per worktree.** git enforces this — two worktrees cannot have
    the same branch checked out simultaneously.
 2. **Independent builds.** Each worktree has its own `build/` directory.
-   Always run the canonical cmake command (see `CLAUDE.md`) inside the
+   Always run the canonical cmake command (see `docs/DEVELOPMENT_WORKFLOW.md`) inside the
    worktree, never reference the other tree's build dir.
 3. **Doc merges.** When both agents update `PROGRESS.md`, `ROADMAP.md`, or
    `TESTS.md`, the second-to-merge PR handles the git conflict — append-only
