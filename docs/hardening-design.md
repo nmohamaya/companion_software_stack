@@ -29,6 +29,8 @@
     - [5.1 Service Unit Architecture](#51-service-unit-architecture)
     - [5.2 sd\_notify API](#52-sd_notify-api)
     - [5.3 Dependency Semantics](#53-dependency-semantics)
+    - [5.4 Restart Rate Limiting](#54-restart-rate-limiting)
+    - [5.5 Startup Sequencing — Why Type=notify Matters](#55-startup-sequencing--why-typenotify-matters)
   - [6. Error Handling — Result\<T,E\>](#6-error-handling--resultte)
   - [7. Utilities](#7-utilities)
     - [7.1 safe\_name\_copy](#71-safe_name_copy)
@@ -74,7 +76,8 @@ Foundation hardening (Epic #64) provides the underpinning:
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Layer 3: OS Supervisor — systemd                                     │
 │   7 independent .service units + drone-stack.target                   │
-│   BindsTo= dependency semantics, WatchdogSec=10s on P7              │
+│   Type=notify + WatchdogSec=10s on all 7 units                      │
+│   BindsTo= dependency semantics, StartLimitBurst=5 in [Unit]        │
 │   Restart=on-failure for all units                                   │
 └──────────────────────────┬───────────────────────────────────────────┘
                            │ manages each process independently
@@ -451,8 +454,8 @@ NOMINAL ─────► DEGRADED ─────► CRITICAL
 
 ## 5. Layer 3 — systemd Integration
 
-**PR:** [#107](https://github.com/nmohamaya/companion_software_stack/pull/107)  
-**Issue:** [#83](https://github.com/nmohamaya/companion_software_stack/issues/83)
+**PRs:** [#107](https://github.com/nmohamaya/companion_software_stack/pull/107), [#132](https://github.com/nmohamaya/companion_software_stack/pull/132), [#133](https://github.com/nmohamaya/companion_software_stack/pull/133)  
+**Issues:** [#83](https://github.com/nmohamaya/companion_software_stack/issues/83), [#131](https://github.com/nmohamaya/companion_software_stack/issues/131)
 
 ### 5.1 Service Unit Architecture
 
@@ -461,14 +464,16 @@ Seven independent systemd units (Option B) — chosen over a single P7 unit (Opt
 ```
 drone-stack.target
     │
-    ├── drone-video-capture.service      (P1, Type=simple)
-    ├── drone-perception.service         (P2, Type=simple, BindsTo=P1)
-    ├── drone-slam-vio-nav.service       (P3, Type=simple, BindsTo=P2)
-    ├── drone-comms.service              (P5, Type=simple)
-    ├── drone-mission-planner.service    (P4, Type=simple, BindsTo=P3+P5)
-    ├── drone-payload-manager.service    (P6, Type=simple, BindsTo=P5)
+    ├── drone-video-capture.service      (P1, Type=notify, WatchdogSec=10s)
+    ├── drone-perception.service         (P2, Type=notify, WatchdogSec=10s, BindsTo=P1)
+    ├── drone-slam-vio-nav.service       (P3, Type=notify, WatchdogSec=10s, BindsTo=P2)
+    ├── drone-comms.service              (P5, Type=notify, WatchdogSec=10s)
+    ├── drone-mission-planner.service    (P4, Type=notify, WatchdogSec=10s, BindsTo=P3+P5)
+    ├── drone-payload-manager.service    (P6, Type=notify, WatchdogSec=10s, BindsTo=P5)
     └── drone-system-monitor.service     (P7, Type=notify, WatchdogSec=10s)
 ```
+
+All units have `StartLimitBurst=5` and `StartLimitIntervalSec=30s` in their `[Unit]` section (see [5.4](#54-restart-rate-limiting)).
 
 **Security hardening per unit:**
 - `NoNewPrivileges=yes`
@@ -495,18 +500,32 @@ namespace drone::systemd {
 }
 ```
 
-**Usage in P7 health loop:**
+**All 7 processes** call all three lifecycle notifications. The canonical pattern (from `main.cpp` of each process):
 
 ```cpp
-drone::systemd::notify_ready();  // After initialization
-while (running_) {
-    health = monitor->collect();
-    publisher.publish(health);
-    drone::systemd::notify_watchdog();  // Pet every tick
-    sleep(1);
+// --- Initialization complete ---
+spdlog::info("[Process N] READY");
+drone::systemd::notify_ready();      // systemd releases dependents
+
+// --- Main loop ---
+while (g_running) {
+    drone::systemd::notify_watchdog();  // must fire within WatchdogSec=10s
+    // ... do work ...
+    std::this_thread::sleep_for(1s);
 }
-drone::systemd::notify_stopping();  // Before exit
+
+// --- Graceful shutdown ---
+spdlog::info("Shutting down...");
+drone::systemd::notify_stopping();   // tells systemd this exit is intentional
 ```
+
+**What each call does:**
+
+| Call | systemd effect | Without it |
+|------|---------------|------------|
+| `notify_ready()` | Releases dependent units; marks service `active` | Dependent units start immediately on process launch, before init is complete |
+| `notify_watchdog()` | Resets systemd's 10 s watchdog timer | After 10 s silence systemd kills and restarts the process |
+| `notify_stopping()` | Marks shutdown as intentional | Graceful `SIGTERM` exit may be logged as unexpected and trigger restart |
 
 ### 5.3 Dependency Semantics
 
@@ -518,6 +537,56 @@ drone::systemd::notify_stopping();  // Before exit
 | `BindsTo=` | Dependent **also stopped** | Dependent stays running |
 
 `BindsTo=` was chosen over `Requires=` because it provides stronger stop propagation — when a dependency crashes, systemd stops all bound dependents too. Combined with `Restart=on-failure` on each unit, systemd then restarts both the crashed dependency and its stopped dependents independently. This clears stale state in dependents, matching the `ProcessGraph` cascade semantics.
+
+### 5.4 Restart Rate Limiting
+
+All 7 units have the following in their `[Unit]` section:
+
+```ini
+[Unit]
+...
+StartLimitBurst=5
+StartLimitIntervalSec=30s
+```
+
+This caps restart attempts to **5 crashes within any 30-second window**. After the limit is hit, systemd marks the unit `failed` and stops retrying.
+
+**Why this must be in `[Unit]`, not `[Service]`:** `StartLimitBurst` is a unit-level restart gate, not a service process directive. Placed under `[Service]` it is silently ignored — the restart storm protection never applies. This was a bug found during PR #132 review and corrected in PR #133.
+
+**Effect:**
+
+| Scenario | Without limit | With limit |
+|----------|--------------|------------|
+| Process crashes on bad config at startup | Infinite restart loop, CPU spins | Fails after 5 attempts in 30 s → operator alerted |
+| Transient crash (OOM spike) | Restarts fine | Restarts fine (single event, well within 5/30s) |
+| Cascading failure storm | All 7 units cycling indefinitely | Each unit fails independently → clear failure state |
+
+### 5.5 Startup Sequencing — Why Type=notify Matters
+
+Processes 1–6 were originally `Type=simple` (PR #107, Issue #83). This was upgraded to `Type=notify` for all 7 processes in PR #132 (Issue #131).
+
+**With `Type=simple`** — systemd considers a unit started the moment the binary is launched:
+
+```
+systemd launches P1
+→ immediately starts P2 (BindsTo=P1 only waits for P1 to launch, not initialize)
+→ P2 tries to subscribe to SHM/Zenoh topics P1 hasn't published yet
+→ P2 misses first frames, or reads stale/zero data
+```
+
+**With `Type=notify`** — systemd waits for an explicit `READY=1` signal:
+
+```
+systemd launches P1
+  P1 loads config, initialises camera backend, starts threads
+  P1 calls notify_ready()
+systemd releases P2
+  P2 starts with P1 already publishing frames
+systemd releases P3 (only after P2 signals ready)
+  ...
+```
+
+The `WatchdogSec=10s` setting is only meaningful with `Type=notify` — systemd ignores watchdog pings on `Type=simple` units.
 
 ---
 
