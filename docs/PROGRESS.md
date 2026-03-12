@@ -1789,4 +1789,39 @@ Scenario 07 had `temp_crit_c: 95°C` override. Host CPU runs at ~100°C under si
 | Thermal scenario flakiness | Hot-hardware false-fail | **Stable** |
 | Compiler warnings | 0 | **0** |
 
+---
+
+## Improvement #35 — Complete sd_notify / WatchdogSec for All 7 Processes (Issue #131, PR #132)
+
+**Date:** 2026-03-12  
+**Category:** Deployment / Reliability  
+**Branch:** `fix/issue-131-systemd-notify-watchdog`  
+**Commit:** `7ace87c`
+
+**What:** Two checklist items from issue #31 (systemd service files) were left unimplemented when that issue was closed:
+1. `sd_notify` / watchdog keepalive calls were only wired for `process7_system_monitor`; processes 1–6 sent no `READY=1` or watchdog pings.
+2. `StartLimitBurst=5` was absent from all 7 service files; 6 of 7 also used `Type=simple` instead of `Type=notify`.
+
+**Files Modified (13):**
+- `process1_video_capture/src/main.cpp` — `notify_ready()`, `notify_watchdog()`, `notify_stopping()`
+- `process2_perception/src/main.cpp` — same
+- `process3_slam_vio_nav/src/main.cpp` — same
+- `process4_mission_planner/src/main.cpp` — same
+- `process5_comms/src/main.cpp` — same
+- `process6_payload_manager/src/main.cpp` — same
+- `deploy/systemd/drone-video-capture.service` — `Type=notify`, `NotifyAccess=main`, `WatchdogSec=10s`, `StartLimitBurst=5`
+- `deploy/systemd/drone-perception.service` — same
+- `deploy/systemd/drone-slam-vio-nav.service` — same
+- `deploy/systemd/drone-mission-planner.service` — same
+- `deploy/systemd/drone-comms.service` — same
+- `deploy/systemd/drone-payload-manager.service` — same
+- `deploy/systemd/drone-system-monitor.service` — `StartLimitBurst=5` only (already had `Type=notify + WatchdogSec=10s`)
+
+**CI Results:**
+- SHM backend: 735/735 tests passed
+- Zenoh backend: 844/844 tests passed
+- clang-format-18: clean
+
+---
+
 _Last updated after Improvement #34 (Full 8-scenario Gazebo SITL + Zenoh suite green — 89/89 checks)_ See [tests/TESTS.md](../tests/TESTS.md) for current test counts.*

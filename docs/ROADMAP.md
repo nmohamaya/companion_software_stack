@@ -531,6 +531,7 @@
 | *(this session)* | OBSTACLE COLLISION guard missing from 6/8 scenario pass criteria | Config fix | **Closed** (Fix #40 — all 8 scenarios) |
 | *(this session)* | Scenario 07 thermal false-fail: `temp_crit_c` override below host CPU temp | Bug fix | **Closed** (Fix #38 — scenario 07 config) |
 | *(this session)* | Scenario 05 geofence: WP4 clips magenta cylinder + floor flood + RTL lock | Bug fix | **Closed** (Fix #37 — scenario 05 config + main.cpp) |
+| [#131](https://github.com/nmohamaya/companion_software_stack/issues/131) | sd_notify/WatchdogSec missing from processes 1–6; StartLimitBurst=5 missing all 7 service files | Reliability fix | **Closed** (PR #132, commit `7ace87c`) |
 
 ---
 

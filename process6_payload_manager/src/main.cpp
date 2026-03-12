@@ -12,6 +12,7 @@
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
+#include "util/sd_notify.h"
 #include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -69,6 +70,7 @@ int main(int argc, char* argv[]) {
     }
 
     spdlog::info("Payload Manager READY");
+    drone::systemd::notify_ready();
     uint64_t last_cmd_ts   = 0;
     uint64_t cycle_count   = 0;
     uint64_t capture_count = 0;
@@ -90,6 +92,7 @@ int main(int argc, char* argv[]) {
     // ── Main loop (configurable control rate) ───────────────
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(payload_hb.handle());
+        drone::systemd::notify_watchdog();
         drone::util::FrameDiagnostics diag(cycle_count);
 
         // Read commands
@@ -151,6 +154,7 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }
 
+    drone::systemd::notify_stopping();
     spdlog::info("=== Payload Manager stopped ===");
     return 0;
 }
