@@ -51,8 +51,8 @@
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
-| Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL |
-| Autonomous flight | ARM → Takeoff → Navigate 3 WPs → RTL → Land → Disarm |
+| Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (A* planner + 3D avoidance + HD-map) |
+| Autonomous flight | ARM → Takeoff → Navigate 7 WPs (A* + 3D avoidance) → RTL → Land → Disarm |
 | CI | GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix (shm/zenoh × sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
 | Line coverage | **75.1%** (lcov, SHM backend) |
 | Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
