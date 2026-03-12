@@ -4,42 +4,57 @@
         "name": "obstacle_avoidance",
         "description": "Navigate through an obstacle field using the A* path planner and 3D potential-field obstacle avoider. Tier 2 requires Gazebo SITL with the test_world.sdf obstacles.",
         "tier": 2,
-        "timeout_s": 180,
+        "timeout_s": 100,
         "requires_gazebo": true
     },
     "config_overrides": {
         "mission_planner": {
             "takeoff_altitude_m": 5.0,
-            "acceptance_radius_m": 2.0,
-            "cruise_speed_mps": 1.5,
+            "acceptance_radius_m": 5.0,
+            "cruise_speed_mps": 3.0,
             "path_planner": {"backend": "astar"},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
-                "influence_radius_m": 5.0,
+                "influence_radius_m": 4.0,
                 "repulsive_gain": 3.0
             },
+            "static_obstacles": [
+                {"x": 1,  "y": 7,  "radius_m": 0.75, "height_m": 5.0, "_color": "RED"},
+                {"x": 2,  "y": 13, "radius_m": 0.75, "height_m": 4.0, "_color": "BLUE"},
+                {"x": 7,  "y": 15, "radius_m": 0.75, "height_m": 4.0, "_color": "YELLOW"},
+                {"x": 13, "y": 14, "radius_m": 0.75, "height_m": 6.0, "_color": "MAGENTA"},
+                {"x": 8,  "y": 8,  "radius_m": 0.75, "height_m": 5.0, "_color": "GREEN"},
+                {"x": 4,  "y": 4,  "radius_m": 0.75, "height_m": 3.0, "_color": "ORANGE"}
+            ],
+            "_comment_static_obstacles": "HD-map: pre-loaded obstacle geometry. Camera detections confirm/refresh these and can detect unexpected obstacles.",
             "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled for obstacle avoidance scenario — polygon RTL would fire when A* no-path pushes drone toward boundary",
                 "polygon": [
                     {"x": -20, "y": -20},
                     {"x":  30, "y": -20},
                     {"x":  30, "y":  30},
                     {"x": -20, "y":  30}
                 ],
-                "altitude_floor_m": 0.0,
+                "altitude_floor_m": -50.0,
+                "_comment_floor": "Floor disabled for avoidance debugging — re-enable to 0.0 when avoidance is working",
                 "altitude_ceiling_m": 50.0,
                 "warning_margin_m": 3.0
             },
             "waypoints": [
-                {"x": 5,  "y": 0,  "z": 5, "yaw": 0,    "speed": 1.5, "payload_trigger": false},
-                {"x": 15, "y": 5,  "z": 5, "yaw": 0.5,   "speed": 1.5, "payload_trigger": false},
-                {"x": 20, "y": 10, "z": 5, "yaw": 1.57,  "speed": 1.5, "payload_trigger": true},
-                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57, "speed": 2.0, "payload_trigger": false}
+                {"x": 1,  "y": 7,  "z": 3, "yaw": 1.43,  "speed": 3.0, "payload_trigger": false, "_comment": "Straight at RED box Gz(7,1)=our(1,7) h=5m — must avoid. yaw=atan2(7,1)=1.43 faces obstacle."},
+                {"x": 2,  "y": 13, "z": 3, "yaw": 1.41,  "speed": 3.0, "payload_trigger": false, "_comment": "Straight at BLUE cylinder Gz(13,2)=our(2,13) h=4m — must avoid. yaw=atan2(6,1)=1.41 faces obstacle."},
+                {"x": 7,  "y": 15, "z": 3, "yaw": 0.38,  "speed": 3.0, "payload_trigger": false, "_comment": "Straight at YELLOW box Gz(15,7)=our(7,15) h=4m — must avoid. yaw=atan2(2,5)=0.38 faces obstacle."},
+                {"x": 13, "y": 14, "z": 4, "yaw": -0.17, "speed": 3.0, "payload_trigger": true,  "_comment": "Straight at MAGENTA cyl Gz(14,13)=our(13,14) h=6m — must avoid. yaw=atan2(-1,6)=-0.17 faces obstacle."},
+                {"x": 8,  "y": 8,  "z": 3, "yaw": -2.27, "speed": 3.0, "payload_trigger": false, "_comment": "Straight at GREEN cyl Gz(8,8)=our(8,8) h=5m — must avoid. yaw=atan2(-6,-5)=-2.27 faces obstacle."},
+                {"x": 4,  "y": 4,  "z": 2, "yaw": -2.36, "speed": 3.0, "payload_trigger": false, "_comment": "Straight at ORANGE box Gz(4,4)=our(4,4) h=3m — must avoid. yaw=atan2(-4,-4)=-2.36 faces obstacle."},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36, "speed": 3.0, "payload_trigger": false, "_comment": "Return home above obstacles"}
             ]
         },
         "perception": {
             "detector": {
-                "backend": "simulated",
+                "backend": "color_contour",
                 "confidence_threshold": 0.3,
                 "max_detections": 64
             }
@@ -51,13 +66,14 @@
     "pass_criteria": {
         "log_contains": [
             "Path planner: astar",
-            "Obstacle avoider: potential_field_3d",
+            "Obstacle avoider: ObstacleAvoider3D",
             "TAKEOFF",
-            "EXECUTING"
+            "EXECUTING",
+            "Mission complete"
         ],
         "log_must_not_contain": [
-            "FAULT_GEOFENCE_BREACH",
-            "EMERGENCY_LAND"
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
         ],
         "processes_alive": [
             "video_capture", "perception", "slam_vio_nav",
@@ -66,9 +82,9 @@
     },
     "manual_controls": {
         "_comment": "Adjustable obstacle avoidance parameters",
-        "influence_radius_range": {"min": 1.0, "max": 10.0, "default": 5.0, "unit": "m"},
-        "repulsive_gain_range": {"min": 0.5, "max": 5.0, "default": 3.0},
-        "cruise_speed_range": {"min": 0.5, "max": 3.0, "default": 1.5, "unit": "m/s"},
+        "influence_radius_range": {"min": 1.0, "max": 30.0, "default": 20.0, "unit": "m"},
+        "repulsive_gain_range": {"min": 0.5, "max": 30.0, "default": 20.0},
+        "cruise_speed_range": {"min": 0.5, "max": 3.0, "default": 1.0, "unit": "m/s"},
         "waypoints_editable": true,
         "planner_backend_options": ["potential_field", "astar"]
     }

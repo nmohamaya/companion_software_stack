@@ -95,7 +95,8 @@
             "FAULT_FC_LINK_LOST"
         ],
         "log_must_not_contain": [
-            "EMERGENCY_LAND"
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
         ],
         "processes_alive": [
             "mission_planner", "comms", "slam_vio_nav", "system_monitor"

@@ -4,7 +4,7 @@
         "name": "battery_degradation",
         "description": "Inject progressive battery drain during flight. Verifies FaultManager's 3-tier battery escalation: WARN at 30%, RTL at 20%, EMERGENCY_LAND at 10%.",
         "tier": 1,
-        "timeout_s": 90,
+        "timeout_s": 80,
         "requires_gazebo": false
     },
     "config_overrides": {
@@ -60,7 +60,8 @@
             "FAULT_BATTERY_CRITICAL"
         ],
         "log_must_not_contain": [
-            "FAULT_GEOFENCE_BREACH"
+            "FAULT_GEOFENCE_BREACH",
+            "OBSTACLE COLLISION"
         ]
     },
     "manual_controls": {

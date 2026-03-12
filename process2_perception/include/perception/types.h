@@ -64,6 +64,8 @@ struct TrackedObject {
     float           confidence   = 0.0f;
     Eigen::Vector2f position_2d  = Eigen::Vector2f::Zero();
     Eigen::Vector2f velocity_2d  = Eigen::Vector2f::Zero();
+    float           bbox_w       = 0.0f;  // bounding box width in pixels
+    float           bbox_h       = 0.0f;  // bounding box height in pixels
     uint32_t        age          = 0;
     uint32_t        hits         = 0;
     uint32_t        misses       = 0;
@@ -113,6 +115,7 @@ namespace drone::perception {
 struct CalibrationData {
     Eigen::Matrix3f camera_intrinsics = Eigen::Matrix3f::Identity();
     float           camera_height_m   = 1.5f;  // camera height above ground
+    float assumed_obstacle_height_m   = 3.0f;  // assumed obstacle height for apparent-size depth
 };
 
 }  // namespace drone::perception

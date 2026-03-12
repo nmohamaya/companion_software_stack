@@ -53,8 +53,11 @@ public:
         auto                        now = std::chrono::steady_clock::now();
         double elapsed                  = std::chrono::duration<double>(now - start_time_).count();
 
-        // Simulate an RTL command after 120 seconds
-        if (!rtl_sent_ && elapsed > 120.0) {
+        // Simulate an RTL command after 300 seconds (scenario timeout is 180 s,
+        // but with obstacle avoidance the mission can take longer than 120 s.
+        // 300 s gives enough headroom for any test scenario while still providing
+        // a GCS watchdog for runaway processes.)
+        if (!rtl_sent_ && elapsed > 300.0) {
             cmd.type         = GCSCommandType::RTL;
             cmd.timestamp_ns = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch())

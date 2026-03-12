@@ -33,6 +33,15 @@
 
 #include <spdlog/spdlog.h>
 
+// ── Gazebo ground-truth headers (only when building with Gazebo support) ──
+#ifdef HAVE_GAZEBO
+#include <atomic>
+#include <mutex>
+
+#include <gz/msgs/odometry.pb.h>
+#include <gz/transport/Node.hh>
+#endif  // HAVE_GAZEBO
+
 namespace drone::slam {
 
 // ─────────────────────────────────────────────────────────────
@@ -238,20 +247,163 @@ private:
     static constexpr int kMinMatchesNominal  = 15;
 };
 
+// ─────────────────────────────────────────────────────────────
+// Gazebo ground-truth VIO backend
+//
+// Reads the drone's exact position from the Gazebo odometry topic via
+// gz-transport and wraps it as a VIOBackend.  The stereo frame and IMU
+// samples are intentionally ignored — Gazebo provides perfect ground
+// truth so no vision/IMU fusion is needed.
+//
+// MODULARITY NOTE: This class is entirely gated behind HAVE_GAZEBO.
+// It is registered under the name "gazebo" in create_vio_backend().
+// To switch back to simulated (or a real VIO algorithm), change
+// slam.vio.backend in the config.  No code changes are required.
+//
+// Frame convention (matches GazeboVisualFrontend in ivisual_frontend.h):
+//   Gazebo world: X=East, Y=North, Z=Up
+//   Our internal:  X=North, Y=East, Z=Up
+//   (vx→north, vy→east matches MavlinkFCLink's NED conversion)
+// ─────────────────────────────────────────────────────────────
+#ifdef HAVE_GAZEBO
+
+class GazeboVIOBackend final : public IVIOBackend {
+public:
+    /// @param gz_topic  Gazebo odometry topic, e.g.
+    ///                  "/model/x500_companion_0/odometry"
+    explicit GazeboVIOBackend(std::string gz_topic)
+        : gz_topic_(std::move(gz_topic)), health_(VIOHealth::INITIALIZING) {
+        bool ok = node_.Subscribe(gz_topic_, &GazeboVIOBackend::on_odom, this);
+        if (!ok) {
+            spdlog::error("[GazeboVIOBackend] Failed to subscribe to '{}'", gz_topic_);
+        } else {
+            spdlog::info("[GazeboVIOBackend] Subscribed to ground-truth odometry: '{}'", gz_topic_);
+        }
+    }
+
+    ~GazeboVIOBackend() override { node_.Unsubscribe(gz_topic_); }
+
+    // Non-copyable, non-movable (owns gz::transport::Node)
+    GazeboVIOBackend(const GazeboVIOBackend&)            = delete;
+    GazeboVIOBackend& operator=(const GazeboVIOBackend&) = delete;
+
+    VIOResult<VIOOutput> process_frame(const drone::ipc::ShmStereoFrame& frame,
+                                       const std::vector<ImuSample>& /*imu_samples*/) override {
+        VIOOutput output;
+        output.frame_id = frame.sequence_number;
+
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (!pose_valid_) {
+                // No odometry received yet — return degraded but not fatal
+                output.health = VIOHealth::INITIALIZING;
+                return VIOResult<VIOOutput>::ok(std::move(output));
+            }
+            output.pose = cached_pose_;
+        }
+
+        output.health             = health_.load(std::memory_order_relaxed);
+        output.num_features       = -1;  // N/A — ground truth, no feature extraction
+        output.num_stereo_matches = -1;
+        output.imu_samples_used   = 0;
+        return VIOResult<VIOOutput>::ok(std::move(output));
+    }
+
+    [[nodiscard]] VIOHealth health() const override {
+        return health_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] std::string name() const override {
+        return "GazeboVIOBackend(" + gz_topic_ + ")";
+    }
+
+private:
+    void on_odom(const gz::msgs::Odometry& msg) {
+        Pose p;
+        // Use steady_clock so the timestamp is in the same epoch as
+        // FaultManager's now_ns — prevents false "pose stale" faults.
+        p.timestamp =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+
+        if (msg.has_pose()) {
+            const auto& pose = msg.pose();
+            if (pose.has_position()) {
+                // Remap Gazebo world frame → our internal frame:
+                //   our X (North) = Gazebo Y
+                //   our Y (East)  = Gazebo X
+                //   our Z (Up)    = Gazebo Z
+                p.position = Eigen::Vector3d(pose.position().y(),   // North
+                                             pose.position().x(),   // East
+                                             pose.position().z());  // Up
+            }
+            if (pose.has_orientation()) {
+                Eigen::Quaterniond gz_q(pose.orientation().w(), pose.orientation().x(),
+                                        pose.orientation().y(), pose.orientation().z());
+                // Gazebo uses ENU: yaw=0 means facing East (+Gz_X = our +Y).
+                // Our frame: yaw=0 means facing North (+our_X = +Gz_Y).
+                // With position remap (North=Gz_Y, East=Gz_X), the heading
+                // transforms as: our_yaw = π/2 - gz_ENU_yaw.
+                // For a yaw-only rotation this equals R_z(+π/2) * gz_q.inverse().
+                static const Eigen::Quaterniond k_enu_to_our(
+                    Eigen::AngleAxisd(M_PI_2, Eigen::Vector3d::UnitZ()));
+                p.orientation = k_enu_to_our * gz_q.conjugate();
+            }
+        }
+        p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.001;
+        p.quality    = 3;  // excellent — ground truth
+
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            cached_pose_ = p;
+            pose_valid_  = true;
+        }
+        odom_count_.fetch_add(1, std::memory_order_relaxed);
+        health_.store(VIOHealth::NOMINAL, std::memory_order_relaxed);
+    }
+
+    std::string            gz_topic_;
+    gz::transport::Node    node_;
+    mutable std::mutex     mtx_;
+    Pose                   cached_pose_;
+    bool                   pose_valid_{false};
+    std::atomic<VIOHealth> health_;
+    std::atomic<uint64_t>  odom_count_{0};
+};
+
+#endif  // HAVE_GAZEBO
+
 // ── Factory ────────────────────────────────────────────────
 
 /// Create a VIO backend by name.
-/// Supported: "simulated" (default).
-/// Future: "msckf", "okvis", "vins"
-inline std::unique_ptr<IVIOBackend> create_vio_backend(const std::string& backend     = "simulated",
-                                                       const StereoCalibration& calib = {},
-                                                       const ImuNoiseParams&    imu_params = {}) {
+///
+/// Supported backends:
+///   "simulated" — synthetic circular trajectory (default; works without hardware)
+///   "gazebo"    — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO builds only)
+///
+/// To add a real VIO algorithm (e.g. MSCKF), add a new class implementing
+/// IVIOBackend and register it here.  The rest of the stack is unchanged.
+inline std::unique_ptr<IVIOBackend> create_vio_backend(
+    const std::string& backend = "simulated", const StereoCalibration& calib = {},
+    const ImuNoiseParams& imu_params = {},
+    const std::string&    gz_topic   = "/model/x500_companion_0/odometry") {
 
     if (backend == "simulated") {
         return std::make_unique<SimulatedVIOBackend>(calib, imu_params);
     }
-    throw std::runtime_error("[VIOBackend] Unknown backend: " + backend +
-                             " (available: simulated)");
+#ifdef HAVE_GAZEBO
+    if (backend == "gazebo") {
+        (void)calib;       // ground truth — calibration not used
+        (void)imu_params;  // ground truth — IMU params not used
+        return std::make_unique<GazeboVIOBackend>(gz_topic);
+    }
+#endif
+    throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
+                             "' (available: simulated"
+#ifdef HAVE_GAZEBO
+                             ", gazebo"
+#endif
+                             ")");
 }
 
 }  // namespace drone::slam

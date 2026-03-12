@@ -360,6 +360,8 @@ int main(int argc, char* argv[]) {
 
     // Create VIO backend via factory
     auto              vio_backend_name = cfg.get<std::string>("slam.vio.backend", "simulated");
+    auto              vio_gz_topic     = cfg.get<std::string>("slam.vio.gz_topic",
+                                                              "/model/x500_companion_0/odometry");
     StereoCalibration calib;
     calib.fx       = cfg.get<double>("slam.stereo.fx", 350.0);
     calib.fy       = cfg.get<double>("slam.stereo.fy", 350.0);
@@ -373,7 +375,7 @@ int main(int argc, char* argv[]) {
     imu_params.accel_noise_density = cfg.get<double>("slam.imu.accel_noise_density", 0.012);
     imu_params.accel_random_walk   = cfg.get<double>("slam.imu.accel_random_walk", 8.0e-5);
 
-    auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params);
+    auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic);
     spdlog::info("VIO backend: {}", vio->name());
     spdlog::info("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m", calib.fx,
                  calib.fy, calib.cx, calib.cy, calib.baseline);

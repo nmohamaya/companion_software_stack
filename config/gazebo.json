@@ -1,6 +1,7 @@
 {
     "_comment": "Gazebo integration-test config — full closed-loop with PX4 SITL",
     "log_level": "info",
+    "ipc_backend": "zenoh",
 
     "video_capture": {
         "mission_cam": {
@@ -128,7 +129,7 @@
             "cpu_warn_percent": 90.0,
             "mem_warn_percent": 90.0,
             "temp_warn_c": 80.0,
-            "temp_crit_c": 95.0,
+            "temp_crit_c": 120.0,
             "battery_warn_percent": 20.0,
             "battery_crit_percent": 10.0,
             "disk_crit_percent": 98.0

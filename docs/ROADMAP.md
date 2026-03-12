@@ -29,11 +29,14 @@
     - [Phase 12 — Production Hardening](#phase-12--production-hardening)
   - [Issue Tracking](#issue-tracking)
     - [Epics](#epics)
+    - [Foundation Hardening (Epic #64) — ✅ COMPLETE](#foundation-hardening-epic-64---complete)
+    - [Process \& Thread Watchdog (Epic #88) — ✅ COMPLETE](#process--thread-watchdog-epic-88---complete)
     - [Phase 9 — First Safe Flight](#phase-9--first-safe-flight)
     - [Phase 10 — Real Cameras \& Perception](#phase-10--real-cameras--perception-1)
     - [Phase 11 — Autonomous Navigation](#phase-11--autonomous-navigation)
     - [Phase 12 — Production Hardening](#phase-12--production-hardening-1)
-    - [Zenoh IPC Migration (Phase 12)](#zenoh-ipc-migration-phase-12)
+    - [Zenoh IPC Migration (Phase 12) — ✅ COMPLETE](#zenoh-ipc-migration-phase-12---complete)
+    - [Core Autonomy \& Safety (Epic #110) — ✅ COMPLETE](#core-autonomy--safety-epic-110---complete)
   - [Metrics History](#metrics-history)
     - [Process Activity During Simulation](#process-activity-during-simulation)
 
@@ -327,7 +330,7 @@
 - VIO backend timestamp fix — `steady_clock::now()` instead of frame-counter epoch
 - FC link-loss timestamp freeze — stale-heartbeat detection works correctly
 - `potential_field_3d` obstacle avoider factory alias
-- Transport-aware scenario runner (`--ipc shm|zenoh`) — 7/7 on both transports
+- Transport-aware scenario runner (`--ipc shm|zenoh`) — **8/8 on Gazebo SITL + Zenoh (89/89 checks)** *(updated: scenarios 02/05 fixed post-merge, PR #130)*
 - Scenario logs consolidated to `drone_logs/scenarios/`
 
 **Cross-Epic Deliveries (Epic #25):**
@@ -519,7 +522,15 @@
 | [#115](https://github.com/nmohamaya/companion_software_stack/issues/115) | Stereo VIO Foundation | Phase 2A | **Closed** (PR #118) |
 | [#116](https://github.com/nmohamaya/companion_software_stack/issues/116) | Planning & Safety (A*, Geofence, FaultMgr) | Phase 3 | **Closed** (PR #119) |
 | [#120](https://github.com/nmohamaya/companion_software_stack/issues/120) | Integration Testing — Scenario Harness | Testing | **Closed** (PR #121) |
-| [#122](https://github.com/nmohamaya/companion_software_stack/issues/122) | Integration scenario failures — 8 root causes | Bug fix | **Open** (PR #123) |
+| [#122](https://github.com/nmohamaya/companion_software_stack/issues/122) | Integration scenario failures — 8 root causes | Bug fix | **Closed** (PR #123) |
+| [#125](https://github.com/nmohamaya/companion_software_stack/issues/125) | Scenario 02 Obstacle Avoidance: SITL Fixes (TTL grid, goal snap, thermal, geofence, BFS escape, HD-map) | Bug fix / Feature | **Closed** (Fixes #30–35) |
+| [#126](https://github.com/nmohamaya/companion_software_stack/issues/126) | HD-Map Two-Layer Occupancy Grid (static + camera TTL) | Feature | **Closed** (Fix #35) |
+| [#127](https://github.com/nmohamaya/companion_software_stack/issues/127) | Proximity-Based Collision Detection in NAVIGATE Loop | Feature | **Closed** (Fix #36) |
+| [#129](https://github.com/nmohamaya/companion_software_stack/issues/129) | PX4 exit tears down companion stack and GUI (launch_gazebo.sh) | Bug | **Open** (Bug #29 — FIXME in launch_gazebo.sh) |
+| *(this session)* | RTL disarm detection: `nav_was_armed_` gap at fault/GCS/complete RTL entry points | Bug fix | **Closed** (Fix #39 — main.cpp) |
+| *(this session)* | OBSTACLE COLLISION guard missing from 6/8 scenario pass criteria | Config fix | **Closed** (Fix #40 — all 8 scenarios) |
+| *(this session)* | Scenario 07 thermal false-fail: `temp_crit_c` override below host CPU temp | Bug fix | **Closed** (Fix #38 — scenario 07 config) |
+| *(this session)* | Scenario 05 geofence: WP4 clips magenta cylinder + floor flood + RTL lock | Bug fix | **Closed** (Fix #37 — scenario 05 config + main.cpp) |
 
 ---
 
@@ -555,7 +566,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅** |
 
 ### Process Activity During Simulation
 
@@ -571,4 +582,4 @@
 
 ---
 
-*Last updated after Issue #122 fix (PR #123) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 29 bug fixes, sideband fault injector.*
+*Last updated after Improvement #33 (Scenario 02 obstacle avoidance full pass, HD-map two-layer grid, proximity collision detection) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 844 tests (SHM+Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 36 bug fixes total. Gazebo SITL scenario 02: 7/7 WP reached, 0 collisions. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

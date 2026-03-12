@@ -1,6 +1,7 @@
 {
     "_comment": "Gazebo SITL configuration — uses MAVLink FC link and Gazebo cameras",
     "log_level": "info",
+    "ipc_backend": "zenoh",
 
     "video_capture": {
         "mission_cam": {
@@ -23,7 +24,7 @@
 
     "perception": {
         "detector": {
-            "backend": "simulated",
+            "backend": "color_contour",
             "confidence_threshold": 0.5,
             "nms_threshold": 0.4,
             "max_detections": 64
@@ -49,6 +50,11 @@
         "imu": {
             "backend": "gazebo",
             "gz_topic": "/imu"
+        },
+        "vio": {
+            "_comment": "Use 'gazebo' for Gazebo SITL ground-truth pose; change to 'simulated' or a real VIO backend (e.g. 'msckf') when deploying on real hardware or a more sophisticated simulator",
+            "backend": "gazebo",
+            "gz_topic": "/model/x500_companion_0/odometry"
         },
         "keyframe": {
             "min_parallax_px": 15.0,
@@ -139,8 +145,8 @@
         "thresholds": {
             "cpu_warn_percent": 90.0,
             "mem_warn_percent": 90.0,
-            "temp_warn_c": 80.0,
-            "temp_crit_c": 95.0,
+            "temp_warn_c": 105.0,
+            "temp_crit_c": 120.0,
             "battery_warn_percent": 20.0,
             "battery_crit_percent": 10.0,
             "disk_crit_percent": 98.0

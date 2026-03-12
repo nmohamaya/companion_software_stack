@@ -13,8 +13,7 @@
             "thresholds": {
                 "cpu_warn_percent": 90.0,
                 "mem_warn_percent": 90.0,
-                "temp_warn_c": 80.0,
-                "temp_crit_c": 95.0,
+                "_comment_temp": "No temp_warn_c/temp_crit_c override — thermal escalation is exercised via the thermal_zone fault injector which sets the zone directly. Keeping base-config thresholds (105/120 °C) prevents false FAULT_THERMAL_CRITICAL on hot hardware before any injection fires.",
                 "battery_warn_percent": 20.0,
                 "battery_crit_percent": 10.0
             }
@@ -74,7 +73,8 @@
         ],
         "log_must_not_contain": [
             "FAULT_BATTERY_RTL",
-            "FAULT_GEOFENCE_BREACH"
+            "FAULT_GEOFENCE_BREACH",
+            "OBSTACLE COLLISION"
         ],
         "processes_alive": [
             "mission_planner", "comms", "slam_vio_nav", "system_monitor"

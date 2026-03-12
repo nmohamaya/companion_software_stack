@@ -174,6 +174,31 @@ int main(int argc, char* argv[]) {
     // Cache pointer for A* obstacle-grid updates (null if not A*)
     auto* astar_planner = dynamic_cast<drone::planner::AStarPathPlanner*>(path_planner.get());
 
+    // ── HD-map: pre-populate A* grid with known static obstacles ────────────
+    // These cells are permanent (no TTL). The camera pipeline independently
+    // confirms these obstacles via live detections (TTL layer). A* sees both.
+    // confirmed / confirm_count track camera cross-checks (see main loop below).
+    struct StaticObstacleRecord {
+        float    x, y, radius_m, height_m;
+        bool     confirmed{false};       // true once camera has seen this obstacle
+        int      confirm_count{0};       // raw detection hit count (need ≥2 to confirm)
+        uint64_t first_confirmed_ns{0};  // loop timestamp of first confirmation
+    };
+    std::vector<StaticObstacleRecord> static_obstacles;
+    {
+        auto obs_json = cfg.section("mission_planner.static_obstacles");
+        if (obs_json.is_array() && !obs_json.empty()) {
+            for (const auto& o : obs_json) {
+                StaticObstacleRecord rec{o.value("x", 0.0f), o.value("y", 0.0f),
+                                         o.value("radius_m", 0.75f), o.value("height_m", 3.0f)};
+                static_obstacles.push_back(rec);
+                if (astar_planner)
+                    astar_planner->add_static_obstacle(rec.x, rec.y, rec.radius_m, rec.height_m);
+            }
+            spdlog::info("[HD-map] Loaded {} static obstacles into A* grid", obs_json.size());
+        }
+    }
+
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
@@ -181,9 +206,10 @@ int main(int argc, char* argv[]) {
     spdlog::info("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
-    Geofence geofence;
-    auto     fence_json = cfg.section("mission_planner.geofence.polygon");
-    if (fence_json.is_array() && fence_json.size() >= 3) {
+    Geofence   geofence;
+    const bool geofence_cfg_enabled = cfg.get<bool>("mission_planner.geofence.enabled", true);
+    auto       fence_json           = cfg.section("mission_planner.geofence.polygon");
+    if (geofence_cfg_enabled && fence_json.is_array() && fence_json.size() >= 3) {
         std::vector<GeoVertex> vertices;
         for (const auto& v : fence_json) {
             vertices.push_back({v.value("x", 0.0f), v.value("y", 0.0f)});
@@ -199,7 +225,8 @@ int main(int argc, char* argv[]) {
                      vertices.size(), alt_floor, alt_ceiling,
                      cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
     } else {
-        spdlog::info("Geofence: disabled (no polygon configured)");
+        spdlog::info("Geofence: disabled ({})",
+                     geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
     }
 
     // RTL/landing tuning
@@ -234,6 +261,11 @@ int main(int argc, char* argv[]) {
     uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
     auto     last_arm_time         = std::chrono::steady_clock::now() -
                          std::chrono::seconds(10);  // allow immediate first ARM
+    bool nav_was_armed_            = false;         // tracks armed state across NAVIGATE ticks
+    auto last_collision_warn_time_ = std::chrono::steady_clock::now() -
+                                     std::chrono::seconds(300);  // allow immediate first warn
+    auto last_unconfirmed_approach_warn_ = std::chrono::steady_clock::now() -
+                                           std::chrono::seconds(300);  // throttle at 10 s
 
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Pose staleness threshold (500ms = 5× planning period)
@@ -291,12 +323,47 @@ int main(int argc, char* argv[]) {
             pose_stale_count = 0;
         }
 
+        // ── Camera cross-check of HD-map static obstacles (every tick) ──────
+        // Detected object positions are already in world frame (perception's
+        // fusion thread applies the camera→world rotation before publishing).
+        // If a detection falls within (radius_m + 1 m) of a known HD-map obstacle
+        // it counts as a hit.  After 2 independent hits the obstacle is marked
+        // confirmed and logged.  This lets the scenario runner (and downstream
+        // logic) verify that every map obstacle was camera-sighted at least once.
+        if (!static_obstacles.empty() && objects.num_objects > 0 && pose.quality >= 1) {
+            for (uint32_t i = 0; i < objects.num_objects; ++i) {
+                const auto& det = objects.objects[i];
+                // Detected positions are already world-frame — use directly.
+                const float wx = det.position_x;
+                const float wy = det.position_y;
+                const float wz = det.position_z;
+                for (auto& obs : static_obstacles) {
+                    if (obs.confirmed) continue;
+                    const float dx   = wx - obs.x;
+                    const float dy   = wy - obs.y;
+                    const float dist = std::sqrt(dx * dx + dy * dy);
+                    if (dist < obs.radius_m + 1.0f && wz <= obs.height_m + 0.5f) {
+                        obs.confirm_count++;
+                        if (obs.confirm_count >= 2) {
+                            obs.confirmed          = true;
+                            obs.first_confirmed_ns = now_ns;
+                            spdlog::info("[HD-map] Obstacle at ({:.1f},{:.1f}) CONFIRMED by camera "
+                                         "(world det ({:.2f},{:.2f},{:.2f}), dist={:.2f}m)",
+                                         obs.x, obs.y, wx, wy, wz, dist);
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Geofence check (every tick, airborne only) ──────
         // Runs BEFORE evaluate() so a breach triggers RTL in the same cycle.
+        // Skip during TAKEOFF — the drone is climbing from ground level and
+        // altitude will legitimately be at or near 0m (the floor).
         {
             drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
             if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
-                fsm.state() != MissionState::PREFLIGHT) {
+                fsm.state() != MissionState::PREFLIGHT && fsm.state() != MissionState::TAKEOFF) {
                 auto fence_result = geofence.check(static_cast<float>(pose.translation[0]),
                                                    static_cast<float>(pose.translation[1]),
                                                    fc_state.rel_alt);
@@ -359,6 +426,8 @@ int main(int argc, char* argv[]) {
                         traj_pub->publish(stop);
                     }
                     rtl_start_time = std::chrono::steady_clock::now();
+                    nav_was_armed_ =
+                        true;  // seed so RTL disarm detection works from any origin state
                     fsm.on_rtl();
                     fsm.set_fault_triggered(true);
                     break;
@@ -412,6 +481,8 @@ int main(int argc, char* argv[]) {
                         traj_pub->publish(stop);
                     }
                     rtl_start_time = std::chrono::steady_clock::now();
+                    nav_was_armed_ =
+                        true;  // seed so RTL disarm detection works from any origin state
                     fsm.on_rtl();
                     break;
                 case drone::ipc::GCSCommandType::LAND:
@@ -516,11 +587,79 @@ int main(int argc, char* argv[]) {
             }
 
             case MissionState::NAVIGATE: {
+                // Detect unexpected disarm mid-navigation (obstacle collision / crash landing).
+                // PX4 triggers a landing-detected + disarm event when the drone is knocked down.
+                // We catch that here and emit a distinct log string that the test runner can
+                // match with log_must_not_contain to fail the scenario.
+                if (nav_was_armed_ && !fc_state.armed) {
+                    spdlog::warn("[Planner] OBSTACLE COLLISION detected — vehicle unexpectedly "
+                                 "disarmed during navigation");
+                }
+                nav_was_armed_ = fc_state.armed;
+
+                // Proximity-based collision detection using HD-map obstacle positions.
+                // Fires if the drone centre enters within (radius_m + 0.5 m) of any known
+                // static obstacle while at or below its height.  Throttled to once per 2 s.
+                {
+                    constexpr float kCollisionMarginM = 0.5f;  // drone body + safety margin
+                    constexpr float kCooldownSeconds  = 2.0f;
+                    const float     px                = static_cast<float>(pose.translation[0]);
+                    const float     py                = static_cast<float>(pose.translation[1]);
+                    const float     pz                = static_cast<float>(pose.translation[2]);
+                    auto            now_c             = std::chrono::steady_clock::now();
+                    if (std::chrono::duration<float>(now_c - last_collision_warn_time_).count() >
+                        kCooldownSeconds) {
+                        for (const auto& obs : static_obstacles) {
+                            const float dx   = px - obs.x;
+                            const float dy   = py - obs.y;
+                            const float dist = std::sqrt(dx * dx + dy * dy);
+                            if (dist < obs.radius_m + kCollisionMarginM &&
+                                pz <= obs.height_m + kCollisionMarginM) {
+                                spdlog::warn("[Planner] OBSTACLE COLLISION detected — drone {:.2f}m"
+                                             " from obstacle at ({:.1f},{:.1f})",
+                                             dist, obs.x, obs.y);
+                                last_collision_warn_time_ = now_c;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 // Update A* obstacle grid if applicable
                 if (astar_planner) {
                     drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");
                     astar_planner->update_obstacles(objects, pose);
                 }
+
+                // Warn if approaching an HD-map obstacle that the camera has not yet confirmed.
+                // This is informational — A* will still route around unconfirmed obstacles
+                // (conservative default).  Useful for diagnosing map/reality mismatches.
+                // Throttled to once per 10 s to avoid log flooding.
+                {
+                    constexpr float kApproachWarnM     = 3.0f;
+                    constexpr float kApproachCooldownS = 10.0f;
+                    const float     px                 = static_cast<float>(pose.translation[0]);
+                    const float     py                 = static_cast<float>(pose.translation[1]);
+                    auto            now_a              = std::chrono::steady_clock::now();
+                    if (std::chrono::duration<float>(now_a - last_unconfirmed_approach_warn_)
+                            .count() > kApproachCooldownS) {
+                        for (const auto& obs : static_obstacles) {
+                            if (obs.confirmed) continue;
+                            const float dx   = px - obs.x;
+                            const float dy   = py - obs.y;
+                            const float dist = std::sqrt(dx * dx + dy * dy);
+                            if (dist < obs.radius_m + kApproachWarnM) {
+                                spdlog::warn(
+                                    "[HD-map] Approaching UNCONFIRMED obstacle at ({:.1f},{:.1f}) "
+                                    "dist={:.2f}m — camera has not verified this obstacle yet",
+                                    obs.x, obs.y, dist);
+                                last_unconfirmed_approach_warn_ = now_a;
+                                break;  // one warn per cooldown window is enough
+                            }
+                        }
+                    }
+                }
+
                 const Waypoint* wp = fsm.current_waypoint();
                 if (wp) {
                     // Plan trajectory via IPathPlanner
@@ -571,6 +710,8 @@ int main(int argc, char* argv[]) {
                                 traj_pub->publish(stop);
                             }
                             rtl_start_time = std::chrono::steady_clock::now();
+                            nav_was_armed_ =
+                                true;  // already true from NAVIGATE, but explicit for clarity
                             fsm.on_rtl();
                         }
                     }
@@ -579,6 +720,16 @@ int main(int argc, char* argv[]) {
             }
 
             case MissionState::RTL: {
+                // Detect unexpected disarm during RTL (crash into an obstacle, or
+                // PX4 auto-disarming after a successful autonomous landing before
+                // the mission planner issues LAND). Both cases should terminate RTL.
+                if (nav_was_armed_ && !fc_state.armed) {
+                    spdlog::warn("[Planner] Vehicle disarmed during RTL — mission IDLE");
+                    fsm.on_landed();
+                    break;
+                }
+                nav_was_armed_ = fc_state.armed;
+
                 // Monitor position — when near home, send LAND to bypass
                 // PX4's RTL loiter delay (RTL_LAND_DELAY).
                 // Only override if we have a valid home fix; otherwise let

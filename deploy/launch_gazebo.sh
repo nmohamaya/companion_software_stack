@@ -306,6 +306,12 @@ echo ""
 
 # ── Step 4: Monitor ──────────────────────────────────────────
 # Wait for any process to exit, then trigger shutdown with its exit code.
+# FIXME(BUG-29): PX4_PID is included in ALL_PIDS, so a normal PX4 exit
+# (mission complete, landing, SIGINT from a previous scenario runner) tears
+# down the entire companion stack and kills the Gazebo GUI immediately.
+# Fix: monitor companion processes only; handle PX4 exit separately.
+# GitHub: https://github.com/nmohamaya/companion_software_stack/issues/129
+# See docs/BUG_FIXES.md — Bug #29 (OPEN).
 ALL_PIDS=("$PX4_PID" "${COMPANION_PIDS[@]}")
 wait -n "${ALL_PIDS[@]}" 2>/dev/null && EXIT_CODE=0 || EXIT_CODE=$?
 

@@ -4,7 +4,7 @@
         "name": "nominal_mission",
         "description": "Fly a 4-waypoint rectangular pattern at 5m altitude. No faults injected. Validates basic mission execution, waypoint acceptance, payload triggering, and landing.",
         "tier": 1,
-        "timeout_s": 120,
+        "timeout_s": 90,
         "requires_gazebo": false
     },
     "config_overrides": {
@@ -53,7 +53,8 @@
             "FAULT_BATTERY_RTL",
             "FAULT_FC_LINK_LOST",
             "FAULT_GEOFENCE_BREACH",
-            "EMERGENCY_LAND"
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
         ],
         "processes_alive": [
             "video_capture", "perception", "slam_vio_nav",
