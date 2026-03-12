@@ -12,8 +12,10 @@
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 1.0,
             "cruise_speed_mps": 2.0,
-            "path_planner": {"backend": "potential_field"},
-            "obstacle_avoider": {"backend": "potential_field"},
+            "path_planner": {"backend": "astar"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "static_obstacles": [],
+            "_comment_static_obstacles": "Empty array overrides base config obstacles so A* plans straight-line paths for this simple rectangular mission",
             "geofence": {
                 "polygon": [
                     {"x": -50, "y": -50},
