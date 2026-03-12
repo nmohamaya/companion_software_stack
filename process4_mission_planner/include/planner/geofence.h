@@ -137,7 +137,10 @@ public:
         }
 
         // ── Altitude check ──────────────────────────────────
-        if (alt > alt_ceiling_) {
+        // Tolerance prevents false positives from sensor noise at
+        // ground level (e.g. Gazebo reporting -0.3m before takeoff).
+        constexpr float kAltTolerance = 0.5f;  // metres
+        if (alt > alt_ceiling_ + kAltTolerance) {
             result.violated = true;
             result.reason   = GeofenceViolation::ABOVE_CEILING;
             result.margin_m = alt - alt_ceiling_;
@@ -145,7 +148,7 @@ public:
                              std::to_string(static_cast<int>(alt_ceiling_)) + "m";
             return result;
         }
-        if (alt < alt_floor_) {
+        if (alt < alt_floor_ - kAltTolerance) {
             result.violated = true;
             result.reason   = GeofenceViolation::BELOW_FLOOR;
             result.margin_m = alt_floor_ - alt;
