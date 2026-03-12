@@ -1,6 +1,5 @@
 // process2_perception/src/fusion_engine.cpp
 // Camera-only fusion implementation.
-// LiDAR/radar paths removed (Phase 1A, Issue #112).
 // Phase 1C: renamed FusionEngine → CameraOnlyFusionEngine (IFusionEngine).
 //
 // Bug fix (issue #129): position_3d is now expressed in camera body frame
@@ -32,8 +31,6 @@ FusedObjectList CameraOnlyFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.class_id            = trk.class_id;
         fused.confidence          = trk.confidence;
         fused.has_camera          = true;
-        fused.has_lidar           = false;
-        fused.has_radar           = false;
         fused.heading             = 0.0f;
         fused.timestamp_ns        = trk.timestamp_ns;
         fused.position_covariance = Eigen::Matrix3f::Identity() * 5.0f;

@@ -404,8 +404,6 @@ program calls `std::terminate()`.
 // Process 2 — Perception (process2_perception/src/main.cpp)
 std::thread t_inference(inference_thread, ...);
 std::thread t_tracker(tracker_thread, ...);
-std::thread t_lidar(lidar_sim_thread, ...);
-std::thread t_radar(radar_sim_thread, ...);
 std::thread t_fusion(fusion_thread, ...);
 
 // ... main loop runs ...
@@ -413,8 +411,6 @@ std::thread t_fusion(fusion_thread, ...);
 g_running.store(false);       // signal all threads to stop
 t_inference.join();           // wait for each thread to finish
 t_tracker.join();
-t_lidar.join();
-t_radar.join();
 t_fusion.join();
 ```
 

@@ -161,7 +161,7 @@ These run identically in sim and on hardware:
 | A* Path Planner | P4 | 3D occupancy grid, A* search, path smoothing |
 | ObstacleAvoider3D | P4 | Velocity-space potential field with prediction |
 | Kalman Tracker | P2 | Multi-object tracking with Hungarian assignment |
-| Fusion Engine | P2 | UKF sensor fusion (LiDAR + camera + radar) |
+| Fusion Engine | P2 | Camera-only sensor fusion |
 | VIO Backend | P3 | Visual-inertial odometry with sliding window (sim uses `steady_clock` timestamps) |
 | IMU Pre-integrator | P3 | IMU measurement integration between keyframes |
 | Watchdog | P7 | Thread heartbeat monitoring, process management |

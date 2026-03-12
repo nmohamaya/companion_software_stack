@@ -243,8 +243,6 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                 dst.heading     = src.heading;
                 dst.has_camera  = src.has_camera;
                 dst.has_thermal = src.has_thermal;
-                dst.has_lidar   = src.has_lidar;
-                dst.has_radar   = src.has_radar;
             }
             det_pub.publish(shm_list);
             ++fusion_count;

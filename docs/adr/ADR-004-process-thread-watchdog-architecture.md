@@ -434,8 +434,6 @@ DEGRADED while the process continues operating.
 | **P2 Perception** | `inference` | Yes | YOLO object detection — loss removes obstacle/target awareness |
 | | `tracker` | Yes | Object tracking continuity — stale tracks cause incorrect planning |
 | | `fusion` | Yes | Sensor fusion output — downstream consumers depend on fused detections |
-| | `lidar` | No | Supplementary range data — perception degrades gracefully without it |
-| | `radar` | No | Supplementary range data — perception degrades gracefully without it |
 | **P3 SLAM/VIO/Nav** | `visual_frontend` | Yes | Visual odometry — loss means no pose updates, navigation fails |
 | | `imu_reader` | Yes | IMU integration — loss means no attitude/velocity estimation |
 | | `pose_publisher` | Yes | Pose output — downstream (P4, P5) lose localisation |
@@ -447,15 +445,14 @@ DEGRADED while the process continues operating.
 | **P6 Payload Manager** | `payload_loop` | No | Payload actuation — non-essential for flight safety |
 | **P7 System Monitor** | `health_loop` | No | Health reporting — loss disables monitoring but does not affect flight control |
 
-**Summary:** 17 threads total — 11 critical, 6 non-critical.
+**Summary:** 15 threads total — 11 critical, 4 non-critical.
 
 **Design principles applied:**
 
 1. **Flight-safety boundary** — any thread whose stall could lead to
    loss of vehicle control or collision is marked critical. This includes
    the entire perception→SLAM→planning→comms chain.
-2. **Graceful degradation** — supplementary sensors (lidar, radar),
-   ground station links, payload, and health monitoring are non-critical.
+2. **Graceful degradation** — ground station links, payload, and health monitoring are non-critical.
    Their loss reduces capability but the vehicle can still fly safely.
 3. **Conservative default** — when in doubt, mark critical. A false
    self-termination triggers a supervised restart (Phase 3), which is

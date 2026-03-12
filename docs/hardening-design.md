@@ -714,8 +714,6 @@ Watchdog configuration in `config/default.json`:
 | **P2** | `inference` | Yes | YOLO detection — removes obstacle awareness |
 | **P2** | `tracker` | Yes | Object tracking — stale tracks cause bad planning |
 | **P2** | `fusion` | Yes | Sensor fusion output — downstream depends on it |
-| **P2** | `lidar` | No | Supplementary range — degrades gracefully |
-| **P2** | `radar` | No | Supplementary range — degrades gracefully |
 | **P3** | `visual_frontend` | Yes | Visual odometry — no pose without it |
 | **P3** | `imu_reader` | Yes | IMU — no attitude/velocity estimation |
 | **P3** | `pose_publisher` | Yes | Pose output — P4, P5 lose localisation |

@@ -27,7 +27,7 @@ Tracking all improvements, features, and infrastructure additions to the Drone C
 | `test_spsc_ring` | 7 | Push/pop, full ring rejection, wrap-around, struct payloads, concurrent producer-consumer |
 | `test_kalman_tracker` | 15 | KalmanBoxTracker init/predict/update, HungarianSolver assignment/edge cases, MultiObjectTracker creation/pruning |
 | `test_mission_fsm` | 7 | FSM transitions, waypoint load/advance/reached, emergency from any state |
-| `test_fusion_engine` | 5 | Camera-only fusion, LiDAR confidence boost, unmatched LiDAR clusters, radar velocity, empty inputs |
+| `test_fusion_engine` | 5 | Camera-only fusion, depth estimation, multiple objects, factory tests |
 | `test_config` | 14 | Load/parse, nested dot-paths, type coercion, sections, missing keys, bool/float values, default.json integration |
 
 **Build Integration:** Added `enable_testing()` and `add_subdirectory(tests)` to root CMakeLists.txt. Created `add_drone_test()` CMake helper function. Handled the Anaconda/system GTest conflict by forcing `GTest_DIR=/usr/lib/x86_64-linux-gnu/cmake/GTest` and adding a `CMAKE_CROSSCOMPILING_EMULATOR` workaround for test discovery.
@@ -95,7 +95,7 @@ All 7 processes plus every tunable parameter are represented in [config/default.
 | Process | Parameters Made Configurable |
 |---|---|
 | P1 video_capture | Mission camera W/H/FPS, stereo camera W/H/FPS |
-| P2 perception | LiDAR sim rate (ms), radar sim rate (ms), camera intrinsics (fx, fy, cx, cy) |
+| P2 perception | Camera intrinsics (fx, fy, cx, cy), camera_height_m |
 | P3 slam_vio_nav | IMU rate (Hz), VIO publish rate (Hz) |
 | P4 mission_planner | Waypoints from JSON array, acceptance radius, cruise speed, obstacle avoidance influence radius & repulsive gain, update rate |
 | P5 comms | MAVLink serial port & baud rate, GCS UDP port |

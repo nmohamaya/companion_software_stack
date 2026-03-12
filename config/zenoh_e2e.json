@@ -47,10 +47,7 @@
             "max_association_cost": 100.0
         },
         "fusion": {
-            "lidar_weight": 0.8,
-            "camera_weight": 0.2,
-            "max_lidar_association_dist": 5.0,
-            "max_radar_association_dist": 3.0,
+            "camera_weight": 1.0,
             "camera_height_m": 1.5
         }
     },

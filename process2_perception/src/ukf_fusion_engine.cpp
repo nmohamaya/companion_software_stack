@@ -284,8 +284,6 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.heading             = 0.0f;
         fused.has_camera          = true;
         fused.has_thermal         = ukf.has_thermal;
-        fused.has_lidar           = false;
-        fused.has_radar           = false;
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
 
