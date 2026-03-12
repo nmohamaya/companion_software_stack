@@ -1017,3 +1017,16 @@ This is distinct from the companion stack's POSIX SHM — `launch_gazebo.sh` alr
 3. Trigger full cleanup only when a companion process exits unexpectedly OR after a configurable post-PX4 drain timeout.
 
 **Impact:** Mission runs terminate prematurely; Gazebo GUI disappears mid-flight; log collection window is cut short; scenario pass/fail verification may miss final log lines (e.g. "Mission complete") and report false failures.
+
+---
+
+### Process Note — GitHub Auto-Close Pitfall (2026-03-12)
+
+**What happened:** PR #130 used `Fix #30` through `Fix #36` as inline labels in its "Bug Fix Index" section and section headings. These are **internal BUG tracking IDs** (sequential numbers in this file), not GitHub issue numbers. However, GitHub treats any `Fix #N`, `Fixes #N`, `Closes #N`, or `Resolves #N` pattern in a PR body as a closing keyword and auto-closed GitHub issues #30–#36 on merge.
+
+**Impact:** Six future-feature GitHub issues ([Phase 1–2] under Epic #25) were incorrectly closed and had to be manually reopened. The PR body was also retroactively updated to replace `Fix #N` with `BUG-N` to remove the closing-keyword syntax.
+
+**Rule going forward:**
+- Internal bug tracking IDs in `BUG_FIXES.md` use the format **`BUG-N`** (e.g., `BUG-35`), never `#N`.
+- PR bodies must never use `Fix #N`, `Fixes #N`, `Closes #N`, or `Resolves #N` unless the intent is to auto-close that specific GitHub issue on merge.
+- When describing internal bug fixes in a PR, write `(Internal BUG-35)` or `(see docs/BUG_FIXES.md BUG-35)`.
