@@ -169,6 +169,41 @@ TEST(GeofenceTest, AtExactFloor) {
     EXPECT_FALSE(r.violated);  // at floor = OK, below = violation
 }
 
+TEST(GeofenceTest, SlightlyBelowFloorWithinTolerance) {
+    Geofence fence;
+    fence.set_polygon(square_100());
+    fence.set_altitude_limits(0, 120);
+    fence.enable(true);
+
+    // Simulates Gazebo ground-truth reporting -0.3m before takeoff.
+    // Should NOT violate — within 0.5m tolerance of the floor.
+    auto r = fence.check(0, 0, -0.3f);
+    EXPECT_FALSE(r.violated);
+}
+
+TEST(GeofenceTest, SlightlyAboveCeilingWithinTolerance) {
+    Geofence fence;
+    fence.set_polygon(square_100());
+    fence.set_altitude_limits(0, 120);
+    fence.enable(true);
+
+    // Within 0.5m tolerance above ceiling — should NOT violate.
+    auto r = fence.check(0, 0, 120.4f);
+    EXPECT_FALSE(r.violated);
+}
+
+TEST(GeofenceTest, WellBelowFloorStillViolates) {
+    Geofence fence;
+    fence.set_polygon(square_100());
+    fence.set_altitude_limits(0, 120);
+    fence.enable(true);
+
+    // 1m below floor — beyond tolerance, should violate.
+    auto r = fence.check(0, 0, -1.0f);
+    EXPECT_TRUE(r.violated);
+    EXPECT_EQ(r.reason, GeofenceViolation::BELOW_FLOOR);
+}
+
 // ═════════════════════════════════════════════════════════════
 // Margin computation tests
 // ═════════════════════════════════════════════════════════════
