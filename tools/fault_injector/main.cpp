@@ -479,7 +479,8 @@ int main(int argc, char* argv[]) {
     }
 
     // Parse --ipc <backend> before command dispatch
-    int arg_offset = 1;
+    const char* argv0      = argv[0];  // preserve for usage output after argv shift
+    int         arg_offset = 1;
     if (std::string(argv[1]) == "--ipc") {
         if (argc < 3) {
             print_err("--ipc requires an argument: shm or zenoh");
@@ -559,12 +560,12 @@ int main(int argc, char* argv[]) {
         return cmd_sequence(argv[2]);
 
     } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
-        print_usage(argv[0]);
+        print_usage(argv0);
         return 0;
 
     } else {
         print_err("Unknown command: " + cmd);
-        print_usage(argv[0]);
+        print_usage(argv0);
         return 1;
     }
 }

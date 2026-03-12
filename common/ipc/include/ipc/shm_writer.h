@@ -50,6 +50,7 @@ public:
         name_ = name;
         fd_   = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
         if (fd_ < 0) return false;
+        owns_ = false;  // Must be set before any fallible op so destructor never unlinks
         if (ftruncate(fd_, sizeof(ShmBlock)) < 0) return false;
         ptr_ = static_cast<ShmBlock*>(
             mmap(nullptr, sizeof(ShmBlock), PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
@@ -57,7 +58,6 @@ public:
             ptr_ = nullptr;
             return false;
         }
-        owns_ = false;
         return true;
     }
 
