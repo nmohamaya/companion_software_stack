@@ -121,14 +121,14 @@ bash deploy/build.sh --test-filter watchdog
 
 ## IPC — SHM
 
-### test_shm_ipc.cpp — 8 tests
+### test_shm_ipc.cpp — 9 tests
 
 **What it tests:** Low-level `ShmWriter` / `ShmReader` with SeqLock-based
 shared memory.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `ShmIPCTest` | 8 | Write ↔ read round-trip for `ShmPose`, concurrent producer–consumer access, move semantics (no double `shm_unlink`), segment creation/cleanup |
+| `ShmIPCTest` | 9 | Write ↔ read round-trip for `ShmPose`, concurrent producer–consumer access, move semantics (no double `shm_unlink`), segment creation/cleanup, `create_non_owning` segment survives writer destruction |
 
 **Key files under test:** `ipc/shm_reader.h`, `ipc/shm_writer.h`, `ipc/shm_types.h`
 

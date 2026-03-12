@@ -117,6 +117,7 @@ public:
             {"/fc_commands", "drone/comms/fc_command"},
             {"/fc_state", "drone/comms/fc_state"},
             {"/gcs_commands", "drone/comms/gcs_command"},
+            {"/mission_upload", "drone/mission/upload"},
             {"/payload_status", "drone/payload/status"},
             {"/system_health", "drone/monitor/health"},
         };

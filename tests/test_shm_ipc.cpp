@@ -186,6 +186,36 @@ TEST_F(ShmIPCTest, ConcurrentWriteRead) {
     EXPECT_GT(successful_reads.load(), 0);
 }
 
+// ── create_non_owning: segment survives writer destruction ──
+TEST_F(ShmIPCTest, ShmWriterNonOwning_SegmentSurvivesDestruction) {
+    constexpr const char* NON_OWNING_SHM = "/drone_test_non_owning";
+    // Ensure clean state
+    shm_unlink(NON_OWNING_SHM);
+
+    {
+        ShmWriter<TestPayload> writer;
+        ASSERT_TRUE(writer.create_non_owning(NON_OWNING_SHM));
+
+        TestPayload out{};
+        out.sequence = 42;
+        writer.write(out);
+    }
+    // Writer destroyed — segment must still exist
+
+    int fd = shm_open(NON_OWNING_SHM, O_RDONLY, 0);
+    ASSERT_GE(fd, 0) << "SHM segment should survive non-owning writer destruction";
+    close(fd);
+
+    // Verify data is still readable
+    ShmReader<TestPayload> reader;
+    ASSERT_TRUE(reader.open(NON_OWNING_SHM));
+    TestPayload in{};
+    ASSERT_TRUE(reader.read(in));
+    EXPECT_EQ(in.sequence, 42u);
+
+    shm_unlink(NON_OWNING_SHM);
+}
+
 // ── Test with actual SHM types (ShmPose) ────────────────────
 TEST_F(ShmIPCTest, ShmPoseRoundTrip) {
     constexpr const char* POSE_SHM = "/drone_test_pose";

@@ -38,6 +38,29 @@ public:
         return true;
     }
 
+    /// Create the SHM segment if it doesn't exist, but never take
+    /// ownership — the destructor will NOT call shm_unlink().  Unlike
+    /// create(), the sequence counter is not reset (POSIX guarantees
+    /// shm_open(O_CREAT) zero-initialises new segments, so seq=0 is
+    /// already correct for fresh segments).
+    ///
+    /// Use this when a tool needs to guarantee the segment exists but
+    /// must not destroy it on exit (e.g. fault_injector overrides).
+    [[nodiscard]] bool create_non_owning(const std::string& name) {
+        name_ = name;
+        fd_   = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) return false;
+        if (ftruncate(fd_, sizeof(ShmBlock)) < 0) return false;
+        ptr_ = static_cast<ShmBlock*>(
+            mmap(nullptr, sizeof(ShmBlock), PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0));
+        if (ptr_ == MAP_FAILED) {
+            ptr_ = nullptr;
+            return false;
+        }
+        owns_ = false;
+        return true;
+    }
+
     /// Open an existing SHM segment for writing without creating or
     /// taking ownership.  Unlike create(), this will NOT truncate, reset
     /// the sequence counter, or shm_unlink() on destruction — making it
