@@ -384,7 +384,10 @@ When working on multiple related issues simultaneously (each on its own branch p
 1. **Create a temporary integration branch** from the most feature-complete branch
 2. **Merge all other branches** into it
 3. **Run full CI once** on the combined superset
-4. If the superset passes, each individual branch is guaranteed to pass (each is a subset of the tested code)
+4. If the superset passes, this is a strong signal that each individual branch will also pass CI, assuming:
+   - All branches share the same base commit (no hidden merge/rebase differences)
+   - No branch depends on changes from another branch in the integration set
+   - CI configuration and inputs are identical for the integration branch and the individual branches
 
 ```bash
 # Example: 4 branches from the same sprint

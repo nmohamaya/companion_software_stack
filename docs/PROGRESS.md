@@ -1885,7 +1885,7 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 **Category:** Configuration / Simulation
 **Branch:** `feature/issue-137-gazebo-full-avoidance-stack`
 
-**What:** The Gazebo SITL world (`test_world.sdf`) contains 6 physical obstacles, but all three Gazebo configs used the simple 2D `potential_field` planner/avoider — meaning `launch_gazebo.sh` flew through obstacles without avoidance. Updated all Gazebo configs to use the A* planner + 3D potential-field avoider + HD-map static obstacles, so every Gazebo run exercises the same code paths as real hardware.
+**What:** The Gazebo SITL world (`test_world.sdf`) contains 6 physical obstacles, but all three Gazebo configs used the simple 2D `potential_field` planner/avoider — meaning `launch_gazebo.sh` flew through obstacles without avoidance. Updated all Gazebo configs to use the A* planner + 3D potential-field avoider + HD-map static obstacles, so every Gazebo run exercises the full avoidance stack (previously only Scenario 02 did).
 
 **Why:** Only Scenario 02 previously exercised the full avoidance stack. Standard Gazebo launches flew through obstacles, leaving the core planning/avoidance code untested in normal simulation runs.
 
@@ -1900,10 +1900,10 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 - `repulsive_gain`: 2.0 → 3.0
 - `influence_radius_m`: 5.0 → 4.0
 - `acceptance_radius_m`: 1.0/2.0 → 2.0 (A* paths don't hit exact waypoint centers)
-- Added `static_obstacles[]` with 6 entries matching `test_world.sdf`
+- Added `static_obstacles[]` with 6 entries corresponding to `test_world.sdf` (coords in internal nav frame: X=North=Gazebo Y, Y=East=Gazebo X; radii are conservative ~0.75m footprints)
 - Waypoints updated to thread through/near obstacles (reused Scenario 02's tuned waypoints)
 
-**Test additions:** None (config-only change). All 856 existing tests pass.
+**Test additions:** None (config-only change). All existing tests pass.
 
 ---
 

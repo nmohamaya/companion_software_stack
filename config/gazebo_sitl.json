@@ -92,7 +92,7 @@
             {"x": 8,  "y": 8,  "radius_m": 0.75, "height_m": 5.0, "_color": "GREEN"},
             {"x": 4,  "y": 4,  "radius_m": 0.75, "height_m": 3.0, "_color": "ORANGE"}
         ],
-        "_comment_static_obstacles": "HD-map: pre-loaded obstacle geometry matching test_world.sdf",
+        "_comment_static_obstacles": "HD-map: obstacle geometry from sim/worlds/test_world.sdf. Coords use internal nav frame (X=North=Gazebo Y, Y=East=Gazebo X). radius_m=0.75 is a conservative uniform footprint vs actual SDF radii (0.6/0.8/1.0).",
         "geofence": {
             "polygon": [
                 {"x": -50, "y": -50},
