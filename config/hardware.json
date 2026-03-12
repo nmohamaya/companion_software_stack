@@ -47,7 +47,9 @@
             "confidence_threshold": 0.35,
             "nms_threshold": 0.45,
             "input_size": 640,
-            "min_contour_area": 100
+            "min_contour_area": 100,
+            "subsample": 2,
+            "max_fps": 0
         },
         "tracker": {
             "max_age": 15,

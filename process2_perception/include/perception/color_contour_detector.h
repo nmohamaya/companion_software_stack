@@ -1,6 +1,13 @@
 // process2_perception/include/perception/color_contour_detector.h
 // Real detector: HSV color segmentation + connected-component labeling.
 // Processes actual RGB camera frames — no external CV libraries.
+//
+// Optimisations (Issue #128):
+//   1. Single-pass color classification: one RGB→HSV scan classifies all N color
+//      ranges simultaneously, eliminating (N-1)/N of per-pixel HSV conversions.
+//   2. Spatial subsampling: configurable stride (default 2) reduces pixel work by
+//      subsample^2; bbox coordinates are scaled back to full resolution on output.
+//   3. max_fps cap: optional sleep throttle to limit CPU use in non-critical paths.
 #pragma once
 
 #include "perception/detector_interface.h"
@@ -13,6 +20,7 @@
 #include <cstdint>
 #include <numeric>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -124,13 +132,18 @@ struct ComponentBBox {
 // ═══════════════════════════════════════════════════════════
 class ColorContourDetector : public IDetector {
 public:
+    /// Sentinel stored in color_map_: pixel matched no color range.
+    static constexpr uint8_t kNoColor = 0xFF;
+
     /// Construct with default color ranges (tuned for Gazebo obstacle colors).
     ColorContourDetector() { init_default_colors(); }
 
-    /// Construct from config — reads HSV ranges and min_area from JSON.
+    /// Construct from config — reads HSV ranges, min_area, subsample and max_fps.
     explicit ColorContourDetector(const drone::Config& cfg) {
         min_contour_area_ = cfg.get<int>("perception.detector.min_contour_area", 80);
         max_detections_   = cfg.get<int>("perception.detector.max_detections", 20);
+        subsample_        = std::max(1, cfg.get<int>("perception.detector.subsample", 2));
+        max_fps_          = cfg.get<int>("perception.detector.max_fps", 0);
 
         // Try to read custom color ranges from config
         if (cfg.has("perception.detector.colors")) {
@@ -154,9 +167,10 @@ public:
             init_default_colors();
         }
 
-        spdlog::info("[ColorContourDetector] Configured with {} color ranges, "
-                     "min_area={}, max_dets={}",
-                     color_ranges_.size(), min_contour_area_, max_detections_);
+        spdlog::info("[ColorContourDetector] {} color ranges, min_area={}, max_dets={}, "
+                     "subsample={}, max_fps={}",
+                     color_ranges_.size(), min_contour_area_, max_detections_, subsample_,
+                     max_fps_);
     }
 
     std::vector<Detection2D> detect(const uint8_t* frame_data, uint32_t width, uint32_t height,
@@ -165,15 +179,37 @@ public:
             return {};
         }
 
-        std::vector<Detection2D> all_detections;
+        // Optional: throttle call rate to preserve CPU headroom.
+        if (max_fps_ > 0) {
+            auto    now = std::chrono::steady_clock::now();
+            int64_t elapsed_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_detect_time_)
+                    .count();
+            int64_t min_interval_ns = 1'000'000'000LL / max_fps_;
+            if (elapsed_ns < min_interval_ns) {
+                std::this_thread::sleep_for(std::chrono::nanoseconds(min_interval_ns - elapsed_ns));
+            }
+            last_detect_time_ = std::chrono::steady_clock::now();
+        }
+
+        const int w      = static_cast<int>(width);
+        const int h      = static_cast<int>(height);
+        const int stride = static_cast<int>(channels);
+        // Subsampled grid dimensions (ceiling division).
+        const int ws = (w + subsample_ - 1) / subsample_;
+        const int hs = (h + subsample_ - 1) / subsample_;
+
+        // Single pass: classify every subsampled pixel into a color bucket.
+        build_color_map(frame_data, w, h, stride, ws, hs);
+
         auto now_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                 std::chrono::steady_clock::now().time_since_epoch())
                                                 .count());
 
-        // For each color range, create binary mask → find components → extract bboxes
-        for (const auto& color : color_ranges_) {
-            auto bboxes = detect_color(frame_data, width, height, channels, color);
+        std::vector<Detection2D> all_detections;
 
+        for (uint8_t ci = 0; ci < static_cast<uint8_t>(color_ranges_.size()); ++ci) {
+            auto bboxes = extract_bboxes(ws, hs, ci);
             for (const auto& bbox : bboxes) {
                 if (bbox.area() < min_contour_area_) continue;
 
@@ -182,11 +218,11 @@ public:
                 det.y              = static_cast<float>(bbox.y_min);
                 det.w              = static_cast<float>(bbox.width());
                 det.h              = static_cast<float>(bbox.height());
-                det.class_id       = color.class_id;
+                det.class_id       = color_ranges_[ci].class_id;
                 det.timestamp_ns   = now_ns;
                 det.frame_sequence = 0;
 
-                // Confidence based on area: larger objects → higher confidence
+                // Confidence based on area: larger objects → higher confidence.
                 float area_ratio = static_cast<float>(bbox.area()) /
                                    static_cast<float>(width * height);
                 det.confidence = std::min(0.95f, 0.5f + area_ratio * 50.0f);
@@ -195,7 +231,7 @@ public:
             }
         }
 
-        // Sort by confidence (descending) and cap at max_detections
+        // Sort by confidence (descending) and cap at max_detections.
         std::sort(
             all_detections.begin(), all_detections.end(),
             [](const Detection2D& a, const Detection2D& b) { return a.confidence > b.confidence; });
@@ -208,22 +244,30 @@ public:
 
     std::string name() const override { return "ColorContourDetector"; }
 
-    /// Expose color ranges for testing
+    /// Expose color ranges for testing.
     const std::vector<HsvRange>& color_ranges() const { return color_ranges_; }
+
+    /// Expose current subsample factor for testing.
+    int subsample() const { return subsample_; }
 
 private:
     std::vector<HsvRange> color_ranges_;
     int                   min_contour_area_ = 80;
     int                   max_detections_   = 20;
+    int                   subsample_        = 2;
+    int                   max_fps_          = 0;
 
-    // Reusable per-frame buffers (avoid heap churn on every detect() call)
-    mutable std::vector<uint8_t> mask_buf_;
-    mutable std::vector<int>     parent_buf_;
-    mutable std::vector<int>     rank_buf_;
+    std::chrono::steady_clock::time_point last_detect_time_{};
+
+    // Reusable per-frame buffers (avoid heap churn on every detect() call).
+    // color_map_: subsampled grid; each cell holds a color index or kNoColor.
+    std::vector<uint8_t> color_map_;
+    std::vector<int>     parent_buf_;
+    std::vector<int>     rank_buf_;
 
     void init_default_colors() {
         color_ranges_.clear();
-        // Red (hue wraps around 0/360) — ends at 15 to avoid overlap with orange
+        // Red (hue wraps around 0/360) — ends at 15 to avoid overlap with orange.
         color_ranges_.push_back(
             {340.0f, 15.0f, 0.3f, 1.0f, 0.3f, 1.0f, ObjectClass::PERSON, "red"});
         // Blue
@@ -243,39 +287,39 @@ private:
             {270.0f, 330.0f, 0.3f, 1.0f, 0.2f, 1.0f, ObjectClass::BUILDING, "magenta"});
     }
 
-    /// Detect all connected components of a given color in the frame.
-    /// Uses pre-allocated buffers (mask_buf_, parent_buf_, rank_buf_) to
-    /// avoid heap churn on each call.
-    std::vector<ComponentBBox> detect_color(const uint8_t* frame_data, uint32_t width,
-                                            uint32_t height, uint32_t channels,
-                                            const HsvRange& color) const {
-        const int    w      = static_cast<int>(width);
-        const int    h      = static_cast<int>(height);
-        const int    stride = static_cast<int>(channels);
-        const size_t npix   = static_cast<size_t>(w) * static_cast<size_t>(h);
+    /// Single-pass: for each subsampled pixel, convert to HSV once and record the
+    /// first matching color range index in color_map_. Pixels matching no range
+    /// are set to kNoColor. Ranges are expected to be non-overlapping in hue;
+    /// the first match wins when overlap exists.
+    void build_color_map(const uint8_t* frame, int w, int h, int stride, int ws, int hs) {
+        const size_t npix_sub = static_cast<size_t>(ws) * static_cast<size_t>(hs);
+        color_map_.assign(npix_sub, kNoColor);
 
-        // Resize reusable buffers (no-op if already correct size)
-        mask_buf_.resize(npix);
-        std::fill(mask_buf_.begin(), mask_buf_.end(), 0);
-
-        parent_buf_.resize(npix);
-        std::iota(parent_buf_.begin(), parent_buf_.end(), 0);
-
-        rank_buf_.assign(npix, 0);
-
-        // Step 1: Build binary mask (1 = pixel matches color)
-        for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-                int  idx = (y * w + x) * stride;
-                auto hsv = rgb_to_hsv(frame_data[idx], frame_data[idx + 1], frame_data[idx + 2]);
-                if (color.contains(hsv.h, hsv.s, hsv.v)) {
-                    mask_buf_[y * w + x] = 1;
+        const auto n_colors = static_cast<uint8_t>(color_ranges_.size());
+        for (int y = 0; y < h; y += subsample_) {
+            for (int x = 0; x < w; x += subsample_) {
+                const int  px  = (y * w + x) * stride;
+                const auto hsv = rgb_to_hsv(frame[px], frame[px + 1], frame[px + 2]);
+                for (uint8_t ci = 0; ci < n_colors; ++ci) {
+                    if (color_ranges_[ci].contains(hsv.h, hsv.s, hsv.v)) {
+                        color_map_[(y / subsample_) * ws + (x / subsample_)] = ci;
+                        break;
+                    }
                 }
             }
         }
+    }
 
-        // Step 2: Connected-component labeling (4-connectivity, inline union-find
-        //         on parent_buf_/rank_buf_ to avoid allocating UnionFind object)
+    /// Run union-find on color_map_ for color index ci, then collect bounding
+    /// boxes. Returned coordinates and pixel_count are scaled back to full
+    /// resolution (multiply by subsample_).
+    std::vector<ComponentBBox> extract_bboxes(int ws, int hs, uint8_t color_idx) {
+        const size_t npix = static_cast<size_t>(ws) * static_cast<size_t>(hs);
+
+        parent_buf_.resize(npix);
+        std::iota(parent_buf_.begin(), parent_buf_.end(), 0);
+        rank_buf_.assign(npix, 0);
+
         auto uf_find = [this](int x) -> int {
             while (parent_buf_[x] != x) {
                 parent_buf_[x] = parent_buf_[parent_buf_[x]];  // path compression
@@ -292,20 +336,21 @@ private:
             if (rank_buf_[a] == rank_buf_[b]) ++rank_buf_[a];
         };
 
-        for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-                if (!mask_buf_[y * w + x]) continue;
-                if (x > 0 && mask_buf_[y * w + (x - 1)]) uf_unite(y * w + x, y * w + (x - 1));
-                if (y > 0 && mask_buf_[(y - 1) * w + x]) uf_unite(y * w + x, (y - 1) * w + x);
+        for (int y = 0; y < hs; ++y) {
+            for (int x = 0; x < ws; ++x) {
+                if (color_map_[y * ws + x] != color_idx) continue;
+                if (x > 0 && color_map_[y * ws + (x - 1)] == color_idx)
+                    uf_unite(y * ws + x, y * ws + (x - 1));
+                if (y > 0 && color_map_[(y - 1) * ws + x] == color_idx)
+                    uf_unite(y * ws + x, (y - 1) * ws + x);
             }
         }
 
-        // Step 3: Collect bounding boxes per component
         std::unordered_map<int, ComponentBBox> components;
-        for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-                if (!mask_buf_[y * w + x]) continue;
-                int  root = uf_find(y * w + x);
+        for (int y = 0; y < hs; ++y) {
+            for (int x = 0; x < ws; ++x) {
+                if (color_map_[y * ws + x] != color_idx) continue;
+                int  root = uf_find(y * ws + x);
                 auto it   = components.find(root);
                 if (it == components.end()) {
                     components[root] = {x, y, x, y, 1};
@@ -315,16 +360,24 @@ private:
                     bb.y_min = std::min(bb.y_min, y);
                     bb.x_max = std::max(bb.x_max, x);
                     bb.y_max = std::max(bb.y_max, y);
-                    bb.pixel_count++;
+                    ++bb.pixel_count;
                 }
             }
         }
 
-        // Step 4: Collect results
+        // Scale subsampled coordinates back to full-resolution pixel space.
+        // pixel_count is scaled by subsample_^2 so area tests remain in real-pixel units.
+        const int                  sub = subsample_;
         std::vector<ComponentBBox> result;
         result.reserve(components.size());
         for (auto& [root, bbox] : components) {
-            result.push_back(bbox);
+            ComponentBBox fb;
+            fb.x_min       = bbox.x_min * sub;
+            fb.y_min       = bbox.y_min * sub;
+            fb.x_max       = bbox.x_max * sub + (sub - 1);
+            fb.y_max       = bbox.y_max * sub + (sub - 1);
+            fb.pixel_count = bbox.pixel_count * sub * sub;
+            result.push_back(fb);
         }
         return result;
     }
