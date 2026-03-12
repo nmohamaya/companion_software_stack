@@ -573,3 +573,224 @@ TEST(ColorContourDetectorTest, LessThanThreeChannelsReturnsEmpty) {
     EXPECT_TRUE(det.detect(data.data(), 10, 10, 1).empty());
     EXPECT_TRUE(det.detect(data.data(), 10, 10, 0).empty());
 }
+
+// ═══════════════════════════════════════════════════════════
+// Optimisation tests (Issue #128) — single-pass + subsampling + max_fps
+// ═══════════════════════════════════════════════════════════
+
+TEST(ColorContourDetectorTest, DefaultSubsampleIsTwo) {
+    ColorContourDetector det;
+    EXPECT_EQ(det.subsample(), 2);
+}
+
+TEST(ColorContourDetectorTest, SubsampleConfigKeyAccepted) {
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "subsample": 1
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    ColorContourDetector det(cfg);
+    EXPECT_EQ(det.subsample(), 1);
+}
+
+TEST(ColorContourDetectorTest, SubsampleTwoConfigKey) {
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "subsample": 2
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    ColorContourDetector det(cfg);
+    EXPECT_EQ(det.subsample(), 2);
+}
+
+TEST(ColorContourDetectorTest, MaxFpsConfigAccepted) {
+    // Verify max_fps config key is read without error and detect() still works.
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "max_fps": 30,
+                "subsample": 1
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    ColorContourDetector det(cfg);
+    auto                 img    = make_solid_image(100, 100, 255, 0, 0);
+    auto                 result = det.detect(img.data(), 100, 100, 3);
+    EXPECT_FALSE(result.empty());
+}
+
+TEST(ColorContourDetectorTest, SubsampleZeroClampedToOne) {
+    // subsample <= 0 must be clamped to 1 (no invalid stride).
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "subsample": 0
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    ColorContourDetector det(cfg);
+    EXPECT_EQ(det.subsample(), 1);
+}
+
+TEST(ColorContourDetectorTest, Subsample1FullResDetectsSmallRect) {
+    // With subsample=1 (no subsampling), a 10×10 rect (100 px > min_area=80) is detected.
+    auto          path = create_temp_config(R"({
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "subsample": 1,
+                "min_contour_area": 80
+            }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    ColorContourDetector det(cfg);
+
+    const uint32_t W = 200, H = 200;
+    auto           img = make_solid_image(W, H, 0, 0, 0);
+    fill_rect(img, W, 50, 50, 10, 10, 255, 0, 0);  // 100 px > 80
+
+    auto result = det.detect(img.data(), W, H, 3);
+    bool found  = false;
+    for (const auto& d : result) {
+        if (d.class_id == ObjectClass::PERSON) found = true;
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(ColorContourDetectorTest, Subsample2DetectsMediumRect) {
+    // With subsample=2 (default), a 30×30 rect is still detected; bbox within ±subsample
+    // of true position.
+    ColorContourDetector det;  // default subsample=2
+    ASSERT_EQ(det.subsample(), 2);
+
+    const uint32_t W = 300, H = 300;
+    auto           img = make_solid_image(W, H, 0, 0, 0);
+    fill_rect(img, W, 60, 60, 30, 30, 255, 0, 0);  // Red 30×30 = 900 px
+
+    auto               result = det.detect(img.data(), W, H, 3);
+    const Detection2D* found  = nullptr;
+    for (const auto& d : result) {
+        if (d.class_id == ObjectClass::PERSON) {
+            found = &d;
+            break;
+        }
+    }
+    ASSERT_NE(found, nullptr);
+    // Bbox should be approximately correct (within subsample pixels).
+    EXPECT_NEAR(found->x, 60.0f, 2.0f);
+    EXPECT_NEAR(found->y, 60.0f, 2.0f);
+    EXPECT_NEAR(found->w, 30.0f, 2.0f);
+    EXPECT_NEAR(found->h, 30.0f, 2.0f);
+}
+
+TEST(ColorContourDetectorTest, SinglePassDetectsAllSixColors) {
+    // Six distinct color rectangles in one frame — all six must be detected
+    // in a single detect() call (validates single-pass classification).
+    const uint32_t W = 700, H = 100;
+    auto           img = make_solid_image(W, H, 0, 0, 0);
+    // Colors matching each of the 6 default ranges:
+    fill_rect(img, W, 10, 10, 30, 30, 255, 0, 0);     // Red   → PERSON
+    fill_rect(img, W, 110, 10, 30, 30, 0, 0, 255);    // Blue  → VEHICLE_CAR
+    fill_rect(img, W, 210, 10, 30, 30, 255, 255, 0);  // Yellow → VEHICLE_TRUCK
+    fill_rect(img, W, 310, 10, 30, 30, 0, 200, 0);    // Green → DRONE
+    fill_rect(img, W, 410, 10, 30, 30, 255, 128, 0);  // Orange → ANIMAL
+    fill_rect(img, W, 510, 10, 30, 30, 200, 0, 200);  // Magenta → BUILDING
+
+    ColorContourDetector det;
+    auto                 result = det.detect(img.data(), W, H, 3);
+
+    bool found_person = false, found_car = false, found_truck = false;
+    bool found_drone = false, found_animal = false, found_building = false;
+    for (const auto& d : result) {
+        switch (d.class_id) {
+            case ObjectClass::PERSON: found_person = true; break;
+            case ObjectClass::VEHICLE_CAR: found_car = true; break;
+            case ObjectClass::VEHICLE_TRUCK: found_truck = true; break;
+            case ObjectClass::DRONE: found_drone = true; break;
+            case ObjectClass::ANIMAL: found_animal = true; break;
+            case ObjectClass::BUILDING: found_building = true; break;
+            default: break;
+        }
+    }
+    EXPECT_TRUE(found_person);
+    EXPECT_TRUE(found_car);
+    EXPECT_TRUE(found_truck);
+    EXPECT_TRUE(found_drone);
+    EXPECT_TRUE(found_animal);
+    EXPECT_TRUE(found_building);
+}
+
+TEST(ColorContourDetectorTest, Subsample2SmallBlobFilteredByArea) {
+    // A 4×4 rect (16 full-res pixels) is below min_area=80, even after
+    // subsampling scales up the count. Should be filtered.
+    ColorContourDetector det;  // default subsample=2, min_area=80
+    const uint32_t       W = 200, H = 200;
+    auto                 img = make_solid_image(W, H, 0, 0, 0);
+    fill_rect(img, W, 50, 50, 4, 4, 255, 0, 0);  // 16 px < 80
+
+    auto result = det.detect(img.data(), W, H, 3);
+    bool found  = false;
+    for (const auto& d : result) {
+        if (d.class_id == ObjectClass::PERSON) found = true;
+    }
+    EXPECT_FALSE(found);
+}
+
+TEST(ColorContourDetectorTest, kNoColorConstantIsCorrectValue) {
+    EXPECT_EQ(ColorContourDetector::kNoColor, static_cast<uint8_t>(0xFF));
+}
+
+// Regression: odd frame dimensions (not multiples of subsample) must not produce
+// bbox coordinates that exceed the image bounds after the scale-back from subsampled
+// space to full-resolution space.
+TEST(ColorContourDetectorTest, Subsample2OddDimsBboxWithinBounds) {
+    ColorContourDetector det;  // default subsample=2
+    ASSERT_EQ(det.subsample(), 2);
+
+    // 301×299 — neither dimension is divisible by 2.
+    const uint32_t W   = 301;
+    const uint32_t H   = 299;
+    auto           img = make_solid_image(W, H, 0, 0, 0);
+
+    // Red rectangle that intentionally extends to the very right/bottom edge so the
+    // last partial subsampled cell (the boundary cell) is exercised.
+    fill_rect(img, W, 240, 240, 61, 59, 255, 0, 0);  // rect reaches pixel (300,298)
+
+    auto               result = det.detect(img.data(), W, H, 3);
+    const Detection2D* found  = nullptr;
+    for (const auto& d : result) {
+        if (d.class_id == ObjectClass::PERSON) {
+            found = &d;
+            break;
+        }
+    }
+    ASSERT_NE(found, nullptr) << "Expected red blob to be detected";
+
+    // Coordinates must be non-negative.
+    EXPECT_GE(found->x, 0.0f);
+    EXPECT_GE(found->y, 0.0f);
+    EXPECT_GE(found->w, 0.0f);
+    EXPECT_GE(found->h, 0.0f);
+
+    // Right / bottom edge of bbox must not exceed the image dimensions.
+    EXPECT_LE(found->x + found->w, static_cast<float>(W) + 1.0f);
+    EXPECT_LE(found->y + found->h, static_cast<float>(H) + 1.0f);
+}

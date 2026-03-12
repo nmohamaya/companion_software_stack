@@ -103,9 +103,12 @@ The detector receives raw pixel data from a `ShmVideoFrame` and returns a list o
 #### `color_contour` (default in `gazebo_sitl.json`, `gazebo.json`, `hardware.json`)
 
 - Class: `ColorContourDetector`
-- HSV-based color segmentation followed by contour extraction
+- HSV-based color segmentation followed by connected-component labeling (union-find CCL)
 - Suitable for controlled environment testing; works without a GPU / ONNX runtime
-- Config keys: `confidence_threshold`, `min_contour_area`
+- **Single-pass classification:** `build_color_map()` converts each subsampled pixel to HSV exactly once and stores the winning color index (or `kNoColor = 0xFF`) — O(W·H) total regardless of the number of color classes
+- **Spatial subsampling:** configurable `subsample` stride (default 2) halves both dimensions before classification, reducing pixel work by up to 4×; bounding boxes are scaled back to full resolution on output
+- **Frame-rate cap:** optional `max_fps` sleep throttle (default 0 = unlimited) to free CPU headroom on embedded hardware
+- Config keys: `confidence_threshold`, `min_contour_area`, `subsample`, `max_fps`
 
 #### `yolov8` (production)
 
@@ -403,6 +406,8 @@ All keys are under `perception.*` in the active JSON config.
 | `perception.detector.model_path` | string | `"models/yolov8n.onnx"` | Path to ONNX model (yolov8 only) |
 | `perception.detector.input_size` | int | `640` | Network input square size in pixels |
 | `perception.detector.min_contour_area` | int | `100` | Minimum contour area in px² (color_contour only) |
+| `perception.detector.subsample` | int | `2` | Spatial subsampling stride; `1` = full resolution, `2` = half resolution in each axis (color_contour only) |
+| `perception.detector.max_fps` | int | `0` | Maximum detection rate in Hz; `0` = unlimited; sleep-throttles the detect loop (color_contour only) |
 | `perception.detector.max_detections` | int | `64` | Hard cap on detections per frame |
 
 ### Tracker
