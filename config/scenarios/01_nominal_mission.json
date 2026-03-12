@@ -12,8 +12,7 @@
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 1.0,
             "cruise_speed_mps": 2.0,
-            "path_planner": {"backend": "potential_field"},
-            "obstacle_avoider": {"backend": "potential_field"},
+            "static_obstacles": [],
             "geofence": {
                 "polygon": [
                     {"x": -50, "y": -50},
