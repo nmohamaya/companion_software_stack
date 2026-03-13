@@ -6,7 +6,6 @@
 // written directly into a Zenoh SHM buffer — zero-copy for local
 // subscribers.  Small messages use the regular Bytes path.
 //
-// Guarded by HAVE_ZENOH.
 #pragma once
 
 

@@ -39,7 +39,7 @@ static std::atomic<bool> g_running{true};
 /// Monotonic sequence counter for FC commands (dedup in comms)
 static uint64_t fc_cmd_seq = 0;
 
-/// Publish an FC command to the FC command SHM channel.
+/// Publish an FC command to the FC command channel.
 /// Carries the current thread-local correlation ID.
 static void send_fc_command(drone::ipc::IPublisher<drone::ipc::FCCommand>& pub,
                             drone::ipc::FCCommandType cmd, float param1 = 0.0f) {
@@ -74,7 +74,7 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
 
-    // ── Create message bus (config-driven: shm or zenoh) ───
+    // ── Create message bus (Zenoh) ─────────────────────────
     auto bus = drone::ipc::create_message_bus(cfg);
 
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
@@ -95,8 +95,6 @@ int main(int argc, char* argv[]) {
     }
 
     // FC state is *critical* for the FSM (armed check, altitude feedback).
-    // Subscribe with retries first so we wait for comms to create the segment,
-    // ensuring the SHM backend has the segment available before we proceed.
     auto fc_state_sub = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
     if (!fc_state_sub->is_connected()) {
         spdlog::error("Cannot connect to FC state — comms may not be running");
@@ -104,8 +102,6 @@ int main(int argc, char* argv[]) {
     }
 
     // GCS commands are optional (may never be published).
-    // Placed after FC-state so that the SHM backend's blocking retry above
-    // gives comms time to initialise, improving GCS segment availability.
     auto gcs_sub = bus.subscribe_optional<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
 
     // Mission upload channel (optional — used for mid-flight waypoint upload)
@@ -153,7 +149,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Mission starts in IDLE → PREFLIGHT. Arm and takeoff are handled
-    // by the state machine below, sending FC commands via SHM to comms.
+    // by the state machine below, sending FC commands to comms.
     fsm.on_arm();  // IDLE → PREFLIGHT
 
     // ── Create path planner and obstacle avoider strategies ──

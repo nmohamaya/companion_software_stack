@@ -2,7 +2,7 @@
 // ZenohMessageBus — factory for Zenoh-backed publishers, subscribers,
 // service clients, and service servers.
 //
-// Drop-in replacement for ShmMessageBus.  Same API surface:
+// Drop-in message bus factory.  API surface:
 //   - advertise<T>(topic)              → IPublisher<T>
 //   - subscribe<T>(topic)              → ISubscriber<T>
 //   - create_client<Req,Resp>(service) → IServiceClient<Req,Resp>
@@ -14,8 +14,6 @@
 //   Service names are prefixed with "drone/service/" if not already
 //   a Zenoh key expression.
 //   Callers can also pass Zenoh key expressions directly.
-//
-// Guarded by HAVE_ZENOH.
 #pragma once
 
 

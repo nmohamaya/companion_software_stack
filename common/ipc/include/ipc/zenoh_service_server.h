@@ -11,7 +11,6 @@
 //   send_response()   → serialises the ServiceResponse<Resp> and calls
 //                       query.reply() on the stored Query handle.
 //
-// Guarded by HAVE_ZENOH.
 #pragma once
 
 

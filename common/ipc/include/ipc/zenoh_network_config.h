@@ -9,7 +9,6 @@
 // The generated config is passed to ZenohSession::configure() before
 // the session is opened.
 //
-// Guarded by HAVE_ZENOH (only meaningful with a Zenoh backend).
 #pragma once
 
 

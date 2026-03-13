@@ -14,9 +14,7 @@
 //
 // See: Issue #51, docs/process-health-monitoring.md
 //
-// Guarded by HAVE_ZENOH — this file compiles to a no-op stub when
-// Zenoh is not available, allowing all process mains to include it
-// unconditionally.
+// Zenoh is a required dependency — this file is always compiled.
 #pragma once
 
 #include "ipc/zenoh_session.h"

@@ -10,7 +10,6 @@
 // A PosixShmProvider is lazily created alongside the session for zero-copy
 // high-bandwidth IPC (video frames).
 //
-// Guarded by HAVE_ZENOH — this file is a no-op when Zenoh is not available.
 #pragma once
 
 

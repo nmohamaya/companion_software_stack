@@ -10,7 +10,6 @@
 // Key expression scheme:
 //   "drone/service/<service_name>"   (e.g. "drone/service/trajectory")
 //
-// Guarded by HAVE_ZENOH.
 #pragma once
 
 

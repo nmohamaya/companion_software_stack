@@ -1959,7 +1959,7 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 ---
 
 _Last updated after Improvement #39 (Zenoh-Only IPC, Issue #126). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 5 CI jobs, Zenoh sole IPC backend._
-## Improvement #39 — Documentation Completeness: HAL, Config Reference, Error Handling, Observability Cross-referencing (Issue #149)
+## Improvement #40 — Documentation Completeness: HAL, Config Reference, Error Handling, Observability Cross-referencing (Issue #149)
 
 **Date:** 2026-03-13
 **Category:** Documentation
@@ -2010,4 +2010,4 @@ _Last updated after Improvement #39 (Zenoh-Only IPC, Issue #126). See [tests/TES
 
 ---
 
-_Last updated after Improvement #39 (Documentation gaps #149). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
+_Last updated after Improvement #40 (Documentation gaps #149). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._

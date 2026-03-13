@@ -115,7 +115,7 @@ if (sub.receive(pose)) { /* use pose */ }
 **Header:** `common/ipc/include/ipc/zenoh_message_bus.h`  
 **Note:** Always available (Zenoh is the sole backend since Issue #126).
 
-Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()` API, backed by Eclipse Zenoh. Automatically maps SHM segment names to Zenoh key expressions.
+Drop-in message bus factory backed by Eclipse Zenoh. Provides `advertise<T>()` / `subscribe<T>()` API. Automatically maps legacy topic names to Zenoh key expressions.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|

@@ -5,7 +5,6 @@
 // The Zenoh callback runs on an internal Zenoh thread; receive() is called
 // from the process main loop.  Thread-safety is provided by atomics.
 //
-// Guarded by HAVE_ZENOH.
 #pragma once
 
 
