@@ -9,7 +9,7 @@
 // structured diagnostics on failure.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "slam/vio_types.h"
 #include "util/diagnostic.h"
 
@@ -36,9 +36,9 @@ public:
     /// @param features  Features detected in the left image.
     /// @param diag      Frame diagnostics collector.
     /// @return Ok(result) on success, Err(VIOError) on failure.
-    virtual VIOResult<StereoMatchResult> match(const drone::ipc::ShmStereoFrame& frame,
-                                               const std::vector<Feature>&       features,
-                                               drone::util::FrameDiagnostics&    diag) = 0;
+    virtual VIOResult<StereoMatchResult> match(const drone::ipc::StereoFrame& frame,
+                                               const std::vector<Feature>&    features,
+                                               drone::util::FrameDiagnostics& diag) = 0;
 
     /// Human-readable name.
     virtual std::string name() const = 0;
@@ -66,9 +66,9 @@ public:
                                     float min_depth = 1.0f, float max_depth = 30.0f)
         : calib_(calib), match_rate_(match_rate), min_depth_(min_depth), max_depth_(max_depth) {}
 
-    VIOResult<StereoMatchResult> match(const drone::ipc::ShmStereoFrame& frame,
-                                       const std::vector<Feature>&       features,
-                                       drone::util::FrameDiagnostics&    diag) override {
+    VIOResult<StereoMatchResult> match(const drone::ipc::StereoFrame& frame,
+                                       const std::vector<Feature>&    features,
+                                       drone::util::FrameDiagnostics& diag) override {
 
         drone::util::ScopedDiagTimer timer(diag, "StereoMatcher");
 

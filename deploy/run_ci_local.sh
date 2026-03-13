@@ -2,21 +2,17 @@
 # deploy/run_ci_local.sh — Run the same checks as GitHub Actions CI, locally.
 #
 # Usage:
-#   bash deploy/run_ci_local.sh            # Run all CI jobs (format + SHM + Zenoh + sanitizers)
-#   bash deploy/run_ci_local.sh --quick    # Format + SHM (no sanitizers, no Zenoh)
+#   bash deploy/run_ci_local.sh            # Run all CI jobs (format + build + sanitizers + coverage)
+#   bash deploy/run_ci_local.sh --quick    # Format + build (no sanitizers, no coverage)
 #   bash deploy/run_ci_local.sh --job FMT  # Run a single job by tag
 #
 # Jobs (tags):
 #   FMT       clang-format-18 check
-#   SHM       SHM backend, Debug build + test
-#   ZENOH     Zenoh backend, Debug build + test
-#   ASAN      SHM + AddressSanitizer
-#   TSAN      SHM + ThreadSanitizer
-#   UBSAN     SHM + UBSanitizer
-#   ASAN_Z    Zenoh + AddressSanitizer
-#   UBSAN_Z   Zenoh + UBSanitizer
-#   COV       Coverage build + lcov report (SHM)
-#   COV_Z     Coverage build + lcov report (Zenoh)
+#   BUILD     Debug build + test (Zenoh)
+#   ASAN      AddressSanitizer
+#   TSAN      ThreadSanitizer
+#   UBSAN     UBSanitizer
+#   COV       Coverage build + lcov report
 #
 # The script mirrors the CI matrix in .github/workflows/ci.yml.
 # If you want to save the results, pipe to a file: bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log
@@ -45,7 +41,7 @@ while [[ $# -gt 0 ]]; do
         --quick|-q)   MODE="quick" ;;
         --job|-j)     MODE="single"; SINGLE_JOB="$2"; shift ;;
         --help|-h)
-            head -21 "$0" | tail -19
+            head -17 "$0" | tail -15
             exit 0
             ;;
         *)
@@ -95,7 +91,7 @@ should_run() {
     if [[ "$MODE" == "single" ]]; then
         [[ "$SINGLE_JOB" == "$tag" ]]
     elif [[ "$MODE" == "quick" ]]; then
-        [[ "$tag" == "FMT" || "$tag" == "SHM" ]]
+        [[ "$tag" == "FMT" || "$tag" == "BUILD" ]]
     else
         return 0  # all
     fi
@@ -117,11 +113,12 @@ build_and_test() {
         fi
     done
 
-    echo "  cmake -B build -DCMAKE_BUILD_TYPE=${build_type} ${cmake_flags[*]}"
+    echo "  cmake -B build -DCMAKE_BUILD_TYPE=${build_type} -DALLOW_INSECURE_ZENOH=ON ${cmake_flags[*]}"
     # shellcheck disable=SC2086
     cmake -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE="${build_type}" \
         -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+        -DALLOW_INSECURE_ZENOH=ON \
         "${cmake_flags[@]}" 2>&1
 
     echo "  cmake --build build -j$(nproc)"
@@ -146,61 +143,44 @@ job_fmt() {
     echo "  All files formatted correctly."
 }
 
-# ── Job: Build + test (parameterized) ────────────────────────
+# ── Job: Build + test ────────────────────────────────────────
 # shellcheck disable=SC2317  # called indirectly via run_job
-job_shm()      { cd "$PROJECT_DIR" && build_and_test Debug; }
-# shellcheck disable=SC2317
-job_zenoh()    { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON; }
+job_build()    { cd "$PROJECT_DIR" && build_and_test Debug; }
 # shellcheck disable=SC2317
 job_asan()     { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_ASAN=ON; }
 # shellcheck disable=SC2317
 job_tsan()     { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_TSAN=ON; }
 # shellcheck disable=SC2317
 job_ubsan()    { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_UBSAN=ON; }
-# shellcheck disable=SC2317
-job_asan_z()   { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON -DENABLE_ASAN=ON; }
-# shellcheck disable=SC2317
-job_ubsan_z()  { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON -DENABLE_UBSAN=ON; }
 
 # ── Helper: coverage report generation ───────────────────────
 # shellcheck disable=SC2317  # called indirectly via run_job
 generate_coverage_report() {
-    local suffix="$1"   # "" or "-zenoh"
-    local title="$2"
-
     echo ""
     echo "  Generating coverage report..."
-    lcov --capture --directory "${BUILD_DIR}" --output-file "${BUILD_DIR}/coverage-raw${suffix}.info" \
+    lcov --capture --directory "${BUILD_DIR}" --output-file "${BUILD_DIR}/coverage-raw.info" \
         --ignore-errors mismatch --rc lcov_branch_coverage=1 2>/dev/null
-    lcov --remove "${BUILD_DIR}/coverage-raw${suffix}.info" \
+    lcov --remove "${BUILD_DIR}/coverage-raw.info" \
         '/usr/*' '*/googletest/*' '*/gtest/*' '*/test/*' '*/tests/*' '*_test.cpp' '*_test.h' \
-        --output-file "${BUILD_DIR}/coverage${suffix}.info" \
+        --output-file "${BUILD_DIR}/coverage.info" \
         --ignore-errors unused --rc lcov_branch_coverage=1 2>/dev/null
     if command -v genhtml &>/dev/null; then
-        genhtml "${BUILD_DIR}/coverage${suffix}.info" \
-            --output-directory "${BUILD_DIR}/coverage-report${suffix}" \
-            --title "${title}" \
+        genhtml "${BUILD_DIR}/coverage.info" \
+            --output-directory "${BUILD_DIR}/coverage-report" \
+            --title "Companion Stack Coverage" \
             --rc genhtml_branch_coverage=1 2>/dev/null
-        echo "  Coverage report: ${BUILD_DIR}/coverage-report${suffix}/index.html"
+        echo "  Coverage report: ${BUILD_DIR}/coverage-report/index.html"
     else
-        echo "  genhtml not found — raw coverage in ${BUILD_DIR}/coverage${suffix}.info"
+        echo "  genhtml not found — raw coverage in ${BUILD_DIR}/coverage.info"
     fi
 }
 
-# ── Job: Coverage (SHM) ──────────────────────────────────────
+# ── Job: Coverage ────────────────────────────────────────────
 # shellcheck disable=SC2317  # called indirectly via run_job
 job_cov() {
     cd "$PROJECT_DIR"
     build_and_test Debug -DENABLE_COVERAGE=ON
-    generate_coverage_report "" "Companion Stack Coverage (SHM)"
-}
-
-# ── Job: Coverage (Zenoh) ────────────────────────────────────
-# shellcheck disable=SC2317  # called indirectly via run_job
-job_cov_z() {
-    cd "$PROJECT_DIR"
-    build_and_test Debug -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON -DENABLE_COVERAGE=ON
-    generate_coverage_report "-zenoh" "Companion Stack Coverage (Zenoh)"
+    generate_coverage_report
 }
 
 # ── Run selected jobs ────────────────────────────────────────
@@ -210,16 +190,12 @@ echo -e "${BOLD}═════════════════════�
 
 START_ALL=$(date +%s)
 
-should_run "FMT"     && run_job "FMT"     "Format check (clang-format-18)"        job_fmt
-should_run "SHM"     && run_job "SHM"     "Build + test (SHM, Debug)"             job_shm
-should_run "ZENOH"   && run_job "ZENOH"   "Build + test (Zenoh, Debug)"           job_zenoh
-should_run "ASAN"    && run_job "ASAN"    "Build + test (SHM, ASan)"              job_asan
-should_run "TSAN"    && run_job "TSAN"    "Build + test (SHM, TSan)"              job_tsan
-should_run "UBSAN"   && run_job "UBSAN"   "Build + test (SHM, UBSan)"            job_ubsan
-should_run "ASAN_Z"  && run_job "ASAN_Z"  "Build + test (Zenoh, ASan)"           job_asan_z
-should_run "UBSAN_Z" && run_job "UBSAN_Z" "Build + test (Zenoh, UBSan)"          job_ubsan_z
-should_run "COV"     && run_job "COV"     "Coverage (SHM, Debug + lcov)"          job_cov
-should_run "COV_Z"   && run_job "COV_Z"   "Coverage (Zenoh, Debug + lcov)"        job_cov_z
+should_run "FMT"   && run_job "FMT"   "Format check (clang-format-18)"     job_fmt
+should_run "BUILD" && run_job "BUILD" "Build + test (Debug)"               job_build
+should_run "ASAN"  && run_job "ASAN"  "Build + test (ASan)"                job_asan
+should_run "TSAN"  && run_job "TSAN"  "Build + test (TSan)"                job_tsan
+should_run "UBSAN" && run_job "UBSAN" "Build + test (UBSan)"               job_ubsan
+should_run "COV"   && run_job "COV"   "Coverage (Debug + lcov)"            job_cov
 
 # ── Summary ──────────────────────────────────────────────────
 ELAPSED_ALL=$(( $(date +%s) - START_ALL ))

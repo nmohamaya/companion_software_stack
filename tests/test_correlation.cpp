@@ -10,7 +10,7 @@
 //   - WireHeader backward-compatible validation (v1 → v2)
 //   - JSON log sink includes correlation_id when non-zero
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "ipc/wire_format.h"
 #include "util/correlation.h"
 #include "util/json_log_sink.h"
@@ -181,46 +181,46 @@ TEST(CorrelationContext, MultiThreadGenerate) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ShmCorrelation, GCSCommandHasCorrelationId) {
-    ShmGCSCommand cmd{};
+    GCSCommand cmd{};
     cmd.correlation_id = 0xABCD1234;
     EXPECT_EQ(cmd.correlation_id, 0xABCD1234ULL);
-    static_assert(std::is_trivially_copyable_v<ShmGCSCommand>);
+    static_assert(std::is_trivially_copyable_v<GCSCommand>);
 }
 
 TEST(ShmCorrelation, FCCommandHasCorrelationId) {
-    ShmFCCommand cmd{};
+    FCCommand cmd{};
     cmd.correlation_id = 0xFACE;
     EXPECT_EQ(cmd.correlation_id, 0xFACEULL);
-    static_assert(std::is_trivially_copyable_v<ShmFCCommand>);
+    static_assert(std::is_trivially_copyable_v<FCCommand>);
 }
 
 TEST(ShmCorrelation, TrajectoryCmdHasCorrelationId) {
-    ShmTrajectoryCmd cmd{};
+    TrajectoryCmd cmd{};
     cmd.correlation_id = 0x12345678;
     EXPECT_EQ(cmd.correlation_id, 0x12345678ULL);
-    static_assert(std::is_trivially_copyable_v<ShmTrajectoryCmd>);
+    static_assert(std::is_trivially_copyable_v<TrajectoryCmd>);
 }
 
 TEST(ShmCorrelation, PayloadCommandHasCorrelationId) {
-    ShmPayloadCommand cmd{};
+    PayloadCommand cmd{};
     cmd.correlation_id = 0xBEEF;
     EXPECT_EQ(cmd.correlation_id, 0xBEEFULL);
-    static_assert(std::is_trivially_copyable_v<ShmPayloadCommand>);
+    static_assert(std::is_trivially_copyable_v<PayloadCommand>);
 }
 
 TEST(ShmCorrelation, MissionStatusHasCorrelationId) {
-    ShmMissionStatus status{};
+    MissionStatus status{};
     status.correlation_id = 0xCAFE;
     EXPECT_EQ(status.correlation_id, 0xCAFEULL);
-    static_assert(std::is_trivially_copyable_v<ShmMissionStatus>);
+    static_assert(std::is_trivially_copyable_v<MissionStatus>);
 }
 
 TEST(ShmCorrelation, DefaultZero) {
-    ShmGCSCommand     gcs{};
-    ShmFCCommand      fc{};
-    ShmTrajectoryCmd  traj{};
-    ShmPayloadCommand pay{};
-    ShmMissionStatus  ms{};
+    GCSCommand     gcs{};
+    FCCommand      fc{};
+    TrajectoryCmd  traj{};
+    PayloadCommand pay{};
+    MissionStatus  ms{};
     EXPECT_EQ(gcs.correlation_id, 0ULL);
     EXPECT_EQ(fc.correlation_id, 0ULL);
     EXPECT_EQ(traj.correlation_id, 0ULL);
@@ -264,7 +264,7 @@ TEST(WireHeaderV2, CorrelationIdRoundTrip) {
 }
 
 TEST(WireHeaderV2, SerializeDeserializeWithCorrelation) {
-    ShmFCCommand cmd{};
+    FCCommand cmd{};
     cmd.timestamp_ns   = 123456789;
     cmd.correlation_id = 0xABCDEF01;
     cmd.command        = FCCommandType::RTL;
@@ -283,18 +283,18 @@ TEST(WireHeaderV2, SerializeDeserializeWithCorrelation) {
     WireHeader hdr2;
     hdr2.correlation_id = 0xFEED;
     hdr2.msg_type       = WireMessageType::FC_COMMAND;
-    hdr2.payload_size   = sizeof(ShmFCCommand);
+    hdr2.payload_size   = sizeof(FCCommand);
     hdr2.sequence       = 1;
 
-    std::vector<uint8_t> buf2(sizeof(WireHeader) + sizeof(ShmFCCommand));
+    std::vector<uint8_t> buf2(sizeof(WireHeader) + sizeof(FCCommand));
     std::memcpy(buf2.data(), &hdr2, sizeof(WireHeader));
-    std::memcpy(buf2.data() + sizeof(WireHeader), &cmd, sizeof(ShmFCCommand));
+    std::memcpy(buf2.data() + sizeof(WireHeader), &cmd, sizeof(FCCommand));
 
     ASSERT_TRUE(wire_validate(buf2.data(), buf2.size()));
     auto decoded_hdr = wire_read_header(buf2.data());
     EXPECT_EQ(decoded_hdr.correlation_id, 0xFEEDULL);
 
-    ShmFCCommand decoded_cmd{};
+    FCCommand decoded_cmd{};
     ASSERT_TRUE(wire_deserialize(buf2.data(), buf2.size(), decoded_cmd));
     EXPECT_EQ(decoded_cmd.correlation_id, 0xABCDEF01ULL);
 }

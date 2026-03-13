@@ -44,8 +44,8 @@ static std::vector<Feature> make_test_features(int n, uint64_t seq = 1) {
     return features;
 }
 
-static drone::ipc::ShmStereoFrame make_frame(uint64_t seq) {
-    drone::ipc::ShmStereoFrame f{};
+static drone::ipc::StereoFrame make_frame(uint64_t seq) {
+    drone::ipc::StereoFrame f{};
     f.sequence_number = seq;
     f.width           = 640;
     f.height          = 480;

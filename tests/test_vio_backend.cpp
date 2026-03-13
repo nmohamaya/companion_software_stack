@@ -16,8 +16,8 @@
 using namespace drone::slam;
 
 // ── Helpers ──────────────────────────────────────────────────
-static drone::ipc::ShmStereoFrame make_frame(uint64_t seq, uint32_t w = 640, uint32_t h = 480) {
-    drone::ipc::ShmStereoFrame f{};
+static drone::ipc::StereoFrame make_frame(uint64_t seq, uint32_t w = 640, uint32_t h = 480) {
+    drone::ipc::StereoFrame f{};
     f.sequence_number = seq;
     f.width           = w;
     f.height          = h;

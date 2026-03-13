@@ -1,5 +1,5 @@
-// common/ipc/include/ipc/shm_types.h
-// Shared data structures for inter-process communication via SHM.
+// common/ipc/include/ipc/ipc_types.h
+// Shared data structures for inter-process communication.
 // All types MUST be trivially copyable (no std::string, std::vector, etc.)
 #pragma once
 #include <atomic>
@@ -11,9 +11,9 @@
 namespace drone::ipc {
 
 // ═══════════════════════════════════════════════════════════
-// Video Frame SHM (Process 1 → Process 2, Process 3)
+// Video Frame (Process 1 → Process 2, Process 3)
 // ═══════════════════════════════════════════════════════════
-struct ShmVideoFrame {
+struct VideoFrame {
     uint64_t timestamp_ns;
     uint64_t sequence_number;
     uint32_t width;
@@ -23,7 +23,7 @@ struct ShmVideoFrame {
     uint8_t  pixel_data[1920 * 1080 * 3];  // RGB24 max
 };
 
-struct ShmStereoFrame {
+struct StereoFrame {
     uint64_t timestamp_ns;
     uint64_t sequence_number;
     uint32_t width;
@@ -32,8 +32,8 @@ struct ShmStereoFrame {
     uint8_t  right_data[640 * 480];  // GRAY8
 };
 
-/// LWIR thermal camera frame (640×512, GRAY8 — 8-bit pseudo-radiometric).
-struct ShmThermalFrame {
+/// LWIR thermal camera frame (640x512, GRAY8 — 8-bit pseudo-radiometric).
+struct ThermalFrame {
     uint64_t timestamp_ns;
     uint64_t sequence_number;
     uint32_t width;
@@ -42,7 +42,7 @@ struct ShmThermalFrame {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Detected Objects SHM (Process 2 → Process 4)
+// Detected Objects (Process 2 → Process 4)
 // ═══════════════════════════════════════════════════════════
 static constexpr int MAX_DETECTED_OBJECTS = 64;
 
@@ -57,7 +57,7 @@ enum class ObjectClass : uint8_t {
     TREE          = 7,
 };
 
-struct ShmDetectedObject {
+struct DetectedObject {
     uint32_t    track_id;
     ObjectClass class_id;
     float       confidence;
@@ -68,17 +68,17 @@ struct ShmDetectedObject {
     bool        has_camera, has_thermal;
 };
 
-struct ShmDetectedObjectList {
-    uint64_t          timestamp_ns;
-    uint32_t          frame_sequence;
-    uint32_t          num_objects;
-    ShmDetectedObject objects[MAX_DETECTED_OBJECTS];
+struct DetectedObjectList {
+    uint64_t       timestamp_ns;
+    uint32_t       frame_sequence;
+    uint32_t       num_objects;
+    DetectedObject objects[MAX_DETECTED_OBJECTS];
 };
 
 // ═══════════════════════════════════════════════════════════
-// SLAM Pose SHM (Process 3 → Process 4, Process 5, Process 6)
+// SLAM Pose (Process 3 → Process 4, Process 5, Process 6)
 // ═══════════════════════════════════════════════════════════
-struct alignas(64) ShmPose {
+struct alignas(64) Pose {
     uint64_t timestamp_ns;
     double   translation[3];  // x, y, z in world frame
     double   quaternion[4];   // w, x, y, z
@@ -88,7 +88,7 @@ struct alignas(64) ShmPose {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Mission Status SHM (Process 4 → Process 5, Process 7)
+// Mission Status (Process 4 → Process 5, Process 7)
 // ═══════════════════════════════════════════════════════════
 enum class MissionState : uint8_t {
     IDLE      = 0,
@@ -102,10 +102,10 @@ enum class MissionState : uint8_t {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Fault Classification — consumed by ShmMissionStatus and FaultManager
+// Fault Classification — consumed by MissionStatus and FaultManager
 // ═══════════════════════════════════════════════════════════
 
-/// Graduated response severity (stored in ShmMissionStatus::fault_action).
+/// Graduated response severity (stored in MissionStatus::fault_action).
 enum class FaultAction : uint8_t {
     NONE           = 0,  // nominal — no action
     WARN           = 1,  // alert GCS, continue mission
@@ -125,7 +125,7 @@ inline const char* fault_action_name(FaultAction a) {
     }
 }
 
-/// Bitmask of active fault conditions (stored in ShmMissionStatus::active_faults).
+/// Bitmask of active fault conditions (stored in MissionStatus::active_faults).
 enum FaultType : uint32_t {
     FAULT_NONE             = 0,
     FAULT_CRITICAL_PROCESS = 1 << 0,  // comms or SLAM died
@@ -178,7 +178,7 @@ inline std::string fault_flags_string(uint32_t flags) {
     return result;
 }
 
-struct ShmMissionStatus {
+struct MissionStatus {
     uint64_t     timestamp_ns;
     uint64_t     correlation_id;  // cross-process trace ID (0 = none)
     MissionState state;
@@ -193,9 +193,9 @@ struct ShmMissionStatus {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Trajectory Command SHM (Process 4 → Process 5)
+// Trajectory Command (Process 4 → Process 5)
 // ═══════════════════════════════════════════════════════════
-struct ShmTrajectoryCmd {
+struct TrajectoryCmd {
     uint64_t timestamp_ns;
     uint64_t correlation_id;                // cross-process trace ID (0 = none)
     float    target_x, target_y, target_z;  // world frame (m)
@@ -207,7 +207,7 @@ struct ShmTrajectoryCmd {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Payload Commands SHM (Process 4 → Process 6)
+// Payload Commands (Process 4 → Process 6)
 // ═══════════════════════════════════════════════════════════
 enum class PayloadAction : uint8_t {
     NONE               = 0,
@@ -217,7 +217,7 @@ enum class PayloadAction : uint8_t {
     CAMERA_STOP_VIDEO  = 4
 };
 
-struct ShmPayloadCommand {
+struct PayloadCommand {
     uint64_t      timestamp_ns;
     uint64_t      correlation_id;  // cross-process trace ID (0 = none)
     PayloadAction action;
@@ -227,7 +227,7 @@ struct ShmPayloadCommand {
 };
 
 // ═══════════════════════════════════════════════════════════
-// FC Command SHM (Process 4 → Process 5)
+// FC Command (Process 4 → Process 5)
 // ═══════════════════════════════════════════════════════════
 enum class FCCommandType : uint8_t {
     NONE     = 0,
@@ -239,7 +239,7 @@ enum class FCCommandType : uint8_t {
     LAND     = 6
 };
 
-struct ShmFCCommand {
+struct FCCommand {
     uint64_t      timestamp_ns;
     uint64_t      correlation_id;  // cross-process trace ID (0 = none)
     FCCommandType command;
@@ -249,9 +249,9 @@ struct ShmFCCommand {
 };
 
 // ═══════════════════════════════════════════════════════════
-// FC State SHM (Process 5 → Process 4)
+// FC State (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
-struct ShmFCState {
+struct FCState {
     uint64_t timestamp_ns;
     float    gps_lat, gps_lon, gps_alt;
     float    rel_alt;
@@ -267,7 +267,7 @@ struct ShmFCState {
 };
 
 // ═══════════════════════════════════════════════════════════
-// GCS Commands SHM (Process 5 → Process 4)
+// GCS Commands (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
 enum class GCSCommandType : uint8_t {
     NONE           = 0,
@@ -282,7 +282,7 @@ enum class GCSCommandType : uint8_t {
     MISSION_UPLOAD = 9  // Upload new waypoints mid-flight
 };
 
-struct ShmGCSCommand {
+struct GCSCommand {
     uint64_t       timestamp_ns;
     uint64_t       correlation_id;  // cross-process trace ID (0 = none)
     GCSCommandType command;
@@ -292,36 +292,36 @@ struct ShmGCSCommand {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Mission Upload SHM (Process 5 → Process 4)  — mid-flight
+// Mission Upload (Process 5 → Process 4)  — mid-flight
 // waypoint upload.  The GCS sends MISSION_UPLOAD, then the
 // planner reads waypoints from this segment.
 // ═══════════════════════════════════════════════════════════
 static constexpr uint8_t kMaxUploadWaypoints = 32;
 
-struct ShmWaypoint {
+struct IpcWaypoint {
     float x{}, y{}, z{};           // world-frame position
     float yaw{};                   // heading (rad)
     float radius{2.0f};            // acceptance radius (m)
     float speed{2.0f};             // cruise speed (m/s)
     bool  trigger_payload{false};  // capture at this waypoint
 };
-static_assert(std::is_trivially_copyable_v<ShmWaypoint>,
-              "ShmWaypoint must be trivially copyable for SHM");
+static_assert(std::is_trivially_copyable_v<IpcWaypoint>,
+              "IpcWaypoint must be trivially copyable for IPC");
 
-struct ShmMissionUpload {
+struct MissionUpload {
     uint64_t    timestamp_ns{};
     uint64_t    correlation_id{};
     uint8_t     num_waypoints{};
-    ShmWaypoint waypoints[kMaxUploadWaypoints]{};
+    IpcWaypoint waypoints[kMaxUploadWaypoints]{};
     bool        valid{false};
 };
-static_assert(std::is_trivially_copyable_v<ShmMissionUpload>,
-              "ShmMissionUpload must be trivially copyable for SHM");
+static_assert(std::is_trivially_copyable_v<MissionUpload>,
+              "MissionUpload must be trivially copyable for IPC");
 
 // ═══════════════════════════════════════════════════════════
-// Payload Status SHM (Process 6 → Process 4, Process 7)
+// Payload Status (Process 6 → Process 4, Process 7)
 // ═══════════════════════════════════════════════════════════
-struct ShmPayloadStatus {
+struct PayloadStatus {
     uint64_t timestamp_ns;
     float    gimbal_pitch, gimbal_yaw;
     uint32_t images_captured;
@@ -342,9 +342,9 @@ struct ProcessHealthEntry {
 };
 
 // ═══════════════════════════════════════════════════════════
-// System Health SHM (Process 7 → all)
+// System Health (Process 7 → all)
 // ═══════════════════════════════════════════════════════════
-struct ShmSystemHealth {
+struct SystemHealth {
     uint64_t timestamp_ns;
     float    cpu_usage_percent;
     float    memory_usage_percent;
@@ -381,24 +381,24 @@ struct ThreadHealthEntry {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Thread Health SHM (each process → Process 7)
+// Thread Health (each process → Process 7)
 // ═══════════════════════════════════════════════════════════
-struct ShmThreadHealth {
+struct ThreadHealth {
     char              process_name[32]            = {};
     ThreadHealthEntry threads[kMaxTrackedThreads] = {};
     uint8_t           num_threads                 = 0;
     uint64_t          timestamp_ns                = 0;
 };
 
-static_assert(std::is_trivially_copyable_v<ShmThreadHealth>,
-              "ShmThreadHealth must be trivially copyable for SHM");
+static_assert(std::is_trivially_copyable_v<ThreadHealth>,
+              "ThreadHealth must be trivially copyable for IPC");
 
 // ═══════════════════════════════════════════════════════════
-// Fault Injection Overrides SHM — written by the fault_injector tool
+// Fault Injection Overrides — written by the fault_injector tool
 // and read by the processes that own the overridden resources.
 // Each field uses a sentinel value (<0) to indicate "no override".
 // ═══════════════════════════════════════════════════════════
-struct alignas(64) ShmFaultOverrides {
+struct alignas(64) FaultOverrides {
     // FC state overrides (consumed by Process 5 comms)
     float   battery_percent;  // <0 = no override
     float   battery_voltage;  // <0 = no override
@@ -411,13 +411,13 @@ struct alignas(64) ShmFaultOverrides {
     uint64_t sequence;
 };
 
-static_assert(std::is_trivially_copyable_v<ShmFaultOverrides>,
-              "ShmFaultOverrides must be trivially copyable for SHM");
+static_assert(std::is_trivially_copyable_v<FaultOverrides>,
+              "FaultOverrides must be trivially copyable for IPC");
 
 // ═══════════════════════════════════════════════════════════
-// SHM Segment Names — centralised to avoid typos
+// IPC Topic Names — centralised to avoid typos
 // ═══════════════════════════════════════════════════════════
-namespace shm_names {
+namespace topics {
 constexpr const char* VIDEO_MISSION_CAM = "/drone_mission_cam";
 constexpr const char* VIDEO_STEREO_CAM  = "/drone_stereo_cam";
 constexpr const char* VIDEO_THERMAL_CAM = "/drone_thermal_cam";
@@ -442,6 +442,6 @@ constexpr const char* THREAD_HEALTH_MISSION_PLANNER = "/drone_thread_health_miss
 constexpr const char* THREAD_HEALTH_COMMS           = "/drone_thread_health_comms";
 constexpr const char* THREAD_HEALTH_PAYLOAD_MANAGER = "/drone_thread_health_payload_manager";
 constexpr const char* THREAD_HEALTH_SYSTEM_MONITOR  = "/drone_thread_health_system_monitor";
-}  // namespace shm_names
+}  // namespace topics
 
 }  // namespace drone::ipc

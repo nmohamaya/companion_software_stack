@@ -1,10 +1,9 @@
 // process7_system_monitor/src/main.cpp
 // Process 7 — System Monitor: CPU / memory / thermal monitoring, process
-// watchdog.  Publishes ShmSystemHealth.
+// watchdog.  Publishes SystemHealth.
 
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_reader.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "monitor/iprocess_monitor.h"
 #include "monitor/process_manager.h"
@@ -195,15 +194,14 @@ int main(int argc, char* argv[]) {
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
     drone::ipc::LivelinessToken liveliness_token("system_monitor");
 
-    auto health_pub =
-        bus.advertise<drone::ipc::ShmSystemHealth>(drone::ipc::shm_names::SYSTEM_HEALTH);
+    auto health_pub = bus.advertise<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
     if (!health_pub->is_ready()) {
         spdlog::error("Failed to create system health publisher");
         return 1;
     }
 
     // ── Optional: subscribe to FC state for battery info ────
-    auto fc_sub = bus.subscribe_optional<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
+    auto fc_sub = bus.subscribe_optional<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
 
     // ── Process health monitoring via liveliness tokens ─────
     // Critical processes: if these die, flag critical_failure.
@@ -261,8 +259,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        health_hb = drone::util::ScopedHeartbeat("health_loop", false);
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub_ch = bus.advertise<drone::ipc::ShmThreadHealth>(
-        drone::ipc::shm_names::THREAD_HEALTH_SYSTEM_MONITOR);
+    auto                        thread_health_pub_ch =
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_SYSTEM_MONITOR);
     drone::util::ThreadHealthPublisher thread_health_publisher(*thread_health_pub_ch,
                                                                "system_monitor", watchdog);
 
@@ -288,9 +286,9 @@ int main(int argc, char* argv[]) {
         disk_interval_ticks);
     spdlog::info("Process monitor: {}", monitor->name());
 
-    // Optional fault-injection override reader.
-    ShmReader<drone::ipc::ShmFaultOverrides> override_reader;
-    (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);  // may not exist yet
+    // Optional fault-injection override subscriber.
+    auto fault_sub =
+        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
 
     uint32_t tick = 0;
 
@@ -301,8 +299,8 @@ int main(int argc, char* argv[]) {
         tick++;
 
         // Incorporate battery from FC if available
-        float                  battery = 100.0f;
-        drone::ipc::ShmFCState fc{};
+        float               battery = 100.0f;
+        drone::ipc::FCState fc{};
         if (fc_sub->is_connected() && fc_sub->receive(fc) && fc.connected) {
             battery = fc.battery_remaining;
         }
@@ -360,11 +358,8 @@ int main(int argc, char* argv[]) {
 
         // Apply fault-injection overrides (if any).
         {
-            drone::ipc::ShmFaultOverrides ovr{};
-            if (!override_reader.is_open()) {
-                (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);
-            }
-            if (override_reader.is_open() && override_reader.read(ovr)) {
+            drone::ipc::FaultOverrides ovr{};
+            if (fault_sub->receive(ovr)) {
                 if (ovr.thermal_zone >= 0) {
                     health.thermal_zone = static_cast<uint8_t>(ovr.thermal_zone);
                 }

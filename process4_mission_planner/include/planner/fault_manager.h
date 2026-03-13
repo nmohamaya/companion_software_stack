@@ -13,7 +13,7 @@
 // Issue: #61
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 
 #include <algorithm>
 #include <chrono>
@@ -26,8 +26,8 @@
 namespace drone::planner {
 
 // Re-export fault types from ipc layer for planner convenience.
-// Canonical definitions live in ipc/shm_types.h so any process can
-// decode ShmMissionStatus::active_faults / fault_action.
+// Canonical definitions live in ipc/ipc_types.h so any process can
+// decode MissionStatus::active_faults / fault_action.
 using drone::ipc::FaultAction;
 using drone::ipc::fault_action_name;
 using drone::ipc::FaultType;
@@ -121,13 +121,13 @@ public:
 
     /// Evaluate all fault conditions and return the highest-priority action.
     ///
-    /// @param health           Latest ShmSystemHealth from Process 7.
-    /// @param fc_state         Latest ShmFCState from Process 5.
-    /// @param pose_timestamp_ns  Timestamp from the last received ShmPose.
+    /// @param health           Latest SystemHealth from Process 7.
+    /// @param fc_state         Latest FCState from Process 5.
+    /// @param pose_timestamp_ns  Timestamp from the last received Pose.
     /// @param now_ns           Current monotonic time (steady_clock).
     /// @return FaultState with recommended action and active fault bitmask.
-    [[nodiscard]] FaultState evaluate(const drone::ipc::ShmSystemHealth& health,
-                                      const drone::ipc::ShmFCState&      fc_state,
+    [[nodiscard]] FaultState evaluate(const drone::ipc::SystemHealth& health,
+                                      const drone::ipc::FCState&      fc_state,
                                       uint64_t pose_timestamp_ns, uint64_t now_ns) {
         FaultState result;
 
@@ -261,7 +261,7 @@ private:
     }
 
     /// Check if a specific process is reported dead in system health.
-    static bool is_process_dead(const drone::ipc::ShmSystemHealth& health, const char* name) {
+    static bool is_process_dead(const drone::ipc::SystemHealth& health, const char* name) {
         for (uint8_t i = 0; i < health.num_processes; ++i) {
             if (std::strncmp(health.processes[i].name, name, sizeof(health.processes[i].name)) ==
                 0) {

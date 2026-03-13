@@ -7,7 +7,7 @@
 // DBUS, or a remote health aggregator.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "monitor/sys_info.h"
 
 #include <chrono>
@@ -22,8 +22,8 @@ public:
     virtual ~IProcessMonitor() = default;
 
     /// Collect current system health metrics.
-    /// @return A filled ShmSystemHealth struct.
-    virtual drone::ipc::ShmSystemHealth collect() = 0;
+    /// @return A filled SystemHealth struct.
+    virtual drone::ipc::SystemHealth collect() = 0;
 
     /// Incorporate external battery level into the next health reading.
     virtual void set_battery_percent(float /*battery*/) {}
@@ -61,7 +61,7 @@ public:
         prev_cpu_ = read_cpu_times();
     }
 
-    drone::ipc::ShmSystemHealth collect() override {
+    drone::ipc::SystemHealth collect() override {
         ++tick_;
 
         // CPU
@@ -81,7 +81,7 @@ public:
         }
 
         // Build health struct
-        drone::ipc::ShmSystemHealth health{};
+        drone::ipc::SystemHealth health{};
         health.timestamp_ns =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                       std::chrono::steady_clock::now().time_since_epoch())

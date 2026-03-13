@@ -1,10 +1,10 @@
 // process4_mission_planner/src/main.cpp
 // Process 4 — Mission Planner: FSM + path planning + obstacle avoidance.
 // Reads SLAM pose and detected objects, outputs trajectory + payload commands.
-// Sends FC commands (arm, takeoff, mode) to comms via ShmFCCommand.
+// Sends FC commands (arm, takeoff, mode) to comms via FCCommand.
 
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "planner/astar_planner.h"
 #include "planner/fault_manager.h"
@@ -41,9 +41,9 @@ static uint64_t fc_cmd_seq = 0;
 
 /// Publish an FC command to the FC command SHM channel.
 /// Carries the current thread-local correlation ID.
-static void send_fc_command(drone::ipc::IPublisher<drone::ipc::ShmFCCommand>& pub,
+static void send_fc_command(drone::ipc::IPublisher<drone::ipc::FCCommand>& pub,
                             drone::ipc::FCCommandType cmd, float param1 = 0.0f) {
-    drone::ipc::ShmFCCommand fc_cmd{};
+    drone::ipc::FCCommand fc_cmd{};
     fc_cmd.timestamp_ns =
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
@@ -81,14 +81,14 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("mission_planner");
 
     // ── Subscribe to inputs ─────────────────────────────────
-    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
+    auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_sub->is_connected()) {
         spdlog::error("Cannot connect to SLAM pose");
         return 1;
     }
 
     auto obj_sub =
-        bus.subscribe<drone::ipc::ShmDetectedObjectList>(drone::ipc::shm_names::DETECTED_OBJECTS);
+        bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!obj_sub->is_connected()) {
         spdlog::error("Cannot connect to detected objects");
         return 1;
@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
     // FC state is *critical* for the FSM (armed check, altitude feedback).
     // Subscribe with retries first so we wait for comms to create the segment,
     // ensuring the SHM backend has the segment available before we proceed.
-    auto fc_state_sub = bus.subscribe<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
+    auto fc_state_sub = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
     if (!fc_state_sub->is_connected()) {
         spdlog::error("Cannot connect to FC state — comms may not be running");
         return 1;
@@ -106,25 +106,22 @@ int main(int argc, char* argv[]) {
     // GCS commands are optional (may never be published).
     // Placed after FC-state so that the SHM backend's blocking retry above
     // gives comms time to initialise, improving GCS segment availability.
-    auto gcs_sub =
-        bus.subscribe_optional<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS);
+    auto gcs_sub = bus.subscribe_optional<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
 
     // Mission upload channel (optional — used for mid-flight waypoint upload)
     auto mission_upload_sub =
-        bus.subscribe_optional<drone::ipc::ShmMissionUpload>(drone::ipc::shm_names::MISSION_UPLOAD);
+        bus.subscribe_optional<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
 
     // System health from Process 7 (optional — monitor may not be running)
     auto health_sub =
-        bus.subscribe_optional<drone::ipc::ShmSystemHealth>(drone::ipc::shm_names::SYSTEM_HEALTH);
+        bus.subscribe_optional<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
 
     // ── Create publishers ───────────────────────────────────
-    auto status_pub =
-        bus.advertise<drone::ipc::ShmMissionStatus>(drone::ipc::shm_names::MISSION_STATUS);
-    auto traj_pub =
-        bus.advertise<drone::ipc::ShmTrajectoryCmd>(drone::ipc::shm_names::TRAJECTORY_CMD);
+    auto status_pub = bus.advertise<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
+    auto traj_pub   = bus.advertise<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
     auto payload_pub =
-        bus.advertise<drone::ipc::ShmPayloadCommand>(drone::ipc::shm_names::PAYLOAD_COMMANDS);
-    auto fc_cmd_pub = bus.advertise<drone::ipc::ShmFCCommand>(drone::ipc::shm_names::FC_COMMANDS);
+        bus.advertise<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
+    auto fc_cmd_pub = bus.advertise<drone::ipc::FCCommand>(drone::ipc::topics::FC_COMMANDS);
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() || !payload_pub->is_ready() ||
         !fc_cmd_pub->is_ready()) {
@@ -246,8 +243,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
-        drone::ipc::shm_names::THREAD_HEALTH_MISSION_PLANNER);
+    auto                        thread_health_pub =
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
                                                         watchdog);
     uint32_t                           health_tick = 0;
@@ -282,20 +279,20 @@ int main(int argc, char* argv[]) {
         drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
 
         // Read inputs
-        drone::ipc::ShmPose pose{};
+        drone::ipc::Pose pose{};
         pose_sub->receive(pose);
 
-        drone::ipc::ShmDetectedObjectList objects{};
+        drone::ipc::DetectedObjectList objects{};
         obj_sub->receive(objects);
 
         // Read FC state (for arm/altitude feedback)
-        drone::ipc::ShmFCState fc_state{};
+        drone::ipc::FCState fc_state{};
         if (fc_state_sub->is_connected()) {
             fc_state_sub->receive(fc_state);
         }
 
         // Read system health from Process 7
-        drone::ipc::ShmSystemHealth sys_health{};
+        drone::ipc::SystemHealth sys_health{};
         if (health_sub->is_connected()) {
             health_sub->receive(sys_health);
         }
@@ -411,7 +408,7 @@ int main(int argc, char* argv[]) {
                         fsm.state() == MissionState::NAVIGATE) {
                         // Stop sending trajectory commands
                         {
-                            drone::ipc::ShmTrajectoryCmd stop{};
+                            drone::ipc::TrajectoryCmd stop{};
                             stop.valid        = false;
                             stop.timestamp_ns = now_ns;
                             traj_pub->publish(stop);
@@ -423,7 +420,7 @@ int main(int argc, char* argv[]) {
                 case FaultAction::RTL:
                     send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
                     {
-                        drone::ipc::ShmTrajectoryCmd stop{};
+                        drone::ipc::TrajectoryCmd stop{};
                         stop.valid        = false;
                         stop.timestamp_ns = now_ns;
                         traj_pub->publish(stop);
@@ -437,7 +434,7 @@ int main(int argc, char* argv[]) {
                 case FaultAction::EMERGENCY_LAND:
                     send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
                     {
-                        drone::ipc::ShmTrajectoryCmd stop{};
+                        drone::ipc::TrajectoryCmd stop{};
                         stop.valid        = false;
                         stop.timestamp_ns = now_ns;
                         traj_pub->publish(stop);
@@ -461,7 +458,7 @@ int main(int argc, char* argv[]) {
         last_active_faults = fault.active_faults;
 
         // Check GCS commands (dedup by timestamp to ignore stale values)
-        drone::ipc::ShmGCSCommand gcs_cmd{};
+        drone::ipc::GCSCommand gcs_cmd{};
         if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) && gcs_cmd.valid &&
             gcs_cmd.timestamp_ns > last_gcs_timestamp) {
             last_gcs_timestamp    = gcs_cmd.timestamp_ns;
@@ -474,7 +471,7 @@ int main(int argc, char* argv[]) {
                     send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
                     // Publish invalid traj to stop comms forwarding stale velocity cmds
                     {
-                        drone::ipc::ShmTrajectoryCmd stop{};
+                        drone::ipc::TrajectoryCmd stop{};
                         stop.valid          = false;
                         stop.correlation_id = gcs_cmd.correlation_id;
                         stop.timestamp_ns   = static_cast<uint64_t>(
@@ -493,7 +490,7 @@ int main(int argc, char* argv[]) {
                     send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
                     land_sent = true;
                     {
-                        drone::ipc::ShmTrajectoryCmd stop{};
+                        drone::ipc::TrajectoryCmd stop{};
                         stop.valid          = false;
                         stop.correlation_id = gcs_cmd.correlation_id;
                         stop.timestamp_ns   = static_cast<uint64_t>(
@@ -506,7 +503,7 @@ int main(int argc, char* argv[]) {
                     break;
                 case drone::ipc::GCSCommandType::MISSION_UPLOAD: {
                     // Read waypoints from the mission upload channel
-                    drone::ipc::ShmMissionUpload upload{};
+                    drone::ipc::MissionUpload upload{};
                     if (mission_upload_sub->is_connected() && mission_upload_sub->receive(upload) &&
                         upload.valid && upload.timestamp_ns > last_upload_timestamp &&
                         upload.num_waypoints > 0) {
@@ -689,7 +686,7 @@ int main(int argc, char* argv[]) {
                         spdlog::info("[Planner] Waypoint {} reached!", fsm.current_wp_index() + 1);
 
                         if (wp->trigger_payload) {
-                            drone::ipc::ShmPayloadCommand pay_cmd{};
+                            drone::ipc::PayloadCommand pay_cmd{};
                             pay_cmd.timestamp_ns   = traj.timestamp_ns;
                             pay_cmd.correlation_id = active_correlation_id;
                             pay_cmd.action         = drone::ipc::PayloadAction::CAMERA_CAPTURE;
@@ -704,7 +701,7 @@ int main(int argc, char* argv[]) {
                             send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
                             // Stop trajectory commands so comms doesn't override RTL
                             {
-                                drone::ipc::ShmTrajectoryCmd stop{};
+                                drone::ipc::TrajectoryCmd stop{};
                                 stop.valid        = false;
                                 stop.timestamp_ns = static_cast<uint64_t>(
                                     std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -778,7 +775,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Publish mission status
-        drone::ipc::ShmMissionStatus status{};
+        drone::ipc::MissionStatus status{};
         status.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();

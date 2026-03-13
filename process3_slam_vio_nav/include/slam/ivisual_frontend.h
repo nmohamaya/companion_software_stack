@@ -7,7 +7,7 @@
 // MSCKF, etc. without touching the process orchestration code.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "slam/types.h"
 
 #include <chrono>
@@ -36,7 +36,7 @@ public:
     /// Process one stereo frame pair and return the estimated pose.
     /// @param frame  The stereo image pair from SHM.
     /// @return The estimated 6-DOF pose.
-    virtual Pose process_frame(const drone::ipc::ShmStereoFrame& frame) = 0;
+    virtual Pose process_frame(const drone::ipc::StereoFrame& frame) = 0;
 
     /// Human-readable name for logging.
     virtual std::string name() const = 0;
@@ -49,7 +49,7 @@ public:
 
 class SimulatedVisualFrontend final : public IVisualFrontend {
 public:
-    Pose process_frame(const drone::ipc::ShmStereoFrame& /*frame*/) override {
+    Pose process_frame(const drone::ipc::StereoFrame& /*frame*/) override {
         t_ += dt_;
 
         Pose p;
@@ -104,7 +104,7 @@ public:
     GazeboVisualFrontend(const GazeboVisualFrontend&)            = delete;
     GazeboVisualFrontend& operator=(const GazeboVisualFrontend&) = delete;
 
-    Pose process_frame(const drone::ipc::ShmStereoFrame& /*frame*/) override {
+    Pose process_frame(const drone::ipc::StereoFrame& /*frame*/) override {
         std::lock_guard<std::mutex> lk(mtx_);
         return cached_;
     }

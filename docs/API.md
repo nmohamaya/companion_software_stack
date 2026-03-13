@@ -10,18 +10,16 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│              MessageBus (config-driven backend)                   │
+│              MessageBus (Zenoh — sole backend)                    │
 │    advertise<T>(topic)  →  IPublisher<T>                         │
 │    subscribe<T>(topic)  →  ISubscriber<T>                        │
-├───────────────────────────┬──────────────────────────────────────┤
-│  Backend: "shm" (default)  │  Backend: "zenoh" (Phase A done #46) │
-│  ShmPublisher<T>          │  ZenohPublisher<T>                   │
-│  ShmSubscriber<T>         │  ZenohSubscriber<T>                  │
-│  SeqLock POSIX SHM        │  Zenoh SHM (zero-copy) + network     │
-│  Local-only               │  SHM local + UDP/TCP to GCS          │
-└───────────────────────────┴──────────────────────────────────────┘
-          │                          │
-┌─────────▼──────────────────────────▼────────────────────────────┐
+├──────────────────────────────────────────────────────────────────┤
+│  ZenohPublisher<T>    /   ZenohSubscriber<T>                     │
+│  Zenoh SHM (zero-copy) + network (UDP/TCP to GCS)                │
+│  Liveliness tokens for process health                            │
+└──────────────────────────────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
 │                   Process Internals                              │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
 │  │IVisualFrontend│ │ IPathPlanner │ │ IObstacleAvoider         │ │
@@ -35,7 +33,7 @@
 
 All interfaces follow the **Strategy pattern**: abstract base class + concrete implementation + factory function. Swap implementations at construction time via config string.
 
-The IPC backend is selected via `"ipc_backend"` in config (`"shm"` or `"zenoh"`). Process code depends only on `IPublisher<T>` / `ISubscriber<T>` — transport is invisible. See [ADR-001](adr/ADR-001-ipc-framework-selection.md) for the decision record.
+The IPC backend is Zenoh (the sole backend since Issue #126 removed the legacy POSIX SHM backend). Process code depends only on `IPublisher<T>` / `ISubscriber<T>` — transport is invisible. See [ADR-001](adr/ADR-001-ipc-framework-selection.md) for the decision record.
 
 ---
 
@@ -67,58 +65,10 @@ Abstract typed subscriber.
 | `is_connected` | `bool is_connected() const` | True if connected to data source |
 | `topic_name` | `const std::string& topic_name() const` | Topic/channel name |
 
-### `ShmPublisher<T>` — Concrete
-
-**Header:** `common/ipc/include/ipc/shm_publisher.h`
-
-Wraps `ShmWriter<T>` (SeqLock-based POSIX shared memory).
-
-```cpp
-ShmPublisher<ShmVideoFrame> pub("/drone_mission_cam");
-pub.publish(frame);
-```
-
-### `ShmSubscriber<T>` — Concrete
-
-**Header:** `common/ipc/include/ipc/shm_subscriber.h`
-
-Wraps `ShmReader<T>` with retry-based connection.
-
-```cpp
-// Eager connection (with retry)
-ShmSubscriber<ShmVideoFrame> sub("/drone_mission_cam", /*retries=*/50, /*ms=*/200);
-
-// Lazy connection
-ShmSubscriber<ShmVideoFrame> sub;
-sub.connect("/drone_mission_cam");
-```
-
-### `ShmMessageBus` — Factory (Current Backend)
-
-**Header:** `common/ipc/include/ipc/shm_message_bus.h`
-
-Lightweight factory — the primary entry point for creating pub/sub pairs.
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `advertise` | `unique_ptr<IPublisher<T>> advertise<T>(topic)` | Create a publisher |
-| `subscribe` | `unique_ptr<ISubscriber<T>> subscribe<T>(topic, retries, ms)` | Create a subscriber with retry |
-| `subscribe_lazy` | `unique_ptr<ShmSubscriber<T>> subscribe_lazy<T>()` | Create unconnected subscriber |
-
-```cpp
-ShmMessageBus bus;
-auto pub = bus.advertise<ShmVideoFrame>("/drone_mission_cam");
-auto sub = bus.subscribe<ShmVideoFrame>("/drone_mission_cam");
-
-pub->publish(frame);
-ShmVideoFrame out;
-sub->receive(out);
-```
-
 ### `ZenohSession` — Singleton Session Manager
 
 **Header:** `common/ipc/include/ipc/zenoh_session.h`  
-**Compile guard:** `#ifdef HAVE_ZENOH`
+**Note:** Always available (Zenoh is the sole backend since Issue #126).
 
 Process-wide Zenoh session singleton. All `ZenohPublisher` / `ZenohSubscriber` instances share this session. Opened lazily on first access in peer mode (no daemon required).
 
@@ -134,7 +84,7 @@ Process-wide Zenoh session singleton. All `ZenohPublisher` / `ZenohSubscriber` i
 ### `ZenohPublisher<T>` — Concrete
 
 **Header:** `common/ipc/include/ipc/zenoh_publisher.h`  
-**Compile guard:** `#ifdef HAVE_ZENOH`
+**Note:** Always available (Zenoh is the sole backend since Issue #126).
 
 Zenoh-backed publisher implementing `IPublisher<T>`. Serializes trivially-copyable `T` to `zenoh::Bytes` (via `std::vector<uint8_t>`) and calls `Publisher::put(Bytes&&)`.
 
@@ -148,7 +98,7 @@ pub.publish(pose);  // Serialized as raw bytes → Zenoh network
 ### `ZenohSubscriber<T>` — Concrete
 
 **Header:** `common/ipc/include/ipc/zenoh_subscriber.h`  
-**Compile guard:** `#ifdef HAVE_ZENOH`
+**Note:** Always available (Zenoh is the sole backend since Issue #126).
 
 Zenoh-backed subscriber implementing `ISubscriber<T>`. Maintains a latest-value cache updated by the Zenoh callback thread. Uses `std::mutex` + `std::atomic` for thread-safe access between the Zenoh callback thread and the process main loop.
 
@@ -163,7 +113,7 @@ if (sub.receive(pose)) { /* use pose */ }
 ### `ZenohMessageBus` — Factory ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46))
 
 **Header:** `common/ipc/include/ipc/zenoh_message_bus.h`  
-**Compile guard:** `#ifdef HAVE_ZENOH`
+**Note:** Always available (Zenoh is the sole backend since Issue #126).
 
 Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()` API, backed by Eclipse Zenoh. Automatically maps SHM segment names to Zenoh key expressions.
 
@@ -197,7 +147,7 @@ Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()
 
 **Header:** `common/ipc/include/ipc/message_bus_factory.h`
 
-Returns the appropriate message bus backend based on config. Uses `std::variant<unique_ptr<ShmMessageBus>, unique_ptr<ZenohMessageBus>>` for type-safe backend storage.
+Returns the Zenoh message bus. The `MessageBus` variant now wraps only `ZenohMessageBus` (SHM backend was removed in Issue #126). Requesting `"shm"` logs an error and falls back to Zenoh.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -219,7 +169,7 @@ ShmPose out;
 sub->receive(out);
 ```
 
-**Zenoh-specific features (not available with SHM backend):**
+**Zenoh features:**
 - Zero-copy SHM via loan-based API (no `memcpy` for 6 MB video frames)
 - Network-transparent — same pub/sub reachable from GCS over TCP/UDP
 - Wildcard subscriptions: `drone/**` captures all channels
@@ -268,27 +218,6 @@ struct ServiceResponse {
     bool valid;
     T payload;
 };
-```
-
-### `ShmServiceClient` / `ShmServiceServer` — Concrete
-
-**Header:** `common/ipc/include/ipc/shm_service_channel.h`
-
-Uses two SHM segments (request + response). Both sides pre-create missing segments via `ensure_shm_exists()` so construction order is irrelevant.
-
-```cpp
-// Server
-ShmServiceServer<ReqType, RespType> server("/svc_req", "/svc_resp");
-if (auto req = server.poll_request()) {
-    RespType resp = process(req->payload);
-    server.send_response(req->correlation_id, ServiceStatus::OK, resp);
-}
-
-// Client
-ShmServiceClient<ReqType, RespType> client("/svc_req", "/svc_resp");
-auto id = client.send_request(my_request);
-auto resp = client.await_response(id, 500ms);
-if (resp && resp->status == ServiceStatus::OK) { /* handle */ }
 ```
 
 ---
@@ -635,19 +564,18 @@ void capture_thread(IPublisher<ShmVideoFrame>& pub) {
 ```json
 // config/default.json
 {
-    "ipc_backend": "shm"     // Current default — POSIX SHM (SeqLock)
-    // "ipc_backend": "zenoh" // Phase A implemented — zero-copy SHM + network transport
+    "ipc_backend": "zenoh"   // Zenoh is the sole backend (SHM removed in Issue #126)
 }
 ```
 
 ```cpp
 // Shared factory helper (in a common header)
 auto create_message_bus(const drone::Config& cfg) {
-    auto backend = cfg.get<std::string>("ipc_backend", "shm");
-#ifdef HAVE_ZENOH
-    if (backend == "zenoh") return std::make_unique<drone::ipc::ZenohMessageBus>();
-#endif
-    return std::make_unique<drone::ipc::ShmMessageBus>();
+    auto backend = cfg.get<std::string>("ipc_backend", "zenoh");
+    if (backend != "zenoh") {
+        spdlog::error("Unknown ipc_backend '{}', falling back to zenoh", backend);
+    }
+    return std::make_unique<drone::ipc::ZenohMessageBus>();
 }
 ```
 

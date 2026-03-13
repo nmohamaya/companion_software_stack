@@ -1,8 +1,8 @@
 // tests/test_thread_health_publisher.cpp
-// Tests for ShmThreadHealth struct + ThreadHealthPublisher bridge logic.
+// Tests for ThreadHealth struct + ThreadHealthPublisher bridge logic.
 // Phase 2 of the Process & Thread Watchdog (Epic #88, Issue #90).
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -18,22 +18,22 @@ using namespace drone::util;
 using namespace drone::ipc;
 
 // ═══════════════════════════════════════════════════════════
-// Mock publisher — captures last published ShmThreadHealth
+// Mock publisher — captures last published ThreadHealth
 // ═══════════════════════════════════════════════════════════
 class MockPublisher {
 public:
-    void publish(const ShmThreadHealth& health) {
+    void publish(const ThreadHealth& health) {
         last_ = health;
         ++count_;
     }
     bool is_ready() const { return true; }
 
-    const ShmThreadHealth& last() const { return last_; }
-    int                    count() const { return count_; }
+    const ThreadHealth& last() const { return last_; }
+    int                 count() const { return count_; }
 
 private:
-    ShmThreadHealth last_{};
-    int             count_ = 0;
+    ThreadHealth last_{};
+    int          count_ = 0;
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -46,12 +46,12 @@ protected:
 };
 
 // ───────────────────────────────────────────────────────────
-// ShmThreadHealth struct correctness
+// ThreadHealth struct correctness
 // ───────────────────────────────────────────────────────────
 
 TEST(ShmThreadHealthStruct, TrivialCopyable) {
-    static_assert(std::is_trivially_copyable_v<ShmThreadHealth>,
-                  "ShmThreadHealth must be trivially copyable for SHM transport");
+    static_assert(std::is_trivially_copyable_v<ThreadHealth>,
+                  "ThreadHealth must be trivially copyable for SHM transport");
 }
 
 TEST(ShmThreadHealthStruct, ThreadHealthEntryTrivialCopyable) {
@@ -60,7 +60,7 @@ TEST(ShmThreadHealthStruct, ThreadHealthEntryTrivialCopyable) {
 }
 
 TEST(ShmThreadHealthStruct, DefaultValues) {
-    ShmThreadHealth health{};
+    ThreadHealth health{};
     EXPECT_EQ(health.num_threads, 0);
     EXPECT_EQ(health.timestamp_ns, 0u);
     EXPECT_EQ(health.process_name[0], '\0');
@@ -78,8 +78,8 @@ TEST(ShmThreadHealthStruct, MaxTrackedThreadsIs16) {
 }
 
 TEST(ShmThreadHealthStruct, ProcessNameFits31Chars) {
-    ShmThreadHealth health{};
-    const char*     long_name = "a_very_long_process_name_12345";  // 30 chars
+    ThreadHealth health{};
+    const char*  long_name = "a_very_long_process_name_12345";  // 30 chars
     std::strncpy(health.process_name, long_name, sizeof(health.process_name) - 1);
     EXPECT_STREQ(health.process_name, long_name);
 }

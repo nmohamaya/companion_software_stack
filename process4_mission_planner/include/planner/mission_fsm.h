@@ -1,7 +1,7 @@
 // process4_mission_planner/include/planner/mission_fsm.h
 // Finite State Machine for mission control.
 #pragma once
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 
 #include <string>
 

@@ -36,11 +36,11 @@ TEST(VisualFrontendTest, FactoryThrowsOnUnknown) {
 TEST(VisualFrontendTest, ProcessFrameReturnsPose) {
     auto fe = create_visual_frontend("simulated");
 
-    ShmStereoFrame frame{};
+    StereoFrame frame{};
     frame.timestamp_ns = 1000;
 
     // Run 10 frames — should produce a pose with some nonzero position
-    Pose pose;
+    drone::slam::Pose pose;
     for (int i = 0; i < 10; ++i) {
         frame.timestamp_ns += 100000000;  // 100ms increments
         pose = fe->process_frame(frame);
@@ -63,7 +63,7 @@ TEST(VisualFrontendTest, ImplementsInterface) {
     IVisualFrontend* iface = fe.get();
     EXPECT_NE(iface, nullptr);
 
-    ShmStereoFrame frame{};
+    StereoFrame frame{};
     frame.timestamp_ns = 500;
     auto pose          = iface->process_frame(frame);
     EXPECT_GT(pose.timestamp, 0.0);
@@ -85,7 +85,7 @@ TEST(PathPlannerTest, FactoryThrowsOnUnknown) {
 TEST(PathPlannerTest, PlanReturnsWaypoints) {
     auto pp = create_path_planner("potential_field");
 
-    ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = 0;
     pose.translation[1] = 0;
     pose.translation[2] = 0;
@@ -105,7 +105,7 @@ TEST(PathPlannerTest, WithObstacles) {
     // But plan should still work even when drone is close to target.
     auto pp = create_path_planner("potential_field");
 
-    ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = 9.5;
 
     Waypoint target{10.0f, 0.0f, 0.0f, 0.0f, 2.0f, 5.0f, false};
@@ -119,7 +119,7 @@ TEST(PathPlannerTest, WithObstacles) {
 TEST(PathPlannerTest, AtGoalZeroVelocity) {
     auto pp = create_path_planner("potential_field");
 
-    ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = 5;
     pose.translation[1] = 5;
     pose.translation[2] = 5;
@@ -148,14 +148,14 @@ TEST(ObstacleAvoiderTest, FactoryThrowsOnUnknown) {
 TEST(ObstacleAvoiderTest, NoObstacleNoChange) {
     auto oa = create_obstacle_avoider("potential_field");
 
-    ShmTrajectoryCmd planned{};
+    TrajectoryCmd planned{};
     planned.valid      = true;
     planned.velocity_x = 2.0f;
     planned.velocity_y = 0.0f;
     planned.velocity_z = 0.0f;
 
-    ShmPose               pose{};
-    ShmDetectedObjectList objects{};
+    drone::ipc::Pose   pose{};
+    DetectedObjectList objects{};
     objects.num_objects = 0;
 
     auto result = oa->avoid(planned, pose, objects);
@@ -167,17 +167,17 @@ TEST(ObstacleAvoiderTest, NoObstacleNoChange) {
 TEST(ObstacleAvoiderTest, ObstacleDeflectsTrajectory) {
     auto oa = create_obstacle_avoider("potential_field", 5.0f, 1.0f);
 
-    ShmTrajectoryCmd planned{};
+    TrajectoryCmd planned{};
     planned.valid      = true;
     planned.velocity_x = 2.0f;
     planned.velocity_y = 0.0f;
 
-    ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
 
     // Place obstacle 2m ahead
-    ShmDetectedObjectList objects{};
+    DetectedObjectList objects{};
     objects.num_objects = 1;
     objects.timestamp_ns =
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -195,14 +195,14 @@ TEST(ObstacleAvoiderTest, ObstacleDeflectsTrajectory) {
 TEST(ObstacleAvoiderTest, FarObstacleNoEffect) {
     auto oa = create_obstacle_avoider("potential_field", 2.0f, 1.0f);
 
-    ShmTrajectoryCmd planned{};
+    TrajectoryCmd planned{};
     planned.valid      = true;
     planned.velocity_x = 1.0f;
 
-    ShmPose pose{};
+    drone::ipc::Pose pose{};
 
     // Obstacle very far away
-    ShmDetectedObjectList objects{};
+    DetectedObjectList objects{};
     objects.num_objects = 1;
     objects.timestamp_ns =
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(

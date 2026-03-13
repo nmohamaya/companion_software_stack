@@ -13,7 +13,6 @@
 // Guarded by HAVE_ZENOH — this file is a no-op when Zenoh is not available.
 #pragma once
 
-#ifdef HAVE_ZENOH
 
 #include "ipc/zenoh_network_config.h"
 
@@ -31,7 +30,7 @@
 namespace drone::ipc {
 
 /// Default Zenoh SHM pool size: 32 MB.
-/// Must hold at least 2× the largest message in flight (ShmVideoFrame ≈ 6 MB).
+/// Must hold at least 2× the largest message in flight (VideoFrame ≈ 6 MB).
 /// Configurable via configure_shm().
 static constexpr std::size_t kDefaultShmPoolBytes = 32 * 1024 * 1024;
 
@@ -192,5 +191,3 @@ private:
 };
 
 }  // namespace drone::ipc
-
-#endif  // HAVE_ZENOH

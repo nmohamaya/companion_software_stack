@@ -124,7 +124,7 @@ public:
     /// Set the process dependency graph for cascade restarts.
     void set_process_graph(const drone::util::ProcessGraph* graph) { graph_ = graph; }
 
-    /// Set the current thermal zone (updated each tick from ShmSystemHealth).
+    /// Set the current thermal zone (updated each tick from SystemHealth).
     void set_thermal_zone(uint8_t zone) { thermal_zone_ = zone; }
 
     /// Get current thermal zone.

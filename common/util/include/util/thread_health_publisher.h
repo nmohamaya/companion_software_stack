@@ -1,12 +1,12 @@
 // common/util/include/util/thread_health_publisher.h
-// Bridges ThreadHeartbeatRegistry + ThreadWatchdog → ShmThreadHealth → IPublisher.
+// Bridges ThreadHeartbeatRegistry + ThreadWatchdog → ThreadHealth → IPublisher.
 //
 // NOTE: Consumers must link both drone_util and drone_ipc, since this header
 //       references types from both libraries (both are header-only INTERFACE
 //       targets, so no CMake cross-dependency is required).
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "util/safe_name_copy.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -17,7 +17,7 @@
 
 namespace drone::util {
 
-/// Publishes ThreadHeartbeatRegistry snapshots as ShmThreadHealth via the
+/// Publishes ThreadHeartbeatRegistry snapshots as ThreadHealth via the
 /// provided IPublisher.  Automatically marks threads that the watchdog has
 /// flagged as stuck with `healthy = false`.
 ///
@@ -32,7 +32,7 @@ namespace drone::util {
 template<typename Publisher>
 class ThreadHealthPublisher {
 public:
-    /// @param pub       Reference to an IPublisher<ShmThreadHealth>.
+    /// @param pub       Reference to an IPublisher<ThreadHealth>.
     /// @param process   Null-terminated process name (max 31 chars).
     /// @param watchdog  Reference to the process's ThreadWatchdog instance.
     ThreadHealthPublisher(Publisher& pub, const char* process, const ThreadWatchdog& watchdog)
@@ -43,7 +43,7 @@ public:
     /// Take a snapshot of the heartbeat registry, cross-reference with
     /// watchdog stuck-thread detection, and publish the result.
     void publish_snapshot() {
-        drone::ipc::ShmThreadHealth health{};
+        drone::ipc::ThreadHealth health{};
         std::memcpy(health.process_name, process_name_, sizeof(health.process_name));
 
         // Snapshot registered heartbeats (stack-allocated — no heap)

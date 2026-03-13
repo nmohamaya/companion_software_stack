@@ -5,30 +5,26 @@
 // channels without knowing or caring which transport is active:
 //
 //   auto bus = drone::ipc::create_message_bus(cfg);
-//   auto pub = bus.advertise<ShmPose>("drone/slam/pose");
-//   auto sub = bus.subscribe<ShmPose>("drone/slam/pose");
+//   auto pub = bus.advertise<Pose>("drone/slam/pose");
+//   auto sub = bus.subscribe<Pose>("drone/slam/pose");
 //
 // Adding a new transport backend (e.g. iceoryx) requires:
 //   1. Implement IceoryxPublisher<T>, IceoryxSubscriber<T>, IceoryxMessageBus
-//   2. Add one #ifdef arm to BusVariant below
+//   2. Add one arm to BusVariant below
 //   3. Add one case in create_message_bus() factory
 //   Zero changes to process code.
 //
 // Architecture:
-//   IPublisher<T>  ←── ShmPublisher<T>   / ZenohPublisher<T>   / (future)
-//   ISubscriber<T> ←── ShmSubscriber<T>  / ZenohSubscriber<T>  / (future)
-//   MessageBus     ←── wraps std::variant<ShmMessageBus, ZenohMessageBus, ...>
+//   IPublisher<T>  ←── ZenohPublisher<T>   / (future IceoryxPublisher<T>)
+//   ISubscriber<T> ←── ZenohSubscriber<T>  / (future IceoryxSubscriber<T>)
+//   MessageBus     ←── wraps std::variant<ZenohMessageBus, ...>
 //
 #pragma once
 
 #include "ipc/ipublisher.h"
 #include "ipc/iservice_channel.h"
 #include "ipc/isubscriber.h"
-#include "ipc/shm_message_bus.h"
-
-#ifdef HAVE_ZENOH
 #include "ipc/zenoh_message_bus.h"
-#endif
 
 #include <memory>
 #include <string>
@@ -46,17 +42,13 @@ namespace drone::ipc {
 //   1. #ifdef HAVE_ICEORYX
 //      #include "ipc/iceoryx_message_bus.h"
 //      #endif
-//   2. Add ", std::unique_ptr<IceoryxMessageBus>" inside the #ifdef below
+//   2. Add ", std::unique_ptr<IceoryxMessageBus>" inside the variant
 //   3. That's it — MessageBus methods use std::visit, so they
 //      automatically dispatch to the new type.
 // ─────────────────────────────────────────────────────────────
 namespace detail {
 
-using BusVariant = std::variant<std::unique_ptr<ShmMessageBus>
-#ifdef HAVE_ZENOH
-                                ,
-                                std::unique_ptr<ZenohMessageBus>
-#endif
+using BusVariant = std::variant<std::unique_ptr<ZenohMessageBus>
                                 // --- Add new backends here ---
                                 // #ifdef HAVE_ICEORYX
                                 // , std::unique_ptr<IceoryxMessageBus>
@@ -67,7 +59,7 @@ using BusVariant = std::variant<std::unique_ptr<ShmMessageBus>
 
 /// Transport-agnostic message bus.
 ///
-/// Wraps a concrete backend (SHM, Zenoh, future iceoryx/DDS) behind a
+/// Wraps a concrete backend (Zenoh, future iceoryx/DDS) behind a
 /// uniform API.  Template methods forward to the active backend via
 /// std::visit — processes never see the variant.
 ///
@@ -75,7 +67,7 @@ using BusVariant = std::variant<std::unique_ptr<ShmMessageBus>
 class MessageBus {
 public:
     /// Construct from any concrete bus backend.
-    /// @tparam BusT  ShmMessageBus, ZenohMessageBus, etc.
+    /// @tparam BusT  ZenohMessageBus, etc.
     template<typename BusT>
     explicit MessageBus(std::unique_ptr<BusT> bus) : impl_(std::move(bus)) {}
 
@@ -88,7 +80,7 @@ public:
 
     /// Create a publisher for the given topic.
     /// @tparam T  Trivially-copyable message type.
-    /// @param topic  Topic name (SHM segment or Zenoh key expression).
+    /// @param topic  Topic name (Zenoh key expression).
     /// @return  Owning publisher — ready to call publish().
     template<typename T>
     [[nodiscard]] std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
@@ -102,8 +94,8 @@ public:
     /// Create a subscriber for the given topic.
     /// @tparam T  Trivially-copyable message type.
     /// @param topic        Topic name.
-    /// @param max_retries  SHM: number of connection retries. Zenoh: ignored.
-    /// @param retry_ms     SHM: delay between retries. Zenoh: ignored.
+    /// @param max_retries  Legacy (ignored by Zenoh).
+    /// @param retry_ms     Legacy (ignored by Zenoh).
     template<typename T>
     [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe(const std::string& topic,
                                                             int                max_retries = 50,
@@ -124,71 +116,38 @@ public:
 
     // ─── Service Channels ────────────────────────────────────
 
-    /// Create a service client.
-    /// @note Only available on backends that support request/reply
-    ///       (currently Zenoh). Returns nullptr on other backends.
+    /// Create a service client (request/reply pattern).
     template<typename Req, typename Resp>
     [[nodiscard]] std::unique_ptr<IServiceClient<Req, Resp>> create_client(
         const std::string& service, uint64_t timeout_ms = 5000) {
         return std::visit(
             [&](auto& b) -> std::unique_ptr<IServiceClient<Req, Resp>> {
-#ifdef HAVE_ZENOH
-                using BusType = std::decay_t<decltype(*b)>;
-                if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
-                    return b->template create_client<Req, Resp>(service, timeout_ms);
-                }
-#endif
-                (void)b;
-                (void)service;
-                (void)timeout_ms;
-                spdlog::warn("[MessageBus] Service channels are not available "
-                             "on the {} backend",
-                             backend_name());
-                return nullptr;
+                return b->template create_client<Req, Resp>(service, timeout_ms);
             },
             impl_);
     }
 
-    /// Create a service server.
-    /// @note Only available on backends that support request/reply
-    ///       (currently Zenoh). Returns nullptr on other backends.
+    /// Create a service server (request/reply pattern).
     template<typename Req, typename Resp>
     [[nodiscard]] std::unique_ptr<IServiceServer<Req, Resp>> create_server(
         const std::string& service) {
         return std::visit(
             [&](auto& b) -> std::unique_ptr<IServiceServer<Req, Resp>> {
-#ifdef HAVE_ZENOH
-                using BusType = std::decay_t<decltype(*b)>;
-                if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
-                    return b->template create_server<Req, Resp>(service);
-                }
-#endif
-                (void)b;
-                (void)service;
-                spdlog::warn("[MessageBus] Service channels are not available "
-                             "on the {} backend",
-                             backend_name());
-                return nullptr;
+                return b->template create_server<Req, Resp>(service);
             },
             impl_);
     }
 
     // ─── Introspection ───────────────────────────────────────
 
-    /// Returns the name of the active transport backend ("shm", "zenoh", ...).
+    /// Returns the name of the active transport backend ("zenoh", ...).
     [[nodiscard]] std::string backend_name() const {
         return std::visit(
             [](const auto& b) -> std::string {
                 using BusType = std::decay_t<decltype(*b)>;
-                if constexpr (std::is_same_v<BusType, ShmMessageBus>) {
-                    return "shm";
-                }
-#ifdef HAVE_ZENOH
-                else if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
+                if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
                     return "zenoh";
-                }
-#endif
-                else {
+                } else {
                     return "unknown";
                 }
             },
@@ -197,11 +156,7 @@ public:
 
     /// Returns true if this backend supports service channels (request/reply).
     [[nodiscard]] bool has_service_channels() const {
-#ifdef HAVE_ZENOH
         return std::holds_alternative<std::unique_ptr<ZenohMessageBus>>(impl_);
-#else
-        return false;
-#endif
     }
 
 private:

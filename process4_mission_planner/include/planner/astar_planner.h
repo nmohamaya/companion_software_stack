@@ -4,7 +4,7 @@
 //
 // Architecture:
 //   1. Obstacle map: maintains a lightweight 3D occupancy grid built from
-//      ShmDetectedObjectList.  Each detected object inflates a sphere of
+//      DetectedObjectList.  Each detected object inflates a sphere of
 //      cells (configurable radius) to provide clearance.
 //   2. A* search: classic A* with 26-connected neighbours on the grid.
 //      Uses Euclidean heuristic (admissible and consistent).
@@ -17,7 +17,7 @@
 // Implements Epic #110 Phase 3 — A*/RRT* global planner.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "planner/ipath_planner.h"
 #include "planner/mission_fsm.h"
 
@@ -131,8 +131,8 @@ public:
 
     /// Insert obstacles from a detected object list.
     /// Updates timestamps for observed cells; stale cells expire after TTL.
-    void update_from_objects(const drone::ipc::ShmDetectedObjectList& objects,
-                             const drone::ipc::ShmPose& /* drone_pose */) {
+    void update_from_objects(const drone::ipc::DetectedObjectList& objects,
+                             const drone::ipc::Pose& /* drone_pose */) {
         const auto     now    = std::chrono::steady_clock::now();
         const uint64_t now_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
@@ -411,8 +411,8 @@ public:
 
     /// Update the obstacle grid from the latest detected objects.
     /// Call this each planning cycle before plan().
-    void update_obstacles(const drone::ipc::ShmDetectedObjectList& objects,
-                          const drone::ipc::ShmPose&               pose) {
+    void update_obstacles(const drone::ipc::DetectedObjectList& objects,
+                          const drone::ipc::Pose&               pose) {
         grid_.update_from_objects(objects, pose);
     }
 
@@ -423,9 +423,8 @@ public:
         snap_valid_ = false;  // invalidate cached snap since grid changed
     }
 
-    drone::ipc::ShmTrajectoryCmd plan(const drone::ipc::ShmPose& pose,
-                                      const Waypoint&            target) override {
-        drone::ipc::ShmTrajectoryCmd cmd{};
+    drone::ipc::TrajectoryCmd plan(const drone::ipc::Pose& pose, const Waypoint& target) override {
+        drone::ipc::TrajectoryCmd cmd{};
         cmd.timestamp_ns =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                       std::chrono::steady_clock::now().time_since_epoch())
