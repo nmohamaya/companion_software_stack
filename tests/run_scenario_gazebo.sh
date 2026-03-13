@@ -474,13 +474,26 @@ cleanup_scenario() {
             kill -SIGKILL "$LAUNCHER_PID" 2>/dev/null || true
         fi
     fi
-    # Kill PX4, Gazebo, and companion processes
-    pkill -f "build/bin/(video_capture|perception|slam_vio_nav|mission_planner|comms|payload_manager|system_monitor)" 2>/dev/null || true
+    # Send SIGTERM to companion processes, PX4, and Gazebo
+    pkill -f "build/bin/video_capture" 2>/dev/null || true
+    pkill -f "build/bin/perception" 2>/dev/null || true
+    pkill -f "build/bin/slam_vio_nav" 2>/dev/null || true
+    pkill -f "build/bin/mission_planner" 2>/dev/null || true
+    pkill -f "build/bin/comms" 2>/dev/null || true
+    pkill -f "build/bin/payload_manager" 2>/dev/null || true
+    pkill -f "build/bin/system_monitor" 2>/dev/null || true
     pkill -f "gz sim" 2>/dev/null || true
     pkill -f "ruby.*gz" 2>/dev/null || true
     pkill -f "px4.*sitl" 2>/dev/null || true
-    sleep 1
-    # Force kill stragglers
+    sleep 2
+    # Force kill any stragglers that ignored SIGTERM
+    pkill -9 -f "build/bin/video_capture" 2>/dev/null || true
+    pkill -9 -f "build/bin/perception" 2>/dev/null || true
+    pkill -9 -f "build/bin/slam_vio_nav" 2>/dev/null || true
+    pkill -9 -f "build/bin/mission_planner" 2>/dev/null || true
+    pkill -9 -f "build/bin/comms" 2>/dev/null || true
+    pkill -9 -f "build/bin/payload_manager" 2>/dev/null || true
+    pkill -9 -f "build/bin/system_monitor" 2>/dev/null || true
     pkill -9 -f "gz sim" 2>/dev/null || true
     pkill -9 -f "px4.*sitl" 2>/dev/null || true
     wait "$LAUNCHER_PID" 2>/dev/null || true
