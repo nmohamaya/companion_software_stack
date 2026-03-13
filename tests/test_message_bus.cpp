@@ -9,14 +9,24 @@
 #include "ipc/isubscriber.h"
 #include "ipc/message_bus_factory.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include <gtest/gtest.h>
 
 using namespace drone::ipc;
+
+/// Generate a unique topic name per test to avoid Zenoh cross-test interference
+/// under parallel ctest execution.
+static std::string unique_topic(const char* base) {
+    static std::atomic<uint32_t> counter{0};
+    return std::string(base) + "_" + std::to_string(::getpid()) + "_" +
+           std::to_string(counter.fetch_add(1));
+}
 
 // ═══════════════════════════════════════════════════════════
 // Test data struct (trivially copyable)
@@ -49,20 +59,22 @@ TEST(MessageBusTest, FactoryFallsBackFromShm) {
 }
 
 TEST(MessageBusTest, AdvertiseAndSubscribe) {
-    auto bus = create_message_bus("zenoh");
-    auto pub = bus.advertise<TestPayload>("/test_mbus_zenoh");
+    auto topic = unique_topic("/test_mbus_advsub");
+    auto bus   = create_message_bus("zenoh");
+    auto pub   = bus.advertise<TestPayload>(topic);
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 
-    auto sub = bus.subscribe<TestPayload>("/test_mbus_zenoh");
+    auto sub = bus.subscribe<TestPayload>(topic);
     ASSERT_NE(sub, nullptr);
     EXPECT_TRUE(sub->is_connected());
 }
 
 TEST(MessageBusTest, PubSubRoundTrip) {
-    auto bus = create_message_bus("zenoh");
-    auto pub = bus.advertise<TestPayload>("/test_mbus_rt");
-    auto sub = bus.subscribe<TestPayload>("/test_mbus_rt");
+    auto topic = unique_topic("/test_mbus_rt");
+    auto bus   = create_message_bus("zenoh");
+    auto pub   = bus.advertise<TestPayload>(topic);
+    auto sub   = bus.subscribe<TestPayload>(topic);
 
     TestPayload sent{42, 3.14f, {}};
     std::strncpy(sent.tag, "test", sizeof(sent.tag));
@@ -79,11 +91,12 @@ TEST(MessageBusTest, PubSubRoundTrip) {
 }
 
 TEST(MessageBusTest, WithIpcTypes) {
-    auto bus = create_message_bus("zenoh");
-    auto pub = bus.advertise<Pose>("/test_mbus_pose");
+    auto topic = unique_topic("/test_mbus_pose");
+    auto bus   = create_message_bus("zenoh");
+    auto pub   = bus.advertise<Pose>(topic);
     ASSERT_TRUE(pub->is_ready());
 
-    auto sub = bus.subscribe<Pose>("/test_mbus_pose");
+    auto sub = bus.subscribe<Pose>(topic);
     ASSERT_TRUE(sub->is_connected());
 
     Pose pose{};
