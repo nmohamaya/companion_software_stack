@@ -8,8 +8,8 @@
 //
 // These tests verify the wire format header, serialization/deserialization,
 // network configuration generation, and config-driven bus creation.
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/wire_format.h"
 
 #include <gtest/gtest.h>
@@ -66,7 +66,7 @@ TEST(WireFormat, MagicIsCorrectDRONLittleEndian) {
 // ── Serialization round-trip ─────────────────────────────
 
 TEST(WireFormat, SerializeRoundTrip) {
-    ShmPose pose{};
+    Pose pose{};
     pose.translation[0] = 1.0;
     pose.translation[1] = 2.0;
     pose.translation[2] = 3.0;
@@ -75,7 +75,7 @@ TEST(WireFormat, SerializeRoundTrip) {
 
     auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE, 7, 12345);
 
-    ASSERT_EQ(buf.size(), sizeof(WireHeader) + sizeof(ShmPose));
+    ASSERT_EQ(buf.size(), sizeof(WireHeader) + sizeof(Pose));
 
     // Validate header
     ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
@@ -84,12 +84,12 @@ TEST(WireFormat, SerializeRoundTrip) {
     EXPECT_EQ(hdr.magic, kWireMagic);
     EXPECT_EQ(hdr.version, kWireVersion);
     EXPECT_EQ(hdr.msg_type, WireMessageType::SLAM_POSE);
-    EXPECT_EQ(hdr.payload_size, sizeof(ShmPose));
+    EXPECT_EQ(hdr.payload_size, sizeof(Pose));
     EXPECT_EQ(hdr.sequence, 7u);
     EXPECT_EQ(hdr.timestamp_ns, 12345u);
 
     // Deserialize payload
-    ShmPose out{};
+    Pose out{};
     ASSERT_TRUE(wire_deserialize(buf.data(), buf.size(), out));
     EXPECT_DOUBLE_EQ(out.translation[0], 1.0);
     EXPECT_DOUBLE_EQ(out.translation[1], 2.0);
@@ -99,7 +99,7 @@ TEST(WireFormat, SerializeRoundTrip) {
 }
 
 TEST(WireFormat, SerializeSystemHealth) {
-    ShmSystemHealth health{};
+    SystemHealth health{};
     health.cpu_usage_percent    = 55.5f;
     health.memory_usage_percent = 42.0f;
     health.disk_usage_percent   = 75.0f;
@@ -109,7 +109,7 @@ TEST(WireFormat, SerializeSystemHealth) {
     auto buf = wire_serialize(health, WireMessageType::SYSTEM_HEALTH, 100);
     ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
 
-    ShmSystemHealth out{};
+    SystemHealth out{};
     ASSERT_TRUE(wire_deserialize(buf.data(), buf.size(), out));
     EXPECT_FLOAT_EQ(out.cpu_usage_percent, 55.5f);
     EXPECT_FLOAT_EQ(out.memory_usage_percent, 42.0f);
@@ -119,7 +119,7 @@ TEST(WireFormat, SerializeSystemHealth) {
 }
 
 TEST(WireFormat, SerializeFCState) {
-    ShmFCState fc{};
+    FCState fc{};
     fc.armed   = true;
     fc.gps_lat = 37.7749f;
     fc.gps_lon = -122.4194f;
@@ -130,7 +130,7 @@ TEST(WireFormat, SerializeFCState) {
     auto buf = wire_serialize(fc, WireMessageType::FC_STATE, 1, 99999);
     ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
 
-    ShmFCState out{};
+    FCState out{};
     ASSERT_TRUE(wire_deserialize(buf.data(), buf.size(), out));
     EXPECT_EQ(out.armed, true);
     EXPECT_FLOAT_EQ(out.gps_lat, 37.7749f);
@@ -141,7 +141,7 @@ TEST(WireFormat, SerializeFCState) {
 }
 
 TEST(WireFormat, SerializeMissionStatus) {
-    ShmMissionStatus ms{};
+    MissionStatus ms{};
     ms.state            = MissionState::NAVIGATE;
     ms.current_waypoint = 3;
     ms.total_waypoints  = 10;
@@ -150,7 +150,7 @@ TEST(WireFormat, SerializeMissionStatus) {
     auto buf = wire_serialize(ms, WireMessageType::MISSION_STATUS, 5);
     ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
 
-    ShmMissionStatus out{};
+    MissionStatus out{};
     ASSERT_TRUE(wire_deserialize(buf.data(), buf.size(), out));
     EXPECT_EQ(out.state, MissionState::NAVIGATE);
     EXPECT_EQ(out.current_waypoint, 3u);
@@ -166,34 +166,34 @@ TEST(WireFormat, ValidateRejectsTooSmall) {
 }
 
 TEST(WireFormat, ValidateRejectsBadMagic) {
-    ShmPose pose{};
-    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    Pose pose{};
+    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
     // Corrupt magic
     buf[0] = 0xFF;
     EXPECT_FALSE(wire_validate(buf.data(), buf.size()));
 }
 
 TEST(WireFormat, ValidateRejectsBadVersion) {
-    ShmPose pose{};
-    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    Pose pose{};
+    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
     // Corrupt version byte (offset 4)
     buf[4] = 99;
     EXPECT_FALSE(wire_validate(buf.data(), buf.size()));
 }
 
 TEST(WireFormat, ValidateRejectsTruncatedPayload) {
-    ShmPose pose{};
-    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    Pose pose{};
+    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
     // Truncate to just the header — payload is missing
     EXPECT_FALSE(wire_validate(buf.data(), sizeof(WireHeader)));
 }
 
 TEST(WireFormat, DeserializeSizeMismatch) {
-    ShmPose pose{};
-    auto    buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
+    Pose pose{};
+    auto buf = wire_serialize(pose, WireMessageType::SLAM_POSE);
 
     // Try to deserialize as a different-sized struct
-    ShmFCState out{};
+    FCState out{};
     EXPECT_FALSE(wire_deserialize(buf.data(), buf.size(), out));
 }
 

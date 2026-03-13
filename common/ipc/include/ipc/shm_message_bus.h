@@ -3,10 +3,10 @@
 //
 // Usage:
 //   drone::ipc::ShmMessageBus bus;
-//   auto pub = bus.advertise<ShmVideoFrame>("/drone_mission_cam");
-//   auto sub = bus.subscribe<ShmPose>("/slam_pose");
+//   auto pub = bus.advertise<VideoFrame>("/drone_mission_cam");
+//   auto sub = bus.subscribe<Pose>("/slam_pose");
 //   pub->publish(frame);
-//   ShmPose pose; sub->receive(pose);
+//   Pose pose; sub->receive(pose);
 //
 // The bus is a lightweight factory — it holds no state beyond what the
 // individual publishers/subscribers own.  Swapping the entire transport

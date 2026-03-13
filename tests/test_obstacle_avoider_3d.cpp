@@ -20,8 +20,8 @@ static uint64_t now_ns() {
                                      .count());
 }
 
-static drone::ipc::ShmTrajectoryCmd make_cmd(float vx = 2.0f, float vy = 0.0f, float vz = 0.0f) {
-    drone::ipc::ShmTrajectoryCmd cmd{};
+static drone::ipc::TrajectoryCmd make_cmd(float vx = 2.0f, float vy = 0.0f, float vz = 0.0f) {
+    drone::ipc::TrajectoryCmd cmd{};
     cmd.velocity_x   = vx;
     cmd.velocity_y   = vy;
     cmd.velocity_z   = vz;
@@ -30,8 +30,8 @@ static drone::ipc::ShmTrajectoryCmd make_cmd(float vx = 2.0f, float vy = 0.0f, f
     return cmd;
 }
 
-static drone::ipc::ShmPose make_pose(float x = 0.0f, float y = 0.0f, float z = 5.0f) {
-    drone::ipc::ShmPose pose{};
+static drone::ipc::Pose make_pose(float x = 0.0f, float y = 0.0f, float z = 5.0f) {
+    drone::ipc::Pose pose{};
     pose.translation[0] = x;
     pose.translation[1] = y;
     pose.translation[2] = z;
@@ -48,7 +48,7 @@ TEST(ObstacleAvoider3DTest, NoObjectsPassThrough) {
     auto              cmd  = make_cmd(2.0f);
     auto              pose = make_pose();
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects  = 0;
     objects.timestamp_ns = now_ns();
 
@@ -63,7 +63,7 @@ TEST(ObstacleAvoider3DTest, StaleObjectsIgnored) {
     auto              cmd  = make_cmd(2.0f);
     auto              pose = make_pose();
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 2.0f;  // close obstacle
     objects.objects[0].position_y = 0.0f;
@@ -85,7 +85,7 @@ TEST(ObstacleAvoider3DTest, CloseObjectRepelsInXYZ) {
     auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
     auto pose = make_pose(0.0f, 0.0f, 5.0f);
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 3.0f;  // ahead, slightly above
     objects.objects[0].position_y = 0.0f;
@@ -109,7 +109,7 @@ TEST(ObstacleAvoider3DTest, LowConfidenceIgnored) {
     auto              cmd  = make_cmd(2.0f);
     auto              pose = make_pose();
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 2.0f;
     objects.objects[0].position_y = 0.0f;
@@ -131,7 +131,7 @@ TEST(ObstacleAvoider3DTest, CorrectionClamped) {
     auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
     auto pose = make_pose(0.0f, 0.0f, 5.0f);
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 1.0f;  // very close
     objects.objects[0].position_y = 0.0f;
@@ -161,7 +161,7 @@ TEST(ObstacleAvoider3DTest, PredictionShiftsRepulsion) {
     auto pose = make_pose(0.0f, 0.0f, 5.0f);
 
     // Obstacle far away but moving toward drone
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 8.0f;
     objects.objects[0].position_y = 0.0f;
@@ -188,12 +188,12 @@ TEST(ObstacleAvoider3DTest, NaNPosePassesThrough) {
     ObstacleAvoider3D avoider;
     auto              cmd = make_cmd(2.0f);
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = std::numeric_limits<double>::quiet_NaN();
     pose.translation[1] = 0.0;
     pose.translation[2] = 5.0;
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 2.0f;
     objects.objects[0].position_y = 0.0f;

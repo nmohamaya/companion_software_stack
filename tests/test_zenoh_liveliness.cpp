@@ -5,7 +5,7 @@
 // and the extract_process_name utility.  Tests that require a real Zenoh
 // session are guarded by HAVE_ZENOH.
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "ipc/zenoh_liveliness.h"
 
 #include <algorithm>
@@ -107,17 +107,17 @@ TEST(ProcessHealthEntry, MaxTrackedProcesses) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ShmSystemHealth extension tests
+// SystemHealth extension tests
 // ═══════════════════════════════════════════════════════════
 
-TEST(ShmSystemHealth, HasProcessHealthFields) {
-    ShmSystemHealth health{};
+TEST(SystemHealth, HasProcessHealthFields) {
+    SystemHealth health{};
     EXPECT_EQ(health.num_processes, 0u);
     EXPECT_FALSE(health.critical_failure);
 }
 
-TEST(ShmSystemHealth, PopulateProcessEntries) {
-    ShmSystemHealth health{};
+TEST(SystemHealth, PopulateProcessEntries) {
+    SystemHealth health{};
 
     // Simulate populating process entries
     const std::vector<std::string> names = {"video_capture",   "perception", "slam_vio_nav",
@@ -138,17 +138,17 @@ TEST(ShmSystemHealth, PopulateProcessEntries) {
     EXPECT_TRUE(health.processes[4].alive);
 }
 
-TEST(ShmSystemHealth, CriticalFailureFlag) {
-    ShmSystemHealth health{};
+TEST(SystemHealth, CriticalFailureFlag) {
+    SystemHealth health{};
     health.critical_failure = true;
     EXPECT_TRUE(health.critical_failure);
 }
 
-TEST(ShmSystemHealth, TriviallyCopyable) {
-    EXPECT_TRUE(std::is_trivially_copyable_v<ShmSystemHealth>);
+TEST(SystemHealth, TriviallyCopyable) {
+    EXPECT_TRUE(std::is_trivially_copyable_v<SystemHealth>);
 }
 
-TEST(ShmSystemHealth, ProcessHealthEntryTriviallyCopyable) {
+TEST(SystemHealth, ProcessHealthEntryTriviallyCopyable) {
     EXPECT_TRUE(std::is_trivially_copyable_v<ProcessHealthEntry>);
 }
 

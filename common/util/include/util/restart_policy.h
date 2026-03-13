@@ -33,7 +33,7 @@
 namespace drone::util {
 
 // ── Stack-level status model ────────────────────────────────
-// Published in ShmSystemHealth::stack_status.
+// Published in SystemHealth::stack_status.
 // Transitions: NOMINAL → DEGRADED (non-critical died/restarting)
 //              DEGRADED → NOMINAL (all processes recovered)
 //              any → CRITICAL (critical process exhausted restarts)

@@ -21,7 +21,7 @@
 // All tests require HAVE_ZENOH.  Under SHM-only builds the file compiles
 // to a single stub test.
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 
 #include <gtest/gtest.h>
 
@@ -202,7 +202,7 @@ TEST(ZenohSessionBranch, ConfigureAfterOpenIsIgnored) {
 
     // Force the session open by creating a transient publisher
     if (!sess.is_open()) {
-        ZenohPublisher<ShmPose> opener("drone/test/cov_force_open");
+        ZenohPublisher<Pose> opener("drone/test/cov_force_open");
     }
     ASSERT_TRUE(sess.is_open());
 
@@ -218,7 +218,7 @@ TEST(ZenohSessionBranch, ConfigureNetworkAfterOpenIsIgnored) {
 
     // Force the session open if not already
     if (!sess.is_open()) {
-        ZenohPublisher<ShmPose> opener("drone/test/cov_force_open_net");
+        ZenohPublisher<Pose> opener("drone/test/cov_force_open_net");
     }
     ASSERT_TRUE(sess.is_open());
 
@@ -266,11 +266,11 @@ TEST(ZenohSessionBranch, ShmPoolBytesAccessor) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ZenohPublisherBranch, SmallMessageUsesBytes) {
-    // ShmPose is small (< 64KB) → bytes path
-    ZenohPublisher<ShmPose> pub("drone/test/cov_small_msg");
+    // Pose is small (< 64KB) → bytes path
+    ZenohPublisher<Pose> pub("drone/test/cov_small_msg");
     ASSERT_TRUE(pub.is_ready());
 
-    ShmPose msg{};
+    Pose msg{};
     msg.timestamp_ns = 42;
     pub.publish(msg);
 
@@ -279,7 +279,7 @@ TEST(ZenohPublisherBranch, SmallMessageUsesBytes) {
 }
 
 TEST(ZenohPublisherBranch, TopicNameAccessor) {
-    ZenohPublisher<ShmPose> pub("drone/test/cov_topic");
+    ZenohPublisher<Pose> pub("drone/test/cov_topic");
     EXPECT_EQ(pub.topic_name(), "drone/test/cov_topic");
 }
 
@@ -287,10 +287,10 @@ TEST(ZenohPublisherBranch, PublishWhenNotReadyIsNoop) {
     // We can't easily create a "not ready" publisher without causing
     // a real exception during construction.  Instead, test that
     // publish() and is_ready() are consistent on a valid publisher.
-    ZenohPublisher<ShmPose> pub("drone/test/cov_ready_check");
+    ZenohPublisher<Pose> pub("drone/test/cov_ready_check");
     ASSERT_TRUE(pub.is_ready());
     // Multiple publishes should increment counters
-    ShmPose msg{};
+    Pose msg{};
     for (int i = 0; i < 5; ++i) {
         pub.publish(msg);
     }
@@ -302,23 +302,23 @@ TEST(ZenohPublisherBranch, PublishWhenNotReadyIsNoop) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(ZenohSubscriberBranch, ReceiveWithNoDataReturnsFalse) {
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_no_data_sub");
-    ShmPose                  msg{};
+    ZenohSubscriber<Pose> sub("drone/test/cov_no_data_sub");
+    Pose                  msg{};
     EXPECT_FALSE(sub.receive(msg));
 }
 
 TEST(ZenohSubscriberBranch, ReceiveWithTimestamp) {
-    ZenohPublisher<ShmPose>  pub("drone/test/cov_ts_sub");
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_ts_sub");
+    ZenohPublisher<Pose>  pub("drone/test/cov_ts_sub");
+    ZenohSubscriber<Pose> sub("drone/test/cov_ts_sub");
 
     // Wait for pub/sub discovery
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    ShmPose msg{};
+    Pose msg{};
     msg.timestamp_ns = 12345;
     pub.publish(msg);
 
-    ShmPose  out{};
+    Pose     out{};
     uint64_t ts = 0;
     ASSERT_TRUE(wait_for([&] { return sub.receive(out, &ts); }));
     EXPECT_EQ(out.timestamp_ns, 12345u);
@@ -326,38 +326,38 @@ TEST(ZenohSubscriberBranch, ReceiveWithTimestamp) {
 }
 
 TEST(ZenohSubscriberBranch, ReceiveWithoutTimestampPtr) {
-    ZenohPublisher<ShmPose>  pub("drone/test/cov_no_ts_ptr");
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_no_ts_ptr");
+    ZenohPublisher<Pose>  pub("drone/test/cov_no_ts_ptr");
+    ZenohSubscriber<Pose> sub("drone/test/cov_no_ts_ptr");
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    ShmPose msg{};
+    Pose msg{};
     msg.timestamp_ns = 99;
     pub.publish(msg);
 
-    ShmPose out{};
+    Pose out{};
     // nullptr timestamp — exercises the branch where timestamp_ns is null
     ASSERT_TRUE(wait_for([&] { return sub.receive(out, nullptr); }));
     EXPECT_EQ(out.timestamp_ns, 99u);
 }
 
 TEST(ZenohSubscriberBranch, LatencyTrackingDisabled) {
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_no_latency", false);
+    ZenohSubscriber<Pose> sub("drone/test/cov_no_latency", false);
     EXPECT_FALSE(sub.log_latency_if_due());
 }
 
 TEST(ZenohSubscriberBranch, IsConnected) {
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_connected");
+    ZenohSubscriber<Pose> sub("drone/test/cov_connected");
     EXPECT_TRUE(sub.is_connected());
 }
 
 TEST(ZenohSubscriberBranch, TopicName) {
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_topic_sub");
+    ZenohSubscriber<Pose> sub("drone/test/cov_topic_sub");
     EXPECT_EQ(sub.topic_name(), "drone/test/cov_topic_sub");
 }
 
 TEST(ZenohSubscriberBranch, LogLatencyIfDueNoSamples) {
-    ZenohSubscriber<ShmPose> sub("drone/test/cov_latency_nosamp", true);
+    ZenohSubscriber<Pose> sub("drone/test/cov_latency_nosamp", true);
     // No messages received yet → should return false (not enough samples)
     EXPECT_FALSE(sub.log_latency_if_due(100));
 }

@@ -3,8 +3,8 @@
 // Reads video frames from SHM, runs detection → tracking → fusion,
 // publishes fused objects to SHM.
 
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "perception/detector_interface.h"
 #include "perception/fusion_engine.h"
@@ -36,8 +36,8 @@ using namespace drone::perception;
 static std::atomic<bool> g_running{true};
 
 // ── Inference thread ────────────────────────────────────────
-static void inference_thread(drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>& video_sub,
-                             drone::SPSCRing<Detection2DList, 4>&                output_queue,
+static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
+                             drone::SPSCRing<Detection2DList, 4>&             output_queue,
                              std::atomic<bool>& running, IDetector& detector) {
     spdlog::info("[Inference] Thread started — using detector: {}", detector.name());
 
@@ -47,8 +47,8 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::ShmVideoFrame>&
     uint64_t queue_drop_count = 0;
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        drone::ipc::ShmVideoFrame frame;
-        bool                      got_frame = video_sub.receive(frame);
+        drone::ipc::VideoFrame frame;
+        bool                   got_frame = video_sub.receive(frame);
 
         if (got_frame) {
             drone::util::FrameDiagnostics diag(frame.sequence_number);
@@ -131,11 +131,11 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 }
 
 // ── Fusion thread ───────────────────────────────────────────
-// pose_sub  — IPC subscriber for drone/slam/pose (ShmPose).
+// pose_sub  — IPC subscriber for drone/slam/pose (Pose).
 //             Used to rotate camera-frame detections into world frame.
-static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                     tracked_queue,
-                          drone::ipc::IPublisher<drone::ipc::ShmDetectedObjectList>& det_pub,
-                          drone::ipc::ISubscriber<drone::ipc::ShmPose>&              pose_sub,
+static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                  tracked_queue,
+                          drone::ipc::IPublisher<drone::ipc::DetectedObjectList>& det_pub,
+                          drone::ipc::ISubscriber<drone::ipc::Pose>&              pose_sub,
                           std::atomic<bool>& running, IFusionEngine& engine) {
     spdlog::info("[Fusion] Thread started — backend: {}", engine.name());
 
@@ -144,15 +144,15 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
     uint64_t fusion_count = 0;
 
     // Cached latest drone pose (world frame: North, East, Up)
-    drone::ipc::ShmPose latest_pose{};
-    bool                has_pose = false;
+    drone::ipc::Pose latest_pose{};
+    bool             has_pose = false;
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
 
         // Drain latest pose (non-blocking — keep the most recent)
         {
-            drone::ipc::ShmPose p{};
+            drone::ipc::Pose p{};
             while (pose_sub.receive(p)) {
                 latest_pose = p;
                 has_pose    = true;
@@ -221,7 +221,7 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
             }
 
             // Publish to SHM (world-frame positions)
-            drone::ipc::ShmDetectedObjectList shm_list{};
+            drone::ipc::DetectedObjectList shm_list{};
             shm_list.timestamp_ns   = fused.timestamp_ns;
             shm_list.frame_sequence = fused.frame_sequence;
             shm_list.num_objects =
@@ -284,8 +284,7 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("perception");
 
     // ── Subscribe to video frames from Process 1 ────────────
-    auto video_sub =
-        bus.subscribe<drone::ipc::ShmVideoFrame>(drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    auto video_sub = bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
     if (!video_sub->is_connected()) {
         spdlog::error("Cannot connect to video channel — is video_capture running?");
         return 1;
@@ -293,9 +292,9 @@ int main(int argc, char* argv[]) {
 
     // ── Create publisher for detected objects → Process 4 ───
     auto det_pub =
-        bus.advertise<drone::ipc::ShmDetectedObjectList>(drone::ipc::shm_names::DETECTED_OBJECTS);
+        bus.advertise<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!det_pub->is_ready()) {
-        spdlog::error("Failed to create publisher: {}", drone::ipc::shm_names::DETECTED_OBJECTS);
+        spdlog::error("Failed to create publisher: {}", drone::ipc::topics::DETECTED_OBJECTS);
         return 1;
     }
 
@@ -336,7 +335,7 @@ int main(int argc, char* argv[]) {
                           std::ref(tracker_to_fusion), std::ref(g_running), std::ref(*tracker));
 
     // Subscribe to drone pose for the camera→world transform in the fusion thread
-    auto pose_sub = bus.subscribe<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
+    auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
 
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(g_running), std::ref(*fusion_engine));
@@ -344,7 +343,7 @@ int main(int argc, char* argv[]) {
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ShmThreadHealth>(drone::ipc::shm_names::THREAD_HEALTH_PERCEPTION);
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_PERCEPTION);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "perception", watchdog);
 
     spdlog::info("All perception threads started — READY");

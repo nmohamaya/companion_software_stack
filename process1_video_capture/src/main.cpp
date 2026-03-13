@@ -4,8 +4,8 @@
 // Uses MessageBusFactory for publishing — backend selected at runtime via config.
 
 #include "hal/hal_factory.h"
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
@@ -30,8 +30,8 @@
 static std::atomic<bool> g_running{true};
 
 // ── Mission camera thread ───────────────────────────────────
-static void mission_cam_thread(drone::hal::ICamera&                               camera,
-                               drone::ipc::IPublisher<drone::ipc::ShmVideoFrame>& publisher,
+static void mission_cam_thread(drone::hal::ICamera&                            camera,
+                               drone::ipc::IPublisher<drone::ipc::VideoFrame>& publisher,
                                std::atomic<bool>& running, int fps) {
     spdlog::info("[MissionCam] Thread started using {} @ {}Hz", camera.name(), fps);
 
@@ -62,7 +62,7 @@ static void mission_cam_thread(drone::hal::ICamera&                             
             continue;
         }
 
-        drone::ipc::ShmVideoFrame shm_frame{};
+        drone::ipc::VideoFrame shm_frame{};
         shm_frame.timestamp_ns    = frame.timestamp_ns;
         shm_frame.sequence_number = frame.sequence;
         shm_frame.width           = frame.width;
@@ -106,7 +106,7 @@ static void mission_cam_thread(drone::hal::ICamera&                             
 
 // ── Stereo camera thread ────────────────────────────────────
 static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera& right_cam,
-                              drone::ipc::IPublisher<drone::ipc::ShmStereoFrame>& publisher,
+                              drone::ipc::IPublisher<drone::ipc::StereoFrame>& publisher,
                               std::atomic<bool>& running, int fps) {
     spdlog::info("[StereoCam] Thread started using {} + {} @ {}Hz", left_cam.name(),
                  right_cam.name(), fps);
@@ -159,7 +159,7 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
                                  "ms)");
         }
 
-        drone::ipc::ShmStereoFrame shm_frame{};
+        drone::ipc::StereoFrame shm_frame{};
         shm_frame.timestamp_ns    = left_frame.timestamp_ns;
         shm_frame.sequence_number = left_frame.sequence;
         shm_frame.width           = left_frame.width;
@@ -257,17 +257,15 @@ int main(int argc, char* argv[]) {
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
     drone::ipc::LivelinessToken liveliness_token("video_capture");
 
-    auto mission_pub =
-        bus.advertise<drone::ipc::ShmVideoFrame>(drone::ipc::shm_names::VIDEO_MISSION_CAM);
+    auto mission_pub = bus.advertise<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
     if (!mission_pub->is_ready()) {
-        spdlog::error("Failed to create publisher: {}", drone::ipc::shm_names::VIDEO_MISSION_CAM);
+        spdlog::error("Failed to create publisher: {}", drone::ipc::topics::VIDEO_MISSION_CAM);
         return 1;
     }
 
-    auto stereo_pub =
-        bus.advertise<drone::ipc::ShmStereoFrame>(drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    auto stereo_pub = bus.advertise<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
     if (!stereo_pub->is_ready()) {
-        spdlog::error("Failed to create publisher: {}", drone::ipc::shm_names::VIDEO_STEREO_CAM);
+        spdlog::error("Failed to create publisher: {}", drone::ipc::topics::VIDEO_STEREO_CAM);
         return 1;
     }
 
@@ -279,8 +277,8 @@ int main(int argc, char* argv[]) {
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
-        drone::ipc::shm_names::THREAD_HEALTH_VIDEO_CAPTURE);
+    auto                        thread_health_pub =
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_VIDEO_CAPTURE);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "video_capture",
                                                         watchdog);
 

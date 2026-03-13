@@ -14,8 +14,8 @@
 // Uses MessageBusFactory — IPC backend selected at runtime via config.
 
 #include "hal/hal_factory.h"
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "slam/ivio_backend.h"
 #include "slam/types.h"
@@ -122,7 +122,7 @@ static std::atomic<bool> g_running{true};
 // Replaces the old visual_frontend_thread.  Now runs the full
 // VIO backend: feature extraction → stereo matching → IMU
 // pre-integration → pose output.
-static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFrame>& stereo_sub,
+static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>& stereo_sub,
                                 drone::slam::IVIOBackend& backend, ImuRingBuffer& imu_buffer,
                                 PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running) {
     spdlog::info("[VIOPipeline] Thread started using {}", backend.name());
@@ -141,8 +141,8 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::ShmStereoFra
         ++vio_loop_tick;
 
         // ── Receive stereo frame ────────────────────────────
-        drone::ipc::ShmStereoFrame frame;
-        bool                       got_stereo = stereo_sub.receive(frame);
+        drone::ipc::StereoFrame frame;
+        bool                    got_stereo = stereo_sub.receive(frame);
         if (!got_stereo) {
             ++no_frame_count;
             if (no_frame_count == 1 || no_frame_count % 300 == 0) {
@@ -260,7 +260,7 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu, ImuRingBuffer& imu_bu
 }
 
 // ── Pose publisher thread ───────────────────────────────────
-static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::ShmPose>& pose_pub,
+static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose_pub,
                                   PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running,
                                   int publish_rate_hz) {
     spdlog::info("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
@@ -273,7 +273,7 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::ShmPose>& p
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         Pose p;
         if (pose_buffer.read(p)) {
-            drone::ipc::ShmPose shm_pose{};
+            drone::ipc::Pose shm_pose{};
             shm_pose.timestamp_ns   = static_cast<uint64_t>(p.timestamp * 1e9);
             shm_pose.translation[0] = p.position.x();
             shm_pose.translation[1] = p.position.y();
@@ -320,8 +320,7 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("slam_vio_nav");
 
     // Subscribe to stereo camera from Process 1
-    auto stereo_sub =
-        bus.subscribe<drone::ipc::ShmStereoFrame>(drone::ipc::shm_names::VIDEO_STEREO_CAM);
+    auto stereo_sub = bus.subscribe<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
     // For SHM: is_connected() means the segment exists (publisher running).
     // For Zenoh: is_connected() only becomes true after first sample, so we
     // can't use it as a startup gate. Log a warning instead of exiting.
@@ -336,7 +335,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Create pose output publisher
-    auto pose_pub = bus.advertise<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
+    auto pose_pub = bus.advertise<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_pub->is_ready()) {
         spdlog::error("Failed to create pose publisher");
         return 1;
@@ -391,8 +390,8 @@ int main(int argc, char* argv[]) {
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
-        drone::ipc::shm_names::THREAD_HEALTH_SLAM_VIO_NAV);
+    auto                        thread_health_pub =
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_SLAM_VIO_NAV);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "slam_vio_nav",
                                                         watchdog);
 

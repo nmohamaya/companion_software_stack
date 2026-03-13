@@ -15,9 +15,9 @@
 // The tool attaches to existing SHM segments (created by running processes)
 // and writes data directly without taking ownership (no shm_unlink on exit).
 // ═══════════════════════════════════════════════════════════════════
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/shm_writer.h"
 
 #include <chrono>
@@ -100,19 +100,19 @@ static void publish_via_bus(const std::string& topic, const T& msg) {
 // ═══════════════════════════════════════════════════════════════
 
 /// Process-local mirror of the current override state.
-static drone::ipc::ShmFaultOverrides g_overrides = {
+static drone::ipc::FaultOverrides g_overrides = {
     /*.battery_percent=*/-1.0f,   /*.battery_voltage=*/-1.0f,
     /*.fc_connected=*/-1,         /*.thermal_zone=*/-1,
     /*.cpu_temp_override=*/-1.0f, /*.sequence=*/0};
 
-static ShmWriter<drone::ipc::ShmFaultOverrides>& get_override_writer() {
-    static ShmWriter<drone::ipc::ShmFaultOverrides> writer;
-    static bool                                     initialised = false;
+static ShmWriter<drone::ipc::FaultOverrides>& get_override_writer() {
+    static ShmWriter<drone::ipc::FaultOverrides> writer;
+    static bool                                  initialised = false;
     if (!initialised) {
         // Try attach first (segment may already exist), then create.
-        bool ok = writer.attach(drone::ipc::shm_names::FAULT_OVERRIDES);
+        bool ok = writer.attach(drone::ipc::topics::FAULT_OVERRIDES);
         if (!ok) {
-            ok = writer.create_non_owning(drone::ipc::shm_names::FAULT_OVERRIDES);
+            ok = writer.create_non_owning(drone::ipc::topics::FAULT_OVERRIDES);
         }
         if (!ok) {
             print_err("Failed to attach to or create fault override SHM segment");
@@ -125,7 +125,7 @@ static ShmWriter<drone::ipc::ShmFaultOverrides>& get_override_writer() {
 }
 
 /// Mutate the process-local override state and flush to SHM.
-static void update_overrides(std::function<void(drone::ipc::ShmFaultOverrides&)> mutator) {
+static void update_overrides(std::function<void(drone::ipc::FaultOverrides&)> mutator) {
     mutator(g_overrides);
     ++g_overrides.sequence;
     get_override_writer().write(g_overrides);
@@ -141,7 +141,7 @@ static int cmd_battery(float percent) {
         return 1;
     }
 
-    update_overrides([&](drone::ipc::ShmFaultOverrides& ovr) {
+    update_overrides([&](drone::ipc::FaultOverrides& ovr) {
         ovr.battery_percent = percent;
         ovr.battery_voltage = 12.0f + percent * 0.048f;
     });
@@ -158,7 +158,7 @@ static int cmd_battery(float percent) {
 // ═══════════════════════════════════════════════════════════════
 static int cmd_fc_link(bool connected) {
     update_overrides(
-        [&](drone::ipc::ShmFaultOverrides& ovr) { ovr.fc_connected = connected ? 1 : 0; });
+        [&](drone::ipc::FaultOverrides& ovr) { ovr.fc_connected = connected ? 1 : 0; });
     print_ok(connected ? "FC link restored" : "FC link disconnected (stale timestamp)");
     return 0;
 }
@@ -190,8 +190,8 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
         return 1;
     }
 
-    static uint64_t           seq = 0;
-    drone::ipc::ShmGCSCommand shm_cmd{};
+    static uint64_t        seq = 0;
+    drone::ipc::GCSCommand shm_cmd{};
     shm_cmd.timestamp_ns   = now_ns();
     shm_cmd.correlation_id = now_ns();  // simple unique ID
     shm_cmd.command        = gcs_type;
@@ -202,12 +202,12 @@ static int cmd_gcs_command(const std::string& cmd, float p1, float p2, float p3)
     shm_cmd.valid          = true;
 
     if (g_ipc_backend != "shm") {
-        publish_via_bus<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS, shm_cmd);
+        publish_via_bus<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS, shm_cmd);
     } else {
-        ShmWriter<drone::ipc::ShmGCSCommand> writer;
-        if (!writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
+        ShmWriter<drone::ipc::GCSCommand> writer;
+        if (!writer.attach(drone::ipc::topics::GCS_COMMANDS)) {
             print_err("Cannot attach to SHM segment " +
-                      std::string(drone::ipc::shm_names::GCS_COMMANDS) +
+                      std::string(drone::ipc::topics::GCS_COMMANDS) +
                       ". Ensure the stack is running.");
             return 1;
         }
@@ -232,7 +232,7 @@ static int cmd_thermal_zone(uint8_t zone) {
     }
 
     float temps[] = {50.0f, 75.0f, 88.0f, 98.0f};
-    update_overrides([&](drone::ipc::ShmFaultOverrides& ovr) {
+    update_overrides([&](drone::ipc::FaultOverrides& ovr) {
         ovr.thermal_zone      = static_cast<int32_t>(zone);
         ovr.cpu_temp_override = temps[zone];
     });
@@ -275,7 +275,7 @@ static int cmd_mission_upload(const std::string& json_file) {
         return 1;
     }
 
-    drone::ipc::ShmMissionUpload upload{};
+    drone::ipc::MissionUpload upload{};
     upload.timestamp_ns   = now_ns();
     upload.correlation_id = now_ns();
     upload.num_waypoints  = static_cast<uint8_t>(wps.size());
@@ -293,7 +293,7 @@ static int cmd_mission_upload(const std::string& json_file) {
     }
 
     // Also inject a MISSION_UPLOAD GCS command to trigger the planner
-    drone::ipc::ShmGCSCommand shm_cmd{};
+    drone::ipc::GCSCommand shm_cmd{};
     shm_cmd.timestamp_ns   = now_ns();
     shm_cmd.correlation_id = upload.correlation_id;
     shm_cmd.command        = drone::ipc::GCSCommandType::MISSION_UPLOAD;
@@ -302,21 +302,20 @@ static int cmd_mission_upload(const std::string& json_file) {
     shm_cmd.valid          = true;
 
     if (g_ipc_backend != "shm") {
-        publish_via_bus<drone::ipc::ShmMissionUpload>(drone::ipc::shm_names::MISSION_UPLOAD,
-                                                      upload);
-        publish_via_bus<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS, shm_cmd);
+        publish_via_bus<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD, upload);
+        publish_via_bus<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS, shm_cmd);
     } else {
-        ShmWriter<drone::ipc::ShmMissionUpload> writer;
-        if (!writer.attach(drone::ipc::shm_names::MISSION_UPLOAD)) {
+        ShmWriter<drone::ipc::MissionUpload> writer;
+        if (!writer.attach(drone::ipc::topics::MISSION_UPLOAD)) {
             print_err("Cannot attach to SHM segment " +
-                      std::string(drone::ipc::shm_names::MISSION_UPLOAD) +
+                      std::string(drone::ipc::topics::MISSION_UPLOAD) +
                       ". Ensure the stack is running.");
             return 1;
         }
         writer.write(upload);
 
-        ShmWriter<drone::ipc::ShmGCSCommand> gcs_writer;
-        if (gcs_writer.attach(drone::ipc::shm_names::GCS_COMMANDS)) {
+        ShmWriter<drone::ipc::GCSCommand> gcs_writer;
+        if (gcs_writer.attach(drone::ipc::topics::GCS_COMMANDS)) {
             gcs_writer.write(shm_cmd);
         }
     }

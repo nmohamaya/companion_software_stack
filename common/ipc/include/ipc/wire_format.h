@@ -39,30 +39,30 @@ enum class WireMessageType : uint16_t {
     UNKNOWN = 0,
 
     // ── Video (Process 1) ────────────────────────────
-    VIDEO_FRAME  = 1,  // ShmVideoFrame
-    STEREO_FRAME = 2,  // ShmStereoFrame
+    VIDEO_FRAME  = 1,  // VideoFrame
+    STEREO_FRAME = 2,  // StereoFrame
 
     // ── Perception (Process 2) ───────────────────────
-    DETECTIONS = 10,  // ShmDetectedObjectList
+    DETECTIONS = 10,  // DetectedObjectList
 
     // ── SLAM (Process 3) ─────────────────────────────
     SLAM_POSE = 20,  // ShmSlamPose
 
     // ── Mission Planner (Process 4) ──────────────────
-    MISSION_STATUS  = 30,  // ShmMissionStatus
-    TRAJECTORY_CMD  = 31,  // ShmTrajectoryCmd
-    PAYLOAD_COMMAND = 32,  // ShmPayloadCommand
-    FC_COMMAND      = 33,  // ShmFCCommand
+    MISSION_STATUS  = 30,  // MissionStatus
+    TRAJECTORY_CMD  = 31,  // TrajectoryCmd
+    PAYLOAD_COMMAND = 32,  // PayloadCommand
+    FC_COMMAND      = 33,  // FCCommand
 
     // ── Comms (Process 5) ────────────────────────────
-    FC_STATE    = 40,  // ShmFCState
-    GCS_COMMAND = 41,  // ShmGCSCommand
+    FC_STATE    = 40,  // FCState
+    GCS_COMMAND = 41,  // GCSCommand
 
     // ── Payload Manager (Process 6) ──────────────────
-    PAYLOAD_STATUS = 50,  // ShmPayloadStatus
+    PAYLOAD_STATUS = 50,  // PayloadStatus
 
     // ── System Monitor (Process 7) ───────────────────
-    SYSTEM_HEALTH = 60,  // ShmSystemHealth
+    SYSTEM_HEALTH = 60,  // SystemHealth
 };
 
 /// Fixed-size wire header prepended to every network message.

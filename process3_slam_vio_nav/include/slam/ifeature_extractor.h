@@ -10,7 +10,7 @@
 // failures carry structured diagnostics (error code, component, frame).
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "slam/vio_types.h"
 #include "util/diagnostic.h"
 
@@ -34,8 +34,8 @@ public:
     /// @param frame   Stereo frame (uses left_data).
     /// @param diag    Frame diagnostics collector — caller-owned, optional info recorded.
     /// @return Ok(result) on success, Err(VIOError) on failure.
-    virtual VIOResult<FeatureExtractionResult> extract(const drone::ipc::ShmStereoFrame& frame,
-                                                       drone::util::FrameDiagnostics&    diag) = 0;
+    virtual VIOResult<FeatureExtractionResult> extract(const drone::ipc::StereoFrame& frame,
+                                                       drone::util::FrameDiagnostics& diag) = 0;
 
     /// Human-readable name (for logging / diagnostics).
     virtual std::string name() const = 0;
@@ -61,8 +61,8 @@ public:
                                        int image_height = 480)
         : num_features_(num_features), image_width_(image_width), image_height_(image_height) {}
 
-    VIOResult<FeatureExtractionResult> extract(const drone::ipc::ShmStereoFrame& frame,
-                                               drone::util::FrameDiagnostics&    diag) override {
+    VIOResult<FeatureExtractionResult> extract(const drone::ipc::StereoFrame& frame,
+                                               drone::util::FrameDiagnostics& diag) override {
 
         drone::util::ScopedDiagTimer timer(diag, "FeatureExtractor");
 

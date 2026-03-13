@@ -11,9 +11,9 @@
 // Build:
 //   cmake -B build                          → runs category 1 only
 //   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1–5
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/shm_message_bus.h"
-#include "ipc/shm_types.h"
 
 #include <gtest/gtest.h>
 
@@ -94,18 +94,18 @@ TEST(ZenohTopicMapping, SystemHealth) {
 
 TEST(ZenohTopicMapping, AllTwelveSegmentsMapped) {
     // Verify every shm_names constant has a mapping
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::VIDEO_MISSION_CAM), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::VIDEO_STEREO_CAM), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::DETECTED_OBJECTS), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::SLAM_POSE), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::MISSION_STATUS), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::TRAJECTORY_CMD), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::PAYLOAD_COMMANDS), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::FC_COMMANDS), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::FC_STATE), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::GCS_COMMANDS), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::PAYLOAD_STATUS), "");
-    EXPECT_NE(ZenohMessageBus::to_key_expr(shm_names::SYSTEM_HEALTH), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::VIDEO_MISSION_CAM), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::VIDEO_STEREO_CAM), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::DETECTED_OBJECTS), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::SLAM_POSE), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::MISSION_STATUS), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::TRAJECTORY_CMD), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::PAYLOAD_COMMANDS), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::FC_COMMANDS), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::FC_STATE), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::GCS_COMMANDS), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::PAYLOAD_STATUS), "");
+    EXPECT_NE(ZenohMessageBus::to_key_expr(topics::SYSTEM_HEALTH), "");
 }
 
 TEST(ZenohTopicMapping, PassthroughZenohKeyExpr) {
@@ -148,7 +148,7 @@ TEST(MessageBusFactory, ZenohRequestWithoutBuild) {
 
 TEST(MessageBusFactory, BusAdvertiseViaMessageBus) {
     auto bus = create_message_bus("shm");
-    auto pub = bus.advertise<ShmPose>("/test_factory_pub_" + std::to_string(getpid()));
+    auto pub = bus.advertise<Pose>("/test_factory_pub_" + std::to_string(getpid()));
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 }
@@ -157,10 +157,10 @@ TEST(MessageBusFactory, BusSubscribeViaMessageBus) {
     // Create publisher first so subscriber can connect
     auto bus   = create_message_bus("shm");
     auto topic = "/test_factory_sub_" + std::to_string(getpid());
-    auto pub   = bus.advertise<ShmPose>(topic);
+    auto pub   = bus.advertise<Pose>(topic);
     ASSERT_NE(pub, nullptr);
 
-    auto sub = bus.subscribe<ShmPose>(topic, 5, 50);
+    auto sub = bus.subscribe<Pose>(topic, 5, 50);
     ASSERT_NE(sub, nullptr);
     EXPECT_TRUE(sub->is_connected());
 }
@@ -263,10 +263,10 @@ TEST(ZenohPubSub, SmallMessageRoundTrip) {
 }
 
 TEST(ZenohPubSub, ShmPoseRoundTrip) {
-    ZenohPublisher<ShmPose>  pub("drone/test/pose_rt");
-    ZenohSubscriber<ShmPose> sub("drone/test/pose_rt");
+    ZenohPublisher<Pose>  pub("drone/test/pose_rt");
+    ZenohSubscriber<Pose> sub("drone/test/pose_rt");
 
-    ShmPose sent{};
+    Pose sent{};
     sent.timestamp_ns   = 123456789;
     sent.translation[0] = 1.0;
     sent.translation[1] = 2.0;
@@ -274,7 +274,7 @@ TEST(ZenohPubSub, ShmPoseRoundTrip) {
     sent.quaternion[0]  = 1.0;  // w
     sent.quality        = 2;
 
-    ShmPose received{};
+    Pose received{};
     ASSERT_TRUE(publish_until_received(pub, sent, sub, received));
     EXPECT_EQ(received.timestamp_ns, 123456789u);
     EXPECT_DOUBLE_EQ(received.translation[0], 1.0);
@@ -284,11 +284,11 @@ TEST(ZenohPubSub, ShmPoseRoundTrip) {
 }
 
 TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
-    ZenohPublisher<ShmVideoFrame>  pub("drone/test/video_rt");
-    ZenohSubscriber<ShmVideoFrame> sub("drone/test/video_rt");
+    ZenohPublisher<VideoFrame>  pub("drone/test/video_rt");
+    ZenohSubscriber<VideoFrame> sub("drone/test/video_rt");
 
-    // Heap-allocate — ShmVideoFrame is ~6 MB, too large for the stack.
-    auto sent                                      = std::make_unique<ShmVideoFrame>();
+    // Heap-allocate — VideoFrame is ~6 MB, too large for the stack.
+    auto sent                                      = std::make_unique<VideoFrame>();
     sent->timestamp_ns                             = 999;
     sent->width                                    = 1920;
     sent->height                                   = 1080;
@@ -298,7 +298,7 @@ TEST(ZenohPubSub, LargeVideoFrameRoundTrip) {
     sent->pixel_data[1]                            = 0xBB;
     sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xFF;
 
-    auto received = std::make_unique<ShmVideoFrame>();
+    auto received = std::make_unique<VideoFrame>();
     ASSERT_TRUE(publish_until_received(pub, *sent, sub, *received));
     EXPECT_EQ(received->width, 1920u);
     EXPECT_EQ(received->height, 1080u);
@@ -362,7 +362,7 @@ TEST(ZenohPubSub, SequenceIncrementsOnPublish) {
 
 TEST(ZenohMessageBus, AdvertiseCreatesPublisher) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmPose>("/slam_pose");
+    auto            pub = bus.advertise<Pose>("/slam_pose");
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
     // Should have mapped to Zenoh key expression
@@ -371,14 +371,14 @@ TEST(ZenohMessageBus, AdvertiseCreatesPublisher) {
 
 TEST(ZenohMessageBus, SubscribeCreatesSubscriber) {
     ZenohMessageBus bus;
-    auto            sub = bus.subscribe<ShmPose>("/slam_pose");
+    auto            sub = bus.subscribe<Pose>("/slam_pose");
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
 
 TEST(ZenohMessageBus, SubscribeLazyCreatesSubscriber) {
     ZenohMessageBus bus;
-    auto            sub = bus.subscribe_lazy<ShmPose>("/slam_pose");
+    auto            sub = bus.subscribe_lazy<Pose>("/slam_pose");
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 }
@@ -441,18 +441,18 @@ static bool publish_until_received_iface(
     return false;
 }
 
-// --- Channel 1: ShmPose (P3 → P4, P5) -----------------------
+// --- Channel 1: Pose (P3 → P4, P5) -----------------------
 
 TEST(ZenohMigration, Pose_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmPose>(shm_names::SLAM_POSE);
-    auto            sub = bus.subscribe<ShmPose>(shm_names::SLAM_POSE);
+    auto            pub = bus.advertise<Pose>(topics::SLAM_POSE);
+    auto            sub = bus.subscribe<Pose>(topics::SLAM_POSE);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(pub->topic_name(), "drone/slam/pose");
     EXPECT_EQ(sub->topic_name(), "drone/slam/pose");
 
-    ShmPose sent{};
+    Pose sent{};
     sent.timestamp_ns   = 100;
     sent.translation[0] = 10.0;
     sent.translation[1] = 20.0;
@@ -461,7 +461,7 @@ TEST(ZenohMigration, Pose_RoundTrip) {
     sent.velocity[0]    = 1.5;
     sent.quality        = 2;
 
-    ShmPose received{};
+    Pose received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 100u);
     EXPECT_DOUBLE_EQ(received.translation[0], 10.0);
@@ -472,17 +472,17 @@ TEST(ZenohMigration, Pose_RoundTrip) {
     EXPECT_EQ(received.quality, 2u);
 }
 
-// --- Channel 2: ShmFCState (P5 → P4, P7) --------------------
+// --- Channel 2: FCState (P5 → P4, P7) --------------------
 
 TEST(ZenohMigration, FCState_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmFCState>(shm_names::FC_STATE);
-    auto            sub = bus.subscribe<ShmFCState>(shm_names::FC_STATE);
+    auto            pub = bus.advertise<FCState>(topics::FC_STATE);
+    auto            sub = bus.subscribe<FCState>(topics::FC_STATE);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
     EXPECT_EQ(pub->topic_name(), "drone/comms/fc_state");
 
-    ShmFCState sent{};
+    FCState sent{};
     sent.timestamp_ns       = 200;
     sent.gps_lat            = 37.7749f;
     sent.gps_lon            = -122.4194f;
@@ -493,7 +493,7 @@ TEST(ZenohMigration, FCState_RoundTrip) {
     sent.satellites_visible = 12;
     sent.flight_mode        = 6;
 
-    ShmFCState received{};
+    FCState received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 200u);
     EXPECT_FLOAT_EQ(received.gps_lat, 37.7749f);
@@ -506,22 +506,22 @@ TEST(ZenohMigration, FCState_RoundTrip) {
     EXPECT_EQ(received.flight_mode, 6);
 }
 
-// --- Channel 3: ShmFCCommand (P4 → P5) ----------------------
+// --- Channel 3: FCCommand (P4 → P5) ----------------------
 
 TEST(ZenohMigration, FCCommand_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmFCCommand>(shm_names::FC_COMMANDS);
-    auto            sub = bus.subscribe<ShmFCCommand>(shm_names::FC_COMMANDS);
+    auto            pub = bus.advertise<FCCommand>(topics::FC_COMMANDS);
+    auto            sub = bus.subscribe<FCCommand>(topics::FC_COMMANDS);
     EXPECT_EQ(pub->topic_name(), "drone/comms/fc_command");
 
-    ShmFCCommand sent{};
+    FCCommand sent{};
     sent.timestamp_ns = 300;
     sent.command      = FCCommandType::TAKEOFF;
     sent.param1       = 5.0f;
     sent.sequence_id  = 42;
     sent.valid        = true;
 
-    ShmFCCommand received{};
+    FCCommand received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 300u);
     EXPECT_EQ(received.command, FCCommandType::TAKEOFF);
@@ -530,15 +530,15 @@ TEST(ZenohMigration, FCCommand_RoundTrip) {
     EXPECT_TRUE(received.valid);
 }
 
-// --- Channel 4: ShmMissionStatus (P4 → P5, P7) --------------
+// --- Channel 4: MissionStatus (P4 → P5, P7) --------------
 
 TEST(ZenohMigration, MissionStatus_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmMissionStatus>(shm_names::MISSION_STATUS);
-    auto            sub = bus.subscribe<ShmMissionStatus>(shm_names::MISSION_STATUS);
+    auto            pub = bus.advertise<MissionStatus>(topics::MISSION_STATUS);
+    auto            sub = bus.subscribe<MissionStatus>(topics::MISSION_STATUS);
     EXPECT_EQ(pub->topic_name(), "drone/mission/status");
 
-    ShmMissionStatus sent{};
+    MissionStatus sent{};
     sent.timestamp_ns     = 400;
     sent.state            = MissionState::NAVIGATE;
     sent.current_waypoint = 3;
@@ -550,7 +550,7 @@ TEST(ZenohMigration, MissionStatus_RoundTrip) {
     sent.battery_percent  = 85.0f;
     sent.mission_active   = true;
 
-    ShmMissionStatus received{};
+    MissionStatus received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 400u);
     EXPECT_EQ(received.state, MissionState::NAVIGATE);
@@ -561,15 +561,15 @@ TEST(ZenohMigration, MissionStatus_RoundTrip) {
     EXPECT_TRUE(received.mission_active);
 }
 
-// --- Channel 5: ShmTrajectoryCmd (P4 → P5) -------------------
+// --- Channel 5: TrajectoryCmd (P4 → P5) -------------------
 
 TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
-    auto            sub = bus.subscribe<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
+    auto            pub = bus.advertise<TrajectoryCmd>(topics::TRAJECTORY_CMD);
+    auto            sub = bus.subscribe<TrajectoryCmd>(topics::TRAJECTORY_CMD);
     EXPECT_EQ(pub->topic_name(), "drone/mission/trajectory");
 
-    ShmTrajectoryCmd sent{};
+    TrajectoryCmd sent{};
     sent.timestamp_ns     = 500;
     sent.target_x         = 10.0f;
     sent.target_y         = 20.0f;
@@ -582,7 +582,7 @@ TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
     sent.coordinate_frame = 8;
     sent.valid            = true;
 
-    ShmTrajectoryCmd received{};
+    TrajectoryCmd received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 500u);
     EXPECT_FLOAT_EQ(received.target_x, 10.0f);
@@ -592,15 +592,15 @@ TEST(ZenohMigration, TrajectoryCmd_RoundTrip) {
     EXPECT_TRUE(received.valid);
 }
 
-// --- Channel 6: ShmGCSCommand (P5 → P4) ---------------------
+// --- Channel 6: GCSCommand (P5 → P4) ---------------------
 
 TEST(ZenohMigration, GCSCommand_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmGCSCommand>(shm_names::GCS_COMMANDS);
-    auto            sub = bus.subscribe<ShmGCSCommand>(shm_names::GCS_COMMANDS);
+    auto            pub = bus.advertise<GCSCommand>(topics::GCS_COMMANDS);
+    auto            sub = bus.subscribe<GCSCommand>(topics::GCS_COMMANDS);
     EXPECT_EQ(pub->topic_name(), "drone/comms/gcs_command");
 
-    ShmGCSCommand sent{};
+    GCSCommand sent{};
     sent.timestamp_ns = 600;
     sent.command      = GCSCommandType::RTL;
     sent.param1       = 0.0f;
@@ -609,7 +609,7 @@ TEST(ZenohMigration, GCSCommand_RoundTrip) {
     sent.sequence_id  = 7;
     sent.valid        = true;
 
-    ShmGCSCommand received{};
+    GCSCommand received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 600u);
     EXPECT_EQ(received.command, GCSCommandType::RTL);
@@ -617,15 +617,15 @@ TEST(ZenohMigration, GCSCommand_RoundTrip) {
     EXPECT_TRUE(received.valid);
 }
 
-// --- Channel 7: ShmDetectedObjectList (P2 → P4) -------------
+// --- Channel 7: DetectedObjectList (P2 → P4) -------------
 
 TEST(ZenohMigration, DetectedObjects_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmDetectedObjectList>(shm_names::DETECTED_OBJECTS);
-    auto            sub = bus.subscribe<ShmDetectedObjectList>(shm_names::DETECTED_OBJECTS);
+    auto            pub = bus.advertise<DetectedObjectList>(topics::DETECTED_OBJECTS);
+    auto            sub = bus.subscribe<DetectedObjectList>(topics::DETECTED_OBJECTS);
     EXPECT_EQ(pub->topic_name(), "drone/perception/detections");
 
-    ShmDetectedObjectList sent{};
+    DetectedObjectList sent{};
     sent.timestamp_ns          = 700;
     sent.frame_sequence        = 42;
     sent.num_objects           = 2;
@@ -639,7 +639,7 @@ TEST(ZenohMigration, DetectedObjects_RoundTrip) {
     sent.objects[1].class_id   = ObjectClass::VEHICLE_CAR;
     sent.objects[1].confidence = 0.87f;
 
-    ShmDetectedObjectList received{};
+    DetectedObjectList received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 700u);
     EXPECT_EQ(received.frame_sequence, 42u);
@@ -652,15 +652,15 @@ TEST(ZenohMigration, DetectedObjects_RoundTrip) {
     EXPECT_EQ(received.objects[1].class_id, ObjectClass::VEHICLE_CAR);
 }
 
-// --- Channel 8: ShmPayloadCommand (P4 → P6) -----------------
+// --- Channel 8: PayloadCommand (P4 → P6) -----------------
 
 TEST(ZenohMigration, PayloadCommand_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmPayloadCommand>(shm_names::PAYLOAD_COMMANDS);
-    auto            sub = bus.subscribe<ShmPayloadCommand>(shm_names::PAYLOAD_COMMANDS);
+    auto            pub = bus.advertise<PayloadCommand>(topics::PAYLOAD_COMMANDS);
+    auto            sub = bus.subscribe<PayloadCommand>(topics::PAYLOAD_COMMANDS);
     EXPECT_EQ(pub->topic_name(), "drone/mission/payload_command");
 
-    ShmPayloadCommand sent{};
+    PayloadCommand sent{};
     sent.timestamp_ns = 800;
     sent.action       = PayloadAction::GIMBAL_POINT;
     sent.gimbal_pitch = -30.0f;
@@ -668,7 +668,7 @@ TEST(ZenohMigration, PayloadCommand_RoundTrip) {
     sent.sequence_id  = 100;
     sent.valid        = true;
 
-    ShmPayloadCommand received{};
+    PayloadCommand received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 800u);
     EXPECT_EQ(received.action, PayloadAction::GIMBAL_POINT);
@@ -678,15 +678,15 @@ TEST(ZenohMigration, PayloadCommand_RoundTrip) {
     EXPECT_TRUE(received.valid);
 }
 
-// --- Channel 9: ShmPayloadStatus (P6 → P4, P7) --------------
+// --- Channel 9: PayloadStatus (P6 → P4, P7) --------------
 
 TEST(ZenohMigration, PayloadStatus_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmPayloadStatus>(shm_names::PAYLOAD_STATUS);
-    auto            sub = bus.subscribe<ShmPayloadStatus>(shm_names::PAYLOAD_STATUS);
+    auto            pub = bus.advertise<PayloadStatus>(topics::PAYLOAD_STATUS);
+    auto            sub = bus.subscribe<PayloadStatus>(topics::PAYLOAD_STATUS);
     EXPECT_EQ(pub->topic_name(), "drone/payload/status");
 
-    ShmPayloadStatus sent{};
+    PayloadStatus sent{};
     sent.timestamp_ns       = 900;
     sent.gimbal_pitch       = -15.0f;
     sent.gimbal_yaw         = 90.0f;
@@ -695,7 +695,7 @@ TEST(ZenohMigration, PayloadStatus_RoundTrip) {
     sent.gimbal_stabilized  = true;
     sent.num_plugins_active = 3;
 
-    ShmPayloadStatus received{};
+    PayloadStatus received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 900u);
     EXPECT_FLOAT_EQ(received.gimbal_pitch, -15.0f);
@@ -706,15 +706,15 @@ TEST(ZenohMigration, PayloadStatus_RoundTrip) {
     EXPECT_EQ(received.num_plugins_active, 3);
 }
 
-// --- Channel 10: ShmSystemHealth (P7 → P4) -------------------
+// --- Channel 10: SystemHealth (P7 → P4) -------------------
 
 TEST(ZenohMigration, SystemHealth_RoundTrip) {
     ZenohMessageBus bus;
-    auto            pub = bus.advertise<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
-    auto            sub = bus.subscribe<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
+    auto            pub = bus.advertise<SystemHealth>(topics::SYSTEM_HEALTH);
+    auto            sub = bus.subscribe<SystemHealth>(topics::SYSTEM_HEALTH);
     EXPECT_EQ(pub->topic_name(), "drone/monitor/health");
 
-    ShmSystemHealth sent{};
+    SystemHealth sent{};
     sent.timestamp_ns         = 1000;
     sent.cpu_usage_percent    = 45.0f;
     sent.memory_usage_percent = 62.0f;
@@ -728,7 +728,7 @@ TEST(ZenohMigration, SystemHealth_RoundTrip) {
     sent.power_watts          = 12.5f;
     sent.thermal_zone         = 1;
 
-    ShmSystemHealth received{};
+    SystemHealth received{};
     ASSERT_TRUE(publish_until_received_iface(*pub, sent, *sub, received));
     EXPECT_EQ(received.timestamp_ns, 1000u);
     EXPECT_FLOAT_EQ(received.cpu_usage_percent, 45.0f);
@@ -746,39 +746,39 @@ TEST(ZenohMigration, SystemHealth_RoundTrip) {
 TEST(ZenohMigration, MultiChannel_Simultaneous) {
     ZenohMessageBus bus;
 
-    auto pose_pub   = bus.advertise<ShmPose>(shm_names::SLAM_POSE);
-    auto fc_pub     = bus.advertise<ShmFCState>(shm_names::FC_STATE);
-    auto traj_pub   = bus.advertise<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
-    auto health_pub = bus.advertise<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
-    auto status_pub = bus.advertise<ShmMissionStatus>(shm_names::MISSION_STATUS);
+    auto pose_pub   = bus.advertise<Pose>(topics::SLAM_POSE);
+    auto fc_pub     = bus.advertise<FCState>(topics::FC_STATE);
+    auto traj_pub   = bus.advertise<TrajectoryCmd>(topics::TRAJECTORY_CMD);
+    auto health_pub = bus.advertise<SystemHealth>(topics::SYSTEM_HEALTH);
+    auto status_pub = bus.advertise<MissionStatus>(topics::MISSION_STATUS);
 
-    auto pose_sub   = bus.subscribe<ShmPose>(shm_names::SLAM_POSE);
-    auto fc_sub     = bus.subscribe<ShmFCState>(shm_names::FC_STATE);
-    auto traj_sub   = bus.subscribe<ShmTrajectoryCmd>(shm_names::TRAJECTORY_CMD);
-    auto health_sub = bus.subscribe<ShmSystemHealth>(shm_names::SYSTEM_HEALTH);
-    auto status_sub = bus.subscribe<ShmMissionStatus>(shm_names::MISSION_STATUS);
+    auto pose_sub   = bus.subscribe<Pose>(topics::SLAM_POSE);
+    auto fc_sub     = bus.subscribe<FCState>(topics::FC_STATE);
+    auto traj_sub   = bus.subscribe<TrajectoryCmd>(topics::TRAJECTORY_CMD);
+    auto health_sub = bus.subscribe<SystemHealth>(topics::SYSTEM_HEALTH);
+    auto status_sub = bus.subscribe<MissionStatus>(topics::MISSION_STATUS);
 
-    ShmPose pose_s{};
+    Pose pose_s{};
     pose_s.timestamp_ns = 1;
     pose_s.quality      = 2;
-    ShmFCState fc_s{};
+    FCState fc_s{};
     fc_s.timestamp_ns = 2;
     fc_s.armed        = true;
-    ShmTrajectoryCmd traj_s{};
+    TrajectoryCmd traj_s{};
     traj_s.timestamp_ns = 3;
     traj_s.valid        = true;
-    ShmSystemHealth hlth_s{};
+    SystemHealth hlth_s{};
     hlth_s.timestamp_ns  = 4;
     hlth_s.total_healthy = 7;
-    ShmMissionStatus ms_s{};
+    MissionStatus ms_s{};
     ms_s.timestamp_ns   = 5;
     ms_s.mission_active = true;
 
-    ShmPose          pose_r{};
-    ShmFCState       fc_r{};
-    ShmTrajectoryCmd traj_r{};
-    ShmSystemHealth  hlth_r{};
-    ShmMissionStatus ms_r{};
+    Pose          pose_r{};
+    FCState       fc_r{};
+    TrajectoryCmd traj_r{};
+    SystemHealth  hlth_r{};
+    MissionStatus ms_r{};
 
     ASSERT_TRUE(publish_until_received_iface(*pose_pub, pose_s, *pose_sub, pose_r));
     ASSERT_TRUE(publish_until_received_iface(*fc_pub, fc_s, *fc_sub, fc_r));
@@ -796,21 +796,21 @@ TEST(ZenohMigration, MultiChannel_Simultaneous) {
 // --- High-rate: Pose at 200 Hz for 2 seconds -----------------
 
 TEST(ZenohMigration, HighRate_Pose) {
-    ZenohPublisher<ShmPose>  pub("drone/test/highrate_pose");
-    ZenohSubscriber<ShmPose> sub("drone/test/highrate_pose");
+    ZenohPublisher<Pose>  pub("drone/test/highrate_pose");
+    ZenohSubscriber<Pose> sub("drone/test/highrate_pose");
 
     // Wait for discovery
     {
-        ShmPose warm{};
+        Pose warm{};
         warm.timestamp_ns = 0;
-        ShmPose warmr{};
+        Pose warmr{};
         ASSERT_TRUE(publish_until_received(pub, warm, sub, warmr));
     }
 
     // Publish 400 messages at 200 Hz (5 ms interval) for 2 seconds
     constexpr int total_msgs = 400;
     for (int i = 1; i <= total_msgs; ++i) {
-        ShmPose msg{};
+        Pose msg{};
         msg.timestamp_ns = static_cast<uint64_t>(i);
         msg.quality      = 2;
         pub.publish(msg);
@@ -821,9 +821,9 @@ TEST(ZenohMigration, HighRate_Pose) {
     // ZenohSubscriber keeps the latest value (non-consuming receive),
     // so we poll repeatedly until the final message (ts == total_msgs)
     // appears or a generous timeout expires.
-    ShmPose last{};
-    bool    got_final     = false;
-    auto    poll_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+    Pose last{};
+    bool got_final     = false;
+    auto poll_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     while (std::chrono::steady_clock::now() < poll_deadline) {
         if (sub.receive(last) && last.timestamp_ns == static_cast<uint64_t>(total_msgs)) {
             got_final = true;
@@ -843,10 +843,10 @@ TEST(ZenohMigration, FactorySubscribeOptional) {
     // may publish on GCS_COMMANDS.
     std::string unique_key = std::string("/factory_opt_test_") + std::to_string(::getpid());
     auto        bus        = create_message_bus("zenoh");
-    auto        sub        = bus.subscribe_optional<ShmGCSCommand>(unique_key);
+    auto        sub        = bus.subscribe_optional<GCSCommand>(unique_key);
     ASSERT_NE(sub, nullptr);
     // No publisher exists — receive should return false but not crash
-    ShmGCSCommand cmd{};
+    GCSCommand cmd{};
     EXPECT_FALSE(sub->receive(cmd));
 }
 
@@ -900,28 +900,28 @@ TEST(ZenohShmProvider, AllocLargeVideoFrameBuffer) {
         GTEST_SKIP() << "SHM provider unavailable";
     }
 
-    // Allocate a buffer the size of ShmVideoFrame (~6.2 MB)
-    auto  result = provider->alloc_gc_defrag_blocking(sizeof(ShmVideoFrame));
+    // Allocate a buffer the size of VideoFrame (~6.2 MB)
+    auto  result = provider->alloc_gc_defrag_blocking(sizeof(VideoFrame));
     auto* buf    = std::get_if<zenoh::ZShmMut>(&result);
-    ASSERT_NE(buf, nullptr) << "Failed to allocate " << sizeof(ShmVideoFrame)
+    ASSERT_NE(buf, nullptr) << "Failed to allocate " << sizeof(VideoFrame)
                             << " bytes from SHM pool";
-    EXPECT_EQ(buf->len(), sizeof(ShmVideoFrame));
+    EXPECT_EQ(buf->len(), sizeof(VideoFrame));
 }
 
 // --- Size-aware publish path tests ------------------------------------
 
 TEST(ZenohShmPublish, SmallMessageUsesBytes) {
-    // ShmPose is small (~400 bytes) — should use bytes path, not SHM
-    static_assert(sizeof(ShmPose) <= kShmPublishThreshold, "ShmPose should be below SHM threshold");
+    // Pose is small (~400 bytes) — should use bytes path, not SHM
+    static_assert(sizeof(Pose) <= kShmPublishThreshold, "Pose should be below SHM threshold");
 
-    ZenohPublisher<ShmPose>  pub("drone/test/shm_small_path");
-    ZenohSubscriber<ShmPose> sub("drone/test/shm_small_path");
+    ZenohPublisher<Pose>  pub("drone/test/shm_small_path");
+    ZenohSubscriber<Pose> sub("drone/test/shm_small_path");
 
-    ShmPose sent{};
+    Pose sent{};
     sent.timestamp_ns = 42;
     sent.quality      = 2;
 
-    ShmPose received{};
+    Pose received{};
     ASSERT_TRUE(publish_until_received(pub, sent, sub, received));
     EXPECT_EQ(received.timestamp_ns, 42u);
     EXPECT_EQ(received.quality, 2u);
@@ -933,19 +933,19 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
                         "cannot be verified";
     }
 
-    // ShmVideoFrame is ~6.2 MB — should use SHM provider path
-    static_assert(sizeof(ShmVideoFrame) > kShmPublishThreshold,
-                  "ShmVideoFrame should be above SHM threshold");
+    // VideoFrame is ~6.2 MB — should use SHM provider path
+    static_assert(sizeof(VideoFrame) > kShmPublishThreshold,
+                  "VideoFrame should be above SHM threshold");
 
-    ZenohPublisher<ShmVideoFrame>  pub("drone/test/shm_video_path");
-    ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_video_path");
+    ZenohPublisher<VideoFrame>  pub("drone/test/shm_video_path");
+    ZenohSubscriber<VideoFrame> sub("drone/test/shm_video_path");
 
     // Record baseline counters before publish
     const auto shm_before   = pub.shm_publish_count();
     const auto bytes_before = pub.bytes_publish_count();
 
     // Heap-allocate — too large for the stack
-    auto sent             = std::make_unique<ShmVideoFrame>();
+    auto sent             = std::make_unique<VideoFrame>();
     sent->timestamp_ns    = 12345;
     sent->width           = 1920;
     sent->height          = 1080;
@@ -957,7 +957,7 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
     sent->pixel_data[sizeof(sent->pixel_data) / 2] = 0xBE;
     sent->pixel_data[sizeof(sent->pixel_data) - 1] = 0xEF;
 
-    auto received = std::make_unique<ShmVideoFrame>();
+    auto received = std::make_unique<VideoFrame>();
     ASSERT_TRUE(publish_until_received(pub, *sent, sub, *received));
     EXPECT_EQ(received->timestamp_ns, 12345u);
     EXPECT_EQ(received->width, 1920u);
@@ -970,9 +970,9 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
     EXPECT_EQ(received->pixel_data[sizeof(received->pixel_data) - 1], 0xEF);
 
     // Verify SHM path was actually used (not the bytes fallback)
-    EXPECT_GT(pub.shm_publish_count(), shm_before) << "Expected SHM publish path for ShmVideoFrame";
+    EXPECT_GT(pub.shm_publish_count(), shm_before) << "Expected SHM publish path for VideoFrame";
     EXPECT_EQ(pub.bytes_publish_count(), bytes_before)
-        << "Bytes path should not be used for ShmVideoFrame";
+        << "Bytes path should not be used for VideoFrame";
 }
 
 TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
@@ -981,17 +981,17 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
                         "cannot be verified";
     }
 
-    // ShmStereoFrame is ~614 KB — should use SHM provider path
-    static_assert(sizeof(ShmStereoFrame) > kShmPublishThreshold,
-                  "ShmStereoFrame should be above SHM threshold");
+    // StereoFrame is ~614 KB — should use SHM provider path
+    static_assert(sizeof(StereoFrame) > kShmPublishThreshold,
+                  "StereoFrame should be above SHM threshold");
 
-    ZenohPublisher<ShmStereoFrame>  pub("drone/test/shm_stereo_path");
-    ZenohSubscriber<ShmStereoFrame> sub("drone/test/shm_stereo_path");
+    ZenohPublisher<StereoFrame>  pub("drone/test/shm_stereo_path");
+    ZenohSubscriber<StereoFrame> sub("drone/test/shm_stereo_path");
 
     const auto shm_before   = pub.shm_publish_count();
     const auto bytes_before = pub.bytes_publish_count();
 
-    auto sent                                      = std::make_unique<ShmStereoFrame>();
+    auto sent                                      = std::make_unique<StereoFrame>();
     sent->timestamp_ns                             = 77777;
     sent->width                                    = 640;
     sent->height                                   = 480;
@@ -1001,7 +1001,7 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
     sent->left_data[sizeof(sent->left_data) - 1]   = 0xCC;
     sent->right_data[sizeof(sent->right_data) - 1] = 0xDD;
 
-    auto received = std::make_unique<ShmStereoFrame>();
+    auto received = std::make_unique<StereoFrame>();
     ASSERT_TRUE(publish_until_received(pub, *sent, sub, *received));
     EXPECT_EQ(received->timestamp_ns, 77777u);
     EXPECT_EQ(received->width, 640u);
@@ -1012,30 +1012,29 @@ TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
     EXPECT_EQ(received->right_data[sizeof(received->right_data) - 1], 0xDD);
 
     // Verify SHM path was actually used
-    EXPECT_GT(pub.shm_publish_count(), shm_before)
-        << "Expected SHM publish path for ShmStereoFrame";
+    EXPECT_GT(pub.shm_publish_count(), shm_before) << "Expected SHM publish path for StereoFrame";
     EXPECT_EQ(pub.bytes_publish_count(), bytes_before)
-        << "Bytes path should not be used for ShmStereoFrame";
+        << "Bytes path should not be used for StereoFrame";
 }
 
 // --- Factory integration with video channels --------------------------
 
 TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
-    // End-to-end: factory → advertise ShmVideoFrame → subscribe → roundtrip
+    // End-to-end: factory → advertise VideoFrame → subscribe → roundtrip
     auto bus = create_message_bus("zenoh");
-    auto pub = bus.advertise<ShmVideoFrame>(shm_names::VIDEO_MISSION_CAM);
-    auto sub = bus.subscribe<ShmVideoFrame>(shm_names::VIDEO_MISSION_CAM);
+    auto pub = bus.advertise<VideoFrame>(topics::VIDEO_MISSION_CAM);
+    auto sub = bus.subscribe<VideoFrame>(topics::VIDEO_MISSION_CAM);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
-    auto sent             = std::make_unique<ShmVideoFrame>();
+    auto sent             = std::make_unique<VideoFrame>();
     sent->timestamp_ns    = 555;
     sent->width           = 1920;
     sent->height          = 1080;
     sent->channels        = 3;
     sent->pixel_data[100] = 0x42;
 
-    auto received = std::make_unique<ShmVideoFrame>();
+    auto received = std::make_unique<VideoFrame>();
     bool ok       = false;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -1059,18 +1058,18 @@ TEST(ZenohShmPublish, FactoryVideoRoundTrip) {
 
 TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
     auto bus = create_message_bus("zenoh");
-    auto pub = bus.advertise<ShmStereoFrame>(shm_names::VIDEO_STEREO_CAM);
-    auto sub = bus.subscribe<ShmStereoFrame>(shm_names::VIDEO_STEREO_CAM);
+    auto pub = bus.advertise<StereoFrame>(topics::VIDEO_STEREO_CAM);
+    auto sub = bus.subscribe<StereoFrame>(topics::VIDEO_STEREO_CAM);
     ASSERT_NE(pub, nullptr);
     ASSERT_NE(sub, nullptr);
 
-    auto sent           = std::make_unique<ShmStereoFrame>();
+    auto sent           = std::make_unique<StereoFrame>();
     sent->timestamp_ns  = 888;
     sent->width         = 640;
     sent->height        = 480;
     sent->left_data[42] = 0x99;
 
-    auto received = std::make_unique<ShmStereoFrame>();
+    auto received = std::make_unique<StereoFrame>();
     bool ok       = false;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -1099,15 +1098,15 @@ TEST(ZenohShmPublish, SustainedVideoPublish) {
                         "cannot be verified";
     }
 
-    ZenohPublisher<ShmVideoFrame>  pub("drone/test/shm_sustained_video");
-    ZenohSubscriber<ShmVideoFrame> sub("drone/test/shm_sustained_video");
+    ZenohPublisher<VideoFrame>  pub("drone/test/shm_sustained_video");
+    ZenohSubscriber<VideoFrame> sub("drone/test/shm_sustained_video");
 
-    auto frame      = std::make_unique<ShmVideoFrame>();
+    auto frame      = std::make_unique<VideoFrame>();
     frame->width    = 1920;
     frame->height   = 1080;
     frame->channels = 3;
 
-    auto received = std::make_unique<ShmVideoFrame>();
+    auto received = std::make_unique<VideoFrame>();
 
     // Warm up discovery
     {

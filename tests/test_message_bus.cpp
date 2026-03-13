@@ -4,13 +4,13 @@
 //
 // Note: SHM service channel tests were removed in Phase D (#49).
 //       Zenoh service channel tests are in test_zenoh_ipc.cpp (Category 5).
+#include "ipc/ipc_types.h"
 #include "ipc/ipublisher.h"
 #include "ipc/iservice_channel.h"
 #include "ipc/isubscriber.h"
 #include "ipc/shm_message_bus.h"
 #include "ipc/shm_publisher.h"
 #include "ipc/shm_subscriber.h"
-#include "ipc/shm_types.h"
 
 #include <chrono>
 #include <cstring>
@@ -185,13 +185,13 @@ TEST(ShmMessageBusTest, MultiplePublishOverwrites) {
 TEST(ShmMessageBusTest, WithShmTypes) {
     auto          name = unique_name("/test_bus_pose");
     ShmMessageBus bus;
-    auto          pub = bus.advertise<ShmPose>(name);
+    auto          pub = bus.advertise<Pose>(name);
     ASSERT_TRUE(pub->is_ready());
 
-    auto sub = bus.subscribe<ShmPose>(name, 1, 10);
+    auto sub = bus.subscribe<Pose>(name, 1, 10);
     ASSERT_TRUE(sub->is_connected());
 
-    ShmPose pose{};
+    Pose pose{};
     pose.timestamp_ns   = 12345678;
     pose.translation[0] = 1.0;
     pose.translation[1] = 2.0;
@@ -199,7 +199,7 @@ TEST(ShmMessageBusTest, WithShmTypes) {
     pose.quality        = 2;
     pub->publish(pose);
 
-    ShmPose received{};
+    Pose received{};
     ASSERT_TRUE(sub->receive(received));
     EXPECT_EQ(received.timestamp_ns, 12345678u);
     EXPECT_DOUBLE_EQ(received.translation[0], 1.0);

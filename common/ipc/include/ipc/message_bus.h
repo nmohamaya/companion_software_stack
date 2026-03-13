@@ -5,8 +5,8 @@
 // channels without knowing or caring which transport is active:
 //
 //   auto bus = drone::ipc::create_message_bus(cfg);
-//   auto pub = bus.advertise<ShmPose>("drone/slam/pose");
-//   auto sub = bus.subscribe<ShmPose>("drone/slam/pose");
+//   auto pub = bus.advertise<Pose>("drone/slam/pose");
+//   auto sub = bus.subscribe<Pose>("drone/slam/pose");
 //
 // Adding a new transport backend (e.g. iceoryx) requires:
 //   1. Implement IceoryxPublisher<T>, IceoryxSubscriber<T>, IceoryxMessageBus

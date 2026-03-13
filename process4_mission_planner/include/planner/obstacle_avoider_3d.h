@@ -12,7 +12,7 @@
 // Implements Epic #110 Phase 3 — 3D obstacle avoidance.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "planner/iobstacle_avoider.h"
 
 #include <algorithm>
@@ -42,9 +42,9 @@ public:
     ObstacleAvoider3D(float influence_radius, float repulsive_gain)
         : config_{influence_radius, repulsive_gain} {}
 
-    drone::ipc::ShmTrajectoryCmd avoid(const drone::ipc::ShmTrajectoryCmd&      planned,
-                                       const drone::ipc::ShmPose&               pose,
-                                       const drone::ipc::ShmDetectedObjectList& objects) override {
+    drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
+                                    const drone::ipc::Pose&               pose,
+                                    const drone::ipc::DetectedObjectList& objects) override {
         auto cmd = planned;
 
         // Skip if data is stale or empty

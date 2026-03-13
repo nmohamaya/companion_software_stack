@@ -15,7 +15,7 @@
 //     are logged with the reason for the transition
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "slam/ifeature_extractor.h"
 #include "slam/imu_preintegrator.h"
 #include "slam/istereo_matcher.h"
@@ -57,8 +57,8 @@ public:
     /// @param frame        The stereo frame from the camera.
     /// @param imu_samples  IMU readings accumulated since the last call.
     /// @return Ok(VIOOutput) on success, Err(VIOError) on critical failure.
-    virtual VIOResult<VIOOutput> process_frame(const drone::ipc::ShmStereoFrame& frame,
-                                               const std::vector<ImuSample>&     imu_samples) = 0;
+    virtual VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
+                                               const std::vector<ImuSample>&  imu_samples) = 0;
 
     /// Current pipeline health.
     [[nodiscard]] virtual VIOHealth health() const = 0;
@@ -96,8 +96,8 @@ public:
         , matcher_(std::make_unique<SimulatedStereoMatcher>(calib))
         , min_init_frames_(min_init_frames) {}
 
-    VIOResult<VIOOutput> process_frame(const drone::ipc::ShmStereoFrame& frame,
-                                       const std::vector<ImuSample>&     imu_samples) override {
+    VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
+                                       const std::vector<ImuSample>&  imu_samples) override {
 
         auto                          pipeline_start = std::chrono::steady_clock::now();
         const uint64_t                seq            = frame.sequence_number;
@@ -287,7 +287,7 @@ public:
     GazeboVIOBackend(const GazeboVIOBackend&)            = delete;
     GazeboVIOBackend& operator=(const GazeboVIOBackend&) = delete;
 
-    VIOResult<VIOOutput> process_frame(const drone::ipc::ShmStereoFrame& frame,
+    VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
                                        const std::vector<ImuSample>& /*imu_samples*/) override {
         VIOOutput output;
         output.frame_id = frame.sequence_number;

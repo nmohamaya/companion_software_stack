@@ -45,14 +45,14 @@ TEST(OccupancyGrid3DTest, InBoundsCheck) {
 TEST(OccupancyGrid3DTest, UpdateFromObjectsInflates) {
     OccupancyGrid3D grid(1.0f, 20.0f, 2.0f);
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 5.0f;
     objects.objects[0].position_y = 5.0f;
     objects.objects[0].position_z = 5.0f;
     objects.objects[0].confidence = 0.9f;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
     // Center cell should be occupied
@@ -68,14 +68,14 @@ TEST(OccupancyGrid3DTest, UpdateFromObjectsInflates) {
 TEST(OccupancyGrid3DTest, LowConfidenceSkipped) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f);
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 5.0f;
     objects.objects[0].position_y = 5.0f;
     objects.objects[0].position_z = 5.0f;
     objects.objects[0].confidence = 0.1f;  // below 0.3 threshold
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
     EXPECT_EQ(grid.occupied_count(), 0u);
@@ -84,14 +84,14 @@ TEST(OccupancyGrid3DTest, LowConfidenceSkipped) {
 TEST(OccupancyGrid3DTest, ClearResetsGrid) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f);
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 5.0f;
     objects.objects[0].position_y = 5.0f;
     objects.objects[0].position_z = 5.0f;
     objects.objects[0].confidence = 0.9f;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
     EXPECT_GT(grid.occupied_count(), 0u);
 
@@ -129,8 +129,8 @@ TEST(AStarSearchTest, PathAround3DObstacle) {
     OccupancyGrid3D grid(1.0f, 20.0f, 0.5f);  // small inflation
 
     // Place a wall of obstacles along x=5, y=-2..2, z=-2..2
-    drone::ipc::ShmDetectedObjectList objects{};
-    uint32_t                          idx = 0;
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
     for (int y = -2; y <= 2; ++y) {
         for (int z = -2; z <= 2; ++z) {
             if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
@@ -143,7 +143,7 @@ TEST(AStarSearchTest, PathAround3DObstacle) {
     }
     objects.num_objects = idx;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
     GridCell start{0, 0, 0};
@@ -161,14 +161,14 @@ TEST(AStarSearchTest, UnreachableGoal) {
     OccupancyGrid3D grid(1.0f, 5.0f, 0.5f);
 
     // Occupy the goal cell
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 4.0f;
     objects.objects[0].position_y = 0.0f;
     objects.objects[0].position_z = 0.0f;
     objects.objects[0].confidence = 0.9f;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
     GridCell start{0, 0, 0};
@@ -183,14 +183,14 @@ TEST(AStarSearchTest, StartBlocked) {
     // occupied, so a path *is* found despite the start cell being blocked.
     OccupancyGrid3D grid(1.0f, 10.0f, 0.5f);
 
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 0.0f;
     objects.objects[0].position_y = 0.0f;
     objects.objects[0].position_z = 0.0f;
     objects.objects[0].confidence = 0.9f;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
     auto result = astar_search(grid, {0, 0, 0}, {5, 0, 0});
@@ -242,7 +242,7 @@ TEST(AStarSearchTest, DiagonalPathWorldCoords) {
 TEST(AStarPathPlannerTest, PlanReturnsValidCmd) {
     AStarPathPlanner planner;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 5.0;
@@ -267,14 +267,14 @@ TEST(AStarPathPlannerTest, FallbackWhenObstacleBlocks) {
     AStarPathPlanner planner(config);
 
     // Block the goal with obstacles
-    drone::ipc::ShmDetectedObjectList objects{};
+    drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
     objects.objects[0].position_x = 5.0f;
     objects.objects[0].position_y = 0.0f;
     objects.objects[0].position_z = 5.0f;
     objects.objects[0].confidence = 0.9f;
 
-    drone::ipc::ShmPose pose{};
+    drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 5.0;

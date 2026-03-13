@@ -3,15 +3,15 @@
 //                    and companion computer ↔ ground control station (GCS).
 // Uses HAL interfaces — backends selected via config.
 // Threads:
-//   fc_rx    — receives FC state, publishes ShmFCState
-//   fc_tx    — reads ShmTrajectoryCmd, sends to FC
-//   gcs_rx   — polls GCS for commands, publishes ShmGCSCommand
+//   fc_rx    — receives FC state, publishes FCState
+//   fc_tx    — reads TrajectoryCmd, sends to FC
+//   gcs_rx   — polls GCS for commands, publishes GCSCommand
 //   gcs_tx   — reads mission status + pose, sends telemetry to GCS
 
 #include "hal/hal_factory.h"
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/shm_reader.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
@@ -35,14 +35,14 @@
 static std::atomic<bool> g_running{true};
 
 // ── FC receive thread (10 Hz) ───────────────────────────────
-static void fc_rx_thread(drone::hal::IFCLink&                            fc,
-                         drone::ipc::IPublisher<drone::ipc::ShmFCState>& pub) {
+static void fc_rx_thread(drone::hal::IFCLink&                         fc,
+                         drone::ipc::IPublisher<drone::ipc::FCState>& pub) {
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
 
     // Optional fault-injection override reader.
-    ShmReader<drone::ipc::ShmFaultOverrides> override_reader;
-    (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);  // may fail — that's fine
+    ShmReader<drone::ipc::FaultOverrides> override_reader;
+    (void)override_reader.open(drone::ipc::topics::FAULT_OVERRIDES);  // may fail — that's fine
 
     // When FC link is overridden to disconnected, freeze the timestamp
     // so the FaultManager sees a stale heartbeat (simulates real link loss).
@@ -54,7 +54,7 @@ static void fc_rx_thread(drone::hal::IFCLink&                            fc,
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto hb = fc.receive_state();
 
-        drone::ipc::ShmFCState state{};
+        drone::ipc::FCState state{};
         state.timestamp_ns       = hb.timestamp_ns;
         state.battery_voltage    = hb.battery_voltage;
         state.battery_remaining  = hb.battery_percent;
@@ -66,10 +66,10 @@ static void fc_rx_thread(drone::hal::IFCLink&                            fc,
         state.connected          = true;
 
         // Apply fault-injection overrides (if any).
-        drone::ipc::ShmFaultOverrides ovr{};
+        drone::ipc::FaultOverrides ovr{};
         if (!override_reader.is_open()) {
             // Retry open — the fault_injector may create it later.
-            (void)override_reader.open(drone::ipc::shm_names::FAULT_OVERRIDES);
+            (void)override_reader.open(drone::ipc::topics::FAULT_OVERRIDES);
         }
         if (override_reader.is_open() && override_reader.read(ovr)) {
             if (ovr.battery_percent >= 0.0f) {
@@ -99,9 +99,9 @@ static void fc_rx_thread(drone::hal::IFCLink&                            fc,
 // ── FC transmit thread (20 Hz) ──────────────────────────────
 // Forwards trajectory commands AND FC commands (arm, takeoff, mode)
 // from the mission planner to the flight controller.
-static void fc_tx_thread(drone::hal::IFCLink&                                   fc,
-                         drone::ipc::ISubscriber<drone::ipc::ShmTrajectoryCmd>& traj_sub,
-                         drone::ipc::ISubscriber<drone::ipc::ShmFCCommand>&     cmd_sub) {
+static void fc_tx_thread(drone::hal::IFCLink&                                fc,
+                         drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>& traj_sub,
+                         drone::ipc::ISubscriber<drone::ipc::FCCommand>&     cmd_sub) {
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_tx thread started using {}", fc.name());
 
@@ -115,7 +115,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         // ── Handle FC commands (arm, takeoff, mode) ─────────
-        drone::ipc::ShmFCCommand fc_cmd{};
+        drone::ipc::FCCommand fc_cmd{};
         if (cmd_sub.is_connected() && cmd_sub.receive(fc_cmd) && fc_cmd.valid &&
             fc_cmd.sequence_id > last_cmd_seq) {
             last_cmd_seq = fc_cmd.sequence_id;
@@ -162,10 +162,10 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
         }
 
         // ── Forward trajectory velocity commands (dedup by timestamp) ──
-        drone::ipc::ShmTrajectoryCmd cmd{};
+        drone::ipc::TrajectoryCmd cmd{};
         if (traj_sub.receive(cmd) && cmd.valid && cmd.timestamp_ns > last_traj_ts) {
             last_traj_ts = cmd.timestamp_ns;
-            // target_yaw is stored in radians (ShmTrajectoryCmd contract);
+            // target_yaw is stored in radians (TrajectoryCmd contract);
             // MavlinkFCLink::send_trajectory expects degrees (PX4 VelocityNedYaw).
             const float yaw_deg = cmd.target_yaw * (180.0f / static_cast<float>(M_PI));
             if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z, yaw_deg)) {
@@ -182,8 +182,8 @@ static void fc_tx_thread(drone::hal::IFCLink&                                   
 }
 
 // ── GCS receive thread (2 Hz) ───────────────────────────────
-static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs,
-                          drone::ipc::IPublisher<drone::ipc::ShmGCSCommand>& pub) {
+static void gcs_rx_thread(drone::hal::IGCSLink&                           gcs,
+                          drone::ipc::IPublisher<drone::ipc::GCSCommand>& pub) {
     set_thread_params("gcs_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] gcs_rx thread started using {}", gcs.name());
 
@@ -193,7 +193,7 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto msg = gcs.poll_command();
         if (msg.valid) {
-            drone::ipc::ShmGCSCommand shm_cmd{};
+            drone::ipc::GCSCommand shm_cmd{};
             shm_cmd.timestamp_ns   = msg.timestamp_ns;
             shm_cmd.correlation_id = drone::util::CorrelationContext::generate();
             switch (msg.type) {
@@ -216,10 +216,10 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                              gcs
 }
 
 // ── GCS telemetry transmit (2 Hz) ───────────────────────────
-static void gcs_tx_thread(drone::hal::IGCSLink&                                  gcs,
-                          drone::ipc::ISubscriber<drone::ipc::ShmPose>&          pose_sub,
-                          drone::ipc::ISubscriber<drone::ipc::ShmMissionStatus>& status_sub,
-                          drone::ipc::ISubscriber<drone::ipc::ShmFCState>&       fc_sub) {
+static void gcs_tx_thread(drone::hal::IGCSLink&                               gcs,
+                          drone::ipc::ISubscriber<drone::ipc::Pose>&          pose_sub,
+                          drone::ipc::ISubscriber<drone::ipc::MissionStatus>& status_sub,
+                          drone::ipc::ISubscriber<drone::ipc::FCState>&       fc_sub) {
     set_thread_params("gcs_tx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] gcs_tx thread started using {}", gcs.name());
 
@@ -235,9 +235,9 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                                 
 
     while (g_running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        drone::ipc::ShmPose          pose{};
-        drone::ipc::ShmMissionStatus mission{};
-        drone::ipc::ShmFCState       fc{};
+        drone::ipc::Pose          pose{};
+        drone::ipc::MissionStatus mission{};
+        drone::ipc::FCState       fc{};
 
         pose_sub.receive(pose);
         status_sub.receive(mission);
@@ -307,24 +307,21 @@ int main(int argc, char* argv[]) {
     drone::ipc::LivelinessToken liveliness_token("comms");
 
     // ── Publishers ──────────────────────────────────────────
-    auto fc_pub = bus.advertise<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
-    auto gcs_cmd_pub =
-        bus.advertise<drone::ipc::ShmGCSCommand>(drone::ipc::shm_names::GCS_COMMANDS);
+    auto fc_pub      = bus.advertise<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto gcs_cmd_pub = bus.advertise<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
     auto mission_upload_pub =
-        bus.advertise<drone::ipc::ShmMissionUpload>(drone::ipc::shm_names::MISSION_UPLOAD);
+        bus.advertise<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
     if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready() || !mission_upload_pub->is_ready()) {
         spdlog::error("Failed to create Comms publishers");
         return 1;
     }
 
     // ── Subscribers ─────────────────────────────────────────
-    auto traj_sub =
-        bus.subscribe<drone::ipc::ShmTrajectoryCmd>(drone::ipc::shm_names::TRAJECTORY_CMD);
-    auto fc_cmd_sub = bus.subscribe<drone::ipc::ShmFCCommand>(drone::ipc::shm_names::FC_COMMANDS);
-    auto pose_sub   = bus.subscribe<drone::ipc::ShmPose>(drone::ipc::shm_names::SLAM_POSE);
-    auto mission_sub =
-        bus.subscribe<drone::ipc::ShmMissionStatus>(drone::ipc::shm_names::MISSION_STATUS);
-    auto fc_sub = bus.subscribe<drone::ipc::ShmFCState>(drone::ipc::shm_names::FC_STATE);
+    auto traj_sub    = bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
+    auto fc_cmd_sub  = bus.subscribe<drone::ipc::FCCommand>(drone::ipc::topics::FC_COMMANDS);
+    auto pose_sub    = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+    auto mission_sub = bus.subscribe<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
+    auto fc_sub      = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
 
     spdlog::info("Comms READY");
     drone::systemd::notify_ready();
@@ -339,7 +336,7 @@ int main(int argc, char* argv[]) {
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ShmThreadHealth>(drone::ipc::shm_names::THREAD_HEALTH_COMMS);
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_COMMS);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "comms", watchdog);
 
     // ── Main loop: health publishing (replaces bare join) ─

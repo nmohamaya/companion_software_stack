@@ -1,7 +1,7 @@
 // tests/test_shm_ipc.cpp
 // Unit tests for ShmWriter / ShmReader SeqLock-based IPC.
+#include "ipc/ipc_types.h"
 #include "ipc/shm_reader.h"
-#include "ipc/shm_types.h"
 #include "ipc/shm_writer.h"
 
 #include <chrono>
@@ -216,14 +216,14 @@ TEST_F(ShmIPCTest, ShmWriterNonOwning_SegmentSurvivesDestruction) {
     shm_unlink(NON_OWNING_SHM);
 }
 
-// ── Test with actual SHM types (ShmPose) ────────────────────
+// ── Test with actual SHM types (Pose) ────────────────────
 TEST_F(ShmIPCTest, ShmPoseRoundTrip) {
     constexpr const char* POSE_SHM = "/drone_test_pose";
 
-    ShmWriter<drone::ipc::ShmPose> writer;
+    ShmWriter<drone::ipc::Pose> writer;
     ASSERT_TRUE(writer.create(POSE_SHM));
 
-    drone::ipc::ShmPose pose_out{};
+    drone::ipc::Pose pose_out{};
     pose_out.timestamp_ns   = 123456789ULL;
     pose_out.translation[0] = 1.0;
     pose_out.translation[1] = 2.0;
@@ -232,10 +232,10 @@ TEST_F(ShmIPCTest, ShmPoseRoundTrip) {
     pose_out.quality        = 2;
     writer.write(pose_out);
 
-    ShmReader<drone::ipc::ShmPose> reader;
+    ShmReader<drone::ipc::Pose> reader;
     ASSERT_TRUE(reader.open(POSE_SHM));
 
-    drone::ipc::ShmPose pose_in{};
+    drone::ipc::Pose pose_in{};
     ASSERT_TRUE(reader.read(pose_in));
     EXPECT_EQ(pose_in.timestamp_ns, 123456789ULL);
     EXPECT_DOUBLE_EQ(pose_in.translation[0], 1.0);

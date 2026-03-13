@@ -6,7 +6,7 @@
 // move from potential-field to RRT*, D* Lite, A*, lattice planners, etc.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 #include "planner/mission_fsm.h"  // Waypoint
 
 #include <algorithm>
@@ -26,8 +26,8 @@ public:
     /// @param pose    Current drone pose.
     /// @param target  Target waypoint.
     /// @return        Trajectory command with velocities and target position.
-    virtual drone::ipc::ShmTrajectoryCmd plan(const drone::ipc::ShmPose& pose,
-                                              const Waypoint&            target) = 0;
+    virtual drone::ipc::TrajectoryCmd plan(const drone::ipc::Pose& pose,
+                                           const Waypoint&         target) = 0;
 
     /// Human-readable name for logging.
     virtual std::string name() const = 0;
@@ -44,9 +44,8 @@ public:
     explicit PotentialFieldPlanner(float smoothing = 0.35f)
         : alpha_(std::clamp(smoothing, 0.05f, 1.0f)) {}
 
-    drone::ipc::ShmTrajectoryCmd plan(const drone::ipc::ShmPose& pose,
-                                      const Waypoint&            target) override {
-        drone::ipc::ShmTrajectoryCmd cmd{};
+    drone::ipc::TrajectoryCmd plan(const drone::ipc::Pose& pose, const Waypoint& target) override {
+        drone::ipc::TrajectoryCmd cmd{};
         cmd.timestamp_ns =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                       std::chrono::steady_clock::now().time_since_epoch())

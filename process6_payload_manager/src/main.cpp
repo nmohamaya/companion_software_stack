@@ -1,11 +1,11 @@
 // process6_payload_manager/src/main.cpp
 // Process 6 — Payload Manager: controls gimbal + camera.
 // Uses HAL IGimbal interface — backend selected via config.
-// Reads ShmPayloadCommand from Mission Planner, publishes ShmPayloadStatus.
+// Reads PayloadCommand from Mission Planner, publishes PayloadStatus.
 
 #include "hal/hal_factory.h"
+#include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_types.h"
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
@@ -55,15 +55,13 @@ int main(int argc, char* argv[]) {
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
     drone::ipc::LivelinessToken liveliness_token("payload_manager");
 
-    auto cmd_sub =
-        bus.subscribe<drone::ipc::ShmPayloadCommand>(drone::ipc::shm_names::PAYLOAD_COMMANDS);
+    auto cmd_sub = bus.subscribe<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
     if (!cmd_sub->is_connected()) {
         spdlog::error("Cannot open payload commands channel");
         return 1;
     }
 
-    auto status_pub =
-        bus.advertise<drone::ipc::ShmPayloadStatus>(drone::ipc::shm_names::PAYLOAD_STATUS);
+    auto status_pub = bus.advertise<drone::ipc::PayloadStatus>(drone::ipc::topics::PAYLOAD_STATUS);
     if (!status_pub->is_ready()) {
         spdlog::error("Failed to create payload status publisher");
         return 1;
@@ -83,8 +81,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        payload_hb = drone::util::ScopedHeartbeat("payload_loop", false);
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub = bus.advertise<drone::ipc::ShmThreadHealth>(
-        drone::ipc::shm_names::THREAD_HEALTH_PAYLOAD_MANAGER);
+    auto                        thread_health_pub =
+        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_PAYLOAD_MANAGER);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "payload_manager",
                                                         watchdog);
     uint32_t                           health_tick = 0;
@@ -96,7 +94,7 @@ int main(int argc, char* argv[]) {
         drone::util::FrameDiagnostics diag(cycle_count);
 
         // Read commands
-        drone::ipc::ShmPayloadCommand cmd{};
+        drone::ipc::PayloadCommand cmd{};
         if (cmd_sub->receive(cmd) && cmd.valid && cmd.timestamp_ns != last_cmd_ts) {
             last_cmd_ts = cmd.timestamp_ns;
             ++cmd_count;
@@ -129,8 +127,8 @@ int main(int argc, char* argv[]) {
         gimbal->update(dt);
 
         // Publish status
-        auto                         g_state = gimbal->state();
-        drone::ipc::ShmPayloadStatus status{};
+        auto                      g_state = gimbal->state();
+        drone::ipc::PayloadStatus status{};
         status.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();

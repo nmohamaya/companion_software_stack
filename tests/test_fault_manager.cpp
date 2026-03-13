@@ -7,8 +7,8 @@
 #include <gtest/gtest.h>
 
 using namespace drone::planner;
-using drone::ipc::ShmSystemHealth;
-using drone::ipc::ShmFCState;
+using drone::ipc::SystemHealth;
+using drone::ipc::FCState;
 
 // ═══════════════════════════════════════════════════════════
 // Helpers — build fresh health / fc_state structs
@@ -18,9 +18,9 @@ namespace {
 constexpr uint64_t MS = 1'000'000ULL;
 constexpr uint64_t S  = 1'000'000'000ULL;
 
-/// Return a nominal ShmSystemHealth (all OK).
-ShmSystemHealth make_healthy() {
-    ShmSystemHealth h{};
+/// Return a nominal SystemHealth (all OK).
+SystemHealth make_healthy() {
+    SystemHealth h{};
     h.timestamp_ns      = 1'000 * S;
     h.cpu_usage_percent = 30.0f;
     h.thermal_zone      = 0;
@@ -29,9 +29,9 @@ ShmSystemHealth make_healthy() {
     return h;
 }
 
-/// Return a nominal ShmFCState (connected, battery full).
-ShmFCState make_fc_ok() {
-    ShmFCState fc{};
+/// Return a nominal FCState (connected, battery full).
+FCState make_fc_ok() {
+    FCState fc{};
     fc.timestamp_ns      = 1'000 * S;
     fc.connected         = true;
     fc.battery_remaining = 80.0f;
@@ -41,7 +41,7 @@ ShmFCState make_fc_ok() {
 }
 
 /// Add a process entry to health.
-void add_process(ShmSystemHealth& h, const char* name, bool alive) {
+void add_process(SystemHealth& h, const char* name, bool alive) {
     ASSERT_LT(h.num_processes, drone::ipc::kMaxTrackedProcesses)
         << "add_process() would overflow processes[]";
     auto& p = h.processes[h.num_processes];

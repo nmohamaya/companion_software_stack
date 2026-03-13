@@ -7,7 +7,7 @@
 // MPC-based avoidance, etc.
 #pragma once
 
-#include "ipc/shm_types.h"
+#include "ipc/ipc_types.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,9 +29,9 @@ public:
     /// @param pose     Current drone pose.
     /// @param objects  Detected objects (potential obstacles).
     /// @return         Modified trajectory command.
-    virtual drone::ipc::ShmTrajectoryCmd avoid(const drone::ipc::ShmTrajectoryCmd& planned,
-                                               const drone::ipc::ShmPose&          pose,
-                                               const drone::ipc::ShmDetectedObjectList& objects) = 0;
+    virtual drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
+                                            const drone::ipc::Pose&               pose,
+                                            const drone::ipc::DetectedObjectList& objects) = 0;
 
     /// Human-readable name for logging.
     virtual std::string name() const = 0;
@@ -49,9 +49,9 @@ public:
     explicit PotentialFieldAvoider(float influence_radius = 5.0f, float repulsive_gain = 2.0f)
         : influence_radius_(influence_radius), repulsive_gain_(repulsive_gain) {}
 
-    drone::ipc::ShmTrajectoryCmd avoid(const drone::ipc::ShmTrajectoryCmd&      planned,
-                                       const drone::ipc::ShmPose&               pose,
-                                       const drone::ipc::ShmDetectedObjectList& objects) override {
+    drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
+                                    const drone::ipc::Pose&               pose,
+                                    const drone::ipc::DetectedObjectList& objects) override {
         auto cmd = planned;
 
         // Only apply avoidance if objects were published recently (< 500ms)
