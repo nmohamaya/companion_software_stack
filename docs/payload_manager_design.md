@@ -277,6 +277,43 @@ while (g_running):
 
 ---
 
+## Observability
+
+P6 subscribes to SLAM pose for gimbal geo-pointing and publishes payload
+status consumed by P4 (payload triggers) and P7 (health monitoring).
+
+### Structured Logging
+
+| Field | Description |
+|-------|-------------|
+| `process` | `"payload_manager"` |
+| `gimbal_pitch_deg` | Current gimbal pitch (degrees, positive = up) |
+| `gimbal_yaw_deg` | Current gimbal yaw (degrees) |
+| `gimbal_stabilised` | `true` when gimbal has converged to target |
+| `is_recording` | `true` when video recording is active |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
+
+### Correlation IDs
+
+P6 does not participate in GCS correlation (payload commands arrive via
+the `/slam_pose` trigger flag, not via `/gcs_commands`).
+
+### Latency Tracking
+
+| Channel | Direction |
+|---------|----------|
+| `/slam_pose` | subscriber |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the control loop to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
+
+See [observability.md](observability.md) for histogram interpretation.
+
+---
+
 ## Known Limitations
 
 1. **No real gimbal backend:** Only simulated gimbal exists. SIYI, Gremsy, or
