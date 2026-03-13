@@ -109,11 +109,11 @@ class ICamera {
 ```cpp
 struct CapturedFrame {
     uint64_t  timestamp_ns;   // steady_clock timestamp
-    uint32_t  sequence;       // Monotonically increasing
+    uint64_t  sequence;       // Monotonically increasing
     uint32_t  width, height;
     uint32_t  channels;       // 1 = GRAY, 3 = RGB
     uint32_t  stride;         // bytes per row
-    uint8_t*  data;           // Valid until next capture() call
+    const uint8_t* data;      // Valid until next capture() call
     bool      valid;          // false if camera closed or error
 };
 ```
@@ -143,7 +143,7 @@ struct CapturedFrame {
 ```cpp
 struct ShmVideoFrame {
     uint64_t timestamp_ns;
-    uint32_t sequence_number;
+    uint64_t sequence_number;
     uint32_t width;             // default 1920
     uint32_t height;            // default 1080
     uint32_t channels;          // 3 (RGB)
@@ -157,7 +157,7 @@ struct ShmVideoFrame {
 ```cpp
 struct ShmStereoFrame {
     uint64_t timestamp_ns;
-    uint32_t sequence_number;
+    uint64_t sequence_number;
     uint32_t width;             // default 640
     uint32_t height;            // default 480
     uint8_t  left_data[640 * 480];    // ~300 KB grayscale

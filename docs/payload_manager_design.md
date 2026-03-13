@@ -174,7 +174,7 @@ struct ShmPayloadCommand {
     PayloadAction action;
     float         gimbal_pitch;   // target pitch (degrees)
     float         gimbal_yaw;     // target yaw (degrees)
-    uint32_t      sequence_id;
+    uint64_t      sequence_id;
     bool          valid;
 };
 ```

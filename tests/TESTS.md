@@ -764,7 +764,7 @@ wire format → JSON log output.
 | `ScopedCorrelation` | 3 | RAII guard sets ID on construction and restores previous on destruction, nested guards restore correctly, restores zero when outer had none |
 | `CorrelationContext` (threads) | 2 | Thread isolation: each thread has independent correlation ID, multi-threaded `generate()` produces globally unique IDs |
 | `ShmCorrelation` | 6 | `correlation_id` field exists and defaults to 0 in all command/status SHM types: `ShmGCSCommand`, `ShmFCCommand`, `ShmTrajectoryCmd`, `ShmPayloadCommand`, `ShmMissionStatus` |
-| `WireHeaderV2` | 5 | Header is 32 bytes, version = 2, `correlation_id` defaults to 0, correlation round-trips through set/get, full serialize → deserialize with correlation preserved |
+| `WireHeaderV2` | 5 | Header is 32 bytes, version = 3, `correlation_id` defaults to 0, correlation round-trips through set/get, full serialize → deserialize with correlation preserved |
 | `WireHeaderBackcompat` | 5 | V1 (24-byte) headers still validate, V1 correlation ID = 0, V0 rejected, future version rejected, truncated V1/V2 rejected |
 | `JsonCorrelation` | 4 | Correlation ID omitted from JSON log when 0, present as hex string when non-zero, `ScopedCorrelation` affects live log output, hex format is correct |
 

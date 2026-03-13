@@ -96,7 +96,7 @@ Key responsibilities:
 | `/fc_state` | `ShmFCState` | P4, P7 | fc_rx |
 | `/gcs_commands` | `ShmGCSCommand` | P4 | gcs_rx |
 | `/mission_upload` | `ShmMissionUpload` | P4 | gcs_rx |
-| `/thread_health/comms` | `ShmThreadHealth` | P7 | main |
+| `/drone_thread_health_comms` | `ShmThreadHealth` | P7 | main |
 
 ---
 
@@ -220,7 +220,7 @@ The `fc_tx_thread` processes two IPC streams:
 | `TAKEOFF` | `send_takeoff(param1)` | `param1` = altitude in metres |
 | `SET_MODE` | `send_mode((uint8_t)param1)` | 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL |
 | `RTL` | `send_mode(3)` | Mapped to mode change |
-| `LAND` | `send_mode(3)` | Mapped to RTL mode |
+| `LAND` | `send_mode(2)` | Mapped to AUTO (Hold/Land) mode |
 
 ---
 

@@ -46,8 +46,11 @@ It is the only process that runs as a **supervisor** (fork+exec parent).
 | **Supervised** | `--supervised` | P7 fork+execs P1–P6 in topological order, monitors + restarts |
 | **Monitoring** | (default) | P7 monitors health via IPC + liveliness, no process management |
 
-In supervised mode, P7 is the parent of all other processes. When P7 is killed, all
-children receive SIGHUP (standard Linux orphan behaviour).
+In supervised mode, P7 is the parent of all other processes. On graceful shutdown,
+P7 explicitly sends `SIGTERM` (then `SIGKILL` after a timeout) to each child via
+`ProcessManager::stop_all()`. If P7 is killed unexpectedly, children are re-parented
+to init (PID 1) and continue running — the systemd `BindsTo=` dependency ensures
+they are stopped at the service level.
 
 ---
 
@@ -115,7 +118,7 @@ children receive SIGHUP (standard Linux orphan behaviour).
 | Channel | Type | Consumers |
 |---------|------|-----------|
 | `/system_health` | `ShmSystemHealth` | P4 (mission_planner) |
-| `/thread_health/system_monitor` | `ShmThreadHealth` | — |
+| `/drone_thread_health_system_monitor` | `ShmThreadHealth` | — |
 
 ---
 

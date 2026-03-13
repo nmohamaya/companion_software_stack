@@ -112,7 +112,7 @@ The process runs **4 threads**:
 | Channel | Type | Consumers |
 |---------|------|-----------|
 | `/slam_pose` | `ShmPose` | P4 (mission_planner), P5 (comms) |
-| `/thread_health/slam_vio_nav` | `ShmThreadHealth` | P7 (system_monitor) |
+| `/drone_thread_health_slam_vio_nav` | `ShmThreadHealth` | P7 (system_monitor) |
 
 ---
 

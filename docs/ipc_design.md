@@ -205,7 +205,7 @@ class SPSCRing {
 - Empty when `read ≥ write`
 - Wrapping: indices grow monotonically, masked at `N − 1` for array access
 
-Used internally by `ImuRingBuffer` (P3) and other intra-process queues.
+Used for high-throughput intra-process producer/consumer queues where the single-writer, single-reader constraint can be guaranteed.
 
 ---
 
@@ -267,14 +267,14 @@ ZenohNetworkConfig::make_local();                    // Peer, no network
 
 ## Wire Format
 
-- **Header:** [`zenoh_wire_format.h`](../common/ipc/include/ipc/zenoh_wire_format.h)
+- **Header:** [`wire_format.h`](../common/ipc/include/ipc/wire_format.h)
 
 Used for network transport. Every message is prefixed with a 32-byte header:
 
 ```cpp
 struct __attribute__((packed)) WireHeader {
     uint32_t magic          = 0x4E4F5244;  // "DRON" little-endian
-    uint8_t  version        = 2;
+    uint8_t  version        = 3;
     uint8_t  flags          = 0;
     WireMessageType msg_type;
     uint32_t payload_size;

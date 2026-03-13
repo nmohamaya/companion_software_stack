@@ -94,7 +94,7 @@ concurrency bugs at the cost of requiring each step to complete within the 100 m
 | `/fc_commands` | `ShmFCCommand` | P5 (comms → FC) |
 | `/mission_status` | `ShmMissionStatus` | P5 (comms → GCS), P7 |
 | `/payload_commands` | `ShmPayloadCommand` | P6 (payload_manager) |
-| `/thread_health/mission_planner` | `ShmThreadHealth` | P7 (system_monitor) |
+| `/drone_thread_health_mission_planner` | `ShmThreadHealth` | P7 (system_monitor) |
 
 ---
 
