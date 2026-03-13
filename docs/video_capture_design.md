@@ -276,6 +276,42 @@ The 5 ms threshold is hardcoded. Real stereo cameras typically have hardware syn
 
 ---
 
+## Observability
+
+P1 publishes two high-bandwidth channels. Latency counters accumulate in
+the *subscriber* processes (P2, P3), not here.
+
+### Structured Logging
+
+Run with `--json-logs` to switch from text to JSON structured output.
+Key fields emitted by this process:
+
+| JSON Field | Description |
+|------------|-------------|
+| `process` | `"video_capture"` |
+| `channel` | `"/drone_mission_cam"` or `"/drone_stereo_cam"` |
+| `frame_seq` | `CapturedFrame::sequence` — monotonic frame counter |
+| `timestamp_ns` | `CapturedFrame::timestamp_ns` — capture wall time |
+| `backend` | Active backend name, e.g. `"SimulatedCamera"` |
+
+### Correlation IDs
+
+P1 does not participate in GCS correlation (no upstream commands).
+
+### Latency Tracking
+
+End-to-end frame latency is measured at every subscriber:
+
+| Subscriber | Channel | Tracker call |
+|------------|---------|-------------|
+| P2 perception | `/drone_mission_cam` | `reader.log_latency_if_due(50)` in detector thread |
+| P3 SLAM/VIO | `/drone_stereo_cam` | `reader.log_latency_if_due(50)` in visual frontend thread |
+
+See [observability.md](observability.md) for the `LatencyTracker` API
+and how to interpret `p50_ms` / `p95_ms` / `p99_ms` histogram fields.
+
+---
+
 ## Known Limitations
 
 1. **No debayering:** Raw Bayer formats (real cameras) are published as-is. No ISP

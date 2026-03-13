@@ -494,6 +494,39 @@ The `fc_rx` thread in P5 and the health collection in P7 both read `ShmFaultOver
 
 ---
 
+## Observability
+
+P7 has the broadest cross-process visibility: it publishes health
+snapshots that summarise all 7 processes in one structured record.
+
+### Structured Logging
+
+| JSON Field | Description |
+|------------|-------------|
+| `process` | `"system_monitor"` |
+| `cpu_percent` | Aggregate CPU usage across all cores |
+| `mem_percent` | RSS / total RAM usage |
+| `temp_c` | SoC die temperature (°C) |
+| `disk_percent` | Root filesystem usage |
+| `battery_percent` | Reported battery level |
+| `process_states` | Array of `{name, pid, status, restart_count}` per managed process |
+
+### Correlation IDs
+
+P7 does not participate in GCS correlation.
+
+### Latency Tracking
+
+| Channel | Direction | Tracker call |
+|---------|-----------|-------------|
+| `/fc_state` | subscriber | `reader.log_latency_if_due(10)` in monitor thread |
+| `/payload_status` | subscriber | `reader.log_latency_if_due(10)` in monitor thread |
+
+See [observability.md](observability.md) for the `LatencyTracker` API
+and `log_latency_if_due()` usage.
+
+---
+
 ## Known Limitations
 
 1. **Disk check is expensive:** `popen("df -m /")` spawns a subprocess — rate-limited to

@@ -301,6 +301,41 @@ The `fc_rx_thread` reads `ShmFaultOverrides` to support integration testing:
 
 ---
 
+## Observability
+
+P5 is where GCS commands enter the stack. Each inbound command gets a
+new correlation ID assigned before it is published on `/gcs_commands`.
+
+### Structured Logging
+
+| JSON Field | Description |
+|------------|-------------|
+| `process` | `"comms"` |
+| `gcs_command_type` | `"RTL"`, `"LAND"`, `"MISSION"`, `"PARAM_SET"`, or `"NONE"` |
+| `correlation_id` | UUID assigned to the new GCS command |
+| `fc_state_mode` | Last received flight controller mode integer |
+| `battery_pct` | Battery percent from last `FCState` |
+
+### Correlation IDs
+
+GCS commands originate here. A new `CorrelationContext` UUID is generated
+and stamped onto each outbound `/gcs_commands` message. Downstream
+processes (notably P4) propagate this ID through the full execution chain.
+
+See [observability.md](observability.md) for the correlation flow diagram.
+
+### Latency Tracking
+
+| Channel | Direction | Tracker call |
+|---------|-----------|-------------|
+| `/slam_pose` | subscriber | `reader.log_latency_if_due(10)` in telemetry thread |
+| `/trajectory_cmd` | subscriber | `reader.log_latency_if_due(20)` in trajectory transmit thread |
+| `/fc_commands` | subscriber | `reader.log_latency_if_due(20)` in FC command thread |
+
+See [observability.md](observability.md) for histogram interpretation.
+
+---
+
 ## Known Limitations
 
 1. **No real GCS backend:** Only simulated GCS exists. Real UDP/TCP GCS link is planned.

@@ -430,6 +430,47 @@ Integration coverage via scenario tests in `config/scenarios/`:
 
 ---
 
+## Observability
+
+P4 is the hub for GCS correlation IDs. Commands arriving on
+`/gcs_commands` start a `ScopedCorrelation` that is propagated to all
+downstream outputs (`/trajectory_cmd`, `/fc_commands`, mission status
+logs).
+
+### Structured Logging
+
+| JSON Field | Description |
+|------------|-------------|
+| `process` | `"mission_planner"` |
+| `fsm_state` | Current FSM state name (e.g. `"MISSION"`, `"RTL"`, `"LOITER"`) |
+| `waypoint_index` | Active waypoint index |
+| `correlation_id` | UUID from originating GCS command (if present) |
+| `planner_backend` | Active path planner name |
+| `avoider_backend` | Active obstacle avoider name |
+
+### Correlation IDs
+
+| Source | Propagated to |
+|--------|--------------|
+| `/gcs_commands` (from P5) | `/trajectory_cmd`, `/fc_commands`, all P4 log lines while command is active |
+
+Enable with `--json-logs`; search log output for `"correlation_id"`.
+
+### Latency Tracking
+
+| Channel | Direction | Tracker call |
+|---------|-----------|-------------|
+| `/detected_objects` | subscriber | `reader.log_latency_if_due(100)` in planner thread |
+| `/slam_pose` | subscriber | `reader.log_latency_if_due(100)` in planner thread |
+| `/fc_state` | subscriber | `reader.log_latency_if_due(10)` in planner thread |
+| `/gcs_commands` | subscriber | `reader.log_latency_if_due(10)` in planner thread |
+| `/system_health` | subscriber | `reader.log_latency_if_due(10)` in planner thread |
+
+See [observability.md](observability.md) for the full correlation ID
+flow diagram and histogram interpretation.
+
+---
+
 ## Known Limitations
 
 1. **Single-threaded:** All logic must complete within one loop period (100 ms at 10 Hz).

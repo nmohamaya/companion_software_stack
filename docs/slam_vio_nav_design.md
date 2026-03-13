@@ -378,6 +378,38 @@ struct VIOError {
 
 ---
 
+## Observability
+
+P3 is latency-critical: IMU runs at 400 Hz and VIO at 100 Hz. Both loops
+emit structured logs and LatencyTracker histograms.
+
+### Structured Logging
+
+| JSON Field | Description |
+|------------|-------------|
+| `process` | `"slam_vio_nav"` |
+| `vio_rate_hz` | Measured VIO loop rate (last 100 iterations) |
+| `tracked_features` | Feature count after optical flow |
+| `keyframe_inserted` | `true` when a keyframe was added this epoch |
+| `pose_x` / `pose_y` / `pose_z` | Published NED position (m) |
+| `imu_rate_hz` | Measured IMU integration rate |
+
+### Correlation IDs
+
+P3 does not participate in GCS correlation. The published `/slam_pose`
+carries a `timestamp_ns` that downstream subscribers use for their own
+latency measurements.
+
+### Latency Tracking
+
+| Channel | Direction | Tracker call |
+|---------|-----------|-------------|
+| `/drone_stereo_cam` | subscriber | `reader.log_latency_if_due(50)` in visual frontend thread |
+
+See [observability.md](observability.md) for histogram interpretation.
+
+---
+
 ## Known Limitations
 
 1. **No real VIO fusion:** The Simulated backend generates poses independently of visual/IMU data.
