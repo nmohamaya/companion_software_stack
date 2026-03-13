@@ -22,11 +22,6 @@
 // to a single stub test.
 
 #include "ipc/ipc_types.h"
-
-#include <gtest/gtest.h>
-
-#ifdef HAVE_ZENOH
-
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_liveliness.h"
 #include "ipc/zenoh_message_bus.h"
@@ -44,6 +39,7 @@
 #include <thread>
 #include <vector>
 
+#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 using namespace drone::ipc;
@@ -530,11 +526,3 @@ TEST(LivelinessBranch, MonitorDuplicatePutIsNotNewCallback) {
         EXPECT_EQ(count, 1) << "Duplicate PUT should not trigger callback again";
     }
 }
-
-#else  // !HAVE_ZENOH
-
-TEST(ZenohCoverageStub, NotAvailable) {
-    GTEST_SKIP() << "Zenoh not available — coverage tests require HAVE_ZENOH";
-}
-
-#endif  // HAVE_ZENOH

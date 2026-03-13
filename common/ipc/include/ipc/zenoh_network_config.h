@@ -12,7 +12,6 @@
 // Guarded by HAVE_ZENOH (only meaningful with a Zenoh backend).
 #pragma once
 
-#ifdef HAVE_ZENOH
 
 #include <cstdint>
 #include <string>
@@ -223,5 +222,3 @@ struct ZenohNetworkConfig {
 };
 
 }  // namespace drone::ipc
-
-#endif  // HAVE_ZENOH

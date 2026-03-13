@@ -89,9 +89,6 @@ find_package(spdlog        REQUIRED)
 find_package(Eigen3        REQUIRED NO_MODULE)
 find_package(nlohmann_json REQUIRED)
 
-# ── Optional: Zenoh IPC backend ─────────────────────────────
-option(ENABLE_ZENOH "Build with Zenoh IPC backend (requires zenohc + zenoh-cpp)" OFF)
-
 # ── Optional: systemd integration ───────────────────────────
 # When enabled, P7 (system_monitor) calls sd_notify() for watchdog support.
 # Requires libsystemd-dev.  Harmless to enable on non-systemd systems at
@@ -107,37 +104,34 @@ else()
     message(STATUS "  systemd      : DISABLED")
 endif()
 
-# Security: require a Zenoh config with TLS/auth for production builds.
-# Pass -DZENOH_CONFIG_PATH=/path/to/zenoh.json5 for a secure config.
+# ── Zenoh IPC backend (required) ────────────────────────────
+# Zenoh is the sole IPC transport. The swappable IMessageBus interface
+# allows adding future backends (iceoryx, DDS) without process changes.
+#
+# Security: pass -DZENOH_CONFIG_PATH=/path/to/zenoh.json5 for TLS+auth.
 # Pass -DALLOW_INSECURE_ZENOH=ON to bypass (development/testing only).
 set(ZENOH_CONFIG_PATH "" CACHE STRING
     "Path to a secure Zenoh configuration file (TLS + mutual auth recommended)")
 option(ALLOW_INSECURE_ZENOH
-    "Allow building Zenoh IPC backend without a secure config (NOT RECOMMENDED)" OFF)
+    "Allow building without a secure Zenoh config (NOT RECOMMENDED)" OFF)
 
-if(ENABLE_ZENOH)
-    if(NOT ZENOH_CONFIG_PATH AND NOT ALLOW_INSECURE_ZENOH)
-        message(FATAL_ERROR
-            "ENABLE_ZENOH is ON but no secure Zenoh configuration was provided.\n"
-            "Set ZENOH_CONFIG_PATH to a config that enables transport encryption "
-            "and authentication (e.g. TLS + mutual auth), or re-run CMake with "
-            "-DALLOW_INSECURE_ZENOH=ON if you accept the risks (dev/test only).")
-    elseif(NOT ZENOH_CONFIG_PATH AND ALLOW_INSECURE_ZENOH)
-        message(WARNING
-            "Building Zenoh IPC WITHOUT a secure configuration "
-            "(ALLOW_INSECURE_ZENOH=ON). Traffic may be unencrypted/unauthenticated.")
-    endif()
-
-    find_package(zenohc REQUIRED)
-    if(ZENOH_CONFIG_PATH)
-        add_compile_definitions(HAVE_ZENOH=1 ZENOH_CONFIG_PATH="${ZENOH_CONFIG_PATH}")
-    else()
-        add_compile_definitions(HAVE_ZENOH=1)
-    endif()
-    message(STATUS "  Zenoh        : ENABLED (zenohc found) — ZenohMessageBus available")
-else()
-    message(STATUS "  Zenoh        : DISABLED (using POSIX SHM backend)")
+if(NOT ZENOH_CONFIG_PATH AND NOT ALLOW_INSECURE_ZENOH)
+    message(FATAL_ERROR
+        "No secure Zenoh configuration was provided.\n"
+        "Set ZENOH_CONFIG_PATH to a config that enables transport encryption "
+        "and authentication (e.g. TLS + mutual auth), or re-run CMake with "
+        "-DALLOW_INSECURE_ZENOH=ON if you accept the risks (dev/test only).")
+elseif(NOT ZENOH_CONFIG_PATH AND ALLOW_INSECURE_ZENOH)
+    message(WARNING
+        "Building Zenoh IPC WITHOUT a secure configuration "
+        "(ALLOW_INSECURE_ZENOH=ON). Traffic may be unencrypted/unauthenticated.")
 endif()
+
+find_package(zenohc REQUIRED)
+if(ZENOH_CONFIG_PATH)
+    add_compile_definitions(ZENOH_CONFIG_PATH="${ZENOH_CONFIG_PATH}")
+endif()
+message(STATUS "  Zenoh        : REQUIRED (zenohc ${zenohc_VERSION})")
 
 # ── Optional dependencies (simulator / real-hardware backends) ──
 find_package(MAVSDK QUIET)
@@ -197,6 +191,6 @@ message(STATUS "  Binaries     : ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "  MAVSDK       : ${MAVSDK_FOUND}")
 message(STATUS "  Gazebo       : ${GAZEBO_FOUND}")
 message(STATUS "  OpenCV       : ${OPENCV_FOUND}")
-message(STATUS "  Zenoh        : ${ENABLE_ZENOH}")
+message(STATUS "  Zenoh        : REQUIRED")
 message(STATUS "  systemd      : ${ENABLE_SYSTEMD}")
 message(STATUS "════════════════════════════════════════════")

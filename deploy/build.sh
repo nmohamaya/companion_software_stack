@@ -2,10 +2,8 @@
 # deploy/build.sh — Build the drone companion stack.
 #
 # Usage:
-#   bash deploy/build.sh                 # Release, SHM backend
-#   bash deploy/build.sh --zenoh         # Release, Zenoh backend
-#   bash deploy/build.sh Debug           # Debug, SHM backend
-#   bash deploy/build.sh Debug --zenoh   # Debug, Zenoh backend
+#   bash deploy/build.sh                 # Release build
+#   bash deploy/build.sh Debug           # Debug build
 #   bash deploy/build.sh --clean         # Delete build/ first
 #   bash deploy/build.sh --asan          # Debug + AddressSanitizer
 #   bash deploy/build.sh --tsan          # Debug + ThreadSanitizer
@@ -20,7 +18,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 BUILD_DIR="${PROJECT_DIR}/build"
 BUILD_TYPE="Release"
-ENABLE_ZENOH="OFF"
 CLEAN=0
 SANITIZER=""
 ENABLE_COVERAGE="OFF"
@@ -30,7 +27,6 @@ TEST_FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --zenoh)         ENABLE_ZENOH="ON" ;;
         --clean)         CLEAN=1 ;;
         --asan)          SANITIZER="asan" ;;
         --tsan)          SANITIZER="tsan" ;;
@@ -57,10 +53,13 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --zenoh)
+            echo "NOTE: --zenoh flag is no longer needed (Zenoh is always enabled). Ignoring."
+            ;;
         Debug|Release|RelWithDebInfo|MinSizeRel) BUILD_TYPE="$1" ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [Debug|Release] [--zenoh] [--clean] [--asan|--tsan|--ubsan] [--coverage] [--format-check] [--test] [--test-filter MODULE]"
+            echo "Usage: $0 [Debug|Release] [--clean] [--asan|--tsan|--ubsan] [--coverage] [--format-check] [--test] [--test-filter MODULE]"
             exit 1
             ;;
     esac
@@ -114,32 +113,27 @@ if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
     COVERAGE_FLAGS="-DENABLE_COVERAGE=ON"
 fi
 
-# Zenoh backend configuration
+# ── Zenoh backend configuration (always required) ────────────
 ZENOH_FLAGS=""
-if [[ "$ENABLE_ZENOH" == "ON" ]]; then
-    if ! pkg-config --exists zenohc 2>/dev/null; then
-        echo "ERROR: --zenoh requested but zenohc not found."
-        echo "  Install: sudo apt install libzenohc libzenohc-dev"
+if ! pkg-config --exists zenohc 2>/dev/null; then
+    echo "ERROR: zenohc not found. Zenoh is a required dependency."
+    echo "  Install: sudo apt install libzenohc libzenohc-dev"
+    exit 1
+fi
+if [[ -n "${ZENOH_CONFIG_PATH:-}" ]]; then
+    if [[ ! -f "$ZENOH_CONFIG_PATH" ]]; then
+        echo "ERROR: ZENOH_CONFIG_PATH='${ZENOH_CONFIG_PATH}' does not exist."
         exit 1
     fi
-    # Prefer secure config if ZENOH_CONFIG_PATH is provided; fall back to
-    # insecure for dev/test.
-    if [[ -n "${ZENOH_CONFIG_PATH:-}" ]]; then
-        if [[ ! -f "$ZENOH_CONFIG_PATH" ]]; then
-            echo "ERROR: ZENOH_CONFIG_PATH='${ZENOH_CONFIG_PATH}' does not exist."
-            exit 1
-        fi
-        ZENOH_FLAGS="-DENABLE_ZENOH=ON -DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
-    else
-        echo "NOTE: No ZENOH_CONFIG_PATH set — using insecure mode (dev/test only)."
-        ZENOH_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
-    fi
+    ZENOH_FLAGS="-DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+else
+    ZENOH_FLAGS="-DALLOW_INSECURE_ZENOH=ON"
 fi
 
 echo "══════════════════════════════════════════"
 echo "  Building Drone Companion Stack"
 echo "  Build type : ${BUILD_TYPE}"
-echo "  IPC backend: $([ "$ENABLE_ZENOH" = "ON" ] && echo "Zenoh" || echo "SHM")"
+echo "  IPC backend: Zenoh"
 [[ -n "$SANITIZER" ]]          && echo "  Sanitizer  : ${SANITIZER}"
 [[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage   : ON"
 echo "══════════════════════════════════════════"

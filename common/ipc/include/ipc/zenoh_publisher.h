@@ -9,7 +9,6 @@
 // Guarded by HAVE_ZENOH.
 #pragma once
 
-#ifdef HAVE_ZENOH
 
 #include "ipc/ipublisher.h"
 #include "ipc/zenoh_session.h"
@@ -120,5 +119,3 @@ private:
 };
 
 }  // namespace drone::ipc
-
-#endif  // HAVE_ZENOH

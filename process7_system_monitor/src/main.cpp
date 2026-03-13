@@ -4,7 +4,6 @@
 
 #include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_reader.h"
 #include "ipc/zenoh_liveliness.h"
 #include "monitor/iprocess_monitor.h"
 #include "monitor/process_manager.h"
@@ -287,9 +286,9 @@ int main(int argc, char* argv[]) {
         disk_interval_ticks);
     spdlog::info("Process monitor: {}", monitor->name());
 
-    // Optional fault-injection override reader.
-    ShmReader<drone::ipc::FaultOverrides> override_reader;
-    (void)override_reader.open(drone::ipc::topics::FAULT_OVERRIDES);  // may not exist yet
+    // Optional fault-injection override subscriber.
+    auto fault_sub =
+        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
 
     uint32_t tick = 0;
 
@@ -360,10 +359,7 @@ int main(int argc, char* argv[]) {
         // Apply fault-injection overrides (if any).
         {
             drone::ipc::FaultOverrides ovr{};
-            if (!override_reader.is_open()) {
-                (void)override_reader.open(drone::ipc::topics::FAULT_OVERRIDES);
-            }
-            if (override_reader.is_open() && override_reader.read(ovr)) {
+            if (fault_sub->receive(ovr)) {
                 if (ovr.thermal_zone >= 0) {
                     health.thermal_zone = static_cast<uint8_t>(ovr.thermal_zone);
                 }

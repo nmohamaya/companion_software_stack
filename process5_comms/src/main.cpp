@@ -11,7 +11,6 @@
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
-#include "ipc/shm_reader.h"
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
@@ -35,14 +34,10 @@
 static std::atomic<bool> g_running{true};
 
 // ── FC receive thread (10 Hz) ───────────────────────────────
-static void fc_rx_thread(drone::hal::IFCLink&                         fc,
-                         drone::ipc::IPublisher<drone::ipc::FCState>& pub) {
+static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::ipc::FCState>& pub,
+                         drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub) {
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
     spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
-
-    // Optional fault-injection override reader.
-    ShmReader<drone::ipc::FaultOverrides> override_reader;
-    (void)override_reader.open(drone::ipc::topics::FAULT_OVERRIDES);  // may fail — that's fine
 
     // When FC link is overridden to disconnected, freeze the timestamp
     // so the FaultManager sees a stale heartbeat (simulates real link loss).
@@ -67,11 +62,7 @@ static void fc_rx_thread(drone::hal::IFCLink&                         fc,
 
         // Apply fault-injection overrides (if any).
         drone::ipc::FaultOverrides ovr{};
-        if (!override_reader.is_open()) {
-            // Retry open — the fault_injector may create it later.
-            (void)override_reader.open(drone::ipc::topics::FAULT_OVERRIDES);
-        }
-        if (override_reader.is_open() && override_reader.read(ovr)) {
+        if (fault_sub.receive(ovr)) {
             if (ovr.battery_percent >= 0.0f) {
                 state.battery_remaining = ovr.battery_percent;
                 state.battery_voltage   = ovr.battery_voltage;
@@ -323,11 +314,15 @@ int main(int argc, char* argv[]) {
     auto mission_sub = bus.subscribe<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
     auto fc_sub      = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
 
+    // ── Subscribe to fault overrides (optional — may not be publishing yet) ──
+    auto fault_sub =
+        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
+
     spdlog::info("Comms READY");
     drone::systemd::notify_ready();
 
     // ── Launch threads ──────────────────────────────────────
-    std::thread t1(fc_rx_thread, std::ref(*fc_link), std::ref(*fc_pub));
+    std::thread t1(fc_rx_thread, std::ref(*fc_link), std::ref(*fc_pub), std::ref(*fault_sub));
     std::thread t2(fc_tx_thread, std::ref(*fc_link), std::ref(*traj_sub), std::ref(*fc_cmd_sub));
     std::thread t3(gcs_rx_thread, std::ref(*gcs_link), std::ref(*gcs_cmd_pub));
     std::thread t4(gcs_tx_thread, std::ref(*gcs_link), std::ref(*pose_sub), std::ref(*mission_sub),

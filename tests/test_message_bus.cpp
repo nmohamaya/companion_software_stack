@@ -1,16 +1,13 @@
 // tests/test_message_bus.cpp
-// Tests for IPublisher/ISubscriber/ShmMessageBus interfaces and
-// IServiceChannel interface types (enums, structs).
+// Tests for MessageBus interface, IPublisher/ISubscriber contracts,
+// and IServiceChannel interface types (enums, structs).
 //
-// Note: SHM service channel tests were removed in Phase D (#49).
-//       Zenoh service channel tests are in test_zenoh_ipc.cpp (Category 5).
+// Zenoh pub/sub and service channel round-trip tests are in test_zenoh_ipc.cpp.
 #include "ipc/ipc_types.h"
 #include "ipc/ipublisher.h"
 #include "ipc/iservice_channel.h"
 #include "ipc/isubscriber.h"
-#include "ipc/shm_message_bus.h"
-#include "ipc/shm_publisher.h"
-#include "ipc/shm_subscriber.h"
+#include "ipc/message_bus_factory.h"
 
 #include <chrono>
 #include <cstring>
@@ -22,14 +19,6 @@
 using namespace drone::ipc;
 
 // ═══════════════════════════════════════════════════════════
-// Helper: unique SHM names to avoid test collisions
-// ═══════════════════════════════════════════════════════════
-static std::string unique_name(const std::string& base) {
-    static int counter = 0;
-    return base + "_mbus_" + std::to_string(getpid()) + "_" + std::to_string(counter++);
-}
-
-// ═══════════════════════════════════════════════════════════
 // Test data struct (trivially copyable)
 // ═══════════════════════════════════════════════════════════
 struct TestPayload {
@@ -39,156 +28,62 @@ struct TestPayload {
 };
 
 // ═══════════════════════════════════════════════════════════
-// ShmPublisher tests
+// MessageBus factory tests
 // ═══════════════════════════════════════════════════════════
 
-TEST(ShmPublisherTest, CreateAndPublish) {
-    auto                      name = unique_name("/test_pub");
-    ShmPublisher<TestPayload> pub(name);
-    ASSERT_TRUE(pub.is_ready());
-    EXPECT_EQ(pub.topic_name(), name);
-
-    TestPayload msg{42, 3.14f, "hello"};
-    pub.publish(msg);  // should not crash
+TEST(MessageBusTest, FactoryCreatesZenoh) {
+    auto bus = create_message_bus("zenoh");
+    EXPECT_EQ(bus.backend_name(), "zenoh");
+    EXPECT_TRUE(bus.has_service_channels());
 }
 
-TEST(ShmPublisherTest, TopicNameStored) {
-    auto                      name = unique_name("/test_pub_name");
-    ShmPublisher<TestPayload> pub(name);
-    EXPECT_EQ(pub.topic_name(), name);
+TEST(MessageBusTest, FactoryDefaultIsZenoh) {
+    auto bus = create_message_bus();
+    EXPECT_EQ(bus.backend_name(), "zenoh");
 }
 
-TEST(ShmPublisherTest, ImplementsIPublisher) {
-    auto                     name  = unique_name("/test_pub_iface");
-    auto                     pub   = std::make_unique<ShmPublisher<TestPayload>>(name);
-    IPublisher<TestPayload>* iface = pub.get();
-    EXPECT_TRUE(iface->is_ready());
-    EXPECT_EQ(iface->topic_name(), name);
+TEST(MessageBusTest, FactoryFallsBackFromShm) {
+    // "shm" is removed — should log error and fall back to zenoh
+    auto bus = create_message_bus("shm");
+    EXPECT_EQ(bus.backend_name(), "zenoh");
 }
 
-// ═══════════════════════════════════════════════════════════
-// ShmSubscriber tests
-// ═══════════════════════════════════════════════════════════
-
-TEST(ShmSubscriberTest, LazyConstructAndConnect) {
-    auto name = unique_name("/test_sub_lazy");
-    // Create a publisher first so the SHM topic exists
-    ShmPublisher<TestPayload> pub(name);
-    ASSERT_TRUE(pub.is_ready());
-
-    ShmSubscriber<TestPayload> sub;
-    EXPECT_FALSE(sub.is_connected());
-    EXPECT_TRUE(sub.connect(name));
-    EXPECT_TRUE(sub.is_connected());
-}
-
-TEST(ShmSubscriberTest, ReceivePublishedData) {
-    auto                      name = unique_name("/test_sub_recv");
-    ShmPublisher<TestPayload> pub(name);
-
-    ShmSubscriber<TestPayload> sub;
-    ASSERT_TRUE(sub.connect(name));
-    ASSERT_TRUE(sub.is_connected());
-
-    TestPayload sent{99, 2.718f, {}};
-    std::strncpy(sent.tag, "test", sizeof(sent.tag));
-    pub.publish(sent);
-
-    TestPayload received{};
-    ASSERT_TRUE(sub.receive(received));
-    EXPECT_EQ(received.id, 99u);
-    EXPECT_FLOAT_EQ(received.value, 2.718f);
-    EXPECT_STREQ(received.tag, "test");
-}
-
-TEST(ShmSubscriberTest, ImplementsISubscriber) {
-    auto                      name = unique_name("/test_sub_iface");
-    ShmPublisher<TestPayload> pub(name);
-
-    auto                      sub   = std::make_unique<ShmSubscriber<TestPayload>>(name, 1, 10);
-    ISubscriber<TestPayload>* iface = sub.get();
-    EXPECT_TRUE(iface->is_connected());
-    EXPECT_EQ(iface->topic_name(), name);
-}
-
-TEST(ShmSubscriberTest, LazyConnectFails) {
-    ShmSubscriber<TestPayload> sub;
-    EXPECT_FALSE(sub.connect("/nonexistent_topic_12345"));
-    EXPECT_FALSE(sub.is_connected());
-}
-
-// ═══════════════════════════════════════════════════════════
-// ShmMessageBus tests
-// ═══════════════════════════════════════════════════════════
-
-TEST(ShmMessageBusTest, AdvertiseAndSubscribe) {
-    auto          name = unique_name("/test_bus");
-    ShmMessageBus bus;
-
-    auto pub = bus.advertise<TestPayload>(name);
-    ASSERT_TRUE(pub->is_ready());
-
-    auto sub = bus.subscribe<TestPayload>(name, 5, 10);
-    ASSERT_TRUE(sub->is_connected());
-
-    TestPayload sent{123, 1.0f, {}};
-    pub->publish(sent);
-
-    TestPayload received{};
-    ASSERT_TRUE(sub->receive(received));
-    EXPECT_EQ(received.id, 123u);
-}
-
-TEST(ShmMessageBusTest, AdvReturnsIPublisher) {
-    auto                                     name = unique_name("/test_bus_type");
-    ShmMessageBus                            bus;
-    std::unique_ptr<IPublisher<TestPayload>> pub = bus.advertise<TestPayload>(name);
-    EXPECT_NE(pub, nullptr);
+TEST(MessageBusTest, AdvertiseAndSubscribe) {
+    auto bus = create_message_bus("zenoh");
+    auto pub = bus.advertise<TestPayload>("/test_mbus_zenoh");
+    ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
-}
 
-TEST(ShmMessageBusTest, SubReturnsISubscriber) {
-    auto                                      name = unique_name("/test_bus_subtype");
-    ShmMessageBus                             bus;
-    auto                                      pub = bus.advertise<TestPayload>(name);
-    std::unique_ptr<ISubscriber<TestPayload>> sub = bus.subscribe<TestPayload>(name, 1, 10);
-    EXPECT_NE(sub, nullptr);
-}
-
-TEST(ShmMessageBusTest, LazySubscriber) {
-    auto          name = unique_name("/test_bus_lazy");
-    ShmMessageBus bus;
-    auto          pub = bus.advertise<TestPayload>(name);
-
-    auto sub = bus.subscribe_lazy<TestPayload>();
-    EXPECT_FALSE(sub->is_connected());
-    EXPECT_TRUE(sub->connect(name));
+    auto sub = bus.subscribe<TestPayload>("/test_mbus_zenoh");
+    ASSERT_NE(sub, nullptr);
     EXPECT_TRUE(sub->is_connected());
 }
 
-TEST(ShmMessageBusTest, MultiplePublishOverwrites) {
-    auto          name = unique_name("/test_bus_overwrite");
-    ShmMessageBus bus;
-    auto          pub = bus.advertise<TestPayload>(name);
-    auto          sub = bus.subscribe<TestPayload>(name, 1, 10);
+TEST(MessageBusTest, PubSubRoundTrip) {
+    auto bus = create_message_bus("zenoh");
+    auto pub = bus.advertise<TestPayload>("/test_mbus_rt");
+    auto sub = bus.subscribe<TestPayload>("/test_mbus_rt");
 
-    for (int i = 0; i < 10; ++i) {
-        TestPayload msg{static_cast<uint64_t>(i), static_cast<float>(i), {}};
-        pub->publish(msg);
-    }
+    TestPayload sent{42, 3.14f, {}};
+    std::strncpy(sent.tag, "test", sizeof(sent.tag));
+    pub->publish(sent);
 
-    TestPayload latest{};
-    ASSERT_TRUE(sub->receive(latest));
-    EXPECT_EQ(latest.id, 9u);  // latest-value semantics
+    // Allow Zenoh delivery
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    TestPayload received{};
+    ASSERT_TRUE(sub->receive(received));
+    EXPECT_EQ(received.id, 42u);
+    EXPECT_FLOAT_EQ(received.value, 3.14f);
+    EXPECT_STREQ(received.tag, "test");
 }
 
-TEST(ShmMessageBusTest, WithShmTypes) {
-    auto          name = unique_name("/test_bus_pose");
-    ShmMessageBus bus;
-    auto          pub = bus.advertise<Pose>(name);
+TEST(MessageBusTest, WithIpcTypes) {
+    auto bus = create_message_bus("zenoh");
+    auto pub = bus.advertise<Pose>("/test_mbus_pose");
     ASSERT_TRUE(pub->is_ready());
 
-    auto sub = bus.subscribe<Pose>(name, 1, 10);
+    auto sub = bus.subscribe<Pose>("/test_mbus_pose");
     ASSERT_TRUE(sub->is_connected());
 
     Pose pose{};
@@ -199,6 +94,8 @@ TEST(ShmMessageBusTest, WithShmTypes) {
     pose.quality        = 2;
     pub->publish(pose);
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
     Pose received{};
     ASSERT_TRUE(sub->receive(received));
     EXPECT_EQ(received.timestamp_ns, 12345678u);
@@ -207,7 +104,7 @@ TEST(ShmMessageBusTest, WithShmTypes) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// IServiceChannel interface tests (no SHM backend needed)
+// IServiceChannel interface tests (no backend needed)
 // ═══════════════════════════════════════════════════════════
 
 struct TestRequest {

@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
-# deploy/clean_build_and_run_zenoh.sh
-# Clean-build the companion stack with Zenoh IPC backend and launch the
-# Gazebo SITL simulation.
+# deploy/clean_build_and_run.sh
+# Clean-build the companion stack and launch the Gazebo SITL simulation.
 #
 # Usage:
-#   bash deploy/clean_build_and_run_zenoh.sh               # headless
-#   bash deploy/clean_build_and_run_zenoh.sh --gui          # with Gazebo 3-D GUI
-#   bash deploy/clean_build_and_run_zenoh.sh --asan         # + AddressSanitizer
-#   bash deploy/clean_build_and_run_zenoh.sh --ubsan        # + UBSan
-#   bash deploy/clean_build_and_run_zenoh.sh --coverage     # + code coverage
+#   bash deploy/clean_build_and_run.sh               # headless
+#   bash deploy/clean_build_and_run.sh --gui          # with Gazebo 3-D GUI
+#   bash deploy/clean_build_and_run.sh --asan         # + AddressSanitizer
+#   bash deploy/clean_build_and_run.sh --ubsan        # + UBSan
+#   bash deploy/clean_build_and_run.sh --coverage     # + code coverage
 #
-# NOTE: --tsan is intentionally omitted for Zenoh builds because the zenohc
-#       library triggers TSan false-positives in its internal threading.
+# NOTE: --tsan is intentionally omitted because the zenohc library triggers
+#       TSan false-positives in its internal threading.
 #
 # What it does:
-#   1. Kill leftover PX4/Gazebo/companion processes & stale SHM segments
-#   2. Clean-build (Release by default, Debug if sanitizer/coverage, Zenoh ON)
+#   1. Kill leftover PX4/Gazebo/companion processes
+#   2. Clean-build (Release by default, Debug if sanitizer/coverage)
 #   3. Run unit tests
-#   4. Launch Gazebo SITL flight with config/gazebo_zenoh.json (Zenoh IPC)
+#   4. Launch Gazebo SITL flight with config/gazebo.json
 #
 # Prerequisites:
 #   - zenohc ≥ 1.0 installed  (apt: libzenohc libzenohc-dev)
@@ -37,8 +36,8 @@ for arg in "$@"; do
         --gui)       GUI_FLAG="--gui" ;;
         --asan)      SANITIZER="asan" ;;
         --tsan)
-            echo "ERROR: --tsan is not supported with Zenoh (false-positives in zenohc)."
-            echo "  Use --asan or --ubsan instead, or run TSan with the SHM backend."
+            echo "ERROR: --tsan is not supported (false-positives in zenohc internal threading)."
+            echo "  Use --asan or --ubsan instead."
             exit 1
             ;;
         --ubsan)     SANITIZER="ubsan" ;;
@@ -76,9 +75,9 @@ fi
 ZENOH_VER="$(pkg-config --modversion zenohc 2>/dev/null || echo 'unknown')"
 echo "[OK] zenohc ${ZENOH_VER} found"
 
-# ── Step 1: Kill leftover processes & SHM ────────────────────
+# ── Step 1: Kill leftover processes ───────────────────────────
 echo ""
-echo "═══ [1/4] Cleaning up old processes & shared memory ═══"
+echo "═══ [1/4] Cleaning up old processes ═══"
 pkill -f "px4" 2>/dev/null || true
 pkill -f "gz sim" 2>/dev/null || true
 pkill -f "ruby.*gz" 2>/dev/null || true
@@ -86,28 +85,11 @@ for p in video_capture perception slam_vio_nav mission_planner comms payload_man
     pkill -f "build/bin/$p" 2>/dev/null || true
 done
 sleep 2
-# Remove only the explicit SHM segments this stack creates (see shm_types.h::shm_names).
-# Avoid broad globs that could delete unrelated /dev/shm objects.
-SHM_SEGMENTS=(
-    /dev/shm/drone_mission_cam
-    /dev/shm/drone_stereo_cam
-    /dev/shm/detected_objects
-    /dev/shm/slam_pose
-    /dev/shm/mission_status
-    /dev/shm/trajectory_cmd
-    /dev/shm/payload_commands
-    /dev/shm/fc_commands
-    /dev/shm/fc_state
-    /dev/shm/gcs_commands
-    /dev/shm/payload_status
-    /dev/shm/system_health
-)
-rm -f "${SHM_SEGMENTS[@]}" 2>/dev/null || true
 echo "  Done."
 
-# ── Step 2: Clean build (Zenoh ON) ───────────────────────────
+# ── Step 2: Clean build ──────────────────────────────────────
 echo ""
-echo "═══ [2/4] Clean build (${BUILD_TYPE}, IPC = Zenoh) ═══"
+echo "═══ [2/4] Clean build (${BUILD_TYPE}) ═══"
 [[ -n "$SANITIZER" ]]            && echo "  Sanitizer: ${SANITIZER}"
 [[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage : ON"
 # Determine Zenoh security configuration:
@@ -129,7 +111,6 @@ fi
 rm -rf build/
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-      -DENABLE_ZENOH=ON \
       ${ZENOH_SECURITY_FLAGS} \
       ${EXTRA_CMAKE_FLAGS} \
       ..
@@ -143,18 +124,18 @@ echo "═══ [3/4] Running unit tests ═══"
 ctest --test-dir build --output-on-failure -j"$(nproc)"
 echo "  All tests passed."
 
-# ── Step 4: Launch Gazebo SITL (Zenoh) ────────────────────────
+# ── Step 4: Launch Gazebo SITL ────────────────────────────────
 echo ""
-echo "═══ [4/4] Launching Gazebo SITL simulation (Zenoh backend) ═══"
+echo "═══ [4/4] Launching Gazebo SITL simulation ═══"
 if [[ -n "$GUI_FLAG" ]]; then
     echo "  Mode   : GUI (3-D visualisation + chase-cam)"
 else
     echo "  Mode   : Headless"
 fi
-echo "  Config : config/gazebo_zenoh.json"
+echo "  Config : config/gazebo.json"
 echo "  Logs   : drone_logs/"
 echo "  Press Ctrl+C to stop."
 echo ""
 
-export CONFIG_FILE="${PROJECT_DIR}/config/gazebo_zenoh.json"
+export CONFIG_FILE="${PROJECT_DIR}/config/gazebo.json"
 exec bash deploy/launch_gazebo.sh $GUI_FLAG

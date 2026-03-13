@@ -37,10 +37,6 @@ function(add_drone_test TEST_NAME)
     endif()
 endfunction()
 
-# ── IPC tests (POSIX SHM — serialise to avoid /dev/shm collisions) ───
-add_drone_test(test_shm_ipc         test_shm_ipc.cpp
-    PROPERTIES RESOURCE_LOCK "posix_shm")
-
 # ── SPSC Ring tests ──────────────────────────────────────────
 add_drone_test(test_spsc_ring       test_spsc_ring.cpp)
 

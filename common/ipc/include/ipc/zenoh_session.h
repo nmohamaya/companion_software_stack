@@ -13,7 +13,6 @@
 // Guarded by HAVE_ZENOH — this file is a no-op when Zenoh is not available.
 #pragma once
 
-#ifdef HAVE_ZENOH
 
 #include "ipc/zenoh_network_config.h"
 
@@ -192,5 +191,3 @@ private:
 };
 
 }  // namespace drone::ipc
-
-#endif  // HAVE_ZENOH

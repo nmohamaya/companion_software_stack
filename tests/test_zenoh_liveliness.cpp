@@ -156,7 +156,6 @@ TEST(SystemHealth, ProcessHealthEntryTriviallyCopyable) {
 // Zenoh-dependent tests (only run when Zenoh is available)
 // ═══════════════════════════════════════════════════════════
 
-#ifdef HAVE_ZENOH
 
 /// Poll predicate every 10ms, return true if it succeeds within timeout.
 template<typename Pred>
@@ -302,17 +301,13 @@ TEST(LivelinessMonitor, TokenDropRemovesFromAlive) {
     ASSERT_TRUE(wait_for([&] { return !monitor.is_alive("drop_test"); }));
 }
 
-#else  // !HAVE_ZENOH
 
-TEST(LivelinessToken, StubIsNotValid) {
-    LivelinessToken token("test");
-    EXPECT_FALSE(token.is_valid());
+TEST(LivelinessToken, TokenIsValid) {
+    LivelinessToken token("token_valid_test");
+    EXPECT_TRUE(token.is_valid());
 }
 
-TEST(LivelinessMonitor, StubReturnsEmpty) {
+TEST(LivelinessMonitor, MonitorDetectsNoUnknownProcesses) {
     LivelinessMonitor monitor([](const std::string&) {}, [](const std::string&) {});
-    EXPECT_TRUE(monitor.get_alive_processes().empty());
-    EXPECT_FALSE(monitor.is_alive("anything"));
+    EXPECT_FALSE(monitor.is_alive("nonexistent_process"));
 }
-
-#endif  // HAVE_ZENOH

@@ -1,10 +1,10 @@
 {
     "_comment": "Default configuration for Drone Companion Stack",
     "log_level": "info",
-    "ipc_backend": "shm",
+    "ipc_backend": "zenoh",
 
     "zenoh": {
-        "_comment": "Zenoh IPC settings (only used when ipc_backend=zenoh)",
+        "_comment": "Zenoh IPC settings",
         "shm_pool_size_mb": 32,
         "network": {
             "_comment": "Network transport: enables drone↔GCS communication over TCP/UDP",

@@ -19,6 +19,8 @@
 // unconditionally.
 #pragma once
 
+#include "ipc/zenoh_session.h"
+
 #include <algorithm>
 #include <functional>
 #include <mutex>
@@ -26,10 +28,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#ifdef HAVE_ZENOH
-
-#include "ipc/zenoh_session.h"
 
 #include <spdlog/spdlog.h>
 #include <zenoh.hxx>
@@ -218,46 +216,3 @@ private:
 };
 
 }  // namespace drone::ipc
-
-#else  // !HAVE_ZENOH
-
-// ═══════════════════════════════════════════════════════════
-// Stub implementations when Zenoh is not available
-// ═══════════════════════════════════════════════════════════
-
-namespace drone::ipc {
-
-static constexpr const char* kLivelinessPrefix   = "drone/alive/";
-static constexpr const char* kLivelinessWildcard = "drone/alive/**";
-
-/// No-op LivelinessToken when Zenoh is not available.
-class LivelinessToken {
-public:
-    explicit LivelinessToken(const std::string& /*process_name*/) {}
-    [[nodiscard]] const std::string& key_expr() const { return key_expr_; }
-    [[nodiscard]] bool               is_valid() const { return false; }
-    [[nodiscard]] static std::string extract_process_name(const std::string& key) {
-        const auto prefix_len = std::string_view(kLivelinessPrefix).size();
-        if (key.size() >= prefix_len && key.substr(0, prefix_len) == kLivelinessPrefix) {
-            return key.substr(prefix_len);
-        }
-        return key;
-    }
-
-private:
-    std::string key_expr_;
-};
-
-/// No-op LivelinessMonitor when Zenoh is not available.
-class LivelinessMonitor {
-public:
-    using AliveCallback = std::function<void(const std::string&)>;
-    using DeathCallback = std::function<void(const std::string&)>;
-    LivelinessMonitor(AliveCallback, DeathCallback) {}
-    [[nodiscard]] std::vector<std::string> get_alive_processes() const { return {}; }
-    [[nodiscard]] bool                     is_alive(const std::string&) const { return false; }
-};
-
-}  // namespace drone::ipc
-
-#endif  // HAVE_ZENOH

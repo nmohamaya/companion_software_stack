@@ -2,30 +2,20 @@
 // Unit tests for the Zenoh IPC backend and message bus factory.
 //
 // Five categories:
-//   1. MessageBusFactory tests (always compiled — no Zenoh dependency)
-//   2. Zenoh topic mapping tests (HAVE_ZENOH — ZenohMessageBus header required)
-//   3. Zenoh pub/sub round-trip tests (HAVE_ZENOH — requires running Zenoh session)
-//   4. Phase C — SHM provider zero-copy tests (HAVE_ZENOH)
-//   5. Phase D — Zenoh service channel tests (HAVE_ZENOH — queryable pattern)
-//
-// Build:
-//   cmake -B build                          → runs category 1 only
-//   cmake -B build -DENABLE_ZENOH=ON        → runs categories 1–5
+//   1. Topic mapping tests
+//   2. Zenoh pub/sub round-trip tests
+//   3. SHM provider zero-copy tests
+//   4. Service channel tests
+//   5. MessageBusFactory tests
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/shm_message_bus.h"
-
-#include <gtest/gtest.h>
-
-#ifdef HAVE_ZENOH
 #include "ipc/iservice_channel.h"
+#include "ipc/message_bus_factory.h"
 #include "ipc/zenoh_message_bus.h"
 #include "ipc/zenoh_publisher.h"
 #include "ipc/zenoh_service_client.h"
 #include "ipc/zenoh_service_server.h"
 #include "ipc/zenoh_session.h"
 #include "ipc/zenoh_subscriber.h"
-#endif
 
 #include <algorithm>
 #include <chrono>
@@ -34,6 +24,7 @@
 #include <string>
 #include <thread>
 
+#include <gtest/gtest.h>
 #include <unistd.h>
 
 using namespace drone::ipc;
@@ -42,7 +33,6 @@ using namespace drone::ipc;
 // Category 1: Topic mapping tests (always compiled)
 // ═══════════════════════════════════════════════════════════
 
-#ifdef HAVE_ZENOH
 
 TEST(ZenohTopicMapping, VideoMissionCam) {
     EXPECT_EQ(ZenohMessageBus::to_key_expr("/drone_mission_cam"), "drone/video/frame");
@@ -118,44 +108,36 @@ TEST(ZenohTopicMapping, FallbackUnmappedShmName) {
     EXPECT_EQ(ZenohMessageBus::to_key_expr("/some_unknown_topic"), "some/unknown/topic");
 }
 
-#endif  // HAVE_ZENOH
 
 // ═══════════════════════════════════════════════════════════
 // Category 1b: MessageBusFactory tests (always compiled)
 // ═══════════════════════════════════════════════════════════
 
-TEST(MessageBusFactory, DefaultCreatesShmBus) {
+TEST(MessageBusFactory, DefaultCreatesZenohBus) {
     auto bus = create_message_bus();
-    EXPECT_EQ(bus.backend_name(), "shm");
-}
-
-TEST(MessageBusFactory, ExplicitShmCreatesShmBus) {
-    auto bus = create_message_bus("shm");
-    EXPECT_EQ(bus.backend_name(), "shm");
-}
-
-TEST(MessageBusFactory, ZenohRequestWithoutBuild) {
-    // When HAVE_ZENOH is not defined, requesting "zenoh" should fall back
-    // to SHM (with a warning). When HAVE_ZENOH IS defined, it should
-    // create a ZenohMessageBus.
-    auto bus = create_message_bus("zenoh");
-#ifdef HAVE_ZENOH
     EXPECT_EQ(bus.backend_name(), "zenoh");
-#else
-    EXPECT_EQ(bus.backend_name(), "shm");
-#endif
+}
+
+TEST(MessageBusFactory, ExplicitZenohCreatesZenohBus) {
+    auto bus = create_message_bus("zenoh");
+    EXPECT_EQ(bus.backend_name(), "zenoh");
+}
+
+TEST(MessageBusFactory, ShmFallsBackToZenoh) {
+    // "shm" backend removed — should fall back to Zenoh with error log
+    auto bus = create_message_bus("shm");
+    EXPECT_EQ(bus.backend_name(), "zenoh");
 }
 
 TEST(MessageBusFactory, BusAdvertiseViaMessageBus) {
-    auto bus = create_message_bus("shm");
+    auto bus = create_message_bus("zenoh");
     auto pub = bus.advertise<Pose>("/test_factory_pub_" + std::to_string(getpid()));
     ASSERT_NE(pub, nullptr);
     EXPECT_TRUE(pub->is_ready());
 }
 
 TEST(MessageBusFactory, BusSubscribeViaMessageBus) {
-    // Create publisher first so subscriber can connect
-    auto bus   = create_message_bus("shm");
+    auto bus   = create_message_bus("zenoh");
     auto topic = "/test_factory_sub_" + std::to_string(getpid());
     auto pub   = bus.advertise<Pose>(topic);
     ASSERT_NE(pub, nullptr);
@@ -169,7 +151,6 @@ TEST(MessageBusFactory, BusSubscribeViaMessageBus) {
 // Category 2: Zenoh pub/sub round-trip tests (HAVE_ZENOH only)
 // ═══════════════════════════════════════════════════════════
 
-#ifdef HAVE_ZENOH
 
 // Small trivially-copyable test payload
 struct ZenohTestPayload {
@@ -1455,37 +1436,17 @@ TEST(ZenohServiceChannel, ViaMessageBus) {
 }
 
 // ---------------------------------------------------------------------------
-// 5.12 — SHM bus returns nullptr for service channels
+// 5.12 — Service channels are available on Zenoh
 // ---------------------------------------------------------------------------
 
-#endif  // HAVE_ZENOH
-
-// Service test types (outside HAVE_ZENOH guard for factory tests)
-#ifndef HAVE_ZENOH
-struct SvcTestRequest {
-    uint32_t command{0};
-    float    param{0.0f};
-};
-
-struct SvcTestResponse {
-    uint32_t result{0};
-    bool     success{false};
-};
-#endif
-
-TEST(MessageBusFactory, ShmBusServiceClientReturnsNull) {
-    auto bus    = create_message_bus("shm");
-    auto client = bus.create_client<SvcTestRequest, SvcTestResponse>("test_no_svc");
-#ifdef HAVE_ZENOH
-    // Under HAVE_ZENOH the variant has both alternatives, but we selected SHM
-    EXPECT_EQ(client, nullptr);
-#else
-    EXPECT_EQ(client, nullptr);
-#endif
+TEST(MessageBusFactory, ZenohBusServiceClientReturnsNonNull) {
+    auto bus    = create_message_bus("zenoh");
+    auto client = bus.create_client<SvcTestRequest, SvcTestResponse>("test_svc_avail");
+    EXPECT_NE(client, nullptr);
 }
 
-TEST(MessageBusFactory, ShmBusServiceServerReturnsNull) {
-    auto bus    = create_message_bus("shm");
-    auto server = bus.create_server<SvcTestRequest, SvcTestResponse>("test_no_svc");
-    EXPECT_EQ(server, nullptr);
+TEST(MessageBusFactory, ZenohBusServiceServerReturnsNonNull) {
+    auto bus    = create_message_bus("zenoh");
+    auto server = bus.create_server<SvcTestRequest, SvcTestResponse>("test_svc_avail");
+    EXPECT_NE(server, nullptr);
 }

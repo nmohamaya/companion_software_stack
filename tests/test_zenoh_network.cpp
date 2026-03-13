@@ -11,18 +11,14 @@
 #include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/wire_format.h"
-
-#include <gtest/gtest.h>
-
-#ifdef HAVE_ZENOH
 #include "ipc/zenoh_network_config.h"
 #include "ipc/zenoh_session.h"
 
-#include <nlohmann/json.hpp>
-#endif
-
 #include <cstring>
 #include <string>
+
+#include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 using namespace drone::ipc;
 
@@ -243,7 +239,6 @@ TEST(WireFormat, EnumValuesAreStable) {
 // Category 2: ZenohNetworkConfig tests (HAVE_ZENOH only)
 // ═══════════════════════════════════════════════════════════
 
-#ifdef HAVE_ZENOH
 
 TEST(ZenohNetworkConfig, MakeDroneDefaultsArePeer) {
     auto cfg = ZenohNetworkConfig::make_drone();
@@ -328,11 +323,12 @@ struct MockConfig {
     nlohmann::json section(const std::string& /*key*/) const { return nlohmann::json::object(); }
 };
 
-TEST(ConfigAwareFactory, ShmBackendFromMockConfig) {
+TEST(ConfigAwareFactory, ShmBackendFallsBackToZenoh) {
     MockConfig cfg;
     cfg.ipc_backend = "shm";
     auto bus        = create_message_bus(cfg);
-    EXPECT_EQ(bus.backend_name(), "shm");
+    // "shm" is removed — falls back to Zenoh with error log
+    EXPECT_EQ(bus.backend_name(), "zenoh");
 }
 
 TEST(ConfigAwareFactory, ZenohBackendFromMockConfig) {
@@ -344,5 +340,3 @@ TEST(ConfigAwareFactory, ZenohBackendFromMockConfig) {
     // Should create a ZenohMessageBus (not ShmMessageBus)
     EXPECT_EQ(bus.backend_name(), "zenoh");
 }
-
-#endif  // HAVE_ZENOH
