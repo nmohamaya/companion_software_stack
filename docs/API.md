@@ -108,27 +108,27 @@ ShmPose pose;
 if (sub.receive(pose)) { /* use pose */ }
 ```
 
-**Why a wrapper?** The raw zenoh-cpp `Subscriber<void>` requires two callbacks (`on_sample` + `on_drop`), manual `Bytes::as_vector()` deserialization, and size validation. The wrapper handles all of this and exposes the same `receive(T&)` API as the SHM backend.
+**Why a wrapper?** The raw zenoh-cpp `Subscriber<void>` requires two callbacks (`on_sample` + `on_drop`), manual `Bytes::as_vector()` deserialization, and size validation. The wrapper handles all of this and exposes a clean `receive(T&)` polling API.
 
 ### `ZenohMessageBus` — Factory ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46))
 
 **Header:** `common/ipc/include/ipc/zenoh_message_bus.h`  
 **Note:** Always available (Zenoh is the sole backend since Issue #126).
 
-Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()` API, backed by Eclipse Zenoh. Automatically maps SHM segment names to Zenoh key expressions.
+The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()` backed by Eclipse Zenoh. Maps channel names to Zenoh key expressions.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `advertise` | `unique_ptr<IPublisher<T>> advertise<T>(topic)` | Create a `ZenohPublisher<T>` |
 | `subscribe` | `unique_ptr<ISubscriber<T>> subscribe<T>(topic)` | Create a `ZenohSubscriber<T>` |
 | `subscribe_lazy` | `unique_ptr<ZenohSubscriber<T>> subscribe_lazy<T>(topic)` | Equivalent to `subscribe()` — Zenoh connections are always async |
-| `to_key_expr` | `static std::string to_key_expr(const std::string& shm_name)` | Map SHM name → Zenoh key expression (guards empty input) |
+| `to_key_expr` | `static std::string to_key_expr(const std::string& channel_name)` | Map channel name → Zenoh key expression (guards empty input) |
 
-**Why a wrapper?** Maps the existing 12 SHM segment names to Zenoh hierarchical key expressions, so process code can use either naming convention. Provides the same factory interface as `ShmMessageBus` for seamless backend swapping.
+**Why a wrapper?** Maps the 12 channel names to Zenoh hierarchical key expressions. Provides a consistent `advertise<T>()` / `subscribe<T>()` factory interface so process code is agnostic to the transport.
 
-**Key-expression mapping** (SHM segment names → Zenoh topics):
+**Key-expression mapping** (channel names → Zenoh topics):
 
-| SHM Name | Zenoh Key Expression |
+| Channel Name | Zenoh Key Expression |
 |----------|---------------------|
 | `/drone_mission_cam` | `drone/video/frame` |
 | `/drone_stereo_cam` | `drone/video/stereo_frame` |
@@ -147,20 +147,20 @@ Drop-in replacement for `ShmMessageBus`. Same `advertise<T>()` / `subscribe<T>()
 
 **Header:** `common/ipc/include/ipc/message_bus_factory.h`
 
-Returns the Zenoh message bus. The `MessageBus` variant now wraps only `ZenohMessageBus` (SHM backend was removed in Issue #126). Requesting `"shm"` logs an error and falls back to Zenoh.
+Returns the Zenoh message bus. `ZenohMessageBus` is the sole backend (legacy SHM removed in Issue #126). Config validation rejects any value other than `"zenoh"` at startup.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `create_message_bus` | `MessageBusVariant create_message_bus(const std::string& backend = "shm")` | Create bus by backend name |
+| `create_message_bus` | `MessageBusVariant create_message_bus(const std::string& backend = "zenoh")` | Create bus by backend name |
 | `bus_advertise<T>` | `unique_ptr<IPublisher<T>> bus_advertise<T>(MessageBusVariant&, topic)` | Advertise via variant |
 | `bus_subscribe<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe<T>(MessageBusVariant&, topic, ...)` | Subscribe via variant |
-| `bus_subscribe_optional<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe_optional<T>(MessageBusVariant&, topic)` | Subscribe with no retries (single attempt). For SHM: `is_connected()` returns false if segment doesn't exist. For Zenoh: `is_connected()` always true (async discovery). |
+| `bus_subscribe_optional<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe_optional<T>(MessageBusVariant&, topic)` | Subscribe with no retries (single attempt). `is_connected()` always returns true (Zenoh uses async discovery). |
 
-**Why a wrapper?** Enables runtime backend selection from config (`"ipc_backend": "shm"` or `"zenoh"`). Process code uses `bus_advertise<T>()` / `bus_subscribe<T>()` — completely agnostic to the transport.
+**Why a wrapper?** Reads `"ipc_backend"` from config (must be `"zenoh"`). Process code uses `bus_advertise<T>()` / `bus_subscribe<T>()` — completely agnostic to the transport.
 
 ```cpp
-// Usage is identical to ShmMessageBus — processes don't know the backend:
-auto bus = create_message_bus(cfg);  // Returns ZenohMessageBus if ipc_backend="zenoh"
+// Processes use bus_advertise<T>()/bus_subscribe<T>() — agnostic to transport:
+auto bus = create_message_bus(cfg);  // Returns ZenohMessageBus (sole backend)
 auto pub = bus->advertise<ShmPose>("drone/slam/pose");
 auto sub = bus->subscribe<ShmPose>("drone/slam/pose");
 
@@ -533,7 +533,7 @@ Monadic error type replacing exceptions on the hot path. See [CPP_PATTERNS_GUIDE
 
 **Header:** `common/util/include/util/safe_name_copy.h`
 
-Template replacing raw `strncpy` for fixed-size SHM name buffers. Deduces buffer size, zeroes, copies, null-terminates.
+Template replacing raw `strncpy` for fixed-size name buffers. Deduces buffer size, zeroes, copies, null-terminates.
 
 ```cpp
 char buf[32];
@@ -548,7 +548,7 @@ Every process creates a message bus via the config-driven factory and obtains ty
 
 ```cpp
 // Example: Process 1 (Video Capture)
-auto bus = create_message_bus(cfg);  // ShmMessageBus or ZenohMessageBus
+auto bus = create_message_bus(cfg);  // Returns ZenohMessageBus (sole backend)
 auto mission_pub = bus->advertise<ShmVideoFrame>("drone/video/frame");
 auto stereo_pub  = bus->advertise<ShmStereoFrame>("drone/video/stereo_frame");
 
@@ -614,16 +614,16 @@ For the full test index (test files, suite names, counts, and how to run them), 
 > **Decision:** [ADR-001](adr/ADR-001-ipc-framework-selection.md)  
 > **Target Hardware:** NVIDIA Jetson Orin (aarch64, JetPack 6.x)
 
-The IPC layer will be migrated from POSIX SHM (SeqLock) to **Eclipse Zenoh** in 6 phases:
+The IPC layer was migrated from POSIX SHM (SeqLock) to **Eclipse Zenoh** in 6 phases (all complete — Epic #45 closed, legacy SHM fully removed in Issue #126):
 
 | Phase | Issue | Title | Status | Key Changes |
 |-------|-------|-------|--------|-------------|
 | **A** | [#46](https://github.com/nmohamaya/companion_software_stack/issues/46) | Foundation | **Done** (PR #52) | CMake `find_package(zenohc)`, `HAVE_ZENOH` guard, `ZenohMessageBus`, `MessageBusFactory`, CI dual-build, 30 tests |
-| **B** | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Low-bandwidth migration | **In Review** (PR #53) | All 7 processes → `MessageBusFactory`, `bus_subscribe_optional<T>()`, 13 new tests, [ipc-key-expressions.md](ipc-key-expressions.md) |
-| **C** | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | High-bandwidth migration | Planned | `ShmVideoFrame`/`ShmStereoFrame` → Zenoh SHM provider (zero-copy) |
-| **D** | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Service channels | Planned | `ShmServiceChannel` → Zenoh queryable; delete legacy SHM files |
-| **E** | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Network transport | Planned | Same pub/sub reachable from GCS over UDP/TCP — enables #34, #35 |
-| **F** | [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Liveliness tokens | Planned | Process death detection — enables #28, #41 |
+| **B** | [#47](https://github.com/nmohamaya/companion_software_stack/issues/47) | Low-bandwidth migration | **Done** (PR #53) | All 7 processes → `MessageBusFactory`, `bus_subscribe_optional<T>()`, 13 new tests |
+| **C** | [#48](https://github.com/nmohamaya/companion_software_stack/issues/48) | High-bandwidth migration | **Done** (PR #54) | Video frames → Zenoh SHM provider (zero-copy), `PosixShmProvider` |
+| **D** | [#49](https://github.com/nmohamaya/companion_software_stack/issues/49) | Service channels | **Done** (PR #55) | Zenoh queryable services, legacy `ShmServiceChannel` removed |
+| **E** | [#50](https://github.com/nmohamaya/companion_software_stack/issues/50) | Network transport | **Done** (PR #56) | Drone↔GCS network transport, wire format, GCS client tool |
+| **F** | [#51](https://github.com/nmohamaya/companion_software_stack/issues/51) | Liveliness tokens | **Done** (PR #57) | Process health via liveliness tokens, P7 death detection |
 
 ### Why Zenoh?
 
@@ -640,7 +640,7 @@ The IPC layer will be migrated from POSIX SHM (SeqLock) to **Eclipse Zenoh** in 
 | `ZenohSession` | `zenoh_session.h` | — | **Implemented** | Singleton Zenoh session per process (intentionally leaked — see BUG_FIXES.md #7) |
 | `ZenohPublisher<T>` | `zenoh_publisher.h` | `IPublisher<T>` | **Implemented** | Serializes `T` to `Bytes` via `vector<uint8_t>`, calls `Publisher::put(Bytes&&)` |
 | `ZenohSubscriber<T>` | `zenoh_subscriber.h` | `ISubscriber<T>` | **Implemented** | Callback-based (`Subscriber<void>`), latest-value cache with mutex + atomics |
-| `ZenohMessageBus` | `zenoh_message_bus.h` | — | **Implemented** | Factory with 12-segment SHM→Zenoh topic mapping |
+| `ZenohMessageBus` | `zenoh_message_bus.h` | — | **Implemented** | Factory with 12-channel Zenoh topic mapping |
 | `MessageBusFactory` | `message_bus_factory.h` | — | **Implemented** | Config-driven `variant`-based backend selection |
 | `ZenohServiceClient<Req,Resp>` | `zenoh_service_client.h` | `IServiceClient<Req,Resp>` | Planned ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) | Zenoh query-based service client |
 | `ZenohServiceServer<Req,Resp>` | `zenoh_service_server.h` | `IServiceServer<Req,Resp>` | Planned ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) | Zenoh queryable-based service server |
