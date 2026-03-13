@@ -53,8 +53,8 @@
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (A* planner + 3D avoidance + HD-map) |
 | Autonomous flight | ARM → Takeoff → Navigate 7 WPs (A* + 3D avoidance) → RTL → Land → Disarm |
-| CI | GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix (shm/zenoh × sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
-| Line coverage | **75.1%** (lcov, SHM backend) |
+| CI | GitHub Actions — 5-job pipeline: format gate + 3-leg build matrix (sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
+| Line coverage | **75.1%** (lcov) |
 | Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
 | Config tunables | 95+ (JSON, dot-path access, schema-validated) |
 | Error handling | `Result<T,E>` monadic type — no exceptions |
@@ -63,7 +63,7 @@
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
-| IPC framework | **POSIX SHM + Zenoh 1.7.2** — All 6 phases complete ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52–#57) |
+| IPC framework | **Zenoh 1.7.2** (sole backend, SHM removed) — All 6 migration phases complete + legacy SHM removed ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52–#57, Issue #126) |
 | E2E testing | **42/42** Zenoh smoke-test checks passing (`tests/test_zenoh_e2e.sh`) |
 | Process supervision | **systemd** service units (7 services + target) with `BindsTo` dependencies |
 | Thread watchdog | **ThreadHeartbeat + ThreadWatchdog** — per-thread stuck detection via atomics |
@@ -73,7 +73,7 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
-| Integration testing | **7/7 Tier 1 scenarios passing** on both SHM and Zenoh; sideband fault injector CLI |
+| Integration testing | **7/7 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 8 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **29** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
@@ -431,6 +431,7 @@
 | [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening — CI, Error Handling, Code Quality | **Closed** ✅ |
 | [#88](https://github.com/nmohamaya/companion_software_stack/issues/88) | [Epic] Process & Thread Watchdog — Crash Recovery & Stuck-Thread Detection | **Closed** ✅ |
 | [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Core Autonomy & Safety — IPC, Perception, VIO, Planning | **Closed** ✅ |
+| [#126](https://github.com/nmohamaya/companion_software_stack/issues/126) | [Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable | **In Progress** |
 
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
@@ -585,4 +586,4 @@
 
 ---
 
-*Last updated after Improvement #36 (ColorContourDetector single-pass + 2× subsampling + max_fps cap, Issue #128, PR #135) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 745 tests (SHM and Zenoh), 42 test suites, 7/7 Tier 1 scenarios passing on both SHM & Zenoh, 36 bug fixes total. Gazebo SITL scenario 02: 7/7 WP reached, 0 collisions. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #39 (Zenoh-Only IPC, Issue #126) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 42 test suites, Zenoh sole IPC backend, 5 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

@@ -32,12 +32,12 @@
 ./tests/run_tests.sh gazebo-e2e
 
 # Gazebo SITL scenario runner (all 8 scenarios with PX4 + Gazebo + Zenoh)
-./tests/run_scenario_gazebo.sh --all --ipc zenoh
-./tests/run_scenario_gazebo.sh --all --ipc zenoh --gui   # with 3D window
-./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json --ipc zenoh
+./tests/run_scenario_gazebo.sh --all
+./tests/run_scenario_gazebo.sh --all --gui   # with 3D window
+./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json
 
-# Build with Zenoh and run E2E
-./tests/run_tests.sh zenoh-e2e --zenoh
+# Run Zenoh E2E
+./tests/run_tests.sh zenoh-e2e
 
 # List available modules
 ./tests/run_tests.sh list
@@ -47,7 +47,7 @@
 
 | Module | Description | Approx. Tests |
 |--------|-------------|---------------|
-| `ipc` | SHM + Zenoh IPC primitives, message bus, wire format | ~150 |
+| `ipc` | Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
 | `perception` | Kalman tracker, fusion engine (UKF+camera), color contour, YOLOv8 | ~113 |
 | `mission` | Mission FSM, FaultManager degradation | ~31 |
@@ -70,7 +70,6 @@
 ./tests/run_tests.sh --parallel 4             # Limit parallelism
 ./tests/run_tests.sh ipc --repeat 5           # Stress-test (run 5x)
 ./tests/run_tests.sh --build                  # Rebuild before testing
-./tests/run_tests.sh --zenoh                   # Build with Zenoh backend + run all
 ./tests/run_tests.sh --asan                   # Rebuild with AddressSanitizer
 ./tests/run_tests.sh --tsan                   # Rebuild with ThreadSanitizer
 ./tests/run_tests.sh --coverage               # Generate coverage report after tests
@@ -94,7 +93,7 @@ bash deploy/build.sh --test-filter watchdog
 
 | Category | Files | Tests | Description |
 |----------|-------|-------|-------------|
-| [IPC — SHM](#ipc--shm) | 3 | 32 | POSIX shared-memory primitives, message bus, SPSC ring buffer |
+| [IPC — Core](#ipc--core) | 2 | 24 | SPSC ring buffer, message bus abstraction |
 | [IPC — Zenoh](#ipc--zenoh) | 3 | 121 | Zenoh pub/sub, services, SHM zero-copy, liveliness, network/wire format |
 | [IPC — Cross-Process Correlation](#ipc--cross-process-correlation) | 1 | 33 | Correlation IDs, ScopedCorrelation, WireHeader v2, SHM + log integration |
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
@@ -115,24 +114,14 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **37 C++ + 4 shell** | **746 + 42 + 80** | |
+| **Total** | **36 C++ + 4 shell** | **845 + 42 + 80** | |
 
 ---
 
-## IPC — SHM
+## IPC — Core
 
-### test_shm_ipc.cpp — 9 tests
-
-**What it tests:** Low-level `ShmWriter` / `ShmReader` with SeqLock-based
-shared memory.
-
-| Suite | Tests | What is validated |
-|-------|-------|-------------------|
-| `ShmIPCTest` | 9 | Write ↔ read round-trip for `ShmPose`, concurrent producer–consumer access, move semantics (no double `shm_unlink`), segment creation/cleanup, `create_non_owning` segment survives writer destruction |
-
-**Key files under test:** `ipc/shm_reader.h`, `ipc/shm_writer.h`, `ipc/shm_types.h`
-
----
+> The legacy `test_shm_ipc.cpp` (9 tests for `ShmWriter`/`ShmReader`) was removed in Issue #126
+> when the POSIX SHM backend was deleted. The SPSC ring buffer and message bus tests remain.
 
 ### test_spsc_ring.cpp — 7 tests
 
@@ -951,8 +940,8 @@ to catch unexpected collisions (Fix #40).
 ```bash
 ./tests/run_scenario_gazebo.sh --list                                    # list
 ./tests/run_scenario_gazebo.sh config/scenarios/01_nominal_mission.json   # one
-./tests/run_scenario_gazebo.sh --all --ipc zenoh                         # all 8 with Zenoh
-./tests/run_scenario_gazebo.sh --all --ipc zenoh --gui                   # with 3D window
+./tests/run_scenario_gazebo.sh --all                                     # all 8 scenarios
+./tests/run_scenario_gazebo.sh --all --gui                               # with 3D window
 ./tests/run_scenario_gazebo.sh --dry-run config/scenarios/02_obstacle_avoidance.json
 ```
 

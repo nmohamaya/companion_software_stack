@@ -1907,4 +1907,55 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 
 ---
 
-_Last updated after Improvement #38 (Gazebo full avoidance stack config #137). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
+## Improvement #39 — Zenoh-Only IPC: Remove Legacy SHM Backend (Issue #126)
+
+**Date:** 2026-03-13
+**Category:** Refactor / IPC Architecture
+**Issue:** [#126](https://github.com/nmohamaya/companion_software_stack/issues/126) — [Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable
+**Branch:** `feature/issue-126-zenoh-only-ipc`
+
+**What:** Removed the entire POSIX SHM IPC backend (~1,500 lines of code). Zenoh is now the sole IPC transport. The `ENABLE_ZENOH` / `HAVE_ZENOH` compile guards were removed — Zenoh is always built. The `MessageBus` variant now wraps only `ZenohMessageBus`. Factory defaults to `"zenoh"`; requesting `"shm"` logs an error and falls back to Zenoh. Renamed `shm_types.h` to `ipc_types.h` and all `Shm*` type prefixes to transport-agnostic names. Renamed `shm_names::` namespace to `topics::`. Migrated `fault_injector`, P5, and P7 from direct `ShmReader` usage to `MessageBus` subscribers.
+
+**Why:** Maintaining two IPC backends (SHM + Zenoh) doubled the CI matrix, added compile guards throughout the codebase, and bloated header includes. Since Zenoh covers both local (zero-copy SHM) and network transport, the legacy POSIX SHM backend was dead weight. Removing it simplifies the build, cuts CI from 9 to 5 jobs, and eliminates an entire class of "did you build with Zenoh?" developer pitfalls.
+
+**Files Deleted (4):**
+- `common/ipc/include/ipc/shm_writer.h` — SeqLock-based POSIX SHM writer
+- `common/ipc/include/ipc/shm_reader.h` — SeqLock-based POSIX SHM reader
+- `common/ipc/include/ipc/shm_publisher.h` — ShmPublisher wrapper
+- `common/ipc/include/ipc/shm_subscriber.h` — ShmSubscriber wrapper
+- `common/ipc/include/ipc/shm_message_bus.h` — ShmMessageBus factory
+- `tests/test_shm_ipc.cpp` — 9 SHM-specific unit tests
+- `deploy/clean_build_and_run_shm.sh` — SHM-specific launch script
+
+**Files Modified (key):**
+- `common/ipc/include/ipc/shm_types.h` → renamed to `ipc_types.h`; all `Shm*` structs renamed to transport-agnostic names
+- `common/ipc/include/ipc/shm_names.h` → `shm_names::` namespace renamed to `topics::`
+- `common/ipc/include/ipc/message_bus_factory.h` — `MessageBus` variant wraps only `ZenohMessageBus`; `"shm"` falls back with error log
+- `CMakeLists.txt` — `find_package(zenohc REQUIRED)`, removed `ENABLE_ZENOH` option
+- `tests/CMakeLists.txt` — removed `test_shm_ipc.cpp`, removed `HAVE_ZENOH` guards from Zenoh tests
+- `deploy/build.sh` — `--zenoh` flag deprecated (now a no-op)
+- `deploy/clean_build_and_run_zenoh.sh` → renamed to `deploy/clean_build_and_run.sh`
+- `.github/workflows/ci.yml` — 9 → 5 jobs (removed SHM/Zenoh build matrix)
+- `deploy/run_ci_local.sh` — 10 → 6 local CI jobs
+- `config/default.json` — `ipc_backend` changed from `"shm"` to `"zenoh"`
+- `tools/fault_injector/main.cpp` — migrated from `ShmReader` to `MessageBus` subscriber
+- All 7 process `main.cpp` files — updated type names and includes
+
+**Net change:** ~1,500 lines removed, ~289 lines added.
+
+**Test results:** 845 tests pass, 0 failures, 0 compiler warnings.
+
+**Summary table update:**
+
+| Metric | Before (Improvement #38) | After (Improvement #39) |
+|--------|--------------------------|------------------------|
+| IPC backends | SHM + Zenoh | Zenoh only |
+| CI jobs | 9 | 5 |
+| Local CI jobs | 10 | 6 |
+| Compile guards | `ENABLE_ZENOH` / `HAVE_ZENOH` | None (Zenoh always on) |
+| Unit tests | 844 | 845 |
+| SHM code | ~1,500 lines | 0 lines |
+
+---
+
+_Last updated after Improvement #39 (Zenoh-Only IPC, Issue #126). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 5 CI jobs, Zenoh sole IPC backend._
