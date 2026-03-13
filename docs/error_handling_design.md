@@ -8,8 +8,9 @@ throughout the drone stack.  The architecture decision is in
 
 ## 1. Overview
 
-All operations that can fail return `drone::util::Result<T, E>` instead
-of throwing exceptions or returning raw `bool`.  The type is:
+New utility APIs and process-internal modules that can fail return
+`drone::util::Result<T, E>` instead of throwing exceptions or returning
+raw `bool`.  The type is:
 
 - **`[[nodiscard]]`** — ignoring the return value is a compiler error
   (`-Werror` is enabled in CI)
@@ -98,9 +99,9 @@ int v = r.value_or(0);
 **Example — chain of fallible operations:**
 
 ```cpp
-auto result = cfg.load("config/default.json")
-    .and_then([&](auto) { return camera->open(w, h, fps); })
-    .and_then([&](auto) { return ipc_bus->init(); });
+// load_config() and ipc_bus->init() both return Result
+auto result = load_config("config/default.json")
+    .and_then([&](drone::Config cfg) { return ipc_bus->init(cfg); });
 
 if (result.is_err()) {
     LOG_ERROR("startup failed: {}", result.error().message());
@@ -135,11 +136,20 @@ alias:
 
 ```cpp
 // In process3_slam_vio_nav/include/slam/vio_types.h
-enum class VIOError {
-    FeatureTrackingFailed = 0,
-    InsufficientFeatures  = 1,
-    IMUPreintegrationFailed = 2,
-    OptimisationDiverged  = 3,
+enum class VIOErrorCode : uint8_t {
+    InsufficientFeatures,
+    FeatureExtractionFailed,
+    StereoMatchFailed,
+    TrackingLost,
+    // ... (see vio_types.h for full list)
+};
+
+struct VIOError {
+    VIOErrorCode code = VIOErrorCode::None;
+    std::string  component;  // stage that produced the error
+    std::string  message;
+    uint64_t     frame_id = 0;
+    [[nodiscard]] std::string to_string() const;
 };
 
 template <typename T>
@@ -151,7 +161,8 @@ Usage inside P3:
 ```cpp
 VIOResult<Pose> track_features(const Frame& frame) {
     if (features.size() < kMinFeatures)
-        return VIOResult<Pose>::err(VIOError::InsufficientFeatures);
+        return VIOResult<Pose>::err(VIOError{VIOErrorCode::InsufficientFeatures,
+                                            "FeatureTracker", "too few points"});
     ...
     return VIOResult<Pose>::ok(pose);
 }

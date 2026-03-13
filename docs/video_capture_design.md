@@ -286,13 +286,16 @@ the *subscriber* processes (P2, P3), not here.
 Run with `--json-logs` to switch from text to JSON structured output.
 Key fields emitted by this process:
 
-| JSON Field | Description |
-|------------|-------------|
-| `process` | `"video_capture"` |
-| `channel` | `"/drone_mission_cam"` or `"/drone_stereo_cam"` |
+| Field | Description |
+|-------|-------------|
+| `process` | `"video_capture"` (appears in the `msg` text) |
+| `channel` | `/drone_mission_cam` or `/drone_stereo_cam` |
 | `frame_seq` | `CapturedFrame::sequence` — monotonic frame counter |
 | `timestamp_ns` | `CapturedFrame::timestamp_ns` — capture wall time |
 | `backend` | Active backend name, e.g. `"SimulatedCamera"` |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
 
 ### Correlation IDs
 
@@ -302,13 +305,17 @@ P1 does not participate in GCS correlation (no upstream commands).
 
 End-to-end frame latency is measured at every subscriber:
 
-| Subscriber | Channel | Tracker call |
-|------------|---------|-------------|
-| P2 perception | `/drone_mission_cam` | `reader.log_latency_if_due(50)` in detector thread |
-| P3 SLAM/VIO | `/drone_stereo_cam` | `reader.log_latency_if_due(50)` in visual frontend thread |
+| Subscriber | Channel |
+|------------|---------|
+| P2 perception | `/drone_mission_cam` |
+| P3 SLAM/VIO | `/drone_stereo_cam` |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the subscriber thread to
+periodically emit a p50/p90/p99 histogram (in µs) to the log.
 
 See [observability.md](observability.md) for the `LatencyTracker` API
-and how to interpret `p50_ms` / `p95_ms` / `p99_ms` histogram fields.
+and how to interpret the p50/p90/p99 (µs) histogram.
 
 ---
 

@@ -284,13 +284,16 @@ status consumed by P4 (payload triggers) and P7 (health monitoring).
 
 ### Structured Logging
 
-| JSON Field | Description |
-|------------|-------------|
+| Field | Description |
+|-------|-------------|
 | `process` | `"payload_manager"` |
 | `gimbal_pitch_deg` | Current gimbal pitch (degrees, positive = up) |
 | `gimbal_yaw_deg` | Current gimbal yaw (degrees) |
 | `gimbal_stabilised` | `true` when gimbal has converged to target |
 | `is_recording` | `true` when video recording is active |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
 
 ### Correlation IDs
 
@@ -299,9 +302,13 @@ the `/slam_pose` trigger flag, not via `/gcs_commands`).
 
 ### Latency Tracking
 
-| Channel | Direction | Tracker call |
-|---------|-----------|-------------|
-| `/slam_pose` | subscriber | `reader.log_latency_if_due(50)` in control loop |
+| Channel | Direction |
+|---------|----------|
+| `/slam_pose` | subscriber |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the control loop to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for histogram interpretation.
 

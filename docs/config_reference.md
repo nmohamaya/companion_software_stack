@@ -24,7 +24,7 @@ codebase.
 | Key | Type | Default | Range | Process | Description |
 |-----|------|---------|-------|---------|-------------|
 | `log_level` | `string` | `"info"` | `"debug"`, `"info"`, `"warn"`, `"error"` | All | Minimum log severity printed to stderr |
-| `ipc_backend` | `string` | `"zenoh"` | `"shm"`, `"zenoh"` | All | IPC transport (effectively always `"zenoh"` post-ADR-002) |
+| `ipc_backend` | `string` | `"shm"` | `"shm"`, `"zenoh"` | All | IPC transport backend (`"shm"` in the default config; set to `"zenoh"` for production Zenoh sessions) |
 
 ---
 
@@ -32,12 +32,12 @@ codebase.
 
 | Key | Type | Default | Range | Process | Description |
 |-----|------|---------|-------|---------|-------------|
-| `zenoh.shm_pool_size_mb` | `int` | `64` | 16–512 | All | Zenoh shared-memory pool allocated per process |
+| `zenoh.shm_pool_size_mb` | `int` | `32` | 16–512 | All | Zenoh shared-memory pool allocated per process |
 | `zenoh.network.enabled` | `bool` | `false` | — | All | Enable WAN/LAN networking (false = loopback only) |
 | `zenoh.network.mode` | `string` | `"peer"` | `"peer"`, `"client"`, `"router"` | All | Zenoh session role |
 | `zenoh.network.listen_port` | `int` | `7447` | 1024–65535 | All | UDP/TCP listen port for peer discovery |
 | `zenoh.network.listen_address` | `string` | `"0.0.0.0"` | Valid IPv4/IPv6 | All | Bind address for incoming connections |
-| `zenoh.network.protocol` | `string` | `"udp"` | `"udp"`, `"tcp"` | All | Underlying transport protocol |
+| `zenoh.network.protocol` | `string` | `"tcp"` | `"udp"`, `"tcp"` | All | Underlying transport protocol |
 | `zenoh.network.connect_endpoints` | `[]string` | `[]` | URIs | All | Static peer addresses, e.g. `["udp/192.168.1.10:7447"]` |
 | `zenoh.network.multicast_scouting` | `bool` | `true` | — | All | Auto-discovery via multicast on LAN |
 | `zenoh.network.gossip_scouting` | `bool` | `true` | — | All | Gossip-based peer discovery |
@@ -157,7 +157,7 @@ codebase.
 
 | Key | Type | Default | Range | Description |
 |-----|------|---------|-------|-------------|
-| `mission_planner.geofence.polygon` | `[]object{lat,lon}` | 50 m square around origin | — | Ordered polygon vertices defining the allowed operating area |
+| `mission_planner.geofence.polygon` | `[]object{x,y}` | 50 m square around origin | — | Ordered polygon vertices in local horizontal frame (x = East m, y = North m) defining the allowed operating area |
 | `mission_planner.geofence.altitude_floor_m` | `float` | `0.0` | -50–0 | Minimum allowed altitude AGL (m) |
 | `mission_planner.geofence.altitude_ceiling_m` | `float` | `120.0` | 0–600 | Maximum allowed altitude AGL (m, ICAO Class G max) |
 | `mission_planner.geofence.warning_margin_m` | `float` | `5.0` | 0–20 | Distance inside geofence boundary that triggers a warning before enforcement |
@@ -291,8 +291,8 @@ Keyed by process short name (e.g., `"video_capture"`, `"perception"`,
 | `comms.mavlink.backend` | `create_fc_link(cfg, "comms.mavlink")` | `IFCLink` |
 | `comms.gcs.backend` | `create_gcs_link(cfg, "comms.gcs")` | `IGCSLink` |
 | `payload_manager.gimbal.backend` | `create_gimbal(cfg, "payload_manager.gimbal")` | `IGimbal` |
-| `mission_planner.path_planner.backend` | `PlannerFactory::create(cfg)` | `IPathPlanner` |
-| `mission_planner.obstacle_avoider.backend` | `AvoiderFactory::create(cfg)` | `IObstacleAvoider` |
+| `mission_planner.path_planner.backend` | `create_path_planner(backend)` | `IPathPlanner` |
+| `mission_planner.obstacle_avoider.backend` | `create_obstacle_avoider(backend, ...)` | `IObstacleAvoider` |
 
 ---
 

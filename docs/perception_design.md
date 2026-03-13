@@ -496,13 +496,16 @@ Latency is tracked from frame capture (P1 `timestamp_ns`) to P2 dequeue.
 
 ### Structured Logging
 
-| JSON Field | Description |
-|------------|-------------|
+| Field | Description |
+|-------|-------------|
 | `process` | `"perception"` |
 | `detection_count` | Objects detected in the current frame |
 | `tracked_objects` | Active track count after SORT association |
 | `fused_objects` | Objects in the fused world-frame output |
-| `latency_ms` | Frame ingest latency reported by `log_latency_if_due()` |
+| `latency_ms` | Frame ingest latency from `log_latency_if_due()` |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
 
 ### Correlation IDs
 
@@ -510,12 +513,15 @@ P2 does not participate in GCS correlation (no command path).
 
 ### Latency Tracking
 
-| Channel | Direction | Tracker call |
-|---------|-----------|-------------|
-| `/drone_mission_cam` | subscriber | `reader.log_latency_if_due(50)` in detector thread |
+| Channel | Direction |
+|---------|----------|
+| `/drone_mission_cam` | subscriber |
 
-The latency covers the time from `CapturedFrame::timestamp_ns` (set by
-P1 at capture) to when P2 dequeues the frame for detection.
+Latency covers the time from `CapturedFrame::timestamp_ns` (set by P1
+at capture) to when P2 dequeues the frame for detection. Latency is
+tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the detector thread to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for histogram interpretation.
 

@@ -1907,8 +1907,6 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 
 ---
 
----
-
 ## Improvement #39 — Documentation Completeness: HAL, Config Reference, Error Handling, Observability Cross-referencing (Issue #149)
 
 **Date:** 2026-03-13

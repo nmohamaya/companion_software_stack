@@ -44,7 +44,7 @@ uniform way to attach an error message to a failure.
 
 - No exceptions in flight-path code
 - No RTTI (`-fno-rtti` compatible)
-- Zero heap allocation for error values
+- Zero heap allocation in the `Result<T,E>` variant itself (note: `Error::message` stores a `std::string` which may heap-allocate)
 - Compiler-enforced handling (`[[nodiscard]]`)
 - Rich error codes (not just `bool`) for structured logging
 - Monadically chainable without callback pyramid
@@ -116,7 +116,14 @@ Tightly-scoped modules define a domain error type and alias:
 
 ```cpp
 // In process3_slam_vio_nav/include/slam/vio_types.h
-enum class VIOError { ... };
+enum class VIOErrorCode : uint8_t { InsufficientFeatures, FeatureExtractionFailed, ... };
+struct VIOError {
+    VIOErrorCode code = VIOErrorCode::None;
+    std::string  component;  // stage that produced the error
+    std::string  message;
+    uint64_t     frame_id = 0;
+    [[nodiscard]] std::string to_string() const;
+};
 template <typename T>
 using VIOResult = drone::util::Result<T, VIOError>;
 ```
@@ -182,8 +189,10 @@ bool, and the out-parameter requires an lvalue at every call site.
 
 ## 6. Usage Rules
 
-1. **All public APIs that can fail must return `Result<T,E>`.** Void
-   operations return `VoidResult`.
+1. **New utility APIs and process-internal modules that can fail must return
+   `Result<T,E>`.** Void operations return `VoidResult`.  Note: HAL interfaces
+   (e.g. `ICamera::open()`) and `drone::Config::load()` still return `bool`
+   for legacy compatibility — these are known exceptions.
 2. **Never call `.value()` without first checking `.is_ok()`.** Prefer
    `.value_or()` or monadic chains.
 3. **Never `throw` in flight-path code.** Exceptions are permitted in
@@ -202,5 +211,6 @@ API reference and code examples.
 
 ## 7. Review Status
 
-Accepted — implemented across all 7 processes and common utilities.
-No known issues.
+Accepted — implemented across new utility APIs and process-internal modules.
+Known exceptions: HAL interface methods (return `bool`) and
+`drone::Config::load()` (returns `bool`) for legacy compatibility.

@@ -439,14 +439,17 @@ logs).
 
 ### Structured Logging
 
-| JSON Field | Description |
-|------------|-------------|
+| Field | Description |
+|-------|-------------|
 | `process` | `"mission_planner"` |
 | `fsm_state` | Current FSM state name (e.g. `"MISSION"`, `"RTL"`, `"LOITER"`) |
 | `waypoint_index` | Active waypoint index |
-| `correlation_id` | UUID from originating GCS command (if present) |
+| `correlation_id` | 64-bit hex value (e.g. `0x000012340000001a`) from originating GCS command (if present) |
 | `planner_backend` | Active path planner name |
 | `avoider_backend` | Active obstacle avoider name |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
 
 ### Correlation IDs
 
@@ -458,13 +461,17 @@ Enable with `--json-logs`; search log output for `"correlation_id"`.
 
 ### Latency Tracking
 
-| Channel | Direction | Tracker call |
-|---------|-----------|-------------|
-| `/detected_objects` | subscriber | `reader.log_latency_if_due(100)` in planner thread |
-| `/slam_pose` | subscriber | `reader.log_latency_if_due(100)` in planner thread |
-| `/fc_state` | subscriber | `reader.log_latency_if_due(10)` in planner thread |
-| `/gcs_commands` | subscriber | `reader.log_latency_if_due(10)` in planner thread |
-| `/system_health` | subscriber | `reader.log_latency_if_due(10)` in planner thread |
+| Channel | Direction |
+|---------|----------|
+| `/detected_objects` | subscriber |
+| `/slam_pose` | subscriber |
+| `/fc_state` | subscriber |
+| `/gcs_commands` | subscriber |
+| `/system_health` | subscriber |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the planner thread to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for the full correlation ID
 flow diagram and histogram interpretation.

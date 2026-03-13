@@ -385,14 +385,17 @@ emit structured logs and LatencyTracker histograms.
 
 ### Structured Logging
 
-| JSON Field | Description |
-|------------|-------------|
+| Field | Description |
+|-------|-------------|
 | `process` | `"slam_vio_nav"` |
 | `vio_rate_hz` | Measured VIO loop rate (last 100 iterations) |
 | `tracked_features` | Feature count after optical flow |
 | `keyframe_inserted` | `true` when a keyframe was added this epoch |
-| `pose_x` / `pose_y` / `pose_z` | Published NED position (m) |
+| `pose_x` / `pose_y` / `pose_z` | Published world-frame position (m) |
 | `imu_rate_hz` | Measured IMU integration rate |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
 
 ### Correlation IDs
 
@@ -402,9 +405,13 @@ latency measurements.
 
 ### Latency Tracking
 
-| Channel | Direction | Tracker call |
-|---------|-----------|-------------|
-| `/drone_stereo_cam` | subscriber | `reader.log_latency_if_due(50)` in visual frontend thread |
+| Channel | Direction |
+|---------|----------|
+| `/drone_stereo_cam` | subscriber |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the visual frontend thread to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for histogram interpretation.
 

@@ -501,8 +501,8 @@ snapshots that summarise all 7 processes in one structured record.
 
 ### Structured Logging
 
-| JSON Field | Description |
-|------------|-------------|
+| Field | Description |
+|-------|-------------|
 | `process` | `"system_monitor"` |
 | `cpu_percent` | Aggregate CPU usage across all cores |
 | `mem_percent` | RSS / total RAM usage |
@@ -511,16 +511,23 @@ snapshots that summarise all 7 processes in one structured record.
 | `battery_percent` | Reported battery level |
 | `process_states` | Array of `{name, pid, status, restart_count}` per managed process |
 
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
+
 ### Correlation IDs
 
 P7 does not participate in GCS correlation.
 
 ### Latency Tracking
 
-| Channel | Direction | Tracker call |
-|---------|-----------|-------------|
-| `/fc_state` | subscriber | `reader.log_latency_if_due(10)` in monitor thread |
-| `/payload_status` | subscriber | `reader.log_latency_if_due(10)` in monitor thread |
+| Channel | Direction |
+|---------|----------|
+| `/fc_state` | subscriber |
+| `/payload_status` | subscriber |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the monitor thread to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for the `LatencyTracker` API
 and `log_latency_if_due()` usage.

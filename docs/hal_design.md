@@ -56,7 +56,7 @@ struct CapturedFrame {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `open` | `bool open(uint32_t w, uint32_t h, uint32_t fps)` | Open camera at requested resolution/frame rate.  Returns false on error. |
+| `open` | `bool open(uint32_t w, uint32_t h, int fps)` | Open camera at requested resolution/frame rate.  Returns false on error. |
 | `close` | `void close()` | Release device + buffers. |
 | `capture` | `CapturedFrame capture()` | Blocking capture.  Returns frame with `valid=false` on timeout/error. |
 | `is_open` | `bool is_open() const` | True only after successful `open()`. |
@@ -67,7 +67,7 @@ struct CapturedFrame {
 | Key | Class | Notes |
 |-----|-------|-------|
 | `"simulated"` | `SimulatedCamera` | Generates a gradient test pattern at 30 fps. |
-| `"gazebo"` | `GazeboCamera` | Subscribes to a gz-transport topic (requires `HAVE_GAZEBO`). |
+| `"gazebo"` | `GazeboCameraBackend` | Subscribes to a gz-transport topic (requires `HAVE_GAZEBO`). |
 | `"v4l2"` | *(future)* | Video4Linux2 for USB/CSI cameras. |
 
 **Config section:** `video_capture.mission_cam` or `video_capture.stereo_cam`
@@ -152,10 +152,10 @@ struct GCSCommand {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `open` | `bool open(const std::string& addr, uint16_t port)` | Bind UDP socket. |
+| `open` | `bool open(const std::string& addr, int port)` | Bind UDP/TCP socket. |
 | `close` | `void close()` | Close socket. |
 | `is_connected` | `bool is_connected() const` | True while socket is bound. |
-| `send_telemetry` | `bool send_telemetry(double lat, double lon, float alt, float battery, const std::string& state)` | Push telemetry to GCS. |
+| `send_telemetry` | `bool send_telemetry(float lat, float lon, float alt, float battery, uint8_t state)` | Push telemetry to GCS. |
 | `poll_command` | `GCSCommand poll_command()` | Non-blocking read of latest GCS command. |
 | `name` | `std::string name() const` | Backend identifier. |
 
@@ -234,7 +234,7 @@ struct ImuReading {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `init` | `bool init(double rate_hz)` | Configure sampling rate and start acquisition. |
+| `init` | `bool init(int rate_hz)` | Configure sampling rate and start acquisition. |
 | `read` | `ImuReading read()` | Non-blocking read of latest sample. |
 | `is_active` | `bool is_active() const` | True after successful `init()`. |
 | `name` | `std::string name() const` | Backend identifier. |
@@ -243,8 +243,8 @@ struct ImuReading {
 
 | Key | Class | Notes |
 |-----|-------|-------|
-| `"simulated"` | `SimulatedImuSource` | Band-limited white noise at requested rate. |
-| `"gazebo"` | `GazeboImuSource` | gz-transport IMU topic (requires `HAVE_GAZEBO`). |
+| `"simulated"` | `SimulatedIMU` | Band-limited white noise at requested rate. |
+| `"gazebo"` | `GazeboIMUBackend` | gz-transport IMU topic (requires `HAVE_GAZEBO`). |
 | `"bmi088"` | *(future)* | Bosch BMI088 over SPI/I2C on Jetson Orin. |
 
 **Config section:** `slam.imu`
@@ -295,10 +295,15 @@ globally.
 **Consumer:** P4 (mission planner)
 
 ```cpp
+namespace drone::planner {
 class IPathPlanner {
-    virtual ShmTrajectoryCmd plan(const ShmPose& pose, const ShmWaypoint& target) = 0;
+public:
+    virtual ~IPathPlanner() = default;
+    virtual drone::ipc::ShmTrajectoryCmd plan(const drone::ipc::ShmPose& pose,
+                                              const Waypoint& target) = 0;
     virtual std::string name() const = 0;
 };
+}  // namespace drone::planner
 ```
 
 | Key | Class | Notes |
@@ -317,7 +322,7 @@ class IPathPlanner {
 class IObstacleAvoider {
     virtual ShmTrajectoryCmd avoid(const ShmTrajectoryCmd& planned,
                                    const ShmPose& pose,
-                                   const ShmDetectedObjects& objects) = 0;
+                                   const ShmDetectedObjectList& objects) = 0;
     virtual std::string name() const = 0;
 };
 ```
@@ -357,7 +362,7 @@ Default thresholds: `cpu_warn=90`, `mem_warn=90`, `temp_warn=80°C`,
 | Interface | Simulated | Gazebo | Real |
 |-----------|-----------|--------|------|
 | `ICamera` | ✓ | ✓ (HAVE_GAZEBO) | V4L2 (future) |
-| `IFCLink` | ✓ | ✓ (HAVE_GAZEBO) | MAVSDK (HAVE_MAVSDK) |
+| `IFCLink` | ✓ | ✓ via `mavlink` + PX4 SITL | MAVSDK (`HAVE_MAVSDK`) |
 | `IGCSLink` | ✓ | ✓ (via FC) | UDP (future) |
 | `IGimbal` | ✓ | — | SIYI (future) |
 | `IIMUSource` | ✓ | ✓ (HAVE_GAZEBO) | BMI088 (future) |
@@ -390,6 +395,6 @@ Default thresholds: `cpu_warn=90`, `mem_warn=90`, `temp_warn=80°C`,
 ## 7. Related Documents
 
 - [ADR-006 — HAL Strategy](adr/ADR-006-hal-hardware-abstraction-strategy.md)
-- [ADR-002 — Modular IPC Backend](adr/ADR-002-modular-ipc-backend.md)
+- [ADR-002 — Modular IPC Backend](adr/ADR-002-modular-ipc-backend-architecture.md)
 - [config_reference.md](config_reference.md) — backend keys per section
 - [observability.md](observability.md) — how to trace latency across HAL boundaries
