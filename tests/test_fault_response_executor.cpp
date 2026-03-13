@@ -1,0 +1,175 @@
+// tests/test_fault_response_executor.cpp
+// Unit tests for FaultResponseExecutor (Issue #154).
+#include "planner/fault_response_executor.h"
+
+#include <vector>
+
+#include <gtest/gtest.h>
+
+using namespace drone::planner;
+using namespace drone::ipc;
+
+namespace {
+
+template<typename T>
+class MockPublisher : public IPublisher<T> {
+public:
+    void                             publish(const T& msg) override { messages_.push_back(msg); }
+    [[nodiscard]] bool               is_ready() const override { return true; }
+    [[nodiscard]] const std::string& topic_name() const override { return topic_; }
+    const std::vector<T>&            messages() const { return messages_; }
+
+private:
+    std::vector<T> messages_;
+    std::string    topic_ = "mock";
+};
+
+struct FCCallRecord {
+    FCCommandType cmd;
+    float         param;
+};
+
+}  // namespace
+
+class FaultResponseExecutorTest : public ::testing::Test {
+protected:
+    MockPublisher<TrajectoryCmd> traj_pub;
+    MissionFSM                   fsm;
+    SharedFlightState            flight_state;
+    std::vector<FCCallRecord>    fc_calls;
+    FaultResponseExecutor        executor;
+
+    FCSendFn send_fc = [this](FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+
+    void SetUp() override {
+        fsm.load_mission({{10, 0, 5, 0, 2, 3, false}});
+        fsm.on_arm();       // IDLE → PREFLIGHT
+        fsm.on_takeoff();   // PREFLIGHT → TAKEOFF
+        fsm.on_navigate();  // TAKEOFF → NAVIGATE (airborne)
+    }
+};
+
+// ═══════════════════════════════════════════════════════════
+// WARN action — log only, no FC commands
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, WarnActionNoFCCommand) {
+    FaultState fault;
+    fault.recommended_action = FaultAction::WARN;
+    fault.reason             = "test warning";
+    fault.active_faults      = FAULT_BATTERY_LOW;
+
+    executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
+
+    EXPECT_TRUE(fc_calls.empty());
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+    EXPECT_EQ(executor.last_action(), FaultAction::WARN);
+}
+
+// ═══════════════════════════════════════════════════════════
+// LOITER action — stops trajectory, transitions FSM
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, LoiterStopsTrajAndTransitions) {
+    FaultState fault;
+    fault.recommended_action = FaultAction::LOITER;
+    fault.reason             = "critical process died";
+    fault.active_faults      = FAULT_CRITICAL_PROCESS;
+
+    executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
+
+    EXPECT_TRUE(fc_calls.empty());  // LOITER doesn't send FC command
+    EXPECT_EQ(fsm.state(), MissionState::LOITER);
+    EXPECT_TRUE(fsm.fault_triggered());
+    EXPECT_GE(traj_pub.messages().size(), 1u);
+    EXPECT_FALSE(traj_pub.messages().back().valid);
+}
+
+// ═══════════════════════════════════════════════════════════
+// RTL action — sends FC command, stops trajectory
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, RTLSendsFCAndTransitions) {
+    FaultState fault;
+    fault.recommended_action = FaultAction::RTL;
+    fault.reason             = "battery low";
+    fault.active_faults      = FAULT_BATTERY_RTL;
+
+    executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
+
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::RTL);
+    EXPECT_EQ(fsm.state(), MissionState::RTL);
+    EXPECT_TRUE(flight_state.nav_was_armed);
+}
+
+// ═══════════════════════════════════════════════════════════
+// EMERGENCY_LAND — sends LAND command
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, EmergencyLandSendsLandCommand) {
+    FaultState fault;
+    fault.recommended_action = FaultAction::EMERGENCY_LAND;
+    fault.reason             = "battery critical";
+    fault.active_faults      = FAULT_BATTERY_CRITICAL;
+
+    executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
+
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::LAND);
+    EXPECT_EQ(fsm.state(), MissionState::LAND);
+    EXPECT_TRUE(flight_state.land_sent);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Escalation-only — doesn't downgrade
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, EscalationOnlyNeverDowngrades) {
+    FaultState fault_rtl;
+    fault_rtl.recommended_action = FaultAction::RTL;
+    fault_rtl.reason             = "battery";
+    fault_rtl.active_faults      = FAULT_BATTERY_RTL;
+    executor.execute(fault_rtl, fsm, send_fc, traj_pub, flight_state, 1000);
+    EXPECT_EQ(executor.last_action(), FaultAction::RTL);
+    fc_calls.clear();
+
+    // Try to apply WARN (lower) — should be ignored
+    FaultState fault_warn;
+    fault_warn.recommended_action = FaultAction::WARN;
+    fault_warn.reason             = "thermal";
+    fault_warn.active_faults      = FAULT_THERMAL_WARNING;
+    executor.execute(fault_warn, fsm, send_fc, traj_pub, flight_state, 2000);
+    EXPECT_TRUE(fc_calls.empty());  // no new commands
+    EXPECT_EQ(executor.last_action(), FaultAction::RTL);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Non-airborne skip — IDLE/PREFLIGHT states
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, SkipsNonAirborneStates) {
+    MissionFSM preflight_fsm;
+    preflight_fsm.load_mission({{10, 0, 5, 0, 2, 3, false}});
+    preflight_fsm.on_arm();  // → PREFLIGHT
+
+    FaultState fault;
+    fault.recommended_action = FaultAction::RTL;
+    fault.reason             = "test";
+    fault.active_faults      = FAULT_BATTERY_RTL;
+
+    executor.execute(fault, preflight_fsm, send_fc, traj_pub, flight_state, 1000);
+    EXPECT_TRUE(fc_calls.empty());
+    EXPECT_EQ(preflight_fsm.state(), MissionState::PREFLIGHT);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Reset clears state
+// ═══════════════════════════════════════════════════════════
+TEST_F(FaultResponseExecutorTest, ResetClearsState) {
+    FaultState fault;
+    fault.recommended_action = FaultAction::RTL;
+    fault.reason             = "test";
+    fault.active_faults      = FAULT_BATTERY_RTL;
+    executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
+    EXPECT_EQ(executor.last_action(), FaultAction::RTL);
+
+    executor.reset();
+    EXPECT_EQ(executor.last_action(), FaultAction::NONE);
+}

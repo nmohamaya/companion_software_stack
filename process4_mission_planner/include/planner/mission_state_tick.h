@@ -1,0 +1,267 @@
+// process4_mission_planner/include/planner/mission_state_tick.h
+// Per-tick state machine logic for the mission planner.
+// Handles PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND state transitions.
+//
+// Extracted from main.cpp as part of Issue #154.
+#pragma once
+
+#include "ipc/ipc_types.h"
+#include "ipc/ipublisher.h"
+#include "planner/astar_planner.h"
+#include "planner/gcs_command_handler.h"
+#include "planner/iobstacle_avoider.h"
+#include "planner/ipath_planner.h"
+#include "planner/mission_fsm.h"
+#include "planner/static_obstacle_layer.h"
+#include "util/diagnostic.h"
+#include "util/scoped_timer.h"
+
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+
+#include <spdlog/spdlog.h>
+
+namespace drone::planner {
+
+/// Configuration for MissionStateTick tunables.
+struct StateTickConfig {
+    float takeoff_alt_m{10.0f};
+    float rtl_acceptance_m{1.5f};
+    float landed_alt_m{0.5f};
+    int   rtl_min_dwell_s{5};
+};
+
+/// Per-tick state machine logic for the mission planner.
+/// Owns tracking variables and implements the FSM tick for each state.
+class MissionStateTick {
+public:
+    explicit MissionStateTick(const StateTickConfig& config) : config_(config) {}
+
+    /// Execute one tick of the state machine.
+    void tick(MissionFSM& fsm, const drone::ipc::Pose& pose, const drone::ipc::FCState& fc_state,
+              const drone::ipc::DetectedObjectList& objects, IPathPlanner& planner,
+              AStarPathPlanner* astar_planner, IObstacleAvoider& avoider,
+              const StaticObstacleLayer&                          obstacle_layer,
+              drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>&  traj_pub,
+              drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
+              const FCSendFn& send_fc, uint64_t correlation_id,
+              drone::util::FrameDiagnostics& diag) {
+        switch (fsm.state()) {
+            case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
+            case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;
+            case MissionState::NAVIGATE:
+                tick_navigate(fsm, pose, fc_state, objects, planner, astar_planner, avoider,
+                              obstacle_layer, traj_pub, payload_pub, send_fc, correlation_id, diag);
+                break;
+            case MissionState::RTL: tick_rtl(fsm, pose, fc_state, send_fc); break;
+            case MissionState::LAND: tick_land(fsm, fc_state); break;
+            case MissionState::IDLE:
+            case MissionState::EMERGENCY:
+            default: break;
+        }
+    }
+
+    /// Access shared flight state (for GCS handler + fault executor).
+    [[nodiscard]] SharedFlightState&       flight_state() { return flight_state_; }
+    [[nodiscard]] const SharedFlightState& flight_state() const { return flight_state_; }
+
+    /// Whether a fault-state reset happened this tick (caller reads + clears).
+    [[nodiscard]] bool consume_fault_reset() {
+        bool v            = fault_exec_reset_;
+        fault_exec_reset_ = false;
+        return v;
+    }
+
+private:
+    StateTickConfig   config_;
+    SharedFlightState flight_state_;
+
+    // Tracking variables
+    bool  takeoff_sent_     = false;
+    float home_x_           = 0.0f;
+    float home_y_           = 0.0f;
+    float home_z_           = 0.0f;
+    bool  home_recorded_    = false;
+    bool  fault_exec_reset_ = false;
+
+    std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
+                                                           std::chrono::seconds(10);
+
+    // ── PREFLIGHT: retry ARM until FC confirms ────────────────
+    void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
+                        const FCSendFn& send_fc) {
+        auto now_arm = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now_arm - last_arm_time_).count() >=
+            3) {
+            spdlog::info("[Planner] Sending ARM command");
+            send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
+            last_arm_time_ = now_arm;
+        }
+        if (fc_state.armed) {
+            spdlog::info("[Planner] Vehicle armed — initiating takeoff");
+            fsm.on_takeoff();
+            takeoff_sent_ = false;
+        }
+    }
+
+    // ── TAKEOFF: send TAKEOFF, record home, wait for altitude ─
+    void tick_takeoff(MissionFSM& fsm, const drone::ipc::Pose& pose,
+                      const drone::ipc::FCState& fc_state, const FCSendFn& send_fc) {
+        if (!takeoff_sent_) {
+            spdlog::info("[Planner] Sending TAKEOFF to {:.1f}m", config_.takeoff_alt_m);
+            send_fc(drone::ipc::FCCommandType::TAKEOFF, config_.takeoff_alt_m);
+            takeoff_sent_ = true;
+        }
+        if (!home_recorded_ && std::isfinite(pose.translation[0]) &&
+            std::isfinite(pose.translation[1])) {
+            home_x_        = static_cast<float>(pose.translation[0]);
+            home_y_        = static_cast<float>(pose.translation[1]);
+            home_z_        = 0.0f;
+            home_recorded_ = true;
+            spdlog::info("[Planner] Home position recorded: ({:.1f}, {:.1f}, {:.1f})", home_x_,
+                         home_y_, home_z_);
+        }
+        if (fc_state.rel_alt >= config_.takeoff_alt_m * 0.9f) {
+            spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE", fc_state.rel_alt);
+            fsm.on_navigate();
+            spdlog::info("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
+        }
+    }
+
+    // ── NAVIGATE: waypoint tracking, collision detect, plan+avoid ─
+    void tick_navigate(MissionFSM& fsm, const drone::ipc::Pose& pose,
+                       const drone::ipc::FCState&            fc_state,
+                       const drone::ipc::DetectedObjectList& objects, IPathPlanner& planner,
+                       AStarPathPlanner* astar_planner, IObstacleAvoider& avoider,
+                       const StaticObstacleLayer&                          obstacle_layer,
+                       drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>&  traj_pub,
+                       drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
+                       const FCSendFn& send_fc, uint64_t correlation_id,
+                       drone::util::FrameDiagnostics& diag) {
+        // Detect unexpected disarm mid-navigation
+        if (flight_state_.nav_was_armed && !fc_state.armed) {
+            spdlog::warn("[Planner] OBSTACLE COLLISION detected — vehicle unexpectedly "
+                         "disarmed during navigation");
+        }
+        flight_state_.nav_was_armed = fc_state.armed;
+
+        // Proximity collision detection
+        {
+            const float px = static_cast<float>(pose.translation[0]);
+            const float py = static_cast<float>(pose.translation[1]);
+            const float pz = static_cast<float>(pose.translation[2]);
+            // const_cast safe — check_collision only modifies cooldown timestamp
+            const_cast<StaticObstacleLayer&>(obstacle_layer)
+                .check_collision(px, py, pz, std::chrono::steady_clock::now());
+        }
+
+        // Update A* obstacle grid
+        if (astar_planner) {
+            drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");
+            astar_planner->update_obstacles(objects, pose);
+        }
+
+        // Warn about approaching unconfirmed obstacles
+        {
+            const float px = static_cast<float>(pose.translation[0]);
+            const float py = static_cast<float>(pose.translation[1]);
+            const_cast<StaticObstacleLayer&>(obstacle_layer)
+                .check_unconfirmed_approach(px, py, std::chrono::steady_clock::now());
+        }
+
+        const Waypoint* wp = fsm.current_waypoint();
+        if (!wp) break_to_navigate_end();
+
+        if (wp) {
+            auto planned = [&]() {
+                drone::util::ScopedDiagTimer t(diag, "PathPlan");
+                return planner.plan(pose, *wp);
+            }();
+            if (astar_planner && astar_planner->using_direct_fallback()) {
+                diag.add_warning("PathPlan",
+                                 "A* fallback: no obstacle-free path — using direct line");
+            }
+            auto traj = [&]() {
+                drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");
+                return avoider.avoid(planned, pose, objects);
+            }();
+            traj_pub.publish(traj);
+
+            if (fsm.waypoint_reached(static_cast<float>(pose.translation[0]),
+                                     static_cast<float>(pose.translation[1]),
+                                     static_cast<float>(pose.translation[2]), *wp)) {
+                spdlog::info("[Planner] Waypoint {} reached!", fsm.current_wp_index() + 1);
+
+                if (wp->trigger_payload) {
+                    drone::ipc::PayloadCommand pay_cmd{};
+                    pay_cmd.timestamp_ns   = traj.timestamp_ns;
+                    pay_cmd.correlation_id = correlation_id;
+                    pay_cmd.action         = drone::ipc::PayloadAction::CAMERA_CAPTURE;
+                    pay_cmd.gimbal_pitch   = -90.0f;
+                    pay_cmd.gimbal_yaw     = 0.0f;
+                    pay_cmd.valid          = true;
+                    payload_pub.publish(pay_cmd);
+                }
+
+                if (!fsm.advance_waypoint()) {
+                    spdlog::info("[Planner] Mission complete — RTL");
+                    send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
+                    {
+                        drone::ipc::TrajectoryCmd stop{};
+                        stop.valid        = false;
+                        stop.timestamp_ns = static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
+                        traj_pub.publish(stop);
+                    }
+                    flight_state_.rtl_start_time = std::chrono::steady_clock::now();
+                    flight_state_.nav_was_armed  = true;
+                    fsm.on_rtl();
+                }
+            }
+        }
+    }
+
+    // Unused — just to silence "not all control paths return a value" warnings.
+    static void break_to_navigate_end() {}
+
+    // ── RTL: detect disarm, monitor position for LAND ─────────
+    void tick_rtl(MissionFSM& fsm, const drone::ipc::Pose& pose,
+                  const drone::ipc::FCState& fc_state, const FCSendFn& send_fc) {
+        if (flight_state_.nav_was_armed && !fc_state.armed) {
+            spdlog::warn("[Planner] Vehicle disarmed during RTL — mission IDLE");
+            fsm.on_landed();
+            return;
+        }
+        flight_state_.nav_was_armed = fc_state.armed;
+
+        if (home_recorded_) {
+            auto rtl_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::steady_clock::now() - flight_state_.rtl_start_time)
+                                   .count();
+            float dx         = static_cast<float>(pose.translation[0]) - home_x_;
+            float dy         = static_cast<float>(pose.translation[1]) - home_y_;
+            float horiz_dist = std::sqrt(dx * dx + dy * dy);
+            if (rtl_elapsed >= config_.rtl_min_dwell_s && horiz_dist < config_.rtl_acceptance_m) {
+                spdlog::info("[Planner] Near home ({:.1f}m, {}s in RTL) — sending LAND", horiz_dist,
+                             rtl_elapsed);
+                send_fc(drone::ipc::FCCommandType::LAND, 0.0f);
+                flight_state_.land_sent = true;
+                fsm.on_land();
+            }
+        }
+    }
+
+    // ── LAND: wait for touchdown ──────────────────────────────
+    void tick_land(MissionFSM& fsm, const drone::ipc::FCState& fc_state) {
+        if (fc_state.rel_alt < config_.landed_alt_m && flight_state_.land_sent) {
+            spdlog::info("[Planner] Landed (alt={:.2f}m) — mission IDLE", fc_state.rel_alt);
+            fsm.on_landed();
+            fault_exec_reset_ = true;
+        }
+    }
+};
+
+}  // namespace drone::planner
