@@ -129,7 +129,7 @@ TEST_F(ThreadHealthPublisherTest, MultipleThreadsPopulateCorrectly) {
 
     auto hb1 = ScopedHeartbeat("inference", true);
     auto hb2 = ScopedHeartbeat("tracker", true);
-    auto hb3 = ScopedHeartbeat("lidar", false);
+    auto hb3 = ScopedHeartbeat("diagnostics", false);
 
     ThreadHeartbeatRegistry::instance().touch(hb1.handle());
     ThreadHeartbeatRegistry::instance().touch(hb2.handle());
@@ -143,7 +143,7 @@ TEST_F(ThreadHealthPublisherTest, MultipleThreadsPopulateCorrectly) {
     EXPECT_TRUE(h.threads[0].critical);
     EXPECT_STREQ(h.threads[1].name, "tracker");
     EXPECT_TRUE(h.threads[1].critical);
-    EXPECT_STREQ(h.threads[2].name, "lidar");
+    EXPECT_STREQ(h.threads[2].name, "diagnostics");
     EXPECT_FALSE(h.threads[2].critical);
 }
 

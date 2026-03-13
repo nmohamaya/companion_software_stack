@@ -468,8 +468,6 @@ All keys are under `perception.*` in the active JSON config.
 | `position_covariance` | Matrix3f | 3×3 position uncertainty |
 | `has_camera` | bool | Camera measurement present |
 | `has_thermal` | bool | Thermal match occurred |
-| `has_lidar` | bool | Always false (LiDAR removed) |
-| `has_radar` | bool | Always false (Radar removed) |
 
 ### `ShmDetectedObjectList` (IPC output, world frame)
 
@@ -499,6 +497,5 @@ Published per frame. Up to `MAX_DETECTED_OBJECTS` entries. Each entry mirrors `F
 | **UKF not default** | The UKF fusion backend is implemented and tested but the default config uses `camera_only`. The UKF backend should be validated in a scenario run before becoming default. | — |
 | **Monocular depth uncertainty** | Depth estimates from apparent size assume a known obstacle height and fixed focal length. Errors propagate into the world-frame position seen by Process 4. The 3×3 `position_covariance` in UKF quantifies this but Process 4 does not currently use it. | — |
 | **Yaw-only camera→world** | The body→world rotation in `fusion_thread` ignores camera pitch/roll. For aggressively pitched manoeuvres the world-frame position will have a systematic error. | — |
-| **LiDAR / Radar removed** | `has_lidar` and `has_radar` are always false. The data type fields and config weights are retained for future re-integration. | Issue #112 |
 | **SimulatedDetector produces random positions** | The default config uses `simulated` detector, so the SPSC queues are always exercised but the object positions carry no semantic meaning. Switch to `color_contour` or `yolov8` for meaningful output. | — |
 | **No cross-process factor graph** | Position fusion between Process 2 (camera) and Process 3 (VIO) is done only with a simple yaw rotation. A full factor graph (e.g. iSAM2) unifying IMU, visual odometry, and detected object tracks is a future improvement. | — |

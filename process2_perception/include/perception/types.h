@@ -1,5 +1,5 @@
 // process2_perception/include/perception/types.h
-// All data types for perception: detections, point clouds, radar, tracked/fused objects.
+// All data types for perception: detections, tracked/fused objects.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -92,8 +92,6 @@ struct FusedObject {
     float           heading             = 0.0f;
     bool            has_camera          = false;
     bool            has_thermal         = false;
-    bool            has_lidar           = false;
-    bool            has_radar           = false;
     Eigen::Matrix3f position_covariance = Eigen::Matrix3f::Identity();
     uint64_t        timestamp_ns        = 0;
 };

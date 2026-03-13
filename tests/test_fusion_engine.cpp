@@ -1,6 +1,5 @@
 // tests/test_fusion_engine.cpp
 // Unit tests for CameraOnlyFusionEngine, UKFFusionEngine, IFusionEngine factory.
-// LiDAR/radar tests removed (Phase 1A, Issue #112).
 // UKF + thermal + factory tests added (Phase 1C, Issue #114).
 #include "perception/fusion_engine.h"
 #include "perception/ifusion_engine.h"
@@ -52,8 +51,6 @@ TEST(FusionEngineTest, CameraOnlyFusion) {
     EXPECT_EQ(result.objects[0].track_id, 1u);
     EXPECT_EQ(result.objects[0].class_id, ObjectClass::PERSON);
     EXPECT_TRUE(result.objects[0].has_camera);
-    EXPECT_FALSE(result.objects[0].has_lidar);
-    EXPECT_FALSE(result.objects[0].has_radar);
 }
 
 TEST(FusionEngineTest, DepthEstimationFromImageY) {
@@ -146,8 +143,6 @@ TEST(FusionEngineTest, MultipleTrackedObjectsProduceMultipleFused) {
     for (uint32_t i = 0; i < 5; ++i) {
         EXPECT_EQ(result.objects[i].track_id, i + 1);
         EXPECT_TRUE(result.objects[i].has_camera);
-        EXPECT_FALSE(result.objects[i].has_lidar);
-        EXPECT_FALSE(result.objects[i].has_radar);
     }
 }
 

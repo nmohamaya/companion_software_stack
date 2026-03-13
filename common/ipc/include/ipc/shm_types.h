@@ -65,7 +65,7 @@ struct ShmDetectedObject {
     float       velocity_x, velocity_y, velocity_z;  // m/s
     float       heading;                             // radians
     float       bbox_x, bbox_y, bbox_w, bbox_h;      // image-space
-    bool        has_camera, has_thermal, has_lidar, has_radar;
+    bool        has_camera, has_thermal;
 };
 
 struct ShmDetectedObjectList {

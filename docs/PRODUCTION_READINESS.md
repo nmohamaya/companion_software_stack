@@ -35,8 +35,8 @@ Production requires implementing the real backend behind each interface.
 | 1.9 | Visual frontend | `SimulatedVisualFrontend` — circular trajectory | ORB-SLAM3 / VINS-Fusion integration | P1 | 🔴 | `IVisualFrontend` interface exists |
 | 1.10 | Path planner | `AStarPathPlanner` — 3D grid, 26-connected search, obstacle inflation, two-layer occupancy (HD-map static + camera TTL 3 s), BFS start-escape | RRT* / D* Lite | P2 | 🟡 | A* + HD-map verified in Gazebo SITL scenario 02 (7/7 WP, 0 collisions); upgrade for dynamic environments |
 | 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field` / `potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) + scenario 02 with HD-map (Fix #35) |
-| 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; simulated code removed |
-| 1.13 | Radar | Removed (Phase 1A, PR #117) | mmWave radar driver (TI AWR, etc.) | P2 | 🔴 | Need HAL `IRadar` interface; simulated code removed |
+| 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; all simulated code and data type fields removed |
+| 1.13 | Radar | Removed (Phase 1A, PR #117) | mmWave radar driver (TI AWR, etc.) | P2 | 🔴 | Need HAL `IRadar` interface; all simulated code and data type fields removed |
 
 ---
 

@@ -1,6 +1,5 @@
 // process2_perception/include/perception/fusion_engine.h
 // Camera-only fusion: tracked 2D objects → 3D fused objects.
-// LiDAR/radar paths removed (Phase 1A, Issue #112).
 // Implements IFusionEngine for factory-based construction (Phase 1C, Issue #114).
 #pragma once
 #include "perception/ifusion_engine.h"

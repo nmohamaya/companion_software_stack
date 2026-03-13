@@ -27,12 +27,10 @@ graph TB
             P1_stereo["StereoCam<br/>30 Hz"]
         end
 
-        subgraph P2["P2 Perception (6 threads)"]
+        subgraph P2["P2 Perception (4 threads)"]
             P2_main["Main<br/>5 s health"]
             P2_infer["Inference<br/>~30 Hz"]
             P2_track["Tracker<br/>event"]
-            P2_lidar["LiDAR sim<br/>10 Hz"]
-            P2_radar["Radar sim<br/>20 Hz"]
             P2_fuse["Fusion<br/>event"]
         end
 
@@ -77,8 +75,6 @@ graph TB
     P1_stereo -->|"/stereo_cam"| P3_vfe
     P2_infer -->|SPSC| P2_track
     P2_track -->|SPSC| P2_fuse
-    P2_lidar -->|SPSC| P2_fuse
-    P2_radar -->|SPSC| P2_fuse
     P2_fuse -->|"/detected_objects"| P4_main
     P3_pose -->|"/slam_pose"| P4_main
     P5_fcrx -->|"/fc_state"| P4_main
@@ -180,7 +176,7 @@ The `SimulatedCamera` generates a deterministic gradient pattern (not random noi
 
 ```mermaid
 graph LR
-    subgraph P2["Process 2 — Perception (6 threads)"]
+    subgraph P2["Process 2 — Perception (4 threads)"]
         direction TB
         Main["Main Thread<br/>5 s health log"]
 
@@ -188,18 +184,11 @@ graph LR
             direction LR
             Infer["Inference Thread<br/>~30 Hz<br/>IDetector::detect()"]
             Track["Tracker Thread<br/>event-driven<br/>SORT Kalman + Hungarian"]
-            Fuse["Fusion Thread<br/>event-driven<br/>Camera+LiDAR+Radar"]
-        end
-
-        subgraph SimSensors["Simulated Sensor Threads"]
-            LiDAR["LiDAR Thread<br/>10 Hz<br/>0–4 random clusters"]
-            Radar["Radar Thread<br/>20 Hz<br/>0–6 random targets"]
+            Fuse["Fusion Thread<br/>event-driven<br/>Camera-only"]
         end
 
         Infer -->|"SPSC(4)<br/>Detection2DList"| Track
         Track -->|"SPSC(4)<br/>TrackedObjectList"| Fuse
-        LiDAR -->|"SPSC(4)<br/>LiDARClusters"| Fuse
-        Radar -->|"SPSC(4)<br/>RadarDetections"| Fuse
     end
 
     SHM_in["/mission_cam<br/>SHM"] --> Infer
@@ -258,12 +247,9 @@ Three detector backends are available via the factory (`create_detector()`):
 
 | Aspect | Detail |
 |---|---|
-| **Algorithm** | Multi-sensor weighted averaging (camera + LiDAR + radar) |
+| **Algorithm** | Camera-only fusion (pinhole unproject + apparent-size depth) |
 | **Camera depth** | Inverse-perspective heuristic: $d = \frac{h_{cam} \times 500}{\max(10,\; c_y)}$ |
-| **LiDAR fusion** | Nearest centroid within 5.0 m; weight 0.8 LiDAR + 0.2 camera; confidence boost +0.15 |
-| **Radar fusion** | Position within 3.0 m; overwrites velocity with decomposed radial velocity; confidence boost +0.1 |
 | **Calibration** | Camera intrinsics: $f_x=500,\; f_y=500,\; c_x=960,\; c_y=540$; extrinsics: identity (sim) |
-| **Covariance reduction** | LiDAR-fused track: covariance × 0.3 |
 | **Written from scratch** | Yes — `FusionEngine` class |
 
 ---
@@ -558,8 +544,6 @@ graph LR
 | Object detection (inference) | ~30 Hz | event-driven | 33 ms | `inference_thread` |
 | Multi-object tracker | ~30 Hz | event-driven | 10 ms | `tracker_thread` |
 | Sensor fusion | ~30 Hz | event-driven | 15 ms | `fusion_thread` |
-| Simulated LiDAR | 10 Hz | 100 ms | — | `lidar_thread` |
-| Simulated radar | 20 Hz | 50 ms | — | `radar_thread` |
 | Visual frontend (SLAM) | 30 Hz | 33 ms | — | `visual_frontend_thread` |
 | IMU reader | 400 Hz | 2.5 ms | — | `imu_reader_thread` |
 | Pose publisher | 100 Hz | 10 ms | — | `pose_publisher_thread` |
@@ -585,9 +569,6 @@ Camera     ├──────────────────────
 Detection  ├──────────────────────────────●───────────────────(event)─────
 Tracker    ├──────────────────────────────●───────────────────(event)─────
 Fusion     ├──────────────────────────────●───────────────────(event)─────
-           │                                                              │
-Radar      ├───────────────────────●─────────────────────────●────────────
-LiDAR      ├────────────────────────────────────────────────●─────────────
            │                                                              │
 Gimbal     ├───────────────────●──────────────────●──────────────────●────
 FC TX      ├───────────────────────────────────────────●──────────────────
@@ -773,7 +754,7 @@ This section maps every algorithm/component currently in the stack to the produc
 | | | **JPDA** (Joint Probabilistic Data Association) | Handles ambiguous close-proximity targets. Higher compute cost. |
 | Tracking — appearance | 🔴 None — position-only matching | **DeepSORT** — CNN appearance descriptor (128-D Re-ID vector) | Publicly available: [nwojke/deep_sort](https://github.com/nwojke/deep_sort). Reduces ID switches by 45%+. |
 | | | **ByteTrack** — uses low-confidence detections for re-association | Publicly available: [ifzhang/ByteTrack](https://github.com/ifzhang/ByteTrack). Simpler than DeepSORT, competitive accuracy. |
-| Sensor fusion | 🟡 **Weighted average** (camera + LiDAR + radar position merge) | **EKF/UKF fusion** with per-sensor measurement models | Proper uncertainty propagation via covariance intersection |
+| Sensor fusion | 🟡 **Camera-only fusion** (pinhole unproject + apparent-size depth) | **EKF/UKF fusion** with per-sensor measurement models | Proper uncertainty propagation via covariance intersection |
 | | | **Factor graph fusion** (GTSAM / Ceres Solver) | Batch optimization over sliding window. Publicly available: [borglab/gtsam](https://github.com/borglab/gtsam) |
 | Depth estimation | 🟡 Inverse-perspective heuristic ($d = 500 h_{cam} / c_y$) | **Stereo block matching** (SGM / Semi-Global Matching) | OpenCV `StereoSGBM` or from-scratch SAD/census-based matching |
 | | | **Monocular depth network** (MiDaS, Depth Anything) | Falls back to single camera. Publicly available: [isl-org/MiDaS](https://github.com/isl-org/MiDaS) |
@@ -1203,7 +1184,7 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │       ├── simulated_detector.cpp    # Random bounding box generator
 │       ├── opencv_yolo_detector.cpp  # YOLOv8n ONNX inference + NMS
 │       ├── kalman_tracker.cpp        # SORT-style tracker + greedy association
-│       └── fusion_engine.cpp         # Camera+LiDAR+radar fusion
+│       └── fusion_engine.cpp         # Camera-only fusion
 ├── process3_slam_vio_nav/            # VIO/pose estimation (4 threads)
 │   └── include/slam/
 │       ├── ivisual_frontend.h        # IVisualFrontend strategy interface
