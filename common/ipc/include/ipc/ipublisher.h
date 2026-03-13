@@ -1,6 +1,6 @@
 // common/ipc/include/ipc/ipublisher.h
 // Abstract publisher interface for typed pub-sub messaging.
-// Decouples process code from the concrete transport (SHM, DDS, ZeroMQ, etc.)
+// Decouples process code from the concrete transport (Zenoh, DDS, etc.)
 #pragma once
 
 #include <string>
@@ -8,7 +8,7 @@
 namespace drone::ipc {
 
 /// Abstract typed publisher — write one message at a time.
-/// Concrete implementations: ShmPublisher<T>, (future) DdsPublisher<T>.
+/// Concrete implementations: ZenohPublisher<T>, (future) DdsPublisher<T>.
 template<typename T>
 class IPublisher {
 public:

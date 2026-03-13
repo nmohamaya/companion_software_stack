@@ -321,15 +321,16 @@ int main(int argc, char* argv[]) {
 
     // Subscribe to stereo camera from Process 1
     auto stereo_sub = bus.subscribe<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
-    // For SHM: is_connected() means the segment exists (publisher running).
-    // For Zenoh: is_connected() only becomes true after first sample, so we
-    // can't use it as a startup gate. Log a warning instead of exiting.
-    const auto ipc_backend = cfg.get<std::string>("ipc_backend", "shm");
-    if (ipc_backend == "shm" && !stereo_sub->is_connected()) {
-        spdlog::error("Cannot connect to stereo channel — is video_capture running?");
-        return 1;
-    }
+    // With Zenoh, is_connected() only becomes true after the first sample
+    // arrives; we cannot use it as a startup gate.  Log a warning and continue —
+    // data will arrive once video_capture starts publishing.
+    const auto ipc_backend = cfg.get<std::string>("ipc_backend", "zenoh");
     if (!stereo_sub->is_connected()) {
+        if (ipc_backend == "shm") {
+            // Should never happen — shm backend was removed, factory falls back
+            // to Zenoh.  Treat as a warning, not a fatal error.
+            spdlog::warn("ipc_backend=shm is no longer supported; using Zenoh.");
+        }
         spdlog::warn("Stereo subscriber not yet connected "
                      "(normal for Zenoh — data will arrive when publisher starts)");
     }

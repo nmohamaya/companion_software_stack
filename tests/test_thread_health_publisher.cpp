@@ -49,17 +49,17 @@ protected:
 // ThreadHealth struct correctness
 // ───────────────────────────────────────────────────────────
 
-TEST(ShmThreadHealthStruct, TrivialCopyable) {
+TEST(ThreadHealthStruct, TrivialCopyable) {
     static_assert(std::is_trivially_copyable_v<ThreadHealth>,
-                  "ThreadHealth must be trivially copyable for SHM transport");
+                  "ThreadHealth must be trivially copyable for IPC transport");
 }
 
-TEST(ShmThreadHealthStruct, ThreadHealthEntryTrivialCopyable) {
+TEST(ThreadHealthStruct, ThreadHealthEntryTrivialCopyable) {
     static_assert(std::is_trivially_copyable_v<ThreadHealthEntry>,
                   "ThreadHealthEntry must be trivially copyable");
 }
 
-TEST(ShmThreadHealthStruct, DefaultValues) {
+TEST(ThreadHealthStruct, DefaultValues) {
     ThreadHealth health{};
     EXPECT_EQ(health.num_threads, 0);
     EXPECT_EQ(health.timestamp_ns, 0u);
@@ -73,11 +73,11 @@ TEST(ShmThreadHealthStruct, DefaultValues) {
     }
 }
 
-TEST(ShmThreadHealthStruct, MaxTrackedThreadsIs16) {
+TEST(ThreadHealthStruct, MaxTrackedThreadsIs16) {
     EXPECT_EQ(kMaxTrackedThreads, 16);
 }
 
-TEST(ShmThreadHealthStruct, ProcessNameFits31Chars) {
+TEST(ThreadHealthStruct, ProcessNameFits31Chars) {
     ThreadHealth health{};
     const char*  long_name = "a_very_long_process_name_12345";  // 30 chars
     std::strncpy(health.process_name, long_name, sizeof(health.process_name) - 1);

@@ -1,6 +1,6 @@
 // common/ipc/include/ipc/isubscriber.h
 // Abstract subscriber interface for typed pub-sub messaging.
-// Decouples process code from the concrete transport (SHM, DDS, ZeroMQ, etc.)
+// Decouples process code from the concrete transport (Zenoh, DDS, etc.)
 #pragma once
 
 #include <cstdint>
@@ -9,7 +9,7 @@
 namespace drone::ipc {
 
 /// Abstract typed subscriber — read latest message from a topic.
-/// Concrete implementations: ShmSubscriber<T>, (future) DdsSubscriber<T>.
+/// Concrete implementations: ZenohSubscriber<T>, (future) DdsSubscriber<T>.
 template<typename T>
 class ISubscriber {
 public:

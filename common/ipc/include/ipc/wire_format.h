@@ -46,7 +46,7 @@ enum class WireMessageType : uint16_t {
     DETECTIONS = 10,  // DetectedObjectList
 
     // ── SLAM (Process 3) ─────────────────────────────
-    SLAM_POSE = 20,  // ShmSlamPose
+    SLAM_POSE = 20,  // Pose
 
     // ── Mission Planner (Process 4) ──────────────────
     MISSION_STATUS  = 30,  // MissionStatus

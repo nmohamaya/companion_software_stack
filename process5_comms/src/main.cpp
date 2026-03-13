@@ -184,22 +184,22 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                           gcs,
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto msg = gcs.poll_command();
         if (msg.valid) {
-            drone::ipc::GCSCommand shm_cmd{};
-            shm_cmd.timestamp_ns   = msg.timestamp_ns;
-            shm_cmd.correlation_id = drone::util::CorrelationContext::generate();
+            drone::ipc::GCSCommand gcs_cmd{};
+            gcs_cmd.timestamp_ns   = msg.timestamp_ns;
+            gcs_cmd.correlation_id = drone::util::CorrelationContext::generate();
             switch (msg.type) {
                 case drone::hal::GCSCommandType::RTL:
-                    shm_cmd.command = drone::ipc::GCSCommandType::RTL;
+                    gcs_cmd.command = drone::ipc::GCSCommandType::RTL;
                     break;
                 case drone::hal::GCSCommandType::LAND:
-                    shm_cmd.command = drone::ipc::GCSCommandType::LAND;
+                    gcs_cmd.command = drone::ipc::GCSCommandType::LAND;
                     break;
-                default: shm_cmd.command = drone::ipc::GCSCommandType::NONE; break;
+                default: gcs_cmd.command = drone::ipc::GCSCommandType::NONE; break;
             }
-            shm_cmd.valid = true;
+            gcs_cmd.valid = true;
             spdlog::info("[Comms] GCS cmd received: {} corr={:#x}",
-                         static_cast<int>(shm_cmd.command), shm_cmd.correlation_id);
-            pub.publish(shm_cmd);
+                         static_cast<int>(gcs_cmd.command), gcs_cmd.correlation_id);
+            pub.publish(gcs_cmd);
             drone::util::CorrelationContext::clear();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));

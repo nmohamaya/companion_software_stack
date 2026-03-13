@@ -36,8 +36,7 @@
 namespace drone::ipc {
 
 /// Factory that creates Zenoh-backed publishers and subscribers.
-/// Mirrors the ShmMessageBus API so processes can switch backends
-/// by changing a single type (or via the MessageBusFactory).
+/// The sole IPC backend — returned by MessageBusFactory for any backend name.
 class ZenohMessageBus {
 public:
     ZenohMessageBus() { spdlog::info("[ZenohMessageBus] Created (Zenoh IPC backend)"); }
@@ -45,14 +44,14 @@ public:
     ~ZenohMessageBus() = default;
 
     /// Create a publisher for the given topic.
-    /// @param topic  SHM segment name (auto-mapped) or Zenoh key expression.
+    /// @param topic  Zenoh key expression (e.g. "drone/slam/pose").
     template<typename T>
     [[nodiscard]] std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
         return std::make_unique<ZenohPublisher<T>>(to_key_expr(topic));
     }
 
     /// Create a subscriber for the given topic.
-    /// @param topic        SHM segment name or Zenoh key expression.
+    /// @param topic        Zenoh key expression (e.g. "drone/slam/pose").
     /// @param max_retries  Ignored — Zenoh subscriptions are created
     ///                     immediately and is_connected() returns true as
     ///                     soon as the subscriber is declared.  Data may
@@ -69,7 +68,7 @@ public:
     /// For Zenoh, this is equivalent to subscribe() — connections are
     /// always asynchronous, so there is no distinction between eager
     /// and lazy subscription.
-    /// @param topic  SHM segment name or Zenoh key expression.
+    /// @param topic  Zenoh key expression (e.g. "drone/slam/pose").
     template<typename T>
     [[nodiscard]] std::unique_ptr<ZenohSubscriber<T>> subscribe_lazy(const std::string& topic) {
         return std::make_unique<ZenohSubscriber<T>>(to_key_expr(topic));
@@ -92,8 +91,8 @@ public:
         return std::make_unique<ZenohServiceServer<Req, Resp>>(to_service_key(service));
     }
 
-    /// Convert a legacy SHM segment name to a Zenoh key expression.
-    /// @param shm_name  E.g. "/drone_mission_cam" or "/slam_pose".
+    /// Convert a topic name to a canonical Zenoh key expression.
+    /// @param topic  Zenoh key expression or legacy SHM name (auto-mapped).
     /// @return          Zenoh key expression, e.g. "drone/video/frame".
     ///
     /// If the name is not in the mapping table, it's passed through

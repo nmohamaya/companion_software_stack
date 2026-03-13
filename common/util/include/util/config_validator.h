@@ -270,7 +270,7 @@ inline ConfigSchema common_schema() {
     ConfigSchema s;
     s.optional<std::string>("log_level")
         .one_of({"trace", "debug", "info", "warn", "error", "critical"});
-    s.optional<std::string>("ipc_backend").one_of({"shm", "zenoh"});
+    s.optional<std::string>("ipc_backend").one_of({"zenoh"});  // "shm" removed in PR #151
     return s;
 }
 

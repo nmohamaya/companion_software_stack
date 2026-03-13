@@ -177,45 +177,45 @@ TEST(CorrelationContext, MultiThreadGenerate) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SHM message types — correlation_id field
+// IPC message types — correlation_id field
 // ═══════════════════════════════════════════════════════════
 
-TEST(ShmCorrelation, GCSCommandHasCorrelationId) {
+TEST(IpcCorrelation, GCSCommandHasCorrelationId) {
     GCSCommand cmd{};
     cmd.correlation_id = 0xABCD1234;
     EXPECT_EQ(cmd.correlation_id, 0xABCD1234ULL);
     static_assert(std::is_trivially_copyable_v<GCSCommand>);
 }
 
-TEST(ShmCorrelation, FCCommandHasCorrelationId) {
+TEST(IpcCorrelation, FCCommandHasCorrelationId) {
     FCCommand cmd{};
     cmd.correlation_id = 0xFACE;
     EXPECT_EQ(cmd.correlation_id, 0xFACEULL);
     static_assert(std::is_trivially_copyable_v<FCCommand>);
 }
 
-TEST(ShmCorrelation, TrajectoryCmdHasCorrelationId) {
+TEST(IpcCorrelation, TrajectoryCmdHasCorrelationId) {
     TrajectoryCmd cmd{};
     cmd.correlation_id = 0x12345678;
     EXPECT_EQ(cmd.correlation_id, 0x12345678ULL);
     static_assert(std::is_trivially_copyable_v<TrajectoryCmd>);
 }
 
-TEST(ShmCorrelation, PayloadCommandHasCorrelationId) {
+TEST(IpcCorrelation, PayloadCommandHasCorrelationId) {
     PayloadCommand cmd{};
     cmd.correlation_id = 0xBEEF;
     EXPECT_EQ(cmd.correlation_id, 0xBEEFULL);
     static_assert(std::is_trivially_copyable_v<PayloadCommand>);
 }
 
-TEST(ShmCorrelation, MissionStatusHasCorrelationId) {
+TEST(IpcCorrelation, MissionStatusHasCorrelationId) {
     MissionStatus status{};
     status.correlation_id = 0xCAFE;
     EXPECT_EQ(status.correlation_id, 0xCAFEULL);
     static_assert(std::is_trivially_copyable_v<MissionStatus>);
 }
 
-TEST(ShmCorrelation, DefaultZero) {
+TEST(IpcCorrelation, DefaultZero) {
     GCSCommand     gcs{};
     FCCommand      fc{};
     TrajectoryCmd  traj{};

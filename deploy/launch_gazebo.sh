@@ -85,12 +85,10 @@ export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY
 # Register custom model path so PX4/Gazebo can find x500_companion
 export GZ_SIM_RESOURCE_PATH="${PROJECT_DIR}/sim/models:${PX4_DIR}/Tools/simulation/gz/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 
-# ── SHM helpers ───────────────────────────────────────────────
-# Names match common/ipc/include/ipc/shm_types.h::shm_names
-# Only relevant when using the POSIX SHM IPC backend (ipc_backend=shm).
-# When using Zenoh (ipc_backend=zenoh), these legacy drone_* /dev/shm segments
-# are not created, though Zenoh may still allocate its own SHM pool segments
-# under /dev/shm.
+# ── SHM cleanup helpers ───────────────────────────────────────
+# The legacy POSIX SHM IPC backend (ipc_backend=shm) was removed in PR #151.
+# Zenoh may still allocate its own SHM pool segments under /dev/shm; the
+# drone_* names below are leftovers from the old backend, safe to remove.
 clean_shm() {
     rm -f /dev/shm/drone_mission_cam /dev/shm/drone_stereo_cam \
           /dev/shm/detected_objects /dev/shm/slam_pose \

@@ -337,6 +337,6 @@ TEST(ConfigAwareFactory, ZenohBackendFromMockConfig) {
     cfg.shm_pool_mb     = 0;
     cfg.network_enabled = false;
     auto bus            = create_message_bus(cfg);
-    // Should create a ZenohMessageBus (not ShmMessageBus)
+    // Should create a ZenohMessageBus (not the legacy ShmMessageBus, which was removed)
     EXPECT_EQ(bus.backend_name(), "zenoh");
 }
