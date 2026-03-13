@@ -1064,3 +1064,53 @@ This is distinct from the companion stack's POSIX SHM — `launch_gazebo.sh` alr
 - Internal bug tracking IDs in `BUG_FIXES.md` use the format **`BUG-N`** (e.g., `BUG-35`), never `#N`.
 - PR bodies must never use `Fix #N`, `Fixes #N`, `Closes #N`, or `Resolves #N` unless the intent is to auto-close that specific GitHub issue on merge.
 - When describing internal bug fixes in a PR, write `(Internal BUG-35)` or `(see docs/BUG_FIXES.md BUG-35)`.
+
+---
+
+### Bug #30 — P3 `slam_vio_nav` Wrong `ipc_backend` Default Causes Silent Fatal Exit
+
+**Date discovered:** 2026-03-13
+**Severity:** High
+**Status:** FIXED — commit `ad7dfd7`
+**GitHub Issue:** https://github.com/nmohamaya/companion_software_stack/issues/153
+**File:** `process3_slam_vio_nav/src/main.cpp` line ~327
+
+**Bug:** After the Zenoh-only migration (PR #151), `slam_vio_nav` still read the
+`ipc_backend` config key with a default of `"shm"` instead of `"zenoh"`.
+If `config/default.json` ever omitted `ipc_backend`, the process would default to
+`"shm"`, immediately evaluate `stereo_sub->is_connected()` (which returns `false`
+for Zenoh until the first sample arrives), and **exit with return code 1** —
+silently killing the SLAM/VIO stack before it published a single pose.
+
+**Root Cause:** The default argument in `cfg.get<std::string>("ipc_backend", "shm")`
+was not updated when `"shm"` was removed as a valid backend in PR #151.
+
+**Fix:** Changed default to `"zenoh"`. Removed the dead `"shm"` startup-gate branch
+that was the only code path that could trigger `return 1`.
+
+**Found by:** Post-merge audit of PR #151 remnants.
+
+---
+
+### Bug #31 — Config Validator Still Accepted `"shm"` as Valid `ipc_backend`
+
+**Date discovered:** 2026-03-13
+**Severity:** Medium
+**Status:** FIXED — commit `ad7dfd7`
+**GitHub Issue:** https://github.com/nmohamaya/companion_software_stack/issues/153
+**File:** `common/util/include/util/config_validator.h` line ~273
+
+**Bug:** The config validator's `one_of({"shm", "zenoh"})` constraint still
+accepted `ipc_backend: "shm"` as a valid config value after the SHM backend was
+removed in PR #151. A misconfigured deployment with `"shm"` would silently pass
+validation, then at runtime the `MessageBusFactory` would log an error and fall
+back to Zenoh — but the operator would have no indication their config was wrong
+at startup.
+
+**Root Cause:** `config_validator.h` was not updated alongside the factory and
+header removals in PR #151.
+
+**Fix:** Changed to `one_of({"zenoh"})`. Setting `ipc_backend: "shm"` now fails
+validation at startup with a clear error message.
+
+**Found by:** Post-merge audit of PR #151 remnants.

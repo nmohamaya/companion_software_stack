@@ -198,7 +198,7 @@ monitoring.
 | `ProcessHealthEntry` | 4 | `ProcessHealthEntry` struct defaults and transitions |
 | `ShmSystemHealth` | 4 | `ShmSystemHealth` struct layout, active process bitmask |
 
-**Key files under test:** `ipc/zenoh_liveliness.h`, `ipc/shm_types.h`
+**Key files under test:** `ipc/zenoh_liveliness.h`, `ipc/ipc_types.h`
 
 ---
 
@@ -534,18 +534,18 @@ Issue #89).  Three layers:
 **What it tests:** Phase 2 of the Process & Thread Watchdog (Epic #88,
 Issue #90).  Two components:
 
-1. **`ShmThreadHealth`** struct — fixed-layout SHM-transportable snapshot
+1. **`ThreadHealth`** struct — fixed-layout IPC-transportable snapshot
    of up to 16 thread health entries per process
 2. **`ThreadHealthPublisher`** — bridge that reads the heartbeat registry
-   + watchdog stuck list and produces `ShmThreadHealth` for cross-process
+   + watchdog stuck list and produces `ThreadHealth` for cross-process
    visibility
 
-Uses a `MockPublisher` that captures the last published `ShmThreadHealth`
-without needing a real SHM or Zenoh backend.
+Uses a `MockPublisher` that captures the last published `ThreadHealth`
+without needing a real Zenoh backend.
 
 | Suite | Tests | What is validated | Why it catches bugs |
 |-------|-------|-------------------|--------------------|
-| `ShmThreadHealthStruct` | `TrivialCopyable` | `static_assert` that struct is trivially copyable | Guarantees safe `memcpy` across SHM boundaries |
+| `ThreadHealthStruct` | `TrivialCopyable` | `static_assert` that struct is trivially copyable | Guarantees safe IPC serialisation |
 | | `ThreadHealthEntryTrivialCopyable` | `static_assert` for `ThreadHealthEntry` | Same guarantee for the per-thread sub-struct |
 | | `DefaultValues` | Zero-initialised: `num_threads=0`, `timestamp_ns=0`, all entries healthy, names empty | Catches uninitialised SHM reads |
 | | `MaxTrackedThreadsIs16` | `kMaxTrackedThreads == 16` | Documents the compile-time contract |
@@ -561,7 +561,7 @@ without needing a real SHM or Zenoh backend.
 | | `TwoThreadIntegration` | 1 active + 1 stuck thread → snapshot shows healthy + unhealthy correctly | Full integration: heartbeat registry + watchdog + publisher in one test |
 | | `ProcessNameTruncatesGracefully` | 52-char process name → truncated to 31 + `\0`, no overflow | Prevents buffer overflow in the SHM struct |
 
-**Key files under test:** `ipc/shm_types.h` (`ShmThreadHealth`, `ThreadHealthEntry`), `util/thread_health_publisher.h`
+**Key files under test:** `ipc/ipc_types.h` (`ThreadHealth`, `ThreadHealthEntry`), `util/thread_health_publisher.h`
 
 ---
 
@@ -752,7 +752,7 @@ wire format → JSON log output.
 | `CorrelationContext` | 7 | Initial value is 0, set/get/clear, `generate()` returns non-zero, lower 32 bits monotonically increase, upper 32 bits contain PID, 1000 generated IDs are all unique |
 | `ScopedCorrelation` | 3 | RAII guard sets ID on construction and restores previous on destruction, nested guards restore correctly, restores zero when outer had none |
 | `CorrelationContext` (threads) | 2 | Thread isolation: each thread has independent correlation ID, multi-threaded `generate()` produces globally unique IDs |
-| `ShmCorrelation` | 6 | `correlation_id` field exists and defaults to 0 in all command/status SHM types: `ShmGCSCommand`, `ShmFCCommand`, `ShmTrajectoryCmd`, `ShmPayloadCommand`, `ShmMissionStatus` |
+| `IpcCorrelation` | 6 | `correlation_id` field exists and defaults to 0 in all command/status IPC types: `GCSCommand`, `FCCommand`, `TrajectoryCmd`, `PayloadCommand`, `MissionStatus` |
 | `WireHeaderV2` | 5 | Header is 32 bytes, version = 3, `correlation_id` defaults to 0, correlation round-trips through set/get, full serialize → deserialize with correlation preserved |
 | `WireHeaderBackcompat` | 5 | V1 (24-byte) headers still validate, V1 correlation ID = 0, V0 rejected, future version rejected, truncated V1/V2 rejected |
 | `JsonCorrelation` | 4 | Correlation ID omitted from JSON log when 0, present as hex string when non-zero, `ScopedCorrelation` affects live log output, hex format is correct |
@@ -765,7 +765,7 @@ and a wire format incompatibility between V1 and V2 would crash older
 processes during rolling upgrades.  The backward-compatibility tests
 explicitly guard against this.
 
-**Key files under test:** `util/correlation.h`, `ipc/shm_types.h`, `ipc/wire_format.h`, `util/json_log_sink.h`
+**Key files under test:** `util/correlation.h`, `ipc/ipc_types.h`, `ipc/wire_format.h`, `util/json_log_sink.h`
 
 ---
 

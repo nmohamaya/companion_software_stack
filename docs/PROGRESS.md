@@ -2011,3 +2011,47 @@ _Last updated after Improvement #39 (Zenoh-Only IPC, Issue #126). See [tests/TES
 ---
 
 _Last updated after Improvement #39 (Documentation gaps #149). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
+
+## Improvement #40 — Post-merge SHM Remnant Cleanup (Issue #153)
+
+**Date:** 2026-03-13
+**Category:** Bug Fix / Tech Debt
+**Commit:** `ad7dfd7` (direct to main)
+
+**What:** Post-merge audit of PR #151 (Zenoh-only IPC) found two functional bugs
+and several naming/comment remnants not caught during review:
+
+**Functional bugs fixed:**
+1. `process3_slam_vio_nav/src/main.cpp` — `ipc_backend` default was `"shm"`
+   instead of `"zenoh"`. If `config/default.json` ever omitted the key, P3 would
+   default to `"shm"`, hit `is_connected() == false` on the Zenoh subscriber
+   (Zenoh doesn't set this at startup), and **exit with error code 1** —
+   killing the SLAM/VIO stack silently.
+2. `common/util/include/util/config_validator.h` — `one_of({"shm", "zenoh"})`
+   still accepted `"shm"` as valid without error. Now `one_of({"zenoh"})` only.
+
+**Naming/comment cleanup:**
+- P5 `comms`: local variable `shm_cmd` → `gcs_cmd`
+- `ipublisher.h`, `isubscriber.h`: doc comments updated (`ShmPublisher` → `ZenohPublisher`)
+- `zenoh_message_bus.h`: removed "Mirrors ShmMessageBus API" phrasing
+- `wire_format.h`: `SLAM_POSE` comment `ShmSlamPose` → `Pose`
+- `deploy/launch_*.sh`: stale `shm_types.h` and `ipc_backend=shm` comments updated
+- `tests/test_correlation.cpp`: suite `ShmCorrelation` → `IpcCorrelation`
+- `tests/test_thread_health_publisher.cpp`: suite `ShmThreadHealthStruct` → `ThreadHealthStruct`
+- `tests/test_zenoh_network.cpp`: stale comment updated
+- `tests/TESTS.md`: updated all suite names and `shm_types.h` file references
+
+**Files modified (13):** `process3_slam_vio_nav/src/main.cpp`,
+`process5_comms/src/main.cpp`, `common/ipc/include/ipc/ipublisher.h`,
+`common/ipc/include/ipc/isubscriber.h`, `common/ipc/include/ipc/wire_format.h`,
+`common/ipc/include/ipc/zenoh_message_bus.h`,
+`common/util/include/util/config_validator.h`,
+`deploy/launch_all.sh`, `deploy/launch_gazebo.sh`, `deploy/launch_hardware.sh`,
+`tests/test_correlation.cpp`, `tests/test_thread_health_publisher.cpp`,
+`tests/test_zenoh_network.cpp`
+
+**Test additions:** None (all existing 845 tests pass; two test suites renamed).
+
+---
+
+_Last updated after Improvement #40 (SHM remnant cleanup, Issue #153). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 6 CI jobs, Zenoh sole IPC backend._
