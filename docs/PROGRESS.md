@@ -1907,4 +1907,55 @@ _Last updated after Improvement #35 (sd_notify/WatchdogSec for all 7 processes, 
 
 ---
 
-_Last updated after Improvement #38 (Gazebo full avoidance stack config #137). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
+## Improvement #39 — Documentation Completeness: HAL, Config Reference, Error Handling, Observability Cross-referencing (Issue #149)
+
+**Date:** 2026-03-13
+**Category:** Documentation
+**Branch:** `docs/issue-149-hal-config-error-handling-observability`
+
+**What:** Filled four major documentation gaps identified after Phase 11:
+
+1. **HAL Design Documentation** — `docs/hal_design.md` covering all 5 common HAL
+   interfaces (`ICamera`, `IFCLink`, `IGCSLink`, `IGimbal`, `IIMUSource`) + factory
+   function reference + process-local Strategy interfaces (`IPathPlanner`,
+   `IObstacleAvoider`, `IProcessMonitor`) + backend availability matrix.
+2. **ADR-006: HAL Strategy** — `docs/adr/ADR-006-hal-hardware-abstraction-strategy.md`
+   documenting the Strategy + factory pattern decision, alternatives considered
+   (ROS2 HAL, template policies), and the three-tier backend hierarchy.
+3. **Config Parameter Reference** — `docs/config_reference.md` mapping all 95+
+   `config/default.json` keys with type, default, valid range, consuming process, and
+   description. Includes a cross-reference table from `"backend"` config keys to HAL
+   factory calls.
+4. **ADR-007: Error Handling** — `docs/adr/ADR-007-error-handling.md` documenting
+   the `Result<T,E>` adoption decision over exceptions, alternatives evaluated
+   (`std::expected`, raw `bool`, `std::optional`), and the domain-alias pattern.
+5. **Error Handling Design Doc** — `docs/error_handling_design.md` with the full
+   `ErrorCode` enum, `Error` class, `Result<T,E>` / `Result<void,E>` / `VoidResult`
+   API reference, monadic combinator examples, domain alias pattern (`VIOResult`),
+   and usage rules.
+6. **Observability Cross-referencing** — Added `## Observability` sections to all 7
+   process design docs with per-process structured logging field tables, correlation
+   ID flow, and latency tracking channel tables — all cross-linked to
+   `docs/observability.md`.
+
+**Files Added (5):**
+- `docs/adr/ADR-006-hal-hardware-abstraction-strategy.md`
+- `docs/adr/ADR-007-error-handling.md`
+- `docs/hal_design.md`
+- `docs/config_reference.md`
+- `docs/error_handling_design.md`
+
+**Files Modified (7):**
+- `docs/video_capture_design.md` — added `## Observability` section
+- `docs/perception_design.md` — added `## Observability` section
+- `docs/slam_vio_nav_design.md` — added `## Observability` section
+- `docs/mission_planner_design.md` — added `## Observability` section
+- `docs/comms_design.md` — added `## Observability` section
+- `docs/payload_manager_design.md` — added `## Observability` section
+- `docs/system_monitor_design.md` — added `## Observability` section
+
+**Test additions:** None (documentation only). All 856 tests pass.
+
+---
+
+_Last updated after Improvement #39 (Documentation gaps #149). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._

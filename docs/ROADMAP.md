@@ -344,6 +344,22 @@
 
 ---
 
+### Phase 12 — Documentation Completeness (Issue #149)
+
+> Filled four major documentation gaps after Phase 11.
+
+**Deliverables:**
+- `docs/hal_design.md` — full HAL interface reference + backend availability matrix + factory function API
+- `docs/adr/ADR-006-hal-hardware-abstraction-strategy.md` — Strategy + factory pattern ADR
+- `docs/config_reference.md` — all 95+ `config/default.json` parameters with type, default, range, and consuming process
+- `docs/adr/ADR-007-error-handling.md` — `Result<T,E>` adoption over exceptions ADR
+- `docs/error_handling_design.md` — `ErrorCode` enum, `Error` class, `Result<T,E>` / `VoidResult` API, domain alias pattern
+- `## Observability` sections added to all 7 process design docs (structured logging fields, correlation ID flow, latency tracking channels)
+
+**Issue:** #149 ✅ Complete
+
+---
+
 ## Planned Phases (Real Drone Deployment)
 
 > **Epic:** [#25 — Real Drone Deployment — From Simulation to Flight](https://github.com/nmohamaya/companion_software_stack/issues/25)

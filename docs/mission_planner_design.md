@@ -430,6 +430,54 @@ Integration coverage via scenario tests in `config/scenarios/`:
 
 ---
 
+## Observability
+
+P4 is the hub for GCS correlation IDs. Commands arriving on
+`/gcs_commands` start a `ScopedCorrelation` that is propagated to all
+downstream outputs (`/trajectory_cmd`, `/fc_commands`, mission status
+logs).
+
+### Structured Logging
+
+| Field | Description |
+|-------|-------------|
+| `process` | `"mission_planner"` |
+| `fsm_state` | Current FSM state name (e.g. `"MISSION"`, `"RTL"`, `"LOITER"`) |
+| `waypoint_index` | Active waypoint index |
+| `correlation_id` | 64-bit hex value (e.g. `0x000012340000001a`) from originating GCS command (if present) |
+| `planner_backend` | Active path planner name |
+| `avoider_backend` | Active obstacle avoider name |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
+
+### Correlation IDs
+
+| Source | Propagated to |
+|--------|--------------|
+| `/gcs_commands` (from P5) | `/trajectory_cmd`, `/fc_commands`, all P4 log lines while command is active |
+
+Enable with `--json-logs`; search log output for `"correlation_id"`.
+
+### Latency Tracking
+
+| Channel | Direction |
+|---------|----------|
+| `/detected_objects` | subscriber |
+| `/slam_pose` | subscriber |
+| `/fc_state` | subscriber |
+| `/gcs_commands` | subscriber |
+| `/system_health` | subscriber |
+
+Latency is tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the planner thread to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
+
+See [observability.md](observability.md) for the full correlation ID
+flow diagram and histogram interpretation.
+
+---
+
 ## Known Limitations
 
 1. **Single-threaded:** All logic must complete within one loop period (100 ms at 10 Hz).
