@@ -2238,7 +2238,7 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 **Why:** After implementing ByteTrack (#163), no scenario exercised the new tracker backend. The pass_criteria bug would cause false failures in Gazebo SITL runs.
 
-**Test additions:** +17 scenario checks (1 new check in scenario 02, 16 checks in new scenario 09). Total scenario checks: 97 across 9 scenarios.
+**Test additions:** +17 scenario checks (1 new check in scenario 02, 16 checks in new scenario 09). Total scenario checks: 96 across 9 scenarios.
 
 ---
 

@@ -113,8 +113,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 97 | 9 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **43 C++ + 4 shell** | **922 + 42 + 97** | |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 96 | 9 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
+| **Total** | **43 C++ + 4 shell** | **922 + 42 + 96** | |
 
 ---
 
@@ -1007,7 +1007,7 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 06 — Mission Upload | 1 | No | 6 | Mid-flight 3-waypoint upload via GCS command |
 | 07 — Thermal Throttle | 1 | No | 8 | Thermal zone escalation with 4 critical processes alive check |
 | 08 — Full Stack Stress | 1 | No | 15 | Concurrent faults, high-rate stress; 4 procs alive + 7 SHM segments |
-| 09 — Perception Tracking | 1 | No | 16 | ByteTrack backend-switching smoke test; 4 log checks + 5 forbidden + 7 procs alive |
+| 09 — Perception Tracking | 1 | No | 15 | ByteTrack backend-switching smoke test; 3 log checks + 5 forbidden + 7 procs alive |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
@@ -1037,7 +1037,7 @@ MAVLink telemetry, Gazebo camera/IMU sensors, and configurable IPC backend (SHM 
 Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
 via `fault_injector`, and verifies pass criteria against actual process logs.
 
-**Pass criteria per scenario (97 total checks across 9 scenarios):**
+**Pass criteria per scenario (96 total checks across 9 scenarios):**
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario

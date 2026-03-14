@@ -607,4 +607,4 @@
 
 ---
 
-*Last updated after Improvement #45 (scenario ByteTrack updates, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks across 9 scenarios, Zenoh sole IPC backend, 6 CI jobs. 8/8 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #45 (scenario ByteTrack updates, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 96 scenario checks across 9 scenarios, Zenoh sole IPC backend, 6 CI jobs. 8/8 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
