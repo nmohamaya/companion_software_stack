@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include <spdlog/spdlog.h>

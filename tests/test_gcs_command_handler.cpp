@@ -43,11 +43,11 @@ private:
 template<typename T>
 class MockPublisher : public IPublisher<T> {
 public:
-    void                               publish(const T& msg) override { messages_.push_back(msg); }
-    [[nodiscard]] bool                 is_ready() const override { return true; }
-    [[nodiscard]] const std::string&   topic_name() const override { return topic_; }
-    [[nodiscard]] const std::vector<T> messages() const { return messages_; }
-    void                               clear() { messages_.clear(); }
+    void                                publish(const T& msg) override { messages_.push_back(msg); }
+    [[nodiscard]] bool                  is_ready() const override { return true; }
+    [[nodiscard]] const std::string&    topic_name() const override { return topic_; }
+    [[nodiscard]] const std::vector<T>& messages() const { return messages_; }
+    void                                clear() { messages_.clear(); }
 
 private:
     std::vector<T> messages_;

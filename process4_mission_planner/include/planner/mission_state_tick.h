@@ -42,7 +42,7 @@ public:
     void tick(MissionFSM& fsm, const drone::ipc::Pose& pose, const drone::ipc::FCState& fc_state,
               const drone::ipc::DetectedObjectList& objects, IPathPlanner& planner,
               AStarPathPlanner* astar_planner, IObstacleAvoider& avoider,
-              const StaticObstacleLayer&                          obstacle_layer,
+              StaticObstacleLayer&                                obstacle_layer,
               drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>&  traj_pub,
               drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
               const FCSendFn& send_fc, uint64_t correlation_id,
@@ -134,7 +134,7 @@ private:
                        const drone::ipc::FCState&            fc_state,
                        const drone::ipc::DetectedObjectList& objects, IPathPlanner& planner,
                        AStarPathPlanner* astar_planner, IObstacleAvoider& avoider,
-                       const StaticObstacleLayer&                          obstacle_layer,
+                       StaticObstacleLayer&                                obstacle_layer,
                        drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>&  traj_pub,
                        drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
                        const FCSendFn& send_fc, uint64_t correlation_id,
@@ -151,9 +151,7 @@ private:
             const float px = static_cast<float>(pose.translation[0]);
             const float py = static_cast<float>(pose.translation[1]);
             const float pz = static_cast<float>(pose.translation[2]);
-            // const_cast safe — check_collision only modifies cooldown timestamp
-            const_cast<StaticObstacleLayer&>(obstacle_layer)
-                .check_collision(px, py, pz, std::chrono::steady_clock::now());
+            obstacle_layer.check_collision(px, py, pz, std::chrono::steady_clock::now());
         }
 
         // Update A* obstacle grid
@@ -166,14 +164,13 @@ private:
         {
             const float px = static_cast<float>(pose.translation[0]);
             const float py = static_cast<float>(pose.translation[1]);
-            const_cast<StaticObstacleLayer&>(obstacle_layer)
-                .check_unconfirmed_approach(px, py, std::chrono::steady_clock::now());
+            obstacle_layer.check_unconfirmed_approach(px, py, std::chrono::steady_clock::now());
         }
 
         const Waypoint* wp = fsm.current_waypoint();
-        if (!wp) break_to_navigate_end();
+        if (!wp) return;
 
-        if (wp) {
+        {
             auto planned = [&]() {
                 drone::util::ScopedDiagTimer t(diag, "PathPlan");
                 return planner.plan(pose, *wp);
@@ -223,9 +220,6 @@ private:
             }
         }
     }
-
-    // Unused — just to silence "not all control paths return a value" warnings.
-    static void break_to_navigate_end() {}
 
     // ── RTL: detect disarm, monitor position for LAND ─────────
     void tick_rtl(MissionFSM& fsm, const drone::ipc::Pose& pose,

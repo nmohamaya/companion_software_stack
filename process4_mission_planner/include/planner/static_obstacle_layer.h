@@ -31,6 +31,7 @@ public:
     /// Load static obstacles from config JSON and populate A* grid if available.
     template<typename Config>
     void load(const Config& cfg, AStarPathPlanner* astar_planner) {
+        obstacles_.clear();
         auto obs_json = cfg.section("mission_planner.static_obstacles");
         if (obs_json.is_array() && !obs_json.empty()) {
             for (const auto& o : obs_json) {

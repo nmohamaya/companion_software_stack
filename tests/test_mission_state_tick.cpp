@@ -72,13 +72,15 @@ protected:
         fsm.on_arm();  // → PREFLIGHT
     }
 
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("potential_field");
+    std::unique_ptr<IObstacleAvoider> avoider_ = create_obstacle_avoider("potential_field", 5.0f,
+                                                                         2.0f);
+
     void do_tick(const Pose& pose, const FCState& fc_state) {
-        DetectedObjectList objects{};
-        auto               planner = create_path_planner("potential_field");
-        auto               avoider = create_obstacle_avoider("potential_field", 5.0f, 2.0f);
+        DetectedObjectList            objects{};
         drone::util::FrameDiagnostics diag(0);
 
-        state_tick.tick(fsm, pose, fc_state, objects, *planner, nullptr, *avoider, obstacle_layer,
+        state_tick.tick(fsm, pose, fc_state, objects, *planner_, nullptr, *avoider_, obstacle_layer,
                         traj_pub, payload_pub, send_fc, 0, diag);
     }
 };
