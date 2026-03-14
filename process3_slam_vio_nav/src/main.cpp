@@ -410,7 +410,7 @@ int main(int argc, char* argv[]) {
         drone::systemd::notify_watchdog();
 
         // ── Forward trajectory targets to VIO backend ────────
-        // Poll at ~100 Hz so the simulated VIO tracks commands promptly.
+        // Poll at ~100 Hz so the simulated VIO tracks waypoint targets promptly.
         for (int i = 0; i < 100 && g_running.load(std::memory_order_relaxed); ++i) {
             drone::ipc::TrajectoryCmd traj_cmd{};
             if (traj_sub->receive(traj_cmd) && traj_cmd.valid) {

@@ -68,9 +68,24 @@ step = min(sim_speed_mps * dt, distance)
 current_position += normalize(direction) * step
 ```
 
+P4 (mission_planner) publishes `TrajectoryCmd` with target_x/y/z (the current
+waypoint). P3 forwards these target positions to the VIO backend. The simulated
+drone flies in a straight line toward each waypoint at configurable speed.
+
+**Design choice — target-following vs velocity integration:** We evaluated
+velocity integration (using the planner's velocity_x/y/z commands) but rejected
+it because the simulated detector produces random phantom detections that the
+obstacle avoider responds to with repulsive forces. Without a real flight
+controller's position hold loop, these forces cause cumulative position drift
+and geofence breaches. Target-following provides inherent stability: even if
+the trajectory is momentarily perturbed, the VIO steers back toward the
+waypoint on the next frame. Obstacle avoidance with camera detections is
+validated in Tier 2 (Gazebo) where rendered frames produce meaningful
+detections.
+
 Key properties:
 - **No target set:** Hovers at origin (0, 0, 0). Does not fly a phantom path.
-- **Target following:** Moves in a straight line toward the target at
+- **Target following:** Moves in a straight line toward the waypoint at
   configurable speed (`slam.vio.sim_speed_mps`, default 3.0 m/s).
 - **No overshoot:** Step is clamped to remaining distance.
 - **Thread safety:** Targets are set via `std::atomic<float>` with

@@ -513,7 +513,6 @@ with open(sys.argv[2], 'w') as f:
 PYEOF
         echo -e "  Fault sequence: ${FAULT_SEQ_FILE}"
         FAULT_INJECTOR_ARGS=("sequence" "$FAULT_SEQ_FILE")
-        [[ "$EFFECTIVE_IPC" != "shm" ]] && FAULT_INJECTOR_ARGS=("--ipc" "$EFFECTIVE_IPC" "${FAULT_INJECTOR_ARGS[@]}")
         "${FAULT_INJECTOR}" "${FAULT_INJECTOR_ARGS[@]}" 2>&1 | tee "${SCENARIO_LOG_DIR}/fault_injector.log"
         check "Fault injection sequence completed" $?
     else

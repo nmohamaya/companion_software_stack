@@ -202,7 +202,7 @@ private:
     Pose generate_simulated_pose(uint64_t /*seq*/) {
         constexpr double dt = 0.033;  // ~30Hz frame rate
 
-        // Read current target (set by P4 trajectory commands via P3 main)
+        // Steer toward target waypoint (set by P4 trajectory commands via P3 main)
         if (has_target_.load(std::memory_order_acquire)) {
             Eigen::Vector3d target(target_x_.load(std::memory_order_acquire),
                                    target_y_.load(std::memory_order_acquire),
