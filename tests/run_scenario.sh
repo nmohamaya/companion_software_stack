@@ -526,12 +526,13 @@ fi
 
 # ── Phase 4: Collection window ────────────────────────────────
 check_deadline
-# Use remaining timeout budget for collection (minimum 5s, reserve 5s for verification).
+# Use remaining timeout budget for collection, reserving 5s for verification.
+# Floor at 3s to ensure some collection even when timeout is nearly exhausted.
 # This lets missions complete waypoint navigation within the scenario timeout.
 if [[ -n "$SCENARIO_TIMEOUT" && "$SCENARIO_TIMEOUT" -gt 0 ]] 2>/dev/null; then
     _elapsed=$(( SECONDS - SCENARIO_START ))
     _remaining=$(( SCENARIO_TIMEOUT - _elapsed - 5 ))
-    COLLECTION_TIME=$(( _remaining > 5 ? _remaining : 5 ))
+    COLLECTION_TIME=$(( _remaining > 3 ? _remaining : 3 ))
 else
     COLLECTION_TIME=5
 fi

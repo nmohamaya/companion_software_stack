@@ -383,10 +383,15 @@ int main(int argc, char* argv[]) {
     spdlog::info("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m", calib.fx,
                  calib.fy, calib.cx, calib.cy, calib.baseline);
 
-    // Subscribe to trajectory commands for simulated navigation
-    auto traj_sub = bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
-    spdlog::info("Subscribed to {} for simulated VIO target tracking",
-                 drone::ipc::topics::TRAJECTORY_CMD);
+    // Subscribe to trajectory commands for simulated VIO navigation.
+    // Only the simulated backend uses trajectory targets — Gazebo/real backends
+    // get pose from actual sensors and ignore set_trajectory_target().
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>> traj_sub;
+    if (vio_backend_name == "simulated") {
+        traj_sub = bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
+        spdlog::info("Subscribed to {} for simulated VIO target tracking",
+                     drone::ipc::topics::TRAJECTORY_CMD);
+    }
 
     // Launch threads
     std::thread t_vio(vio_pipeline_thread, std::ref(*stereo_sub), std::ref(*vio),
@@ -411,13 +416,19 @@ int main(int argc, char* argv[]) {
 
         // ── Forward trajectory targets to VIO backend ────────
         // Poll at ~100 Hz so the simulated VIO tracks waypoint targets promptly.
-        for (int i = 0; i < 100 && g_running.load(std::memory_order_relaxed); ++i) {
-            drone::ipc::TrajectoryCmd traj_cmd{};
-            if (traj_sub->receive(traj_cmd) && traj_cmd.valid) {
-                vio->set_trajectory_target(traj_cmd.target_x, traj_cmd.target_y, traj_cmd.target_z,
-                                           traj_cmd.target_yaw);
+        // Only active for simulated backend — Gazebo/real backends ignore targets.
+        if (traj_sub) {
+            for (int i = 0; i < 100 && g_running.load(std::memory_order_relaxed); ++i) {
+                drone::ipc::TrajectoryCmd traj_cmd{};
+                if (traj_sub->receive(traj_cmd) && traj_cmd.valid) {
+                    vio->set_trajectory_target(traj_cmd.target_x, traj_cmd.target_y,
+                                               traj_cmd.target_z, traj_cmd.target_yaw);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } else {
+            // Non-simulated backend — just sleep for the main loop period
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
         health_publisher.publish_snapshot();

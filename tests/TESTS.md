@@ -113,7 +113,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 96 | 9 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 97 | 9 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (8 Tier 1 + 1 Tier 2) |
 | **Total** | **43 C++ + 4 shell** | **922 + 42 + 96** | |
 
 ---
@@ -1007,7 +1007,7 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 06 — Mission Upload | 1 | No | 6 | Mid-flight 3-waypoint upload via GCS command |
 | 07 — Thermal Throttle | 1 | No | 8 | Thermal zone escalation with 4 critical processes alive check |
 | 08 — Full Stack Stress | 1 | No | 15 | Concurrent faults, high-rate stress; 4 procs alive + 7 SHM segments |
-| 09 — Perception Tracking | 1 | No | 15 | ByteTrack backend-switching smoke test; 3 log checks + 5 forbidden + 7 procs alive |
+| 09 — Perception Tracking | 1 | No | 16 | ByteTrack backend-switching smoke test; 4 log checks + 5 forbidden + 7 procs alive |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
@@ -1032,12 +1032,12 @@ diagrams and detailed setup instructions.
 
 ### run_scenario_gazebo.sh — Gazebo SITL Scenario Runner
 
-**What it tests:** All 9 scenarios running on PX4 SITL + Gazebo Harmonic with real
-MAVLink telemetry, Gazebo camera/IMU sensors, and configurable IPC backend (SHM or Zenoh).
+**What it tests:** All 9 scenarios (8 Tier 1 + 1 Tier 2) running on PX4 SITL + Gazebo
+Harmonic with real MAVLink telemetry, Gazebo camera/IMU sensors, and Zenoh IPC.
 Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
 via `fault_injector`, and verifies pass criteria against actual process logs.
 
-**Pass criteria per scenario (96 total checks across 9 scenarios):**
+**Pass criteria per scenario (97 total checks across 9 scenarios):**
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
@@ -1065,7 +1065,7 @@ to catch unexpected collisions (Fix #40).
 **Requires:** PX4 SITL (`$PX4_DIR`, default `~/PX4-Autopilot`), Gazebo Harmonic,
 `fault_injector` built. Logs output to `drone_logs/scenarios_gazebo/<scenario_name>/`.
 
-**Status (March 2026):** 9/9 scenarios passing, 97 checks green (Gazebo SITL + Zenoh).
+**Status (March 2026):** 4/9 scenarios passing (01, 05, 06, 08 green; 02 intermittent collision; 03 PX4 battery model mismatch; 04, 07 affected by Bug #29 PX4 exit; 09 log capture timing). See ADR-009 for Tier 1 vs Tier 2 test strategy.
 
 ---
 
@@ -1094,4 +1094,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp). Fix #164 (2026-03-14): Enabled 8 previously skipped tests — copied YOLOv8 model from companion_software_stack, fixed config path resolution using PROJECT_CONFIG_DIR cmake definition. All 904 tests now running.*
+*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 97 scenario checks across 9 scenarios (run_scenario.sh + run_scenario_gazebo.sh). 8/8 Tier 1 scenarios passing on Zenoh. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp). Fix #164 (2026-03-14): Enabled 8 previously skipped tests — copied YOLOv8 model from companion_software_stack, fixed config path resolution using PROJECT_CONFIG_DIR cmake definition. All 904 tests now running.*

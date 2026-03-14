@@ -592,7 +592,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 (8/8 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅ (scenario 09 Tier 1 only)** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 scenarios (8 Tier 1 + 1 Tier 2), 8/8 Tier 1 pass on Zenoh** |
 
 ### Process Activity During Simulation
 
@@ -608,4 +608,4 @@
 
 ---
 
-*Last updated after Improvement #46 (responsive simulated VIO + thermal fix, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 96 scenario checks across 9 scenarios, Zenoh sole IPC backend, 6 CI jobs. 9/9 Tier 1 scenarios passing on Zenoh (including hot dev machines). Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #46 (responsive simulated VIO + thermal fix, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks across 9 scenarios (8 Tier 1 + 1 Tier 2), Zenoh sole IPC backend, 6 CI jobs. 8/8 Tier 1 scenarios passing on Zenoh (including hot dev machines). Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

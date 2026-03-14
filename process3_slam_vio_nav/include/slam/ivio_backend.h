@@ -419,7 +419,7 @@ private:
 /// Create a VIO backend by name.
 ///
 /// Supported backends:
-///   "simulated" — synthetic circular trajectory (default; works without hardware)
+///   "simulated" — target-following dynamics (default; works without hardware)
 ///   "gazebo"    — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO builds only)
 ///
 /// To add a real VIO algorithm (e.g. MSCKF), add a new class implementing
