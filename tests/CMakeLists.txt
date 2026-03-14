@@ -207,3 +207,15 @@ add_drone_test(test_imu_preintegrator test_imu_preintegrator.cpp
 add_drone_test(test_vio_backend     test_vio_backend.cpp
     ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
 )
+
+# ── Static Obstacle Layer tests (Issue #154) ───────────────
+add_drone_test(test_static_obstacle_layer test_static_obstacle_layer.cpp)
+
+# ── GCS Command Handler tests (Issue #154) ─────────────────
+add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
+
+# ── Fault Response Executor tests (Issue #154) ─────────────
+add_drone_test(test_fault_response_executor test_fault_response_executor.cpp)
+
+# ── Mission State Tick tests (Issue #154) ──────────────────
+add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)

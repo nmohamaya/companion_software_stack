@@ -8,11 +8,15 @@
 #include "ipc/zenoh_liveliness.h"
 #include "planner/astar_planner.h"
 #include "planner/fault_manager.h"
+#include "planner/fault_response_executor.h"
+#include "planner/gcs_command_handler.h"
 #include "planner/geofence.h"
 #include "planner/iobstacle_avoider.h"
 #include "planner/ipath_planner.h"
 #include "planner/mission_fsm.h"
+#include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
+#include "planner/static_obstacle_layer.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/correlation.h"
@@ -39,7 +43,7 @@ static std::atomic<bool> g_running{true};
 /// Monotonic sequence counter for FC commands (dedup in comms)
 static uint64_t fc_cmd_seq = 0;
 
-/// Publish an FC command to the FC command SHM channel.
+/// Publish an FC command to the FC command channel.
 /// Carries the current thread-local correlation ID.
 static void send_fc_command(drone::ipc::IPublisher<drone::ipc::FCCommand>& pub,
                             drone::ipc::FCCommandType cmd, float param1 = 0.0f) {
@@ -74,7 +78,7 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
 
-    // ── Create message bus (config-driven: shm or zenoh) ───
+    // ── Create message bus (config-driven) ───────────────────
     auto bus = drone::ipc::create_message_bus(cfg);
 
     // ── Declare liveliness token (auto-dropped on exit/crash) ──
@@ -94,25 +98,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // FC state is *critical* for the FSM (armed check, altitude feedback).
-    // Subscribe with retries first so we wait for comms to create the segment,
-    // ensuring the SHM backend has the segment available before we proceed.
     auto fc_state_sub = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
     if (!fc_state_sub->is_connected()) {
         spdlog::error("Cannot connect to FC state — comms may not be running");
         return 1;
     }
 
-    // GCS commands are optional (may never be published).
-    // Placed after FC-state so that the SHM backend's blocking retry above
-    // gives comms time to initialise, improving GCS segment availability.
     auto gcs_sub = bus.subscribe_optional<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
-
-    // Mission upload channel (optional — used for mid-flight waypoint upload)
     auto mission_upload_sub =
         bus.subscribe_optional<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
-
-    // System health from Process 7 (optional — monitor may not be running)
     auto health_sub =
         bus.subscribe_optional<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
 
@@ -151,9 +145,6 @@ int main(int argc, char* argv[]) {
             {0.0f, 0.0f, 5.0f, -1.57f, 2.0f, 3.0f, false},
         });
     }
-
-    // Mission starts in IDLE → PREFLIGHT. Arm and takeoff are handled
-    // by the state machine below, sending FC commands via SHM to comms.
     fsm.on_arm();  // IDLE → PREFLIGHT
 
     // ── Create path planner and obstacle avoider strategies ──
@@ -169,33 +160,11 @@ int main(int argc, char* argv[]) {
                                                 "potential_field");
     auto path_planner    = drone::planner::create_path_planner(planner_backend);
     spdlog::info("Path planner: {}", path_planner->name());
-    // Cache pointer for A* obstacle-grid updates (null if not A*)
     auto* astar_planner = dynamic_cast<drone::planner::AStarPathPlanner*>(path_planner.get());
 
-    // ── HD-map: pre-populate A* grid with known static obstacles ────────────
-    // These cells are permanent (no TTL). The camera pipeline independently
-    // confirms these obstacles via live detections (TTL layer). A* sees both.
-    // confirmed / confirm_count track camera cross-checks (see main loop below).
-    struct StaticObstacleRecord {
-        float    x, y, radius_m, height_m;
-        bool     confirmed{false};       // true once camera has seen this obstacle
-        int      confirm_count{0};       // raw detection hit count (need ≥2 to confirm)
-        uint64_t first_confirmed_ns{0};  // loop timestamp of first confirmation
-    };
-    std::vector<StaticObstacleRecord> static_obstacles;
-    {
-        auto obs_json = cfg.section("mission_planner.static_obstacles");
-        if (obs_json.is_array() && !obs_json.empty()) {
-            for (const auto& o : obs_json) {
-                StaticObstacleRecord rec{o.value("x", 0.0f), o.value("y", 0.0f),
-                                         o.value("radius_m", 0.75f), o.value("height_m", 3.0f)};
-                static_obstacles.push_back(rec);
-                if (astar_planner)
-                    astar_planner->add_static_obstacle(rec.x, rec.y, rec.radius_m, rec.height_m);
-            }
-            spdlog::info("[HD-map] Loaded {} static obstacles into A* grid", obs_json.size());
-        }
-    }
+    // ── HD-map static obstacles ─────────────────────────────
+    StaticObstacleLayer obstacle_layer;
+    obstacle_layer.load(cfg, astar_planner);
 
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
@@ -227,15 +196,20 @@ int main(int argc, char* argv[]) {
                      geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
     }
 
-    // RTL/landing tuning
+    // ── Create extracted subsystems ─────────────────────────
     const float rtl_acceptance_m = cfg.get<float>("mission_planner.rtl_acceptance_radius_m", 1.5f);
     const float landed_alt_m     = cfg.get<float>("mission_planner.landed_altitude_m", 0.5f);
     const int   rtl_min_dwell_s  = cfg.get<int>("mission_planner.rtl_min_dwell_seconds", 5);
 
+    MissionStateTick state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s});
+    FaultResponseExecutor fault_exec;
+    GCSCommandHandler     gcs_handler;
+    auto                  send_fc = [&](drone::ipc::FCCommandType cmd, float p) {
+        send_fc_command(*fc_cmd_pub, cmd, p);
+    };
+
     // ── Create fault manager (config-driven thresholds) ────
     FaultManager fault_mgr(cfg);
-    FaultAction  last_fault_action  = FaultAction::NONE;
-    uint32_t     last_active_faults = 0;
 
     spdlog::info("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
@@ -249,25 +223,11 @@ int main(int argc, char* argv[]) {
                                                         watchdog);
     uint32_t                           health_tick = 0;
 
-    // Tracking variables for state machine
-    bool                                  takeoff_sent = false;
-    bool                                  land_sent    = false;
-    float                                 home_x = 0.0f, home_y = 0.0f, home_z = 0.0f;
-    bool                                  home_recorded = false;
-    std::chrono::steady_clock::time_point rtl_start_time{};
-    uint64_t last_gcs_timestamp    = 0;  // dedup GCS commands by timestamp
-    uint64_t last_upload_timestamp = 0;  // dedup mission uploads by timestamp
-    uint64_t active_correlation_id = 0;  // persisted GCS correlation ID for mission outputs
-    auto     last_arm_time         = std::chrono::steady_clock::now() -
-                         std::chrono::seconds(10);  // allow immediate first ARM
-    bool nav_was_armed_            = false;         // tracks armed state across NAVIGATE ticks
-    auto last_collision_warn_time_ = std::chrono::steady_clock::now() -
-                                     std::chrono::seconds(300);  // allow immediate first warn
-    auto last_unconfirmed_approach_warn_ = std::chrono::steady_clock::now() -
-                                           std::chrono::seconds(300);  // throttle at 10 s
-
     // ── Main planning loop (10 Hz) ──────────────────────────
-    // Pose staleness threshold (500ms = 5× planning period)
+    // Execution order contract:
+    //   1. Read inputs → 2. Pose staleness → 3. Obstacle cross-check →
+    //   4. Geofence → 5. Fault evaluate → 6. Fault execute →
+    //   7. GCS commands → 8. State tick → 9. Publish status
     constexpr uint64_t kPoseStaleThresholdNs = 500'000'000ULL;
     uint64_t           pose_stale_count      = 0;
     uint64_t           loop_tick             = 0;
@@ -278,33 +238,28 @@ int main(int argc, char* argv[]) {
         drone::util::FrameDiagnostics diag(loop_tick);
         drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
 
-        // Read inputs
+        // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
         pose_sub->receive(pose);
 
         drone::ipc::DetectedObjectList objects{};
         obj_sub->receive(objects);
 
-        // Read FC state (for arm/altitude feedback)
         drone::ipc::FCState fc_state{};
         if (fc_state_sub->is_connected()) {
             fc_state_sub->receive(fc_state);
         }
 
-        // Read system health from Process 7
         drone::ipc::SystemHealth sys_health{};
         if (health_sub->is_connected()) {
             health_sub->receive(sys_health);
         }
 
-        // ── Fault evaluation (before GCS / FSM logic) ───────
         auto now_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                 std::chrono::steady_clock::now().time_since_epoch())
                                                 .count());
 
-        // ── Pose staleness check (SAFETY CRITICAL) ──────────
-        // If pose data is older than threshold, we may be flying
-        // with stale position — warn loudly.
+        // ── 2. Pose staleness check (SAFETY CRITICAL, inline) ──
         if (pose.timestamp_ns > 0 && (now_ns - pose.timestamp_ns) > kPoseStaleThresholdNs) {
             ++pose_stale_count;
             double age_ms = static_cast<double>(now_ns - pose.timestamp_ns) / 1e6;
@@ -323,43 +278,10 @@ int main(int argc, char* argv[]) {
             pose_stale_count = 0;
         }
 
-        // ── Camera cross-check of HD-map static obstacles (every tick) ──────
-        // Detected object positions are already in world frame (perception's
-        // fusion thread applies the camera→world rotation before publishing).
-        // If a detection falls within (radius_m + 1 m) of a known HD-map obstacle
-        // it counts as a hit.  After 2 independent hits the obstacle is marked
-        // confirmed and logged.  This lets the scenario runner (and downstream
-        // logic) verify that every map obstacle was camera-sighted at least once.
-        if (!static_obstacles.empty() && objects.num_objects > 0 && pose.quality >= 1) {
-            for (uint32_t i = 0; i < objects.num_objects; ++i) {
-                const auto& det = objects.objects[i];
-                // Detected positions are already world-frame — use directly.
-                const float wx = det.position_x;
-                const float wy = det.position_y;
-                const float wz = det.position_z;
-                for (auto& obs : static_obstacles) {
-                    if (obs.confirmed) continue;
-                    const float dx   = wx - obs.x;
-                    const float dy   = wy - obs.y;
-                    const float dist = std::sqrt(dx * dx + dy * dy);
-                    if (dist < obs.radius_m + 1.0f && wz <= obs.height_m + 0.5f) {
-                        obs.confirm_count++;
-                        if (obs.confirm_count >= 2) {
-                            obs.confirmed          = true;
-                            obs.first_confirmed_ns = now_ns;
-                            spdlog::info("[HD-map] Obstacle at ({:.1f},{:.1f}) CONFIRMED by camera "
-                                         "(world det ({:.2f},{:.2f},{:.2f}), dist={:.2f}m)",
-                                         obs.x, obs.y, wx, wy, wz, dist);
-                        }
-                    }
-                }
-            }
-        }
+        // ── 3. Obstacle cross-check ─────────────────────────
+        obstacle_layer.cross_check(objects, pose.quality, now_ns);
 
-        // ── Geofence check (every tick, airborne only) ──────
-        // Runs BEFORE evaluate() so a breach triggers RTL in the same cycle.
-        // Skip during TAKEOFF — the drone is climbing from ground level and
-        // altitude will legitimately be at or near 0m (the floor).
+        // ── 4. Geofence check (airborne only, skip TAKEOFF) ─
         {
             drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
             if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
@@ -381,405 +303,39 @@ int main(int argc, char* argv[]) {
             } else {
                 fault_mgr.set_geofence_violation(false);
             }
-        }  // GeofenceCheck timer scope
+        }
 
+        // ── 5. Fault evaluate ───────────────────────────────
         auto fault = [&]() {
             drone::util::ScopedDiagTimer t(diag, "FaultEval");
             return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
         }();
 
-        // Apply fault action if escalated (only in airborne states)
-        if (fault.recommended_action > last_fault_action &&
-            fault.recommended_action > FaultAction::NONE && fsm.state() != MissionState::IDLE &&
-            fsm.state() != MissionState::PREFLIGHT) {
+        // ── 6. Fault execute ────────────────────────────────
+        fault_exec.execute(fault, fsm, send_fc, *traj_pub, state_tick.flight_state(), now_ns);
+        fault_exec.log_new_faults(fault.active_faults);
 
-            spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {}) "
-                         "active_faults=[{}]",
-                         fault_action_name(last_fault_action),
-                         fault_action_name(fault.recommended_action), fault.reason,
-                         drone::ipc::fault_flags_string(fault.active_faults));
+        // ── 7. GCS commands ─────────────────────────────────
+        gcs_handler.process(*gcs_sub, *mission_upload_sub, fsm, send_fc, *traj_pub,
+                            state_tick.flight_state(), diag);
 
-            switch (fault.recommended_action) {
-                case FaultAction::WARN:
-                    // Log only — continue mission
-                    break;
-                case FaultAction::LOITER:
-                    if (fsm.state() == MissionState::TAKEOFF ||
-                        fsm.state() == MissionState::NAVIGATE) {
-                        // Stop sending trajectory commands
-                        {
-                            drone::ipc::TrajectoryCmd stop{};
-                            stop.valid        = false;
-                            stop.timestamp_ns = now_ns;
-                            traj_pub->publish(stop);
-                        }
-                        fsm.on_loiter();
-                        fsm.set_fault_triggered(true);
-                    }
-                    break;
-                case FaultAction::RTL:
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
-                    {
-                        drone::ipc::TrajectoryCmd stop{};
-                        stop.valid        = false;
-                        stop.timestamp_ns = now_ns;
-                        traj_pub->publish(stop);
-                    }
-                    rtl_start_time = std::chrono::steady_clock::now();
-                    nav_was_armed_ =
-                        true;  // seed so RTL disarm detection works from any origin state
-                    fsm.on_rtl();
-                    fsm.set_fault_triggered(true);
-                    break;
-                case FaultAction::EMERGENCY_LAND:
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
-                    {
-                        drone::ipc::TrajectoryCmd stop{};
-                        stop.valid        = false;
-                        stop.timestamp_ns = now_ns;
-                        traj_pub->publish(stop);
-                    }
-                    land_sent = true;
-                    fsm.on_land();
-                    fsm.set_fault_triggered(true);
-                    break;
-                default: break;
-            }
-            last_fault_action = fault.recommended_action;
+        // ── 8. State tick ───────────────────────────────────
+        state_tick.tick(fsm, pose, fc_state, objects, *path_planner, astar_planner, *avoider,
+                        obstacle_layer, *traj_pub, *payload_pub, send_fc,
+                        gcs_handler.active_correlation_id(), diag);
+
+        // Handle fault reset on landing
+        if (state_tick.consume_fault_reset()) {
+            fault_mgr.reset();
+            fault_exec.reset();
         }
 
-        // Log when new fault flags appear (even without action-level change).
-        uint32_t new_flags = fault.active_faults & ~last_active_faults;
-        if (new_flags != 0) {
-            spdlog::warn("[FaultMgr] New faults: [{}] active_faults=[{}]",
-                         drone::ipc::fault_flags_string(new_flags),
-                         drone::ipc::fault_flags_string(fault.active_faults));
-        }
-        last_active_faults = fault.active_faults;
-
-        // Check GCS commands (dedup by timestamp to ignore stale values)
-        drone::ipc::GCSCommand gcs_cmd{};
-        if (gcs_sub->is_connected() && gcs_sub->receive(gcs_cmd) && gcs_cmd.valid &&
-            gcs_cmd.timestamp_ns > last_gcs_timestamp) {
-            last_gcs_timestamp    = gcs_cmd.timestamp_ns;
-            active_correlation_id = gcs_cmd.correlation_id;
-            // Propagate GCS correlation ID into outgoing commands
-            drone::util::ScopedCorrelation gcs_guard(gcs_cmd.correlation_id);
-            switch (gcs_cmd.command) {
-                case drone::ipc::GCSCommandType::RTL:
-                    spdlog::info("[Planner] GCS command: RTL corr={:#x}", gcs_cmd.correlation_id);
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
-                    // Publish invalid traj to stop comms forwarding stale velocity cmds
-                    {
-                        drone::ipc::TrajectoryCmd stop{};
-                        stop.valid          = false;
-                        stop.correlation_id = gcs_cmd.correlation_id;
-                        stop.timestamp_ns   = static_cast<uint64_t>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                std::chrono::steady_clock::now().time_since_epoch())
-                                .count());
-                        traj_pub->publish(stop);
-                    }
-                    rtl_start_time = std::chrono::steady_clock::now();
-                    nav_was_armed_ =
-                        true;  // seed so RTL disarm detection works from any origin state
-                    fsm.on_rtl();
-                    break;
-                case drone::ipc::GCSCommandType::LAND:
-                    spdlog::info("[Planner] GCS command: LAND corr={:#x}", gcs_cmd.correlation_id);
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
-                    land_sent = true;
-                    {
-                        drone::ipc::TrajectoryCmd stop{};
-                        stop.valid          = false;
-                        stop.correlation_id = gcs_cmd.correlation_id;
-                        stop.timestamp_ns   = static_cast<uint64_t>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                std::chrono::steady_clock::now().time_since_epoch())
-                                .count());
-                        traj_pub->publish(stop);
-                    }
-                    fsm.on_land();
-                    break;
-                case drone::ipc::GCSCommandType::MISSION_UPLOAD: {
-                    // Read waypoints from the mission upload channel
-                    drone::ipc::MissionUpload upload{};
-                    if (mission_upload_sub->is_connected() && mission_upload_sub->receive(upload) &&
-                        upload.valid && upload.timestamp_ns > last_upload_timestamp &&
-                        upload.num_waypoints > 0) {
-                        last_upload_timestamp = upload.timestamp_ns;
-                        std::vector<Waypoint> new_wps;
-                        for (uint8_t i = 0;
-                             i < upload.num_waypoints && i < drone::ipc::kMaxUploadWaypoints; ++i) {
-                            const auto& sw = upload.waypoints[i];
-                            new_wps.push_back({sw.x, sw.y, sw.z, sw.yaw, sw.radius, sw.speed,
-                                               sw.trigger_payload});
-                        }
-                        fsm.load_mission(new_wps);
-                        spdlog::info("[Planner] GCS MISSION_UPLOAD: {} waypoints loaded "
-                                     "corr={:#x}",
-                                     new_wps.size(), gcs_cmd.correlation_id);
-                        diag.add_warning("MissionUpload", "Mid-flight waypoint upload: " +
-                                                              std::to_string(new_wps.size()) +
-                                                              " waypoints");
-                        // If currently navigating, start the new mission immediately
-                        if (fsm.state() == MissionState::NAVIGATE ||
-                            fsm.state() == MissionState::LOITER) {
-                            fsm.on_navigate();
-                        }
-                    } else {
-                        spdlog::warn("[Planner] MISSION_UPLOAD command but no valid "
-                                     "upload data available");
-                    }
-                    break;
-                }
-                default: break;
-            }
-        }
-
-        // ── State machine ───────────────────────────────────
-        switch (fsm.state()) {
-            case MissionState::PREFLIGHT: {
-                // Send ARM command periodically until FC confirms armed.
-                // PX4 may deny initial attempts until MAVSDK heartbeats
-                // establish a GCS link (requires ~3-5s after connection).
-                auto now_arm = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now_arm - last_arm_time)
-                        .count() >= 3) {
-                    spdlog::info("[Planner] Sending ARM command");
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::ARM);
-                    last_arm_time = now_arm;
-                }
-                if (fc_state.armed) {
-                    spdlog::info("[Planner] Vehicle armed — initiating takeoff");
-                    fsm.on_takeoff();
-                    takeoff_sent = false;
-                }
-                break;
-            }
-
-            case MissionState::TAKEOFF: {
-                // Send TAKEOFF command, wait for target altitude
-                if (!takeoff_sent) {
-                    spdlog::info("[Planner] Sending TAKEOFF to {:.1f}m", takeoff_alt);
-                    send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::TAKEOFF, takeoff_alt);
-                    takeoff_sent = true;
-                }
-                // Record home position (where we took off from)
-                if (!home_recorded && std::isfinite(pose.translation[0]) &&
-                    std::isfinite(pose.translation[1])) {
-                    home_x        = static_cast<float>(pose.translation[0]);
-                    home_y        = static_cast<float>(pose.translation[1]);
-                    home_z        = 0.0f;  // ground level
-                    home_recorded = true;
-                    spdlog::info("[Planner] Home position recorded: ({:.1f}, {:.1f}, {:.1f})",
-                                 home_x, home_y, home_z);
-                }
-                // Check if close to target altitude (90% threshold)
-                if (fc_state.rel_alt >= takeoff_alt * 0.9f) {
-                    spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE",
-                                 fc_state.rel_alt);
-                    fsm.on_navigate();
-                    spdlog::info("[FSM] EXECUTING — navigating {} waypoints",
-                                 fsm.total_waypoints());
-                }
-                break;
-            }
-
-            case MissionState::NAVIGATE: {
-                // Detect unexpected disarm mid-navigation (obstacle collision / crash landing).
-                // PX4 triggers a landing-detected + disarm event when the drone is knocked down.
-                // We catch that here and emit a distinct log string that the test runner can
-                // match with log_must_not_contain to fail the scenario.
-                if (nav_was_armed_ && !fc_state.armed) {
-                    spdlog::warn("[Planner] OBSTACLE COLLISION detected — vehicle unexpectedly "
-                                 "disarmed during navigation");
-                }
-                nav_was_armed_ = fc_state.armed;
-
-                // Proximity-based collision detection using HD-map obstacle positions.
-                // Fires if the drone centre enters within (radius_m + 0.5 m) of any known
-                // static obstacle while at or below its height.  Throttled to once per 2 s.
-                {
-                    constexpr float kCollisionMarginM = 0.5f;  // drone body + safety margin
-                    constexpr float kCooldownSeconds  = 2.0f;
-                    const float     px                = static_cast<float>(pose.translation[0]);
-                    const float     py                = static_cast<float>(pose.translation[1]);
-                    const float     pz                = static_cast<float>(pose.translation[2]);
-                    auto            now_c             = std::chrono::steady_clock::now();
-                    if (std::chrono::duration<float>(now_c - last_collision_warn_time_).count() >
-                        kCooldownSeconds) {
-                        for (const auto& obs : static_obstacles) {
-                            const float dx   = px - obs.x;
-                            const float dy   = py - obs.y;
-                            const float dist = std::sqrt(dx * dx + dy * dy);
-                            if (dist < obs.radius_m + kCollisionMarginM &&
-                                pz <= obs.height_m + kCollisionMarginM) {
-                                spdlog::warn("[Planner] OBSTACLE COLLISION detected — drone {:.2f}m"
-                                             " from obstacle at ({:.1f},{:.1f})",
-                                             dist, obs.x, obs.y);
-                                last_collision_warn_time_ = now_c;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Update A* obstacle grid if applicable
-                if (astar_planner) {
-                    drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");
-                    astar_planner->update_obstacles(objects, pose);
-                }
-
-                // Warn if approaching an HD-map obstacle that the camera has not yet confirmed.
-                // This is informational — A* will still route around unconfirmed obstacles
-                // (conservative default).  Useful for diagnosing map/reality mismatches.
-                // Throttled to once per 10 s to avoid log flooding.
-                {
-                    constexpr float kApproachWarnM     = 3.0f;
-                    constexpr float kApproachCooldownS = 10.0f;
-                    const float     px                 = static_cast<float>(pose.translation[0]);
-                    const float     py                 = static_cast<float>(pose.translation[1]);
-                    auto            now_a              = std::chrono::steady_clock::now();
-                    if (std::chrono::duration<float>(now_a - last_unconfirmed_approach_warn_)
-                            .count() > kApproachCooldownS) {
-                        for (const auto& obs : static_obstacles) {
-                            if (obs.confirmed) continue;
-                            const float dx   = px - obs.x;
-                            const float dy   = py - obs.y;
-                            const float dist = std::sqrt(dx * dx + dy * dy);
-                            if (dist < obs.radius_m + kApproachWarnM) {
-                                spdlog::warn(
-                                    "[HD-map] Approaching UNCONFIRMED obstacle at ({:.1f},{:.1f}) "
-                                    "dist={:.2f}m — camera has not verified this obstacle yet",
-                                    obs.x, obs.y, dist);
-                                last_unconfirmed_approach_warn_ = now_a;
-                                break;  // one warn per cooldown window is enough
-                            }
-                        }
-                    }
-                }
-
-                const Waypoint* wp = fsm.current_waypoint();
-                if (wp) {
-                    // Plan trajectory via IPathPlanner
-                    auto planned = [&]() {
-                        drone::util::ScopedDiagTimer t(diag, "PathPlan");
-                        return path_planner->plan(pose, *wp);
-                    }();
-                    // Flag if A* fell back to direct line (no obstacle-free path found)
-                    if (astar_planner && astar_planner->using_direct_fallback()) {
-                        diag.add_warning("PathPlan", "A* fallback: no obstacle-free path — using "
-                                                     "direct line");
-                    }
-                    // Apply obstacle avoidance via IObstacleAvoider
-                    auto traj = [&]() {
-                        drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");
-                        return avoider->avoid(planned, pose, objects);
-                    }();
-                    traj_pub->publish(traj);
-
-                    // Check if waypoint reached
-                    if (fsm.waypoint_reached(static_cast<float>(pose.translation[0]),
-                                             static_cast<float>(pose.translation[1]),
-                                             static_cast<float>(pose.translation[2]), *wp)) {
-                        spdlog::info("[Planner] Waypoint {} reached!", fsm.current_wp_index() + 1);
-
-                        if (wp->trigger_payload) {
-                            drone::ipc::PayloadCommand pay_cmd{};
-                            pay_cmd.timestamp_ns   = traj.timestamp_ns;
-                            pay_cmd.correlation_id = active_correlation_id;
-                            pay_cmd.action         = drone::ipc::PayloadAction::CAMERA_CAPTURE;
-                            pay_cmd.gimbal_pitch   = -90.0f;
-                            pay_cmd.gimbal_yaw     = 0.0f;
-                            pay_cmd.valid          = true;
-                            payload_pub->publish(pay_cmd);
-                        }
-
-                        if (!fsm.advance_waypoint()) {
-                            spdlog::info("[Planner] Mission complete — RTL");
-                            send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::RTL);
-                            // Stop trajectory commands so comms doesn't override RTL
-                            {
-                                drone::ipc::TrajectoryCmd stop{};
-                                stop.valid        = false;
-                                stop.timestamp_ns = static_cast<uint64_t>(
-                                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                        std::chrono::steady_clock::now().time_since_epoch())
-                                        .count());
-                                traj_pub->publish(stop);
-                            }
-                            rtl_start_time = std::chrono::steady_clock::now();
-                            nav_was_armed_ =
-                                true;  // already true from NAVIGATE, but explicit for clarity
-                            fsm.on_rtl();
-                        }
-                    }
-                }
-                break;
-            }
-
-            case MissionState::RTL: {
-                // Detect unexpected disarm during RTL (crash into an obstacle, or
-                // PX4 auto-disarming after a successful autonomous landing before
-                // the mission planner issues LAND). Both cases should terminate RTL.
-                if (nav_was_armed_ && !fc_state.armed) {
-                    spdlog::warn("[Planner] Vehicle disarmed during RTL — mission IDLE");
-                    fsm.on_landed();
-                    break;
-                }
-                nav_was_armed_ = fc_state.armed;
-
-                // Monitor position — when near home, send LAND to bypass
-                // PX4's RTL loiter delay (RTL_LAND_DELAY).
-                // Only override if we have a valid home fix; otherwise let
-                // PX4 handle RTL/landing autonomously.
-                // Wait at least rtl_min_dwell_s seconds so PX4 has time
-                // to actually fly the drone back to the home position
-                // before we intercept with LAND.
-                if (home_recorded) {
-                    auto rtl_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                                           std::chrono::steady_clock::now() - rtl_start_time)
-                                           .count();
-                    float dx         = static_cast<float>(pose.translation[0]) - home_x;
-                    float dy         = static_cast<float>(pose.translation[1]) - home_y;
-                    float horiz_dist = std::sqrt(dx * dx + dy * dy);
-                    if (rtl_elapsed >= rtl_min_dwell_s && horiz_dist < rtl_acceptance_m) {
-                        spdlog::info("[Planner] Near home ({:.1f}m, {}s in RTL) — sending LAND",
-                                     horiz_dist, rtl_elapsed);
-                        send_fc_command(*fc_cmd_pub, drone::ipc::FCCommandType::LAND);
-                        land_sent = true;
-                        fsm.on_land();
-                    }
-                }
-                break;
-            }
-
-            case MissionState::LAND: {
-                // Monitor altitude — transition to IDLE when on the ground
-                if (fc_state.rel_alt < landed_alt_m && land_sent) {
-                    spdlog::info("[Planner] Landed (alt={:.2f}m) — mission IDLE", fc_state.rel_alt);
-                    fsm.on_landed();
-                    // Reset fault state for next mission / flight
-                    fault_mgr.reset();
-                    last_fault_action = FaultAction::NONE;
-                }
-                break;
-            }
-
-            case MissionState::IDLE:
-            case MissionState::EMERGENCY:
-            default:
-                // No trajectory commands
-                break;
-        }
-
-        // Publish mission status
+        // ── 9. Publish status + health + diagnostics ────────
         drone::ipc::MissionStatus status{};
         status.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
-        status.correlation_id   = active_correlation_id;
+        status.correlation_id   = gcs_handler.active_correlation_id();
         status.state            = fsm.state();
         status.current_waypoint = static_cast<uint32_t>(fsm.current_wp_index());
         status.total_waypoints  = static_cast<uint32_t>(fsm.total_waypoints());
@@ -791,13 +347,11 @@ int main(int argc, char* argv[]) {
         status.fault_action     = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);
 
-        // Publish thread health at ~1 Hz (every update_ms ticks)
         ++health_tick;
         if (health_tick % static_cast<uint32_t>(std::max(1, 1000 / loop_sleep_ms)) == 0) {
             health_publisher.publish_snapshot();
         }
 
-        // Log diagnostics if issues detected this tick
         if (diag.has_errors() || diag.has_warnings()) {
             diag.log_summary("MissionPlanner");
         }

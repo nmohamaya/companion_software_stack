@@ -551,6 +551,7 @@
 | [#131](https://github.com/nmohamaya/companion_software_stack/issues/131) | sd_notify/WatchdogSec missing from processes 1–6; StartLimitBurst=5 missing all 7 service files | Reliability fix | **Closed** (PR #132, commit `7ace87c`) |
 | *(fault_injector Zenoh fix)* | ~~fault_injector GCS/mission commands invisible to Zenoh subscribers~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
 | *(fault_injector shm_unlink fix)* | ~~fault_injector shm_unlink on exit breaks subsequent runs~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
+| ~~[#154](https://github.com/nmohamaya/companion_software_stack/issues/154)~~ | ~~P4 Mission Planner: Extract 4 classes from main.cpp~~ ✅ | Refactor | **Closed** (Improvement #41, PR #157) |
 
 ---
 
@@ -602,4 +603,5 @@
 
 ---
 
+* updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR #157) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 880 tests, 46 test suites, Zenoh sole IPC backend, 5 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
 *Last updated after Improvement #41 (API.md/ROADMAP.md SHM doc cleanup, Issue #155) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 42 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
