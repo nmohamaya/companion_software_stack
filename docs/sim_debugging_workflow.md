@@ -66,7 +66,7 @@ tail -20 drone_logs/scenarios_gazebo/<scenario>/combined.log | grep -E "passed|f
 
 ```bash
 # Find the exact moment things went wrong
-tail -100 drone_logs/scenarios_gazebo/<scenario>/combined.log | grep -iE "error|fatal|failed"
+tail -100 drone_logs/scenarios_gazebo/<scenario>/combined.log | grep -iE "error|fatal"
 ```
 
 **Example output:**
@@ -244,7 +244,7 @@ Results: 2 passed, 14 failed, 16 total
 
 **Step 2: Identify failure point**
 ```bash
-$ grep -i "error\|fatal" drone_logs/scenarios_gazebo/obstacle_avoidance/combined.log | head -5
+$ grep -iE "error|fatal" drone_logs/scenarios_gazebo/obstacle_avoidance/combined.log | head -5
 [2026-03-14 16:41:55.334] [mission_planner] [error] [t:205488] [Planner] No path found 
   after 30 tries — timeout exceeded
 ```
@@ -441,7 +441,7 @@ Scenario Failed
   └─→ Process liveness check failed?
        └─→ Check if all 7 processes logged after test completion
             └─→ Process silent: Check its .log for crashes
-            └─→ All logged: Check scenariorunner validation timing
+            └─→ All logged: Check scenario runner validation timing
 ```
 
 ---
