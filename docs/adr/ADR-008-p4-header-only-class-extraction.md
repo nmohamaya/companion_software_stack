@@ -34,8 +34,9 @@ made isolated regression testing impractical.
 
 - Each sub-system must be independently unit-testable with injected mocks
   and no Zenoh/hardware dependency
-- Extraction must not change observable runtime behaviour (zero behavioural
-  delta — validated by existing 94 passing tests before extraction)
+- Extraction must not change observable runtime behaviour — zero behavioural
+  delta validated by the existing test suite (845 pre-PR tests all passing
+  before extraction)
 - Must be compatible with the existing `drone::Config` / `Result<T,E>` /
   `[[nodiscard]]` patterns (ADR-003, ADR-007)
 - No new build dependencies; header-only preferred to avoid linker complexity
@@ -52,18 +53,39 @@ Extract four logically cohesive sub-systems from `main.cpp` into
 | Class | Header | Responsibility |
 |-------|--------|---------------|
 | `FaultResponseExecutor` | `fault_response_executor.h` | Translate `FaultAction` → trajectory stop + FC command; enforce escalation-only policy |
-| `GcsCommandHandler` | `gcs_command_handler.h` | Dispatch RTL/LAND/MISSION_UPLOAD; deduplicate by command timestamp |
+| `GCSCommandHandler` | `gcs_command_handler.h` | Dispatch RTL/LAND/MISSION_UPLOAD; deduplicate by command timestamp |
 | `MissionStateTick` | `mission_state_tick.h` | All per-tick FSM transitions (PREFLIGHT/TAKEOFF/NAVIGATE/RTL/LAND/IDLE) |
-| `StaticObstacleLayer` | `static_obstacle_layer.h` | Load HD-map entries from config; camera cross-validation; collision proximity check |
+| `StaticObstacleLayer` | `static_obstacle_layer.h` | Load HD-map entries from config; camera cross-validation (`cross_check`); collision proximity checks (`check_collision`, `check_unconfirmed_approach`) |
 
 Each class:
 
-1. Takes its dependencies via constructor injection (bus references, config,
-   HAL interface pointers) — no global state, no singleton lookups
-2. Exposes a single primary method (`execute`, `handle`, `tick`, `check_collision`)
-   that can be called directly from unit tests with mock inputs
+1. Takes its dependencies via constructor injection (config, planners) or
+   default construction — no global state, no singleton lookups
+2. Exposes purpose-driven public methods called directly from the planning loop
+   and unit-testable with mock inputs (no Zenoh bus required)
 3. Is header-only — no separate `.cpp` compilation unit, no CMakeLists change
 4. Is `[[nodiscard]]`-annotated on all methods that return state
+
+Construction and call pattern as used in `main.cpp`:
+
+```cpp
+// Construction — each class is stack-allocated in main()
+StaticObstacleLayer   obstacle_layer;
+MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s});
+FaultResponseExecutor fault_exec;
+GCSCommandHandler     gcs_handler;
+
+obstacle_layer.load(cfg, astar_planner);  // once, at startup
+
+// Inside the planning loop:
+obstacle_layer.cross_check(objects, pose.quality, now_ns);
+fault_exec.execute(fault, fsm, send_fc, *traj_pub, state_tick.flight_state(), now_ns);
+gcs_handler.process(*gcs_sub, *upload_sub, fsm, send_fc, *traj_pub,
+                    state_tick.flight_state(), diag);
+state_tick.tick(fsm, pose, fc_state, objects, *planner, astar_planner,
+                *avoider, obstacle_layer, *traj_pub, payload_pub, send_fc,
+                gcs_handler.active_correlation_id(), diag);
+```
 
 `main.cpp` was reduced from **809 → 366 lines**. It now only:
 - Parses config and instantiates components
@@ -118,12 +140,8 @@ over-engineering for what are conceptually large functions.
 
 ## 6. Implementation Notes
 
-- All four classes follow the same dependency-injection pattern:
-  ```cpp
-  FaultResponseExecutor executor{bus, cfg};
-  // later in loop:
-  executor.execute(fault_action, current_state);
-  ```
+- All four classes are stack-allocated in `main()` and passed to the planning
+  loop by reference — lifetime is trivially managed
 - Unit tests use Google Test with lightweight struct mocks — no Zenoh
   `RESOURCE_LOCK` needed
 - Integration validated by all 8 Gazebo SITL scenarios passing post-merge

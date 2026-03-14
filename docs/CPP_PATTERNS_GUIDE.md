@@ -1597,7 +1597,7 @@ When writing or reviewing any C++ code change, answer these four questions:
 3. **Are all error paths handled?** No silent fallback, no unchecked `Result`, no `[[nodiscard]]` return ignored.
 4. **Would this code behave correctly under a use-after-free or data-race scenario?** If the answer requires thought, add a comment or restructure.
 
-> **Design rationale:** These rules exist because silent memory corruption in a flight-control thread produces undefined behaviour with potentially catastrophic outcome. The safety overhead is near-zero — `unique_ptr` has the same runtime cost as a raw pointer; `Result<T,E>` is a two-word stack value. The benefit is a compiler-enforced ownership graph and exhaustive error-path coverage.
+> **Design rationale:** These rules exist because silent memory corruption in a flight-control thread produces undefined behaviour with potentially catastrophic outcome. The safety overhead is near-zero — `unique_ptr` has the same runtime cost as a raw pointer; `Result<T,E>` is a small stack-allocated value type (backed by `std::variant<T,E>` — size depends on `T`/`E` but always stack-resident with no separate heap allocation). The benefit is a compiler-enforced ownership graph and exhaustive error-path coverage.
 
 ---
 

@@ -396,7 +396,7 @@ The planning loop runs at `mission_planner.update_rate_hz` (default 10 Hz):
 ```
 while (running) {
     1. Touch heartbeat + systemd watchdog
-    2. Read drone::ipc::Pose, DetectedObjectList, FCState, SystemHealth
+    2. Read drone::ipc::Pose, drone::ipc::DetectedObjectList, drone::ipc::FCState, drone::ipc::SystemHealth
     3. Pose staleness check (500ms threshold)
     4. Camera cross-check of HD-map obstacles
     5. Geofence check (airborne only, skip TAKEOFF)
