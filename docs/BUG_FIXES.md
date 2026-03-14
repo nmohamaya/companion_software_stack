@@ -2,6 +2,8 @@
 
 Tracking all bug fixes applied to the Drone Companion Software Stack.
 
+> **⚠️ IMPORTANT:** The "Fix #X" numbers (e.g., "Fix #1", "Fix #46") in this document are **sequential identifiers for this file only** and do **NOT** correspond to GitHub issue numbers. For the actual GitHub issue, see the **(Issue #Y)** reference in each fix title or use the `Found by:` / `Related to:` fields.
+
 Sections:
 - [IPC / Transport](#ipc--transport)
 - [Perception (Process 2)](#perception-process-2)
@@ -906,11 +908,12 @@ The temperature-to-zone logic in `iprocess_monitor.h` also sets `thermal_zone=2`
 
 ---
 
-### Fix #46 — 8 Unit Tests Silently Skipped Due to Missing Model & CWD Assumptions
+### Fix #164 — 8 Unit Tests Silently Skipped Due to Missing Model & CWD Assumptions
 
 **Date:** 2026-03-14
 **Severity:** Low
 **Files:** `tests/CMakeLists.txt`, `tests/test_config_validator.cpp`, `tests/test_restart_policy.cpp`, `models/yolov8n.onnx`
+**GitHub Issue:** #164
 
 **Bug:** Two categories of tests were silently skipped by `GTEST_SKIP()`:
 1. **7 YOLO model tests** (`YoloModelTest::*`) — required `models/yolov8n.onnx` (13 MB) which was missing because:
