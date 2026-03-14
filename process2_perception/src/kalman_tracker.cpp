@@ -3,6 +3,9 @@
 // Phase 1B (Issue #113): proper O(n³) Hungarian, ITracker interface.
 #include "perception/kalman_tracker.h"
 
+#include "perception/bytetrack_tracker.h"
+#include "util/config.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -313,6 +316,19 @@ std::unique_ptr<ITracker> create_tracker(const std::string&                    b
                                          [[maybe_unused]] const drone::Config* cfg) {
     if (backend == "sort") {
         return std::make_unique<SortTracker>();
+    }
+    if (backend == "bytetrack") {
+        ByteTrackTracker::Params params;
+        if (cfg) {
+            params.high_conf_threshold = cfg->get<float>("perception.tracker.high_conf_threshold",
+                                                         0.5f);
+            params.low_conf_threshold  = cfg->get<float>("perception.tracker.low_conf_threshold",
+                                                         0.1f);
+            params.max_iou_cost        = cfg->get<double>("perception.tracker.max_iou_cost", 0.7);
+            params.max_age             = cfg->get<uint32_t>("perception.tracker.max_age", 10);
+            params.min_hits            = cfg->get<uint32_t>("perception.tracker.min_hits", 3);
+        }
+        return std::make_unique<ByteTrackTracker>(params);
     }
     throw std::invalid_argument("Unknown tracker backend: " + backend);
 }

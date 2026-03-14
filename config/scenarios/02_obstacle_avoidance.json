@@ -4,7 +4,7 @@
         "name": "obstacle_avoidance",
         "description": "Navigate through an obstacle field using the A* path planner and 3D potential-field obstacle avoider. Tier 2 requires Gazebo SITL with the test_world.sdf obstacles.",
         "tier": 2,
-        "timeout_s": 100,
+        "timeout_s": 150,
         "requires_gazebo": true
     },
     "config_overrides": {

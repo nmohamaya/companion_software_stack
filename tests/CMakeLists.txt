@@ -43,6 +43,7 @@ add_drone_test(test_spsc_ring       test_spsc_ring.cpp)
 # ── Kalman tracker tests ─────────────────────────────────────
 add_drone_test(test_kalman_tracker  test_kalman_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/bytetrack_tracker.cpp
 )
 
 # ── Mission FSM tests ────────────────────────────────────────
@@ -65,6 +66,7 @@ add_drone_test(test_fusion_engine   test_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/ukf_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/bytetrack_tracker.cpp
 )
 
 # ── Config system tests ──────────────────────────────────────
@@ -222,6 +224,12 @@ add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
 
 # ── Fault Response Executor tests (Issue #154) ─────────────
 add_drone_test(test_fault_response_executor test_fault_response_executor.cpp)
+
+# ── ByteTrack Tracker tests (Issue #163) ────────────────────
+add_drone_test(test_bytetrack_tracker test_bytetrack_tracker.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/bytetrack_tracker.cpp
+)
 
 # ── D* Lite Path Planner tests (Issue #158) ────────────────
 add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
