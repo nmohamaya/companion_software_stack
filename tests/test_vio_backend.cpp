@@ -183,6 +183,108 @@ TEST(VIOBackendTest, InvalidFrameDimensionsCauseError) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// set_trajectory_target() tests
+// ═══════════════════════════════════════════════════════════
+
+TEST(VIOBackendTest, NoTargetHoversAtOrigin) {
+    SimulatedVIOBackend backend({}, {}, 1, 3.0f);
+
+    // Process several frames without setting a target
+    for (int i = 0; i < 10; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+    }
+
+    auto frame = make_frame(10);
+    auto imu   = make_imu_samples(13, 10 * 0.033);
+    auto r     = backend.process_frame(frame, imu);
+    ASSERT_TRUE(r.is_ok());
+
+    // Without a target, position should stay near origin (within noise)
+    auto& pos = r.value().pose.position;
+    EXPECT_NEAR(pos.x(), 0.0, 0.2) << "Should hover near origin X";
+    EXPECT_NEAR(pos.y(), 0.0, 0.2) << "Should hover near origin Y";
+    EXPECT_NEAR(pos.z(), 0.0, 0.2) << "Should hover near origin Z";
+}
+
+TEST(VIOBackendTest, TargetFollowingMovesTowardTarget) {
+    SimulatedVIOBackend backend({}, {}, 1, 5.0f);  // 5 m/s speed
+
+    // Set a target far away
+    backend.set_trajectory_target(100.0f, 0.0f, 0.0f, 0.0f);
+
+    // Process several frames — drone should move toward target
+    Eigen::Vector3d last_pos = Eigen::Vector3d::Zero();
+    for (int i = 0; i < 30; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+        last_pos = r.value().pose.position;
+    }
+
+    // Should have moved significantly toward X=100
+    EXPECT_GT(last_pos.x(), 2.0) << "Should move toward target X";
+    EXPECT_NEAR(last_pos.y(), 0.0, 1.0) << "Should stay near Y=0";
+    EXPECT_NEAR(last_pos.z(), 0.0, 1.0) << "Should stay near Z=0";
+}
+
+TEST(VIOBackendTest, TargetFollowingNoOvershoot) {
+    SimulatedVIOBackend backend({}, {}, 1, 10.0f);  // 10 m/s — very fast
+
+    // Set a target very close
+    backend.set_trajectory_target(0.1f, 0.0f, 0.0f, 0.0f);
+
+    // Process many frames — should not overshoot past 0.1
+    for (int i = 0; i < 100; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+
+        // Position should never overshoot significantly past target
+        // (within noise tolerance of ±0.01 * sqrt(100 frames) ≈ ±0.1)
+        EXPECT_LT(r.value().pose.position.x(), 0.5)
+            << "Frame " << i << ": should not overshoot target X=0.1";
+    }
+}
+
+TEST(VIOBackendTest, TargetFollowingYaw) {
+    SimulatedVIOBackend backend({}, {}, 1, 3.0f);
+
+    backend.set_trajectory_target(10.0f, 0.0f, 0.0f, 1.57f);
+
+    for (int i = 0; i < 5; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+    }
+
+    // Check yaw from quaternion — extract yaw angle
+    auto  frame = make_frame(5);
+    auto  imu   = make_imu_samples(13, 5 * 0.033);
+    auto  r     = backend.process_frame(frame, imu);
+    auto& q     = r.value().pose.orientation;
+    // For a pure Z rotation: yaw = atan2(2*(w*z+x*y), 1-2*(y*y+z*z))
+    double yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
+                            1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+    EXPECT_NEAR(yaw, 1.57, 0.1) << "Yaw should follow target yaw";
+}
+
+TEST(VIOBackendTest, DefaultSetTrajectoryTargetIsNoOp) {
+    // IVIOBackend default implementation should not crash
+    // (tested via a backend that doesn't override it — use factory for Gazebo
+    //  but since we can't create Gazebo without HAVE_GAZEBO, just verify the
+    //  base class default doesn't crash)
+    SimulatedVIOBackend backend;
+    // This just verifies the method can be called — already tested above
+    backend.set_trajectory_target(1.0f, 2.0f, 3.0f, 0.5f);
+}
+
+// ═══════════════════════════════════════════════════════════
 // VIOHealth helpers
 // ═══════════════════════════════════════════════════════════
 

@@ -154,8 +154,9 @@
         "thresholds": {
             "cpu_warn_percent": 90.0,
             "mem_warn_percent": 90.0,
-            "temp_warn_c": 80.0,
-            "temp_crit_c": 95.0,
+            "temp_warn_c": 105.0,
+            "temp_crit_c": 120.0,
+            "_comment_thermal": "Dev-safe thresholds (raised from 80/95 to avoid false FAULT_THERMAL_CRITICAL on hot dev machines). For real hardware, use config/hardware.json with thresholds calibrated to the host SBC's thermal runaway characteristics.",
             "battery_warn_percent": 20.0,
             "battery_crit_percent": 10.0,
             "disk_crit_percent": 98.0

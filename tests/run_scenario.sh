@@ -513,7 +513,6 @@ with open(sys.argv[2], 'w') as f:
 PYEOF
         echo -e "  Fault sequence: ${FAULT_SEQ_FILE}"
         FAULT_INJECTOR_ARGS=("sequence" "$FAULT_SEQ_FILE")
-        [[ "$EFFECTIVE_IPC" != "shm" ]] && FAULT_INJECTOR_ARGS=("--ipc" "$EFFECTIVE_IPC" "${FAULT_INJECTOR_ARGS[@]}")
         "${FAULT_INJECTOR}" "${FAULT_INJECTOR_ARGS[@]}" 2>&1 | tee "${SCENARIO_LOG_DIR}/fault_injector.log"
         check "Fault injection sequence completed" $?
     else
@@ -527,7 +526,16 @@ fi
 
 # ── Phase 4: Collection window ────────────────────────────────
 check_deadline
-COLLECTION_TIME=5
+# Use remaining timeout budget for collection, reserving 5s for verification.
+# Floor at 3s to ensure some collection even when timeout is nearly exhausted.
+# This lets missions complete waypoint navigation within the scenario timeout.
+if [[ -n "$SCENARIO_TIMEOUT" && "$SCENARIO_TIMEOUT" -gt 0 ]] 2>/dev/null; then
+    _elapsed=$(( SECONDS - SCENARIO_START ))
+    _remaining=$(( SCENARIO_TIMEOUT - _elapsed - 5 ))
+    COLLECTION_TIME=$(( _remaining > 3 ? _remaining : 3 ))
+else
+    COLLECTION_TIME=5
+fi
 echo ""
 echo "Phase 4: Post-injection collection (${COLLECTION_TIME}s)..."
 sleep "$COLLECTION_TIME"

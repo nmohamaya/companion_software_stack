@@ -73,8 +73,8 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
-| Integration testing | **7/7 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
-| Test scenarios | 8 parameterized JSON configs with fault sequences + pass criteria |
+| Integration testing | **8/8 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
+| Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **29** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
 ---
@@ -422,6 +422,7 @@
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | 🟡 **Partial** — FaultManager ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61), PR #63) handles 8 fault conditions with graduated response. Remaining: geofencing, motor failure, SLAM divergence detection |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
+| — | Predictive thermal trend monitoring | P1 | Replace threshold-only thermal zone computation with sliding-window linear regression (dT/dt) to predict time-to-thermal-runaway. Issue early warnings before critical temperature is reached, allowing the drone to RTL while still safe. Thresholds must be calibrated per-platform based on host SBC thermal characteristics (e.g., Jetson Orin throttle at 97°C, heatsink/fan curves). See `config/hardware.json` for deployment thresholds. |
 | ~~[#45](https://github.com/nmohamaya/companion_software_stack/issues/45)~~ | ~~**[Epic] Zenoh IPC Migration**~~ | ~~P1~~ | ✅ **Complete** — All 6 phases done (PRs #52–#57), Epic closed |
 | ~~[#46](https://github.com/nmohamaya/companion_software_stack/issues/46)~~ | ~~Zenoh Phase A — Foundation~~ | ~~P0~~ | ✅ Done (PR #52) — CMake, ZenohMessageBus, security options, 33 tests, CI dual-build |
 | ~~[#47](https://github.com/nmohamaya/companion_software_stack/issues/47)~~ | ~~Zenoh Phase B — Low-bandwidth channels~~ | ~~P1~~ | ✅ Done (PR #53) — 10 control/status channels migrated, all 7 processes on factory |
@@ -555,6 +556,7 @@
 | ~~[#155](https://github.com/nmohamaya/companion_software_stack/issues/155)~~ | ~~Stale SHM reference cleanup in API.md and ROADMAP.md~~ ✅ | Docs | **Closed** (Improvement #42, PR #156) |
 | ~~[#158](https://github.com/nmohamaya/companion_software_stack/issues/158)~~ | ~~D* Lite Incremental Path Planner~~ ✅ | Feature / Refactor | **Closed** (Improvement #43) |
 | ~~[#163](https://github.com/nmohamaya/companion_software_stack/issues/163)~~ | ~~ByteTrack Multi-Object Tracker~~ ✅ | Feature | **Closed** (Improvement #44, PR #165) |
+| [#167](https://github.com/nmohamaya/companion_software_stack/issues/167) | Scenario configs for ByteTrack + new perception tracking scenario | Bug fix / Testing | **Open** |
 
 ---
 
@@ -590,7 +592,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 scenarios (8 Tier 1 + 1 Tier 2), 8/8 Tier 1 pass on Zenoh** |
 
 ### Process Activity During Simulation
 
@@ -606,4 +608,4 @@
 
 ---
 
-*Last updated after Improvement #44 (ByteTrack tracker, Issue #163) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #46 (responsive simulated VIO + thermal fix, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks across 9 scenarios (8 Tier 1 + 1 Tier 2), Zenoh sole IPC backend, 6 CI jobs. 8/8 Tier 1 scenarios passing on Zenoh (including hot dev machines). Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

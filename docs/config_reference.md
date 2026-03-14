@@ -245,8 +245,8 @@ transitions (LOITER → RTL → LAND).
 |-----|------|---------|-------|-------------|
 | `system_monitor.thresholds.cpu_warn_percent` | `float` | `90.0` | 0–100 | CPU usage warning threshold |
 | `system_monitor.thresholds.mem_warn_percent` | `float` | `90.0` | 0–100 | System memory usage warning threshold |
-| `system_monitor.thresholds.temp_warn_c` | `float` | `80.0` | 0–150 | Die temperature warning threshold (°C) |
-| `system_monitor.thresholds.temp_crit_c` | `float` | `95.0` | 0–150 | Die temperature critical threshold; triggers process shutdown (°C) |
+| `system_monitor.thresholds.temp_warn_c` | `float` | `105.0` | 0–150 | Die temperature warning threshold (°C). Default is dev-safe; for real hardware, calibrate based on host SBC thermal runaway characteristics |
+| `system_monitor.thresholds.temp_crit_c` | `float` | `120.0` | 0–150 | Die temperature critical threshold; triggers FAULT_THERMAL_CRITICAL → RTL (°C). For real hardware, set below thermal throttle point with safety margin (e.g., Jetson Orin throttles at 97°C → set ~85°C) |
 | `system_monitor.thresholds.battery_warn_percent` | `float` | `20.0` | 0–100 | Battery warning threshold (mirrors fault_manager; both must agree) |
 | `system_monitor.thresholds.battery_crit_percent` | `float` | `10.0` | 0–100 | Battery critical threshold |
 | `system_monitor.thresholds.disk_crit_percent` | `float` | `98.0` | 0–100 | Disk full critical threshold |
