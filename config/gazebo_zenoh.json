@@ -88,7 +88,8 @@
         "acceptance_radius_m": 2.0,
         "cruise_speed_mps": 3.0,
         "path_planner": {
-            "backend": "astar"
+            "backend": "dstar_lite",
+            "max_search_time_ms": 50
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"

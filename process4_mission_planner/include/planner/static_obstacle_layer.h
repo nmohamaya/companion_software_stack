@@ -3,9 +3,10 @@
 // collision detection, and unconfirmed approach warnings.
 //
 // Extracted from main.cpp as part of Issue #154.
+// Updated in Issue #158: AStarPathPlanner* → IGridPlanner*.
 #pragma once
 
-#include "planner/astar_planner.h"
+#include "planner/grid_planner_base.h"
 
 #include <chrono>
 #include <cmath>
@@ -28,9 +29,9 @@ struct StaticObstacleRecord {
 /// and unconfirmed approach warnings.
 class StaticObstacleLayer {
 public:
-    /// Load static obstacles from config JSON and populate A* grid if available.
+    /// Load static obstacles from config JSON and populate planner grid if available.
     template<typename Config>
-    void load(const Config& cfg, AStarPathPlanner* astar_planner) {
+    void load(const Config& cfg, IGridPlanner* grid_planner) {
         obstacles_.clear();
         auto obs_json = cfg.section("mission_planner.static_obstacles");
         if (obs_json.is_array() && !obs_json.empty()) {
@@ -38,20 +39,20 @@ public:
                 StaticObstacleRecord rec{o.value("x", 0.0f), o.value("y", 0.0f),
                                          o.value("radius_m", 0.75f), o.value("height_m", 3.0f)};
                 obstacles_.push_back(rec);
-                if (astar_planner)
-                    astar_planner->add_static_obstacle(rec.x, rec.y, rec.radius_m, rec.height_m);
+                if (grid_planner)
+                    grid_planner->add_static_obstacle(rec.x, rec.y, rec.radius_m, rec.height_m);
             }
-            spdlog::info("[HD-map] Loaded {} static obstacles into A* grid", obs_json.size());
+            spdlog::info("[HD-map] Loaded {} static obstacles into planner grid", obs_json.size());
         }
     }
 
     /// Load directly from a vector (for tests or programmatic use).
     void load(const std::vector<StaticObstacleRecord>& obstacles,
-              AStarPathPlanner*                        astar_planner = nullptr) {
+              IGridPlanner*                            grid_planner = nullptr) {
         obstacles_ = obstacles;
-        if (astar_planner) {
+        if (grid_planner) {
             for (const auto& obs : obstacles_) {
-                astar_planner->add_static_obstacle(obs.x, obs.y, obs.radius_m, obs.height_m);
+                grid_planner->add_static_obstacle(obs.x, obs.y, obs.radius_m, obs.height_m);
             }
         }
     }

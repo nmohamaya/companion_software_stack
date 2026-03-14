@@ -2,8 +2,10 @@
 // Unit tests for A* 3D Grid Path Planner (Phase 3).
 #include "planner/astar_planner.h"
 #include "planner/ipath_planner.h"
+#include "planner/planner_factory.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -333,4 +335,25 @@ TEST(GridCellHashTest, DifferentCellsDifferentHashes) {
 TEST(GridCellHashTest, SameCellSameHash) {
     GridCellHash h;
     EXPECT_EQ(h({3, 4, 5}), h({3, 4, 5}));
+}
+
+// ═════════════════════════════════════════════════════════════
+// A* timeout test (Issue #158)
+// ═════════════════════════════════════════════════════════════
+
+TEST(AStarSearchTest, MaxSearchTimeEnforced) {
+    OccupancyGrid3D grid(0.5f, 50.0f, 0.5f);
+    GridCell        start{0, 0, 0};
+    GridCell        goal{80, 80, 0};  // far goal to force many iterations
+
+    auto start_time = std::chrono::steady_clock::now();
+    auto result     = astar_search(grid, start, goal, 500000, 5.0f);  // 5ms timeout
+    auto elapsed_ms =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start_time)
+            .count();
+
+    // Should complete within reasonable time (well under the no-timeout case)
+    EXPECT_LT(elapsed_ms, 500.0f);
+    // Iterations should be limited by timeout, not max_iter
+    EXPECT_LT(result.iterations, 500000);
 }

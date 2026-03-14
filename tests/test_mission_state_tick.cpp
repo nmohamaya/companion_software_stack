@@ -2,6 +2,7 @@
 // Unit tests for MissionStateTick (Issue #154).
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
+#include "planner/planner_factory.h"
 
 #include <vector>
 
