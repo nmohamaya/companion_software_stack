@@ -51,8 +51,12 @@
    - [4.3 Conditional Compilation (`#ifdef`)](#43-conditional-compilation-ifdef)
    - [4.4 `fork` + `exec` — Process Management](#44-fork--exec--process-management)
    - [4.5 Exponential Backoff](#45-exponential-backoff)
-5. [Concept Map — Where Patterns Intersect](#5-concept-map--where-patterns-intersect)
-6. [Glossary](#6-glossary)
+5. [Safety-Critical C++ Standards](#5-safety-critical-c-standards)
+   - [5.1 Mandatory Constructs](#51-mandatory-constructs)
+   - [5.2 Forbidden Patterns](#52-forbidden-patterns)
+   - [5.3 Code Review Gate](#53-code-review-gate)
+6. [Concept Map — Where Patterns Intersect](#6-concept-map--where-patterns-intersect)
+7. [Glossary](#7-glossary)
 
 ---
 
@@ -1552,7 +1556,52 @@ This prevents one early crash from permanently consuming the retry budget.
 
 ---
 
-## 5. Concept Map — Where Patterns Intersect
+## 5. Safety-Critical C++ Standards
+
+This is a **safety-critical autonomous drone stack**. C++ correctness, ownership
+clarity, and memory safety are not optional — they are first-class requirements
+alongside functionality.
+
+### 5.1 Mandatory Constructs
+
+| Requirement | Rule |
+|-------------|------|
+| **Ownership** | Use `std::unique_ptr` for sole ownership. `std::shared_ptr` only when shared lifetime is genuinely required and justified. **Raw owning pointers (`T*` owning heap memory) are forbidden.** |
+| **Memory copies** | **`memcpy` / `memmove` / `memset` are forbidden** on safety- or functionally-relevant data. Use value semantics, structured bindings, or Zenoh's loan-based zero-copy API. |
+| **Interfaces** | Pass by `const T&` or `T&&`. Never pass raw pointers across API boundaries unless interfacing with a C library — and wrap immediately in RAII. |
+| **RAII** | All resources (file descriptors, threads, locks, timers) must be managed by RAII wrappers. No manual `new` / `delete`. |
+| **Error handling** | Use `Result<T,E>` (see §3.13). No exceptions. No silent swallowing of errors. All `[[nodiscard]]` results must be handled (see §3.14). |
+| **Concurrency** | Use `std::atomic` with explicit memory order (`acquire` / `release`). No ad-hoc `volatile` for synchronisation. Prefer lock-free ring buffers over mutexes for hot paths. |
+| **Integer arithmetic** | Use fixed-width types (`uint32_t`, `int16_t`, etc.) for protocol/wire data. Avoid implicit narrowing conversions. |
+| **Initialisation** | Always initialise variables at declaration. Eigen types must use `= Eigen::VectorXf::Zero()` / `= Eigen::MatrixXf::Zero()`. No uninitialised reads. |
+
+### 5.2 Forbidden Patterns
+
+The following are **forbidden** unless the code is explicitly non-safety and the
+rationale is documented in a comment:
+
+- `memcpy` / `memset` / `memmove` on safety-relevant structs
+- Raw owning pointers (`T* p = new T(...)`)
+- `std::shared_ptr` without a clear, justified shared-lifetime reason
+- `reinterpret_cast` on safety-relevant data
+- `static_cast` truncating values without a bounds check
+- Unbounded recursion
+- Global mutable state outside of explicitly documented singletons (e.g. `ZenohSession`)
+
+### 5.3 Code Review Gate
+
+When writing or reviewing any C++ code change, answer these four questions:
+
+1. **Is ownership explicit and leak-free?** Every heap allocation has exactly one responsible owner; destructors are deterministic.
+2. **Is there any raw memory manipulation that could be replaced with value semantics?** A `drone::ipc::Pose pose = other_pose;` copy is safer than `memcpy(&pose, &other_pose, sizeof(Pose))`.
+3. **Are all error paths handled?** No silent fallback, no unchecked `Result`, no `[[nodiscard]]` return ignored.
+4. **Would this code behave correctly under a use-after-free or data-race scenario?** If the answer requires thought, add a comment or restructure.
+
+> **Design rationale:** These rules exist because silent memory corruption in a flight-control thread produces undefined behaviour with potentially catastrophic outcome. The safety overhead is near-zero — `unique_ptr` has the same runtime cost as a raw pointer; `Result<T,E>` is a small stack-allocated value type (backed by `std::variant<T,E>` — size depends on `T`/`E` but always stack-resident with no separate heap allocation). The benefit is a compiler-enforced ownership graph and exhaustive error-path coverage.
+
+---
+
+## 6. Concept Map — Where Patterns Intersect
 
 The real power of these patterns is how they compose.  Here's how they
 connect in a single publish operation:
@@ -1598,7 +1647,7 @@ config.json          │                     │
 
 ---
 
-## 6. Glossary
+## 7. Glossary
 
 | Term | Definition |
 |------|-----------|

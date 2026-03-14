@@ -80,22 +80,22 @@ concurrency bugs at the cost of requiring each step to complete within the 100 m
 
 | Channel | Type | Source | Required |
 |---------|------|--------|----------|
-| `/slam_pose` | `ShmPose` | P3 (slam_vio_nav) | Yes |
-| `/detected_objects` | `ShmDetectedObjectList` | P2 (perception) | Yes |
-| `/fc_state` | `ShmFCState` | P5 (comms) | Yes |
-| `/gcs_commands` | `ShmGCSCommand` | P5 (comms) | Optional |
-| `/mission_upload` | `ShmMissionUpload` | P5 (comms) | Optional |
-| `/system_health` | `ShmSystemHealth` | P7 (system_monitor) | Optional |
+| `/slam_pose` | `drone::ipc::Pose` | P3 (slam_vio_nav) | Yes |
+| `/detected_objects` | `drone::ipc::DetectedObjectList` | P2 (perception) | Yes |
+| `/fc_state` | `drone::ipc::FCState` | P5 (comms) | Yes |
+| `/gcs_commands` | `drone::ipc::GCSCommand` | P5 (comms) | Optional |
+| `/mission_upload` | `drone::ipc::MissionUpload` | P5 (comms) | Optional |
+| `/system_health` | `drone::ipc::SystemHealth` | P7 (system_monitor) | Optional |
 
 ### Publications (outputs)
 
 | Channel | Type | Consumers |
 |---------|------|-----------|
-| `/trajectory_cmd` | `ShmTrajectoryCmd` | P5 (comms → FC) |
-| `/fc_commands` | `ShmFCCommand` | P5 (comms → FC) |
-| `/mission_status` | `ShmMissionStatus` | P5 (comms → GCS), P7 |
-| `/payload_commands` | `ShmPayloadCommand` | P6 (payload_manager) |
-| `/drone_thread_health_mission_planner` | `ShmThreadHealth` | P7 (system_monitor) |
+| `/trajectory_cmd` | `drone::ipc::TrajectoryCmd` | P5 (comms → FC) |
+| `/fc_commands` | `drone::ipc::FCCommand` | P5 (comms → FC) |
+| `/mission_status` | `drone::ipc::MissionStatus` | P5 (comms → GCS), P7 |
+| `/payload_commands` | `drone::ipc::PayloadCommand` | P6 (payload_manager) |
+| `/drone_thread_health_mission_planner` | `drone::ipc::ThreadHealth` | P7 (system_monitor) |
 
 ---
 
@@ -396,7 +396,7 @@ The planning loop runs at `mission_planner.update_rate_hz` (default 10 Hz):
 ```
 while (running) {
     1. Touch heartbeat + systemd watchdog
-    2. Read ShmPose, ShmDetectedObjectList, ShmFCState, ShmSystemHealth
+    2. Read drone::ipc::Pose, drone::ipc::DetectedObjectList, drone::ipc::FCState, drone::ipc::SystemHealth
     3. Pose staleness check (500ms threshold)
     4. Camera cross-check of HD-map obstacles
     5. Geofence check (airborne only, skip TAKEOFF)
@@ -409,7 +409,7 @@ while (running) {
                    check waypoint reached → advance or RTL
        - RTL: monitor position → LAND when near home (after min dwell)
        - LAND: monitor altitude → IDLE when < 0.5m
-    9. Publish ShmMissionStatus (state, progress, faults)
+    9. Publish drone::ipc::MissionStatus (state, progress, faults)
    10. Publish thread health at ~1 Hz
    11. Log diagnostics if warnings/errors
    12. Sleep for loop_sleep_ms
@@ -418,7 +418,7 @@ while (running) {
 
 ### FC Command Protocol
 
-FC commands are sent via `ShmFCCommand` with a monotonic `sequence_id` for deduplication.
+FC commands are sent via `drone::ipc::FCCommand` with a monotonic `sequence_id` for deduplication.
 Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 
 | Command | When |
