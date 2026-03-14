@@ -33,7 +33,7 @@ public:
 
 /// Factory: create a tracker from a backend name.
 /// Supported backends: "sort" (default), "bytetrack".
-/// Looks up "perception.tracker.backend" in cfg if provided.
+/// If cfg is non-null, backend-specific parameters are read from it.
 std::unique_ptr<ITracker> create_tracker(const std::string&   backend = "sort",
                                          const drone::Config* cfg     = nullptr);
 

@@ -5,6 +5,7 @@
         "description": "Navigate through an obstacle field using the A* path planner and 3D potential-field obstacle avoider. Tier 2 requires Gazebo SITL with the test_world.sdf obstacles.",
         "tier": 2,
         "timeout_s": 150,
+        "_comment_timeout": "Raised from 100s: D* Lite + 7 WPs through 6 obstacles needs ~120s in SITL",
         "requires_gazebo": true
     },
     "config_overrides": {
