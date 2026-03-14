@@ -23,6 +23,7 @@
 #include "slam/vio_types.h"
 #include "util/diagnostic.h"
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -35,7 +36,6 @@
 
 // ── Gazebo ground-truth headers (only when building with Gazebo support) ──
 #ifdef HAVE_GAZEBO
-#include <atomic>
 #include <mutex>
 
 #include <gz/msgs/odometry.pb.h>
@@ -65,6 +65,11 @@ public:
 
     /// Human-readable name for logging.
     [[nodiscard]] virtual std::string name() const = 0;
+
+    /// Set trajectory target for simulated navigation.
+    /// Only meaningful for simulated backends — real/Gazebo backends get pose
+    /// from actual sensors and ignore this. Default implementation is a no-op.
+    virtual void set_trajectory_target(float /*x*/, float /*y*/, float /*z*/, float /*yaw*/) {}
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -74,11 +79,14 @@ public:
 //   SimulatedFeatureExtractor → SimulatedStereoMatcher → ImuPreintegrator
 //
 // Pose generation:
-//   - Uses the same circular trajectory as the legacy SimulatedVisualFrontend
+//   - Steers toward the latest trajectory target set via set_trajectory_target().
+//   - When no target has been set, hovers at the initial position (0, 0, 0).
+//   - Uses first-order dynamics: position moves toward target at configurable
+//     speed (sim_speed_mps), clamped to not overshoot.
 //   - IMU pre-integration is computed and validated but the pose is
 //     generated independently (no actual fusion yet — that's Phase 2B)
-//   - This lets us validate the full pipeline plumbing and error handling
-//     before adding the optimizer
+//   - This lets Tier 1 scenarios validate actual waypoint navigation,
+//     mission completion, and RTL logic without Gazebo.
 //
 // Health transitions:
 //   INITIALIZING → NOMINAL after min_init_frames_ frames
@@ -89,12 +97,13 @@ public:
 class SimulatedVIOBackend final : public IVIOBackend {
 public:
     explicit SimulatedVIOBackend(StereoCalibration calib = {}, ImuNoiseParams imu_params = {},
-                                 uint64_t min_init_frames = 5)
+                                 uint64_t min_init_frames = 5, float sim_speed_mps = 3.0f)
         : calib_(calib)
         , preintegrator_(imu_params)
         , extractor_(std::make_unique<SimulatedFeatureExtractor>())
         , matcher_(std::make_unique<SimulatedStereoMatcher>(calib))
-        , min_init_frames_(min_init_frames) {}
+        , min_init_frames_(min_init_frames)
+        , sim_speed_mps_(sim_speed_mps) {}
 
     VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
                                        const std::vector<ImuSample>&  imu_samples) override {
@@ -180,10 +189,34 @@ public:
 
     [[nodiscard]] std::string name() const override { return "SimulatedVIOBackend"; }
 
+    void set_trajectory_target(float x, float y, float z, float yaw) override {
+        target_x_.store(x, std::memory_order_release);
+        target_y_.store(y, std::memory_order_release);
+        target_z_.store(z, std::memory_order_release);
+        target_yaw_.store(yaw, std::memory_order_release);
+        has_target_.store(true, std::memory_order_release);
+    }
+
 private:
-    // ── Simulated pose generation (same as legacy frontend) ──
-    Pose generate_simulated_pose(uint64_t seq) {
-        double t = static_cast<double>(seq) * 0.033;  // ~30Hz
+    // ── Simulated pose generation (target-following dynamics) ──
+    Pose generate_simulated_pose(uint64_t /*seq*/) {
+        constexpr double dt = 0.033;  // ~30Hz frame rate
+
+        // Read current target (set by P4 trajectory commands via P3 main)
+        if (has_target_.load(std::memory_order_acquire)) {
+            Eigen::Vector3d target(target_x_.load(std::memory_order_acquire),
+                                   target_y_.load(std::memory_order_acquire),
+                                   target_z_.load(std::memory_order_acquire));
+
+            Eigen::Vector3d dir  = target - current_pos_;
+            double          dist = dir.norm();
+            if (dist > 0.01) {
+                double step = std::min(static_cast<double>(sim_speed_mps_) * dt, dist);
+                current_pos_ += dir.normalized() * step;
+            }
+            current_yaw_ = static_cast<double>(target_yaw_.load(std::memory_order_acquire));
+        }
+        // If no target set yet, stay at current_pos_ (initially 0,0,0)
 
         Pose p;
         // Use steady_clock so the timestamp is in the same epoch as
@@ -191,13 +224,11 @@ private:
         p.timestamp =
             std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
                 .count();
-        p.position    = Eigen::Vector3d(5.0 * std::cos(t * 0.5) + noise_(rng_),
-                                        5.0 * std::sin(t * 0.5) + noise_(rng_),
-                                        2.0 + 0.1 * std::sin(t) + noise_(rng_));
-        double yaw    = t * 0.5 + M_PI / 2.0;
-        p.orientation = Eigen::Quaterniond(Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()));
-        p.covariance  = Eigen::Matrix<double, 6, 6>::Identity() * 0.01;
-        p.quality     = 2;  // good
+        p.position = current_pos_ + Eigen::Vector3d(noise_(rng_), noise_(rng_), noise_(rng_));
+        p.orientation =
+            Eigen::Quaterniond(Eigen::AngleAxisd(current_yaw_, Eigen::Vector3d::UnitZ()));
+        p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.01;
+        p.quality    = 2;  // good
         return p;
     }
 
@@ -241,6 +272,16 @@ private:
     uint64_t                         frame_count_ = 0;
     std::mt19937                     rng_{42};
     std::normal_distribution<double> noise_{0.0, 0.01};
+    float                            sim_speed_mps_;
+
+    // ── Target-following state (set from trajectory commands) ──
+    std::atomic<float> target_x_{0.0f};
+    std::atomic<float> target_y_{0.0f};
+    std::atomic<float> target_z_{0.0f};
+    std::atomic<float> target_yaw_{0.0f};
+    std::atomic<bool>  has_target_{false};
+    Eigen::Vector3d    current_pos_ = Eigen::Vector3d::Zero();
+    double             current_yaw_ = 0.0;
 
     // ── Thresholds ──────────────────────────────────────────
     static constexpr int kMinFeaturesNominal = 30;
@@ -386,10 +427,10 @@ private:
 inline std::unique_ptr<IVIOBackend> create_vio_backend(
     const std::string& backend = "simulated", const StereoCalibration& calib = {},
     const ImuNoiseParams& imu_params = {},
-    const std::string&    gz_topic   = "/model/x500_companion_0/odometry") {
+    const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f) {
 
     if (backend == "simulated") {
-        return std::make_unique<SimulatedVIOBackend>(calib, imu_params);
+        return std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps);
     }
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {

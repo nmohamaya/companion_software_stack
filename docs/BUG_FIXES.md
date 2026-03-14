@@ -1166,3 +1166,37 @@ header removals in PR #151.
 validation at startup with a clear error message.
 
 **Found by:** Post-merge audit of PR #151 remnants.
+
+---
+
+### Bug #32 — Scenario 09 Thermal Override at Wrong Config Nesting Level
+
+**Date discovered:** 2026-03-14
+**Severity:** High
+**Status:** FIXED (Issue #167)
+**Files:** `config/scenarios/09_perception_tracking.json`, `config/default.json`
+
+**Bug:** Scenario 09's `config_overrides` placed `temp_warn_c` and `temp_crit_c` directly under `system_monitor`, but `process7_system_monitor/src/main.cpp` reads them from `system_monitor.thresholds.temp_warn_c`. The deep-merge in `run_scenario.sh` correctly merged the dicts, but the orphaned keys at the wrong nesting level were silently ignored. On hot dev machines (CPU at 99°C), the default 95°C threshold triggered `FAULT_THERMAL_CRITICAL` → RTL before mission completion.
+
+**Root Cause:** Same root cause as Fix #38 (scenario 07). The config override schema must match the full nesting path. The scenario runner's deep merge doesn't validate that overridden keys are actually read by any process.
+
+**Fix:** Raised `default.json` thresholds to 105/120°C (matching `gazebo_sitl.json`) since `default.json` is the dev/simulation base config. Removed the scenario 09 override entirely. Added documentation notes in `config/hardware.json`, `config/default.json`, and `docs/config_reference.md` that real hardware thresholds must be calibrated per-platform based on thermal runaway characteristics.
+
+**Found by:** Investigating why scenario 09 failed with `FAULT_THERMAL_CRITICAL` despite having thermal overrides in config.
+
+---
+
+### Bug #33 — Scenario Runner Hardcoded 5s Collection Window Insufficient for Mission Completion
+
+**Date discovered:** 2026-03-14
+**Severity:** Medium
+**Status:** FIXED (Issue #167)
+**File:** `tests/run_scenario.sh`
+
+**Bug:** After fault injection (Phase 3), the scenario runner waited a hardcoded 5 seconds for Phase 4 collection. With the responsive VIO changes, waypoints were actually reached, but the mission couldn't complete within 5 seconds. The runner would kill the stack and check logs before mission FSM transitioned through all waypoints.
+
+**Root Cause:** The 5-second window was originally adequate because the simulated VIO traced a fixed circular path (no waypoint navigation), so the "Mission complete" check was never in pass_criteria. With responsive VIO, missions actually run and need the full timeout.
+
+**Fix:** Changed Phase 4 collection to use the remaining timeout budget: `remaining = timeout - elapsed - 5s` (5s reserved for cleanup). Minimum 5 seconds maintained as a floor.
+
+**Found by:** Scenario 09 passed all checks except "Mission complete" — waypoints were reached but the runner killed the stack too early.

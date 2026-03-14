@@ -158,6 +158,7 @@
             "mem_warn_percent": 85.0,
             "temp_warn_c": 75.0,
             "temp_crit_c": 90.0,
+            "_comment_thermal": "IMPORTANT: These thresholds must be calibrated per-platform based on the host SBC's thermal runaway characteristics. Jetson Orin thermal throttle starts at 97°C; these values must include safety margin. See ROADMAP.md for planned predictive thermal trend monitoring.",
             "battery_warn_percent": 25.0,
             "battery_crit_percent": 15.0,
             "disk_crit_percent": 95.0

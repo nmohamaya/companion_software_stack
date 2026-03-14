@@ -422,6 +422,7 @@
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | 🟡 **Partial** — FaultManager ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61), PR #63) handles 8 fault conditions with graduated response. Remaining: geofencing, motor failure, SLAM divergence detection |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
+| — | Predictive thermal trend monitoring | P1 | Replace threshold-only thermal zone computation with sliding-window linear regression (dT/dt) to predict time-to-thermal-runaway. Issue early warnings before critical temperature is reached, allowing the drone to RTL while still safe. Thresholds must be calibrated per-platform based on host SBC thermal characteristics (e.g., Jetson Orin throttle at 97°C, heatsink/fan curves). See `config/hardware.json` for deployment thresholds. |
 | ~~[#45](https://github.com/nmohamaya/companion_software_stack/issues/45)~~ | ~~**[Epic] Zenoh IPC Migration**~~ | ~~P1~~ | ✅ **Complete** — All 6 phases done (PRs #52–#57), Epic closed |
 | ~~[#46](https://github.com/nmohamaya/companion_software_stack/issues/46)~~ | ~~Zenoh Phase A — Foundation~~ | ~~P0~~ | ✅ Done (PR #52) — CMake, ZenohMessageBus, security options, 33 tests, CI dual-build |
 | ~~[#47](https://github.com/nmohamaya/companion_software_stack/issues/47)~~ | ~~Zenoh Phase B — Low-bandwidth channels~~ | ~~P1~~ | ✅ Done (PR #53) — 10 control/status channels migrated, all 7 processes on factory |
@@ -607,4 +608,4 @@
 
 ---
 
-*Last updated after Improvement #45 (scenario ByteTrack updates, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 96 scenario checks across 9 scenarios, Zenoh sole IPC backend, 6 CI jobs. 8/8 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #46 (responsive simulated VIO + thermal fix, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 96 scenario checks across 9 scenarios, Zenoh sole IPC backend, 6 CI jobs. 9/9 Tier 1 scenarios passing on Zenoh (including hot dev machines). Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

@@ -57,9 +57,9 @@
         "log_contains": [
             "backend: bytetrack",
             "TAKEOFF",
-            "EXECUTING"
+            "EXECUTING",
+            "Mission complete"
         ],
-        "_comment_pass_criteria": "No 'Mission complete' check — simulated VIO traces a fixed circular path and never reaches waypoints. Tier 2 (Gazebo) scenarios can assert mission completion.",
         "log_must_not_contain": [
             "FAULT_BATTERY_RTL",
             "FAULT_FC_LINK_LOST",
