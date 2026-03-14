@@ -40,9 +40,9 @@ Key responsibilities:
 
 | Thread | Rate | Direction | Description |
 |--------|------|-----------|-------------|
-| `fc_rx_thread` | 10 Hz | FC → Bus | Polls `IFCLink::receive_state()`, publishes `ShmFCState`, applies fault overrides |
+| `fc_rx_thread` | 10 Hz | FC → Bus | Polls `IFCLink::receive_state()`, publishes `drone::ipc::FCState`, applies fault overrides |
 | `fc_tx_thread` | 20 Hz | Bus → FC | Subscribes to trajectory + FC commands, deduplicates, sends to FC |
-| `gcs_rx_thread` | 2 Hz | GCS → Bus | Polls `IGCSLink::poll_command()`, publishes `ShmGCSCommand` / `ShmMissionUpload` |
+| `gcs_rx_thread` | 2 Hz | GCS → Bus | Polls `IGCSLink::poll_command()`, publishes `drone::ipc::GCSCommand` / `drone::ipc::MissionUpload` |
 | `gcs_tx_thread` | 2 Hz | Bus → GCS | Subscribes to pose + mission status + FC state, sends telemetry to GCS |
 | Main thread | 1 Hz | — | Health log + `ThreadHealthPublisher` + systemd watchdog notify |
 
@@ -58,8 +58,8 @@ Key responsibilities:
 │  │ (HAL)    │             │(10 Hz) │       │(2 Hz)    │  IGCSLink  │
 │  │          │             └───┬────┘       └───┬──────┘  (HAL)     │
 │  │          │                 │                 │                    │
-│  │          │           ShmFCState        ShmGCSCommand             │
-│  │          │           (publish)        ShmMissionUpload           │
+│  │          │           drone::ipc::FCState        drone::ipc::GCSCommand             │
+│  │          │           (publish)        drone::ipc::MissionUpload           │
 │  │          │                                  (publish)            │
 │  │          │                                                       │
 │  │          │  send_*     ┌────────┐       ┌──────────┐ send_telem │
@@ -67,9 +67,9 @@ Key responsibilities:
 │  │          │◄──traj──────│(20 Hz) │       │(2 Hz)    │  IGCSLink  │
 │  └──────────┘             └───┬────┘       └───┬──────┘            │
 │                               │                 │                   │
-│                         ShmTrajectoryCmd   ShmPose                  │
-│                         ShmFCCommand       ShmMissionStatus         │
-│                           (subscribe)      ShmFCState               │
+│                         drone::ipc::TrajectoryCmd   drone::ipc::Pose                  │
+│                         drone::ipc::FCCommand       drone::ipc::MissionStatus         │
+│                           (subscribe)      drone::ipc::FCState               │
 │                                              (subscribe)            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -82,21 +82,21 @@ Key responsibilities:
 
 | Channel | Type | Source | Thread |
 |---------|------|--------|--------|
-| `/trajectory_cmd` | `ShmTrajectoryCmd` | P4 | fc_tx |
-| `/fc_commands` | `ShmFCCommand` | P4 | fc_tx |
-| `/slam_pose` | `ShmPose` | P3 | gcs_tx |
-| `/mission_status` | `ShmMissionStatus` | P4 | gcs_tx |
-| `/fc_state` | `ShmFCState` | Self (fc_rx) | gcs_tx |
-| `/fault_overrides` | `ShmFaultOverrides` | Test harness | fc_rx |
+| `/trajectory_cmd` | `drone::ipc::TrajectoryCmd` | P4 | fc_tx |
+| `/fc_commands` | `drone::ipc::FCCommand` | P4 | fc_tx |
+| `/slam_pose` | `drone::ipc::Pose` | P3 | gcs_tx |
+| `/mission_status` | `drone::ipc::MissionStatus` | P4 | gcs_tx |
+| `/fc_state` | `drone::ipc::FCState` | Self (fc_rx) | gcs_tx |
+| `/fault_overrides` | `drone::ipc::FaultOverrides` | Test harness | fc_rx |
 
 ### Publications (outputs)
 
 | Channel | Type | Consumers | Thread |
 |---------|------|-----------|--------|
-| `/fc_state` | `ShmFCState` | P4, P7 | fc_rx |
-| `/gcs_commands` | `ShmGCSCommand` | P4 | gcs_rx |
-| `/mission_upload` | `ShmMissionUpload` | P4 | gcs_rx |
-| `/drone_thread_health_comms` | `ShmThreadHealth` | P7 | main |
+| `/fc_state` | `drone::ipc::FCState` | P4, P7 | fc_rx |
+| `/gcs_commands` | `drone::ipc::GCSCommand` | P4 | gcs_rx |
+| `/mission_upload` | `drone::ipc::MissionUpload` | P4 | gcs_rx |
+| `/drone_thread_health_comms` | `drone::ipc::ThreadHealth` | P7 | main |
 
 ---
 
