@@ -6,16 +6,17 @@
 #include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/zenoh_liveliness.h"
-#include "planner/astar_planner.h"
 #include "planner/fault_manager.h"
 #include "planner/fault_response_executor.h"
 #include "planner/gcs_command_handler.h"
 #include "planner/geofence.h"
+#include "planner/grid_planner_base.h"
 #include "planner/iobstacle_avoider.h"
 #include "planner/ipath_planner.h"
 #include "planner/mission_fsm.h"
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
+#include "planner/planner_factory.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
@@ -158,13 +159,30 @@ int main(int argc, char* argv[]) {
 
     auto planner_backend = cfg.get<std::string>("mission_planner.path_planner.backend",
                                                 "potential_field");
-    auto path_planner    = drone::planner::create_path_planner(planner_backend);
+    drone::planner::GridPlannerConfig planner_cfg;
+    planner_cfg.resolution_m       = cfg.get<float>("mission_planner.path_planner.resolution_m",
+                                                    planner_cfg.resolution_m);
+    planner_cfg.grid_extent_m      = cfg.get<float>("mission_planner.path_planner.grid_extent_m",
+                                                    planner_cfg.grid_extent_m);
+    planner_cfg.inflation_radius_m = cfg.get<float>(
+        "mission_planner.path_planner.inflation_radius_m", planner_cfg.inflation_radius_m);
+    planner_cfg.replan_interval_s = cfg.get<float>("mission_planner.path_planner.replan_interval_s",
+                                                   planner_cfg.replan_interval_s);
+    planner_cfg.path_speed_mps    = cfg.get<float>("mission_planner.path_planner.path_speed_mps",
+                                                   planner_cfg.path_speed_mps);
+    planner_cfg.smoothing_alpha   = cfg.get<float>("mission_planner.path_planner.smoothing_alpha",
+                                                   planner_cfg.smoothing_alpha);
+    planner_cfg.max_iterations    = cfg.get<int>("mission_planner.path_planner.max_iterations",
+                                                 planner_cfg.max_iterations);
+    planner_cfg.max_search_time_ms = cfg.get<float>(
+        "mission_planner.path_planner.max_search_time_ms", planner_cfg.max_search_time_ms);
+    auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
-    auto* astar_planner = dynamic_cast<drone::planner::AStarPathPlanner*>(path_planner.get());
+    auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
 
     // ── HD-map static obstacles ─────────────────────────────
     StaticObstacleLayer obstacle_layer;
-    obstacle_layer.load(cfg, astar_planner);
+    obstacle_layer.load(cfg, grid_planner);
 
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
@@ -320,7 +338,7 @@ int main(int argc, char* argv[]) {
                             state_tick.flight_state(), diag);
 
         // ── 8. State tick ───────────────────────────────────
-        state_tick.tick(fsm, pose, fc_state, objects, *path_planner, astar_planner, *avoider,
+        state_tick.tick(fsm, pose, fc_state, objects, *path_planner, grid_planner, *avoider,
                         obstacle_layer, *traj_pub, *payload_pub, send_fc,
                         gcs_handler.active_correlation_id(), diag);
 

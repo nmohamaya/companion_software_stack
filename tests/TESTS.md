@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [P2 — Perception](#p2--perception) | 4 | 113 | Kalman tracker (Munkres), fusion (UKF+camera), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 6 | 66 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 90 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, A* planner, D* Lite planner |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -114,7 +114,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **40 C++ + 4 shell** | **880 + 42 + 80** | |
+| **Total** | **42 C++ + 4 shell** | **904 + 42 + 80** | |
 
 ---
 
@@ -428,6 +428,42 @@ states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
 | `MissionStateTickTest` | 10 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard |
 
 **Key files under test:** `planner/mission_state_tick.h`
+
+---
+
+### test_astar_planner.cpp — 20 tests
+
+**What it tests:** A* 3D grid path planner — occupancy grid, A* search algorithm,
+`AStarPathPlanner` (IPathPlanner implementation), factory registration, wall-clock timeout.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `OccupancyGrid3DTest` | 6 | Empty grid, world↔grid round-trip, in-bounds check, obstacle inflation, low-confidence skip, clear resets |
+| `AStarSearchTest` | 8 | Trivial start=goal, straight line, 3D obstacle detour, unreachable goal, blocked start BFS escape, out-of-bounds goal, max iterations limit, diagonal world coords, wall-clock timeout |
+| `AStarPathPlannerTest` | 3 | Plan returns valid cmd, fallback when blocked (goal snap), name check, grid accessor, cached path accessor |
+| `PathPlannerFactory` | 2 | A* backend registered, unknown throws |
+| `GridCellHashTest` | 2 | Different cells → different hashes, same cell → same hash |
+
+**Key files under test:** `planner/astar_planner.h`, `planner/occupancy_grid_3d.h`, `planner/planner_factory.h`
+
+---
+
+### test_dstar_lite_planner.cpp — 23 tests
+
+**What it tests:** D* Lite incremental path planner — change tracking in occupancy grid,
+D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLitePlanner`
+(IPathPlanner implementation) integration.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `ChangeTrackingTest` | 4 | New cell insertions recorded, expired cells recorded, drain clears buffer, static obstacle changes tracked |
+| `DStarLiteSearchTest` | 6 | Trivial start=goal, straight line path, 3D obstacle detour, unreachable goal → direct fallback, blocked start BFS escape, out-of-bounds goal |
+| `DStarLiteIncrementalTest` | 4 | New obstacle on path triggers replan (no occupied waypoints), obstacle removed shortens path, goal change reinitialises, drone movement updates km |
+| `DStarLiteTimeoutTest` | 2 | Max search time enforced, fallback on timeout |
+| `DStarLiteIntegrationTest` | 6 | Plan returns valid cmd, goal snapping works, EMA smoothing, speed ramping near target, update obstacles integration, factory registered |
+| `DStarLiteNameTest` | 1 | Name is "DStarLitePlanner" |
+
+**Key files under test:** `planner/dstar_lite_planner.h`, `planner/occupancy_grid_3d.h`, `planner/grid_planner_base.h`, `planner/planner_factory.h`
 
 ---
 
@@ -944,7 +980,7 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | Scenario | Tier | Gazebo | Checks | Description |
 |----------|------|--------|--------|-------------|
 | 01 — Nominal Mission | 1 | No | 22 | 4-waypoint rectangular flight, no faults; verifies all 7 processes alive + 5 SHM segments |
-| 02 — Obstacle Avoidance | 2 | Yes | 14 | HD-map two-layer A* planner navigates 7-WP obstacle field with proximity collision detection |
+| 02 — Obstacle Avoidance | 2 | Yes | 14 | HD-map two-layer D* Lite planner navigates 7-WP obstacle field with proximity collision detection |
 | 03 — Battery Degradation | 1 | No | 5 | 3-tier battery escalation (WARN→RTL→CRIT) |
 | 04 — FC Link Loss | 1 | No | 5 | FC disconnect → LOITER → RTL contingency |
 | 05 — Geofence Breach | 1 | No | 5 | Tight geofence polygon → RTL on violation (WP4 exits eastern boundary) |
@@ -1037,4 +1073,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 880 unit tests across 46 suites in 40 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #154: 4 new test files for P4 Mission Planner refactor (StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick).*
+*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp).*

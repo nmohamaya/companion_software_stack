@@ -71,7 +71,8 @@
         "landed_altitude_m": 0.5,
         "rtl_min_dwell_seconds": 5,
         "path_planner": {
-            "backend": "astar"
+            "backend": "dstar_lite",
+            "max_search_time_ms": 50
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"

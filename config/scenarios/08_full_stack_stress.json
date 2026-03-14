@@ -23,7 +23,7 @@
         "mission_planner": {
             "update_rate_hz": 20,
             "takeoff_altitude_m": 5.0,
-            "path_planner": {"backend": "astar"},
+            "path_planner": {"backend": "dstar_lite"},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "waypoints": [
                 {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 3.0, "payload_trigger": false},

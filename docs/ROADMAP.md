@@ -51,8 +51,8 @@
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
-| Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (A* planner + 3D avoidance + HD-map) |
-| Autonomous flight | ARM → Takeoff → Navigate 7 WPs (A* + 3D avoidance) → RTL → Land → Disarm |
+| Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (D* Lite planner + 3D avoidance + HD-map) |
+| Autonomous flight | ARM → Takeoff → Navigate 7 WPs (D* Lite + 3D avoidance) → RTL → Land → Disarm |
 | CI | GitHub Actions — 5-job pipeline: format gate + 3-leg build matrix (sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
 | Line coverage | **75.1%** (lcov) |
 | Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
@@ -69,7 +69,7 @@
 | Thread watchdog | **ThreadHeartbeat + ThreadWatchdog** — per-thread stuck detection via atomics |
 | Process watchdog | **ProcessManager** — fork+exec, dependency graph, exponential backoff |
 | Observability | JSON logging + IPC latency histograms + cross-process correlation IDs |
-| Planning | **A* 3D grid planner** + 3D obstacle avoidance + potential field fallback |
+| Planning | **D* Lite incremental planner** + A* 3D grid planner + 3D obstacle avoidance + potential field fallback |
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
@@ -553,6 +553,7 @@
 | *(fault_injector shm_unlink fix)* | ~~fault_injector shm_unlink on exit breaks subsequent runs~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
 | ~~[#154](https://github.com/nmohamaya/companion_software_stack/issues/154)~~ | ~~P4 Mission Planner: Extract 4 classes from main.cpp~~ ✅ | Refactor | **Closed** (Improvement #41, PR #157) |
 | ~~[#155](https://github.com/nmohamaya/companion_software_stack/issues/155)~~ | ~~Stale SHM reference cleanup in API.md and ROADMAP.md~~ ✅ | Docs | **Closed** (Improvement #42, PR #156) |
+| ~~[#158](https://github.com/nmohamaya/companion_software_stack/issues/158)~~ | ~~D* Lite Incremental Path Planner~~ ✅ | Feature / Refactor | **Closed** (Improvement #43) |
 
 ---
 
@@ -585,7 +586,7 @@
 | Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | **enforced** |
 | Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | **ThreadHeartbeat + ThreadWatchdog** |
 | Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | **systemd + ProcessManager** |
-| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **A* 3D + potential field** |
+| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
 | Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅** |
@@ -604,4 +605,4 @@
 
 ---
 
-*Last updated after Improvement #42 (API.md/ROADMAP.md SHM doc cleanup, Issue #155) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 880 tests, 46 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #43 (D* Lite incremental planner, Issue #158) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 904 tests, 48 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

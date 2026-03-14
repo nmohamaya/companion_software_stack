@@ -3,12 +3,13 @@
 // Handles PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND state transitions.
 //
 // Extracted from main.cpp as part of Issue #154.
+// Updated in Issue #158: AStarPathPlanner* → IGridPlanner*.
 #pragma once
 
 #include "ipc/ipc_types.h"
 #include "ipc/ipublisher.h"
-#include "planner/astar_planner.h"
 #include "planner/gcs_command_handler.h"
+#include "planner/grid_planner_base.h"
 #include "planner/iobstacle_avoider.h"
 #include "planner/ipath_planner.h"
 #include "planner/mission_fsm.h"
@@ -41,7 +42,7 @@ public:
     /// Execute one tick of the state machine.
     void tick(MissionFSM& fsm, const drone::ipc::Pose& pose, const drone::ipc::FCState& fc_state,
               const drone::ipc::DetectedObjectList& objects, IPathPlanner& planner,
-              AStarPathPlanner* astar_planner, IObstacleAvoider& avoider,
+              IGridPlanner* grid_planner, IObstacleAvoider& avoider,
               StaticObstacleLayer&                                obstacle_layer,
               drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>&  traj_pub,
               drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
@@ -51,7 +52,7 @@ public:
             case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
             case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;
             case MissionState::NAVIGATE:
-                tick_navigate(fsm, pose, fc_state, objects, planner, astar_planner, avoider,
+                tick_navigate(fsm, pose, fc_state, objects, planner, grid_planner, avoider,
                               obstacle_layer, traj_pub, payload_pub, send_fc, correlation_id, diag);
                 break;
             case MissionState::RTL: tick_rtl(fsm, pose, fc_state, send_fc); break;
@@ -133,7 +134,7 @@ private:
     void tick_navigate(MissionFSM& fsm, const drone::ipc::Pose& pose,
                        const drone::ipc::FCState&            fc_state,
                        const drone::ipc::DetectedObjectList& objects, IPathPlanner& planner,
-                       AStarPathPlanner* astar_planner, IObstacleAvoider& avoider,
+                       IGridPlanner* grid_planner, IObstacleAvoider& avoider,
                        StaticObstacleLayer&                                obstacle_layer,
                        drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>&  traj_pub,
                        drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
@@ -154,10 +155,10 @@ private:
             obstacle_layer.check_collision(px, py, pz, std::chrono::steady_clock::now());
         }
 
-        // Update A* obstacle grid
-        if (astar_planner) {
-            drone::util::ScopedDiagTimer t(diag, "AStarGridUpdate");
-            astar_planner->update_obstacles(objects, pose);
+        // Update planner obstacle grid
+        if (grid_planner) {
+            drone::util::ScopedDiagTimer t(diag, "GridUpdate");
+            grid_planner->update_obstacles(objects, pose);
         }
 
         // Warn about approaching unconfirmed obstacles
@@ -175,9 +176,9 @@ private:
                 drone::util::ScopedDiagTimer t(diag, "PathPlan");
                 return planner.plan(pose, *wp);
             }();
-            if (astar_planner && astar_planner->using_direct_fallback()) {
+            if (grid_planner && grid_planner->using_direct_fallback()) {
                 diag.add_warning("PathPlan",
-                                 "A* fallback: no obstacle-free path — using direct line");
+                                 "Planner fallback: no obstacle-free path — using direct line");
             }
             auto traj = [&]() {
                 drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");

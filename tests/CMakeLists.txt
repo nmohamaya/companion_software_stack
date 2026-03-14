@@ -217,5 +217,8 @@ add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
 # ── Fault Response Executor tests (Issue #154) ─────────────
 add_drone_test(test_fault_response_executor test_fault_response_executor.cpp)
 
+# ── D* Lite Path Planner tests (Issue #158) ────────────────
+add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
+
 # ── Mission State Tick tests (Issue #154) ──────────────────
 add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)
