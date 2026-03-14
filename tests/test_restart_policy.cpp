@@ -251,13 +251,14 @@ TEST(ProcessConfig, FromJsonThermalGateClampedToFour) {
 
 TEST(ProcessConfig, LoadFromDefaultJsonFile) {
     // Load the actual default.json if available
-    std::ifstream ifs("config/default.json");
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    std::ifstream ifs(config_path);
     if (!ifs.is_open()) {
-        // Try from build directory
-        ifs.open("../config/default.json");
-    }
-    if (!ifs.is_open()) {
-        GTEST_SKIP() << "config/default.json not found";
+        GTEST_SKIP() << "config/default.json not found at " << config_path;
     }
 
     auto data = nlohmann::json::parse(ifs);

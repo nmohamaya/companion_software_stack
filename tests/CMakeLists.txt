@@ -72,6 +72,9 @@ add_drone_test(test_config          test_config.cpp)
 
 # ── Config validator tests ───────────────────────────────────
 add_drone_test(test_config_validator test_config_validator.cpp)
+target_compile_definitions(test_config_validator PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
 
 # ── Result<T,E> type tests ───────────────────────────────────
 add_drone_test(test_result          test_result.cpp)
@@ -147,6 +150,9 @@ add_dependencies(test_process_manager test_crasher)
 
 # ── Restart Policy tests (Phase 4) ──────────────────────────
 add_drone_test(test_restart_policy  test_restart_policy.cpp)
+target_compile_definitions(test_restart_policy PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
 
 # ── Process Graph tests (Phase 4) ───────────────────────────
 add_drone_test(test_process_graph   test_process_graph.cpp)

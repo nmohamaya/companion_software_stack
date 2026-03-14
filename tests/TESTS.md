@@ -336,15 +336,15 @@ synthetic test images with known colored rectangles.
 ### test_opencv_yolo_detector.cpp — 24 tests
 
 **What it tests:** `OpenCvYoloDetector` (YOLOv8-nano via OpenCV DNN) and the
-YOLO factory.  COCO mapping tests always compile; inference tests require a
-model file.
+YOLO factory.  COCO mapping tests always compile; inference tests now enabled
+with model file `models/yolov8n.onnx` (13 MB, copied from companion_software_stack).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `CocoMappingTest` | 6 | COCO class ID → `ObjectClass` enum mapping (person, car, truck, etc.) |
-| `YoloModelTest` | 4 | Model loading, input tensor shape, backend selection |
-| `OpenCvYoloDetectorTest` | 8 | Inference on synthetic images, NMS, confidence thresholds |
-| `YoloFactoryTest` | 6 | Factory creation for `"yolov8"` backend with config |
+| `YoloModelTest` | 6 | Model loading, black/colored/gradient image detection, high confidence threshold reduces detections |
+| `OpenCvYoloDetectorTest` | 8 | Inference on synthetic images, NMS, confidence thresholds, config construction |
+| `YoloFactoryTest` | 4 | Factory creation for `"yolov8"` backend with config |
 
 **Key files under test:** `perception/opencv_yolo_detector.h`, `perception/detector_interface.h`
 
@@ -686,7 +686,7 @@ Issue #92).  Three components:
 | | `FromJsonPartialConfig` | Partial JSON with only some fields → correct merge | Selective override without breaking defaults |
 | | `FromJsonEmptyArrays` | Empty `launch_after` / `restart_cascade` arrays → empty vectors | Edge case: explicit empty arrays |
 | | `FromJsonInvalidArrayElementsIgnored` | Non-string elements in arrays → silently skipped | Robustness against bad config data |
-| | `LoadFromDefaultJsonFile` | Loads `config/default.json`, validates comms=critical, slam=critical, video=non-critical | Integration: real config matches expectations (skips if file not found) |
+| | `LoadFromDefaultJsonFile` | Loads `config/default.json`, validates comms=critical, slam=critical, video=non-critical | Integration: real config matches expectations (absolute path via PROJECT_CONFIG_DIR compile definition) |
 
 **Key files under test:** `util/restart_policy.h`
 
@@ -768,11 +768,12 @@ graph where:
 ### test_config_validator.cpp — 22 tests
 
 **What it tests:** `ConfigSchema` startup-time config validation with
-builder-pattern constraints.
+builder-pattern constraints. Includes real config validation test
+(`DefaultConfigPassesAllSchemas`) using absolute path resolution.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `ConfigValidatorTest` | 22 | Required field missing → error, type mismatch → error, range constraint (`.range()`), one-of constraint (`.one_of()`), custom predicate (`.satisfies()`), optional fields, required sections, valid config passes, multiple errors collected in single pass, pre-built process schemas |
+| `ConfigValidatorTest` | 22 | Required field missing → error, type mismatch → error, range constraint (`.range()`), one-of constraint (`.one_of()`), custom predicate (`.satisfies()`), optional fields, required sections, **default.json validates against all schemas** (absolute path via PROJECT_CONFIG_DIR), multiple errors collected in single pass, pre-built process schemas |
 
 **Key files under test:** `util/config_validator.h`
 
@@ -1059,7 +1060,7 @@ is not available.
 | `HAVE_ZENOH` | `test_zenoh_ipc`, `test_zenoh_liveliness`, `test_zenoh_network` | Zenoh C++ 1.7.2 |
 | `HAVE_GAZEBO` | `test_gazebo_camera`, `test_gazebo_imu` | Gazebo Harmonic + gz-transport |
 | `HAVE_MAVSDK` | `test_mavlink_fc_link` | MAVSDK 2.12.12 |
-| `HAVE_OPENCV` | `test_opencv_yolo_detector` (inference tests) | OpenCV 4.10.0 + YOLOv8 ONNX model |
+| `HAVE_OPENCV` | `test_opencv_yolo_detector` (inference tests) | OpenCV 4.10.0 + YOLOv8 ONNX model ✓ (available at `models/yolov8n.onnx`) |
 
 ---
 
@@ -1073,4 +1074,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp).*
+*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp). Fix #46 (2026-03-14): Enabled 8 previously skipped tests — copied YOLOv8 model from companion_software_stack, fixed config path resolution using PROJECT_CONFIG_DIR cmake definition. All 904 tests now running.*

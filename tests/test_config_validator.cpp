@@ -237,9 +237,14 @@ TEST_F(ConfigValidatorTest, DoubleOutOfRange) {
 TEST_F(ConfigValidatorTest, DefaultConfigPassesAllSchemas) {
     // Load the actual default.json — it should pass all schemas
     drone::Config cfg;
-    bool          loaded = cfg.load("config/default.json");
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    bool loaded = cfg.load(config_path);
     if (!loaded) {
-        GTEST_SKIP() << "config/default.json not available (CWD-dependent)";
+        GTEST_SKIP() << "config/default.json not available at " << config_path;
     }
 
     auto check = [&](const char* name, ConfigSchema schema) {

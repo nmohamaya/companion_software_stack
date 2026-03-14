@@ -906,6 +906,55 @@ The temperature-to-zone logic in `iprocess_monitor.h` also sets `thermal_zone=2`
 
 ---
 
+### Fix #46 — 8 Unit Tests Silently Skipped Due to Missing Model & CWD Assumptions
+
+**Date:** 2026-03-14
+**Severity:** Low
+**Files:** `tests/CMakeLists.txt`, `tests/test_config_validator.cpp`, `tests/test_restart_policy.cpp`, `models/yolov8n.onnx`
+
+**Bug:** Two categories of tests were silently skipped by `GTEST_SKIP()`:
+1. **7 YOLO model tests** (`YoloModelTest::*`) — required `models/yolov8n.onnx` (13 MB) which was missing because:
+   - The model file is not committed to git (it's large)
+   - No automated download mechanism existed in CI
+   - Tests gracefully skipped if file not found, making the skips invisible in summary output
+
+2. **1 Config validator test** (`ConfigValidatorTest::DefaultConfigPassesAllSchemas`) — used relative path `"config/default.json"` which depends on CWD being the project root:
+   - Tests run from `build/tests` directory
+   - Relative path lookup failed silently
+   - Test skipped instead of reporting the path as unfound
+
+Also **1 Process config test** (`ProcessConfig::LoadFromDefaultJsonFile`) had the same CWD assumption but attempted fallback to `../config/default.json`.
+
+**Root Cause:** 
+- YOLO model was manually obtained during development but never automated for CI
+- Config tests written with CWD assumption before understanding test execution directory
+
+**Fix:**
+1. Copied `yolov8n.onnx` from `companion_software_stack` workspace (which had it) to `models/yolov8n.onnx`
+2. Added compile-time path definitions in CMakeLists.txt:
+   - `target_compile_definitions(test_config_validator PRIVATE PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config")`
+   - `target_compile_definitions(test_restart_policy PRIVATE PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config")`
+3. Updated both test files to use `#ifdef PROJECT_CONFIG_DIR` and construct absolute paths at runtime
+
+**Impact:**
+- All 8 previously skipped tests now execute and pass
+- CI test count increased from 896 to 904 tests
+- No more silent test skips due to missing resources or CWD assumptions
+
+**Test Results:**
+- Before: 896 tests passed, 8 skipped
+- After: 904 tests passed, 0 skipped
+- All 8 enabled tests pass cleanly, including:
+  - YoloModelTest: LoadsSuccessfully, BlackImageFewOrNoDetections, DetectionsHaveValidFields, FourChannelImageWorks, ConfigConstruction, HighConfidenceThresholdReducesDetections
+  - ConfigValidatorTest: DefaultConfigPassesAllSchemas
+  - ProcessConfig: LoadFromDefaultJsonFile
+
+**Lessons:**
+- Binary assets (models, weights) that can't be gitignored should be either: (a) downloaded at CMake configure time, (b) symlinked from a shared location, or (c) checked for presence and skipped with clear error message, NOT silently
+- Tests using relative paths must account for the actual test execution directory (typically `build/` for ctest), not project root
+
+---
+
 ## CI / Tooling
 
 ---
