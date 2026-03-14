@@ -552,6 +552,7 @@
 | *(fault_injector Zenoh fix)* | ~~fault_injector GCS/mission commands invisible to Zenoh subscribers~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
 | *(fault_injector shm_unlink fix)* | ~~fault_injector shm_unlink on exit breaks subsequent runs~~ ✅ | Bug fix | **Closed** (Improvement #37, PR #136) |
 | ~~[#154](https://github.com/nmohamaya/companion_software_stack/issues/154)~~ | ~~P4 Mission Planner: Extract 4 classes from main.cpp~~ ✅ | Refactor | **Closed** (Improvement #41, PR #157) |
+| ~~[#155](https://github.com/nmohamaya/companion_software_stack/issues/155)~~ | ~~Stale SHM reference cleanup in API.md and ROADMAP.md~~ ✅ | Docs | **Closed** (Improvement #42, PR #156) |
 
 ---
 

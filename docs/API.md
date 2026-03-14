@@ -89,7 +89,7 @@ Process-wide Zenoh session singleton. All `ZenohPublisher` / `ZenohSubscriber` i
 Zenoh-backed publisher implementing `IPublisher<T>`. Serializes trivially-copyable `T` to `zenoh::Bytes` (via `std::vector<uint8_t>`) and calls `Publisher::put(Bytes&&)`.
 
 ```cpp
-ZenohPublisher<ShmPose> pub("drone/slam/pose");
+ZenohPublisher<drone::ipc::Pose> pub("drone/slam/pose");
 pub.publish(pose);  // Serialized as raw bytes → Zenoh network
 ```
 
@@ -230,7 +230,7 @@ struct ServiceResponse {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `process_frame` | `Pose process_frame(const ShmStereoFrame& frame)` | Process stereo frame, return 6-DOF pose |
+| `process_frame` | `drone::slam::Pose process_frame(const drone::ipc::StereoFrame& frame)` | Process stereo frame, return 6-DOF pose |
 | `name` | `std::string name() const` | Implementation name for logging |
 
 | Implementation | Description |
@@ -253,7 +253,7 @@ Pose p = fe->process_frame(stereo_frame);
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `plan` | `ShmTrajectoryCmd plan(const ShmPose& pose, const Waypoint& target)` | Compute velocity command toward target |
+| `plan` | `drone::ipc::TrajectoryCmd plan(const drone::ipc::Pose& pose, const Waypoint& target)` | Compute velocity command toward target |
 | `name` | `std::string name() const` | Implementation name |
 
 | Implementation | Description |
@@ -271,7 +271,7 @@ Pose p = fe->process_frame(stereo_frame);
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `avoid` | `ShmTrajectoryCmd avoid(const ShmTrajectoryCmd& planned, const ShmPose& pose, const ShmDetectedObjectList& objects)` | Modify trajectory to avoid obstacles |
+| `avoid` | `drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd& planned, const drone::ipc::Pose& pose, const drone::ipc::DetectedObjectList& objects)` | Modify trajectory to avoid obstacles |
 | `name` | `std::string name() const` | Implementation name |
 
 | Implementation | Parameters | Description |
@@ -657,7 +657,7 @@ auto sub = bus.subscribe<drone::ipc::ShmPose>("/drone_slam_pose");
 
 // AFTER:
 auto bus = create_message_bus(cfg);  // ZenohMessageBus if ipc_backend=zenoh
-auto sub = bus->subscribe<drone::ipc::ShmPose>("drone/slam/pose");
+auto sub = bus.subscribe<drone::ipc::Pose>("drone/slam/pose");
 ```
 
 All `IPublisher<T>` and `ISubscriber<T>` usage remains identical.

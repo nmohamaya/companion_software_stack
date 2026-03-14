@@ -24,7 +24,7 @@ codebase.
 | Key | Type | Default | Range | Process | Description |
 |-----|------|---------|-------|---------|-------------|
 | `log_level` | `string` | `"info"` | `"debug"`, `"info"`, `"warn"`, `"error"` | All | Minimum log severity printed to stderr |
-| `ipc_backend` | `string` | `"shm"` | `"shm"`, `"zenoh"` | All | IPC transport backend (`"shm"` in the default config; set to `"zenoh"` for production Zenoh sessions) |
+| `ipc_backend` | `string` | `"zenoh"` | `"zenoh"` | All | IPC transport backend. Zenoh is the sole backend since Issue #126 (SHM removed). Any value other than `"zenoh"` fails config validation at startup. |
 
 ---
 

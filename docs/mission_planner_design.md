@@ -17,10 +17,11 @@
 7. [Component: Geofence](#component-geofence)
 8. [Component: FaultManager](#component-faultmanager)
 9. [HD-Map Static Obstacles](#hd-map-static-obstacles)
-10. [Main Loop](#main-loop)
-11. [Configuration Reference](#configuration-reference)
-12. [Testing](#testing)
-13. [Known Limitations](#known-limitations)
+10. [Extracted Sub-Components (PR #157)](#extracted-sub-components-pr-157)
+11. [Main Loop](#main-loop)
+12. [Configuration Reference](#configuration-reference)
+13. [Testing](#testing)
+14. [Known Limitations](#known-limitations)
 
 ---
 
@@ -331,6 +332,63 @@ Proximity-based check during NAVIGATE:
 
 ---
 
+## Extracted Sub-Components (PR #157)
+
+PR #157 refactored the monolithic `main.cpp` (809 → 366 lines) by extracting four
+logically cohesive sub-systems into header-only classes under `process4_mission_planner/include/planner/`.
+Each class is independently unit-tested with injected mocks — no Zenoh or real hardware required.
+
+### `FaultResponseExecutor`
+
+**Header:** [`planner/fault_response_executor.h`](../process4_mission_planner/include/planner/fault_response_executor.h)
+
+Executes fault responses (WARN → LOITER → RTL → EMERGENCY_LAND) based on the
+current `FaultAction` from `FaultManager`. Enforces the **escalation-only policy**
+(severity can never decrease) and skips action when the drone is not airborne.
+
+| Method | Description |
+|--------|-------------|
+| `execute(action, state, bus)` | Apply fault action to trajectory + FC command |
+| `reset()` | Clear applied action (on clean landing) |
+
+### `GcsCommandHandler`
+
+**Header:** [`planner/gcs_command_handler.h`](../process4_mission_planner/include/planner/gcs_command_handler.h)
+
+Dispatches GCS commands (RTL / LAND / MISSION_UPLOAD) from `/gcs_commands`.
+Deduplicates by command timestamp to prevent double-execution on resubscription.
+
+| Method | Description |
+|--------|-------------|
+| `handle(cmd, state, waypoints)` | Process one GCS command; returns updated state |
+
+### `MissionStateTick`
+
+**Header:** [`planner/mission_state_tick.h`](../process4_mission_planner/include/planner/mission_state_tick.h)
+
+Contains all per-tick FSM transition logic (PREFLIGHT / TAKEOFF / NAVIGATE / RTL / LAND / IDLE).
+Previously inlined inside the main planning loop; extraction makes each state independently testable.
+
+| Method | Description |
+|--------|-------------|
+| `tick(ctx)` | Advance FSM one tick; `ctx` bundles pose, FC state, waypoints, bus refs |
+
+### `StaticObstacleLayer`
+
+**Header:** [`planner/static_obstacle_layer.h`](../process4_mission_planner/include/planner/static_obstacle_layer.h)
+
+Loads HD-map static obstacles from config, performs camera cross-validation
+(2-hit confirmation), and provides collision proximity checks.
+Extracted from the previous inline logic in the planning loop.
+
+| Method | Description |
+|--------|-------------|
+| `load(cfg)` | Parse `static_obstacles[]` config entries |
+| `cross_check(pose, detections)` | Update confirmation hits per obstacle |
+| `check_collision(pose)` | Returns true if drone is within margin of any obstacle |
+
+---
+
 ## Main Loop
 
 The planning loop runs at `mission_planner.update_rate_hz` (default 10 Hz):
@@ -420,7 +478,11 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) | 12 | 3D repulsion, predictive, NaN, factory |
 | [`test_geofence.cpp`](../tests/test_geofence.cpp) | 21 | Polygon, altitude, margin, NaN/Inf |
 | [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 31 | All 11 faults, escalation, loiter timeout, FC contingency |
-| **Total** | **94** | |
+| [`test_static_obstacle_layer.cpp`](../tests/test_static_obstacle_layer.cpp) | 12 | Load empty/single/multi HD-map entries, cross-check 2-hit confirmation, low-quality pose skip, collision/no-collision, cooldown throttle, height check |
+| [`test_gcs_command_handler.cpp`](../tests/test_gcs_command_handler.cpp) | 6 | RTL/LAND/MISSION_UPLOAD dispatch, dedup by timestamp, unknown command ignored |
+| [`test_fault_response_executor.cpp`](../tests/test_fault_response_executor.cpp) | 7 | WARN (no FC cmd), LOITER, RTL, EMERGENCY_LAND, escalation-only policy, non-airborne skip, reset clears state |
+| [`test_mission_state_tick.cpp`](../tests/test_mission_state_tick.cpp) | 10 | PREFLIGHT ARM retry, TAKEOFF altitude threshold, waypoint reached + payload trigger, mission complete → RTL, RTL disarm → IDLE, landed → IDLE + fault reset |
+| **Total** | **129** | |
 
 Integration coverage via scenario tests in `config/scenarios/`:
 - `02_obstacle_avoidance.json` — A* planner + 3D avoider with HD-map obstacles
