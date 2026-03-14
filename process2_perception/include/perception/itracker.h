@@ -1,6 +1,6 @@
 // process2_perception/include/perception/itracker.h
 // Abstract tracker interface — strategy pattern for multi-object tracking.
-// Concrete implementations: SortTracker (SORT + Kalman + Hungarian).
+// Concrete implementations: SortTracker (SORT), ByteTrackTracker (ByteTrack two-stage).
 // Issue #113 — Phase 1B.
 #pragma once
 #include "perception/types.h"
@@ -32,8 +32,8 @@ public:
 };
 
 /// Factory: create a tracker from a backend name.
-/// Supported backends: "sort" (default).
-/// Looks up "perception.tracker.backend" in cfg if provided.
+/// Supported backends: "sort" (default), "bytetrack".
+/// If cfg is non-null, backend-specific parameters are read from it.
 std::unique_ptr<ITracker> create_tracker(const std::string&   backend = "sort",
                                          const drone::Config* cfg     = nullptr);
 

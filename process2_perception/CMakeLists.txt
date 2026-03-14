@@ -4,6 +4,7 @@ add_executable(perception
     src/simulated_detector.cpp
     src/detector_factory.cpp
     src/kalman_tracker.cpp
+    src/bytetrack_tracker.cpp
     src/fusion_engine.cpp
     src/ukf_fusion_engine.cpp
     src/opencv_yolo_detector.cpp

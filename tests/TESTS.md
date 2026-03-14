@@ -99,7 +99,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 4 | 113 | Kalman tracker (Munkres), fusion (UKF+camera), color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 5 | 131 | Kalman tracker (Munkres), ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 8 | 90 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, A* planner, D* Lite planner |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -114,7 +114,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **42 C++ + 4 shell** | **904 + 42 + 80** | |
+| **Total** | **43 C++ + 4 shell** | **922 + 42 + 80** | |
 
 ---
 
@@ -347,6 +347,25 @@ with model file `models/yolov8n.onnx` (13 MB, copied from companion_software_sta
 | `YoloFactoryTest` | 4 | Factory creation for `"yolov8"` backend with config |
 
 **Key files under test:** `perception/opencv_yolo_detector.h`, `perception/detector_interface.h`
+
+---
+
+### test_bytetrack_tracker.cpp — 18 tests
+
+**What it tests:** ByteTrack two-stage association tracker — IoU computation,
+cost matrix, two-stage matching (high-conf then low-conf), track lifecycle,
+occlusion recovery, config/factory integration.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `ByteTrackIoU` | 3 | Perfect overlap (IoU=1.0), no overlap (IoU=0.0), partial overlap (known geometry) |
+| `ByteTrackCostMatrix` | 2 | Single track/det (1×1 matrix), multiple tracks/dets (2×3 matrix with expected costs) |
+| `ByteTrackAssociation` | 4 | High-conf matched first, low-conf recovers unmatched track, low-conf doesn't create new track, only high-conf creates new tracks |
+| `ByteTrackLifecycle` | 3 | Empty detections, single detection becomes confirmed after `min_hits`, stale tracks pruned after `max_age` |
+| `ByteTrackOcclusion` | 2 | Occlusion recovery (high→low→high conf preserves track ID), SORT comparison (loses track without low-conf recovery) |
+| `ByteTrackConfig` | 4 | Default params, factory with null config, `name()` returns "bytetrack", factory creates working tracker |
+
+**Key files under test:** `perception/bytetrack_tracker.h`, `perception/itracker.h`, `perception/kalman_tracker.h`
 
 ---
 
