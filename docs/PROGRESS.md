@@ -2100,3 +2100,42 @@ _Last updated after Improvement #40 (SHM remnant cleanup, Issue #153). See [test
 ---
 
 _Last updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR #157). 880 tests, 46 test suites._
+## Improvement #41 — Stale SHM Reference Cleanup in API.md and ROADMAP.md (Issue #155)
+
+**Date:** 2026-03-13
+**Category:** Documentation / Tech Debt
+**Branch:** `docs/issue-155-api-shm-cleanup`
+**PR:** [#156](https://github.com/nmohamaya/companion_software_stack/pull/156)
+**Commit:** `f73c863`
+
+**Files modified (2):** `docs/API.md`, `docs/ROADMAP.md`
+
+**What:** Removed all remaining stale POSIX SHM references from `docs/API.md` and `docs/ROADMAP.md` that were missed during the Zenoh-only IPC migration (Issue #126, PR #151).
+
+**API.md changes (14 fixes):**
+- `ZenohSubscriber` "Why a wrapper?": removed "same `receive(T&)` API as the SHM backend" comparison
+- `ZenohMessageBus` description: replaced "Drop-in replacement for `ShmMessageBus`" with standalone description
+- `ZenohMessageBus` `to_key_expr`: param `shm_name` → `channel_name`; description updated
+- `ZenohMessageBus` "Why a wrapper?": removed all `ShmMessageBus` references; reflects Zenoh-only world
+- Key-expression table: column header `SHM Name` → `Channel Name`
+- `MessageBusFactory` `create_message_bus`: default `backend = "shm"` → `"zenoh"`
+- `MessageBusFactory` description: removed "Requesting `\"shm\"` logs error" — validator now rejects it
+- `MessageBusFactory` `bus_subscribe_optional`: removed SHM-specific `is_connected()` note
+- `MessageBusFactory` "Why a wrapper?": removed `"shm"` option reference
+- Section 5 code comment: `ShmMessageBus or ZenohMessageBus` → `Returns ZenohMessageBus (sole backend)`
+- `safe_name_copy` description: removed "SHM" from "fixed-size SHM name buffers"
+- Section 8 migration table: all phases A–F updated to **Done** with correct PR numbers
+- Section 8 intro: future tense → past tense (migration complete)
+- Zenoh Types table: `12-segment SHM→Zenoh topic mapping` → `12-channel Zenoh topic mapping`
+
+**ROADMAP.md changes (2 fixes):**
+- Issue #126 epic entry: `**In Progress**` → `~~strikethrough~~ **Closed** ✅ (PR #151)`
+- Footer: `Improvement #39` → `#40`; `5 CI jobs` → `6 CI jobs`
+
+**Why:** These were purely documentation gaps — no functional impact — but misleading to anyone reading the API reference. Discovered during post-merge doc audit after Issue #153.
+
+**Test additions:** None (docs-only change; 845 tests unchanged).
+
+---
+
+_Last updated after Improvement #41 (API.md/ROADMAP.md SHM cleanup, Issue #155). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 6 CI jobs, Zenoh sole IPC backend._

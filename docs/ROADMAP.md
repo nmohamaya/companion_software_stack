@@ -447,7 +447,7 @@
 | [#64](https://github.com/nmohamaya/companion_software_stack/issues/64) | [Epic] Foundation Hardening — CI, Error Handling, Code Quality | **Closed** ✅ |
 | [#88](https://github.com/nmohamaya/companion_software_stack/issues/88) | [Epic] Process & Thread Watchdog — Crash Recovery & Stuck-Thread Detection | **Closed** ✅ |
 | [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Core Autonomy & Safety — IPC, Perception, VIO, Planning | **Closed** ✅ |
-| [#126](https://github.com/nmohamaya/companion_software_stack/issues/126) | [Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable | **In Progress** |
+| ~~[#126](https://github.com/nmohamaya/companion_software_stack/issues/126)~~ | ~~[Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable~~ | **Closed** ✅ (PR #151) |
 
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
@@ -603,4 +603,5 @@
 
 ---
 
-*Last updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR #157) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 880 tests, 46 test suites, Zenoh sole IPC backend, 5 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+* updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR #157) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 880 tests, 46 test suites, Zenoh sole IPC backend, 5 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #41 (API.md/ROADMAP.md SHM doc cleanup, Issue #155) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 42 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
