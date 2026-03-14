@@ -103,8 +103,8 @@ pub.publish(pose);  // Serialized as raw bytes → Zenoh network
 Zenoh-backed subscriber implementing `ISubscriber<T>`. Maintains a latest-value cache updated by the Zenoh callback thread. Uses `std::mutex` + `std::atomic` for thread-safe access between the Zenoh callback thread and the process main loop.
 
 ```cpp
-ZenohSubscriber<ShmPose> sub("drone/slam/pose");
-ShmPose pose;
+ZenohSubscriber<Pose> sub("drone/slam/pose");
+Pose pose;
 if (sub.receive(pose)) { /* use pose */ }
 ```
 
@@ -147,25 +147,24 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 
 **Header:** `common/ipc/include/ipc/message_bus_factory.h`
 
-Returns the Zenoh message bus. `ZenohMessageBus` is the sole backend (legacy SHM removed in Issue #126). Config validation rejects any value other than `"zenoh"` at startup.
+Returns the Zenoh message bus. `ZenohMessageBus` is the sole backend (legacy SHM removed in Issue #126). Unknown backends log an error and fall back to Zenoh; the config schema additionally rejects non-`"zenoh"` values at startup.
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `create_message_bus` | `MessageBusVariant create_message_bus(const std::string& backend = "zenoh")` | Create bus by backend name |
-| `bus_advertise<T>` | `unique_ptr<IPublisher<T>> bus_advertise<T>(MessageBusVariant&, topic)` | Advertise via variant |
-| `bus_subscribe<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe<T>(MessageBusVariant&, topic, ...)` | Subscribe via variant |
-| `bus_subscribe_optional<T>` | `unique_ptr<ISubscriber<T>> bus_subscribe_optional<T>(MessageBusVariant&, topic)` | Subscribe with no retries (single attempt). `is_connected()` always returns true (Zenoh uses async discovery). |
+| Function/Method | Signature | Description |
+|-----------------|-----------|-------------|
+| `create_message_bus` | `MessageBus create_message_bus(const std::string& backend = "zenoh")` | Create and return a `MessageBus` |
+| `bus.advertise<T>` | `unique_ptr<IPublisher<T>> advertise<T>(topic)` | Create a publisher on the bus |
+| `bus.subscribe<T>` | `unique_ptr<ISubscriber<T>> subscribe<T>(topic, max_retries, retry_ms)` | Create a subscriber with optional retries |
+| `bus.subscribe_optional<T>` | `unique_ptr<ISubscriber<T>> subscribe_optional<T>(topic)` | Single-attempt subscribe; `is_connected()` is true once declared successfully (does not depend on publisher presence). |
 
-**Why a wrapper?** Reads `"ipc_backend"` from config (must be `"zenoh"`). Process code uses `bus_advertise<T>()` / `bus_subscribe<T>()` — completely agnostic to the transport.
+**Why a wrapper?** Reads `"ipc_backend"` from config (defaults to `"zenoh"`). Process code calls `bus.advertise<T>()` / `bus.subscribe<T>()` — completely agnostic to the transport.
 
 ```cpp
-// Processes use bus_advertise<T>()/bus_subscribe<T>() — agnostic to transport:
-auto bus = create_message_bus(cfg);  // Returns ZenohMessageBus (sole backend)
-auto pub = bus->advertise<ShmPose>("drone/slam/pose");
-auto sub = bus->subscribe<ShmPose>("drone/slam/pose");
+auto bus = create_message_bus(cfg);  // Returns MessageBus wrapping ZenohMessageBus
+auto pub = bus.advertise<Pose>("drone/slam/pose");
+auto sub = bus.subscribe<Pose>("drone/slam/pose");
 
 pub->publish(pose);
-ShmPose out;
+Pose out;
 sub->receive(out);
 ```
 
@@ -548,13 +547,13 @@ Every process creates a message bus via the config-driven factory and obtains ty
 
 ```cpp
 // Example: Process 1 (Video Capture)
-auto bus = create_message_bus(cfg);  // Returns ZenohMessageBus (sole backend)
-auto mission_pub = bus->advertise<ShmVideoFrame>("drone/video/frame");
-auto stereo_pub  = bus->advertise<ShmStereoFrame>("drone/video/stereo_frame");
+auto bus = create_message_bus(cfg);  // Returns MessageBus wrapping ZenohMessageBus
+auto mission_pub = bus.advertise<VideoFrame>("drone/video/frame");
+auto stereo_pub  = bus.advertise<StereoFrame>("drone/video/stereo_frame");
 
 // Thread function takes IPublisher<T>& — testable with mocks
-void capture_thread(IPublisher<ShmVideoFrame>& pub) {
-    ShmVideoFrame frame = capture();
+void capture_thread(IPublisher<VideoFrame>& pub) {
+    VideoFrame frame = capture();
     pub.publish(frame);
 }
 ```

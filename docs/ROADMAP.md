@@ -602,4 +602,4 @@
 
 ---
 
-*Last updated after Improvement #40 (SHM remnant cleanup, Issue #153) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 42 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #41 (API.md/ROADMAP.md SHM doc cleanup, Issue #155) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 42 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
