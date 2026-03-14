@@ -2139,3 +2139,60 @@ _Last updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR
 ---
 
 _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 880 tests, 46 test suites, 6 CI jobs, Zenoh sole IPC backend._
+
+## Improvement #43 — D* Lite Incremental Path Planner + Grid Planner Refactor (Issue #158)
+
+**Date:** 2026-03-14
+**Category:** Feature / Refactor / Performance
+**Issue:** [#158](https://github.com/nmohamaya/companion_software_stack/issues/158)
+**Branch:** `feature/issue-158-dstar-lite-planner`
+
+**What:** Implemented D* Lite (Koenig & Likhachev, 2002) incremental path planner and refactored the grid-based planner infrastructure. D* Lite searches backward from goal and maintains its priority queue across frames — replanning is O(changed cells) instead of O(grid), significantly reducing replan cost in obstacle-dense environments.
+
+**Phase 1 — Extract shared infrastructure (refactor, no behavior change):**
+- Extracted `OccupancyGrid3D`, `GridCell`, `GridCellHash`, neighbor tables from `astar_planner.h` into `occupancy_grid_3d.h`
+- Added change tracking to `OccupancyGrid3D`: `changed_cells_` vector, `drain_changes()`, `pending_changes()` for incremental planners
+- Created `GridPlannerBase` (template method pattern) with shared logic: goal snapping, path following, EMA velocity smoothing, speed ramping, replan timing
+- `AStarPathPlanner` now extends `GridPlannerBase` instead of implementing `IPathPlanner` directly
+- Updated integration points: `static_obstacle_layer.h`, `mission_state_tick.h`, `main.cpp` use `IGridPlanner*` instead of `AStarPathPlanner*`
+
+**Phase 2 — D* Lite planner:**
+- Backward search from goal with `g(s)` / `rhs(s)` consistency tracking
+- `std::set<QueueEntry>` priority queue with two-key ordering for O(log n) decrease-key
+- `km_` correction factor for drone movement between replans
+- Incremental replanning: `drain_changes()` → update affected vertices → `compute_shortest_path()` (only re-expands changed nodes)
+- Large change threshold (>500 cells) triggers full reinitialisation instead of incremental update
+- Wall-clock timeout guard: `steady_clock` checked every 64 iterations in both A* and D* Lite
+
+**Phase 3 — Tests, configs, documentation:**
+- 23 new D* Lite tests + 1 new A* timeout test = 24 new tests
+- Updated Gazebo configs: `"astar"` → `"dstar_lite"`, added `"max_search_time_ms": 50`
+- New `planner_factory.h` supporting `"potential_field"`, `"astar"`, `"dstar_lite"` backends
+
+**Files Added (4):**
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — extracted grid + change tracking
+- `process4_mission_planner/include/planner/grid_planner_base.h` — `IGridPlanner` interface + `GridPlannerBase` shared logic
+- `process4_mission_planner/include/planner/dstar_lite_planner.h` — D* Lite implementation
+- `tests/test_dstar_lite_planner.cpp` — 23 tests (change tracking, search, incremental replan, timeout, integration)
+
+**Files Modified (9):**
+- `process4_mission_planner/include/planner/astar_planner.h` — extends `GridPlannerBase`, added timeout support
+- `process4_mission_planner/include/planner/planner_factory.h` — relocated factory, added `"dstar_lite"` backend + config param
+- `process4_mission_planner/include/planner/static_obstacle_layer.h` — `AStarPathPlanner*` → `IGridPlanner*`
+- `process4_mission_planner/include/planner/mission_state_tick.h` — `AStarPathPlanner*` → `IGridPlanner*`
+- `process4_mission_planner/src/main.cpp` — factory wiring with `GridPlannerConfig` from JSON
+- `tests/test_astar_planner.cpp` — added `MaxSearchTimeEnforced` timeout test
+- `tests/test_process_interfaces.cpp` — updated include for relocated factory
+- `tests/test_mission_state_tick.cpp` — updated include for relocated factory
+- `tests/CMakeLists.txt` — added `test_dstar_lite_planner` target
+
+**Config Changes (3):**
+- `config/gazebo_sitl.json` — `"backend": "dstar_lite"`, `"max_search_time_ms": 50`
+- `config/gazebo.json` — same
+- `config/gazebo_zenoh.json` — same
+
+**Test count:** 880 → 904 (+24 tests, 2 new suites)
+
+---
+
+_Last updated after Improvement #43 (D* Lite incremental planner, Issue #158). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 904 tests, 48 test suites, 6 CI jobs._
