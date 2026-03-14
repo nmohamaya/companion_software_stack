@@ -252,12 +252,10 @@ TEST(ByteTrackOcclusion, OcclusionRecovery) {
     EXPECT_EQ(out.objects[0].track_id, original_id);
 }
 
-TEST(ByteTrackOcclusion, SortLosesOccludedTrack) {
-    // Same scenario with SortTracker — documents that SORT loses the track
-    // because low-conf detections are above SortTracker's distance threshold
-    // but the center-distance cost still matches. The key difference is that
-    // SortTracker has no confidence-based filtering, so this test documents
-    // the behavioral contrast.
+TEST(ByteTrackOcclusion, SortLosesTrackAfterGap) {
+    // SORT has no low-conf recovery — after enough missed frames the track is
+    // pruned and a returning detection gets a new ID.  This documents the
+    // behavioral contrast with ByteTrack's Stage 2 recovery above.
     SortTracker tracker;
 
     // Phase 1: 3 frames to confirm
@@ -265,21 +263,21 @@ TEST(ByteTrackOcclusion, SortLosesOccludedTrack) {
     (void)tracker.update(make_det_list({det}));
     (void)tracker.update(make_det_list({make_det(102, 102, 50, 50, 0.9f)}));
     auto out = tracker.update(make_det_list({make_det(104, 104, 50, 50, 0.9f)}));
-    ASSERT_GE(out.objects.size(), 1u);
-    (void)out.objects[0].track_id;
+    ASSERT_EQ(out.objects.size(), 1u);
+    uint32_t original_id = out.objects[0].track_id;
 
-    // Phase 2: No detections for several frames (simulating missed detection
-    // during occlusion — SORT has no low-conf recovery mechanism)
-    for (int i = 0; i < 5; ++i) {
-        out = tracker.update(make_det_list({}));
+    // Phase 2: 12 empty frames — exceeds SORT's max_age (10), track is pruned
+    for (int i = 0; i < 12; ++i) {
+        (void)tracker.update(make_det_list({}));
     }
 
-    // Phase 3: detection returns — SORT creates a NEW track with different ID
-    out = tracker.update(make_det_list({make_det(114, 114, 50, 50, 0.9f)}));
-    // The detection may match an existing stale track or create new — either way
-    // it demonstrates SORT's inability to bridge the gap with low-conf detections
-    // like ByteTrack does. We verify the tracker still functions.
-    EXPECT_GE(out.objects.size(), 0u);  // SORT may or may not output (stale track)
+    // Phase 3: detection returns — must get a NEW track ID (old was pruned)
+    // Need 3 frames to re-confirm
+    (void)tracker.update(make_det_list({make_det(114, 114, 50, 50, 0.9f)}));
+    (void)tracker.update(make_det_list({make_det(116, 116, 50, 50, 0.9f)}));
+    out = tracker.update(make_det_list({make_det(118, 118, 50, 50, 0.9f)}));
+    ASSERT_EQ(out.objects.size(), 1u);
+    EXPECT_NE(out.objects[0].track_id, original_id) << "SORT should have lost the original track";
 }
 
 // ═══════════════════════════════════════════════════════════
