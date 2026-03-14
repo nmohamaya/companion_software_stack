@@ -1074,4 +1074,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp). Fix #46 (2026-03-14): Enabled 8 previously skipped tests — copied YOLOv8 model from companion_software_stack, fixed config path resolution using PROJECT_CONFIG_DIR cmake definition. All 904 tests now running.*
+*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp). Fix #164 (2026-03-14): Enabled 8 previously skipped tests — copied YOLOv8 model from companion_software_stack, fixed config path resolution using PROJECT_CONFIG_DIR cmake definition. All 904 tests now running.*
