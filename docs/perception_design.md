@@ -68,7 +68,7 @@ Each stage is independently pipelined. Backpressure is handled by lock-free SPSC
 
 ## IPC Channels
 
-| Direction | Channel key (`shm_names::`) | Message type | Source / Consumer |
+| Direction | Channel key (`drone::ipc::topics::`) | Message type | Source / Consumer |
 |-----------|----------------------------|--------------|------------------|
 | Subscribe | `VIDEO_MISSION_CAM` | `drone::ipc::VideoFrame` | Process 1 → Process 2 |
 | Subscribe | `SLAM_POSE` | `drone::ipc::Pose` | Process 3 → Process 2 (fusion thread) |

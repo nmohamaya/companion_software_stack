@@ -16,13 +16,17 @@ This repository supports **concurrent development by multiple agents** using **g
 
 ```bash
 # Create a new worktree (one per agent)
-git worktree add <worktree_path> <base_branch>
+# Note: each branch can only be checked out in one worktree at a time
+git worktree add -b <agent-branch-1> <worktree_path_1> <base_branch>
+git worktree add -b <agent-branch-2> <worktree_path_2> <base_branch>
 
 # Example:
-git worktree add ~/dev/wt-agent-1 main          # Agent 1 in separate path
-git worktree add ~/dev/wt-agent-2 main          # Agent 2 in separate path
-git worktree list                               # View all active worktrees
+git worktree add -b agent-1-work ~/dev/wt-agent-1 main       # Creates wt-agent-1, checks out agent-1-work
+git worktree add -b agent-2-work ~/dev/wt-agent-2 main       # Creates wt-agent-2, checks out agent-2-work
+git worktree list                                            # View all active worktrees + branches
 ```
+
+**Important:** Git disallows the same branch (including `main`) from being checked out in multiple worktrees. The `-b` flag creates per-agent branches at add-time, preventing conflicts. Each agent then works on their own branch and opens PRs as usual.
 
 ### Key Principles
 
