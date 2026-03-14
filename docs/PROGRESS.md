@@ -2226,4 +2226,20 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-_Last updated after Improvement #44 (ByteTrack tracker, Issue #163). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 6 CI jobs._
+## Improvement #45 — Scenario Config Updates for ByteTrack Tracker (Issue #167)
+
+**Date:** 2026-03-14
+**Category:** Bug Fix / Testing / Config
+**Files Modified:**
+- `config/scenarios/02_obstacle_avoidance.json`
+- `config/scenarios/09_perception_tracking.json` (new)
+
+**What:** Fixed a bug in Scenario 02 pass_criteria where `"Path planner: astar"` didn't match the actual D* Lite backend log output (`"Path planner: DStarLitePlanner"`). Updated Scenario 02 to exercise ByteTrack tracker instead of default SORT — this is the perception-heavy obstacle avoidance scenario, ideal for ByteTrack's two-stage association (obstacles partially occlude each other). Created new Scenario 09 (Perception Tracking) as a dedicated Tier 1 scenario validating ByteTrack backend switching and two-stage association without Gazebo.
+
+**Why:** After implementing ByteTrack (#163), no scenario exercised the new tracker backend. The pass_criteria bug would cause false failures in Gazebo SITL runs.
+
+**Test additions:** +17 scenario checks (1 new check in scenario 02, 16 checks in new scenario 09). Total scenario checks: 97 across 9 scenarios.
+
+---
+
+_Last updated after Improvement #45 (scenario ByteTrack updates, Issue #167). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 6 CI jobs._

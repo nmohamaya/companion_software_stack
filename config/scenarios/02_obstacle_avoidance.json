@@ -1,5 +1,5 @@
 {
-    "_comment": "Scenario 2: Obstacle Avoidance — A* planner through obstacle field",
+    "_comment": "Scenario 2: Obstacle Avoidance — D* Lite planner through obstacle field with ByteTrack tracking",
     "scenario": {
         "name": "obstacle_avoidance",
         "description": "Navigate through an obstacle field using the D* Lite incremental path planner and 3D potential-field obstacle avoider. Tier 2 requires Gazebo SITL with the test_world.sdf obstacles.",
@@ -58,6 +58,13 @@
                 "backend": "color_contour",
                 "confidence_threshold": 0.3,
                 "max_detections": 64
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "_comment": "ByteTrack two-stage association: obstacles partially occlude each other, low-conf Stage 2 recovers tracks"
             }
         }
     },
@@ -66,8 +73,9 @@
     },
     "pass_criteria": {
         "log_contains": [
-            "Path planner: astar",
+            "Path planner: DStarLitePlanner",
             "Obstacle avoider: ObstacleAvoider3D",
+            "backend: bytetrack",
             "TAKEOFF",
             "EXECUTING",
             "Mission complete"

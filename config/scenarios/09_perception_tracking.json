@@ -1,0 +1,84 @@
+{
+    "_comment": "Scenario 9: Perception Tracking — ByteTrack two-stage association validation",
+    "scenario": {
+        "name": "perception_tracking",
+        "description": "Validate ByteTrack tracker two-stage association during a simple mission. Exercises high-conf Stage 1 matching and low-conf Stage 2 occlusion recovery. Tier 1 — no Gazebo required.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,     "speed": 2.0, "payload_trigger": false, "_comment": "Straight leg — stable detections, high-conf matching"},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57,   "speed": 2.0, "payload_trigger": true,  "_comment": "Turn — brief occlusion expected, low-conf recovery"},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14,   "speed": 2.0, "payload_trigger": false, "_comment": "Return leg — re-acquire tracks after turn"},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57,  "speed": 2.0, "payload_trigger": false, "_comment": "Final leg — continuous tracking"}
+            ]
+        },
+        "perception": {
+            "detector": {
+                "backend": "simulated",
+                "confidence_threshold": 0.3,
+                "_comment": "Low threshold so simulated detector produces a mix of high and low confidence detections for ByteTrack Stage 2 testing"
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "max_age": 10,
+                "min_hits": 3,
+                "_comment": "ByteTrack with standard params — validates two-stage association under simulated perception"
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "backend: bytetrack",
+            "TAKEOFF",
+            "EXECUTING",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable perception tracking parameters",
+        "tracker_backend_options": ["sort", "bytetrack"],
+        "high_conf_threshold_range": {"min": 0.3, "max": 0.8, "default": 0.5},
+        "low_conf_threshold_range": {"min": 0.05, "max": 0.4, "default": 0.1},
+        "max_iou_cost_range": {"min": 0.3, "max": 0.9, "default": 0.7},
+        "waypoints_editable": true,
+        "notes": "Switch tracker_backend to 'sort' to compare SORT vs ByteTrack tracking behavior. ByteTrack should maintain track IDs through low-confidence periods where SORT would lose them."
+    }
+}

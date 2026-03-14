@@ -74,7 +74,7 @@
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
 | Integration testing | **7/7 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
-| Test scenarios | 8 parameterized JSON configs with fault sequences + pass criteria |
+| Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **29** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
 ---
@@ -555,6 +555,7 @@
 | ~~[#155](https://github.com/nmohamaya/companion_software_stack/issues/155)~~ | ~~Stale SHM reference cleanup in API.md and ROADMAP.md~~ ✅ | Docs | **Closed** (Improvement #42, PR #156) |
 | ~~[#158](https://github.com/nmohamaya/companion_software_stack/issues/158)~~ | ~~D* Lite Incremental Path Planner~~ ✅ | Feature / Refactor | **Closed** (Improvement #43) |
 | ~~[#163](https://github.com/nmohamaya/companion_software_stack/issues/163)~~ | ~~ByteTrack Multi-Object Tracker~~ ✅ | Feature | **Closed** (Improvement #44, PR #165) |
+| [#167](https://github.com/nmohamaya/companion_software_stack/issues/167) | Scenario configs for ByteTrack + new perception tracking scenario | Bug fix / Testing | **Open** |
 
 ---
 
@@ -590,7 +591,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **8 (7/7 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 (8/8 Tier 1 pass, SHM+Zenoh)** | **9/9 Gazebo SITL + Zenoh ✅** |
 
 ### Process Activity During Simulation
 
@@ -606,4 +607,4 @@
 
 ---
 
-*Last updated after Improvement #44 (ByteTrack tracker, Issue #163) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #45 (scenario ByteTrack updates, Issue #167) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks across 9 scenarios, Zenoh sole IPC backend, 6 CI jobs. 8/8 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

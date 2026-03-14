@@ -113,8 +113,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **43 C++ + 4 shell** | **922 + 42 + 80** | |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 97 | 9 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
+| **Total** | **43 C++ + 4 shell** | **922 + 42 + 97** | |
 
 ---
 
@@ -1000,13 +1000,14 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | Scenario | Tier | Gazebo | Checks | Description |
 |----------|------|--------|--------|-------------|
 | 01 — Nominal Mission | 1 | No | 22 | 4-waypoint rectangular flight, no faults; verifies all 7 processes alive + 5 SHM segments |
-| 02 — Obstacle Avoidance | 2 | Yes | 14 | HD-map two-layer D* Lite planner navigates 7-WP obstacle field with proximity collision detection |
+| 02 — Obstacle Avoidance | 2 | Yes | 15 | HD-map two-layer D* Lite planner navigates 7-WP obstacle field with ByteTrack tracker + proximity collision detection |
 | 03 — Battery Degradation | 1 | No | 5 | 3-tier battery escalation (WARN→RTL→CRIT) |
 | 04 — FC Link Loss | 1 | No | 5 | FC disconnect → LOITER → RTL contingency |
 | 05 — Geofence Breach | 1 | No | 5 | Tight geofence polygon → RTL on violation (WP4 exits eastern boundary) |
 | 06 — Mission Upload | 1 | No | 6 | Mid-flight 3-waypoint upload via GCS command |
 | 07 — Thermal Throttle | 1 | No | 8 | Thermal zone escalation with 4 critical processes alive check |
 | 08 — Full Stack Stress | 1 | No | 15 | Concurrent faults, high-rate stress; 4 procs alive + 7 SHM segments |
+| 09 — Perception Tracking | 1 | No | 16 | ByteTrack two-stage association validation; 4 log checks + 5 forbidden + 7 procs alive |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
@@ -1031,12 +1032,12 @@ diagrams and detailed setup instructions.
 
 ### run_scenario_gazebo.sh — Gazebo SITL Scenario Runner
 
-**What it tests:** All 8 scenarios running on PX4 SITL + Gazebo Harmonic with real
+**What it tests:** All 9 scenarios running on PX4 SITL + Gazebo Harmonic with real
 MAVLink telemetry, Gazebo camera/IMU sensors, and configurable IPC backend (SHM or Zenoh).
 Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
 via `fault_injector`, and verifies pass criteria against actual process logs.
 
-**Pass criteria per scenario (80 total checks across 8 scenarios):**
+**Pass criteria per scenario (97 total checks across 9 scenarios):**
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
