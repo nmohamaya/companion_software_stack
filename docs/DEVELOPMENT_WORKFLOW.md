@@ -8,6 +8,65 @@ This project follows a structured development process designed to catch issues e
 
 ---
 
+## Multi-Agent Development Environment
+
+This repository supports **concurrent development by multiple agents** using **git worktrees** for isolation. Each agent works in its own checked-out copy of the repository to prevent interference on shared branches.
+
+### Worktree Setup
+
+```bash
+# Create a new worktree (one per agent)
+# Note: each branch can only be checked out in one worktree at a time
+git worktree add -b <agent-branch-1> <worktree_path_1> <base_branch>
+git worktree add -b <agent-branch-2> <worktree_path_2> <base_branch>
+
+# Example:
+git worktree add -b agent-1-work ~/dev/wt-agent-1 main       # Creates wt-agent-1, checks out agent-1-work
+git worktree add -b agent-2-work ~/dev/wt-agent-2 main       # Creates wt-agent-2, checks out agent-2-work
+git worktree list                                            # View all active worktrees + branches
+```
+
+**Important:** Git disallows the same branch (including `main`) from being checked out in multiple worktrees. The `-b` flag creates per-agent branches at add-time, preventing conflicts. Each agent then works on their own branch and opens PRs as usual.
+
+### Key Principles
+
+1. **Isolated branches** — Each agent creates and works on its own feature branch within its worktree
+2. **No direct file manipulation** — Never modify files in another agent's worktree directly
+3. **Coordinate via branches and PRs** — All cross-agent work goes through GitHub (branches, PRs, reviews)
+4. **Rebase when ordering matters** — If work depends on prior agent work:
+   - Create PR from Agent A's branch, merge to main
+   - Agent B rebases feature branch on **updated main** (not stale main from start time)
+   - Alternatively: branch Agent B's work from Agent A's branch, but rebase after A merges
+
+### Example Multi-Phase Workflow
+
+**Phase 1 (Agent A):**
+```bash
+cd ~/dev/wt-agent-1
+git checkout main && git pull
+git checkout -b feature/issue-100-part-1
+# ... implement, commit, push, create PR, merge
+```
+
+**Phase 2 (Agent B):**
+```bash
+cd ~/dev/wt-agent-2
+git checkout main && git pull    # Essential: pull Agent A's merged work
+git checkout -b feature/issue-100-part-2
+# ... implement on top of Agent A's changes
+```
+
+### Cleanup
+
+```bash
+# After merging a feature branch, clean up the worktree
+git checkout main
+git branch -d <feature_branch>
+git worktree remove <worktree_path>
+```
+
+---
+
 ### 🔄 Complete Development Workflow
 
 #### Step 1: Issue Management & Planning

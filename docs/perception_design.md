@@ -45,7 +45,7 @@ Video Frame (SHM)
                                                                                             Camera→World yaw rotation
                                                                                                                │
                                                                                                                ▼
-                                                                                              ShmDetectedObjectList (SHM/Zenoh)
+                                                                                              drone::ipc::DetectedObjectList (SHM/Zenoh)
 ```
 
 Each stage is independently pipelined. Backpressure is handled by lock-free SPSC ring drop (oldest frame is discarded when the ring is full).
@@ -56,9 +56,9 @@ Each stage is independently pipelined. Backpressure is handled by lock-free SPSC
 
 | Thread | Name (heartbeat) | Input | Output |
 |--------|-----------------|-------|--------|
-| Inference | `inference` | `ShmVideoFrame` via IPC subscriber | `Detection2DList` via SPSC ring |
+| Inference | `inference` | `drone::ipc::VideoFrame` via IPC subscriber | `Detection2DList` via SPSC ring |
 | Tracker | `tracker` | `Detection2DList` via SPSC ring | `TrackedObjectList` via SPSC ring |
-| Fusion | `fusion` | `TrackedObjectList` via SPSC ring + `ShmPose` from IPC | `ShmDetectedObjectList` via IPC publisher |
+| Fusion | `fusion` | `TrackedObjectList` via SPSC ring + `drone::ipc::Pose` from IPC | `drone::ipc::DetectedObjectList` via IPC publisher |
 
 **SPSC ring capacity**: 4 slots each. If the downstream thread is slower than upstream, the push fails silently (drop counter incremented, logged every 100 frames or on warning).
 
@@ -68,12 +68,12 @@ Each stage is independently pipelined. Backpressure is handled by lock-free SPSC
 
 ## IPC Channels
 
-| Direction | Channel key (`shm_names::`) | Message type | Source / Consumer |
+| Direction | Channel key (`drone::ipc::topics::`) | Message type | Source / Consumer |
 |-----------|----------------------------|--------------|------------------|
-| Subscribe | `VIDEO_MISSION_CAM` | `ShmVideoFrame` | Process 1 → Process 2 |
-| Subscribe | `SLAM_POSE` | `ShmPose` | Process 3 → Process 2 (fusion thread) |
-| Publish | `DETECTED_OBJECTS` | `ShmDetectedObjectList` | Process 2 → Process 4 |
-| Publish | `THREAD_HEALTH_PERCEPTION` | `ShmThreadHealth` | Process 2 → Process 7 |
+| Subscribe | `VIDEO_MISSION_CAM` | `drone::ipc::VideoFrame` | Process 1 → Process 2 |
+| Subscribe | `SLAM_POSE` | `drone::ipc::Pose` | Process 3 → Process 2 (fusion thread) |
+| Publish | `DETECTED_OBJECTS` | `drone::ipc::DetectedObjectList` | Process 2 → Process 4 |
+| Publish | `THREAD_HEALTH_PERCEPTION` | `drone::ipc::ThreadHealth` | Process 2 → Process 7 |
 
 The IPC backend (SHM or Zenoh) is resolved from `ipc_backend` in the active config. Gazebo SITL configs default to `"zenoh"`.
 

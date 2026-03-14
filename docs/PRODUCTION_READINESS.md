@@ -107,8 +107,8 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|------|--------------------|--------------------|----------|--------|-------|
-| 7.1 | ASan coverage | All 717 tests pass under ASan | All tests pass under ASan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,asan` + `zenoh,asan` |
-| 7.2 | UBSan coverage | All 717 tests pass under UBSan | All tests pass under UBSan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,ubsan` + `zenoh,ubsan` |
+| 7.1 | ASan coverage | All 880 tests pass under ASan | All tests pass under ASan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,asan` + `zenoh,asan` |
+| 7.2 | UBSan coverage | All 880 tests pass under UBSan | All tests pass under UBSan | P1 | 🟢 | Verified locally 2026-03-06; CI leg `shm,ubsan` + `zenoh,ubsan` |
 | 7.3 | TSan coverage — own code | 560/560 own-code tests pass under TSan | All own-code tests pass under TSan | P1 | 🟢 | SPSC, seqlock, watchdog, process manager all clean |
 | 7.4 | TSan coverage — third-party libs | 157 tests excluded (Zenoh/MAVSDK/OpenCV/Liveliness) — pre-built libs not TSan-instrumented | Run all tests under TSan with instrumented libs or targeted suppressions | P1 | 🔴 | See details below |
 | 7.5 | Valgrind / Helgrind soak tests | Not implemented | Multi-hour soak runs under Valgrind + Helgrind for leak/race detection | P2 | 🔴 | Catches different bug classes than sanitizers |
@@ -138,7 +138,7 @@ TSan instruments memory accesses at **compile time**. Pre-built shared libraries
 |---|------|------------|------|
 | 4.1 | Process supervision | systemd 7-unit architecture (PR #107) + ProcessManager fork+exec supervisor (implementation in PRs #101, #102; ADR in PR #100) + restart policies with dependency graph. `BindsTo=` stop-propagation semantics, `sd_notify(READY=1)`, `WatchdogSec=10s` on P7. | 2026-03-06 |
 | 4.4 | Config validation | `ConfigSchema` builder-pattern validation with 7 process schemas (PR #76, Issue #69) | 2026-03-03 |
-| 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ShmThreadHealth` publisher + `ProcessManager` crash recovery (PRs #96, #101, #102), (3) systemd `WatchdogSec` OS-level supervision (PR #107). See [tests/TESTS.md](../tests/TESTS.md) for test counts. | 2026-03-06 |
+| 5.3 | Health watchdog | Three-layer watchdog: (1) `ThreadHeartbeat` atomic per-thread heartbeats + `ThreadWatchdog` scanner (PR #94), (2) `ThreadHealthPublisher` publishing `ThreadHealth` messages + `ProcessManager` crash recovery (PRs #96, #101, #102), (3) systemd `WatchdogSec` OS-level supervision (PR #107). See [tests/TESTS.md](../tests/TESTS.md) for test counts. | 2026-03-06 |
 | 5.2 | Geofencing | Ray-casting point-in-polygon + altitude ceiling + warning margin (PR #119, Phase 3). Verified end-to-end via geofence breach scenario (PR #123). | 2026-03-08 |
 | 5.6 | HD-map obstacle avoidance | Two-layer A* occupancy grid (permanent HD-map static layer + 3 s TTL camera confirmation layer). Verified in Gazebo SITL scenario 02: 7/7 waypoints reached, 0 collisions (Fix #35). | 2026-03-09 |
 | 5.7 | Proximity collision detection | NAVIGATE loop checks drone ENU position against all HD-map obstacles each tick (`radius_m + 0.5 m` XY, `height_m + 0.5 m` Z). Throttled 2 s cooldown. Supplements disarm-based crash check (Fix #36). | 2026-03-09 |
