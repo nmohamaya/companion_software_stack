@@ -2055,3 +2055,48 @@ and several naming/comment remnants not caught during review:
 ---
 
 _Last updated after Improvement #40 (SHM remnant cleanup, Issue #153). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 6 CI jobs, Zenoh sole IPC backend._
+
+## Improvement #41 — P4 Mission Planner Refactor: Extract 4 Classes from main.cpp (Issue #154, PR #157)
+
+**Date:** 2026-03-14
+**Category:** Refactor / Code Quality
+**Issue:** [#154](https://github.com/nmohamaya/companion_software_stack/issues/154)
+**PR:** [#157](https://github.com/nmohamaya/companion_software_stack/pull/157)
+**Branch:** `refactor/issue-154-mission-planner-extract`
+
+**What:** Extracted ~530 lines of inline logic from `process4_mission_planner/src/main.cpp` into 4 focused, header-only classes with 35 new unit tests. Reduced main.cpp from 809 to 366 lines while preserving the 9-step execution order contract.
+
+**Files Added (8):**
+- `process4_mission_planner/include/planner/static_obstacle_layer.h` — HD-map obstacle loading, camera cross-check confirmation, collision detection, unconfirmed approach warnings (~150 lines)
+- `process4_mission_planner/include/planner/gcs_command_handler.h` — GCS command dispatch (RTL/LAND/MISSION_UPLOAD), dedup by timestamp, correlation ID propagation (~130 lines)
+- `process4_mission_planner/include/planner/fault_response_executor.h` — Fault response execution (WARN/LOITER/RTL/EMERGENCY_LAND), escalation-only policy (~105 lines)
+- `process4_mission_planner/include/planner/mission_state_tick.h` — Per-tick FSM logic (PREFLIGHT/TAKEOFF/NAVIGATE/RTL/LAND), owns tracking variables (~280 lines)
+- `tests/test_static_obstacle_layer.cpp` — 12 tests
+- `tests/test_gcs_command_handler.cpp` — 6 tests
+- `tests/test_fault_response_executor.cpp` — 7 tests
+- `tests/test_mission_state_tick.cpp` — 10 tests
+
+**Files Modified (2):**
+- `process4_mission_planner/src/main.cpp` — Replaced inline logic with extracted class calls (809 → 366 lines)
+- `tests/CMakeLists.txt` — Added 4 new `add_drone_test()` entries
+
+**Design Decisions:**
+- **SharedFlightState struct** — Mutable state (`land_sent`, `nav_was_armed`, `rtl_start_time`) shared between GCSCommandHandler, FaultResponseExecutor, and MissionStateTick. Owned by MissionStateTick, passed by reference to avoid circular dependencies.
+- **consume_fault_reset() pattern** — MissionStateTick signals landing via a flag, main.cpp reads and clears it to reset FaultManager. Avoids coupling MissionStateTick to FaultManager.
+- **Header-only** — Matches existing codebase pattern; no CMakeLists.txt changes needed for production code.
+- **9-step execution order preserved** — Inputs → staleness → obstacles → geofence → fault eval → fault exec → GCS → state tick → publish status.
+
+**Test Coverage (35 new tests):**
+
+| Suite | Tests | Covers |
+|---|---|---|
+| `StaticObstacleLayer` | 12 | Load empty/single/multi, cross-check 2-hit confirmation, low-quality skip, distant detection skip, collision margin, cooldown throttle, height check, unconfirmed approach |
+| `GCSCommandHandler` | 6 | RTL/LAND/MISSION_UPLOAD dispatch, dedup by timestamp, correlation ID, disconnected subscriber |
+| `FaultResponseExecutor` | 7 | WARN/LOITER/RTL/EMERGENCY_LAND actions, escalation-only, non-airborne skip, reset |
+| `MissionStateTick` | 10 | ARM retry, armed transition, takeoff altitude, waypoint+payload, mission complete RTL, disarm detection, RTL disarm→IDLE, landed transition, land_sent guard |
+
+**Test count:** 845 → 880 (+35 tests, 4 new suites)
+
+---
+
+_Last updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR #157). 880 tests, 46 test suites._

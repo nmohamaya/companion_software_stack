@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [P2 — Perception](#p2--perception) | 4 | 113 | Kalman tracker (Munkres), fusion (UKF+camera), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 2 | 31 | Mission FSM state machine, FaultManager degradation |
+| [P4 — Mission Planner](#p4--mission-planner) | 6 | 66 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -114,7 +114,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 80 | 8 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (Tier 1 + Tier 2) |
-| **Total** | **36 C++ + 4 shell** | **845 + 42 + 80** | |
+| **Total** | **40 C++ + 4 shell** | **880 + 42 + 80** | |
 
 ---
 
@@ -375,6 +375,59 @@ fault evaluation with escalation-only policy.
 | `FaultManagerTest` | 24 | Nominal health → `NONE`, battery low → `WARN`, battery critical → `RTL`, thermal warning → `LOITER`, thermal critical → `EMERGENCY_LAND`, critical process death, pose staleness, FC link lost, escalation-only (never downgrade), loiter → RTL auto-escalation, high-water mark tracking, config overrides |
 
 **Key files under test:** `planner/fault_manager.h`
+
+---
+
+### test_static_obstacle_layer.cpp — 12 tests
+
+**What it tests:** `StaticObstacleLayer` — HD-map static obstacle management
+including loading, camera cross-check confirmation, collision detection, and
+unconfirmed approach warnings.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `StaticObstacleLayerTest` | 12 | Load empty/single/multi, cross-check 2-hit confirmation, low-quality pose skip, distant detection skip, collision within margin, no collision when far, cooldown throttle, height check, unconfirmed approach warning, confirmed obstacle no-warn |
+
+**Key files under test:** `planner/static_obstacle_layer.h`
+
+---
+
+### test_gcs_command_handler.cpp — 6 tests
+
+**What it tests:** `GCSCommandHandler` — GCS command dispatch (RTL, LAND,
+MISSION_UPLOAD) with deduplication by timestamp and correlation ID propagation.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `GCSCommandHandlerTest` | 6 | RTL dispatch + FSM transition, LAND dispatch + land_sent flag, duplicate timestamp ignored, correlation ID persists, mission upload loads waypoints, disconnected subscriber ignored |
+
+**Key files under test:** `planner/gcs_command_handler.h`
+
+---
+
+### test_fault_response_executor.cpp — 7 tests
+
+**What it tests:** `FaultResponseExecutor` — fault response execution with
+escalation-only policy (never downgrade from a previously applied action).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `FaultResponseExecutorTest` | 7 | WARN action (no FC command), LOITER stops trajectory + transitions, RTL sends FC + transitions, EMERGENCY_LAND sends LAND, escalation-only (never downgrade), non-airborne states skipped, reset clears state |
+
+**Key files under test:** `planner/fault_response_executor.h`
+
+---
+
+### test_mission_state_tick.cpp — 10 tests
+
+**What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
+states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `MissionStateTickTest` | 10 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard |
+
+**Key files under test:** `planner/mission_state_tick.h`
 
 ---
 
@@ -984,4 +1037,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 746 unit tests (SHM) / 746 (SHM+Zenoh) across 49+ suites in 37 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. PR #135 (rev 2): bbox clamping, uint8_t overflow guard, area_ratio float cast, max_fps sleep-at-end, odd-dimension regression test.*
+*Last updated: March 2026 — 880 unit tests across 46 suites in 40 files + 42 E2E checks (2 shell scripts) + 80 scenario checks across 8 scenarios (run_scenario.sh + run_scenario_gazebo.sh). All 8 Gazebo SITL + Zenoh scenarios green. Issue #154: 4 new test files for P4 Mission Planner refactor (StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick).*
