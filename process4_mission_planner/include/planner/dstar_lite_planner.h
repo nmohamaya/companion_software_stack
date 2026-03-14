@@ -209,18 +209,7 @@ private:
 
     // ── Remove a cell from the priority queue ────────────────
     void remove_from_queue(const GridCell& u) {
-        // We need to find and remove the entry for u.
-        // Since the set is ordered by key, we compute the current key and search.
-        // However, the stored key may differ from the current key, so we
-        // do a linear scan only if needed.
-        auto it = queue_index_.find(u);
-        if (it != queue_index_.end()) {
-            // We have a cached iterator — erase it
-            // But the iterator may be stale due to other modifications.
-            // Use find-based removal instead.
-            queue_index_.erase(it);
-        }
-        // Brute-force removal (the set is typically small after changes)
+        // Linear scan — the set is typically small after incremental changes.
         for (auto sit = U_.begin(); sit != U_.end(); ++sit) {
             if (sit->cell == u) {
                 U_.erase(sit);
@@ -350,14 +339,13 @@ private:
     }
 
     // ── D* Lite state ────────────────────────────────────────
-    std::unordered_map<GridCell, float, GridCellHash>                          g_;
-    std::unordered_map<GridCell, float, GridCellHash>                          rhs_;
-    std::set<QueueEntry>                                                       U_;
-    std::unordered_map<GridCell, std::set<QueueEntry>::iterator, GridCellHash> queue_index_;
-    GridCell                                                                   last_start_{};
-    GridCell                                                                   last_goal_{};
-    float                                                                      km_          = 0.0f;
-    bool                                                                       initialized_ = false;
+    std::unordered_map<GridCell, float, GridCellHash> g_;
+    std::unordered_map<GridCell, float, GridCellHash> rhs_;
+    std::set<QueueEntry>                              U_;
+    GridCell                                          last_start_{};
+    GridCell                                          last_goal_{};
+    float                                             km_          = 0.0f;
+    bool                                              initialized_ = false;
 };
 
 }  // namespace drone::planner

@@ -100,8 +100,8 @@ inline constexpr float kCosts[26] = {
 ///
 /// Key design: obstacles are NEVER cleared unless they have not been
 /// observed for `cell_ttl_s` seconds (default 3 s).  This prevents a
-/// single missed detection frame from wiping the grid and causing A* to
-/// re-route straight through a known obstacle.
+/// single missed detection frame from wiping the grid and causing the planner
+/// to re-route straight through a known obstacle.
 class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
