@@ -2195,4 +2195,35 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-_Last updated after Improvement #43 (D* Lite incremental planner, Issue #158). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 904 tests, 48 test suites, 6 CI jobs._
+## Improvement #44 — ByteTrack Multi-Object Tracker: Two-Stage Association (Issue #163, PR #165)
+
+**Date:** 2026-03-14
+**Category:** Feature / Perception
+**Issue:** [#163](https://github.com/nmohamaya/companion_software_stack/issues/163)
+**PR:** [#165](https://github.com/nmohamaya/companion_software_stack/pull/165)
+
+**What:** Implemented ByteTrack (Zhang et al., ECCV 2022) two-stage association tracker to reduce ID switches during partial occlusion. Stage 1 matches all tracks against high-confidence detections using IoU cost + Hungarian assignment. Stage 2 recovers unmatched tracks using low-confidence detections — no CNN features required. Reuses existing `KalmanBoxTracker` and `HungarianSolver` with zero new dependencies.
+
+**Key Design:**
+- **Two-stage association:** High-conf detections match first (Stage 1), then low-conf detections recover unmatched tracks (Stage 2). Only high-conf detections create new tracks.
+- **IoU cost matrix:** Replaces SORT's center-distance cost with intersection-over-union for more robust bbox matching.
+- **Config-driven params:** `high_conf_threshold`, `low_conf_threshold`, `max_iou_cost` in `config/default.json`.
+- **No raw/shared pointers:** Value vector of `KalmanBoxTracker`, RAII throughout.
+
+**Files Added (2):**
+- `process2_perception/include/perception/bytetrack_tracker.h` — `ByteTrackTracker` class with `ByteTrackParams`
+- `process2_perception/src/bytetrack_tracker.cpp` — IoU computation, cost matrix, two-stage update
+- `tests/test_bytetrack_tracker.cpp` — 18 tests across 6 suites
+
+**Files Modified (5):**
+- `process2_perception/src/kalman_tracker.cpp` — Factory: added `"bytetrack"` backend with config-driven params
+- `process2_perception/include/perception/itracker.h` — Updated comment: supported backends
+- `process2_perception/CMakeLists.txt` — Added `bytetrack_tracker.cpp` source
+- `tests/CMakeLists.txt` — Added test target + linked bytetrack to existing test targets
+- `config/default.json` — Added `high_conf_threshold`, `low_conf_threshold`, `max_iou_cost` keys
+
+**Test count:** 904 → 922 (+18 tests, 6 new suites)
+
+---
+
+_Last updated after Improvement #44 (ByteTrack tracker, Issue #163). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 6 CI jobs._

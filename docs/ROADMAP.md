@@ -71,7 +71,7 @@
 | Observability | JSON logging + IPC latency histograms + cross-process correlation IDs |
 | Planning | **D* Lite incremental planner** + A* 3D grid planner + 3D obstacle avoidance + potential field fallback |
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
-| Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian |
+| Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
 | Integration testing | **7/7 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 8 parameterized JSON configs with fault sequences + pass criteria |
@@ -554,6 +554,7 @@
 | ~~[#154](https://github.com/nmohamaya/companion_software_stack/issues/154)~~ | ~~P4 Mission Planner: Extract 4 classes from main.cpp~~ ✅ | Refactor | **Closed** (Improvement #41, PR #157) |
 | ~~[#155](https://github.com/nmohamaya/companion_software_stack/issues/155)~~ | ~~Stale SHM reference cleanup in API.md and ROADMAP.md~~ ✅ | Docs | **Closed** (Improvement #42, PR #156) |
 | ~~[#158](https://github.com/nmohamaya/companion_software_stack/issues/158)~~ | ~~D* Lite Incremental Path Planner~~ ✅ | Feature / Refactor | **Closed** (Improvement #43) |
+| ~~[#163](https://github.com/nmohamaya/companion_software_stack/issues/163)~~ | ~~ByteTrack Multi-Object Tracker~~ ✅ | Feature | **Closed** (Improvement #44, PR #165) |
 
 ---
 
@@ -605,4 +606,4 @@
 
 ---
 
-*Last updated after Improvement #43 (D* Lite incremental planner, Issue #158) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 904 tests, 48 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Improvement #44 (ByteTrack tracker, Issue #163) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, Zenoh sole IPC backend, 6 CI jobs. 7/7 Tier 1 scenarios passing on Zenoh. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
