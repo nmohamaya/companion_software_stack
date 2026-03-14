@@ -2100,7 +2100,7 @@ _Last updated after Improvement #40 (SHM remnant cleanup, Issue #153). See [test
 ---
 
 _Last updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR #157). 880 tests, 46 test suites._
-## Improvement #41 — Stale SHM Reference Cleanup in API.md and ROADMAP.md (Issue #155)
+## Improvement #42 — Stale SHM Reference Cleanup in API.md and ROADMAP.md (Issue #155)
 
 **Date:** 2026-03-13
 **Category:** Documentation / Tech Debt
@@ -2138,4 +2138,4 @@ _Last updated after Improvement #41 (P4 Mission Planner refactor, Issue #154, PR
 
 ---
 
-_Last updated after Improvement #41 (API.md/ROADMAP.md SHM cleanup, Issue #155). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 845 tests, 6 CI jobs, Zenoh sole IPC backend._
+_Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 880 tests, 46 test suites, 6 CI jobs, Zenoh sole IPC backend._
