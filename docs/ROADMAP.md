@@ -73,7 +73,7 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
-| Integration testing | **7/7 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
+| Integration testing | **8/8 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **29** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
@@ -591,7 +591,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 (8/8 Tier 1 pass, SHM+Zenoh)** | **9/9 Gazebo SITL + Zenoh ✅** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 (8/8 Tier 1 pass, SHM+Zenoh)** | **8/8 Gazebo SITL + Zenoh ✅ (scenario 09 Tier 1 only)** |
 
 ### Process Activity During Simulation
 

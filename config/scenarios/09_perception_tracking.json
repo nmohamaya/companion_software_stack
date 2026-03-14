@@ -1,8 +1,8 @@
 {
-    "_comment": "Scenario 9: Perception Tracking — ByteTrack two-stage association validation",
+    "_comment": "Scenario 9: Perception Tracking — ByteTrack backend-switching smoke test",
     "scenario": {
         "name": "perception_tracking",
-        "description": "Validate ByteTrack tracker two-stage association during a simple mission. Exercises high-conf Stage 1 matching and low-conf Stage 2 occlusion recovery. Tier 1 — no Gazebo required.",
+        "description": "Smoke test for ByteTrack tracker backend switching. Verifies the tracker is instantiated and the mission completes with ByteTrack active. Does not assert two-stage association behavior (no observable log markers for Stage 1/Stage 2 yet). Tier 1 — no Gazebo required.",
         "tier": 1,
         "timeout_s": 90,
         "requires_gazebo": false

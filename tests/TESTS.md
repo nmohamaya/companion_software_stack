@@ -31,7 +31,7 @@
 # Gazebo SITL integration (requires PX4 + Gazebo Harmonic)
 ./tests/run_tests.sh gazebo-e2e
 
-# Gazebo SITL scenario runner (all 8 scenarios with PX4 + Gazebo + Zenoh)
+# Gazebo SITL scenario runner (all 9 scenarios with PX4 + Gazebo + Zenoh)
 ./tests/run_scenario_gazebo.sh --all
 ./tests/run_scenario_gazebo.sh --all --gui   # with 3D window
 ./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json
@@ -1007,7 +1007,7 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 06 — Mission Upload | 1 | No | 6 | Mid-flight 3-waypoint upload via GCS command |
 | 07 — Thermal Throttle | 1 | No | 8 | Thermal zone escalation with 4 critical processes alive check |
 | 08 — Full Stack Stress | 1 | No | 15 | Concurrent faults, high-rate stress; 4 procs alive + 7 SHM segments |
-| 09 — Perception Tracking | 1 | No | 16 | ByteTrack two-stage association validation; 4 log checks + 5 forbidden + 7 procs alive |
+| 09 — Perception Tracking | 1 | No | 16 | ByteTrack backend-switching smoke test; 4 log checks + 5 forbidden + 7 procs alive |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
@@ -1043,14 +1043,14 @@ via `fault_injector`, and verifies pass criteria against actual process logs.
 - `processes_alive` — processes that must survive to end of scenario
 - `shm_segments_exist` — SHM segments that must be present at verification time
 
-All 8 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
+All 9 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
 to catch unexpected collisions (Fix #40).
 
 **Run (Tier 2 — Gazebo SITL):**
 ```bash
 ./tests/run_scenario_gazebo.sh --list                                    # list
 ./tests/run_scenario_gazebo.sh config/scenarios/01_nominal_mission.json   # one
-./tests/run_scenario_gazebo.sh --all                                     # all 8 scenarios
+./tests/run_scenario_gazebo.sh --all                                     # all 9 scenarios
 ./tests/run_scenario_gazebo.sh --all --gui                               # with 3D window
 ./tests/run_scenario_gazebo.sh --dry-run config/scenarios/02_obstacle_avoidance.json
 ```
@@ -1065,7 +1065,7 @@ to catch unexpected collisions (Fix #40).
 **Requires:** PX4 SITL (`$PX4_DIR`, default `~/PX4-Autopilot`), Gazebo Harmonic,
 `fault_injector` built. Logs output to `drone_logs/scenarios_gazebo/<scenario_name>/`.
 
-**Status (March 2026):** 8/8 scenarios passing, 80 checks green (Gazebo SITL + Zenoh).
+**Status (March 2026):** 9/9 scenarios passing, 97 checks green (Gazebo SITL + Zenoh).
 
 ---
 
