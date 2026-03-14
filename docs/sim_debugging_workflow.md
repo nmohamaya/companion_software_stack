@@ -52,7 +52,7 @@ Before diving into logs, understand what could fail:
 ### **Step 1: Verify the Failure Mode**
 
 ```bash
-cd /home/nmohanan31/NM/Projects/companion_software_stack
+cd "$(git rev-parse --show-toplevel)"
 
 # Check which tests passed/failed
 tail -20 drone_logs/scenarios_gazebo/<scenario>/combined.log | grep -E "passed|failed"
