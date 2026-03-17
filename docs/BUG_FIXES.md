@@ -908,6 +908,26 @@ The temperature-to-zone logic in `iprocess_monitor.h` also sets `thermal_zone=2`
 
 ---
 
+### Fix #41 — `gazebo.json` Uses Stale `slam.visual_frontend` Key, Falls Back to Simulated VIO in Gazebo SITL
+
+**Date:** 2026-03-17
+**Severity:** Critical (drone cannot navigate in Gazebo when launched via `launch_gazebo.sh`)
+**Files:** `config/gazebo.json`
+
+**Bug:** `config/gazebo.json` configured the VIO backend under `slam.visual_frontend.backend: "gazebo"`, but P3 (`slam_vio_nav/src/main.cpp` line 363) reads `slam.vio.backend`. The key mismatch caused P3 to fall back to the default `"simulated"` backend. The `SimulatedVIOBackend` uses target-following dynamics — it maintains an internal position that tracks trajectory commands at a fixed speed, completely independent of the real drone position in Gazebo. The mission planner computed velocity commands from this divergent simulated pose, causing the real PX4 drone to fly erratically and never reach waypoints or engage obstacle avoidance.
+
+**Root Cause:** When the config key was renamed from `slam.visual_frontend` to `slam.vio` (during VIO backend refactoring), `config/gazebo_sitl.json` was updated but `config/gazebo.json` was not. The two files serve different purposes (`gazebo_sitl.json` is the base for the automated Gazebo scenario runner; `gazebo.json` is the default for manual `launch_gazebo.sh` runs), so the bug only manifested during manual Gazebo testing, not in automated Tier 2 scenarios.
+
+**Relationship to Fix #25:** This is the same class of bug as Fix #25 (Gazebo SITL Drone Ignores Waypoints Due to Fake SLAM Pose), which fixed the identical missing `slam.vio` key in `gazebo_sitl.json`. The fix for #25 did not propagate to `gazebo.json` because that file was not identified as also requiring the change.
+
+**Fix:** Renamed `slam.visual_frontend` to `slam.vio` in `config/gazebo.json`, matching the key that P3 actually reads. Added the same `_comment` as `gazebo_sitl.json` for clarity.
+
+**Found by:** Manual Gazebo SITL testing — scenario 02 (obstacle avoidance) drone no longer flew toward obstacles after recent VIO and planner changes. Root cause identified by comparing the `slam` sections of `gazebo.json` vs `gazebo_sitl.json` and tracing the config key P3 reads.
+
+**Prevention:** Config keys that are read by process code should be validated at startup. A config validator rule for `slam.vio.backend` (required, `one_of({"simulated", "gazebo", "msckf"})`) would catch this class of stale-key bug. Additionally, `gazebo.json` and `gazebo_sitl.json` should be kept in sync — consider generating one from the other or adding a CI diff check.
+
+---
+
 ### Fix #164 — 8 Unit Tests Silently Skipped Due to Missing Model & CWD Assumptions
 
 **Date:** 2026-03-14

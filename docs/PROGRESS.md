@@ -2264,4 +2264,23 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-_Last updated after Improvement #46 (responsive simulated VIO + thermal fix, Issue #167). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks (8 Tier 1 + 1 Tier 2), 6 CI jobs._
+## Improvement #47 — Fix Gazebo VIO Config Key Mismatch + Debugging Workflow Improvements (Issue #170)
+
+**Date:** 2026-03-17
+**Category:** Bug Fix / Documentation
+**Issue:** [#170](https://github.com/nmohamaya/companion_software_stack/issues/170)
+
+**What:** Fixed a critical config key mismatch in `config/gazebo.json` where `slam.visual_frontend` (a stale key from a prior refactor) should have been `slam.vio`. This caused P3 to silently fall back to `SimulatedVIOBackend` during manual Gazebo SITL runs (`launch_gazebo.sh`), making the drone unable to navigate toward obstacles or follow waypoints. Same class of bug as Fix #25, which fixed the identical issue in `gazebo_sitl.json` but didn't propagate to `gazebo.json`.
+
+**Why:** Scenario 02 (obstacle avoidance) regressed in manual Gazebo testing — the drone no longer flew toward obstacles. Root cause: P3 reads `slam.vio.backend` but `gazebo.json` had the value under the stale `slam.visual_frontend` key, so the VIO factory returned `SimulatedVIOBackend` (synthetic pose) instead of `GazeboVIOBackend` (ground-truth odometry).
+
+**Files Modified (3):**
+- `config/gazebo.json` — renamed `slam.visual_frontend` → `slam.vio`
+- `docs/BUG_FIXES.md` — added Fix #41 (stale config key, root cause, prevention)
+- `docs/sim_debugging_workflow.md` — added config verification step, copy-pastable commands with `LOG_DIR` variable, Pattern 5 (config key mismatch), new worked example, updated troubleshooting flowchart
+
+**Test impact:** No new tests. Existing Tier 2 scenario 02 should now pass in manual Gazebo SITL.
+
+---
+
+_Last updated after Improvement #47 (Gazebo VIO config fix, Issue #170). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks (8 Tier 1 + 1 Tier 2), 6 CI jobs._
