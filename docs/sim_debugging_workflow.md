@@ -246,6 +246,9 @@ required = [('slam','vio','backend'), ('comms','mavlink','backend'), ('perceptio
 for keys in required:
     val = cfg
     for k in keys:
+        if not isinstance(val, dict):
+            val = 'MISSING'
+            break
         val = val.get(k, {})
     print(f\"{'→'.join(keys)}: {val if val else 'MISSING'}\")"
 
