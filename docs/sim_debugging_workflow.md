@@ -229,13 +229,20 @@ python3 -m json.tool "${LOG_DIR}/merged_config.json" | head -80
 python3 -c "
 import json, sys
 cfg = json.load(open(sys.argv[1]))
-print('VIO backend:      ', cfg.get('slam',{}).get('vio',{}).get('backend','NOT SET'))
-print('IMU backend:      ', cfg.get('slam',{}).get('imu',{}).get('backend','NOT SET'))
-print('FC backend:       ', cfg.get('comms',{}).get('mavlink',{}).get('backend','NOT SET'))
-print('Detector backend: ', cfg.get('perception',{}).get('detector',{}).get('backend','NOT SET'))
-print('Planner backend:  ', cfg.get('mission_planner',{}).get('path_planner',{}).get('backend','NOT SET'))
-print('Avoider backend:  ', cfg.get('mission_planner',{}).get('obstacle_avoider',{}).get('backend','NOT SET'))
-print('IPC backend:      ', cfg.get('ipc_backend','NOT SET'))
+def walk(d, *keys):
+    for k in keys:
+        v = d.get(k, {}) if isinstance(d, dict) else 'MISSING'
+        if v == 'MISSING':
+            return v
+        d = v
+    return d if d != {} else 'NOT SET'
+print('VIO backend:      ', walk(cfg, 'slam', 'vio', 'backend'))
+print('IMU backend:      ', walk(cfg, 'slam', 'imu', 'backend'))
+print('FC backend:       ', walk(cfg, 'comms', 'mavlink', 'backend'))
+print('Detector backend: ', walk(cfg, 'perception', 'detector', 'backend'))
+print('Planner backend:  ', walk(cfg, 'mission_planner', 'path_planner', 'backend'))
+print('Avoider backend:  ', walk(cfg, 'mission_planner', 'obstacle_avoider', 'backend'))
+print('IPC backend:      ', walk(cfg, 'ipc_backend'))
 " "${LOG_DIR}/merged_config.json"
 
 # 3. Compare base configs for drift (gazebo.json vs gazebo_sitl.json)

@@ -9,7 +9,7 @@
 # expected IPC / log output.
 #
 # This is NOT a closed-loop waypoint mission test — it verifies
-# that all processes start correctly and communicate via SHM,
+# that all processes start correctly and communicate via Zenoh,
 # gz-transport, and MAVLink.
 #
 # Usage:

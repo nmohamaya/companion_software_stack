@@ -110,21 +110,19 @@ CONFIG_FILE=config/gazebo.json bash deploy/launch_all.sh
 Starts PX4 SITL + Gazebo + the companion stack:
 
 ```bash
-bash deploy/launch_gazebo.sh              # Headless, SHM backend
+bash deploy/launch_gazebo.sh              # Headless
 bash deploy/launch_gazebo.sh --gui        # With 3-D visualisation
 ```
 
-Set `CONFIG_FILE` to choose the IPC backend config:
+Set `CONFIG_FILE` to select a Gazebo/SITL config profile:
 
 ```bash
-CONFIG_FILE=config/gazebo.json       bash deploy/launch_gazebo.sh --gui   # SHM
-CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui   # Zenoh
-CONFIG_FILE=config/gazebo_sitl.json  bash deploy/launch_gazebo.sh --gui   # Zenoh (scenario default)
+CONFIG_FILE=config/gazebo_sitl.json  bash deploy/launch_gazebo.sh --gui   # Scenario default
 ```
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `CONFIG_FILE` | `config/gazebo.json` | JSON config for IPC backend + process settings |
+| `CONFIG_FILE` | `config/gazebo_sitl.json` | JSON config for Gazebo/SITL profile + process settings |
 | `PX4_DIR` | `~/PX4-Autopilot` | Path to PX4-Autopilot source |
 | `GZ_WORLD` | `sim/worlds/test_world.sdf` | Gazebo SDF world file |
 | `LOG_DIR` | `drone_logs/` | Log output directory |

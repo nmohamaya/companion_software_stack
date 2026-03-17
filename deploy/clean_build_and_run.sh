@@ -16,7 +16,7 @@
 #   1. Kill leftover PX4/Gazebo/companion processes
 #   2. Clean-build (Release by default, Debug if sanitizer/coverage)
 #   3. Run unit tests
-#   4. Launch Gazebo SITL flight with config/gazebo.json
+#   4. Launch Gazebo SITL flight with config/gazebo_sitl.json
 #
 # Prerequisites:
 #   - zenohc ≥ 1.0 installed  (apt: libzenohc libzenohc-dev)
