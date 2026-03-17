@@ -9,7 +9,7 @@
 # Environment variables (override defaults):
 #   PX4_DIR          Path to PX4-Autopilot   (default: ~/PX4-Autopilot)
 #   GZ_WORLD         SDF world file          (default: sim/worlds/test_world.sdf)
-#   CONFIG_FILE      JSON config             (default: config/gazebo.json)
+#   CONFIG_FILE      JSON config             (default: config/gazebo_sitl.json)
 #   LOG_DIR          Log output directory    (default: <project>/drone_logs)
 #
 # Prerequisites:
@@ -26,7 +26,7 @@ BIN_DIR="${PROJECT_DIR}/build/bin"
 # ── Defaults ──────────────────────────────────────────────────
 PX4_DIR="${PX4_DIR:-${HOME}/PX4-Autopilot}"
 GZ_WORLD="${GZ_WORLD:-${PROJECT_DIR}/sim/worlds/test_world.sdf}"
-CONFIG_FILE="${CONFIG_FILE:-${PROJECT_DIR}/config/gazebo.json}"
+CONFIG_FILE="${CONFIG_FILE:-${PROJECT_DIR}/config/gazebo_sitl.json}"
 LOG_DIR="${LOG_DIR:-${PROJECT_DIR}/drone_logs}"
 PX4_MODEL="x500_companion"
 HEADLESS=1

@@ -132,10 +132,10 @@ if [[ -n "$GUI_FLAG" ]]; then
 else
     echo "  Mode   : Headless"
 fi
-echo "  Config : config/gazebo.json"
+echo "  Config : config/gazebo_sitl.json"
 echo "  Logs   : drone_logs/"
 echo "  Press Ctrl+C to stop."
 echo ""
 
-export CONFIG_FILE="${PROJECT_DIR}/config/gazebo.json"
+export CONFIG_FILE="${PROJECT_DIR}/config/gazebo_sitl.json"
 exec bash deploy/launch_gazebo.sh $GUI_FLAG

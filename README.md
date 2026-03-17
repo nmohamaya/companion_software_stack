@@ -1134,8 +1134,7 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 ├── CMakeLists.txt                    # Super-build
 ├── config/
 │   ├── default.json                  # All tunables (simulated backends)
-│   ├── gazebo_sitl.json              # Gazebo SITL config (mavlink FC, gazebo cameras)
-│   └── gazebo.json                   # Full Gazebo config (+ gazebo visual frontend)
+│   └── gazebo_sitl.json              # Gazebo SITL config (mavlink FC, gazebo cameras)
 ├── common/
 │   ├── ipc/                          # Shared memory IPC library
 │   │   └── include/ipc/

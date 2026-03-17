@@ -265,7 +265,7 @@ Press **Ctrl+C** to gracefully stop everything (PX4 + Gazebo + all 7 processes).
 |---|---|---|
 | `PX4_DIR` | `~/PX4-Autopilot` | Path to PX4-Autopilot checkout |
 | `GZ_WORLD` | `sim/worlds/test_world.sdf` | World SDF file |
-| `CONFIG_FILE` | `config/gazebo.json` | JSON config for the companion stack |
+| `CONFIG_FILE` | `config/gazebo_sitl.json` | JSON config for the companion stack |
 | `LOG_DIR` | `<project>/drone_logs` | Where process logs are written |
 
 Example with overrides:
@@ -279,7 +279,7 @@ PX4_DIR=/opt/px4 CONFIG_FILE=config/my_mission.json \
 
 ## 9. What Happens During a Flight
 
-With the default configuration (`config/gazebo.json`), the autonomous flight sequence is:
+With the default configuration (`config/gazebo_sitl.json`), the autonomous flight sequence is:
 
 ```
         IDLE ──► PREFLIGHT ──► TAKEOFF ──► NAVIGATE ──► RTL ──► LAND
@@ -362,11 +362,11 @@ gz service -s /gui/follow \
 
 ## 11. Modifying the Flight Plan
 
-The flight plan is defined in the JSON config file. The default for simulation is `config/gazebo.json`.
+The flight plan is defined in the JSON config file. The default for simulation is `config/gazebo_sitl.json`.
 
 ### Waypoint format
 
-Open `config/gazebo.json` and find the `mission_planner` section:
+Open `config/gazebo_sitl.json` and find the `mission_planner` section:
 
 ```json
 "mission_planner": {
@@ -460,7 +460,7 @@ You can create a separate config file for each mission profile without modifying
 
 ```bash
 # Copy the base config
-cp config/gazebo.json config/my_patrol.json
+cp config/gazebo_sitl.json config/my_patrol.json
 
 # Edit waypoints in my_patrol.json
 nano config/my_patrol.json
@@ -583,7 +583,7 @@ grep -i "ready\|home\|armed\|takeoff" drone_logs/px4_sitl.log
 | Camera follow doesn't work | CameraTracking service takes time | Wait 10 s after GUI opens, or use Entity Tree → right-click drone → Move to |
 | `gz service` commands time out | Gazebo GUI not running | Make sure `gz sim -g` is running |
 | Tests fail with MAVSDK errors | MAVSDK not installed or wrong version | Run `pkg-config --modversion mavsdk` — must be 2.12.12 |
-| Processes exit immediately | Config file not found | Verify `config/gazebo.json` exists and is valid JSON |
+| Processes exit immediately | Config file not found | Verify `config/gazebo_sitl.json` exists and is valid JSON |
 
 ### Clean restart
 
@@ -612,7 +612,7 @@ bash deploy/launch_gazebo.sh --gui
 | File | Purpose |
 |---|---|
 | `deploy/launch_gazebo.sh` | Main launch script — starts PX4, Gazebo, GUI, and all 7 processes |
-| `config/gazebo.json` | Simulation config — backends, waypoints, sensor params, comms settings |
+| `config/gazebo_sitl.json` | Simulation config — backends, waypoints, sensor params, comms settings |
 | `sim/worlds/test_world.sdf` | Gazebo world — ground plane, landing pad, obstacles, lighting, physics |
 | `sim/models/x500_companion/model.sdf` | Custom drone model — x500 + cameras + IMU |
 | `sim/models/x500_companion/model.config` | Gazebo model metadata |

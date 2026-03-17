@@ -100,7 +100,7 @@ Starts all seven companion processes in the background using a given config
 file. Typically called by the clean-build scripts, but can be used standalone:
 
 ```bash
-CONFIG_FILE=config/gazebo.json bash deploy/launch_all.sh
+CONFIG_FILE=config/gazebo_sitl.json bash deploy/launch_all.sh
 ```
 
 ---
@@ -117,14 +117,13 @@ bash deploy/launch_gazebo.sh --gui        # With 3-D visualisation
 Set `CONFIG_FILE` to choose the IPC backend config:
 
 ```bash
-CONFIG_FILE=config/gazebo.json       bash deploy/launch_gazebo.sh --gui   # SHM
-CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui   # Zenoh
-CONFIG_FILE=config/gazebo_sitl.json  bash deploy/launch_gazebo.sh --gui   # Zenoh (scenario default)
+CONFIG_FILE=config/gazebo_sitl.json   bash deploy/launch_gazebo.sh --gui   # Zenoh (default)
+CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui   # Zenoh (alternate)
 ```
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `CONFIG_FILE` | `config/gazebo.json` | JSON config for IPC backend + process settings |
+| `CONFIG_FILE` | `config/gazebo_sitl.json` | JSON config for IPC backend + process settings |
 | `PX4_DIR` | `~/PX4-Autopilot` | Path to PX4-Autopilot source |
 | `GZ_WORLD` | `sim/worlds/test_world.sdf` | Gazebo SDF world file |
 | `LOG_DIR` | `drone_logs/` | Log output directory |

@@ -924,7 +924,7 @@ The temperature-to-zone logic in `iprocess_monitor.h` also sets `thermal_zone=2`
 
 **Found by:** Manual Gazebo SITL testing — scenario 02 (obstacle avoidance) drone no longer flew toward obstacles after recent VIO and planner changes. Root cause identified by comparing the `slam` sections of `gazebo.json` vs `gazebo_sitl.json` and tracing the config key P3 reads.
 
-**Prevention:** Config keys that are read by process code should be validated at startup. A config validator rule for `slam.vio.backend` (required, `one_of({"simulated", "gazebo"})`) would catch this class of stale-key bug. Additionally, `gazebo.json` and `gazebo_sitl.json` should be kept in sync — consider generating one from the other or adding a CI diff check.
+**Prevention:** Config keys that are read by process code should be validated at startup. A config validator rule for `slam.vio.backend` (required, `one_of({"simulated", "gazebo"})`) would catch this class of stale-key bug. **Update:** `config/gazebo.json` has since been consolidated into `config/gazebo_sitl.json` — both `launch_gazebo.sh` and `run_scenario_gazebo.sh` now use the single `gazebo_sitl.json` file, eliminating this class of config-drift bug entirely.
 
 ---
 

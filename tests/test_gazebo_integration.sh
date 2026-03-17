@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BIN_DIR="${PROJECT_DIR}/build/bin"
 DEPLOY_DIR="${PROJECT_DIR}/deploy"
-CONFIG_FILE="${PROJECT_DIR}/config/gazebo.json"
+CONFIG_FILE="${PROJECT_DIR}/config/gazebo_sitl.json"
 LOG_DIR="/tmp/drone_integration_test_logs"
 VERIFY_TIME="${VERIFY_TIME:-20}"
 
