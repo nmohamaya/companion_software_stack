@@ -51,7 +51,7 @@
             "gz_topic": "/imu"
         },
         "vio": {
-            "_comment": "Use 'gazebo' for Gazebo SITL ground-truth pose; change to 'simulated' or a real VIO backend (e.g. 'msckf') when deploying on real hardware or a more sophisticated simulator",
+            "_comment": "Use 'gazebo' for Gazebo SITL ground-truth pose; change to 'simulated' for headless dev. Real VIO backends (e.g. MSCKF) are planned but not yet implemented in the factory.",
             "backend": "gazebo",
             "gz_topic": "/model/x500_companion_0/odometry"
         },
