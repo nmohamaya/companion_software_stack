@@ -395,7 +395,7 @@ Running scenario 02 (obstacle avoidance) via `launch_gazebo.sh`:
 # For manual launch_gazebo.sh runs, logs are in drone_logs/ directly:
 LOG_DIR=drone_logs
 strings "${LOG_DIR}/slam_vio_nav.log" | grep -i "backend"
-# -> [VIO] Using backend: SimulatedVIOBackend
+# -> VIO backend: SimulatedVIOBackend (sim_speed=2.0 m/s)
 # WRONG! Should be GazeboVIOBackend for Gazebo SITL
 ```
 
@@ -534,8 +534,8 @@ perception.2.log: Growing from 1MB to 500MB in 20s
 
 **Log appearance:**
 ```
-slam_vio_nav.log: [VIO] Using backend: SimulatedVIOBackend
-# Expected: GazeboVIOBackend (for Gazebo SITL runs)
+slam_vio_nav.log: VIO backend: SimulatedVIOBackend (sim_speed=2.0 m/s)
+# Expected: VIO backend: GazeboVIOBackend (for Gazebo SITL runs)
 ```
 
 **Diagnosis:**
@@ -587,7 +587,7 @@ if vio == 'NOT SET':
 Scenario Failed
   |
   +-> Drone takes off but doesn't navigate / flies randomly?
-  |    +-> Check VIO backend: strings slam_vio_nav.log | grep backend
+  |    +-> Check VIO backend: strings ${LOG_DIR}/slam_vio_nav.log | grep backend
   |         +-> "SimulatedVIOBackend": CONFIG BUG — slam.vio.backend missing
   |         +-> "GazeboVIOBackend": VIO is correct, check planner/avoider
   |

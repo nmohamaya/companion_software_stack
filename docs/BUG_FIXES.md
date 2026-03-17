@@ -914,7 +914,7 @@ The temperature-to-zone logic in `iprocess_monitor.h` also sets `thermal_zone=2`
 **Severity:** Critical (drone cannot navigate in Gazebo when launched via `launch_gazebo.sh`)
 **Files:** `config/gazebo.json`
 
-**Bug:** `config/gazebo.json` configured the VIO backend under `slam.visual_frontend.backend: "gazebo"`, but P3 (`slam_vio_nav/src/main.cpp` line 363) reads `slam.vio.backend`. The key mismatch caused P3 to fall back to the default `"simulated"` backend. The `SimulatedVIOBackend` uses target-following dynamics — it maintains an internal position that tracks trajectory commands at a fixed speed, completely independent of the real drone position in Gazebo. The mission planner computed velocity commands from this divergent simulated pose, causing the real PX4 drone to fly erratically and never reach waypoints or engage obstacle avoidance.
+**Bug:** `config/gazebo.json` configured the VIO backend under `slam.visual_frontend.backend: "gazebo"`, but P3 (`process3_slam_vio_nav/src/main.cpp` line 363) reads `slam.vio.backend`. The key mismatch caused P3 to fall back to the default `"simulated"` backend. The `SimulatedVIOBackend` uses target-following dynamics — it maintains an internal position that tracks trajectory commands at a fixed speed, completely independent of the real drone position in Gazebo. The mission planner computed velocity commands from this divergent simulated pose, causing the real PX4 drone to fly erratically and never reach waypoints or engage obstacle avoidance.
 
 **Root Cause:** When the config key was renamed from `slam.visual_frontend` to `slam.vio` (during VIO backend refactoring), `config/gazebo_sitl.json` was updated but `config/gazebo.json` was not. The two files serve different purposes (`gazebo_sitl.json` is the base for the automated Gazebo scenario runner; `gazebo.json` is the default for manual `launch_gazebo.sh` runs), so the bug only manifested during manual Gazebo testing, not in automated Tier 2 scenarios.
 
@@ -924,7 +924,7 @@ The temperature-to-zone logic in `iprocess_monitor.h` also sets `thermal_zone=2`
 
 **Found by:** Manual Gazebo SITL testing — scenario 02 (obstacle avoidance) drone no longer flew toward obstacles after recent VIO and planner changes. Root cause identified by comparing the `slam` sections of `gazebo.json` vs `gazebo_sitl.json` and tracing the config key P3 reads.
 
-**Prevention:** Config keys that are read by process code should be validated at startup. A config validator rule for `slam.vio.backend` (required, `one_of({"simulated", "gazebo", "msckf"})`) would catch this class of stale-key bug. Additionally, `gazebo.json` and `gazebo_sitl.json` should be kept in sync — consider generating one from the other or adding a CI diff check.
+**Prevention:** Config keys that are read by process code should be validated at startup. A config validator rule for `slam.vio.backend` (required, `one_of({"simulated", "gazebo"})`) would catch this class of stale-key bug. Additionally, `gazebo.json` and `gazebo_sitl.json` should be kept in sync — consider generating one from the other or adding a CI diff check.
 
 ---
 
