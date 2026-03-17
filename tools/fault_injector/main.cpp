@@ -82,12 +82,17 @@ static void publish_via_bus(const std::string& topic, const T& msg) {
         it                     = pubs.find(topic);
     }
 
-    // Zenoh needs a brief delay after first advertise for discovery
+    // Zenoh needs a delay after first advertise for peer discovery.
+    // 200ms was insufficient for GCS command delivery — increase to 500ms.
     if (first_advertise[topic]) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         first_advertise[topic] = false;
     }
 
+    // Publish twice with a small gap — single-shot messages can be missed
+    // if discovery is still in progress.
+    it->second->publish(msg);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     it->second->publish(msg);
 }
 
@@ -324,6 +329,19 @@ static int cmd_sequence(const std::string& json_file) {
 
     auto& steps = j["steps"];
     print_info("Executing fault sequence: " + std::to_string(steps.size()) + " steps");
+
+    // Pre-warm publishers for all topics used in the sequence so Zenoh
+    // discovery completes before the first timed step fires.
+    for (const auto& step : steps) {
+        std::string action = step.value("action", "");
+        if (action == "gcs_command" || action == "mission_upload") {
+            // Trigger GCS publisher creation (the publish_via_bus static
+            // creates the bus + publisher and waits for discovery).
+            drone::ipc::GCSCommand warmup{};
+            publish_via_bus<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS, warmup);
+            break;  // one warmup is enough — publisher is cached
+        }
+    }
 
     int errors = 0;
     for (size_t i = 0; i < steps.size(); ++i) {

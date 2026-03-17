@@ -196,6 +196,101 @@ TEST_F(GCSCommandHandlerTest, MissionUploadLoadsWaypoints) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// MISSION_PAUSE dispatch
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, PauseCommandTransitionsToLoiter) {
+    // Put FSM into NAVIGATE state
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns   = 100;
+    cmd.correlation_id = 0xBEEF;
+    cmd.command        = GCSCommandType::MISSION_PAUSE;
+    cmd.valid          = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::LOITER);
+    EXPECT_TRUE(fc_calls.empty());  // Pause does NOT send FC command, just stops trajectory
+    EXPECT_GE(traj_pub.messages().size(), 1u);
+    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+}
+
+// ═══════════════════════════════════════════════════════════
+// MISSION_START resumes from LOITER
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, StartCommandResumesFromLoiter) {
+    // Put FSM into LOITER state (simulating a pause)
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_loiter();
+    ASSERT_EQ(fsm.state(), MissionState::LOITER);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns   = 100;
+    cmd.correlation_id = 0xFACE;
+    cmd.command        = GCSCommandType::MISSION_START;
+    cmd.valid          = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// MISSION_START ignored when not in LOITER
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, StartCommandIgnoredWhenNotInLoiter) {
+    // FSM in NAVIGATE — MISSION_START should be a no-op
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_START;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// MISSION_ABORT dispatch — triggers RTL
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, AbortCommandSendsRTLAndTransitions) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns   = 100;
+    cmd.correlation_id = 0xDEAD;
+    cmd.command        = GCSCommandType::MISSION_ABORT;
+    cmd.valid          = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::RTL);
+    EXPECT_EQ(fsm.state(), MissionState::RTL);
+    EXPECT_TRUE(flight_state.nav_was_armed);
+    EXPECT_GE(traj_pub.messages().size(), 1u);
+    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+}
+
+// ═══════════════════════════════════════════════════════════
 // Disconnected subscriber — no processing
 // ═══════════════════════════════════════════════════════════
 TEST_F(GCSCommandHandlerTest, DisconnectedSubscriberIgnored) {

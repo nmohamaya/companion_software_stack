@@ -1,0 +1,63 @@
+{
+    "_comment": "Scenario 12: GCS-Commanded RTL — direct RTL command (not via fault escalation)",
+    "scenario": {
+        "name": "gcs_rtl",
+        "description": "Inject a GCS RTL command mid-flight. Unlike scenarios 03-05 where RTL is triggered by fault escalation, this tests the direct GCS RTL command path through the mission planner FSM.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 5,
+                "action": "gcs_command",
+                "command": "rtl",
+                "_comment": "RTL mid-flight — must fire before simulated mission completes (~11s)"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "TAKEOFF",
+            "EXECUTING",
+            "GCS command: RTL"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable RTL timing",
+        "rtl_delay_range": {"min": 5, "max": 60, "default": 15, "unit": "s"},
+        "notes": "RTL via GCS command should produce the same RTL behavior as fault-escalated RTL but through a different FSM code path."
+    }
+}

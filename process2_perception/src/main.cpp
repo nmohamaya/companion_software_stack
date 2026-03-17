@@ -95,8 +95,9 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 
     auto hb = drone::util::ScopedHeartbeat("tracker", true);
 
-    uint64_t cycle_count      = 0;
-    uint64_t queue_drop_count = 0;
+    constexpr uint64_t kStatusInterval  = 50;  // Log tracker status every N cycles
+    uint64_t           cycle_count      = 0;
+    uint64_t           queue_drop_count = 0;
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto det_opt = input_queue.try_pop();
@@ -118,6 +119,11 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
                 }
             }
             ++cycle_count;
+
+            if (cycle_count % kStatusInterval == 0) {
+                spdlog::info("[Tracker] Status: backend={}, cycles={}, drops={}", tracker.name(),
+                             cycle_count, queue_drop_count);
+            }
 
             if (diag.has_warnings() || diag.has_errors()) {
                 diag.log_summary("Tracker");

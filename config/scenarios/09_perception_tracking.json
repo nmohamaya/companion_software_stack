@@ -55,7 +55,7 @@
     },
     "pass_criteria": {
         "log_contains": [
-            "backend: bytetrack",
+            "backend=bytetrack",
             "TAKEOFF",
             "EXECUTING",
             "Mission complete"

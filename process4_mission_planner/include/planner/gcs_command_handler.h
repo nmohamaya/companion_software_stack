@@ -1,5 +1,5 @@
 // process4_mission_planner/include/planner/gcs_command_handler.h
-// Handles GCS command dispatch: RTL, LAND, MISSION_UPLOAD.
+// Handles GCS command dispatch: RTL, LAND, MISSION_PAUSE, MISSION_START,
 // Deduplicates by timestamp and propagates correlation IDs.
 //
 // Extracted from main.cpp as part of Issue #154.
@@ -33,7 +33,7 @@ struct SharedFlightState {
     std::chrono::steady_clock::time_point rtl_start_time{};
 };
 
-/// Handles GCS commands received via IPC: RTL, LAND, MISSION_UPLOAD.
+/// Handles GCS commands received via IPC: RTL, LAND, MISSION_PAUSE/START/ABORT/UPLOAD.
 /// Deduplicates by timestamp to ignore stale values from the subscriber cache.
 class GCSCommandHandler {
 public:
@@ -68,6 +68,31 @@ public:
                 flight_state.land_sent = true;
                 publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
                 fsm.on_land();
+                break;
+
+            case drone::ipc::GCSCommandType::MISSION_PAUSE:
+                spdlog::info("[Planner] GCS command: MISSION_PAUSE corr={:#x}",
+                             gcs_cmd.correlation_id);
+                publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
+                fsm.on_loiter();
+                break;
+
+            case drone::ipc::GCSCommandType::MISSION_START:
+                spdlog::info("[Planner] GCS command: MISSION_START corr={:#x}",
+                             gcs_cmd.correlation_id);
+                if (fsm.state() == MissionState::LOITER) {
+                    fsm.on_navigate();
+                }
+                break;
+
+            case drone::ipc::GCSCommandType::MISSION_ABORT:
+                spdlog::info("[Planner] GCS command: MISSION_ABORT corr={:#x}",
+                             gcs_cmd.correlation_id);
+                send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
+                publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
+                flight_state.rtl_start_time = std::chrono::steady_clock::now();
+                flight_state.nav_was_armed  = true;
+                fsm.on_rtl();
                 break;
 
             case drone::ipc::GCSCommandType::MISSION_UPLOAD: {

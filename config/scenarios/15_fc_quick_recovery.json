@@ -1,0 +1,82 @@
+{
+    "_comment": "Scenario 15: FC Link Quick Recovery — reconnect before RTL timeout, resume from LOITER",
+    "scenario": {
+        "name": "fc_quick_recovery",
+        "description": "Simulate FC link loss with quick recovery. Disconnect at 5s, reconnect at 10s (before 15s RTL timeout), then GCS MISSION_START to resume. LOITER never auto-downgrades (safety design), so explicit GCS resume is required. Complements scenario 04 (late reconnect past RTL timeout).",
+        "tier": 1,
+        "timeout_s": 120,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57,"speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "fc_link_lost_timeout_ms": 3000,
+            "fc_link_rtl_timeout_ms": 15000,
+            "loiter_escalation_timeout_s": 30
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 5,
+                "action": "fc_disconnect",
+                "_comment": "Disconnect FC early — must fire before simulated mission completes (~12s)"
+            },
+            {
+                "delay_s": 5,
+                "action": "fc_reconnect",
+                "_comment": "Quick reconnect at 5s (before 15s RTL timeout)"
+            },
+            {
+                "delay_s": 2,
+                "action": "gcs_command",
+                "command": "mission_start",
+                "_comment": "GCS explicitly resumes mission — LOITER never auto-downgrades (safety design)"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "TAKEOFF",
+            "EXECUTING",
+            "FAULT_FC_LINK_LOST",
+            "LOITER",
+            "GCS command: MISSION_START",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable FC recovery timing",
+        "disconnect_delay_range": {"min": 5, "max": 30, "default": 10, "unit": "s"},
+        "reconnect_delay_range": {"min": 2, "max": 14, "default": 5, "unit": "s"},
+        "notes": "Reconnect delay MUST be less than fc_link_rtl_timeout_ms (15s) to test quick recovery. Scenario 04 tests late reconnect (20s delay, past RTL timeout). This scenario tests early reconnect — mission should complete normally after recovery."
+    }
+}
