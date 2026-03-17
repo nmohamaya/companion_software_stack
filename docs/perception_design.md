@@ -100,7 +100,7 @@ The detector receives raw pixel data from a `ShmVideoFrame` and returns a list o
 - Bounding boxes are uniformly distributed across the frame with random sizes (40–200 px), confidence (0.40–0.99), and class IDs (0–4)
 - Used only for integration/unit testing without real video
 
-#### `color_contour` (default in `gazebo_sitl.json`, `gazebo.json`, `hardware.json`)
+#### `color_contour` (default in `gazebo_sitl.json`, `hardware.json`)
 
 - Class: `ColorContourDetector`
 - HSV-based color segmentation followed by connected-component labeling (union-find CCL)
@@ -481,7 +481,6 @@ Published per frame. Up to `MAX_DETECTED_OBJECTS` entries. Each entry mirrors `F
 |--------|----------|---------|--------|-----|-------|
 | `default.json` | simulated | sort | camera_only | shm | Integration testing only |
 | `gazebo_sitl.json` | color_contour | sort | camera_only | zenoh | Gazebo SITL with Zenoh |
-| `gazebo.json` | color_contour | sort | camera_only | zenoh | Gazebo (alternate) |
 | `hardware.json` | color_contour | sort | camera_only | shm | Real hardware (yolov8 opt-in) |
 | `zenoh_e2e.json` | (per config) | sort | camera_only | zenoh | End-to-end Zenoh testing |
 

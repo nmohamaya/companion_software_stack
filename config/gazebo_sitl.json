@@ -25,9 +25,13 @@
     "perception": {
         "detector": {
             "backend": "color_contour",
+            "_comment": "Use 'yolov8' with model_path below if OpenCV DNN is available",
+            "model_path": "models/yolov8n.onnx",
             "confidence_threshold": 0.5,
             "nms_threshold": 0.4,
+            "input_size": 640,
             "max_detections": 64,
+            "min_contour_area": 80,
             "subsample": 2,
             "max_fps": 0
         },
@@ -38,7 +42,11 @@
         },
         "fusion": {
             "camera_weight": 1.0,
-            "camera_height_m": 1.5
+            "camera_height_m": 1.5,
+            "fx": 277.0,
+            "fy": 277.0,
+            "cx": 320.0,
+            "cy": 240.0
         }
     },
 

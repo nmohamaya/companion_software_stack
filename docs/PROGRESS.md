@@ -2283,4 +2283,35 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-_Last updated after Improvement #47 (Gazebo VIO config fix, Issue #170). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 922 tests, 54 test suites, 97 scenario checks (8 Tier 1 + 1 Tier 2), 6 CI jobs._
+## Improvement #48 — Consolidate gazebo.json into gazebo_sitl.json (Issue #172)
+
+**Date:** 2026-03-17
+**Category:** Refactor / Config / Documentation
+**Issue:** [#172](https://github.com/nmohamaya/companion_software_stack/issues/172)
+
+**What:** Eliminated config drift between manual and automated Gazebo SITL runs by deleting `config/gazebo.json` and consolidating into `config/gazebo_sitl.json`. Added missing camera intrinsics (`fx=277, fy=277, cx=320, cy=240`), `min_contour_area`, YOLOv8 `model_path`/`input_size` comment, and other detector params to `gazebo_sitl.json`. Updated all scripts (`launch_gazebo.sh`, `clean_build_and_run.sh`, `test_gazebo_integration.sh`) and ~20 doc references across 9 files.
+
+**Why:** Maintaining two near-identical Gazebo config files caused two separate bugs from config drift (Fix #25 and Fix #41 — both stale keys in one file that had been updated in the other). A single source of truth eliminates this class of bug entirely. The missing camera intrinsics in `gazebo_sitl.json` meant the fusion engine was using wrong defaults (`fx=500, cx=960`) instead of the correct values for the 640×480 Gazebo camera.
+
+**Files Deleted (1):**
+- `config/gazebo.json`
+
+**Files Modified (11):**
+- `config/gazebo_sitl.json` — added camera intrinsics, min_contour_area, model_path, input_size
+- `deploy/launch_gazebo.sh` — default config `gazebo.json` → `gazebo_sitl.json`
+- `deploy/clean_build_and_run.sh` — same
+- `tests/test_gazebo_integration.sh` — same
+- `docs/sim_debugging_workflow.md` — updated references, replaced config diff with single-file validation
+- `docs/Gazebo_sim_run.md` — updated 7 references
+- `docs/INSTALL.md` — updated launch reference
+- `docs/SIMULATION_ARCHITECTURE.md` — removed gazebo.json row from config table
+- `docs/perception_design.md` — removed gazebo.json from deployment profiles
+- `docs/BUG_FIXES.md` — added consolidation note to Fix #41 prevention
+- `README.md` — removed gazebo.json from directory tree
+- `deploy/DEPLOY_USAGE.md` — updated config references
+
+**Test impact:** No new tests. 927/927 pass. Zero warnings.
+
+---
+
+_Last updated after Improvement #48 (config consolidation, Issue #172). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 927 tests, 54 test suites, 97 scenario checks (8 Tier 1 + 1 Tier 2), 6 CI jobs._
