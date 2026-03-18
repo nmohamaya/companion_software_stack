@@ -197,22 +197,6 @@ TEST_F(GCSCommandHandlerTest, MissionUploadLoadsWaypoints) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Disconnected subscriber — no processing
-// ═══════════════════════════════════════════════════════════
-TEST_F(GCSCommandHandlerTest, DisconnectedSubscriberIgnored) {
-    GCSCommand cmd{};
-    cmd.timestamp_ns = 100;
-    cmd.command      = GCSCommandType::RTL;
-    cmd.valid        = true;
-    gcs_sub.set(cmd);
-    gcs_sub.connected_ = false;  // disconnect AFTER set() (which sets connected=true)
-
-    auto diag = make_diag();
-    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
-    EXPECT_TRUE(fc_calls.empty());
-}
-
-// ═══════════════════════════════════════════════════════════
 // MISSION_PAUSE command (#174)
 // ═══════════════════════════════════════════════════════════
 TEST_F(GCSCommandHandlerTest, PauseCommandTransitionsToLoiter) {

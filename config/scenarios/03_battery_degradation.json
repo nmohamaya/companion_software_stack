@@ -29,25 +29,25 @@
     "fault_sequence": {
         "steps": [
             {
-                "delay_s": 10,
+                "delay_s": 3,
                 "action": "battery",
                 "value": 50.0,
                 "_comment": "Nominal battery — no action expected"
             },
             {
-                "delay_s": 5,
+                "delay_s": 2,
                 "action": "battery",
                 "value": 28.0,
                 "_comment": "Below 30% — WARN expected"
             },
             {
-                "delay_s": 10,
+                "delay_s": 3,
                 "action": "battery",
                 "value": 18.0,
                 "_comment": "Below 20% — RTL expected"
             },
             {
-                "delay_s": 15,
+                "delay_s": 3,
                 "action": "battery",
                 "value": 8.0,
                 "_comment": "Below 10% — EMERGENCY_LAND expected"

@@ -1,5 +1,6 @@
 // process4_mission_planner/include/planner/gcs_command_handler.h
-// Handles GCS command dispatch: RTL, LAND, MISSION_UPLOAD, PAUSE, START, ABORT.
+// Handles GCS command dispatch: RTL, LAND, MISSION_PAUSE, MISSION_START,
+// MISSION_ABORT, MISSION_UPLOAD.
 // Deduplicates by timestamp and propagates correlation IDs.
 // Validates waypoint data (#177, #178) and rate-limits uploads (#182).
 //
@@ -35,7 +36,7 @@ struct SharedFlightState {
     std::chrono::steady_clock::time_point rtl_start_time{};
 };
 
-/// Handles GCS commands received via IPC: RTL, LAND, MISSION_UPLOAD, PAUSE, START, ABORT.
+/// Handles GCS commands received via IPC: RTL, LAND, MISSION_PAUSE/START/ABORT/UPLOAD.
 /// Deduplicates by timestamp to ignore stale values from the subscriber cache.
 /// Validates waypoint data and rate-limits mission uploads.
 class GCSCommandHandler {

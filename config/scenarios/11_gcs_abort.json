@@ -1,0 +1,63 @@
+{
+    "_comment": "Scenario 11: GCS Mission Abort — abort mid-flight triggers RTL",
+    "scenario": {
+        "name": "gcs_abort",
+        "description": "Inject a GCS MISSION_ABORT command mid-flight. Verifies the mission planner stops waypoint execution and the drone enters RTL.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 5,
+                "action": "gcs_command",
+                "command": "mission_abort",
+                "_comment": "Abort mid-flight — expect RTL (must fire before simulated mission completes ~11s)"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "TAKEOFF",
+            "EXECUTING",
+            "GCS command: MISSION_ABORT",
+            "RTL"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable abort timing",
+        "abort_delay_range": {"min": 5, "max": 60, "default": 15, "unit": "s"},
+        "notes": "The drone should stop executing waypoints after abort. Verify it does not continue to the next waypoint."
+    }
+}

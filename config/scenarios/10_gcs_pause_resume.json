@@ -1,0 +1,78 @@
+{
+    "_comment": "Scenario 10: GCS Mission Pause/Resume — LOITER hold and mission resumption",
+    "scenario": {
+        "name": "gcs_pause_resume",
+        "description": "Inject a GCS MISSION_PAUSE command mid-flight to verify the drone enters LOITER, then send MISSION_START to resume. Validates the NAVIGATE → LOITER → NAVIGATE FSM transition via GCS commands.",
+        "tier": 1,
+        "timeout_s": 120,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57,"speed": 2.0, "payload_trigger": false}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 5,
+                "action": "gcs_command",
+                "command": "mission_pause",
+                "_comment": "Pause mid-flight — must fire before simulated mission completes (~11s)"
+            },
+            {
+                "delay_s": 10,
+                "action": "gcs_command",
+                "command": "mission_start",
+                "_comment": "Resume mission — expect return to EXECUTING"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "TAKEOFF",
+            "EXECUTING",
+            "GCS command: MISSION_PAUSE",
+            "LOITER",
+            "GCS command: MISSION_START",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable pause/resume timing",
+        "pause_delay_range": {"min": 5, "max": 60, "default": 15, "unit": "s"},
+        "resume_delay_range": {"min": 5, "max": 60, "default": 15, "unit": "s"},
+        "notes": "Increase pause duration to verify drone maintains LOITER position. Short pause tests rapid state transitions."
+    }
+}

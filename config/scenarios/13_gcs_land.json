@@ -1,0 +1,62 @@
+{
+    "_comment": "Scenario 13: GCS-Commanded Land — immediate landing at current position",
+    "scenario": {
+        "name": "gcs_land",
+        "description": "Inject a GCS LAND command mid-flight. Verifies the drone stops waypoint execution and lands at its current position rather than returning to launch.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 5,
+                "action": "gcs_command",
+                "command": "land",
+                "_comment": "Land mid-flight — must fire before simulated mission completes (~11s)"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "TAKEOFF",
+            "EXECUTING",
+            "GCS command: LAND"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "FAULT_GEOFENCE_BREACH",
+            "OBSTACLE COLLISION"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable land timing",
+        "land_delay_range": {"min": 5, "max": 60, "default": 15, "unit": "s"},
+        "notes": "LAND differs from RTL — the drone should land at its current position, not return to launch first."
+    }
+}

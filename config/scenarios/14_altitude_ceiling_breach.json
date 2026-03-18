@@ -1,0 +1,61 @@
+{
+    "_comment": "Scenario 14: Altitude Ceiling Breach — altitude geofence violation triggers RTL",
+    "scenario": {
+        "name": "altitude_ceiling_breach",
+        "description": "Configure a low altitude ceiling (8m). Waypoints include one at 10m altitude that exceeds the ceiling. Verifies the altitude geofence check triggers FAULT_GEOFENCE_BREACH independently of the polygon check (which is tested in scenario 05).",
+        "tier": 1,
+        "timeout_s": 60,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 8.0,
+                "warning_margin_m": 1.0
+            },
+            "waypoints": [
+                {"x": 5, "y": 0,  "z": 5,  "yaw": 0,   "speed": 2.0, "payload_trigger": false, "_comment": "Within ceiling (5m < 8m)"},
+                {"x": 5, "y": 5,  "z": 7,  "yaw": 0.5, "speed": 2.0, "payload_trigger": false, "_comment": "Near ceiling (7m ≈ 8m - 1m warning)"},
+                {"x": 5, "y": 10, "z": 10, "yaw": 1.0, "speed": 2.0, "payload_trigger": false, "_comment": "Above ceiling (10m > 8m) — triggers breach"},
+                {"x": 0, "y": 0,  "z": 5,  "yaw": 0,   "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "battery_warn_percent": 30.0,
+            "battery_rtl_percent": 20.0,
+            "battery_crit_percent": 10.0
+        }
+    },
+    "fault_sequence": {
+        "_comment": "No fault injection. WP3 at z=10 exceeds the 8m altitude ceiling, triggering FAULT_GEOFENCE_BREACH.",
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "FAULT_GEOFENCE_BREACH",
+            "Geofence: VIOLATED"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "OBSTACLE COLLISION"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable altitude geofence parameters",
+        "altitude_ceiling_range": {"min": 5.0, "max": 50.0, "default": 8.0, "unit": "m"},
+        "waypoints_editable": true,
+        "notes": "Scenario 05 tests polygon boundary breach. This scenario isolates the altitude ceiling check. Set WP altitude above ceiling to trigger. The warning_margin_m=1.0 means warning fires at 7m (ceiling - margin)."
+    }
+}
