@@ -87,6 +87,7 @@ private:
     float home_y_           = 0.0f;
     float home_z_           = 0.0f;
     bool  home_recorded_    = false;
+    bool  home_warn_logged_ = false;
     bool  fault_exec_reset_ = false;
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
@@ -125,19 +126,21 @@ private:
                      home_z_);
     }
 
-    // ── TAKEOFF: send TAKEOFF, record home, wait for altitude ─
-    void tick_takeoff(MissionFSM& fsm, const drone::ipc::Pose& pose,
+    // ── TAKEOFF: send TAKEOFF, wait for altitude + home ─────────
+    void tick_takeoff(MissionFSM&                fsm, const drone::ipc::Pose& /*pose*/,
                       const drone::ipc::FCState& fc_state, const FCSendFn& send_fc) {
         if (!takeoff_sent_) {
             spdlog::info("[Planner] Sending TAKEOFF to {:.1f}m", config_.takeoff_alt_m);
             send_fc(drone::ipc::FCCommandType::TAKEOFF, config_.takeoff_alt_m);
             takeoff_sent_ = true;
         }
-        try_record_home(pose);
         if (fc_state.rel_alt >= config_.takeoff_alt_m * 0.9f) {
             if (!home_recorded_) {
-                spdlog::warn("[Planner] Takeoff altitude reached but no valid pose "
-                             "received yet — deferring NAVIGATE until home is recorded");
+                if (!home_warn_logged_) {
+                    spdlog::warn("[Planner] Takeoff altitude reached but no valid pose "
+                                 "received yet — deferring NAVIGATE until home is recorded");
+                    home_warn_logged_ = true;
+                }
                 return;
             }
             spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE", fc_state.rel_alt);
