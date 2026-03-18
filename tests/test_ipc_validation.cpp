@@ -190,6 +190,14 @@ TEST(IpcValidation, PoseNaNTranslation) {
     EXPECT_FALSE(p.validate());
 }
 
+TEST(IpcValidation, PoseGroundTruthQuality) {
+    Pose p{};
+    p.translation[0] = 1.0;
+    p.quaternion[0]  = 1.0;
+    p.quality        = 3;  // ground truth (Gazebo backends)
+    EXPECT_TRUE(p.validate());
+}
+
 TEST(IpcValidation, PoseInvalidQuality) {
     Pose p{};
     p.quaternion[0] = 1.0;

@@ -117,7 +117,7 @@ struct alignas(64) Pose {
     double   quaternion[4];   // w, x, y, z
     double   velocity[3];     // vx, vy, vz
     double   covariance[36];  // 6x6 pose covariance
-    uint32_t quality;         // 0=lost, 1=degraded, 2=good
+    uint32_t quality;         // 0=lost, 1=degraded, 2=good, 3=excellent (ground truth)
 
     [[nodiscard]] bool validate() const {
         for (int i = 0; i < 3; ++i) {
@@ -126,7 +126,7 @@ struct alignas(64) Pose {
         for (int i = 0; i < 4; ++i) {
             if (!std::isfinite(quaternion[i])) return false;
         }
-        return quality <= 2;
+        return quality <= 3;  // 0=lost, 1=degraded, 2=good, 3=excellent (ground truth)
     }
 };
 
