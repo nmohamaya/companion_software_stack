@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <limits>
+#include <memory>
 
 #include <gtest/gtest.h>
 
@@ -13,36 +14,36 @@ using namespace drone::ipc;
 // VideoFrame validation
 // ═══════════════════════════════════════════════════════════
 TEST(IpcValidation, VideoFrameValidDimensions) {
-    VideoFrame f{};
-    f.width    = 1920;
-    f.height   = 1080;
-    f.channels = 3;
-    EXPECT_TRUE(f.validate());
+    auto f      = std::make_unique<VideoFrame>();
+    f->width    = 1920;
+    f->height   = 1080;
+    f->channels = 3;
+    EXPECT_TRUE(f->validate());
 }
 
 TEST(IpcValidation, VideoFrameZeroWidth) {
-    VideoFrame f{};
-    f.width    = 0;
-    f.height   = 1080;
-    f.channels = 3;
-    EXPECT_FALSE(f.validate());
+    auto f      = std::make_unique<VideoFrame>();
+    f->width    = 0;
+    f->height   = 1080;
+    f->channels = 3;
+    EXPECT_FALSE(f->validate());
 }
 
 TEST(IpcValidation, VideoFrameOversizedDimensions) {
-    VideoFrame f{};
-    f.width    = 3840;
-    f.height   = 2160;
-    f.channels = 3;
+    auto f      = std::make_unique<VideoFrame>();
+    f->width    = 3840;
+    f->height   = 2160;
+    f->channels = 3;
     // 3840*2160*3 = 24,883,200 > sizeof(pixel_data) = 6,220,800
-    EXPECT_FALSE(f.validate());
+    EXPECT_FALSE(f->validate());
 }
 
 TEST(IpcValidation, VideoFrameSmallValidDimensions) {
-    VideoFrame f{};
-    f.width    = 640;
-    f.height   = 480;
-    f.channels = 3;
-    EXPECT_TRUE(f.validate());
+    auto f      = std::make_unique<VideoFrame>();
+    f->width    = 640;
+    f->height   = 480;
+    f->channels = 3;
+    EXPECT_TRUE(f->validate());
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -407,6 +408,104 @@ TEST(IpcValidation, SystemHealthNaNTemp) {
     SystemHealth h{};
     h.max_temp_c = std::numeric_limits<float>::quiet_NaN();
     EXPECT_FALSE(h.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// FCCommand validation
+// ═══════════════════════════════════════════════════════════
+TEST(IpcValidation, FCCommandValid) {
+    FCCommand c{};
+    c.command = FCCommandType::TAKEOFF;
+    c.param1  = 10.0f;
+    EXPECT_TRUE(c.validate());
+}
+
+TEST(IpcValidation, FCCommandInvalidEnum) {
+    FCCommand c{};
+    c.command = static_cast<FCCommandType>(255);
+    c.param1  = 10.0f;
+    EXPECT_FALSE(c.validate());
+}
+
+TEST(IpcValidation, FCCommandNaNParam) {
+    FCCommand c{};
+    c.command = FCCommandType::TAKEOFF;
+    c.param1  = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(c.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// PayloadCommand validation
+// ═══════════════════════════════════════════════════════════
+TEST(IpcValidation, PayloadCommandValid) {
+    PayloadCommand p{};
+    p.gimbal_pitch = -90.0f;
+    p.gimbal_yaw   = 0.0f;
+    EXPECT_TRUE(p.validate());
+}
+
+TEST(IpcValidation, PayloadCommandNaNPitch) {
+    PayloadCommand p{};
+    p.gimbal_pitch = std::numeric_limits<float>::quiet_NaN();
+    p.gimbal_yaw   = 0.0f;
+    EXPECT_FALSE(p.validate());
+}
+
+TEST(IpcValidation, PayloadCommandInfYaw) {
+    PayloadCommand p{};
+    p.gimbal_pitch = 0.0f;
+    p.gimbal_yaw   = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(p.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// PayloadStatus validation
+// ═══════════════════════════════════════════════════════════
+TEST(IpcValidation, PayloadStatusValid) {
+    PayloadStatus s{};
+    s.gimbal_pitch = -45.0f;
+    s.gimbal_yaw   = 90.0f;
+    EXPECT_TRUE(s.validate());
+}
+
+TEST(IpcValidation, PayloadStatusNaNPitch) {
+    PayloadStatus s{};
+    s.gimbal_pitch = std::numeric_limits<float>::quiet_NaN();
+    s.gimbal_yaw   = 0.0f;
+    EXPECT_FALSE(s.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// MissionStatus validation
+// ═══════════════════════════════════════════════════════════
+TEST(IpcValidation, MissionStatusValid) {
+    MissionStatus m{};
+    m.progress_percent = 50.0f;
+    m.target_x         = 10.0f;
+    m.target_y         = 20.0f;
+    m.target_z         = 5.0f;
+    m.battery_percent  = 80.0f;
+    EXPECT_TRUE(m.validate());
+}
+
+TEST(IpcValidation, MissionStatusNaNProgress) {
+    MissionStatus m{};
+    m.progress_percent = std::numeric_limits<float>::quiet_NaN();
+    m.target_x         = 10.0f;
+    m.target_y         = 20.0f;
+    m.target_z         = 5.0f;
+    m.battery_percent  = 80.0f;
+    EXPECT_FALSE(m.validate());
+}
+
+TEST(IpcValidation, MissionStatusInfTarget) {
+    MissionStatus m{};
+    m.progress_percent = 50.0f;
+    m.target_x         = std::numeric_limits<float>::infinity();
+    m.target_y         = 20.0f;
+    m.target_z         = 5.0f;
+    m.battery_percent  = 80.0f;
+    EXPECT_FALSE(m.validate());
 }
 
 // ═══════════════════════════════════════════════════════════

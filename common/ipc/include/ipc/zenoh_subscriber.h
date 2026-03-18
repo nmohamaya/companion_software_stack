@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include <spdlog/spdlog.h>
 #include <zenoh.hxx>
@@ -114,23 +115,32 @@ private:
             return;
         }
 
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        std::memcpy(&latest_msg_, bytes.data(), sizeof(T));
-
-        // Validate message contents at ingress — reject corrupted/malicious data
+        // Validate into a temporary before committing to latest_msg_,
+        // so a failed validation never overwrites a previously good value.
         if constexpr (has_validate<T>::value) {
-            if (!latest_msg_.validate()) {
+            T temp{};
+            std::memcpy(&temp, bytes.data(), sizeof(T));
+            if (!temp.validate()) {
                 spdlog::warn("[ZenohSubscriber] Validation failed on '{}' — "
                              "dropping message",
                              key_expr_);
                 return;
             }
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            latest_msg_ = temp;
+            timestamp_ns_ =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+        } else {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            std::memcpy(&latest_msg_, bytes.data(), sizeof(T));
+            timestamp_ns_ =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
         }
 
-        timestamp_ns_ =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
         seq_.fetch_add(1, std::memory_order_relaxed);
         has_data_.store(true, std::memory_order_release);
     }
