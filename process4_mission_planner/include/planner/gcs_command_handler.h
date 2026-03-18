@@ -1,5 +1,6 @@
 // process4_mission_planner/include/planner/gcs_command_handler.h
 // Handles GCS command dispatch: RTL, LAND, MISSION_PAUSE, MISSION_START,
+// MISSION_ABORT, MISSION_UPLOAD.
 // Deduplicates by timestamp and propagates correlation IDs.
 //
 // Extracted from main.cpp as part of Issue #154.

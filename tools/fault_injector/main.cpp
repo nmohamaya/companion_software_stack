@@ -332,14 +332,34 @@ static int cmd_sequence(const std::string& json_file) {
 
     // Pre-warm publishers for all topics used in the sequence so Zenoh
     // discovery completes before the first timed step fires.
-    for (const auto& step : steps) {
-        std::string action = step.value("action", "");
-        if (action == "gcs_command" || action == "mission_upload") {
-            // Trigger GCS publisher creation (the publish_via_bus static
-            // creates the bus + publisher and waits for discovery).
+    {
+        bool need_gcs    = false;
+        bool need_fault  = false;
+        bool need_upload = false;
+        for (const auto& step : steps) {
+            std::string action = step.value("action", "");
+            if (action == "gcs_command") need_gcs = true;
+            if (action == "mission_upload") {
+                need_gcs    = true;
+                need_upload = true;
+            }
+            if (action == "battery" || action == "fc_disconnect" || action == "thermal_zone" ||
+                action == "clear") {
+                need_fault = true;
+            }
+        }
+        if (need_gcs) {
             drone::ipc::GCSCommand warmup{};
             publish_via_bus<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS, warmup);
-            break;  // one warmup is enough — publisher is cached
+        }
+        if (need_fault) {
+            drone::ipc::FaultOverrides warmup{};
+            publish_via_bus<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES,
+                                                        warmup);
+        }
+        if (need_upload) {
+            drone::ipc::MissionUpload warmup{};
+            publish_via_bus<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD, warmup);
         }
     }
 
