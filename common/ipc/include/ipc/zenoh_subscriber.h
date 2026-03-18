@@ -13,9 +13,10 @@
 #include "ipc/zenoh_session.h"
 #include "util/latency_tracker.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstring>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -68,7 +69,7 @@ public:
         uint64_t msg_ts = 0;
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            std::memcpy(&out, &latest_msg_, sizeof(T));
+            out    = latest_msg_;
             msg_ts = timestamp_ns_;
         }
         if (timestamp_ns) {
@@ -115,26 +116,30 @@ private:
             return;
         }
 
-        // Validate into a temporary before committing to latest_msg_,
-        // so a failed validation never overwrites a previously good value.
+        // Validate into a heap-allocated temporary before committing to
+        // latest_msg_, so a failed validation never overwrites a previously
+        // good value.  Heap allocation avoids stack overflow for large types
+        // (e.g. VideoFrame ~6.2 MB) on Zenoh's callback thread.
         if constexpr (has_validate<T>::value) {
-            T temp{};
-            std::memcpy(&temp, bytes.data(), sizeof(T));
-            if (!temp.validate()) {
+            auto  temp = std::make_unique<T>();
+            auto* dst  = reinterpret_cast<uint8_t*>(temp.get());
+            std::copy(bytes.begin(), bytes.end(), dst);
+            if (!temp->validate()) {
                 spdlog::warn("[ZenohSubscriber] Validation failed on '{}' — "
                              "dropping message",
                              key_expr_);
                 return;
             }
             std::lock_guard<std::mutex> lock(data_mutex_);
-            latest_msg_ = temp;
+            latest_msg_ = *temp;
             timestamp_ns_ =
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
                                           .count());
         } else {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            std::memcpy(&latest_msg_, bytes.data(), sizeof(T));
+            auto*                       dst = reinterpret_cast<uint8_t*>(&latest_msg_);
+            std::copy(bytes.begin(), bytes.end(), dst);
             timestamp_ns_ =
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
