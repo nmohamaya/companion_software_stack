@@ -138,6 +138,53 @@ TEST_F(MissionStateTickTest, TakeoffStaysIfBelowAlt) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// HOME RECORDING: race condition guards
+// ═══════════════════════════════════════════════════════════
+TEST_F(MissionStateTickTest, HomeNotRecordedFromDefaultPose) {
+    fsm.on_takeoff();
+    // Default-constructed pose has timestamp_ns=0 — must NOT record home
+    Pose default_pose{};
+    auto fc = make_fc(true, 9.5f);  // altitude reached
+
+    do_tick(default_pose, fc);
+
+    // Should stay in TAKEOFF because home was not recorded
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+TEST_F(MissionStateTickTest, TakeoffDefersNavigateUntilHomeRecorded) {
+    fsm.on_takeoff();
+
+    // Tick 1: altitude reached but no real pose yet
+    Pose default_pose{};
+    auto fc = make_fc(true, 9.5f);
+    do_tick(default_pose, fc);
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+
+    // Tick 2: real pose arrives → home recorded → transition
+    auto real_pose = make_pose(5.0f, 10.0f, 0.0f);
+    do_tick(real_pose, fc);
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}
+
+TEST_F(MissionStateTickTest, HomeRecordedDuringPreflight) {
+    // Home should be recorded from any state once a real pose arrives
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    auto pose = make_pose(7.0f, 3.0f, 0.0f);
+    auto fc   = make_fc(true, 0.0f);
+    do_tick(pose, fc);
+
+    // Now transition through to TAKEOFF and reach altitude
+    EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+    fc = make_fc(true, 9.5f);
+    do_tick(pose, fc);
+
+    // Should transition directly to NAVIGATE since home was already recorded
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}
+
+// ═══════════════════════════════════════════════════════════
 // NAVIGATE: waypoint reached + payload trigger
 // ═══════════════════════════════════════════════════════════
 TEST_F(MissionStateTickTest, WaypointReachedTriggersPayload) {
