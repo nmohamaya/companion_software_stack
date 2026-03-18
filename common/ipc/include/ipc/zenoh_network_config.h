@@ -61,16 +61,20 @@ struct ZenohNetworkConfig {
     uint16_t listen_port = 7447;
 
     /// Default listen address (used by convenience helpers).
-    std::string listen_address = "0.0.0.0";
+    /// Defaults to localhost for security — use "0.0.0.0" only when
+    /// explicitly needed for drone↔GCS communication (#180).
+    std::string listen_address = "127.0.0.1";
 
     /// Default protocol for convenience helpers.
     std::string protocol = "tcp";
 
     // ─── Convenience factory methods ──────────────────────────
 
-    /// Create a drone-side config: peer mode, listening on all interfaces.
+    /// Create a drone-side config: peer mode, listening on specified interface.
+    /// Defaults to localhost (127.0.0.1) for security — pass "0.0.0.0" explicitly
+    /// when network exposure is intentionally needed (#180).
     static ZenohNetworkConfig make_drone(uint16_t           port    = 7447,
-                                         const std::string& address = "0.0.0.0",
+                                         const std::string& address = "127.0.0.1",
                                          const std::string& proto   = "tcp") {
         ZenohNetworkConfig cfg;
         cfg.mode           = "peer";
@@ -210,6 +214,13 @@ struct ZenohNetworkConfig {
             for (const auto& ep : zenoh_network["connect_endpoints"]) {
                 cfg.connect_endpoints.push_back(ep.template get<std::string>());
             }
+        }
+
+        // Warn if listening on all interfaces — potential security risk (#180)
+        if (cfg.listen_address == "0.0.0.0" && !cfg.listen_endpoints.empty()) {
+            spdlog::warn("[ZenohNetworkConfig] Listening on 0.0.0.0 exposes "
+                         "unauthenticated IPC to the network. Use 127.0.0.1 "
+                         "or a specific interface for production.");
         }
 
         spdlog::info("[ZenohNetworkConfig] Loaded from app config: "

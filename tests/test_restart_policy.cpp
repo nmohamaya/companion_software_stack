@@ -116,6 +116,7 @@ TEST(RestartPolicy, DefaultValues) {
     EXPECT_EQ(policy.max_backoff_ms, 30000u);
     EXPECT_FALSE(policy.is_critical);
     EXPECT_EQ(policy.thermal_gate, 3);
+    EXPECT_EQ(policy.max_thermal_defer_s, 300u);  // #183: 5-minute default
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -147,6 +148,7 @@ TEST(ProcessConfig, FromJsonFullConfig) {
         {"backoff_ms", 1000},
         {"max_backoff_ms", 60000},
         {"thermal_gate", 2},
+        {"max_thermal_defer_s", 600},
         {"launch_after", {"video_capture", "perception"}},
         {"restart_cascade", {"mission_planner", "payload_manager"}},
     };
@@ -161,6 +163,7 @@ TEST(ProcessConfig, FromJsonFullConfig) {
     EXPECT_EQ(cfg.policy.initial_backoff_ms, 1000u);
     EXPECT_EQ(cfg.policy.max_backoff_ms, 60000u);
     EXPECT_EQ(cfg.policy.thermal_gate, 2);
+    EXPECT_EQ(cfg.policy.max_thermal_defer_s, 600u);
 
     ASSERT_EQ(cfg.launch_after.size(), 2u);
     EXPECT_EQ(cfg.launch_after[0], "video_capture");

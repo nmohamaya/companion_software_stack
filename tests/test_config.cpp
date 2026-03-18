@@ -3,6 +3,7 @@
 #include "util/config.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 
 #include <gtest/gtest.h>
@@ -247,4 +248,23 @@ TEST_F(ConfigTest, RequireWithMap) {
     auto doubled = cfg.require<int>("port").map([](int p) { return p * 2; });
     EXPECT_TRUE(doubled.is_ok());
     EXPECT_EQ(doubled.value(), 16160);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Security: symlink rejection (#184)
+// ═══════════════════════════════════════════════════════════
+TEST_F(ConfigTest, SymlinkConfigRejected) {
+    // Create a real config file
+    write_json(R"({"key": "value"})");
+
+    // Create a symlink to it
+    std::string link_path = tmp_path_ + ".link";
+    std::filesystem::create_symlink(tmp_path_, link_path);
+
+    drone::Config cfg;
+    auto          result = cfg.load_config(link_path);
+    EXPECT_TRUE(result.is_err());
+
+    // Cleanup
+    std::filesystem::remove(link_path);
 }
