@@ -262,7 +262,6 @@ Config files in `config/`:
 | File | Description |
 |---|---|
 | `default.json` | All simulated backends (Tier 1) |
-| `gazebo.json` | Gazebo cameras, simulated FC |
 | `gazebo_sitl.json` | Gazebo cameras + MAVLink FC (Tier 2) |
 | `hardware.json` | Real hardware backends |
 

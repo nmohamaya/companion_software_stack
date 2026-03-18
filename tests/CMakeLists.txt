@@ -219,6 +219,9 @@ add_drone_test(test_vio_backend     test_vio_backend.cpp
 # ── Static Obstacle Layer tests (Issue #154) ───────────────
 add_drone_test(test_static_obstacle_layer test_static_obstacle_layer.cpp)
 
+# ── IPC Validation tests (Issues #179, #181, #185) ─────────
+add_drone_test(test_ipc_validation test_ipc_validation.cpp)
+
 # ── GCS Command Handler tests (Issue #154) ─────────────────
 add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
 

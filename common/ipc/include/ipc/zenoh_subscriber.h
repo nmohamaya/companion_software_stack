@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include <spdlog/spdlog.h>
 #include <zenoh.hxx>
@@ -103,6 +104,7 @@ private:
     /// Zenoh callback — runs on Zenoh internal thread.
     /// Stamps timestamp_ns_ with the arrival time so that receive()
     /// can measure *callback→poll* delay (not true wire latency).
+    /// Rejects messages that fail structural validation (Issues #179, #181, #185).
     void on_sample(zenoh::Sample& sample) {
         const auto& payload = sample.get_payload();
         auto        bytes   = payload.as_vector();
@@ -113,15 +115,43 @@ private:
             return;
         }
 
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        std::memcpy(&latest_msg_, bytes.data(), sizeof(T));
-        timestamp_ns_ =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        // Validate into a temporary before committing to latest_msg_,
+        // so a failed validation never overwrites a previously good value.
+        if constexpr (has_validate<T>::value) {
+            T temp{};
+            std::memcpy(&temp, bytes.data(), sizeof(T));
+            if (!temp.validate()) {
+                spdlog::warn("[ZenohSubscriber] Validation failed on '{}' — "
+                             "dropping message",
+                             key_expr_);
+                return;
+            }
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            latest_msg_ = temp;
+            timestamp_ns_ =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+        } else {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            std::memcpy(&latest_msg_, bytes.data(), sizeof(T));
+            timestamp_ns_ =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+        }
+
         seq_.fetch_add(1, std::memory_order_relaxed);
         has_data_.store(true, std::memory_order_release);
     }
+
+    /// SFINAE helper to detect T::validate() at compile time.
+    template<typename U, typename = void>
+    struct has_validate : std::false_type {};
+
+    template<typename U>
+    struct has_validate<U, std::void_t<decltype(std::declval<const U&>().validate())>>
+        : std::true_type {};
 
     std::string                            key_expr_;
     std::optional<zenoh::Subscriber<void>> subscriber_;

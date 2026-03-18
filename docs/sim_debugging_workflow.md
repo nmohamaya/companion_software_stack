@@ -238,9 +238,19 @@ print('Avoider backend:  ', cfg.get('mission_planner',{}).get('obstacle_avoider'
 print('IPC backend:      ', cfg.get('ipc_backend','NOT SET'))
 " "${LOG_DIR}/merged_config.json"
 
-# 3. Compare base configs for drift (gazebo.json vs gazebo_sitl.json)
-diff <(python3 -c "import json; print(json.dumps(json.load(open('config/gazebo.json')), indent=2, sort_keys=True))") \
-     <(python3 -c "import json; print(json.dumps(json.load(open('config/gazebo_sitl.json')), indent=2, sort_keys=True))")
+# 3. Verify the base config has all required keys
+python3 -c "
+import json, sys
+cfg = json.load(open('config/gazebo_sitl.json'))
+required = [('slam','vio','backend'), ('comms','mavlink','backend'), ('perception','detector','backend')]
+for keys in required:
+    val = cfg
+    for k in keys:
+        if not isinstance(val, dict):
+            val = 'MISSING'
+            break
+        val = val.get(k, {})
+    print(f\"{'→'.join(keys)}: {val if val else 'MISSING'}\")"
 
 # 4. Verify process logs confirm the expected backend was loaded
 strings "${LOG_DIR}/slam_vio_nav.log" | grep -i "backend"
@@ -250,8 +260,9 @@ strings "${LOG_DIR}/comms.log" | grep -i "FC link:"
 
 **What to look for:**
 - `VIO backend: NOT SET` -> P3 will fall back to `"simulated"`, which generates a fake pose unrelated to the real drone position in Gazebo. This is the most common cause of "drone doesn't navigate" in SITL. (See Fix #25, Fix #41 in `docs/BUG_FIXES.md`.)
-- Backend mismatch between `gazebo.json` (used by `launch_gazebo.sh`) and `gazebo_sitl.json` (used by `run_scenario_gazebo.sh`) — these files must be kept in sync.
 - Stale config keys (e.g. `slam.visual_frontend` instead of `slam.vio`) — the process code reads a specific key path; if the config uses a different name, the value is silently ignored and the default is used.
+
+> **Note:** There is now a single Gazebo config file (`config/gazebo_sitl.json`) used by both `launch_gazebo.sh` and `run_scenario_gazebo.sh`. The previous `config/gazebo.json` was consolidated into `gazebo_sitl.json` to eliminate config drift between manual and automated runs (see Fix #41).
 
 ### **Step 9: Investigate Root Cause**
 
@@ -401,11 +412,11 @@ strings "${LOG_DIR}/slam_vio_nav.log" | grep -i "backend"
 
 **Step 2: Check the config that was used**
 
-`launch_gazebo.sh` defaults to `config/gazebo.json`. Inspect it:
+`launch_gazebo.sh` defaults to `config/gazebo_sitl.json`. Inspect it:
 ```bash
 python3 -c "
 import json
-cfg = json.load(open('config/gazebo.json'))
+cfg = json.load(open('config/gazebo_sitl.json'))
 print('slam.vio.backend:', cfg.get('slam',{}).get('vio',{}).get('backend','NOT SET'))
 print('slam keys:', list(cfg.get('slam',{}).keys()))
 "
@@ -413,17 +424,24 @@ print('slam keys:', list(cfg.get('slam',{}).keys()))
 
 If this prints `slam.vio.backend: NOT SET`, the config is missing the `slam.vio` section. P3 reads `slam.vio.backend` and defaults to `"simulated"` when not found.
 
-**Step 3: Compare with the working config**
+**Step 3: Verify all critical backend keys are present**
 ```bash
-diff <(python3 -c "import json; print(json.dumps(json.load(open('config/gazebo.json')).get('slam',{}), indent=2, sort_keys=True))") \
-     <(python3 -c "import json; print(json.dumps(json.load(open('config/gazebo_sitl.json')).get('slam',{}), indent=2, sort_keys=True))")
+python3 -c "
+import json
+cfg = json.load(open('config/gazebo_sitl.json'))
+checks = [
+    ('slam.vio.backend', cfg.get('slam',{}).get('vio',{}).get('backend','NOT SET')),
+    ('comms.mavlink.backend', cfg.get('comms',{}).get('mavlink',{}).get('backend','NOT SET')),
+    ('perception.detector.backend', cfg.get('perception',{}).get('detector',{}).get('backend','NOT SET')),
+]
+for key, val in checks:
+    status = 'OK' if val != 'NOT SET' else 'MISSING'
+    print(f'{key}: {val} [{status}]')"
 ```
-
-This reveals mismatched keys — e.g. `visual_frontend` (stale) vs `vio` (correct).
 
 **Step 4: Fix the config**
 
-Rename the stale key to match what the code reads:
+Ensure the config has the correct key path that P3 reads:
 ```json
 "slam": {
     "vio": {
@@ -441,11 +459,7 @@ Rename the stale key to match what the code reads:
 
 ### Key Lesson
 
-There are two Gazebo config files that must stay in sync:
-- `config/gazebo.json` — used by `deploy/launch_gazebo.sh` (manual runs)
-- `config/gazebo_sitl.json` — used by `tests/run_scenario_gazebo.sh` (automated)
-
-When a config key is renamed, both files must be updated. See Fix #25 and Fix #41 in `docs/BUG_FIXES.md`.
+Both `launch_gazebo.sh` and `run_scenario_gazebo.sh` use the same config file (`config/gazebo_sitl.json`). This consolidation (from a previous two-file setup) eliminates the risk of config drift between manual and automated runs. When a config key is renamed, only one file needs updating. See Fix #25 and Fix #41 in `docs/BUG_FIXES.md` for the history of this issue.
 
 ---
 
@@ -549,7 +563,7 @@ slam_vio_nav.log: VIO backend: SimulatedVIOBackend (sim_speed=2.0 m/s)
 # Check if slam.vio.backend is set in the config being used
 python3 -c "
 import json
-cfg = json.load(open('config/gazebo.json'))
+cfg = json.load(open('config/gazebo_sitl.json'))
 vio = cfg.get('slam',{}).get('vio',{}).get('backend','NOT SET')
 print('slam.vio.backend:', vio)
 if vio == 'NOT SET':
@@ -560,7 +574,7 @@ if vio == 'NOT SET':
 "
 ```
 
-**Fix:** Ensure the config has `slam.vio.backend: "gazebo"` (not under a different key name). Compare with the known-good `config/gazebo_sitl.json`.
+**Fix:** Ensure the config has `slam.vio.backend: "gazebo"` (not under a different key name).
 
 ---
 

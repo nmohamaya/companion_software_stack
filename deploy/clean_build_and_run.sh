@@ -16,7 +16,7 @@
 #   1. Kill leftover PX4/Gazebo/companion processes
 #   2. Clean-build (Release by default, Debug if sanitizer/coverage)
 #   3. Run unit tests
-#   4. Launch Gazebo SITL flight with config/gazebo.json
+#   4. Launch Gazebo SITL flight with config/gazebo_sitl.json
 #
 # Prerequisites:
 #   - zenohc ≥ 1.0 installed  (apt: libzenohc libzenohc-dev)
@@ -132,10 +132,10 @@ if [[ -n "$GUI_FLAG" ]]; then
 else
     echo "  Mode   : Headless"
 fi
-echo "  Config : config/gazebo.json"
+echo "  Config : config/gazebo_sitl.json"
 echo "  Logs   : drone_logs/"
 echo "  Press Ctrl+C to stop."
 echo ""
 
-export CONFIG_FILE="${PROJECT_DIR}/config/gazebo.json"
+export CONFIG_FILE="${PROJECT_DIR}/config/gazebo_sitl.json"
 exec bash deploy/launch_gazebo.sh $GUI_FLAG

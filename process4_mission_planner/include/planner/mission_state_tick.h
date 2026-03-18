@@ -48,6 +48,9 @@ public:
               drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
               const FCSendFn& send_fc, uint64_t correlation_id,
               drone::util::FrameDiagnostics& diag) {
+        // Record home position from the first real pose, regardless of state.
+        try_record_home(pose);
+
         switch (fsm.state()) {
             case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
             case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;
@@ -84,6 +87,7 @@ private:
     float home_y_           = 0.0f;
     float home_z_           = 0.0f;
     bool  home_recorded_    = false;
+    bool  home_warn_logged_ = false;
     bool  fault_exec_reset_ = false;
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
@@ -106,24 +110,39 @@ private:
         }
     }
 
-    // ── TAKEOFF: send TAKEOFF, record home, wait for altitude ─
-    void tick_takeoff(MissionFSM& fsm, const drone::ipc::Pose& pose,
+    // ── Record home from the first real pose (any state) ──────
+    void try_record_home(const drone::ipc::Pose& pose) {
+        if (home_recorded_) return;
+        // Only accept poses with a non-zero timestamp (i.e. actually received
+        // from the SLAM/VIO pipeline, not a default-constructed Pose{}).
+        if (pose.timestamp_ns == 0) return;
+        if (!std::isfinite(pose.translation[0]) || !std::isfinite(pose.translation[1])) return;
+
+        home_x_        = static_cast<float>(pose.translation[0]);
+        home_y_        = static_cast<float>(pose.translation[1]);
+        home_z_        = 0.0f;
+        home_recorded_ = true;
+        spdlog::info("[Planner] Home position recorded: ({:.1f}, {:.1f}, {:.1f})", home_x_, home_y_,
+                     home_z_);
+    }
+
+    // ── TAKEOFF: send TAKEOFF, wait for altitude + home ─────────
+    void tick_takeoff(MissionFSM&                fsm, const drone::ipc::Pose& /*pose*/,
                       const drone::ipc::FCState& fc_state, const FCSendFn& send_fc) {
         if (!takeoff_sent_) {
             spdlog::info("[Planner] Sending TAKEOFF to {:.1f}m", config_.takeoff_alt_m);
             send_fc(drone::ipc::FCCommandType::TAKEOFF, config_.takeoff_alt_m);
             takeoff_sent_ = true;
         }
-        if (!home_recorded_ && std::isfinite(pose.translation[0]) &&
-            std::isfinite(pose.translation[1])) {
-            home_x_        = static_cast<float>(pose.translation[0]);
-            home_y_        = static_cast<float>(pose.translation[1]);
-            home_z_        = 0.0f;
-            home_recorded_ = true;
-            spdlog::info("[Planner] Home position recorded: ({:.1f}, {:.1f}, {:.1f})", home_x_,
-                         home_y_, home_z_);
-        }
         if (fc_state.rel_alt >= config_.takeoff_alt_m * 0.9f) {
+            if (!home_recorded_) {
+                if (!home_warn_logged_) {
+                    spdlog::warn("[Planner] Takeoff altitude reached but no valid pose "
+                                 "received yet — deferring NAVIGATE until home is recorded");
+                    home_warn_logged_ = true;
+                }
+                return;
+            }
             spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE", fc_state.rel_alt);
             fsm.on_navigate();
             spdlog::info("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());

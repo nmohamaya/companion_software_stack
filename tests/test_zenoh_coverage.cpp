@@ -97,7 +97,7 @@ TEST(ZenohNetworkConfigBranch, FromAppConfigEmptyJson) {
     auto           cfg   = ZenohNetworkConfig::from_app_config(empty);
     EXPECT_EQ(cfg.mode, "peer");
     EXPECT_EQ(cfg.listen_port, 7447);
-    EXPECT_EQ(cfg.listen_address, "0.0.0.0");
+    EXPECT_EQ(cfg.listen_address, "127.0.0.1");
     EXPECT_EQ(cfg.protocol, "tcp");
     EXPECT_TRUE(cfg.multicast_scouting);
     EXPECT_TRUE(cfg.gossip_scouting);
@@ -126,7 +126,7 @@ TEST(ZenohNetworkConfigBranch, FromAppConfigListenPortRebuildsEndpoint) {
 
     auto cfg = ZenohNetworkConfig::from_app_config(net);
     ASSERT_EQ(cfg.listen_endpoints.size(), 1u);
-    EXPECT_EQ(cfg.listen_endpoints[0], "tcp/0.0.0.0:8080");
+    EXPECT_EQ(cfg.listen_endpoints[0], "tcp/127.0.0.1:8080");
 }
 
 TEST(ZenohNetworkConfigBranch, FromAppConfigEmptyConnectEndpoints) {

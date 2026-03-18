@@ -4,11 +4,13 @@
 #pragma once
 #include "util/result.h"
 
+#include <filesystem>
 #include <fstream>
 #include <string>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <sys/stat.h>
 
 namespace drone {
 
@@ -25,6 +27,21 @@ public:
     /// Returns Result<void> on success, or an Error with details.
     [[nodiscard]] util::VoidResult load_config(const std::string& path) {
         path_ = path;
+
+        // Security checks (#184): reject symlinks and world-writable configs
+        std::error_code ec;
+        if (std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec))) {
+            spdlog::error("Config path is a symbolic link — refusing to load: {}", path);
+            data_ = nlohmann::json::object();
+            return util::VoidResult::err(util::Error(util::ErrorCode::InvalidValue,
+                                                     "Config path is a symbolic link: " + path));
+        }
+
+        struct stat st {};
+        if (::stat(path.c_str(), &st) == 0 && (st.st_mode & S_IWOTH)) {
+            spdlog::warn("Config file is world-writable — potential security risk: {}", path);
+        }
+
         std::ifstream ifs(path);
         if (!ifs.is_open()) {
             spdlog::warn("Config file not found: {} — using defaults", path);

@@ -3,6 +3,14 @@ build/
 build-*/
 cmake-build-*/
 
+# CMake artifacts if accidentally run outside build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+
 # Code coverage artifacts
 coverage-raw.info
 coverage.info
@@ -45,3 +53,7 @@ Thumbs.db
 work_instructions.md
 tasks/
 CLAUDE.md
+
+# Security and license documentation (local-only)
+docs/SECURITY.md
+docs/LICENSE_AUDIT.md

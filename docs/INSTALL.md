@@ -328,7 +328,7 @@ The launch script:
 1. Starts PX4 SITL with Gazebo physics server
 2. Waits for MAVLink heartbeat on UDP port 14540
 3. Optionally starts the Gazebo GUI client
-4. Launches all 7 companion stack processes with `config/gazebo.json`
+4. Launches all 7 companion stack processes with `config/gazebo_sitl.json`
 5. Catches Ctrl+C and cleanly shuts everything down
 
 ### Known Issues — Gazebo + PX4

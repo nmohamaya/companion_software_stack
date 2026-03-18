@@ -248,8 +248,8 @@ TEST(ZenohNetworkConfig, MakeDroneDefaultsArePeer) {
     EXPECT_TRUE(cfg.multicast_scouting);
     EXPECT_TRUE(cfg.gossip_scouting);
 
-    // Default endpoint should be tcp/0.0.0.0:7447
-    EXPECT_EQ(cfg.listen_endpoints[0], "tcp/0.0.0.0:7447");
+    // Default endpoint should be tcp/127.0.0.1:7447 (localhost for security, #180)
+    EXPECT_EQ(cfg.listen_endpoints[0], "tcp/127.0.0.1:7447");
 }
 
 TEST(ZenohNetworkConfig, MakeDroneCustomPort) {
