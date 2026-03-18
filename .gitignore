@@ -45,3 +45,7 @@ Thumbs.db
 work_instructions.md
 tasks/
 CLAUDE.md
+
+# Security and license documentation (local-only)
+docs/SECURITY.md
+docs/LICENSE_AUDIT.md
