@@ -61,6 +61,8 @@ struct RestartPolicy {
     bool     is_critical        = false;  // Stack enters CRITICAL on give-up
     uint8_t  thermal_gate       = 3;      // Block restart when thermal_zone >= this
                                           // 0=always block, 3=critical only, 4=never block
+    uint32_t max_thermal_defer_s = 300;   // Force restart after this many seconds of
+                                          // thermal deferral (0 = no limit) (#183)
 
     /// Compute backoff delay in milliseconds for a given attempt number.
     /// attempt is 0-based (first restart = attempt 0).
@@ -109,6 +111,8 @@ struct ProcessConfig {
             static_cast<uint32_t>(std::max(0, j.value("max_backoff_ms", 30000)));
         cfg.policy.thermal_gate =
             static_cast<uint8_t>(std::clamp(j.value("thermal_gate", 3), 0, 4));
+        cfg.policy.max_thermal_defer_s =
+            static_cast<uint32_t>(std::max(0, j.value("max_thermal_defer_s", 300)));
 
         // Dependency edges
         if (j.contains("launch_after") && j["launch_after"].is_array()) {

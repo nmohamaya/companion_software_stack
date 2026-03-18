@@ -11,7 +11,7 @@
             "enabled": false,
             "mode": "peer",
             "listen_port": 7447,
-            "listen_address": "0.0.0.0",
+            "listen_address": "127.0.0.1",
             "protocol": "tcp",
             "connect_endpoints": [],
             "multicast_scouting": true,

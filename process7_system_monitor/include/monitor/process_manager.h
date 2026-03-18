@@ -68,19 +68,20 @@ inline const char* to_string(ProcessState s) {
 
 // ── Managed process descriptor ──────────────────────────────
 struct ManagedProcess {
-    char         name[32]         = {};
-    char         binary_path[256] = {};
-    char         args[256]        = {};
-    pid_t        pid              = -1;
-    ProcessState state            = ProcessState::STOPPED;
-    uint32_t     restart_count    = 0;
-    uint64_t     last_restart_ns  = 0;      // steady_clock timestamp
-    uint64_t     started_at_ns    = 0;      // steady_clock timestamp
-    int          last_exit_code   = 0;      // wstatus from waitpid
-    bool         was_signaled     = false;  // true if killed by signal
-    int          last_signal      = 0;      // signal number if was_signaled
-    bool         thermal_deferred = false;  // true if restart is deferred due to thermal
-    char         blocked_by[32]   = {};     // cascade: wait for this process to be RUNNING
+    char         name[32]               = {};
+    char         binary_path[256]       = {};
+    char         args[256]              = {};
+    pid_t        pid                    = -1;
+    ProcessState state                  = ProcessState::STOPPED;
+    uint32_t     restart_count          = 0;
+    uint64_t     last_restart_ns        = 0;      // steady_clock timestamp
+    uint64_t     started_at_ns          = 0;      // steady_clock timestamp
+    int          last_exit_code         = 0;      // wstatus from waitpid
+    bool         was_signaled           = false;  // true if killed by signal
+    int          last_signal            = 0;      // signal number if was_signaled
+    bool         thermal_deferred       = false;  // true if restart is deferred due to thermal
+    uint64_t     thermal_defer_start_ns = 0;      // when thermal deferral began (#183)
+    char         blocked_by[32]         = {};     // cascade: wait for this process to be RUNNING
 };
 
 // ── Death callback type ─────────────────────────────────────
@@ -231,13 +232,33 @@ public:
                 // Thermal gate: defer restart when system is overheating
                 if (policy.is_thermal_blocked(thermal_zone_)) {
                     if (!proc.thermal_deferred) {
-                        proc.thermal_deferred = true;
-                        auto cid              = drone::util::CorrelationContext::generate();
+                        proc.thermal_deferred       = true;
+                        proc.thermal_defer_start_ns = now_ns;
+                        auto cid                    = drone::util::CorrelationContext::generate();
                         spdlog::warn("[Supervisor] RESTART_DEFERRED_THERMAL process={} "
                                      "thermal_zone={} thermal_gate={} cid={:#018x}",
                                      proc.name, thermal_zone_, policy.thermal_gate, cid);
                     }
-                    continue;  // Skip — wait for thermal to clear
+
+                    // Force restart after max deferral timeout (#183)
+                    if (policy.max_thermal_defer_s > 0 && proc.thermal_defer_start_ns > 0) {
+                        uint64_t defer_ns = now_ns - proc.thermal_defer_start_ns;
+                        uint64_t limit_ns = static_cast<uint64_t>(policy.max_thermal_defer_s) *
+                                            1'000'000'000ULL;
+                        if (defer_ns >= limit_ns) {
+                            spdlog::error("[Supervisor] THERMAL_DEFERRAL_TIMEOUT process={} "
+                                          "deferred_for={}s max={}s — forcing restart",
+                                          proc.name, defer_ns / 1'000'000'000ULL,
+                                          policy.max_thermal_defer_s);
+                            proc.thermal_deferred       = false;
+                            proc.thermal_defer_start_ns = 0;
+                            // Fall through to backoff check below
+                        } else {
+                            continue;  // Still within deferral window
+                        }
+                    } else {
+                        continue;  // No timeout configured — wait indefinitely
+                    }
                 }
 
                 // Clear thermal deferral flag if temperature dropped
@@ -493,11 +514,12 @@ private:
             proc.restart_count++;
         }
 
-        proc.pid              = pid;
-        proc.state            = ProcessState::RUNNING;
-        proc.started_at_ns    = now_ns;
-        proc.thermal_deferred = false;
-        proc.blocked_by[0]    = '\0';
+        proc.pid                    = pid;
+        proc.state                  = ProcessState::RUNNING;
+        proc.started_at_ns          = now_ns;
+        proc.thermal_deferred       = false;
+        proc.thermal_defer_start_ns = 0;
+        proc.blocked_by[0]          = '\0';
 
         spdlog::info("[Supervisor] Launched {} (PID {})", proc.name, pid);
         return true;

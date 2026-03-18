@@ -3,6 +3,7 @@
 // All types MUST be trivially copyable (no std::string, std::vector, etc.)
 #pragma once
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -21,6 +22,12 @@ struct VideoFrame {
     uint32_t channels;
     uint32_t stride;
     uint8_t  pixel_data[1920 * 1080 * 3];  // RGB24 max
+
+    /// Validate frame dimensions fit within the fixed pixel_data buffer.
+    [[nodiscard]] bool validate() const {
+        if (width == 0 || height == 0 || channels == 0) return false;
+        return static_cast<uint64_t>(width) * height * channels <= sizeof(pixel_data);
+    }
 };
 
 struct StereoFrame {
@@ -30,6 +37,12 @@ struct StereoFrame {
     uint32_t height;
     uint8_t  left_data[640 * 480];   // GRAY8
     uint8_t  right_data[640 * 480];  // GRAY8
+
+    [[nodiscard]] bool validate() const {
+        if (width == 0 || height == 0) return false;
+        uint64_t size = static_cast<uint64_t>(width) * height;
+        return size <= sizeof(left_data) && size <= sizeof(right_data);
+    }
 };
 
 /// LWIR thermal camera frame (640x512, GRAY8 — 8-bit pseudo-radiometric).
@@ -39,6 +52,11 @@ struct ThermalFrame {
     uint32_t width;
     uint32_t height;
     uint8_t  pixel_data[640 * 512];  // GRAY8 — 1 byte per pixel
+
+    [[nodiscard]] bool validate() const {
+        if (width == 0 || height == 0) return false;
+        return static_cast<uint64_t>(width) * height <= sizeof(pixel_data);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -66,6 +84,13 @@ struct DetectedObject {
     float       heading;                             // radians
     float       bbox_x, bbox_y, bbox_w, bbox_h;      // image-space
     bool        has_camera, has_thermal;
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(confidence) && confidence >= 0.0f && confidence <= 1.0f &&
+               std::isfinite(position_x) && std::isfinite(position_y) &&
+               std::isfinite(position_z) && std::isfinite(velocity_x) &&
+               std::isfinite(velocity_y) && std::isfinite(velocity_z);
+    }
 };
 
 struct DetectedObjectList {
@@ -73,6 +98,14 @@ struct DetectedObjectList {
     uint32_t       frame_sequence;
     uint32_t       num_objects;
     DetectedObject objects[MAX_DETECTED_OBJECTS];
+
+    [[nodiscard]] bool validate() const {
+        if (num_objects > MAX_DETECTED_OBJECTS) return false;
+        for (uint32_t i = 0; i < num_objects; ++i) {
+            if (!objects[i].validate()) return false;
+        }
+        return true;
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -84,7 +117,17 @@ struct alignas(64) Pose {
     double   quaternion[4];   // w, x, y, z
     double   velocity[3];     // vx, vy, vz
     double   covariance[36];  // 6x6 pose covariance
-    uint32_t quality;         // 0=lost, 1=degraded, 2=good
+    uint32_t quality;         // 0=lost, 1=degraded, 2=good, 3=excellent (ground truth)
+
+    [[nodiscard]] bool validate() const {
+        for (int i = 0; i < 3; ++i) {
+            if (!std::isfinite(translation[i]) || !std::isfinite(velocity[i])) return false;
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (!std::isfinite(quaternion[i])) return false;
+        }
+        return quality <= 3;  // 0=lost, 1=degraded, 2=good, 3=excellent (ground truth)
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -190,6 +233,11 @@ struct MissionStatus {
     bool         mission_active;
     uint32_t     active_faults;  // bitmask of FaultType (0 = nominal)
     uint8_t      fault_action;   // current FaultAction severity (0 = NONE)
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(progress_percent) && std::isfinite(target_x) &&
+               std::isfinite(target_y) && std::isfinite(target_z) && std::isfinite(battery_percent);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -204,6 +252,13 @@ struct TrajectoryCmd {
     float    yaw_rate;
     uint8_t  coordinate_frame;  // MAVLink frame enum
     bool     valid;
+
+    [[nodiscard]] bool validate() const {
+        if (!valid) return true;  // stop commands (valid=false) are always OK
+        return std::isfinite(target_x) && std::isfinite(target_y) && std::isfinite(target_z) &&
+               std::isfinite(target_yaw) && std::isfinite(velocity_x) &&
+               std::isfinite(velocity_y) && std::isfinite(velocity_z) && std::isfinite(yaw_rate);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -224,6 +279,10 @@ struct PayloadCommand {
     float         gimbal_pitch, gimbal_yaw;  // degrees
     uint64_t      sequence_id;
     bool          valid;
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(gimbal_pitch) && std::isfinite(gimbal_yaw);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -246,6 +305,11 @@ struct FCCommand {
     float         param1;       // TAKEOFF: altitude_m; SET_MODE: mode_id
     uint64_t      sequence_id;  // monotonic, for dedup
     bool          valid;
+
+    [[nodiscard]] bool validate() const {
+        return static_cast<uint8_t>(command) <= static_cast<uint8_t>(FCCommandType::LAND) &&
+               std::isfinite(param1);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -264,6 +328,14 @@ struct FCState {
     bool     connected;
     uint8_t  gps_fix_type;
     uint8_t  satellites_visible;
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(battery_voltage) && battery_voltage >= 0.0f &&
+               battery_voltage <= 60.0f && std::isfinite(battery_remaining) &&
+               battery_remaining >= 0.0f && battery_remaining <= 100.0f && std::isfinite(roll) &&
+               std::isfinite(pitch) && std::isfinite(yaw) && std::isfinite(vx) &&
+               std::isfinite(vy) && std::isfinite(vz);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -289,6 +361,11 @@ struct GCSCommand {
     float          param1, param2, param3;
     uint64_t       sequence_id;
     bool           valid;
+
+    [[nodiscard]] bool validate() const {
+        return static_cast<uint8_t>(command) <=
+               static_cast<uint8_t>(GCSCommandType::MISSION_UPLOAD);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -304,6 +381,11 @@ struct IpcWaypoint {
     float radius{2.0f};            // acceptance radius (m)
     float speed{2.0f};             // cruise speed (m/s)
     bool  trigger_payload{false};  // capture at this waypoint
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && std::isfinite(yaw) &&
+               std::isfinite(radius) && radius > 0.0f && std::isfinite(speed) && speed > 0.0f;
+    }
 };
 static_assert(std::is_trivially_copyable_v<IpcWaypoint>,
               "IpcWaypoint must be trivially copyable for IPC");
@@ -314,6 +396,14 @@ struct MissionUpload {
     uint8_t     num_waypoints{};
     IpcWaypoint waypoints[kMaxUploadWaypoints]{};
     bool        valid{false};
+
+    [[nodiscard]] bool validate() const {
+        if (num_waypoints > kMaxUploadWaypoints) return false;
+        for (uint8_t i = 0; i < num_waypoints; ++i) {
+            if (!waypoints[i].validate()) return false;
+        }
+        return true;
+    }
 };
 static_assert(std::is_trivially_copyable_v<MissionUpload>,
               "MissionUpload must be trivially copyable for IPC");
@@ -328,6 +418,10 @@ struct PayloadStatus {
     bool     recording_video;
     bool     gimbal_stabilized;
     uint8_t  num_plugins_active;
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(gimbal_pitch) && std::isfinite(gimbal_yaw);
+    }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -366,6 +460,12 @@ struct SystemHealth {
     ProcessHealthEntry processes[kMaxTrackedProcesses] = {};
     uint8_t            num_processes                   = 0;      // Number of tracked processes
     bool               critical_failure                = false;  // True if a critical process died
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(cpu_usage_percent) && std::isfinite(memory_usage_percent) &&
+               std::isfinite(max_temp_c) && std::isfinite(power_watts) && thermal_zone <= 3 &&
+               num_processes <= kMaxTrackedProcesses;
+    }
 };
 
 // ═══════════════════════════════════════════════════════════

@@ -2,6 +2,7 @@
 // Unit tests for GCSCommandHandler (Issue #154).
 #include "planner/gcs_command_handler.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -209,4 +210,390 @@ TEST_F(GCSCommandHandlerTest, DisconnectedSubscriberIgnored) {
     auto diag = make_diag();
     handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
     EXPECT_TRUE(fc_calls.empty());
+}
+
+// ═══════════════════════════════════════════════════════════
+// MISSION_PAUSE command (#174)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, PauseCommandTransitionsToLoiter) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns   = 100;
+    cmd.correlation_id = 0x5000;
+    cmd.command        = GCSCommandType::MISSION_PAUSE;
+    cmd.valid          = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::LOITER);
+    EXPECT_TRUE(fc_calls.empty());  // no FC command for pause
+    EXPECT_GE(traj_pub.messages().size(), 1u);
+    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+}
+
+// ═══════════════════════════════════════════════════════════
+// MISSION_START command (#174)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, StartCommandResumesFromLoiter) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_loiter();
+    ASSERT_EQ(fsm.state(), MissionState::LOITER);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns   = 100;
+    cmd.correlation_id = 0x5001;
+    cmd.command        = GCSCommandType::MISSION_START;
+    cmd.valid          = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+    EXPECT_TRUE(fc_calls.empty());  // no FC command for start
+}
+
+TEST_F(GCSCommandHandlerTest, StartCommandIgnoredIfNotLoitering) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_START;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);  // unchanged
+}
+
+// ═══════════════════════════════════════════════════════════
+// MISSION_ABORT command (#174)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, AbortCommandSendsRTL) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns   = 100;
+    cmd.correlation_id = 0x5002;
+    cmd.command        = GCSCommandType::MISSION_ABORT;
+    cmd.valid          = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::RTL);
+    EXPECT_EQ(fsm.state(), MissionState::RTL);
+    EXPECT_TRUE(flight_state.nav_was_armed);
+    EXPECT_GE(traj_pub.messages().size(), 1u);
+    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+}
+
+// ═══════════════════════════════════════════════════════════
+// Waypoint validation — NaN/Inf (#177)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, NaNCoordinateUploadRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {std::numeric_limits<float>::quiet_NaN(), 2, 3, 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.validation_rejected_count(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, InfCoordinateUploadRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, std::numeric_limits<float>::infinity(), 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.validation_rejected_count(), 1u);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Waypoint validation — speed/radius range (#178)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, ZeroSpeedUploadRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 0.0f, false};  // speed = 0
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.validation_rejected_count(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, NegativeRadiusUploadRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, -1.0f, 3, false};  // radius < 0
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.validation_rejected_count(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, ExcessiveSpeedUploadRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 100.0f, false};  // speed > 50
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.validation_rejected_count(), 1u);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Rate limiting (#182)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, RateLimitedUploadRejected) {
+    // Use a very large rate limit so the second upload is always within the window
+    GCSCommandHandler rate_handler(
+        GCSCommandHandler::UploadLimits{0.1f, 50.0f, 0.1f, 100.0f, 60000});
+
+    fsm.on_takeoff();
+    fsm.on_navigate();
+
+    // First upload — should succeed
+    MissionUpload upload1{};
+    upload1.timestamp_ns  = 200;
+    upload1.num_waypoints = 1;
+    upload1.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload1.valid         = true;
+    upload_sub.set(upload1);
+
+    GCSCommand cmd1{};
+    cmd1.timestamp_ns = 100;
+    cmd1.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd1.valid        = true;
+    gcs_sub.set(cmd1);
+
+    auto diag1 = make_diag();
+    rate_handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag1);
+    EXPECT_EQ(rate_handler.rate_limited_count(), 0u);
+
+    // Second upload — should be rate-limited
+    MissionUpload upload2{};
+    upload2.timestamp_ns  = 300;
+    upload2.num_waypoints = 1;
+    upload2.waypoints[0]  = {4, 5, 6, 0, 2, 3, false};
+    upload2.valid         = true;
+    upload_sub.set(upload2);
+
+    GCSCommand cmd2{};
+    cmd2.timestamp_ns = 200;
+    cmd2.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd2.valid        = true;
+    gcs_sub.set(cmd2);
+
+    auto diag2 = make_diag();
+    rate_handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag2);
+    EXPECT_EQ(rate_handler.rate_limited_count(), 1u);
+}
+
+// ═══════════════════════════════════════════════════════════
+// FSM state gating (#182)
+// ═══════════════════════════════════════════════════════════
+TEST_F(GCSCommandHandlerTest, UploadDuringRTLRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_rtl();
+    ASSERT_EQ(fsm.state(), MissionState::RTL);
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.state_rejected_count(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, UploadDuringLandRejected) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_land();
+    ASSERT_EQ(fsm.state(), MissionState::LAND);
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.state_rejected_count(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, UploadDuringTakeoffRejected) {
+    fsm.on_takeoff();
+    ASSERT_EQ(fsm.state(), MissionState::TAKEOFF);
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.state_rejected_count(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, UploadDuringNavigateAccepted) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.state_rejected_count(), 0u);
+    EXPECT_EQ(handler.validation_rejected_count(), 0u);
+    EXPECT_EQ(fsm.total_waypoints(), 1u);
+}
+
+TEST_F(GCSCommandHandlerTest, UploadDuringLoiterAccepted) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_loiter();
+    ASSERT_EQ(fsm.state(), MissionState::LOITER);
+
+    MissionUpload upload{};
+    upload.timestamp_ns  = 200;
+    upload.num_waypoints = 1;
+    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.valid         = true;
+    upload_sub.set(upload);
+
+    GCSCommand cmd{};
+    cmd.timestamp_ns = 100;
+    cmd.command      = GCSCommandType::MISSION_UPLOAD;
+    cmd.valid        = true;
+    gcs_sub.set(cmd);
+
+    auto diag = make_diag();
+    handler.process(gcs_sub, upload_sub, fsm, send_fc, traj_pub, flight_state, diag);
+
+    EXPECT_EQ(handler.state_rejected_count(), 0u);
+    EXPECT_EQ(fsm.total_waypoints(), 1u);
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);  // auto-resumes
 }
