@@ -98,7 +98,7 @@ The stack is currently 100% "make" — all algorithms are original implementatio
 
 | Option | License | Annual Cost | Jetson Orin | Notes |
 |--------|---------|-------------|-------------|-------|
-| **Spleenlab visonAIry** | Proprietary | Custom (contact sales) | Xavier NX confirmed, Orin likely | Top drone customers: Quantum Systems, DroneUp, Aerialoop. Auterion/PX4 ecosystem partner |
+| **Spleenlab visionAIry** | Proprietary | Custom (contact sales) | Xavier NX confirmed, Orin likely | Top drone customers: Quantum Systems, DroneUp, Aerialoop. Auterion/PX4 ecosystem partner |
 | **SLAMcore** | Proprietary | Per-seat + per-robot/month (undisclosed) | Orin since v23.04 | RealSense D435i/D455 out-of-box, warehouse/consumer focus |
 | **Kudan SLAM** | Proprietary | GBP 1,000/app (AR); enterprise custom | Orin (NVIDIA partner) | LiDAR + visual SLAM, Terra Drone customer |
 | **Spectacular AI** | Proprietary | Custom (undisclosed) | ARM with commercial license | OAK-D, RealSense, free non-commercial x86 tier |
@@ -266,7 +266,7 @@ The stack is currently 100% "make" — all algorithms are original implementatio
 |-----------|----------|-------------|
 | Detection | Ultralytics YOLO11 Enterprise | ~$5,000 |
 | Tracking | NVIDIA DeepStream NvSORT | $0 |
-| VIO | Spleenlab visonAIry or cuVSLAM | ~$10,000-50,000 (est.) |
+| VIO | Spleenlab visionAIry or cuVSLAM | ~$10,000-50,000 (est.) |
 | Planning | Auterion SDK + Skynode | ~$5,000-20,000 |
 | FC Comms | MAVSDK | $0 |
 | IPC | RTI Connext DDS (certified) | ~$4,500-8,000 |

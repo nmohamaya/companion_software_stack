@@ -1242,7 +1242,7 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | MAVSDK | ≥ 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
 
-> **YOLOv8 License Note:** The optional YOLOv8n model (`models/yolov8n.onnx`, downloaded on demand) is licensed under **AGPL 3.0** by Ultralytics. If deploying with `HAS_OPENCV=ON`, you must either comply with AGPL 3.0 (source disclosure), obtain a [commercial Ultralytics license](https://ultralytics.com/license), or use the built-in `ColorContourDetector` instead. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.
+> **YOLOv8 License Note:** The optional YOLOv8n model (`models/yolov8n.onnx`, downloaded on demand) is licensed under **AGPL 3.0** by Ultralytics. AGPL compliance (source disclosure) or a [commercial Ultralytics license](https://ultralytics.com/license) is required only if the YOLOv8n model is used in the deployed product (i.e. the `OpenCvYoloDetector` backend is active at runtime). Compiling with `HAS_OPENCV=ON` alone does not trigger the obligation if the built-in `ColorContourDetector` is used instead. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.
 
 ## Development Workflow
 
