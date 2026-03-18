@@ -13,8 +13,8 @@
 #include "ipc/ipublisher.h"
 #include "ipc/zenoh_session.h"
 
+#include <algorithm>
 #include <atomic>
-#include <cstring>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -83,7 +83,7 @@ private:
         publisher_->put(zenoh::Bytes(std::move(buf)));
     }
 
-    /// Large-message path: allocate SHM buffer, memcpy, publish zero-copy.
+    /// Large-message path: allocate SHM buffer, copy, publish zero-copy.
     void publish_shm(const T& msg) {
         auto* provider = ZenohSession::instance().shm_provider();
         if (!provider) {
@@ -102,8 +102,9 @@ private:
             return;
         }
 
-        // Zero-copy write: memcpy directly into shared memory
-        std::memcpy(buf->data(), &msg, sizeof(T));
+        // Zero-copy write: copy directly into shared memory
+        const auto* src = reinterpret_cast<const uint8_t*>(&msg);
+        std::copy(src, src + sizeof(T), buf->data());
 
         // Move SHM buffer into Bytes and publish — only a descriptor
         // is sent over the transport; local subscribers receive a
