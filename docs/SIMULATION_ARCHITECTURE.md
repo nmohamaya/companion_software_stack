@@ -25,7 +25,7 @@ flowchart TB
         P7["P7 — System Monitor<br/><i>CPU/GPU/Thermal, Watchdog,<br/>Process Supervisor</i>"]
     end
 
-    subgraph IPC["IPC Layer (POSIX SHM / Zenoh)"]
+    subgraph IPC["IPC Layer (Zenoh)"]
         direction LR
         SHM1["/drone_mission_cam"]
         SHM2["/detected_objects"]
@@ -63,8 +63,8 @@ flowchart TB
 
     subgraph TOOLS["Test Tooling"]
         FI["fault_injector CLI<br/><i>Writes to /fault_overrides<br/>sideband channel</i>"]
-        SR["run_scenario.sh<br/><i>Launch → Inject → Verify<br/>Transport-aware (SHM / Zenoh)</i>"]
-        SCEN["Scenario Configs<br/><i>8 JSON scenario files</i>"]
+        SR["run_scenario.sh<br/><i>Launch → Inject → Verify</i>"]
+        SCEN["Scenario Configs<br/><i>9 JSON scenario files</i>"]
     end
 
     subgraph EXTERNAL["External Systems (Tier 2 only)"]
@@ -165,7 +165,7 @@ These run identically in sim and on hardware:
 | VIO Backend | P3 | Visual-inertial odometry with sliding window (sim uses `steady_clock` timestamps) |
 | IMU Pre-integrator | P3 | IMU measurement integration between keyframes |
 | Watchdog | P7 | Thread heartbeat monitoring, process management |
-| IPC Layer | All | SHM SeqLock pub/sub or Zenoh transport |
+| IPC Layer | All | Zenoh pub/sub transport |
 
 ### HAL-Swappable Backends
 
@@ -208,11 +208,12 @@ sudo apt install libmavsdk-dev  # or build from source
 ```bash
 # Tier 1 build (default — all simulated)
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_BUILD_TYPE=Release -DALLOW_INSECURE_ZENOH=ON ..
 make -j$(nproc)
 
 # Tier 2 build (with Gazebo + MAVSDK)
 cmake -DCMAKE_BUILD_TYPE=Release \
+      -DALLOW_INSECURE_ZENOH=ON \
       -DENABLE_GAZEBO=ON \
       -DENABLE_MAVSDK=ON ..
 make -j$(nproc)
@@ -281,20 +282,14 @@ Config files in `config/`:
 # List available scenarios
 ./tests/run_scenario.sh --list
 
-# Run a single scenario (uses SHM transport by default)
+# Run a single scenario
 ./tests/run_scenario.sh config/scenarios/01_nominal_mission.json
-
-# Run with explicit Zenoh transport
-./tests/run_scenario.sh config/scenarios/01_nominal_mission.json --ipc zenoh
 
 # Dry-run (show plan without executing)
 ./tests/run_scenario.sh config/scenarios/03_battery_degradation.json --dry-run
 
-# Run all Tier 1 scenarios (SHM)
+# Run all Tier 1 scenarios
 ./tests/run_scenario.sh --all --tier 1
-
-# Run all Tier 1 scenarios (Zenoh)
-./tests/run_scenario.sh --all --tier 1 --ipc zenoh
 ```
 
 **Option C: Manual fault injection (while stack is running)**
@@ -329,8 +324,8 @@ PX4_DIR=~/PX4-Autopilot ./deploy/launch_gazebo.sh
 ## Fault Injection Tool
 
 The `fault_injector` CLI uses a **sideband override channel**
-(`/fault_overrides`) rather than writing directly to production SHM
-segments. This avoids race conditions — the producing processes (P5
+(`/fault_overrides`) rather than writing directly to production IPC
+channels. This avoids race conditions — the producing processes (P5
 Comms, P7 System Monitor) continue their normal publish loops and
 **merge** overrides into the values they publish.
 
@@ -356,9 +351,8 @@ flowchart LR
 - **FC link loss**: When `fc_connected = 0`, P5 freezes the FC
   heartbeat timestamp so the FaultManager's stale-heartbeat check
   fires correctly.
-- **Transport-agnostic**: The `/fault_overrides` segment is always
-  POSIX SHM (even when the main transport is Zenoh), so fault
-  injection works identically across transports.
+- **Same IPC transport**: The `/fault_overrides` channel uses the
+  same Zenoh transport as all other IPC channels.
 
 ### ShmFaultOverrides Struct
 
@@ -402,7 +396,7 @@ struct alignas(64) ShmFaultOverrides {
 
 ## Test Scenarios
 
-Eight pre-defined scenarios in `config/scenarios/`:
+Nine pre-defined scenarios in `config/scenarios/`:
 
 | # | Scenario | Tier | Gazebo | What it Tests |
 |---|---|---|---|---|
@@ -414,6 +408,7 @@ Eight pre-defined scenarios in `config/scenarios/`:
 | 06 | Mission Upload | 1 | No | Mid-flight waypoint upload via GCS |
 | 07 | Thermal Throttle | 1 | No | Zone escalation (0→1→2→3→0) |
 | 08 | Full Stack Stress | 1 | No | Concurrent faults, high rates |
+| 09 | Perception Tracking | 1 | No | ByteTrack multi-object tracking |
 
 ### Scenario JSON Structure
 
@@ -436,7 +431,7 @@ Each scenario file contains:
         "log_contains": ["..."],
         "log_must_not_contain": ["..."],
         "processes_alive": ["..."],
-        "shm_segments_exist": ["..."]
+        "processes_running": ["..."]
     },
     "manual_controls": {
         "notes": "What parameters can be adjusted"
@@ -458,8 +453,7 @@ which parameters can be adjusted for manual testing:
   `"potential_field"` and `"astar"`
 - **Obstacle avoider backend**: `"potential_field"` or
   `"potential_field_3d"` (3D variant used by stress test)
-- **IPC transport**: `--ipc shm` or `--ipc zenoh` on the
-  `run_scenario.sh` command line (default: from base config)
+- **IPC transport**: Zenoh (sole backend, configured via `config/default.json`)
 
 ---
 
@@ -473,14 +467,9 @@ sequenceDiagram
     participant FO as /fault_overrides
 
     Runner->>Runner: Merge base config + scenario overrides
-    Runner->>Runner: Resolve effective IPC (SHM or Zenoh)
-    Runner->>Stack: Launch with merged config + --ipc flag
+    Runner->>Stack: Launch with merged config
 
-    alt SHM transport
-        Runner->>Runner: Wait for /dev/shm segments
-    else Zenoh transport
-        Runner->>Runner: Wait for process log output
-    end
+    Runner->>Runner: Wait for process log output
 
     Note over Runner,FI: Fault Injection Phase
 
@@ -496,9 +485,6 @@ sequenceDiagram
     Note over Runner: Verification Phase
 
     Runner->>Runner: Check logs for expected patterns
-    alt SHM transport
-        Runner->>Runner: Check SHM segments exist
-    end
     Runner->>Runner: Check processes alive
     Runner->>Runner: Report PASS/FAIL
 ```
@@ -521,6 +507,7 @@ companion_software_stack/
 │       ├── 06_mission_upload.json
 │       ├── 07_thermal_throttle.json
 │       ├── 08_full_stack_stress.json
+│       ├── 09_perception_tracking.json
 │       └── data/
 │           └── upload_waypoints.json
 ├── common/hal/include/hal/
@@ -533,7 +520,7 @@ companion_software_stack/
 │       ├── CMakeLists.txt
 │       └── main.cpp                  # Fault injection CLI (sideband /fault_overrides)
 ├── tests/
-│   ├── run_scenario.sh               # Scenario runner (transport-aware, --ipc flag)
+│   ├── run_scenario.sh               # Scenario runner
 │   └── test_gazebo_integration.sh    # Gazebo smoke test
 ├── drone_logs/
 │   └── scenarios/                    # Scenario runner output logs

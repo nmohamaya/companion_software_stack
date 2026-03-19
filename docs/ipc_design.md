@@ -1,8 +1,13 @@
 # IPC Layer: Design Document
 
 > **Scope**: Detailed design of the inter-process communication layer in `common/ipc/`.
-> This document covers the SHM transport, Zenoh transport, wire format, liveliness
+> This document covers the Zenoh transport, wire format, liveliness
 > monitoring, service channels, and the transport-agnostic MessageBus abstraction.
+
+> **Note (March 2026):** The POSIX SHM backend was removed in Issue #126 (PR #151).
+> **Zenoh is the sole IPC backend.** Historical SHM sections are retained below
+> (marked as such) for architectural reference. See
+> [ADR-001](adr/ADR-001-ipc-framework-selection.md) for the migration rationale.
 
 ---
 
@@ -11,7 +16,7 @@
 1. [Overview](#overview)
 2. [Architecture](#architecture)
 3. [Message Types](#message-types)
-4. [SHM Transport (SeqLock)](#shm-transport-seqlock)
+4. [SHM Transport — Historical](#shm-transport--historical)
 5. [SPSC Ring Buffer](#spsc-ring-buffer)
 6. [Zenoh Transport](#zenoh-transport)
 7. [Wire Format](#wire-format)
@@ -27,20 +32,18 @@
 
 ## Overview
 
-The IPC layer provides type-safe, zero-copy communication between the 7 processes.
-Two backends are supported:
+The IPC layer provides type-safe, zero-copy communication between the 7 processes
+using **Zenoh** as the sole transport backend.
 
-| Backend | Build Flag | Use Case |
-|---------|-----------|----------|
-| **SHM** | Always on | Single-machine, lowest latency (~ns overhead) |
-| **Zenoh** | `ENABLE_ZENOH=ON` | Network-capable, zero-copy SHM + TCP/UDP pub-sub |
+Zenoh provides network-capable, zero-copy SHM + TCP/UDP pub-sub. Messages use
+**latest-value semantics** — only the most recent message is retained. Older
+messages are silently overwritten.
 
-Both backends use **latest-value semantics** — only the most recent message is
-retained. Older messages are silently overwritten.
-
-Process code never touches the backends directly. All IPC goes through the
-`MessageBus` abstraction, which is created via a factory using a config-driven backend
-selector.
+Process code never touches Zenoh directly. All IPC goes through the
+`MessageBus` abstraction, which is created via a factory. The `MessageBus`
+interface is backend-agnostic by design ([ADR-002](adr/ADR-002-modular-ipc-backend.md)),
+so adding a new backend (e.g., iceoryx, DDS) requires one file change — zero
+process code changes.
 
 ---
 
@@ -54,18 +57,18 @@ selector.
 │        │                                    ▲                │
 │        ▼                                    │                │
 │  ┌────────────────────── MessageBus ──────────────────────┐  │
-│  │  variant<ShmMessageBus, ZenohMessageBus>               │  │
-│  └───────────┬────────────────────────────────┬───────────┘  │
-│              │                                │              │
-│     ┌────────▼─────────┐            ┌─────────▼──────────┐  │
-│     │  SHM Backend     │            │  Zenoh Backend      │  │
-│     │  ShmWriter<T>    │            │  ZenohPublisher<T>  │  │
-│     │  ShmReader<T>    │            │  ZenohSubscriber<T> │  │
-│     │  (SeqLock)       │            │  (Session)          │  │
-│     └──────────────────┘            └────────────────────┘   │
-│              │                                │              │
-│       POSIX SHM                        Zenoh SHM + TCP       │
-│    (/dev/shm/drone_*)              (zenoh::Session)          │
+│  │  ZenohMessageBus (sole backend)                        │  │
+│  └───────────────────────┬────────────────────────────────┘  │
+│                          │                                   │
+│                ┌─────────▼──────────┐                        │
+│                │  Zenoh Backend      │                        │
+│                │  ZenohPublisher<T>  │                        │
+│                │  ZenohSubscriber<T> │                        │
+│                │  (Session)          │                        │
+│                └────────────────────┘                         │
+│                          │                                   │
+│                   Zenoh SHM + TCP                             │
+│                (zenoh::Session)                               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -127,9 +130,12 @@ Object classes: `PERSON`, `VEHICLE_CAR`, `TRUCK`, `DRONE`, `ANIMAL`, `BUILDING`,
 
 ---
 
-## SHM Transport (SeqLock)
+## SHM Transport — Historical
 
-- **Headers:** [`shm_writer.h`](../common/ipc/include/ipc/shm_writer.h), [`shm_reader.h`](../common/ipc/include/ipc/shm_reader.h)
+> **Removed in Issue #126 (PR #151).** This section is retained for architectural
+> reference only. The POSIX SHM SeqLock backend is no longer part of the codebase.
+
+- **Former headers:** `shm_writer.h`, `shm_reader.h` (removed)
 
 ### Memory Layout
 
@@ -340,11 +346,11 @@ SHM segment names map to Zenoh key expressions:
 
 - **Header:** [`message_bus.h`](../common/ipc/include/ipc/message_bus.h)
 
-The `MessageBus` class wraps both backends behind a type-erased variant:
+The `MessageBus` class wraps the Zenoh backend behind a type-erased interface:
 
 ```cpp
 class MessageBus {
-    // Internally: std::variant<unique_ptr<ShmMessageBus>, unique_ptr<ZenohMessageBus>>
+    // Internally: unique_ptr<ZenohMessageBus>
 
     template<typename T>
     unique_ptr<IPublisher<T>> advertise(const string& topic);
@@ -357,8 +363,8 @@ class MessageBus {
     template<typename T>
     unique_ptr<ISubscriber<T>> subscribe_optional(const string& topic);
 
-    string backend_name() const;       // "shm" or "zenoh"
-    bool has_service_channels() const; // true for Zenoh only
+    string backend_name() const;       // "zenoh"
+    bool has_service_channels() const; // true (Zenoh supports request-reply)
 };
 ```
 
@@ -366,7 +372,7 @@ class MessageBus {
 
 ```cpp
 // Manual:
-MessageBus create_message_bus(const string& backend = "shm",
+MessageBus create_message_bus(const string& backend = "zenoh",
                                size_t shm_pool_mb = 0,
                                const string& zenoh_json = "");
 
@@ -375,13 +381,13 @@ MessageBus create_message_bus(const Config& cfg);
 ```
 
 The factory is the **only** place backend selection happens. Process code never
-references SHM or Zenoh directly.
+references Zenoh directly — it only uses the `IPublisher`/`ISubscriber` interfaces.
 
 ---
 
 ## Service Channels
 
-Zenoh-only request-reply channels for synchronous operations.
+Request-reply channels for synchronous operations (built on Zenoh queryables).
 
 ### Envelope Types
 
@@ -425,7 +431,6 @@ class IServiceServer {
 ```
 
 Service channels are created via `MessageBus::create_client()` / `create_server()`.
-Not available with SHM backend (`has_service_channels()` returns false).
 
 ---
 
@@ -462,7 +467,7 @@ Subscribes to `drone/alive/**` wildcard. Used by P7 for process health detection
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `ipc_backend` | string | `"shm"` | Transport backend (`"shm"` or `"zenoh"`) |
+| `ipc_backend` | string | `"zenoh"` | Transport backend (Zenoh is the sole backend) |
 | `zenoh.shm_pool_size_mb` | int | 32 | SHM pool for zero-copy (video frames) |
 | `zenoh.network.mode` | string | `"peer"` | Zenoh session mode |
 | `zenoh.network.listen` | string[] | `["tcp/0.0.0.0:7447"]` | Listen endpoints |
@@ -509,16 +514,15 @@ Subscribes to `drone/alive/**` wildcard. Used by P7 for process health detection
 
 ## Known Limitations
 
-1. **Latest-value only:** Both backends overwrite old messages. No queue or
+1. **Latest-value only:** Zenoh overwrites old messages. No queue or
    guaranteed delivery. Streams with burst losses (perception at high FPS) can
    miss detections.
 2. **No message ordering guarantees:** With Zenoh over network, messages on
    different topics may arrive out of order relative to each other.
-3. **SHM segments leak on kill -9:** A SIGKILL prevents the owning writer from
-   calling `shm_unlink`. Manual cleanup: `rm /dev/shm/drone_*`.
-4. **Single Zenoh session per process:** The singleton design prevents a process
+3. **Single Zenoh session per process:** The singleton design prevents a process
    from having multiple sessions (e.g., isolated Zenoh domains).
-5. **No flow control:** Publishers are not throttled by slow subscribers. A slow
+4. **No flow control:** Publishers are not throttled by slow subscribers. A slow
    P2 consumer receiving 30 fps 6.2 MB frames generates ~180 MB/s of copies.
-6. **Service channels Zenoh-only:** SHM backend does not support request-reply.
-   Processes must use pub-sub workarounds.
+5. **Zenoh SHM requires `shared-memory` Cargo feature:** The pre-built CI debs
+   lack this feature, so `PosixShmProvider` returns `nullptr` on CI. SHM-path
+   tests use `GTEST_SKIP()`. Locally-built zenohc works correctly.

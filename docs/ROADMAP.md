@@ -73,7 +73,7 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
-| Integration testing | **8/8 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
+| Integration testing | **9 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **41** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
@@ -570,7 +570,7 @@
 | Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **29** |
 | Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
 | HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **9** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **SHM + Zenoh** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **Zenoh (sole)** |
 | Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
 | Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 | Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
@@ -592,7 +592,7 @@
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
 | Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 scenarios (8 Tier 1 + 1 Tier 2), 8/8 Tier 1 pass on Zenoh** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **9 scenarios (8 Tier 1 + 1 Tier 2), 9/9 pass on Zenoh** |
 
 ### Process Activity During Simulation
 
