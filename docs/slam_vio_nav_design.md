@@ -66,35 +66,37 @@ The process runs **4 threads**:
 
 ## Thread Architecture
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│                    SLAM/VIO/Nav (P3)                          │
-│                                                               │
-│  ┌──────────────┐     ImuRingBuffer     ┌──────────────────┐  │
-│  │ IMU Reader   │──────(mutex+deque)───►│  VIO Pipeline    │  │
-│  │ (400 Hz)     │                       │  (~30 Hz)        │  │
-│  └──────────────┘                       │                  │  │
-│                                         │  1. Extract feat │  │
-│  ┌──────────────┐                       │  2. Stereo match │  │
-│  │ShmStereoFrame│──────(subscribe)─────►│  3. IMU preint   │  │
-│  │  from P1     │                       │  4. Generate pose│  │
-│  └──────────────┘                       └────────┬─────────┘  │
-│                                                  │            │
-│                                        PoseDoubleBuffer       │
-│                                         (lock-free)           │
-│                                                  │            │
-│                                         ┌────────▼─────────┐  │
-│                                         │ Pose Publisher   │  │
-│                                         │ (100 Hz)        │  │
-│                                         └────────┬─────────┘  │
-│                                                  │            │
-│                                                  ▼            │
-│                                           ShmPose → P4, P5   │
-│                                                               │
-│  ┌──────────────┐                                             │
-│  │ Main Thread  │  (1 Hz health log + ThreadHealthPublisher)  │
-│  └──────────────┘                                             │
-└───────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph P3["P3 SLAM/VIO/Nav — 4 Threads"]
+        direction TB
+        subgraph Input["Input Threads"]
+            direction LR
+            IMU_T["IMU Reader\n400 Hz\nIIMUSource::read()"]
+            Stereo["/drone_stereo_cam\nfrom P1"]
+        end
+
+        subgraph Pipeline["VIO Pipeline (~30 Hz)"]
+            direction TB
+            FE["1. Feature Extraction\nSimulatedFeatureExtractor"]
+            SM["2. Stereo Matching\nSimulatedStereoMatcher"]
+            PI["3. IMU Pre-integration\nForster et al. 2017"]
+            PG["4. Pose Generation\n+ VIOHealth update"]
+            FE --> SM --> PI --> PG
+        end
+
+        PDB["PoseDoubleBuffer\nlock-free atomic swap"]
+        Pub["Pose Publisher\n100 Hz"]
+
+        PG --> PDB --> Pub
+    end
+
+    IMU_T -->|"ImuRingBuffer\nmutex + deque"| Pipeline
+    Stereo --> Pipeline
+    Pub -->|"/slam_pose\nPose + quality field"| Consumers["P4 FaultManager\nP5 Comms\nP6 Payload"]
+
+    style P3 fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
+    style Pipeline fill:#1a1a2e,stroke:#9b59b6,color:#e0e0e0
 ```
 
 ---
@@ -414,6 +416,30 @@ Latency is tracked automatically on each `receive()` call. Call
 periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for histogram interpretation.
+
+---
+
+## VIO Health → FaultManager Integration
+
+The `Pose.quality` field carries VIO health information from P3 to P4:
+
+| VIOHealth | `quality` | Meaning |
+|-----------|-----------|---------|
+| LOST | 0 | lost |
+| INITIALIZING | 1 | degraded |
+| DEGRADED | 1 | degraded |
+| NOMINAL | 2 | good |
+| _(Gazebo ground truth)_ | 3 | excellent |
+
+P4's `FaultManager` reads `Pose.quality` on every `evaluate()` tick:
+- **quality ≤ 0** → `FAULT_VIO_LOST` → RTL
+- **quality ≤ 1** → `FAULT_VIO_DEGRADED` → LOITER
+
+The simulated backend starts in INITIALIZING (quality=1) for the first 5 frames (~165 ms).
+This does not cause a false fault trigger because `FaultResponseExecutor` skips
+non-airborne states (IDLE, PREFLIGHT), and VIO reaches NOMINAL well before TAKEOFF.
+
+> **Note:** VIO health fault escalation is implemented in PR #190 (Issue #169).
 
 ---
 

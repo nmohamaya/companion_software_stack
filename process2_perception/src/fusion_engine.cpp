@@ -1,11 +1,16 @@
 // process2_perception/src/fusion_engine.cpp
-// Camera-only fusion implementation.
+// Monocular depth estimation from tracked 2D bounding boxes.
 // Phase 1C: renamed FusionEngine → CameraOnlyFusionEngine (IFusionEngine).
 //
-// Bug fix (issue #129): position_3d is now expressed in camera body frame
-// (forward=X, right=Y, up=-Z) using the full pinhole unproject.  The
-// camera→world rotation is applied by fusion_thread in main.cpp using the
-// live drone pose from drone/slam/pose.
+// NOTE: This is NOT multi-sensor fusion. It estimates 3D positions from a
+// single monocular RGB camera using pinhole geometry (apparent-size depth).
+// The stereo camera feeds P3 (VIO/SLAM), not P2 perception.
+//
+// Output positions are in camera body frame (forward=X, right=Y, down=Z).
+// The camera→world rotation (yaw-only) is applied by fusion_thread in
+// main.cpp using the latest drone pose from /slam_pose.
+//
+// Bug fix (issue #129): position_3d correctly uses pinhole unproject.
 #include "perception/fusion_engine.h"
 
 #include <algorithm>

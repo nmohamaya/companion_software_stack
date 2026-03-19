@@ -293,13 +293,13 @@ Config-driven graceful degradation engine. Evaluates system health each loop tic
 | Type | Description |
 |------|-------------|
 | `FaultAction` | Enum: `NONE(0)` < `WARN(1)` < `LOITER(2)` < `RTL(3)` < `EMERGENCY_LAND(4)` |
-| `FaultType` | Bitmask enum: 8 fault conditions (critical process, pose stale, battery low/critical, thermal warn/critical, perception dead, FC link lost) |
+| `FaultType` | Bitmask enum: 10 fault conditions (critical process, pose stale, battery low/critical/RTL, thermal warn/critical, perception dead, FC link lost, geofence breach) |
 | `FaultState` | Return type: `recommended_action`, `active_faults` bitmask, `reason` string |
 | `FaultConfig` | Thresholds: `pose_stale_timeout_ns`, `battery_warn_percent`, `battery_crit_percent`, `fc_link_lost_timeout_ns`, `loiter_escalation_timeout_ns` |
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `evaluate` | `FaultState evaluate(const ShmSystemHealth&, const ShmFCState&, uint64_t pose_ts, uint64_t now_ns)` | Evaluate all fault conditions, return graduated action |
+| `evaluate` | `FaultState evaluate(const ShmSystemHealth&, const ShmFCState&, uint64_t pose_ts, uint64_t now_ns, uint32_t pose_quality = 2)` | Evaluate all fault conditions, return graduated action |
 | `reset` | `void reset()` | Clear high-water mark (after landing / new mission) |
 | `high_water_mark` | `FaultAction high_water_mark() const` | Highest action ever returned |
 | `config` | `const FaultConfig& config() const` | Current config thresholds |
@@ -318,6 +318,19 @@ FaultManager(const FaultConfig& cfg);   // Direct config (unit tests)
 | `battery_crit_percent` | 10.0 | Battery % → EMERGENCY_LAND |
 | `fc_link_lost_timeout_ms` | 3000 | FC disconnect duration → LOITER |
 | `loiter_escalation_timeout_s` | 30 | Loiter duration before auto-RTL |
+
+**`Pose.quality` field** (defined in `common/ipc/include/ipc/ipc_types.h`):
+
+The `Pose` struct includes a `uint32_t quality` field that propagates VIO health from P3 to P4:
+
+| Value | Meaning | Source |
+|-------|---------|--------|
+| 0 | Lost | VIOHealth::LOST (simulated backend) |
+| 1 | Degraded | VIOHealth::INITIALIZING or DEGRADED (simulated backend) |
+| 2 | Good | VIOHealth::NOMINAL (simulated backend) |
+| 3 | Excellent | Ground truth (Gazebo backend) |
+
+FaultManager uses this field (via the `pose_quality` parameter to `evaluate()`) to trigger VIO-related fault responses. See [slam_vio_nav_design.md](slam_vio_nav_design.md) for the VIO health integration details.
 
 ---
 
