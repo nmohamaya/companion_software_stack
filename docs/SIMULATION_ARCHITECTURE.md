@@ -63,13 +63,8 @@ flowchart TB
 
     subgraph TOOLS["Test Tooling"]
         FI["fault_injector CLI<br/><i>Writes to /fault_overrides<br/>sideband channel</i>"]
-<<<<<<< chore/deploy-script-cleanup
         SR["run_scenario.sh<br/><i>Launch → Inject → Verify</i>"]
-        SCEN["Scenario Configs<br/><i>9 JSON scenario files</i>"]
-=======
-        SR["run_scenario.sh<br/><i>Launch → Inject → Verify<br/>Transport-aware (SHM / Zenoh)</i>"]
         SCEN["Scenario Configs<br/><i>15 JSON scenario files</i>"]
->>>>>>> main
     end
 
     subgraph EXTERNAL["External Systems (Tier 2 only)"]
@@ -401,21 +396,6 @@ struct alignas(64) ShmFaultOverrides {
 
 ## Test Scenarios
 
-<<<<<<< chore/deploy-script-cleanup
-Nine pre-defined scenarios in `config/scenarios/`:
-
-| # | Scenario | Tier | Gazebo | What it Tests |
-|---|---|---|---|---|
-| 01 | Nominal Mission | 1 | No | Basic 4-waypoint flight, landing |
-| 02 | Obstacle Avoidance | 2 | Yes | A* planner through obstacle field |
-| 03 | Battery Degradation | 1 | No | 3-tier: WARN → RTL → EMERGENCY_LAND |
-| 04 | FC Link Loss | 1 | No | LOITER → RTL contingency |
-| 05 | Geofence Breach | 1 | No | Polygon violation → RTL |
-| 06 | Mission Upload | 1 | No | Mid-flight waypoint upload via GCS |
-| 07 | Thermal Throttle | 1 | No | Zone escalation (0→1→2→3→0) |
-| 08 | Full Stack Stress | 1 | No | Concurrent faults, high rates |
-| 09 | Perception Tracking | 1 | No | ByteTrack multi-object tracking |
-=======
 Fifteen pre-defined scenarios in `config/scenarios/`:
 
 | # | Scenario | Tier | Gazebo | What it Tests |
@@ -435,7 +415,6 @@ Fifteen pre-defined scenarios in `config/scenarios/`:
 | 13 | GCS Land | 1 | No | GCS LAND at current position (not return-to-launch) |
 | 14 | Altitude Ceiling Breach | 1 | No | Waypoint above geofence ceiling (10 m > 8 m limit) → RTL |
 | 15 | FC Quick Recovery | 1 | No | FC link loss → quick reconnect before RTL timeout → resume |
->>>>>>> main
 
 ### Scenario JSON Structure
 
@@ -624,15 +603,12 @@ companion_software_stack/
 │       ├── 07_thermal_throttle.json
 │       ├── 08_full_stack_stress.json
 │       ├── 09_perception_tracking.json
-<<<<<<< chore/deploy-script-cleanup
-=======
 │       ├── 10_gcs_pause_resume.json
 │       ├── 11_gcs_abort.json
 │       ├── 12_gcs_rtl.json
 │       ├── 13_gcs_land.json
 │       ├── 14_altitude_ceiling_breach.json
 │       ├── 15_fc_quick_recovery.json
->>>>>>> main
 │       └── data/
 │           └── upload_waypoints.json
 ├── common/hal/include/hal/
