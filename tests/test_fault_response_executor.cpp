@@ -58,7 +58,7 @@ TEST_F(FaultResponseExecutorTest, WarnActionNoFCCommand) {
     FaultState fault;
     fault.recommended_action = FaultAction::WARN;
     fault.reason             = "test warning";
-    fault.active_faults      = FAULT_BATTERY_LOW;
+    fault.active_faults      = to_uint(FAULT_BATTERY_LOW);
 
     executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
 
@@ -74,7 +74,7 @@ TEST_F(FaultResponseExecutorTest, LoiterStopsTrajAndTransitions) {
     FaultState fault;
     fault.recommended_action = FaultAction::LOITER;
     fault.reason             = "critical process died";
-    fault.active_faults      = FAULT_CRITICAL_PROCESS;
+    fault.active_faults      = to_uint(FAULT_CRITICAL_PROCESS);
 
     executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
 
@@ -92,7 +92,7 @@ TEST_F(FaultResponseExecutorTest, RTLSendsFCAndTransitions) {
     FaultState fault;
     fault.recommended_action = FaultAction::RTL;
     fault.reason             = "battery low";
-    fault.active_faults      = FAULT_BATTERY_RTL;
+    fault.active_faults      = to_uint(FAULT_BATTERY_RTL);
 
     executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
 
@@ -109,7 +109,7 @@ TEST_F(FaultResponseExecutorTest, EmergencyLandSendsLandCommand) {
     FaultState fault;
     fault.recommended_action = FaultAction::EMERGENCY_LAND;
     fault.reason             = "battery critical";
-    fault.active_faults      = FAULT_BATTERY_CRITICAL;
+    fault.active_faults      = to_uint(FAULT_BATTERY_CRITICAL);
 
     executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
 
@@ -126,7 +126,7 @@ TEST_F(FaultResponseExecutorTest, EscalationOnlyNeverDowngrades) {
     FaultState fault_rtl;
     fault_rtl.recommended_action = FaultAction::RTL;
     fault_rtl.reason             = "battery";
-    fault_rtl.active_faults      = FAULT_BATTERY_RTL;
+    fault_rtl.active_faults      = to_uint(FAULT_BATTERY_RTL);
     executor.execute(fault_rtl, fsm, send_fc, traj_pub, flight_state, 1000);
     EXPECT_EQ(executor.last_action(), FaultAction::RTL);
     fc_calls.clear();
@@ -135,7 +135,7 @@ TEST_F(FaultResponseExecutorTest, EscalationOnlyNeverDowngrades) {
     FaultState fault_warn;
     fault_warn.recommended_action = FaultAction::WARN;
     fault_warn.reason             = "thermal";
-    fault_warn.active_faults      = FAULT_THERMAL_WARNING;
+    fault_warn.active_faults      = to_uint(FAULT_THERMAL_WARNING);
     executor.execute(fault_warn, fsm, send_fc, traj_pub, flight_state, 2000);
     EXPECT_TRUE(fc_calls.empty());  // no new commands
     EXPECT_EQ(executor.last_action(), FaultAction::RTL);
@@ -152,7 +152,7 @@ TEST_F(FaultResponseExecutorTest, SkipsNonAirborneStates) {
     FaultState fault;
     fault.recommended_action = FaultAction::RTL;
     fault.reason             = "test";
-    fault.active_faults      = FAULT_BATTERY_RTL;
+    fault.active_faults      = to_uint(FAULT_BATTERY_RTL);
 
     executor.execute(fault, preflight_fsm, send_fc, traj_pub, flight_state, 1000);
     EXPECT_TRUE(fc_calls.empty());
@@ -166,7 +166,7 @@ TEST_F(FaultResponseExecutorTest, ResetClearsState) {
     FaultState fault;
     fault.recommended_action = FaultAction::RTL;
     fault.reason             = "test";
-    fault.active_faults      = FAULT_BATTERY_RTL;
+    fault.active_faults      = to_uint(FAULT_BATTERY_RTL);
     executor.execute(fault, fsm, send_fc, traj_pub, flight_state, 1000);
     EXPECT_EQ(executor.last_action(), FaultAction::RTL);
 

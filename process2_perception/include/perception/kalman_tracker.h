@@ -38,10 +38,10 @@ public:
     [[nodiscard]] bool is_stale() const { return consecutive_misses > 10; }
 
 private:
-    StateVec                                 x_;
-    StateMat                                 F_, P_, Q_;
-    MeasMat                                  H_;
-    Eigen::Matrix<float, MEAS_DIM, MEAS_DIM> R_;
+    StateVec x_ = StateVec::Zero();
+    StateMat F_ = StateMat::Zero(), P_ = StateMat::Zero(), Q_ = StateMat::Zero();
+    MeasMat  H_                                 = MeasMat::Zero();
+    Eigen::Matrix<float, MEAS_DIM, MEAS_DIM> R_ = Eigen::Matrix<float, MEAS_DIM, MEAS_DIM>::Zero();
 };
 
 /// Hungarian assignment solver for data association.

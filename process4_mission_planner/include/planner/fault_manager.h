@@ -31,27 +31,28 @@ namespace drone::planner {
 using drone::ipc::FaultAction;
 using drone::ipc::fault_action_name;
 using drone::ipc::FaultType;
-using drone::ipc::FAULT_NONE;
-using drone::ipc::FAULT_CRITICAL_PROCESS;
-using drone::ipc::FAULT_POSE_STALE;
-using drone::ipc::FAULT_BATTERY_LOW;
-using drone::ipc::FAULT_BATTERY_CRITICAL;
-using drone::ipc::FAULT_BATTERY_RTL;
-using drone::ipc::FAULT_THERMAL_WARNING;
-using drone::ipc::FAULT_THERMAL_CRITICAL;
-using drone::ipc::FAULT_PERCEPTION_DEAD;
-using drone::ipc::FAULT_FC_LINK_LOST;
-using drone::ipc::FAULT_GEOFENCE_BREACH;
-using drone::ipc::FAULT_VIO_DEGRADED;
-using drone::ipc::FAULT_VIO_LOST;
+inline constexpr auto FAULT_NONE             = FaultType::FAULT_NONE;
+inline constexpr auto FAULT_CRITICAL_PROCESS = FaultType::FAULT_CRITICAL_PROCESS;
+inline constexpr auto FAULT_POSE_STALE       = FaultType::FAULT_POSE_STALE;
+inline constexpr auto FAULT_BATTERY_LOW      = FaultType::FAULT_BATTERY_LOW;
+inline constexpr auto FAULT_BATTERY_CRITICAL = FaultType::FAULT_BATTERY_CRITICAL;
+inline constexpr auto FAULT_BATTERY_RTL      = FaultType::FAULT_BATTERY_RTL;
+inline constexpr auto FAULT_THERMAL_WARNING  = FaultType::FAULT_THERMAL_WARNING;
+inline constexpr auto FAULT_THERMAL_CRITICAL = FaultType::FAULT_THERMAL_CRITICAL;
+inline constexpr auto FAULT_PERCEPTION_DEAD  = FaultType::FAULT_PERCEPTION_DEAD;
+inline constexpr auto FAULT_FC_LINK_LOST     = FaultType::FAULT_FC_LINK_LOST;
+inline constexpr auto FAULT_GEOFENCE_BREACH  = FaultType::FAULT_GEOFENCE_BREACH;
+inline constexpr auto FAULT_VIO_DEGRADED     = FaultType::FAULT_VIO_DEGRADED;
+inline constexpr auto FAULT_VIO_LOST         = FaultType::FAULT_VIO_LOST;
+using drone::ipc::to_uint;
 
 // ═══════════════════════════════════════════════════════════
 // FaultState — output of evaluate()
 // ═══════════════════════════════════════════════════════════
 struct FaultState {
     FaultAction recommended_action = FaultAction::NONE;
-    uint32_t    active_faults      = FAULT_NONE;  // bitmask of FaultType
-    const char* reason             = "nominal";   // human-readable
+    uint32_t    active_faults      = 0;          // bitmask of FaultType
+    const char* reason             = "nominal";  // human-readable
 };
 
 // ═══════════════════════════════════════════════════════════

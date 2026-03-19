@@ -169,7 +169,7 @@ inline const char* fault_action_name(FaultAction a) {
 }
 
 /// Bitmask of active fault conditions (stored in MissionStatus::active_faults).
-enum FaultType : uint32_t {
+enum class FaultType : uint32_t {
     FAULT_NONE             = 0,
     FAULT_CRITICAL_PROCESS = 1 << 0,   // comms or SLAM died
     FAULT_POSE_STALE       = 1 << 1,   // no pose update within timeout
@@ -185,6 +185,26 @@ enum FaultType : uint32_t {
     FAULT_VIO_LOST         = 1 << 11,  // VIO tracking lost → RTL
 };
 
+/// Bitwise operators for FaultType bitmask usage with uint32_t.
+constexpr uint32_t operator|(FaultType a, FaultType b) {
+    return static_cast<uint32_t>(a) | static_cast<uint32_t>(b);
+}
+constexpr uint32_t operator&(uint32_t a, FaultType b) {
+    return a & static_cast<uint32_t>(b);
+}
+constexpr uint32_t& operator|=(uint32_t& a, FaultType b) {
+    return a |= static_cast<uint32_t>(b);
+}
+constexpr bool operator==(uint32_t a, FaultType b) {
+    return a == static_cast<uint32_t>(b);
+}
+constexpr bool operator!=(uint32_t a, FaultType b) {
+    return !(a == b);
+}
+constexpr uint32_t to_uint(FaultType f) {
+    return static_cast<uint32_t>(f);
+}
+
 /// Convert active fault bitmask to a human-readable pipe-separated string.
 inline std::string fault_flags_string(uint32_t flags) {
     if (flags == 0) return "FAULT_NONE";
@@ -194,18 +214,18 @@ inline std::string fault_flags_string(uint32_t flags) {
         const char* name;
     };
     static constexpr Flag kFlags[] = {
-        {FAULT_CRITICAL_PROCESS, "FAULT_CRITICAL_PROCESS"},
-        {FAULT_POSE_STALE, "FAULT_POSE_STALE"},
-        {FAULT_BATTERY_LOW, "FAULT_BATTERY_LOW"},
-        {FAULT_BATTERY_CRITICAL, "FAULT_BATTERY_CRITICAL"},
-        {FAULT_THERMAL_WARNING, "FAULT_THERMAL_WARNING"},
-        {FAULT_THERMAL_CRITICAL, "FAULT_THERMAL_CRITICAL"},
-        {FAULT_PERCEPTION_DEAD, "FAULT_PERCEPTION_DEAD"},
-        {FAULT_FC_LINK_LOST, "FAULT_FC_LINK_LOST"},
-        {FAULT_GEOFENCE_BREACH, "FAULT_GEOFENCE_BREACH"},
-        {FAULT_BATTERY_RTL, "FAULT_BATTERY_RTL"},
-        {FAULT_VIO_DEGRADED, "FAULT_VIO_DEGRADED"},
-        {FAULT_VIO_LOST, "FAULT_VIO_LOST"},
+        {static_cast<uint32_t>(FaultType::FAULT_CRITICAL_PROCESS), "FAULT_CRITICAL_PROCESS"},
+        {static_cast<uint32_t>(FaultType::FAULT_POSE_STALE), "FAULT_POSE_STALE"},
+        {static_cast<uint32_t>(FaultType::FAULT_BATTERY_LOW), "FAULT_BATTERY_LOW"},
+        {static_cast<uint32_t>(FaultType::FAULT_BATTERY_CRITICAL), "FAULT_BATTERY_CRITICAL"},
+        {static_cast<uint32_t>(FaultType::FAULT_THERMAL_WARNING), "FAULT_THERMAL_WARNING"},
+        {static_cast<uint32_t>(FaultType::FAULT_THERMAL_CRITICAL), "FAULT_THERMAL_CRITICAL"},
+        {static_cast<uint32_t>(FaultType::FAULT_PERCEPTION_DEAD), "FAULT_PERCEPTION_DEAD"},
+        {static_cast<uint32_t>(FaultType::FAULT_FC_LINK_LOST), "FAULT_FC_LINK_LOST"},
+        {static_cast<uint32_t>(FaultType::FAULT_GEOFENCE_BREACH), "FAULT_GEOFENCE_BREACH"},
+        {static_cast<uint32_t>(FaultType::FAULT_BATTERY_RTL), "FAULT_BATTERY_RTL"},
+        {static_cast<uint32_t>(FaultType::FAULT_VIO_DEGRADED), "FAULT_VIO_DEGRADED"},
+        {static_cast<uint32_t>(FaultType::FAULT_VIO_LOST), "FAULT_VIO_LOST"},
     };
     uint32_t known = 0;
     for (const auto& f : kFlags) {
