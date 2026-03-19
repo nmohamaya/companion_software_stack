@@ -6,98 +6,83 @@ Quick reference for all build, test, and launch scripts in the `deploy/` folder.
 
 ## `build.sh` — Flexible Project Build
 
-The main build script. Supports all IPC backends, sanitizers, coverage, and
-format checking.
+The main build script. Supports sanitizers, coverage, format checking, and
+integrated test runs.
 
 ```bash
 # ── Basic builds ─────────────────────────────────────────────
-bash deploy/build.sh                          # Release, SHM backend
-bash deploy/build.sh Debug                    # Debug, SHM backend
-bash deploy/build.sh --zenoh                  # Release, Zenoh backend
-bash deploy/build.sh Debug --zenoh            # Debug, Zenoh backend
+bash deploy/build.sh                          # Release build
+bash deploy/build.sh Debug                    # Debug build
 bash deploy/build.sh --clean                  # Delete build/ before building
 
 # ── Sanitizers (auto-switches to Debug) ──────────────────────
 bash deploy/build.sh --asan                   # AddressSanitizer
 bash deploy/build.sh --tsan                   # ThreadSanitizer
 bash deploy/build.sh --ubsan                  # UndefinedBehaviorSanitizer
-bash deploy/build.sh --asan --zenoh           # ASan + Zenoh backend
 
 # ── Code coverage (auto-switches to Debug) ───────────────────
 bash deploy/build.sh --coverage               # Build with gcov instrumentation
-bash deploy/build.sh --coverage --zenoh       # Coverage + Zenoh backend
+
+# ── Tests ────────────────────────────────────────────────────
+bash deploy/build.sh --test                   # Build + run all tests
+bash deploy/build.sh --test-filter watchdog   # Build + run module tests
 
 # ── Format check (no build — validates formatting only) ──────
 bash deploy/build.sh --format-check           # Dry-run clang-format-18 check
 
 # ── Combinations ─────────────────────────────────────────────
-bash deploy/build.sh --clean --asan --zenoh   # Clean + ASan + Zenoh
+bash deploy/build.sh --clean --asan           # Clean + ASan
 ```
 
 | Flag             | Effect                                              |
 | ---------------- | --------------------------------------------------- |
 | `Debug\|Release` | Set CMake build type (default: `Release`)           |
-| `--zenoh`        | Enable Zenoh IPC backend (default: POSIX SHM)       |
 | `--clean`        | Remove `build/` before configuring                  |
 | `--asan`         | Enable AddressSanitizer (forces Debug)               |
 | `--tsan`         | Enable ThreadSanitizer (forces Debug)                |
 | `--ubsan`        | Enable UndefinedBehaviorSanitizer (forces Debug)     |
 | `--coverage`     | Enable gcov code-coverage instrumentation (forces Debug) |
 | `--format-check` | Run `clang-format-18 --dry-run --Werror` and exit   |
+| `--test`         | Build then run all tests via `ctest`                 |
+| `--test-filter`  | Build then run tests matching a module name          |
 
 > **Note:** Sanitizers are mutually exclusive — only pass one of `--asan`,
 > `--tsan`, or `--ubsan` at a time.
+>
+> **Note:** The `--zenoh` flag is accepted but ignored — Zenoh is always enabled
+> (it is the sole IPC backend since PR #151).
 
 ---
 
-## `clean_build_and_run_shm.sh` — Full SHM Pipeline
+## `clean_build_and_run.sh` — Full Build + Gazebo SITL Pipeline
 
-Performs a **complete cycle**: cleanup → clean build → unit tests → Gazebo SITL
-launch, all using the POSIX shared-memory IPC backend.
+Performs a **complete cycle**: kill stale processes → clean build → unit tests →
+Gazebo SITL launch.
 
 ```bash
-bash deploy/clean_build_and_run_shm.sh                # Headless, Release
-bash deploy/clean_build_and_run_shm.sh --gui           # With 3-D Gazebo GUI
-bash deploy/clean_build_and_run_shm.sh --asan          # + AddressSanitizer
-bash deploy/clean_build_and_run_shm.sh --tsan          # + ThreadSanitizer
-bash deploy/clean_build_and_run_shm.sh --ubsan         # + UBSan
-bash deploy/clean_build_and_run_shm.sh --coverage      # + code coverage
-bash deploy/clean_build_and_run_shm.sh --gui --asan    # GUI + ASan
+bash deploy/clean_build_and_run.sh               # Headless, Release
+bash deploy/clean_build_and_run.sh --gui          # With 3-D Gazebo GUI
+bash deploy/clean_build_and_run.sh --asan         # + AddressSanitizer
+bash deploy/clean_build_and_run.sh --ubsan        # + UBSan
+bash deploy/clean_build_and_run.sh --coverage     # + code coverage
 ```
 
 | Flag         | Effect                               |
 | ------------ | ------------------------------------ |
 | `--gui`      | Open the Gazebo 3-D visualisation    |
 | `--asan`     | AddressSanitizer (forces Debug)      |
-| `--tsan`     | ThreadSanitizer (forces Debug)       |
 | `--ubsan`    | UBSan (forces Debug)                 |
 | `--coverage` | gcov instrumentation (forces Debug)  |
 
----
-
-## `clean_build_and_run_zenoh.sh` — Full Zenoh Pipeline
-
-Same four-step cycle as the SHM variant, but using the **Zenoh** IPC backend.
-Requires `zenohc` to be installed.
-
-```bash
-bash deploy/clean_build_and_run_zenoh.sh               # Headless, Release
-bash deploy/clean_build_and_run_zenoh.sh --gui          # With 3-D Gazebo GUI
-bash deploy/clean_build_and_run_zenoh.sh --asan         # + AddressSanitizer
-bash deploy/clean_build_and_run_zenoh.sh --ubsan        # + UBSan
-bash deploy/clean_build_and_run_zenoh.sh --coverage     # + code coverage
-```
-
-> **`--tsan` is intentionally blocked** for Zenoh builds because the `zenohc`
-> library triggers ThreadSanitizer false-positives in its internal threading.
-> Use `--tsan` with the SHM backend instead.
+> **Note:** `--tsan` is intentionally omitted because the `zenohc` library
+> triggers ThreadSanitizer false-positives in its internal threading.
 
 ---
 
 ## `launch_all.sh` — Launch All Companion Processes
 
 Starts all seven companion processes in the background using a given config
-file. Typically called by the clean-build scripts, but can be used standalone:
+file. Typically called by the clean-build script, but can be used standalone:
 
 ```bash
 CONFIG_FILE=config/gazebo_sitl.json bash deploy/launch_all.sh
@@ -177,8 +162,8 @@ Runs the same matrix of checks as GitHub Actions CI, locally. Useful for
 validating before pushing.
 
 ```bash
-bash deploy/run_ci_local.sh               # All jobs (format + SHM + Zenoh + sanitizers + coverage)
-bash deploy/run_ci_local.sh --quick       # Format + SHM only (fast)
+bash deploy/run_ci_local.sh               # All jobs (format + build + sanitizers + coverage)
+bash deploy/run_ci_local.sh --quick       # Format + build only (fast)
 bash deploy/run_ci_local.sh --job FMT     # Single job by tag
 bash deploy/run_ci_local.sh --job ASAN    # ASan only
 bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log   # Save output
@@ -187,15 +172,11 @@ bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log   # Save output
 | Tag | Description |
 |-----|-------------|
 | `FMT` | clang-format-18 check |
-| `SHM` | SHM backend, Debug build + test |
-| `ZENOH` | Zenoh backend, Debug build + test |
-| `ASAN` | SHM + AddressSanitizer |
-| `TSAN` | SHM + ThreadSanitizer |
-| `UBSAN` | SHM + UndefinedBehaviorSanitizer |
-| `ASAN_Z` | Zenoh + AddressSanitizer |
-| `UBSAN_Z` | Zenoh + UBSanitizer |
-| `COV` | Coverage build + lcov report (SHM) |
-| `COV_Z` | Coverage build + lcov report (Zenoh) |
+| `BUILD` | Debug build + test |
+| `ASAN` | AddressSanitizer |
+| `TSAN` | ThreadSanitizer |
+| `UBSAN` | UndefinedBehaviorSanitizer |
+| `COV` | Coverage build + lcov report |
 
 ---
 
@@ -204,17 +185,15 @@ bash deploy/run_ci_local.sh 2>&1 | tee ci_results.log   # Save output
 Builds with coverage instrumentation, runs tests, and generates an HTML report.
 
 ```bash
-bash deploy/view_coverage.sh              # Full pipeline (SHM): build → test → report
-bash deploy/view_coverage.sh --zenoh      # Full pipeline with Zenoh backend
+bash deploy/view_coverage.sh              # Full pipeline: build → test → report
 bash deploy/view_coverage.sh --open       # Auto-open report in browser
 bash deploy/view_coverage.sh --report     # Skip build/test, just regenerate report
 bash deploy/view_coverage.sh --summary    # Terminal summary only (no HTML)
 ```
 
 **Output:**
-- `build/coverage-report/index.html` — HTML coverage report (SHM)
-- `build/coverage-report-zenoh/index.html` — HTML coverage report (Zenoh)
-- `build/coverage.info` / `build/coverage-zenoh.info` — lcov tracefiles
+- `build/coverage-report/index.html` — HTML coverage report
+- `build/coverage.info` — lcov tracefile
 
 ---
 
@@ -236,6 +215,12 @@ ctest --test-dir build --output-on-failure
 ### Generate a code-coverage report
 
 ```bash
+bash deploy/view_coverage.sh --open
+```
+
+Or manually:
+
+```bash
 bash deploy/build.sh --clean --coverage
 cd build
 ctest --output-on-failure
@@ -245,23 +230,23 @@ genhtml coverage_filtered.info --output-directory coverage_html
 echo "Open: ${PWD}/coverage_html/index.html"
 ```
 
-### Full end-to-end with ThreadSanitizer and Gazebo GUI
+### Full end-to-end with Gazebo GUI
 
 ```bash
-bash deploy/clean_build_and_run_shm.sh --gui --tsan
+bash deploy/clean_build_and_run.sh --gui
 ```
 
-### Run all 8 Gazebo SITL scenarios (Zenoh)
+### Run all Gazebo SITL scenarios
 
 ```bash
-./tests/run_scenario_gazebo.sh --all --ipc zenoh           # headless
-./tests/run_scenario_gazebo.sh --all --ipc zenoh --gui     # with 3-D window
+./tests/run_scenario_gazebo.sh --all           # headless
+./tests/run_scenario_gazebo.sh --all --gui     # with 3-D window
 ```
 
 ### Run a single scenario (e.g. obstacle avoidance)
 
 ```bash
-./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json --ipc zenoh --gui
+./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json --gui
 ```
 
 ### Run Tier 1 scenarios without Gazebo
@@ -273,7 +258,7 @@ bash deploy/clean_build_and_run_shm.sh --gui --tsan
 ### Run full CI locally before pushing
 
 ```bash
-bash deploy/run_ci_local.sh --quick    # fast: format + SHM
+bash deploy/run_ci_local.sh --quick    # fast: format + build
 bash deploy/run_ci_local.sh            # full: all CI jobs
 ```
 

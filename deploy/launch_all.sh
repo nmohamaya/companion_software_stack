@@ -47,15 +47,6 @@ LOG_DIR="${PROJECT_DIR}/drone_logs"
 # Ensure system libstdc++ is used instead of Anaconda's older version
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# Clean stale Zenoh SHM pool segments from previous runs.
-# The legacy POSIX SHM backend (ipc_backend=shm) was removed in PR #151.
-# Zenoh may still create its own pool segments under /dev/shm; the drone_*
-# names below are leftover from that backend and safe to remove at startup.
-rm -f /dev/shm/drone_* /dev/shm/detected_objects /dev/shm/slam_pose \
-      /dev/shm/mission_status /dev/shm/trajectory_cmd /dev/shm/payload_commands \
-      /dev/shm/fc_state /dev/shm/gcs_commands /dev/shm/payload_status \
-      /dev/shm/system_health 2>/dev/null || true
-
 mkdir -p "$LOG_DIR"
 export DRONE_LOG_DIR="$LOG_DIR"
 

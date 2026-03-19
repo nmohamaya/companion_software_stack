@@ -239,33 +239,6 @@ if [[ -d "/usr/lib/aarch64-linux-gnu" ]]; then
     export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
 fi
 
-# ── SHM cleanup helpers ───────────────────────────────────────
-# The legacy POSIX SHM IPC backend (ipc_backend=shm) was removed in PR #151.
-# Zenoh may still allocate its own SHM pool segments under /dev/shm; the
-# drone_* names below are leftovers from the old backend, safe to remove.
-clean_shm() {
-    local shm_names=(
-        drone_mission_cam
-        drone_stereo_cam
-        detected_objects
-        slam_pose
-        mission_status
-        trajectory_cmd
-        payload_commands
-        fc_commands
-        fc_state
-        gcs_commands
-        payload_status
-        system_health
-    )
-    for name in "${shm_names[@]}"; do
-        rm -f "/dev/shm/${name}" "/dev/shm/sem.${name}" 2>/dev/null || true
-    done
-}
-
-# Clean stale SHM on startup
-clean_shm
-
 mkdir -p "$LOG_DIR"
 export DRONE_LOG_DIR="$LOG_DIR"
 

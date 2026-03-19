@@ -367,15 +367,14 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-#  STEP 4: Zenoh IPC Backend (Optional)
+#  STEP 4: Zenoh IPC Backend (Required)
 # ══════════════════════════════════════════════════════════════
-header "Step 4/6: Zenoh IPC Backend (Optional — Alternative to POSIX SHM)"
+header "Step 4/6: Zenoh IPC Backend (Required)"
 
-echo "  Zenoh provides a high-performance publish/subscribe IPC backend"
-echo "  as an alternative to the default POSIX SHM transport."
-echo "  It supports shared-memory zero-copy, peer-to-peer networking, and"
-echo "  is the recommended backend for multi-machine drone deployments."
-echo "  Without it, the stack uses POSIX SHM (single-machine only)."
+echo "  Zenoh is the sole IPC backend for the companion stack."
+echo "  It provides high-performance publish/subscribe with shared-memory"
+echo "  zero-copy, peer-to-peer networking, and multi-machine support."
+echo "  The stack requires Zenoh to build and run."
 echo ""
 
 INSTALL_ZENOH=false
@@ -665,14 +664,16 @@ ZENOH_CMAKE_FLAGS=""
 if pkg-config --exists zenohc 2>/dev/null; then
     # Prefer secure config if ZENOH_CONFIG_PATH env var is set.
     if [[ -n "${ZENOH_CONFIG_PATH:-}" && -f "${ZENOH_CONFIG_PATH:-}" ]]; then
-        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+        ZENOH_CMAKE_FLAGS="-DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
         info "Zenoh detected — building with secure config: ${ZENOH_CONFIG_PATH}"
     else
-        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
-        info "Zenoh detected — building with ENABLE_ZENOH=ON (insecure — dev/test only)"
+        ZENOH_CMAKE_FLAGS="-DALLOW_INSECURE_ZENOH=ON"
+        info "Zenoh detected — building with ALLOW_INSECURE_ZENOH=ON (dev/test only)"
     fi
 else
-    info "Zenoh not found — building with SHM backend only"
+    fail "Zenoh not found — the stack requires Zenoh to function."
+    echo "  Re-run this script and select 'y' when prompted to install Zenoh."
+    exit 1
 fi
 
 info "Configuring with CMake..."
@@ -711,13 +712,11 @@ fi
 
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
-echo "  1. Build (SHM):     bash deploy/build.sh"
-echo "     Build (Zenoh):   bash deploy/build.sh --zenoh"
+echo "  1. Build:           bash deploy/build.sh"
 echo "  2. Run tests:       cd build && ctest --output-on-failure"
 echo "  3. Run stack:       bash deploy/launch_all.sh"
 if $INSTALL_GAZEBO || [[ "${INSTALLED[*]}" == *"Gazebo"* ]]; then
-    echo "  4. SITL (SHM):      bash deploy/clean_build_and_run_shm.sh --gui"
-    echo "     SITL (Zenoh):    bash deploy/clean_build_and_run_zenoh.sh --gui"
+    echo "  4. SITL:            bash deploy/clean_build_and_run.sh --gui"
 fi
 echo ""
 echo "  See docs/INSTALL.md for troubleshooting and detailed documentation."

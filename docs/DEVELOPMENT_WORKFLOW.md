@@ -104,18 +104,13 @@ git checkout -b feature/issue-XX-short-description
 
 ##### 4a. Build (zero warnings required)
 ```bash
-# Default (SHM backend):
 bash deploy/build.sh Release
 
-# With Zenoh backend:
-bash deploy/build.sh Release --zenoh
-
 # Clean rebuild:
-bash deploy/build.sh Release --clean          # SHM
-bash deploy/build.sh Release --zenoh --clean   # Zenoh
+bash deploy/build.sh Release --clean
 
 # Or manually:
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release   # add -DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON for Zenoh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" -DALLOW_INSECURE_ZENOH=ON
 cmake --build build -j$(nproc)
 ```
 - All 7 binaries + all test targets must compile
@@ -195,25 +190,19 @@ sleep 1 && ./perception &
 sleep 2
 kill %1 %2
 
-# Full Gazebo SITL (SHM backend):
-bash deploy/clean_build_and_run_shm.sh         # headless
-bash deploy/clean_build_and_run_shm.sh --gui   # with Gazebo GUI
-
-# Full Gazebo SITL (Zenoh backend):
-bash deploy/clean_build_and_run_zenoh.sh        # headless
-bash deploy/clean_build_and_run_zenoh.sh --gui  # with Gazebo GUI
+# Full Gazebo SITL:
+bash deploy/clean_build_and_run.sh         # headless
+bash deploy/clean_build_and_run.sh --gui   # with Gazebo GUI
 ```
 - Verify IPC channels created/cleaned up
 - No segfaults or assertion failures
-- Both SHM and Zenoh backends should be tested when IPC-related code changes
 
 ##### 4e. Integration / Simulation Tests (when applicable)
 For changes that interact with external simulators or hardware:
 ```bash
 # Gazebo SITL via deploy scripts (recommended):
-bash deploy/launch_gazebo.sh              # SHM backend (default)
+bash deploy/launch_gazebo.sh              # headless
 bash deploy/launch_gazebo.sh --gui        # with Gazebo GUI
-CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui  # Zenoh
 
 # End-to-end Zenoh smoke test (automated, no GUI required):
 bash tests/test_zenoh_e2e.sh

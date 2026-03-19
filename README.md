@@ -912,18 +912,17 @@ CMake auto-detects these and enables compile guards (`HAVE_MAVSDK`, `HAVE_GAZEBO
 ```bash
 # From the project root directory:
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_BUILD_TYPE=Release -DALLOW_INSECURE_ZENOH=ON ..
 make -j$(nproc)
 ```
 
 Or use the build script:
 ```bash
-./deploy/build.sh                 # Release build, SHM backend (default)
-./deploy/build.sh --zenoh         # Release build, Zenoh IPC backend
-./deploy/build.sh Debug           # Debug build, SHM backend
-./deploy/build.sh Debug --zenoh   # Debug build, Zenoh backend
+./deploy/build.sh                 # Release build
+./deploy/build.sh Debug           # Debug build
 ./deploy/build.sh --clean         # Delete build/ first, then build
-./deploy/build.sh --clean --zenoh # Clean rebuild with Zenoh
+./deploy/build.sh --test          # Build + run all tests
+./deploy/build.sh --test-filter watchdog  # Build + run module tests
 ```
 
 Binaries are placed in `build/bin/`.
@@ -934,9 +933,8 @@ Binaries are placed in `build/bin/`.
 
 | Script | Purpose | When to use |
 |---|---|---|
-| `deploy/clean_build_and_run_shm.sh [--gui]` | Clean build (SHM) + Gazebo SITL flight | First run, or after code changes — uses POSIX SHM IPC |
-| `deploy/clean_build_and_run_zenoh.sh [--gui]` | Clean build (Zenoh) + Gazebo SITL flight | First run with Zenoh, or after code changes — uses Zenoh IPC |
-| `deploy/build.sh [--zenoh] [--clean]` | Build only (no launch) | Quick incremental builds during development |
+| `deploy/clean_build_and_run.sh [--gui]` | Clean build + Gazebo SITL flight | First run, or after code changes |
+| `deploy/build.sh [--clean]` | Build only (no launch) | Quick incremental builds during development |
 | `deploy/launch_all.sh` | Launch 7 processes (no PX4/Gazebo) | Standalone launch with `default.json`, or when PX4 is already running |
 | `deploy/launch_gazebo.sh [--gui]` | PX4 SITL + Gazebo + 7 processes | Launch simulation without rebuilding |
 | `deploy/launch_hardware.sh [--config ...] [--dry-run]` | Real drone hardware launch | Production flight on real hardware |
@@ -944,31 +942,22 @@ Binaries are placed in `build/bin/`.
 
 ### Clean build and run (recommended for first use)
 
-These scripts clean-build the entire stack, run all unit tests, then launch a full
+This script clean-builds the entire stack, runs all unit tests, then launches a full
 Gazebo SITL autonomous flight:
 
 ```bash
-# SHM backend (POSIX shared memory):
-bash deploy/clean_build_and_run_shm.sh          # headless
-bash deploy/clean_build_and_run_shm.sh --gui    # with Gazebo 3-D GUI
-
-# Zenoh backend (requires zenohc ≥ 1.0 installed):
-bash deploy/clean_build_and_run_zenoh.sh         # headless
-bash deploy/clean_build_and_run_zenoh.sh --gui   # with Gazebo 3-D GUI
+bash deploy/clean_build_and_run.sh          # headless
+bash deploy/clean_build_and_run.sh --gui    # with Gazebo 3-D GUI
 ```
 
-Both scripts: kill stale processes → `rm -rf build/` → cmake + build → ctest → launch Gazebo SITL.
+Steps: kill stale processes → `rm -rf build/` → cmake + build → ctest → launch Gazebo SITL.
 
 ### Launch Gazebo SITL (without rebuilding)
 
 If the stack is already built, launch simulation directly:
 
 ```bash
-# SHM backend (default config):
 bash deploy/launch_gazebo.sh --gui
-
-# Zenoh backend:
-CONFIG_FILE=config/gazebo_zenoh.json bash deploy/launch_gazebo.sh --gui
 ```
 
 The `--gui` flag is optional — omit it for headless mode.
@@ -1190,9 +1179,8 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 ├── models/
 │   └── yolov8n.onnx                 # YOLOv8-nano ONNX model (12.8 MB)
 └── deploy/
-    ├── build.sh                      # Build (Release/Debug, --zenoh, --clean)
-    ├── clean_build_and_run_shm.sh    # Clean build + Gazebo SITL (SHM backend)
-    ├── clean_build_and_run_zenoh.sh  # Clean build + Gazebo SITL (Zenoh backend)
+    ├── build.sh                      # Build (Release/Debug, --clean, --test)
+    ├── clean_build_and_run.sh        # Clean build + Gazebo SITL
     ├── install_dependencies.sh       # Full dependency installer (interactive)
     ├── launch_all.sh                 # Launch 7 processes (no PX4/Gazebo)
     ├── launch_gazebo.sh              # PX4 SITL + Gazebo + 7 processes
