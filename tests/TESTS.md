@@ -31,7 +31,7 @@
 # Gazebo SITL integration (requires PX4 + Gazebo Harmonic)
 ./tests/run_tests.sh gazebo-e2e
 
-# Gazebo SITL scenario runner (all 9 scenarios with PX4 + Gazebo + Zenoh)
+# Gazebo SITL scenario runner (all 15 scenarios with PX4 + Gazebo + Zenoh)
 ./tests/run_scenario_gazebo.sh --all
 ./tests/run_scenario_gazebo.sh --all --gui   # with 3D window
 ./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json
@@ -50,7 +50,7 @@
 | `ipc` | Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
 | `perception` | Kalman tracker, fusion engine (UKF+camera), color contour, YOLOv8 | ~113 |
-| `mission` | Mission FSM, FaultManager degradation | ~31 |
+| `mission` | Mission FSM, FaultManager degradation | ~129 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
 | `payload` | GimbalController servo simulation | ~9 |
@@ -113,8 +113,10 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 21 | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
-| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 97 | 9 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (8 Tier 1 + 1 Tier 2) |
-| **Total** | **43 C++ + 4 shell** | **922 + 42 + 96** | |
+| [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
+| [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 150+ | 15 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (14 Tier 1 + 1 Tier 2) |
+| **Total** | **48 C++ + 4 shell** | **1008 + 42 + 150+** | |
 
 ---
 
@@ -1008,6 +1010,12 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 07 — Thermal Throttle | 1 | No | 8 | Thermal zone escalation with 4 critical processes alive check |
 | 08 — Full Stack Stress | 1 | No | 15 | Concurrent faults, high-rate stress; 4 procs alive + 7 SHM segments |
 | 09 — Perception Tracking | 1 | No | 16 | ByteTrack backend-switching smoke test; 4 log checks + 5 forbidden + 7 procs alive |
+| 10 — GCS Pause/Resume | 1 | No | — | GCS pause + resume command during NAVIGATE |
+| 11 — GCS Abort | 1 | No | — | GCS abort triggers immediate LAND |
+| 12 — GCS RTL | 1 | No | — | GCS RTL command mid-mission |
+| 13 — GCS Land | 1 | No | — | GCS LAND command mid-mission |
+| 14 — Altitude Ceiling Breach | 1 | No | — | Waypoint above geofence ceiling → RTL |
+| 15 — FC Quick Recovery | 1 | No | — | FC link lost + quick reconnect → LOITER then resume |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
@@ -1032,25 +1040,25 @@ diagrams and detailed setup instructions.
 
 ### run_scenario_gazebo.sh — Gazebo SITL Scenario Runner
 
-**What it tests:** All 9 scenarios (8 Tier 1 + 1 Tier 2) running on PX4 SITL + Gazebo
+**What it tests:** All 15 scenarios (14 Tier 1 + 1 Tier 2) running on PX4 SITL + Gazebo
 Harmonic with real MAVLink telemetry, Gazebo camera/IMU sensors, and Zenoh IPC.
 Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
 via `fault_injector`, and verifies pass criteria against actual process logs.
 
-**Pass criteria per scenario (97 total checks across 9 scenarios):**
+**Pass criteria per scenario (150+ total checks across 15 scenarios):**
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
 - `shm_segments_exist` — SHM segments that must be present at verification time
 
-All 9 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
+All 15 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
 to catch unexpected collisions (Fix #40).
 
 **Run (Tier 2 — Gazebo SITL):**
 ```bash
 ./tests/run_scenario_gazebo.sh --list                                    # list
 ./tests/run_scenario_gazebo.sh config/scenarios/01_nominal_mission.json   # one
-./tests/run_scenario_gazebo.sh --all                                     # all 9 scenarios
+./tests/run_scenario_gazebo.sh --all                                     # all 15 scenarios
 ./tests/run_scenario_gazebo.sh --all --gui                               # with 3D window
 ./tests/run_scenario_gazebo.sh --dry-run config/scenarios/02_obstacle_avoidance.json
 ```
@@ -1065,7 +1073,7 @@ to catch unexpected collisions (Fix #40).
 **Requires:** PX4 SITL (`$PX4_DIR`, default `~/PX4-Autopilot`), Gazebo Harmonic,
 `fault_injector` built. Logs output to `drone_logs/scenarios_gazebo/<scenario_name>/`.
 
-**Status (March 2026):** 4/9 scenarios passing (01, 05, 06, 08 green; 02 intermittent collision; 03 PX4 battery model mismatch; 04, 07 affected by Bug #29 PX4 exit; 09 log capture timing). See ADR-009 for Tier 1 vs Tier 2 test strategy.
+**Status (March 2026):** 4/15 scenarios passing (01, 05, 06, 08 green; 02 intermittent collision; 03 PX4 battery model mismatch; 04, 07 affected by Bug #29 PX4 exit; 09 log capture timing). See ADR-009 for Tier 1 vs Tier 2 test strategy.
 
 ---
 
@@ -1094,4 +1102,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 904 unit tests across 48 suites in 42 files + 42 E2E checks (2 shell scripts) + 97 scenario checks across 9 scenarios (run_scenario.sh + run_scenario_gazebo.sh). 8/8 Tier 1 scenarios passing on Zenoh. Issue #158: D* Lite incremental planner + A* refactor (test_astar_planner.cpp, test_dstar_lite_planner.cpp). Fix #164 (2026-03-14): Enabled 8 previously skipped tests — copied YOLOv8 model from companion_software_stack, fixed config path resolution using PROJECT_CONFIG_DIR cmake definition. All 904 tests now running.*
+*Last updated: March 2026 — 1008 unit tests across 48 C++ files + 42 E2E checks (2 shell scripts) + 150+ scenario checks across 15 scenarios (14 Tier 1 + 1 Tier 2). All Tier 1 scenarios passing on Zenoh. Issue #174: 6 new GCS/geofence/FC scenarios (10–15). Issue #179: memcpy → std::copy safety fix. All 1008 tests passing.*

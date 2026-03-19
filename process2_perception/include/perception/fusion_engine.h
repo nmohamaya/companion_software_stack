@@ -9,8 +9,11 @@
 
 namespace drone::perception {
 
-/// Converts tracked 2D detections into 3D fused objects using camera geometry.
-/// This is the simple depth-from-bbox approach — no filtering, no thermal.
+/// Converts tracked 2D detections into 3D positions using monocular depth estimation.
+/// This is NOT multi-sensor fusion — it uses a single RGB camera's bounding boxes
+/// with pinhole geometry to estimate depth. See ifusion_engine.h for full context.
+/// The fusion_thread in main.cpp rotates these camera-frame positions to world ENU
+/// frame using the latest drone yaw from /slam_pose.
 class CameraOnlyFusionEngine : public IFusionEngine {
 public:
     explicit CameraOnlyFusionEngine(const CalibrationData& calib) : calib_(calib) {}

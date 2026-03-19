@@ -9,89 +9,75 @@ Multi-process C++17 software stack for an autonomous drone companion computer. 7
 ### System Overview
 
 ```mermaid
-graph TB
-    subgraph HW["External Hardware / Sensors"]
-        MissionCam["Mission Camera<br/>1920×1080 @ 30 Hz"]
-        StereoCam["Stereo Camera<br/>640×480 @ 30 Hz"]
-        IMU["IMU<br/>400 Hz"]
-        ProcSys["/proc & /sys"]
-        FC["Flight Controller<br/>(MAVLink)"]
-        GCS["Ground Control Station<br/>(UDP)"]
+graph LR
+    subgraph Sensors["🔌 External Hardware"]
+        direction TB
+        MissionCam["📷 Mission Camera\n1920×1080 @ 30 Hz"]
+        StereoCam["📷📷 Stereo Camera\n640×480 @ 30 Hz"]
+        IMU["⚡ IMU\n400 Hz"]
+        FC["✈️ Flight Controller\nMAVLink"]
+        GCS["📡 Ground Station\nUDP"]
+        OS["/proc  /sys"]
     end
 
-    subgraph CC["Companion Computer (Linux) — 7 Processes, 21 Threads"]
+    subgraph Stack["Companion Computer — 7 Processes, 21 Threads"]
+        direction TB
 
-        subgraph P1["P1 Video Capture (3 threads)"]
-            P1_main["Main<br/>5 s health"]
-            P1_mission["MissionCam<br/>30 Hz"]
-            P1_stereo["StereoCam<br/>30 Hz"]
+        subgraph Sense["Sensing Layer"]
+            direction LR
+            P1["🎥 P1 Video Capture\n3 threads · 30 Hz\nMission + Stereo cams"]
         end
 
-        subgraph P2["P2 Perception (4 threads)"]
-            P2_main["Main<br/>5 s health"]
-            P2_infer["Inference<br/>~30 Hz"]
-            P2_track["Tracker<br/>event"]
-            P2_fuse["Fusion<br/>event"]
+        subgraph Understand["Understanding Layer"]
+            direction LR
+            P2["🧠 P2 Perception\n4 threads · ~30 Hz\nDetect → Track → Fuse"]
+            P3["🗺️ P3 SLAM / VIO\n4 threads · 100 Hz\nStereo + IMU → Pose"]
         end
 
-        subgraph P3["P3 SLAM/VIO/Nav (4 threads)"]
-            P3_main["Main<br/>5 s health"]
-            P3_vfe["VisualFrontend<br/>30 Hz"]
-            P3_imu["IMUReader<br/>400 Hz"]
-            P3_pose["PosePublisher<br/>100 Hz"]
+        subgraph Decide["Decision Layer"]
+            direction LR
+            P4["🎯 P4 Mission Planner\n1 thread · 10 Hz\nFSM + Faults + Planning"]
         end
 
-        subgraph P4["P4 Mission Planner (1 thread)"]
-            P4_main["Main Loop<br/>10 Hz<br/>FSM + FaultMgr + Planner + Avoider"]
+        subgraph Act["Action Layer"]
+            direction LR
+            P5["📻 P5 Comms\n5 threads\nFC + GCS bridge"]
+            P6["🎬 P6 Payload\n1 thread · 50 Hz\nGimbal + Camera"]
         end
 
-        subgraph P5["P5 Comms (5 threads)"]
-            P5_main["Main<br/>join"]
-            P5_fcrx["fc_rx<br/>10 Hz"]
-            P5_fctx["fc_tx<br/>20 Hz"]
-            P5_gcsrx["gcs_rx<br/>2 Hz"]
-            P5_gcstx["gcs_tx<br/>2 Hz"]
-        end
-
-        subgraph P6["P6 Payload Manager (1 thread)"]
-            P6_main["Main Loop<br/>50 Hz<br/>Gimbal + Camera"]
-        end
-
-        subgraph P7["P7 System Monitor (1 thread)"]
-            P7_main["Main Loop<br/>1 Hz<br/>CPU/Mem/Temp/Disk"]
+        subgraph Watch["Supervision Layer"]
+            direction LR
+            P7["🔍 P7 Monitor\n1 thread · 1 Hz\nCPU/Mem/Temp"]
         end
     end
 
-    MissionCam -->|HAL ICamera| P1_mission
-    StereoCam -->|HAL ICamera| P1_stereo
-    IMU -->|HAL IIMUSource| P3_imu
-    ProcSys --> P7_main
-    FC <-->|HAL IFCLink| P5_fcrx
-    FC <-->|HAL IFCLink| P5_fctx
-    GCS <-->|HAL IGCSLink| P5_gcsrx
-    GCS <-->|HAL IGCSLink| P5_gcstx
+    MissionCam --> P1
+    StereoCam --> P1
+    IMU --> P3
+    OS --> P7
+    FC <--> P5
+    GCS <--> P5
 
-    P1_mission -->|"/mission_cam"| P2_infer
-    P1_stereo -->|"/stereo_cam"| P3_vfe
-    P2_infer -->|SPSC| P2_track
-    P2_track -->|SPSC| P2_fuse
-    P2_fuse -->|"/detected_objects"| P4_main
-    P3_pose -->|"/slam_pose"| P4_main
-    P5_fcrx -->|"/fc_state"| P4_main
-    P5_gcsrx -->|"/gcs_commands"| P4_main
-    P7_main -->|"/system_health"| P4_main
-    P4_main -->|"/trajectory_cmd"| P5_fctx
-    P4_main -->|"/fc_commands"| P5_fctx
-    P4_main -->|"/payload_commands"| P6_main
-    P4_main -->|"/mission_status"| P5_gcstx
-    P6_main -->|HAL IGimbal| P6_main
+    P1 -->|"/mission_cam"| P2
+    P1 -->|"/stereo_cam"| P3
+    P2 -->|"/detected_objects"| P4
+    P3 -->|"/slam_pose"| P4
+    P5 -->|"/fc_state"| P4
+    P5 -->|"/gcs_commands"| P4
+    P7 -->|"/system_health"| P4
+    P4 -->|"/trajectory_cmd\n/fc_commands"| P5
+    P4 -->|"/payload_commands"| P6
 
-    style CC fill:#1a1a2e,color:#e0e0e0
-    classDef ipcNote fill:#2d4a22,stroke:#4caf50,color:#fff
-    IPC_NOTE["IPC Layer: ShmMessageBus (default) or ZenohMessageBus (config-driven)<br/>All /channel edges use IPublisher/ISubscriber abstraction"]:::ipcNote
+    style Sensors fill:#2d1f3d,stroke:#9b59b6,color:#e0e0e0
+    style Stack fill:#1a1a2e,stroke:#3498db,color:#e0e0e0
+    style Sense fill:#1a3a1a,stroke:#27ae60,color:#e0e0e0
+    style Understand fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
+    style Decide fill:#3a2a1a,stroke:#e67e22,color:#e0e0e0
+    style Act fill:#1a3a3a,stroke:#1abc9c,color:#e0e0e0
+    style Watch fill:#3a1a1a,stroke:#e74c3c,color:#e0e0e0
 ```
 
-**Thread summary:** 21 threads total across 7 Linux processes (3 + 6 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction — backed by lock-free POSIX shared memory (SeqLock, default) or **Zenoh** zero-copy SHM + network transport (`-DENABLE_ZENOH=ON`, [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45)). The backend is selected via `ipc_backend` in the JSON config. Intra-process queues (Process 2 only) use lock-free SPSC ring buffers.
+**Data flows top-down** through five conceptual layers: Sense → Understand → Decide → Act, with lateral supervision. 21 threads total across 7 Linux processes (3 + 4 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process queues (P2 only) use lock-free SPSC ring buffers.
 
 **Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. In supervised deployments (`--supervised` flag), `ProcessManager` in P7 fork+execs the other processes and handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` stop propagation + `WatchdogSec` on P7) provide OS-level supervision, and P7 runs monitor-only. Sanitizer-clean (ASan/TSan/UBSan). See [tests/TESTS.md](tests/TESTS.md) for test counts, [Epic #88](https://github.com/nmohamaya/companion_software_stack/issues/88) and [docs/process-health-monitoring.md](docs/process-health-monitoring.md).
 
@@ -142,20 +128,18 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 
 ```mermaid
 graph LR
-    subgraph P1["Process 1 — Video Capture (3 threads)"]
+    subgraph P1["P1 Video Capture — Dual Camera Acquisition (3 threads)"]
         direction TB
-        Main["Main Thread<br/>5 s health log"]
-
-        subgraph Workers["Worker Threads"]
-            MCam["MissionCam Thread<br/>30 Hz • 1920×1080 RGB24<br/>ScopedTimer 50 ms"]
-            SCam["StereoCam Thread<br/>30 Hz • 640×480 GRAY8<br/>L+R pair"]
-        end
+        MCam["Mission Camera\n30 Hz - 1920x1080 RGB\nfor object detection"]
+        SCam["Stereo Camera\n30 Hz - 640x480 GRAY\nfor VIO depth"]
     end
 
-    CamHW1["ICamera<br/>(mission)"] -->|"HAL"| MCam
-    CamHW2["ICamera × 2<br/>(stereo L+R)"] -->|"HAL"| SCam
-    MCam -->|"SHM /mission_cam<br/>~6.2 MB"| P2["P2 Perception"]
-    SCam -->|"SHM /stereo_cam<br/>~614 KB"| P3["P3 SLAM"]
+    CamHW1["Mission\nCamera HW"] --> MCam
+    CamHW2["Stereo\nCamera HW"] --> SCam
+    MCam -->|"/mission_cam\n~6.2 MB"| P2["P2 Perception"]
+    SCam -->|"/stereo_cam\n~614 KB"| P3["P3 SLAM/VIO"]
+
+    style P1 fill:#1a3a1a,stroke:#27ae60,color:#e0e0e0
 ```
 
 Two capture threads publish frames to shared memory.
@@ -176,26 +160,26 @@ The `SimulatedCamera` generates a deterministic gradient pattern (not random noi
 
 ```mermaid
 graph LR
-    subgraph P2["Process 2 — Perception (4 threads)"]
-        direction TB
-        Main["Main Thread<br/>5 s health log"]
+    subgraph P2["P2 Perception — Monocular 3D Object Pipeline"]
+        direction LR
+        Infer["1. Detect\nIDetector\n~30 Hz"]
+        Track["2. Track\nKalman + Hungarian\nor ByteTrack"]
+        Fuse["3. Depth Estimate\nPinhole unproject\n+ yaw rotation"]
 
-        subgraph Pipeline["Detection → Tracking → Fusion Pipeline"]
-            direction LR
-            Infer["Inference Thread<br/>~30 Hz<br/>IDetector::detect()"]
-            Track["Tracker Thread<br/>event-driven<br/>SORT Kalman + Hungarian"]
-            Fuse["Fusion Thread<br/>event-driven<br/>Camera-only"]
-        end
-
-        Infer -->|"SPSC(4)<br/>Detection2DList"| Track
-        Track -->|"SPSC(4)<br/>TrackedObjectList"| Fuse
+        Infer -->|"SPSC(4)"| Track
+        Track -->|"SPSC(4)"| Fuse
     end
 
-    SHM_in["/mission_cam<br/>SHM"] --> Infer
-    Fuse -->|"SHM /detected_objects<br/>~5 KB"| P4["P4 Mission Planner"]
+    MissionCam["/mission_cam\n1920x1080 RGB"] --> Infer
+    Pose["/slam_pose\nfrom P3"] --> Fuse
+    Fuse -->|"/detected_objects\n3D world frame"| P4["P4 Mission Planner"]
+
+    style P2 fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
 ```
 
-Perception runs a multi-stage pipeline across 5 worker threads connected by lock-free SPSC queues (depth 4 each).
+Perception runs a three-stage pipeline across 3 worker threads + 1 main thread, connected by lock-free SPSC queues (depth 4 each).
+
+> **Terminology note:** The "fusion" stage is **not** multi-sensor fusion. It is **monocular depth estimation** — it takes 2D tracked bounding boxes from a single RGB camera, estimates depth using pinhole geometry (apparent-size formula), and applies a yaw-only rotation to world frame using the latest pose from P3. The stereo camera feeds P3 (VIO), not P2. See [perception_design.md](docs/perception_design.md) for details.
 
 #### 2.1 Detection — `IDetector` Strategy Pattern
 
@@ -258,23 +242,23 @@ Three detector backends are available via the factory (`create_detector()`):
 
 ```mermaid
 graph LR
-    subgraph P3["Process 3 — SLAM/VIO/Nav (4 threads)"]
-        direction TB
-        Main3["Main Thread<br/>5 s health log"]
+    subgraph P3["P3 SLAM/VIO — Stereo + IMU Pose Estimation"]
+        direction LR
+        VIO["VIO Pipeline\n~30 Hz\nFeatures + Stereo\n+ IMU preint"]
+        PDB["PoseDoubleBuffer\nlock-free\natomic swap"]
+        Pub["Pose Publisher\n100 Hz"]
 
-        VF["Visual Frontend Thread<br/>~30 Hz<br/>IVisualFrontend::process()"]
-        IMU["IMU Reader Thread<br/>400 Hz<br/>IIMUSource::read()"]
-        PP["Pose Publisher Thread<br/>100 Hz<br/>PoseDoubleBuffer → SHM"]
-
-        VF -->|"PoseDoubleBuffer<br/>(lock-free atomic swap)"| PP
+        VIO --> PDB --> Pub
     end
 
-    SHM_stereo["/drone_stereo_cam<br/>SHM"] --> VF
-    IMU_HAL["HAL IIMUSource"] --> IMU
-    PP -->|"SHM /slam_pose<br/>~352 B"| P4_5["P4, P5"]
+    StereoCam["/stereo_cam\n640x480 L+R"] --> VIO
+    IMU["IMU\n400 Hz"] --> VIO
+    Pub -->|"/slam_pose\nPose + quality"| P4_5["P4, P5, P6"]
+
+    style P3 fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
 ```
 
-Three worker threads + main health-check loop. The visual frontend produces `Pose` objects into a **lock-free double buffer** (`PoseDoubleBuffer` — atomic index swap), consumed by the pose publisher thread which writes to SHM.
+Three worker threads + main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data (Forster et al. 2017), and generates a 6-DOF pose. The `Pose.quality` field (0=lost, 1=degraded, 2=good, 3=excellent) reflects VIOHealth state, consumed by P4's FaultManager for safety response.
 
 #### Visual Frontend — `IVisualFrontend` Strategy Pattern
 
@@ -307,29 +291,28 @@ Three worker threads + main health-check loop. The visual frontend produces `Pos
 
 ```mermaid
 graph TD
-    subgraph P4["Process 4 — Mission Planner (1 thread, 10 Hz)"]
+    subgraph P4["P4 Mission Planner — Autonomous Decision Engine (10 Hz)"]
         direction TB
-        FSM["MissionFSM<br/>State Machine"]
-        PP["IPathPlanner<br/>PotentialFieldPlanner<br/>+ EMA smoothing α=0.35"]
-        OA["IObstacleAvoider<br/>PotentialFieldAvoider<br/>+ staleness/confidence/clamp"]
-        CMD["FC Command Publisher<br/>monotonic sequence_id"]
+        Fault["FaultManager\n10 fault conditions\nescalation-only"]
+        FSM["MissionFSM\nIDLE > ARM > TAKEOFF\n> NAVIGATE > RTL > LAND"]
+        Plan["Path Planner\nD* Lite / A* / PotField"]
+        Avoid["Obstacle Avoider\n3D repulsive field"]
 
-        FSM --> PP
-        PP --> OA
-        OA --> CMD
+        Fault --> FSM --> Plan --> Avoid
     end
 
-    SHM_pose["/slam_pose"] --> FSM
-    SHM_det["/detected_objects"] --> OA
-    SHM_fc["/fc_state"] --> FSM
-    SHM_gcs["/gcs_commands<br/>(lazy)"] --> FSM
-    CMD -->|"/trajectory_cmd"| P5["P5 Comms"]
-    CMD -->|"/fc_commands"| P5
-    FSM -->|"/mission_status"| P5_7["P5, P7"]
+    Pose["/slam_pose\npose + quality"] --> Fault
+    Objects["/detected_objects"] --> Avoid
+    FCState["/fc_state"] --> FSM
+    Health["/system_health"] --> Fault
+    GCS["/gcs_commands"] --> FSM
+    Avoid -->|"/trajectory_cmd\n/fc_commands"| P5["P5 Comms"]
     FSM -->|"/payload_commands"| P6["P6 Payload"]
+
+    style P4 fill:#3a2a1a,stroke:#e67e22,color:#e0e0e0
 ```
 
-Single-threaded 10 Hz loop: FSM tick → **fault evaluation** → path planning → obstacle avoidance → FC command dispatch. Subscribes mandatory to `FC_STATE` (armed check, altitude feedback), lazy to `GCS_COMMANDS` (dedup by timestamp), and optional to `SYSTEM_HEALTH` (for fault detection).
+Single-threaded 10 Hz loop: fault evaluation → FSM tick → path planning → obstacle avoidance → FC command dispatch. Subscribes mandatory to `FC_STATE` (armed check, altitude feedback), lazy to `GCS_COMMANDS` (dedup by timestamp), and optional to `SYSTEM_HEALTH` (for fault detection).
 
 #### FaultManager — Graceful Degradation ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61))
 
@@ -341,14 +324,16 @@ A config-driven **FaultManager** library evaluates system health each loop tick 
 |---|-----------------|---------|--------|
 | 1 | Critical process death | comms/SLAM died | LOITER |
 | 2 | Pose data stale | No update >500 ms | LOITER |
-| 3 | Battery low | <20% remaining | RTL |
-| 4 | Battery critical | <10% remaining | EMERGENCY_LAND |
-| 5 | Thermal warning | Zone 2 (hot) | WARN |
-| 6 | Thermal critical | Zone 3 (critical) | RTL |
-| 7 | Perception dead | Process died | WARN |
-| 8 | FC link lost | Disconnected >3 s | LOITER |
+| 3 | Battery low | <30% remaining | WARN |
+| 4 | Battery RTL | <20% remaining | RTL |
+| 5 | Battery critical | <10% remaining | EMERGENCY_LAND |
+| 6 | Thermal warning | Zone 2 (hot) | WARN |
+| 7 | Thermal critical | Zone 3 (critical) | RTL |
+| 8 | Perception dead | Process died | WARN |
+| 9 | FC link lost | Disconnected >3 s | LOITER |
+| 10 | Geofence breach | Outside polygon/altitude | RTL |
 
-**Key design:** FaultManager is a library in P4 (not a separate process) — zero IPC latency, P4 already owns FSM + FC command authority, PX4 failsafe covers P4 death. All thresholds are config-driven via `fault_manager.*` JSON keys. Loiter auto-escalates to RTL after configurable timeout (default 30 s).
+**Key design:** FaultManager is a library in P4 (not a separate process) — zero IPC latency, P4 already owns FSM + FC command authority, PX4 failsafe covers P4 death. All thresholds are config-driven via `fault_manager.*` JSON keys. Loiter auto-escalates to RTL after configurable timeout (default 30 s). VIO health fault escalation (quality-based LOITER/RTL) is in development ([PR #190](https://github.com/nmohamaya/companion_software_stack/pull/190), Issue #169).
 
 #### FSM States
 
@@ -411,32 +396,27 @@ A config-driven **FaultManager** library evaluates system health each loop tick 
 
 ```mermaid
 graph LR
-    subgraph P5["Process 5 — Comms (5 threads)"]
+    subgraph P5["P5 Comms — FC + GCS Bridge (5 threads)"]
         direction TB
-        Main5["Main Thread<br/>health check"]
-
-        subgraph FCBridge["FC Bridge"]
+        subgraph FC_Bridge["Flight Controller Bridge"]
             direction LR
-            FCRX["fc_rx Thread<br/>10 Hz<br/>IFCLink → SHM"]
-            FCTX["fc_tx Thread<br/>20 Hz<br/>SHM → IFCLink<br/>+ RTL guard"]
+            FCRX["fc_rx\n10 Hz\nFC state in"]
+            FCTX["fc_tx\n20 Hz\nvelocity out\n+ RTL guard"]
         end
-
-        subgraph GCSBridge["GCS Bridge"]
+        subgraph GCS_Bridge["Ground Station Bridge"]
             direction LR
-            GCSRX["gcs_rx Thread<br/>2 Hz<br/>IGCSLink → SHM"]
-            GCSTX["gcs_tx Thread<br/>2 Hz<br/>SHM → IGCSLink"]
+            GCSRX["gcs_rx\n2 Hz\ncommands in"]
+            GCSTX["gcs_tx\n2 Hz\ntelemetry out"]
         end
     end
 
-    FCRX -->|"SHM /fc_state"| P4_7["P4, P7"]
-    SHM_traj["/trajectory_cmd"] --> FCTX
-    SHM_fccmd["/fc_commands"] --> FCTX
-    FCTX --> FC["Flight Controller<br/>(PX4 / Simulated)"]
-    FC --> FCRX
-    GCSRX -->|"SHM /gcs_commands"| P4b["P4"]
-    SHM_pose2["/slam_pose + /mission_status + /fc_state"] --> GCSTX
-    GCSTX --> GCS["Ground Station"]
-    GCS --> GCSRX
+    FC["Flight Controller\nPX4 / Simulated"] <--> FC_Bridge
+    GCS["Ground Station\nUDP"] <--> GCS_Bridge
+    FCRX -->|"/fc_state"| P4_7["P4, P7"]
+    P4_in["/trajectory_cmd\n/fc_commands"] --> FCTX
+    GCSRX -->|"/gcs_commands"| P4b["P4"]
+
+    style P5 fill:#1a3a3a,stroke:#1abc9c,color:#e0e0e0
 ```
 
 Five threads (main + 4 workers) bridge the companion computer with the flight controller and ground station.
@@ -467,14 +447,16 @@ Five threads (main + 4 workers) bridge the companion computer with the flight co
 
 ```mermaid
 graph LR
-    subgraph P6["Process 6 — Payload Manager (1 thread, 50 Hz)"]
+    subgraph P6["P6 Payload — Gimbal + Camera Control (50 Hz)"]
         direction TB
-        Loop6["Main Loop<br/>Read command → Gimbal update(dt) → Publish status"]
+        Loop6["Command -> Gimbal update -> Status"]
     end
 
-    SHM_payload["/payload_commands"] --> Loop6
-    Loop6 -->|"SHM /payload_status"| Out6["P4, P7"]
-    Loop6 --> Gimbal["HAL IGimbal<br/>SimulatedGimbal"]
+    Cmd["/payload_commands\nfrom P4"] --> Loop6
+    Loop6 -->|"/payload_status"| Out6["P4, P7"]
+    Loop6 --> Gimbal["Gimbal HW\nrate-limited slew"]
+
+    style P6 fill:#1a3a3a,stroke:#1abc9c,color:#e0e0e0
 ```
 
 | Aspect | Detail |
@@ -494,18 +476,18 @@ graph LR
 
 ```mermaid
 graph LR
-    subgraph P7["Process 7 — System Monitor (1 thread, 1 Hz)"]
-        direction TB
-        Mon["IProcessMonitor<br/>LinuxProcessMonitor"]
-        Alert["Threshold Alerting<br/>normal / WARNING / CRITICAL"]
-        Mon --> Alert
+    subgraph P7["P7 Monitor — Health Supervision (1 Hz)"]
+        direction LR
+        Metrics["Collect\nCPU/Mem/Temp/Disk"]
+        Alert["Evaluate\nnormal/WARN/CRITICAL"]
+        Metrics --> Alert
     end
 
-    Proc["/proc/stat<br/>/proc/meminfo"] --> Mon
-    Thermal["/sys/.../thermal_zone0/temp"] --> Mon
-    Disk["df -m / (every N ticks)"] --> Mon
-    SHM_fc7["/fc_state<br/>(lazy subscribe)"] -->|"battery %"| Mon
-    Alert -->|"SHM /system_health"| P4_out["P4"]
+    Proc["/proc + /sys"] --> Metrics
+    Battery["/fc_state\nbattery %"] --> Metrics
+    Alert -->|"/system_health\nthermal zone + flags"| P4_out["P4 FaultManager"]
+
+    style P7 fill:#3a1a1a,stroke:#e74c3c,color:#e0e0e0
 ```
 
 | Metric | Source | Method |
