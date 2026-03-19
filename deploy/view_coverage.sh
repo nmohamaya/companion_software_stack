@@ -2,8 +2,7 @@
 # deploy/view_coverage.sh — Build with coverage, run tests, generate & view HTML report.
 #
 # Usage:
-#   bash deploy/view_coverage.sh            # Full pipeline: build → test → report (SHM)
-#   bash deploy/view_coverage.sh --zenoh     # Full pipeline with Zenoh backend
+#   bash deploy/view_coverage.sh            # Full pipeline: build → test → report
 #   bash deploy/view_coverage.sh --open      # Same, but auto-open report in browser
 #   bash deploy/view_coverage.sh --report    # Skip build/test, just regenerate report
 #   bash deploy/view_coverage.sh --summary   # Print terminal summary only (no HTML)
@@ -14,10 +13,6 @@
 # Output:
 #   build/coverage-report/index.html  — Full HTML coverage report
 #   build/coverage.info               — lcov tracefile (for CI upload)
-#
-# With --zenoh:
-#   build/coverage-report-zenoh/index.html
-#   build/coverage-zenoh.info
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,16 +26,17 @@ FILTERED_INFO="${BUILD_DIR}/coverage.info"
 AUTO_OPEN=0
 REPORT_ONLY=0
 SUMMARY_ONLY=0
-ENABLE_ZENOH=0
 
 for arg in "$@"; do
     case "$arg" in
         --open)     AUTO_OPEN=1 ;;
         --report)   REPORT_ONLY=1 ;;
         --summary)  SUMMARY_ONLY=1 ;;
-        --zenoh)    ENABLE_ZENOH=1 ;;
+        --zenoh)
+            echo "NOTE: --zenoh flag is no longer needed (Zenoh is always enabled). Ignoring."
+            ;;
         -h|--help)
-            head -15 "$0" | tail -14
+            head -14 "$0" | tail -13
             exit 0
             ;;
         *)
@@ -51,15 +47,7 @@ for arg in "$@"; do
     esac
 done
 
-# ── Zenoh-aware paths ────────────────────────────────────────
-if [[ "$ENABLE_ZENOH" -eq 1 ]]; then
-    COVERAGE_DIR="${BUILD_DIR}/coverage-report-zenoh"
-    RAW_INFO="${BUILD_DIR}/coverage-raw-zenoh.info"
-    FILTERED_INFO="${BUILD_DIR}/coverage-zenoh.info"
-    REPORT_TITLE="Companion Stack Coverage (Zenoh)"
-else
-    REPORT_TITLE="Companion Stack Coverage"
-fi
+REPORT_TITLE="Companion Stack Coverage"
 
 # ── Dependency check ─────────────────────────────────────────
 check_deps() {
@@ -79,23 +67,14 @@ check_deps() {
 # ── Step 1: Build with coverage ──────────────────────────────
 build_with_coverage() {
     echo "══════════════════════════════════════════"
-    if [[ "$ENABLE_ZENOH" -eq 1 ]]; then
-        echo "  Step 1/4: Building with coverage (Zenoh)"
-    else
-        echo "  Step 1/4: Building with coverage (SHM)"
-    fi
+    echo "  Step 1/4: Building with coverage"
     echo "══════════════════════════════════════════"
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
 
-    local cmake_extra_flags=()
-    if [[ "$ENABLE_ZENOH" -eq 1 ]]; then
-        cmake_extra_flags+=(-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON)
-    fi
-
     cmake -DCMAKE_BUILD_TYPE=Debug \
           -DENABLE_COVERAGE=ON \
-          "${cmake_extra_flags[@]}" \
+          -DALLOW_INSECURE_ZENOH=ON \
           ..
     cmake --build . -j"$(nproc)"
     echo "  Build complete."
