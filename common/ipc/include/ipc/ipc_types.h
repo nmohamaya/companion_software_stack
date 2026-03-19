@@ -171,16 +171,18 @@ inline const char* fault_action_name(FaultAction a) {
 /// Bitmask of active fault conditions (stored in MissionStatus::active_faults).
 enum FaultType : uint32_t {
     FAULT_NONE             = 0,
-    FAULT_CRITICAL_PROCESS = 1 << 0,  // comms or SLAM died
-    FAULT_POSE_STALE       = 1 << 1,  // no pose update within timeout
-    FAULT_BATTERY_LOW      = 1 << 2,  // battery below warning threshold
-    FAULT_BATTERY_CRITICAL = 1 << 3,  // battery below critical threshold
-    FAULT_THERMAL_WARNING  = 1 << 4,  // thermal zone 2 (hot)
-    FAULT_THERMAL_CRITICAL = 1 << 5,  // thermal zone 3 (critical)
-    FAULT_PERCEPTION_DEAD  = 1 << 6,  // perception process died
-    FAULT_FC_LINK_LOST     = 1 << 7,  // FC not connected for >timeout
-    FAULT_GEOFENCE_BREACH  = 1 << 8,  // outside geofence boundary
-    FAULT_BATTERY_RTL      = 1 << 9,  // battery below RTL threshold
+    FAULT_CRITICAL_PROCESS = 1 << 0,   // comms or SLAM died
+    FAULT_POSE_STALE       = 1 << 1,   // no pose update within timeout
+    FAULT_BATTERY_LOW      = 1 << 2,   // battery below warning threshold
+    FAULT_BATTERY_CRITICAL = 1 << 3,   // battery below critical threshold
+    FAULT_THERMAL_WARNING  = 1 << 4,   // thermal zone 2 (hot)
+    FAULT_THERMAL_CRITICAL = 1 << 5,   // thermal zone 3 (critical)
+    FAULT_PERCEPTION_DEAD  = 1 << 6,   // perception process died
+    FAULT_FC_LINK_LOST     = 1 << 7,   // FC not connected for >timeout
+    FAULT_GEOFENCE_BREACH  = 1 << 8,   // outside geofence boundary
+    FAULT_BATTERY_RTL      = 1 << 9,   // battery below RTL threshold
+    FAULT_VIO_DEGRADED     = 1 << 10,  // VIO quality degraded → LOITER
+    FAULT_VIO_LOST         = 1 << 11,  // VIO tracking lost → RTL
 };
 
 /// Convert active fault bitmask to a human-readable pipe-separated string.
@@ -202,6 +204,8 @@ inline std::string fault_flags_string(uint32_t flags) {
         {FAULT_FC_LINK_LOST, "FAULT_FC_LINK_LOST"},
         {FAULT_GEOFENCE_BREACH, "FAULT_GEOFENCE_BREACH"},
         {FAULT_BATTERY_RTL, "FAULT_BATTERY_RTL"},
+        {FAULT_VIO_DEGRADED, "FAULT_VIO_DEGRADED"},
+        {FAULT_VIO_LOST, "FAULT_VIO_LOST"},
     };
     uint32_t known = 0;
     for (const auto& f : kFlags) {
@@ -506,6 +510,8 @@ struct alignas(64) FaultOverrides {
     // System health overrides (consumed by Process 7 system monitor)
     int32_t thermal_zone;       // <0 = no override, 0-3 = zone
     float   cpu_temp_override;  // <0 = no override
+    // VIO quality override (consumed by Process 3 SLAM/VIO)
+    int32_t vio_quality;  // <0 = no override, 0-3 = quality level
     // Sequence counter – incremented by the injector so consumers can
     // detect new writes vs stale values.
     uint64_t sequence;

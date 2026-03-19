@@ -42,6 +42,8 @@ using drone::ipc::FAULT_THERMAL_CRITICAL;
 using drone::ipc::FAULT_PERCEPTION_DEAD;
 using drone::ipc::FAULT_FC_LINK_LOST;
 using drone::ipc::FAULT_GEOFENCE_BREACH;
+using drone::ipc::FAULT_VIO_DEGRADED;
+using drone::ipc::FAULT_VIO_LOST;
 
 // ═══════════════════════════════════════════════════════════
 // FaultState — output of evaluate()
@@ -71,6 +73,10 @@ struct FaultConfig {
 
     // Loiter → RTL escalation delay (general, not FC-specific)
     uint64_t loiter_escalation_timeout_ns = 30'000'000'000ULL;  // 30 s
+
+    // VIO quality thresholds (Pose.quality: 0=lost, 1=degraded, 2=good, 3=excellent)
+    uint32_t vio_quality_loiter_threshold = 1;  // quality <= this → LOITER
+    uint32_t vio_quality_rtl_threshold    = 0;  // quality <= this → RTL
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -106,14 +112,21 @@ public:
                 cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30)) *
             1'000'000'000ULL;
 
+        config_.vio_quality_loiter_threshold = static_cast<uint32_t>(
+            cfg.template get<int>("fault_manager.vio_quality_loiter_threshold", 1));
+        config_.vio_quality_rtl_threshold = static_cast<uint32_t>(
+            cfg.template get<int>("fault_manager.vio_quality_rtl_threshold", 0));
+
         spdlog::info("[FaultMgr] Thresholds: pose_stale={}ms, "
                      "batt_warn={}%, batt_rtl={}%, batt_crit={}%, "
-                     "fc_lost={}ms, fc_rtl={}ms, loiter_esc={}s",
+                     "fc_lost={}ms, fc_rtl={}ms, loiter_esc={}s, "
+                     "vio_loiter_q<={}, vio_rtl_q<={}",
                      config_.pose_stale_timeout_ns / 1'000'000, config_.battery_warn_percent,
                      config_.battery_rtl_percent, config_.battery_crit_percent,
                      config_.fc_link_lost_timeout_ns / 1'000'000,
                      config_.fc_link_rtl_timeout_ns / 1'000'000,
-                     config_.loiter_escalation_timeout_ns / 1'000'000'000);
+                     config_.loiter_escalation_timeout_ns / 1'000'000'000,
+                     config_.vio_quality_loiter_threshold, config_.vio_quality_rtl_threshold);
     }
 
     /// Construct with explicit config (for unit tests).
@@ -128,7 +141,8 @@ public:
     /// @return FaultState with recommended action and active fault bitmask.
     [[nodiscard]] FaultState evaluate(const drone::ipc::SystemHealth& health,
                                       const drone::ipc::FCState&      fc_state,
-                                      uint64_t pose_timestamp_ns, uint64_t now_ns) {
+                                      uint64_t pose_timestamp_ns, uint64_t now_ns,
+                                      uint32_t pose_quality = 2) {
         FaultState result;
 
         // ── 1. Critical process death (comms / SLAM) ────────
@@ -146,7 +160,16 @@ public:
             }
         }
 
-        // ── 3. Battery — three-tier progressive escalation ──
+        // ── 3. VIO health degradation ────────────────────────
+        if (pose_quality <= config_.vio_quality_rtl_threshold) {
+            result.active_faults |= FAULT_VIO_LOST;
+            escalate(result, FaultAction::RTL, "VIO tracking lost");
+        } else if (pose_quality <= config_.vio_quality_loiter_threshold) {
+            result.active_faults |= FAULT_VIO_DEGRADED;
+            escalate(result, FaultAction::LOITER, "VIO quality degraded");
+        }
+
+        // ── 4. Battery — three-tier progressive escalation ──
         if (fc_state.connected && fc_state.battery_remaining > 0.0f) {
             if (fc_state.battery_remaining < config_.battery_crit_percent) {
                 result.active_faults |= FAULT_BATTERY_CRITICAL;
@@ -160,7 +183,7 @@ public:
             }
         }
 
-        // ── 4. Thermal ──────────────────────────────────────
+        // ── 5. Thermal ──────────────────────────────────────
         if (health.thermal_zone >= 3) {
             result.active_faults |= FAULT_THERMAL_CRITICAL;
             escalate(result, FaultAction::RTL, "thermal critical");
@@ -169,13 +192,13 @@ public:
             escalate(result, FaultAction::WARN, "thermal warning");
         }
 
-        // ── 5. Perception process death ─────────────────────
+        // ── 6. Perception process death ─────────────────────
         if (is_process_dead(health, "perception")) {
             result.active_faults |= FAULT_PERCEPTION_DEAD;
             escalate(result, FaultAction::WARN, "perception died — no obstacle avoidance");
         }
 
-        // ── 6. FC link lost — LOITER then escalate to RTL ─
+        // ── 7. FC link lost — LOITER then escalate to RTL ─
         if (!fc_state.connected && fc_state.timestamp_ns > 0 && now_ns > fc_state.timestamp_ns) {
             uint64_t fc_age = now_ns - fc_state.timestamp_ns;
             if (fc_age > config_.fc_link_rtl_timeout_ns) {
@@ -189,13 +212,13 @@ public:
             }
         }
 
-        // ── 7. Geofence breach ──────────────────────────────
+        // ── 8. Geofence breach ──────────────────────────────
         if (geofence_violated_) {
             result.active_faults |= FAULT_GEOFENCE_BREACH;
             escalate(result, FaultAction::RTL, "geofence breach");
         }
 
-        // ── 8. Enforce escalation-only policy ───────────────
+        // ── 9. Enforce escalation-only policy ───────────────
         // Once we've escalated to a higher action, never downgrade.
         // Applied BEFORE the loiter timer so that a cleared LOITER
         // cause still counts toward the escalation timeout.
@@ -207,7 +230,7 @@ public:
             high_water_reason_ = result.reason;
         }
 
-        // ── 9. Loiter escalation to RTL ─────────────────────
+        // ── 10. Loiter escalation to RTL ────────────────────
         // If the effective action (post high-water mark) has been
         // LOITER for too long, escalate to RTL.
         if (result.recommended_action == FaultAction::LOITER) {

@@ -1,0 +1,50 @@
+{
+    "_comment": "Scenario 16: VIO Failure — LOITER on degradation, fault flag clearance on recovery",
+    "scenario": {
+        "name": "vio_failure",
+        "description": "Inject VIO quality degradation mid-flight via fault override. Verifies FaultManager's VIO fault detection: quality=1 triggers LOITER via FAULT_VIO_DEGRADED. After VIO override is cleared, the fault flag clears but action stays at LOITER (escalation-only policy).",
+        "tier": 1,
+        "timeout_s": 60,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "static_obstacles": [],
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "vio_quality_loiter_threshold": 1,
+            "vio_quality_rtl_threshold": 0
+        }
+    },
+    "fault_sequence": {
+        "steps": [
+            {
+                "delay_s": 8,
+                "action": "vio_quality",
+                "value": 1,
+                "_comment": "Degrade VIO to quality=1 (DEGRADED) — expect LOITER"
+            },
+            {
+                "delay_s": 10,
+                "action": "vio_clear",
+                "_comment": "Restore VIO — fault flag clears but action stays LOITER (escalation-only)"
+            }
+        ]
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "FAULT_VIO_DEGRADED",
+            "LOITER"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND",
+            "FAULT_GEOFENCE_BREACH",
+            "OBSTACLE COLLISION"
+        ]
+    }
+}

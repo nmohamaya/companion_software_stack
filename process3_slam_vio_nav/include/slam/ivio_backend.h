@@ -228,7 +228,14 @@ private:
         p.orientation =
             Eigen::Quaterniond(Eigen::AngleAxisd(current_yaw_, Eigen::Vector3d::UnitZ()));
         p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.01;
-        p.quality    = 2;  // good
+        // Map VIOHealth → Pose quality (higher = better)
+        switch (health_) {
+            case VIOHealth::LOST: p.quality = 0; break;          // lost
+            case VIOHealth::INITIALIZING: p.quality = 1; break;  // degraded
+            case VIOHealth::DEGRADED: p.quality = 1; break;      // degraded
+            case VIOHealth::NOMINAL: [[fallthrough]];
+            default: p.quality = 2; break;  // good
+        }
         return p;
     }
 

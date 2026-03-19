@@ -608,3 +608,104 @@ TEST(FaultManagerTest, GeofenceViolationClearedAfterReset) {
     auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S);
     EXPECT_FALSE(r2.active_faults & FAULT_GEOFENCE_BREACH);
 }
+
+// ═══════════════════════════════════════════════════════════
+// VIO health fault detection (Issue #169 Phase A)
+// ═══════════════════════════════════════════════════════════
+
+TEST(FaultManagerTest, VIODegradedTriggersLoiter) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/1);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::LOITER);
+    EXPECT_TRUE(result.active_faults & FAULT_VIO_DEGRADED);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
+}
+
+TEST(FaultManagerTest, VIOLostTriggersRTL) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::RTL);
+    EXPECT_TRUE(result.active_faults & FAULT_VIO_LOST);
+}
+
+TEST(FaultManagerTest, VIONominalNoFault) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/2);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
+}
+
+TEST(FaultManagerTest, VIOExcellentNoFault) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/3);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
+}
+
+TEST(FaultManagerTest, VIODegradedRecoveryStaysEscalated) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    // First: VIO degraded → LOITER
+    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/1);
+    EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
+
+    // Second: VIO recovers to NOMINAL — escalation-only means LOITER persists
+    auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S, /*pose_quality=*/2);
+    EXPECT_EQ(r2.recommended_action, FaultAction::LOITER);
+    // VIO fault bit should be CLEARED (no active VIO fault)
+    EXPECT_FALSE(r2.active_faults & FAULT_VIO_DEGRADED);
+}
+
+TEST(FaultManagerTest, VIOLostPlusBatteryCritHighestWins) {
+    FaultManager mgr(default_cfg());
+    auto         health  = make_healthy();
+    auto         fc      = make_fc_ok();
+    fc.battery_remaining = 5.0f;  // critical
+    uint64_t now         = 1'000 * S;
+
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+
+    // EMERGENCY_LAND (battery critical) > RTL (VIO lost)
+    EXPECT_EQ(result.recommended_action, FaultAction::EMERGENCY_LAND);
+    EXPECT_TRUE(result.active_faults & FAULT_VIO_LOST);
+    EXPECT_TRUE(result.active_faults & FAULT_BATTERY_CRITICAL);
+}
+
+TEST(FaultManagerTest, VIODefaultQualityNoFault) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    // Call without pose_quality parameter — uses default=2 (good)
+    auto result = mgr.evaluate(health, fc, now - 10 * MS, now);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
+}
