@@ -112,10 +112,13 @@ public:
                 cfg.template get<int>("fault_manager.loiter_escalation_timeout_s", 30)) *
             1'000'000'000ULL;
 
-        config_.vio_quality_loiter_threshold = static_cast<uint32_t>(
-            cfg.template get<int>("fault_manager.vio_quality_loiter_threshold", 1));
-        config_.vio_quality_rtl_threshold = static_cast<uint32_t>(
-            cfg.template get<int>("fault_manager.vio_quality_rtl_threshold", 0));
+        {
+            int loiter_q = cfg.template get<int>("fault_manager.vio_quality_loiter_threshold", 1);
+            int rtl_q    = cfg.template get<int>("fault_manager.vio_quality_rtl_threshold", 0);
+            config_.vio_quality_loiter_threshold =
+                static_cast<uint32_t>(std::clamp(loiter_q, 0, 3));
+            config_.vio_quality_rtl_threshold = static_cast<uint32_t>(std::clamp(rtl_q, 0, 3));
+        }
 
         spdlog::info("[FaultMgr] Thresholds: pose_stale={}ms, "
                      "batt_warn={}%, batt_rtl={}%, batt_crit={}%, "
@@ -161,12 +164,18 @@ public:
         }
 
         // ── 3. VIO health degradation ────────────────────────
-        if (pose_quality <= config_.vio_quality_rtl_threshold) {
-            result.active_faults |= FAULT_VIO_LOST;
-            escalate(result, FaultAction::RTL, "VIO tracking lost");
-        } else if (pose_quality <= config_.vio_quality_loiter_threshold) {
-            result.active_faults |= FAULT_VIO_DEGRADED;
-            escalate(result, FaultAction::LOITER, "VIO quality degraded");
+        // Only evaluate VIO quality after we've received at least one valid pose.
+        // Before first pose, pose_timestamp_ns==0 and pose_quality is default (2),
+        // but a zero-initialized Pose would have quality==0 — gating on timestamp
+        // prevents false RTL escalation during startup.
+        if (pose_timestamp_ns > 0) {
+            if (pose_quality <= config_.vio_quality_rtl_threshold) {
+                result.active_faults |= FAULT_VIO_LOST;
+                escalate(result, FaultAction::RTL, "VIO tracking lost");
+            } else if (pose_quality <= config_.vio_quality_loiter_threshold) {
+                result.active_faults |= FAULT_VIO_DEGRADED;
+                escalate(result, FaultAction::LOITER, "VIO quality degraded");
+            }
         }
 
         // ── 4. Battery — three-tier progressive escalation ──

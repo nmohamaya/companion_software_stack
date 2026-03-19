@@ -31,6 +31,7 @@
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -294,7 +295,8 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose
             // Apply VIO quality override from fault injector (if active)
             drone::ipc::FaultOverrides ovr{};
             if (fault_sub.receive(ovr) && ovr.vio_quality >= 0) {
-                shm_pose.quality = static_cast<uint32_t>(ovr.vio_quality);
+                shm_pose.quality =
+                    static_cast<uint32_t>(std::clamp(ovr.vio_quality, int32_t{0}, int32_t{3}));
             }
 
             pose_pub.publish(shm_pose);

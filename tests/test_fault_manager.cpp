@@ -709,3 +709,18 @@ TEST(FaultManagerTest, VIODefaultQualityNoFault) {
     EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
     EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
 }
+
+TEST(FaultManagerTest, VIOQualityIgnoredBeforeFirstPose) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+
+    // pose_timestamp_ns == 0 means no pose received yet.
+    // Even with pose_quality == 0 (lost), VIO faults should NOT fire.
+    auto result = mgr.evaluate(health, fc, /*pose_timestamp_ns=*/0, /*now_ns=*/1'000 * S,
+                               /*pose_quality=*/0);
+
+    EXPECT_EQ(result.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
+    EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
+}

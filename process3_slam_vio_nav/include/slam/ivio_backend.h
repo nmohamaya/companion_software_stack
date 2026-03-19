@@ -436,6 +436,10 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     const ImuNoiseParams& imu_params = {},
     const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f) {
 
+#ifndef HAVE_GAZEBO
+    (void)gz_topic;  // only used by Gazebo backend
+#endif
+
     if (backend == "simulated") {
         return std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps);
     }
