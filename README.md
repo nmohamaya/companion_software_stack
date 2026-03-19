@@ -930,7 +930,7 @@ CMake auto-detects these and enables compile guards (`HAVE_MAVSDK`, `HAVE_GAZEBO
 ```bash
 # From the project root directory:
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_BUILD_TYPE=Release -DALLOW_INSECURE_ZENOH=ON ..
 make -j$(nproc)
 ```
 

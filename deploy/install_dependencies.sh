@@ -367,7 +367,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-#  STEP 4: Zenoh IPC Backend (Optional)
+#  STEP 4: Zenoh IPC Backend (Required)
 # ══════════════════════════════════════════════════════════════
 header "Step 4/6: Zenoh IPC Backend (Required)"
 
@@ -664,14 +664,16 @@ ZENOH_CMAKE_FLAGS=""
 if pkg-config --exists zenohc 2>/dev/null; then
     # Prefer secure config if ZENOH_CONFIG_PATH env var is set.
     if [[ -n "${ZENOH_CONFIG_PATH:-}" && -f "${ZENOH_CONFIG_PATH:-}" ]]; then
-        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+        ZENOH_CMAKE_FLAGS="-DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
         info "Zenoh detected — building with secure config: ${ZENOH_CONFIG_PATH}"
     else
-        ZENOH_CMAKE_FLAGS="-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON"
-        info "Zenoh detected — building with ENABLE_ZENOH=ON (insecure — dev/test only)"
+        ZENOH_CMAKE_FLAGS="-DALLOW_INSECURE_ZENOH=ON"
+        info "Zenoh detected — building with ALLOW_INSECURE_ZENOH=ON (dev/test only)"
     fi
 else
-    warn "Zenoh not found — the stack requires Zenoh to function. Install it by re-running this script."
+    fail "Zenoh not found — the stack requires Zenoh to function."
+    echo "  Re-run this script and select 'y' when prompted to install Zenoh."
+    exit 1
 fi
 
 info "Configuring with CMake..."
