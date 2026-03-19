@@ -9,6 +9,8 @@
 //   fault_injector fc_reconnect               — set FC state to connected
 //   fault_injector gcs_command <cmd> [params] — inject GCS command
 //   fault_injector thermal_zone <0-3>         — override thermal zone
+//   fault_injector vio_quality <0-3>          — override VIO pose quality
+//   fault_injector vio_clear                  — clear VIO quality override
 //   fault_injector mission_upload <json_file> — upload new waypoints
 //   fault_injector sequence <json_file>       — timed sequence of faults
 //
@@ -102,9 +104,13 @@ static void publish_via_bus(const std::string& topic, const T& msg) {
 
 /// Process-local mirror of the current override state.
 static drone::ipc::FaultOverrides g_overrides = {
-    /*.battery_percent=*/-1.0f,   /*.battery_voltage=*/-1.0f,
-    /*.fc_connected=*/-1,         /*.thermal_zone=*/-1,
-    /*.cpu_temp_override=*/-1.0f, /*.sequence=*/0};
+    /*.battery_percent=*/-1.0f,
+    /*.battery_voltage=*/-1.0f,
+    /*.fc_connected=*/-1,
+    /*.thermal_zone=*/-1,
+    /*.cpu_temp_override=*/-1.0f,
+    /*.vio_quality=*/-1,
+    /*.sequence=*/0};
 
 /// Mutate the process-local override state and publish via MessageBus.
 static void update_overrides(std::function<void(drone::ipc::FaultOverrides&)> mutator) {
@@ -215,6 +221,34 @@ static int cmd_thermal_zone(uint8_t zone) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Command: vio_quality <0-3>
+// Overrides VIO pose quality in /fault_overrides (consumed by P3).
+// ═══════════════════════════════════════════════════════════════
+static int cmd_vio_quality(int quality) {
+    if (quality < 0 || quality > 3) {
+        print_err("VIO quality must be 0-3 (got " + std::to_string(quality) + ")");
+        return 1;
+    }
+
+    update_overrides(
+        [&](drone::ipc::FaultOverrides& ovr) { ovr.vio_quality = static_cast<int32_t>(quality); });
+
+    const char* names[] = {"LOST", "DEGRADED", "GOOD", "EXCELLENT"};
+    print_ok("VIO quality override: " + std::to_string(quality) + " (" + names[quality] + ")");
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Command: vio_clear
+// Clears VIO quality override — restores actual VIO health.
+// ═══════════════════════════════════════════════════════════════
+static int cmd_vio_clear() {
+    update_overrides([](drone::ipc::FaultOverrides& ovr) { ovr.vio_quality = -1; });
+    print_ok("VIO quality override cleared — using actual VIO health");
+    return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Command: mission_upload <json_file>
 // Uploads new waypoints via /mission_upload channel.
 // JSON format: {"waypoints": [{"x":..,"y":..,"z":..,"yaw":..},...]}
@@ -299,6 +333,10 @@ static int execute_step(const json& step) {
                                step.value("param2", 0.0f), step.value("param3", 0.0f));
     } else if (action == "thermal_zone") {
         return cmd_thermal_zone(step.value("value", 0));
+    } else if (action == "vio_quality") {
+        return cmd_vio_quality(step.value("value", 2));
+    } else if (action == "vio_clear") {
+        return cmd_vio_clear();
     } else if (action == "mission_upload") {
         return cmd_mission_upload(step.value("file", ""));
     } else {
@@ -344,7 +382,7 @@ static int cmd_sequence(const std::string& json_file) {
                 need_upload = true;
             }
             if (action == "battery" || action == "fc_disconnect" || action == "thermal_zone" ||
-                action == "clear") {
+                action == "vio_quality" || action == "vio_clear" || action == "clear") {
                 need_fault = true;
             }
         }
@@ -406,6 +444,8 @@ static void print_usage(const char* argv0) {
               << "  fc_reconnect                  Restore FC link\n"
               << "  gcs_command <cmd> [p1 p2 p3]  Inject GCS command\n"
               << "  thermal_zone <0-3>            Override thermal zone\n"
+              << "  vio_quality <0-3>             Override VIO pose quality\n"
+              << "  vio_clear                     Clear VIO quality override\n"
               << "  mission_upload <json_file>     Upload new waypoints\n"
               << "  sequence <json_file>           Timed fault sequence\n"
               << "\nGCS commands: arm, disarm, takeoff, land, rtl,\n"
@@ -489,6 +529,18 @@ int main(int argc, char* argv[]) {
         int zone = 0;
         if (!safe_stoi(argv[2], zone, "thermal zone")) return 1;
         return cmd_thermal_zone(static_cast<uint8_t>(zone));
+
+    } else if (cmd == "vio_quality") {
+        if (argc < 3) {
+            print_err("Usage: fault_injector vio_quality <0-3>");
+            return 1;
+        }
+        int quality = 0;
+        if (!safe_stoi(argv[2], quality, "VIO quality")) return 1;
+        return cmd_vio_quality(quality);
+
+    } else if (cmd == "vio_clear") {
+        return cmd_vio_clear();
 
     } else if (cmd == "mission_upload") {
         if (argc < 3) {

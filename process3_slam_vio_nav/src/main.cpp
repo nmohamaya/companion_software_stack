@@ -31,6 +31,7 @@
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -262,7 +263,8 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu, ImuRingBuffer& imu_bu
 // ── Pose publisher thread ───────────────────────────────────
 static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose_pub,
                                   PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running,
-                                  int publish_rate_hz) {
+                                  int publish_rate_hz,
+                                  drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub) {
     spdlog::info("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
 
     auto hb = drone::util::ScopedHeartbeat("pose_publisher", true);
@@ -289,6 +291,14 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose
                 shm_pose.covariance[i] = p.covariance.data()[i];
             }
             shm_pose.quality = p.quality;
+
+            // Apply VIO quality override from fault injector (if active)
+            drone::ipc::FaultOverrides ovr{};
+            if (fault_sub.receive(ovr) && ovr.vio_quality >= 0) {
+                shm_pose.quality =
+                    static_cast<uint32_t>(std::clamp(ovr.vio_quality, int32_t{0}, int32_t{3}));
+            }
+
             pose_pub.publish(shm_pose);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));  // configurable
@@ -393,13 +403,17 @@ int main(int argc, char* argv[]) {
                      drone::ipc::topics::TRAJECTORY_CMD);
     }
 
+    // Subscribe to fault overrides for VIO quality injection
+    auto fault_sub =
+        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
+
     // Launch threads
     std::thread t_vio(vio_pipeline_thread, std::ref(*stereo_sub), std::ref(*vio),
                       std::ref(imu_ring_buffer), std::ref(pose_buffer), std::ref(g_running));
     std::thread t_imu(imu_reader_thread, std::ref(*imu), std::ref(imu_ring_buffer),
                       std::ref(g_running), imu_rate);
     std::thread t_publisher(pose_publisher_thread, std::ref(*pose_pub), std::ref(pose_buffer),
-                            std::ref(g_running), vio_rate);
+                            std::ref(g_running), vio_rate, std::ref(*fault_sub));
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;

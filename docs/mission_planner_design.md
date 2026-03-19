@@ -37,7 +37,7 @@ rate (default 10 Hz).
 - Path planning via pluggable strategy (A* or potential field)
 - Real-time obstacle avoidance via pluggable strategy (3D repulsive field or 2D potential field)
 - Polygon + altitude geofencing with ray-casting
-- 11-type fault evaluation with escalation-only policy
+- 10-type fault evaluation with escalation-only policy (12 with VIO health, PR #190)
 - GCS command handling (RTL, LAND, mid-flight mission upload)
 - HD-map static obstacle integration with camera cross-validation
 - Waypoint advancement with payload triggering
@@ -46,27 +46,44 @@ rate (default 10 Hz).
 
 ## Thread Architecture
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                   Mission Planner (P4)                   │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │            Main Planning Loop (10 Hz)              │  │
-│  │                                                    │  │
-│  │  1. Read inputs (pose, objects, FC state, health)  │  │
-│  │  2. Pose staleness check                           │  │
-│  │  3. HD-map camera cross-check                      │  │
-│  │  4. Geofence check                                 │  │
-│  │  5. Fault evaluation + escalation                  │  │
-│  │  6. GCS command handling                           │  │
-│  │  7. FSM state machine execution                    │  │
-│  │  8. Path planning + obstacle avoidance             │  │
-│  │  9. Publish trajectory, status, health             │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  ThreadHeartbeat: "planning_loop"                        │
-│  ThreadWatchdog + ThreadHealthPublisher                  │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Inputs["IPC Inputs"]
+        direction LR
+        POSE["/slam_pose\nPose + quality"]
+        OBJ["/detected_objects\nDetectedObjectList"]
+        FC["/fc_state\nFCState"]
+        GCS["/gcs_commands\nGCSCommand"]
+        SH["/system_health\nSystemHealth"]
+    end
+
+    subgraph P4["P4 Mission Planner — Single Thread, 10 Hz"]
+        direction TB
+        S1["1. Read inputs"]
+        S2["2. Pose staleness check"]
+        S3["3. HD-map cross-check"]
+        S4["4. Geofence check"]
+        S5["5. Fault evaluation\n+ escalation"]
+        S6["6. GCS command handling"]
+        S7["7. FSM state machine"]
+        S8["8. Path planning\n+ obstacle avoidance"]
+        S9["9. Publish outputs"]
+
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9
+    end
+
+    subgraph Outputs["IPC Outputs"]
+        direction LR
+        TRAJ["/trajectory_cmd"]
+        FCCMD["/fc_commands"]
+        STATUS["/mission_status"]
+        PAY["/payload_commands"]
+    end
+
+    Inputs --> S1
+    S9 --> Outputs
+
+    style P4 fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
 ```
 
 Single-threaded — all logic runs sequentially in one loop iteration. This eliminates
@@ -287,6 +304,9 @@ Selected via `mission_planner.obstacle_avoider.backend` config key.
 | `FAULT_FC_LINK_LOST` | FC disconnected > 3 s | LOITER → RTL (15 s) |
 | `FAULT_GEOFENCE_BREACH` | Position outside polygon or altitude band | RTL |
 
+> **Pending (PR #190, Issue #169):** Two additional VIO health faults:
+> `FAULT_VIO_DEGRADED` (Pose quality ≤ 1 → LOITER) and `FAULT_VIO_LOST` (Pose quality = 0 → RTL).
+
 ### Action Severity Ordering
 
 ```
@@ -297,7 +317,7 @@ NONE < WARN < LOITER < RTL < EMERGENCY_LAND
 
 ```
 evaluate()
-  ├─ Check 7 fault conditions → compute recommended_action
+  ├─ Check 10 fault conditions → compute recommended_action
   ├─ Apply high-water mark (never downgrade)
   └─ If LOITER for > loiter_escalation_timeout (30s) → escalate to RTL
 ```
@@ -477,7 +497,7 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | [`test_astar_planner.cpp`](../tests/test_astar_planner.cpp) | 23 | Grid, A* search, goal-snap, factory |
 | [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) | 12 | 3D repulsion, predictive, NaN, factory |
 | [`test_geofence.cpp`](../tests/test_geofence.cpp) | 21 | Polygon, altitude, margin, NaN/Inf |
-| [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 31 | All 11 faults, escalation, loiter timeout, FC contingency |
+| [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 31 | All 10 faults, escalation, loiter timeout, FC contingency |
 | [`test_static_obstacle_layer.cpp`](../tests/test_static_obstacle_layer.cpp) | 12 | Load empty/single/multi HD-map entries, cross-check 2-hit confirmation, low-quality pose skip, collision/no-collision, cooldown throttle, height check |
 | [`test_gcs_command_handler.cpp`](../tests/test_gcs_command_handler.cpp) | 6 | RTL/LAND/MISSION_UPLOAD dispatch, dedup by timestamp, unknown command ignored |
 | [`test_fault_response_executor.cpp`](../tests/test_fault_response_executor.cpp) | 7 | WARN (no FC cmd), LOITER, RTL, EMERGENCY_LAND, escalation-only policy, non-airborne skip, reset clears state |

@@ -63,8 +63,13 @@ flowchart TB
 
     subgraph TOOLS["Test Tooling"]
         FI["fault_injector CLI<br/><i>Writes to /fault_overrides<br/>sideband channel</i>"]
+<<<<<<< chore/deploy-script-cleanup
         SR["run_scenario.sh<br/><i>Launch → Inject → Verify</i>"]
         SCEN["Scenario Configs<br/><i>9 JSON scenario files</i>"]
+=======
+        SR["run_scenario.sh<br/><i>Launch → Inject → Verify<br/>Transport-aware (SHM / Zenoh)</i>"]
+        SCEN["Scenario Configs<br/><i>15 JSON scenario files</i>"]
+>>>>>>> main
     end
 
     subgraph EXTERNAL["External Systems (Tier 2 only)"]
@@ -396,6 +401,7 @@ struct alignas(64) ShmFaultOverrides {
 
 ## Test Scenarios
 
+<<<<<<< chore/deploy-script-cleanup
 Nine pre-defined scenarios in `config/scenarios/`:
 
 | # | Scenario | Tier | Gazebo | What it Tests |
@@ -409,6 +415,27 @@ Nine pre-defined scenarios in `config/scenarios/`:
 | 07 | Thermal Throttle | 1 | No | Zone escalation (0→1→2→3→0) |
 | 08 | Full Stack Stress | 1 | No | Concurrent faults, high rates |
 | 09 | Perception Tracking | 1 | No | ByteTrack multi-object tracking |
+=======
+Fifteen pre-defined scenarios in `config/scenarios/`:
+
+| # | Scenario | Tier | Gazebo | What it Tests |
+|---|---|---|---|---|
+| 01 | Nominal Mission | 1 | No | Basic 4-waypoint flight, landing, payload trigger |
+| 02 | Obstacle Avoidance | 2 | Yes | D* Lite through 6-obstacle field, ByteTrack tracker, color_contour detector |
+| 03 | Battery Degradation | 1 | No | 3-tier: WARN (30%) → RTL (20%) → EMERGENCY_LAND (10%) |
+| 04 | FC Link Loss | 1 | No | LOITER (3 s) → RTL contingency (15 s) |
+| 05 | Geofence Breach | 1 | No | Polygon violation (WP4 exits east boundary) → RTL |
+| 06 | Mission Upload | 1 | No | Mid-flight 3-waypoint upload via GCS |
+| 07 | Thermal Throttle | 1 | No | Zone escalation (0→1→2→3→0), thermal gates suspend P1/P2/P6 |
+| 08 | Full Stack Stress | 1 | No | Concurrent faults (battery + thermal + FC), high rates (60 Hz cam, 200 Hz VIO) |
+| 09 | Perception Tracking | 1 | No | ByteTrack two-stage association, low-confidence recovery |
+| 10 | GCS Pause/Resume | 1 | No | GCS MISSION_PAUSE → LOITER, resume → NAVIGATE |
+| 11 | GCS Abort | 1 | No | GCS MISSION_ABORT → RTL mid-flight |
+| 12 | GCS RTL | 1 | No | Direct GCS RTL command (separate path from fault RTL) |
+| 13 | GCS Land | 1 | No | GCS LAND at current position (not return-to-launch) |
+| 14 | Altitude Ceiling Breach | 1 | No | Waypoint above geofence ceiling (10 m > 8 m limit) → RTL |
+| 15 | FC Quick Recovery | 1 | No | FC link loss → quick reconnect before RTL timeout → resume |
+>>>>>>> main
 
 ### Scenario JSON Structure
 
@@ -438,6 +465,95 @@ Each scenario file contains:
     }
 }
 ```
+
+### Per-Scenario Backend Coverage
+
+Which pluggable backends are exercised by each scenario:
+
+| Scenario | Path Planner | Obstacle Avoider | Detector | Tracker | Fusion |
+|---|---|---|---|---|---|
+| 01 Nominal | `dstar_lite` | `potential_field_3d` | `simulated` | `sort` | `camera_only` |
+| 02 Obstacles | `dstar_lite` | `potential_field_3d` | `color_contour` | `bytetrack` | `camera_only` |
+| 03 Battery | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 04 FC Link | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 05 Geofence | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 06 Upload | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 07 Thermal | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 08 Stress | `dstar_lite` | `potential_field_3d` | `simulated` | `sort` | `camera_only` |
+| 09 Tracking | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 10 Pause | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 11 Abort | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 12 GCS RTL | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 13 GCS Land | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 14 Alt Breach | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 15 FC Recover | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+
+### Per-Scenario Fault Coverage
+
+Which fault types and FSM states are exercised:
+
+| Scenario | Fault Types Triggered | FSM States Exercised | GCS Commands |
+|---|---|---|---|
+| 01 Nominal | None | IDLE → PREFLIGHT → TAKEOFF → NAVIGATE → RTL → LAND → IDLE | — |
+| 02 Obstacles | None | IDLE → TAKEOFF → NAVIGATE → RTL → LAND | — |
+| 03 Battery | BATTERY_LOW, BATTERY_RTL, BATTERY_CRITICAL | TAKEOFF → NAVIGATE → RTL → EMERGENCY_LAND | — |
+| 04 FC Link | FC_LINK_LOST | NAVIGATE → LOITER → RTL | — |
+| 05 Geofence | GEOFENCE_BREACH | NAVIGATE → RTL | — |
+| 06 Upload | None | NAVIGATE (mid-flight waypoint change) | MISSION_UPLOAD |
+| 07 Thermal | THERMAL_WARNING, THERMAL_CRITICAL, PERCEPTION_DEAD | NAVIGATE → RTL | — |
+| 08 Stress | BATTERY_LOW, FC_LINK_LOST | NAVIGATE → LOITER | — |
+| 09 Tracking | None | NAVIGATE → RTL → LAND | — |
+| 10 Pause | None | NAVIGATE → LOITER → NAVIGATE | MISSION_PAUSE, MISSION_START |
+| 11 Abort | None | NAVIGATE → RTL | MISSION_ABORT |
+| 12 GCS RTL | None | NAVIGATE → RTL | RTL |
+| 13 GCS Land | None | NAVIGATE → LAND | LAND |
+| 14 Alt Breach | GEOFENCE_BREACH | NAVIGATE → RTL | — |
+| 15 FC Recover | FC_LINK_LOST | NAVIGATE → LOITER → NAVIGATE | MISSION_START |
+
+---
+
+## Simulation Coverage Gaps
+
+The following code paths are **not exercised** by any scenario and rely solely on
+unit tests for validation. This section is maintained to guide future scenario development.
+
+### Backends Never Tested in Scenarios
+
+| Backend | Type | Unit Tests | Why Not Covered |
+|---|---|---|---|
+| `astar` | Path planner | 20 tests | D* Lite supersedes it; consider a scenario variant |
+| `ukf` | Fusion engine | 6 tests | Camera-only is default; UKF needs thermal input for meaningful testing |
+| `yolov8` | Detector | 24 tests | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
+| SORT tracker | Tracker | 22 tests | Used passively as default, but no scenario validates its tracking quality specifically |
+
+### Fault Types Never Triggered
+
+| Fault | Description | Why Not Covered |
+|---|---|---|
+| `FAULT_POSE_STALE` | Pose age > 500 ms | Would require freezing VIO output; no injector command for this yet |
+| `FAULT_CRITICAL_PROCESS` | Critical process (comms/SLAM) dead | Would require killing a process mid-scenario; not supported by fault_injector |
+| `FAULT_VIO_DEGRADED` | VIO quality ≤ 1 | Pending PR #190; needs `vio_quality` override in fault_injector |
+| `FAULT_VIO_LOST` | VIO quality = 0 | Pending PR #190; planned as scenario 16 |
+
+### Subsystems With Partial Coverage
+
+| Subsystem | What Is Tested | What Is Not |
+|---|---|---|
+| **Geofence** | Polygon east boundary (05), altitude ceiling (14) | Altitude floor, complex polygons, warning margin alerts |
+| **Payload Manager (P6)** | Process alive, `payload_trigger` flag on waypoints | Actual gimbal commands, slew-rate limits, payload feedback (`/payload_status`) |
+| **Watchdog / Process Mgmt** | Thermal gates in scenario 07 | Thread heartbeat timeout, process restart cascade, backoff recovery |
+| **Camera → World rotation** | Implicit in all scenarios (fusion thread applies yaw) | Aggressive pitch/roll manoeuvres (yaw-only assumption not stress-tested) |
+| **IPC latency** | Normal rates + high-rate stress (08) | Clock jitter, out-of-order timestamps, message loss |
+| **FC link recovery** | Quick recovery before RTL timeout (15) | Recovery after RTL has already been commanded |
+
+### Tier 2 Limitations
+
+Only **scenario 02** runs on Gazebo SITL. The following fault scenarios would
+benefit from Gazebo validation but are currently Tier 1 only:
+
+- Battery degradation (03) — PX4 has its own battery model; Tier 1 uses injected values
+- FC link loss (04, 15) — real MAVLink timeouts differ from simulated stubs
+- Thermal throttle (07) — Gazebo has thermal camera plugins that could feed P2
 
 ### Manual Controls
 
@@ -508,6 +624,15 @@ companion_software_stack/
 │       ├── 07_thermal_throttle.json
 │       ├── 08_full_stack_stress.json
 │       ├── 09_perception_tracking.json
+<<<<<<< chore/deploy-script-cleanup
+=======
+│       ├── 10_gcs_pause_resume.json
+│       ├── 11_gcs_abort.json
+│       ├── 12_gcs_rtl.json
+│       ├── 13_gcs_land.json
+│       ├── 14_altitude_ceiling_breach.json
+│       ├── 15_fc_quick_recovery.json
+>>>>>>> main
 │       └── data/
 │           └── upload_waypoints.json
 ├── common/hal/include/hal/

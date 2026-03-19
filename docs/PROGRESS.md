@@ -2314,4 +2314,31 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-_Last updated after Improvement #48 (config consolidation, Issue #172). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 927 tests, 54 test suites, 97 scenario checks (8 Tier 1 + 1 Tier 2), 6 CI jobs._
+## Improvement #49 — Documentation Refresh (Issue #192)
+
+**Date:** 2026-03-19
+**Category:** Documentation
+**Issue:** [#192](https://github.com/nmohamaya/companion_software_stack/issues/192)
+
+**What:** Comprehensive documentation refresh across 8+ files: replaced ASCII architecture diagrams with mermaid diagrams (README.md, perception_design.md, mission_planner_design.md), updated stale metrics (test counts 927→1008, scenarios 9→15, fault types to 10), clarified P2 "fusion" terminology (monocular depth estimation, not multi-sensor fusion), documented Pose.quality field and VIO health → FaultManager integration, and added per-scenario backend/fault coverage mapping to SIMULATION_ARCHITECTURE.md with coverage gap analysis.
+
+**Why:** Documentation had drifted significantly from the codebase after 6+ months of development. Test counts, scenario counts, fault condition counts, and IPC backend references were stale across multiple docs. Architecture diagrams were hard-to-read ASCII art. The P2 "fusion engine" name was misleading (suggests multi-sensor fusion when it's actually monocular depth estimation). VIO health integration (Issue #169) was undocumented.
+
+**Files Modified:**
+- `README.md` — mermaid diagrams, updated FaultManager table, test/scenario counts
+- `docs/perception_design.md` — mermaid pipeline diagram, fusion terminology clarification
+- `docs/mission_planner_design.md` — mermaid thread diagram, fault count corrections, VIO health note
+- `docs/slam_vio_nav_design.md` — VIO health → FaultManager integration section
+- `docs/SIMULATION_ARCHITECTURE.md` — scenario table (15 entries), per-scenario backend/fault coverage tables, coverage gap analysis
+- `docs/ROADMAP.md` — metrics table updates (tests, scenarios, faults, IPC backend), footer
+- `docs/API.md` — Pose.quality field documentation, FaultManager fault count and evaluate() signature
+- `tests/TESTS.md` — test counts, scenario entries, module totals
+- `process2_perception/include/perception/ifusion_engine.h` — terminology note
+- `process2_perception/include/perception/fusion_engine.h` — class doc clarification
+- `process2_perception/src/fusion_engine.cpp` — header comment clarification
+
+**Test impact:** No new tests. Documentation-only changes (plus minor source comment updates).
+
+---
+
+_Last updated after Improvement #49 (documentation refresh, Issue #192). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1008 tests, 48 C++ test files, 150+ scenario checks across 15 scenarios (14 Tier 1 + 1 Tier 2), 9 CI jobs._

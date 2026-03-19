@@ -326,7 +326,8 @@ int main(int argc, char* argv[]) {
         // ── 5. Fault evaluate ───────────────────────────────
         auto fault = [&]() {
             drone::util::ScopedDiagTimer t(diag, "FaultEval");
-            return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns);
+            return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns,
+                                      pose.quality);
         }();
 
         // ── 6. Fault execute ────────────────────────────────
