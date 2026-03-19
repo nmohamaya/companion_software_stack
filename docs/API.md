@@ -293,7 +293,7 @@ Config-driven graceful degradation engine. Evaluates system health each loop tic
 | Type | Description |
 |------|-------------|
 | `FaultAction` | Enum: `NONE(0)` < `WARN(1)` < `LOITER(2)` < `RTL(3)` < `EMERGENCY_LAND(4)` |
-| `FaultType` | Bitmask enum: 10 fault conditions (critical process, pose stale, battery low/critical, thermal warn/critical, perception dead, FC link lost, geofence breach, loiter timeout) |
+| `FaultType` | Bitmask enum: 10 fault conditions (critical process, pose stale, battery low/critical/RTL, thermal warn/critical, perception dead, FC link lost, geofence breach) |
 | `FaultState` | Return type: `recommended_action`, `active_faults` bitmask, `reason` string |
 | `FaultConfig` | Thresholds: `pose_stale_timeout_ns`, `battery_warn_percent`, `battery_crit_percent`, `fc_link_lost_timeout_ns`, `loiter_escalation_timeout_ns` |
 

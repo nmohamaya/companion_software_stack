@@ -219,6 +219,20 @@ network configuration.
 
 ---
 
+## IPC — Validation
+
+### test_ipc_validation.cpp — 56 tests
+
+**What it tests:** `validate()` methods on all IPC structs — boundary checks for dimensions, NaN/Inf rejection, oversized payloads, and quality field range.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `IpcValidation` | 56 | VideoFrame (valid dims, zero width/height/channels, max exceeded), StereoFrame (valid, zero/max dims), DetectedObject (valid, NaN fields, negative confidence, label overflow), DetectedObjectList (valid, count exceeded, invalid nested object), Pose (valid, NaN position/quaternion, quality range), SystemHealth (valid fields), FCState (valid, NaN battery), TrajectoryCmd (valid, NaN velocity), ThreadHealth (valid, name overflow) |
+
+**Key files under test:** `ipc/ipc_types.h`
+
+---
+
 ## HAL — Simulated
 
 ### test_hal.cpp — 30 tests
@@ -959,6 +973,20 @@ processes — tested via their simulated backends.
 
 ---
 
+## Utility — sd_notify
+
+### test_sd_notify.cpp — 9 tests
+
+**What it tests:** `drone::systemd::*` sd_notify wrapper functions — verifies they don't crash regardless of build mode (with or without `-DENABLE_SYSTEMD=ON`), and validates watchdog environment variable parsing.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `SdNotifyWrapper` | 9 | `notify_ready()` no-crash, `notify_stopping()` no-crash, `notify_watchdog()` no-crash, `notify_status()` no-crash, `watchdog_enabled()` returns false outside systemd, `watchdog_usec()` returns 0 outside systemd, `WATCHDOG_USEC` env var parsing, `WATCHDOG_PID` mismatch handling, status string with special characters |
+
+**Key files under test:** `util/sd_notify.h`
+
+---
+
 ## Integration Tests
 
 ### test_zenoh_e2e.sh — 42 checks
@@ -1049,7 +1077,7 @@ via `fault_injector`, and verifies pass criteria against actual process logs.
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
-- `shm_segments_exist` — SHM segments that must be present at verification time
+- `shm_segments_exist` — SHM segments that must be present at verification time (legacy; skipped when `EFFECTIVE_IPC == zenoh`, which is the sole backend)
 
 All 15 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
 to catch unexpected collisions (Fix #40).

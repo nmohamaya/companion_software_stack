@@ -58,8 +58,8 @@ graph LR
     FC <--> P5
     GCS <--> P5
 
-    P1 -->|"/mission_cam"| P2
-    P1 -->|"/stereo_cam"| P3
+    P1 -->|"/drone_mission_cam"| P2
+    P1 -->|"/drone_stereo_cam"| P3
     P2 -->|"/detected_objects"| P4
     P3 -->|"/slam_pose"| P4
     P5 -->|"/fc_state"| P4
@@ -83,7 +83,7 @@ graph LR
 
 ### IPC Channel Map
 
-All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The backend is selected via `ipc_backend` in the JSON config (`"shm"` or `"zenoh"`). SHM uses POSIX segment names; Zenoh uses key expressions.
+All channels are abstracted behind `IPublisher<T>` / `ISubscriber<T>`. The sole backend is **Zenoh** (the legacy POSIX SHM backend was removed in Issue #126). Zenoh uses key expressions for topic addressing and provides zero-copy SHM for local transport plus network transport (UDP/TCP) for GCS communication.
 
 ```
  P1 ──▶ /drone_mission_cam ──────▶ P2           (Zenoh: drone/video/frame)
@@ -136,8 +136,8 @@ graph LR
 
     CamHW1["Mission\nCamera HW"] --> MCam
     CamHW2["Stereo\nCamera HW"] --> SCam
-    MCam -->|"/mission_cam\n~6.2 MB"| P2["P2 Perception"]
-    SCam -->|"/stereo_cam\n~614 KB"| P3["P3 SLAM/VIO"]
+    MCam -->|"/drone_mission_cam\n~6.2 MB"| P2["P2 Perception"]
+    SCam -->|"/drone_stereo_cam\n~614 KB"| P3["P3 SLAM/VIO"]
 
     style P1 fill:#1a3a1a,stroke:#27ae60,color:#e0e0e0
 ```
@@ -170,7 +170,7 @@ graph LR
         Track -->|"SPSC(4)"| Fuse
     end
 
-    MissionCam["/mission_cam\n1920x1080 RGB"] --> Infer
+    MissionCam["/drone_mission_cam\n1920x1080 RGB"] --> Infer
     Pose["/slam_pose\nfrom P3"] --> Fuse
     Fuse -->|"/detected_objects\n3D world frame"| P4["P4 Mission Planner"]
 
@@ -251,7 +251,7 @@ graph LR
         VIO --> PDB --> Pub
     end
 
-    StereoCam["/stereo_cam\n640x480 L+R"] --> VIO
+    StereoCam["/drone_stereo_cam\n640x480 L+R"] --> VIO
     IMU["IMU\n400 Hz"] --> VIO
     Pub -->|"/slam_pose\nPose + quality"| P4_5["P4, P5, P6"]
 

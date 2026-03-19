@@ -73,7 +73,7 @@ graph TD
         subgraph Input["Input Threads"]
             direction LR
             IMU_T["IMU Reader\n400 Hz\nIIMUSource::read()"]
-            Stereo["/stereo_cam\nfrom P1"]
+            Stereo["/drone_stereo_cam\nfrom P1"]
         end
 
         subgraph Pipeline["VIO Pipeline (~30 Hz)"]
