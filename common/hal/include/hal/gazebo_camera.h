@@ -177,7 +177,7 @@ private:
 
         if (src_ch == dst_ch && !is_bgr_format(pf)) {
             // Direct copy: L_INT8 or RGB_INT8
-            std::memcpy(back_buffer_.data(), src, dst_size);
+            std::copy(src, src + dst_size, back_buffer_.data());
         } else if (is_bgr_format(pf) && src_ch == 3) {
             // BGR → RGB
             convert_bgr_to_rgb(src, back_buffer_.data(), msg_w * msg_h);
@@ -189,7 +189,8 @@ private:
             convert_bgra_to_rgb(src, back_buffer_.data(), msg_w * msg_h);
         } else {
             // Fallback: just copy what fits
-            std::memcpy(back_buffer_.data(), src, std::min(dst_size, msg.data().size()));
+            const auto fallback_size = std::min(dst_size, msg.data().size());
+            std::copy(src, src + fallback_size, back_buffer_.data());
         }
 
         last_width_    = msg_w;

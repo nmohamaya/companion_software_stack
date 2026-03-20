@@ -74,7 +74,7 @@ static void mission_cam_thread(drone::hal::ICamera&                            c
         size_t copy_size = std::min(static_cast<size_t>(frame.height) * frame.stride,
                                     sizeof(shm_frame.pixel_data));
         if (frame.data) {
-            std::memcpy(shm_frame.pixel_data, frame.data, copy_size);
+            std::copy(frame.data, frame.data + copy_size, shm_frame.pixel_data);
         } else {
             ++null_data_count;
             ++drop_count;
@@ -188,8 +188,8 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
             continue;
         }
 
-        std::memcpy(shm_frame.left_data, left_frame.data, copy_size_left);
-        std::memcpy(shm_frame.right_data, right_frame.data, copy_size_right);
+        std::copy(left_frame.data, left_frame.data + copy_size_left, shm_frame.left_data);
+        std::copy(right_frame.data, right_frame.data + copy_size_right, shm_frame.right_data);
 
         publisher.publish(shm_frame);
 

@@ -18,6 +18,7 @@
 // This header is backend-agnostic — included unconditionally.
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -120,8 +121,10 @@ template<typename T>
     hdr.correlation_id = corr_id;
 
     std::vector<uint8_t> buf(sizeof(WireHeader) + sizeof(T));
-    std::memcpy(buf.data(), &hdr, sizeof(WireHeader));
-    std::memcpy(buf.data() + sizeof(WireHeader), &msg, sizeof(T));
+    const auto*          hdr_src = reinterpret_cast<const uint8_t*>(&hdr);
+    std::copy(hdr_src, hdr_src + sizeof(WireHeader), buf.data());
+    const auto* msg_src = reinterpret_cast<const uint8_t*>(&msg);
+    std::copy(msg_src, msg_src + sizeof(T), buf.data() + sizeof(WireHeader));
     return buf;
 }
 
@@ -140,8 +143,9 @@ template<typename T>
     static constexpr std::size_t kV1HeaderSize = 24;
     if (len < kV1HeaderSize) return false;
 
-    uint32_t magic = 0;
-    std::memcpy(&magic, data, sizeof(magic));
+    uint32_t magic     = 0;
+    auto*    magic_dst = reinterpret_cast<uint8_t*>(&magic);
+    std::copy(data, data + sizeof(magic), magic_dst);
     if (magic != kWireMagic) return false;
 
     uint8_t version = data[4];
@@ -152,7 +156,8 @@ template<typename T>
     if (len < header_size) return false;
 
     uint32_t payload_size = 0;
-    std::memcpy(&payload_size, data + 8, sizeof(payload_size));
+    auto*    payload_dst  = reinterpret_cast<uint8_t*>(&payload_size);
+    std::copy(data + 8, data + 8 + sizeof(payload_size), payload_dst);
     if (len < header_size + payload_size) return false;
 
     return true;
@@ -165,11 +170,13 @@ template<typename T>
     uint8_t    version = data[4];
     WireHeader hdr{};
     if (version >= 2) {
-        std::memcpy(static_cast<void*>(&hdr), data, sizeof(WireHeader));
+        auto* hdr_dst = reinterpret_cast<uint8_t*>(&hdr);
+        std::copy(data, data + sizeof(WireHeader), hdr_dst);
     } else {
         // v1 header: only 24 bytes — copy the first 24 and leave correlation_id = 0.
         static constexpr std::size_t kV1HeaderSize = 24;
-        std::memcpy(static_cast<void*>(&hdr), data, kV1HeaderSize);
+        auto*                        hdr_dst       = reinterpret_cast<uint8_t*>(&hdr);
+        std::copy(data, data + kV1HeaderSize, hdr_dst);
         hdr.correlation_id = 0;
     }
     return hdr;
@@ -194,7 +201,8 @@ template<typename T>
 
     // Use version-dependent header size for payload offset (v1 = 24, v2 = 32).
     const std::size_t hdr_size = (hdr.version >= 2) ? sizeof(WireHeader) : 24;
-    std::memcpy(&out, data + hdr_size, sizeof(T));
+    auto*             out_dst  = reinterpret_cast<uint8_t*>(&out);
+    std::copy(data + hdr_size, data + hdr_size + sizeof(T), out_dst);
     return true;
 }
 

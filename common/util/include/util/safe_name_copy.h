@@ -7,6 +7,7 @@
 // should use this function instead of raw strncpy/snprintf/memcpy.
 #pragma once
 
+#include <algorithm>
 #include <cstring>
 
 namespace drone::util {
@@ -31,7 +32,7 @@ namespace drone::util {
 template<std::size_t N>
 inline void safe_name_copy(char (&dst)[N], const char* src) {
     static_assert(N > 0, "Destination buffer must be non-empty");
-    std::memset(dst, 0, N);
+    std::fill_n(dst, N, '\0');
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-truncation"

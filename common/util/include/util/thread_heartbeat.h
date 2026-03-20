@@ -9,6 +9,7 @@
 
 #include "util/safe_name_copy.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -42,7 +43,7 @@ struct ThreadHeartbeat {
     // (guarded by initialized.load(acquire) in snapshot()).
     ThreadHeartbeat() = default;
     ThreadHeartbeat(const ThreadHeartbeat& other) : is_critical(other.is_critical) {
-        std::memcpy(name, other.name, sizeof(name));
+        std::copy(std::begin(other.name), std::end(other.name), std::begin(name));
         last_touch_ns.store(other.last_touch_ns.load(std::memory_order_relaxed),
                             std::memory_order_relaxed);
         initialized.store(other.initialized.load(std::memory_order_relaxed),
@@ -50,7 +51,7 @@ struct ThreadHeartbeat {
     }
     ThreadHeartbeat& operator=(const ThreadHeartbeat& other) {
         if (this != &other) {
-            std::memcpy(name, other.name, sizeof(name));
+            std::copy(std::begin(other.name), std::end(other.name), std::begin(name));
             last_touch_ns.store(other.last_touch_ns.load(std::memory_order_relaxed),
                                 std::memory_order_relaxed);
             is_critical = other.is_critical;
@@ -174,7 +175,7 @@ public:
     void reset_for_testing() {
         for (size_t i = 0; i < kMaxThreads; ++i) {
             beats_[i].initialized.store(false, std::memory_order_relaxed);
-            std::memset(beats_[i].name, 0, sizeof(beats_[i].name));
+            std::fill_n(beats_[i].name, sizeof(beats_[i].name), '\0');
             beats_[i].last_touch_ns.store(0, std::memory_order_relaxed);
             beats_[i].is_critical = false;
         }
