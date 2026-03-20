@@ -17,6 +17,7 @@
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_session.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -97,7 +98,8 @@ public:
                     }
 
                     ServiceResponse<Resp> resp;
-                    std::memcpy(&resp, bytes.data(), sizeof(ServiceResponse<Resp>));
+                    auto*                 resp_dst = reinterpret_cast<uint8_t*>(&resp);
+                    std::copy(bytes.data(), bytes.data() + sizeof(ServiceResponse<Resp>), resp_dst);
 
                     std::lock_guard<std::mutex> lock(responses->mutex);
                     responses->queue.push_back(resp);

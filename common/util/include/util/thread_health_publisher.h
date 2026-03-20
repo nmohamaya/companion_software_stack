@@ -44,7 +44,8 @@ public:
     /// watchdog stuck-thread detection, and publish the result.
     void publish_snapshot() {
         drone::ipc::ThreadHealth health{};
-        std::memcpy(health.process_name, process_name_, sizeof(health.process_name));
+        std::copy(std::begin(process_name_), std::end(process_name_),
+                  std::begin(health.process_name));
 
         // Snapshot registered heartbeats (stack-allocated — no heap)
         auto snap  = ThreadHeartbeatRegistry::instance().snapshot();
@@ -60,8 +61,8 @@ public:
             auto& dst = health.threads[i];
             auto& src = snap[i];
 
-            std::memset(dst.name, 0, sizeof(dst.name));
-            std::memcpy(dst.name, src.name, sizeof(dst.name));
+            std::fill_n(dst.name, sizeof(dst.name), '\0');
+            std::copy(std::begin(src.name), std::end(src.name), std::begin(dst.name));
             dst.critical = src.is_critical;
             dst.last_ns  = src.last_touch_ns.load(std::memory_order_relaxed);
 

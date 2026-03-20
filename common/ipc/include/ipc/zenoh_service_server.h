@@ -18,6 +18,7 @@
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_session.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -84,8 +85,9 @@ public:
                         return;
                     }
 
-                    Req req{};
-                    std::memcpy(&req, bytes.data(), sizeof(Req));
+                    Req   req{};
+                    auto* req_dst = reinterpret_cast<uint8_t*>(&req);
+                    std::copy(bytes.data(), bytes.data() + sizeof(Req), req_dst);
 
                     // Build envelope
                     ServiceEnvelope<Req> env;
