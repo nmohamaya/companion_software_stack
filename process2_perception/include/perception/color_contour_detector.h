@@ -140,13 +140,16 @@ public:
 
     /// Construct from config — reads HSV ranges, min_area, subsample and max_fps.
     explicit ColorContourDetector(const drone::Config& cfg) {
-        min_contour_area_      = cfg.get<int>("perception.detector.min_contour_area", 80);
-        max_detections_        = cfg.get<int>("perception.detector.max_detections", 20);
-        subsample_             = std::max(1, cfg.get<int>("perception.detector.subsample", 2));
-        max_fps_               = cfg.get<int>("perception.detector.max_fps", 0);
-        confidence_max_        = cfg.get<float>("perception.detector.confidence_max", 0.95f);
-        confidence_base_       = cfg.get<float>("perception.detector.confidence_base", 0.5f);
-        confidence_area_scale_ = cfg.get<float>("perception.detector.confidence_area_scale", 50.0f);
+        min_contour_area_ = cfg.get<int>("perception.detector.min_contour_area", 80);
+        max_detections_   = cfg.get<int>("perception.detector.max_detections", 20);
+        subsample_        = std::max(1, cfg.get<int>("perception.detector.subsample", 2));
+        max_fps_          = cfg.get<int>("perception.detector.max_fps", 0);
+        confidence_max_   = std::clamp(cfg.get<float>("perception.detector.confidence_max", 0.95f),
+                                       0.0f, 1.0f);
+        confidence_base_  = std::clamp(cfg.get<float>("perception.detector.confidence_base", 0.5f),
+                                       0.0f, 1.0f);
+        confidence_area_scale_ =
+            std::max(0.0f, cfg.get<float>("perception.detector.confidence_area_scale", 50.0f));
 
         // Try to read custom color ranges from config
         if (cfg.has("perception.detector.colors")) {

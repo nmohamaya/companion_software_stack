@@ -55,9 +55,14 @@ public:
                                                 config_.min_confidence);
         config_.prediction_dt_s = cfg.get<float>(
             "mission_planner.obstacle_avoidance.prediction_dt_s", config_.prediction_dt_s);
-        config_.max_age_ns = static_cast<uint64_t>(cfg.get<int>(
-                                 "mission_planner.obstacle_avoidance.max_age_ms", 500)) *
-                             1'000'000ULL;
+        const int default_max_age_ms = static_cast<int>(config_.max_age_ns / 1'000'000ULL);
+        int       max_age_ms         = cfg.get<int>("mission_planner.obstacle_avoidance.max_age_ms",
+                                                    default_max_age_ms);
+        if (max_age_ms < 0) {
+            spdlog::warn("[ObstacleAvoider3D] max_age_ms ({}) < 0, clamping to 0", max_age_ms);
+            max_age_ms = 0;
+        }
+        config_.max_age_ns = static_cast<uint64_t>(max_age_ms) * 1'000'000ULL;
     }
 
     drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
@@ -148,11 +153,14 @@ namespace drone::planner {
 
 inline std::unique_ptr<IObstacleAvoider> create_obstacle_avoider(
     const std::string& backend = "potential_field", float influence_radius = 5.0f,
-    float repulsive_gain = 2.0f) {
+    float repulsive_gain = 2.0f, const drone::Config* cfg = nullptr) {
     if (backend == "potential_field") {
         return std::make_unique<PotentialFieldAvoider>(influence_radius, repulsive_gain);
     }
     if (backend == "3d" || backend == "obstacle_avoider_3d" || backend == "potential_field_3d") {
+        if (cfg) {
+            return std::make_unique<ObstacleAvoider3D>(*cfg);
+        }
         return std::make_unique<ObstacleAvoider3D>(influence_radius, repulsive_gain);
     }
     throw std::runtime_error("Unknown obstacle avoider: " + backend);

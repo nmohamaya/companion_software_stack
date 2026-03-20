@@ -273,10 +273,10 @@ private:
 
             // Fallback: nearest horizontal free cell
             if (!snapped) {
-                float best_dist_sq = 1e9f;
-                for (int dy = -config_.snap_search_radius; dy <= config_.snap_search_radius; ++dy) {
-                    for (int dx = -config_.snap_search_radius; dx <= config_.snap_search_radius;
-                         ++dx) {
+                float     best_dist_sq = 1e9f;
+                const int radius       = std::clamp(config_.snap_search_radius, 0, 100);
+                for (int dy = -radius; dy <= radius; ++dy) {
+                    for (int dx = -radius; dx <= radius; ++dx) {
                         const float dist_sq = static_cast<float>(dx * dx + dy * dy);
                         if (dist_sq == 0.0f || dist_sq >= best_dist_sq) continue;
                         GridCell c{orig_goal.x + dx, orig_goal.y + dy, orig_goal.z};

@@ -193,7 +193,7 @@ int main(int argc, char* argv[]) {
     auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
                                                 "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
-                                                           repulsive_gain);
+                                                           repulsive_gain, &cfg);
     spdlog::info("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
