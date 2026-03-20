@@ -222,13 +222,13 @@ network configuration.
 
 ## IPC — Validation
 
-### test_ipc_validation.cpp — 56 tests
+### test_ipc_validation.cpp — 54 tests
 
 **What it tests:** `validate()` methods on all IPC structs — boundary checks for dimensions, NaN/Inf rejection, oversized payloads, and quality field range.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `IpcValidation` | 56 | VideoFrame (valid dims, zero width/height/channels, max exceeded), StereoFrame (valid, zero/max dims), DetectedObject (valid, NaN fields, negative confidence, label overflow), DetectedObjectList (valid, count exceeded, invalid nested object), Pose (valid, NaN position/quaternion, quality range), SystemHealth (valid fields), FCState (valid, NaN battery), TrajectoryCmd (valid, NaN velocity), ThreadHealth (valid, name overflow) |
+| `IpcValidation` | 54 | VideoFrame (valid dims, zero width/height/channels, max exceeded), StereoFrame (valid, zero/max dims), DetectedObject (valid, NaN fields, negative confidence, label overflow), DetectedObjectList (valid, count exceeded, invalid nested object), Pose (valid, NaN position/quaternion, quality range), SystemHealth (valid fields), FCState (valid, NaN battery), TrajectoryCmd (valid, NaN velocity), ThreadHealth (valid, name overflow) |
 
 **Key files under test:** `ipc/ipc_types.h`
 
@@ -336,16 +336,16 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 14 tests
+### test_fusion_engine.cpp — 13 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF),
-IFusionEngine factory, thermal measurement update.
+IFusionEngine factory.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `FusionEngineTest` | 4 | Empty inputs → empty output, camera-only fusion, depth estimation from bbox height, multiple tracked objects |
 | `FusionFactoryTest` | 3 | Factory creates `camera_only` and `ukf` backends, unknown backend throws |
-| `UKFFusionEngineTest` | 6 | Empty input, 3D position estimate, covariance convergence, thermal flag, reset clears state, name |
+| `UKFFusionEngineTest` | 5 | Empty input, 3D position estimate, covariance convergence, reset clears state, name |
 | `CameraOnlyFusionEngineTest` | 1 | Name returns "camera_only" |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`

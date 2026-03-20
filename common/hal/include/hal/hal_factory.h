@@ -27,7 +27,7 @@
 #include "hal/simulated_gimbal.h"
 #include "hal/simulated_imu.h"
 #include "hal/simulated_radar.h"
-#include "hal/simulated_thermal_camera.h"
+
 
 // Optional backends — only included when the dependency is found by CMake
 #ifdef HAVE_MAVSDK
@@ -68,22 +68,6 @@ inline std::unique_ptr<ICamera> create_camera(const drone::Config& cfg,
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
 
     throw std::runtime_error("[HAL] Unknown camera backend: " + backend);
-}
-
-/// Create a thermal camera backend from config.
-/// @param cfg      Loaded configuration
-/// @param section  Config path prefix (e.g. "perception.thermal_cam")
-inline std::unique_ptr<ICamera> create_thermal_camera(const drone::Config& cfg,
-                                                      const std::string&   section) {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
-    spdlog::info("[HAL] Creating thermal camera '{}' backend='{}'", section, backend);
-
-    if (backend == "simulated") {
-        return std::make_unique<SimulatedThermalCamera>();
-    }
-    // Future: if (backend == "flir_boson") return std::make_unique<FlirBosonCamera>();
-
-    throw std::runtime_error("[HAL] Unknown thermal camera backend: " + backend);
 }
 
 /// Create a flight controller link from config.

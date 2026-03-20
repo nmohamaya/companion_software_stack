@@ -45,7 +45,6 @@ flowchart TB
         subgraph SIMULATED["Simulated Backends (Tier 1)"]
             SC["SimulatedCamera<br/><i>Synthetic gradient RGB</i>"]
             SI["SimulatedIMU<br/><i>Gaussian noise accel+gyro</i>"]
-            ST["SimulatedThermalCamera<br/><i>Warm blob generation</i>"]
             SF["SimulatedFCLink<br/><i>Battery drain, stub FC</i>"]
             SG["SimulatedGCSLink<br/><i>UDP stub</i>"]
             SGim["SimulatedGimbal<br/><i>Slew-rate limited</i>"]
@@ -520,7 +519,7 @@ unit tests for validation. This section is maintained to guide future scenario d
 
 | Backend | Type | Unit Tests | Why Not Covered |
 |---|---|---|---|
-| `ukf` | Fusion engine | 6 tests | Camera-only is default; UKF needs thermal input for meaningful testing |
+| `ukf` | Fusion engine | 5 tests | Camera-only is default; UKF provides temporal smoothing but needs scenario validation |
 | `yolov8` | Detector | 24 tests | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
 
 ### Backend Coverage Recommendations
@@ -570,7 +569,7 @@ benefit from Gazebo validation but are currently Tier 1 only:
 
 - Battery degradation (03) — PX4 has its own battery model; Tier 1 uses injected values
 - FC link loss (04, 15) — real MAVLink timeouts differ from simulated stubs
-- Thermal throttle (07) — Gazebo has thermal camera plugins that could feed P2
+- Thermal throttle (07) — PX4 has thermal zone models; Tier 1 uses injected values
 
 ### Manual Controls
 

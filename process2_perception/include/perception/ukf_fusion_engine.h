@@ -1,8 +1,7 @@
 // process2_perception/include/perception/ukf_fusion_engine.h
 // Unscented Kalman Filter fusion engine.
 // Per-object UKF state: [x, y, z, vx, vy, vz].
-// Measurement models: camera (2D bbox → bearing + depth estimate),
-//                     thermal (bearing confirmation + heat confidence).
+// Measurement model: camera (2D bbox → bearing + depth estimate).
 // Phase 1C (Issue #114).
 #pragma once
 #include "perception/ifusion_engine.h"
@@ -35,9 +34,6 @@ public:
     /// Update with camera measurement (bearing + depth estimate).
     void update_camera(const TrackedObject& trk, float estimated_depth);
 
-    /// Update with thermal confirmation (reduces covariance).
-    void update_thermal(float thermal_confidence);
-
     /// Get current 3D position estimate.
     [[nodiscard]] Eigen::Vector3f position() const;
 
@@ -49,7 +45,6 @@ public:
 
     uint32_t track_id{0};
     uint32_t age{0};
-    bool     has_thermal{false};
 
 private:
     /// Generate sigma points using unscented transform.
@@ -68,21 +63,17 @@ private:
 
 /// UKF-based fusion engine.
 /// Maintains per-object UKF instances, matched by track_id.
-/// Supports camera + thermal measurement updates.
 class UKFFusionEngine : public IFusionEngine {
 public:
     explicit UKFFusionEngine(const CalibrationData& calib);
 
     FusedObjectList fuse(const TrackedObjectList& tracked) override;
-    void            set_thermal_detections(const Detection2DList& thermal) override;
     std::string     name() const override { return "ukf"; }
     void            reset() override;
 
 private:
     CalibrationData                         calib_;
     std::unordered_map<uint32_t, ObjectUKF> filters_;  // track_id → UKF
-    Detection2DList                         thermal_dets_;
-    bool                                    has_thermal_frame_{false};
 
     float estimate_depth(const TrackedObject& trk) const;
 };

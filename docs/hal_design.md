@@ -291,7 +291,6 @@ namespace drone::hal {
 
 // Video cameras
 std::unique_ptr<ICamera>   create_camera(const Config& cfg, const std::string& section);
-std::unique_ptr<ICamera>   create_thermal_camera(const Config& cfg, const std::string& section);
 
 // Flight controller / GCS links
 std::unique_ptr<IFCLink>   create_fc_link(const Config& cfg, const std::string& section);

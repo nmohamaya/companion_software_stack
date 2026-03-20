@@ -22,7 +22,7 @@
 | Process | Simulation Maturity | Real Hardware Maturity |
 |---------|--------------------|-----------------------|
 | P1 Video Capture | Full (Gazebo cameras) | 0% — no V4L2, no ISP |
-| P2 Perception | High (YOLOv8 CPU, ByteTrack tracker, UKF) | 10% — no TensorRT, no thermal |
+| P2 Perception | High (YOLOv8 CPU, ByteTrack tracker, UKF) | 10% — no TensorRT, no radar |
 | P3 SLAM/VIO/Nav | Medium (IMU preintegrator real, rest simulated) | 5% — no real VO, no factor graph |
 | P4 Mission Planner | High (D* Lite, 3D avoider, FSM, geofence) | 95% — hardware-agnostic |
 | P5 Comms | High (MAVSDK FC link works) | 70% — serial config exists, no real GCS |
@@ -82,7 +82,7 @@ All backends selected at runtime via JSON config + factory functions:
 | **Multi-sensor fusion** | **EKF fusion** with camera + ultrasonic range (TFMini) | Monocular depth is unreliable. A $15 rangefinder gives ground-truth depth for the primary threat axis |
 | **Temporal model** | **Object velocity estimation** via track history + Kalman prediction | Velocity-obstacle (VO) avoidance reacts to where objects *will be* |
 | **Segmentation fallback** | **MobileSAM** or **FastSAM** as `IDetector` backend | Detects novel obstacles (wires, branches) that YOLO misses |
-| **Thermal** | Wire existing UKF thermal path + FLIR Lepton 3.5 | Already coded but not connected. Thermal + RGB fusion is rare in open-source |
+| **Radar** | Integrate mmWave radar (e.g. TI AWR1843) as new sensor input to UKF | Provides velocity + range in all weather; complements camera for robust obstacle detection |
 
 **Interface changes needed:** Zero. `IDetector`, `ITracker`, `IFusionEngine` already exist. Each is a new concrete implementation.
 
@@ -278,7 +278,7 @@ Add:
 | #128 | Optimize perception latency | P0 | Yes |
 | ~~NEW~~ | ~~ByteTrack tracker upgrade~~ (done — Issue #163, SORT removed #205) | — | — |
 | NEW | Rangefinder depth fusion in UKF | P1 | Yes |
-| NEW | Ensemble detector (YOLO + thermal + contour) | P2 | Yes |
+| NEW | Ensemble detector (YOLO + radar + contour) | P2 | Yes |
 
 ### Phase 11: GPS-Denied Navigation
 
