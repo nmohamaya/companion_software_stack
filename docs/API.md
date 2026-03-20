@@ -301,9 +301,9 @@ Pose p = fe->process_frame(stereo_frame);
 
 | Implementation | Description |
 |----------------|-------------|
-| `PotentialFieldPlanner` | Attractive force: normalized direction × min(speed, distance) |
+| `DStarLitePlanner` | 3D incremental D* Lite search with obstacle-aware routing, EMA smoothing |
 
-**Factory:** `create_path_planner(backend)` — backends: `"potential_field"`
+**Factory:** `create_path_planner(backend)` — backends: `"dstar_lite"`
 
 ---
 
@@ -319,9 +319,9 @@ Pose p = fe->process_frame(stereo_frame);
 
 | Implementation | Parameters | Description |
 |----------------|-----------|-------------|
-| `PotentialFieldAvoider` | `influence_radius` (default 5.0m), `repulsive_gain` (default 2.0) | Inverse-square repulsive forces within influence radius |
+| `ObstacleAvoider3D` | `influence_radius` (default 5.0m), `repulsive_gain` (default 2.0) | Full 3D repulsive field with velocity prediction, NaN guards, per-axis clamping |
 
-**Factory:** `create_obstacle_avoider(backend, influence_radius, repulsive_gain)` — backends: `"potential_field"`
+**Factory:** `create_obstacle_avoider(backend, influence_radius, repulsive_gain)` — backends: `"3d"`, `"obstacle_avoider_3d"`, `"potential_field_3d"`
 
 ---
 
@@ -677,9 +677,9 @@ auto create_message_bus(const drone::Config& cfg) {
 Strategy interfaces are created via factories, typically from config:
 
 ```cpp
-auto planner = create_path_planner(cfg.get("planner.backend", "potential_field"));
+auto planner = create_path_planner(cfg.get("planner.backend", "dstar_lite"));
 auto avoider = create_obstacle_avoider(
-    cfg.get("avoider.backend", "potential_field"),
+    cfg.get("avoider.backend", "potential_field_3d"),
     cfg.get("avoider.influence_radius", 5.0f),
     cfg.get("avoider.repulsive_gain",   2.0f));
 ```

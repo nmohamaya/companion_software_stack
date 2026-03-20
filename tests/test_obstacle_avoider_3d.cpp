@@ -222,6 +222,12 @@ TEST(ObstacleAvoiderFactory, AlternateNameRegistered) {
     EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
 }
 
+TEST(ObstacleAvoiderFactory, PotentialField3DRegistered) {
+    auto avoider = create_obstacle_avoider("potential_field_3d");
+    EXPECT_NE(avoider, nullptr);
+    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+}
+
 TEST(ObstacleAvoiderFactory, UnknownThrows) {
     EXPECT_THROW(create_obstacle_avoider("nonexistent"), std::runtime_error);
 }

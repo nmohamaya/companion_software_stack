@@ -1,6 +1,5 @@
 // tests/test_kalman_tracker.cpp
-// Unit tests for KalmanBoxTracker, HungarianSolver (Munkres), SortTracker, ITracker.
-#include "perception/itracker.h"
+// Unit tests for KalmanBoxTracker and HungarianSolver (Munkres).
 #include "perception/kalman_tracker.h"
 
 #include <gtest/gtest.h>
@@ -163,59 +162,6 @@ TEST(HungarianSolverTest, TotalCostInitializedToZero) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SortTracker / MultiObjectTracker tests
-// ═══════════════════════════════════════════════════════════
-
-TEST(MultiObjectTrackerTest, EmptyDetections) {
-    MultiObjectTracker tracker;
-    Detection2DList    empty;
-    auto               result = tracker.update(empty);
-    EXPECT_TRUE(result.objects.empty());
-}
-
-TEST(MultiObjectTrackerTest, SingleDetectionBecomesTrack) {
-    MultiObjectTracker tracker;
-
-    // Feed the same detection 3 times — tracker should confirm after 3 hits
-    for (int i = 0; i < 3; ++i) {
-        Detection2DList det_list;
-        det_list.timestamp_ns   = static_cast<uint64_t>(i) * 33000000;
-        det_list.frame_sequence = static_cast<uint64_t>(i);
-        det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON,
-                                       det_list.timestamp_ns, det_list.frame_sequence});
-
-        auto result = tracker.update(det_list);
-        if (i < 2) {
-            // Not yet confirmed (needs >= 3 hits)
-            EXPECT_TRUE(result.objects.empty()) << "Frame " << i;
-        } else {
-            // Should be confirmed now
-            ASSERT_EQ(result.objects.size(), 1u) << "Frame " << i;
-            EXPECT_EQ(result.objects[0].class_id, ObjectClass::PERSON);
-        }
-    }
-}
-
-TEST(MultiObjectTrackerTest, StaleTracksRemoved) {
-    MultiObjectTracker tracker;
-
-    // Create a track
-    Detection2DList det_list;
-    det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0});
-
-    (void)tracker.update(det_list);  // side-effect: creates initial track
-
-    // Now send empty detections for 11+ frames — track should be pruned
-    Detection2DList empty;
-    for (int i = 0; i < 15; ++i) {
-        (void)tracker.update(empty);  // side-effect: ages tracks
-    }
-
-    auto result = tracker.update(empty);
-    EXPECT_TRUE(result.objects.empty());
-}
-
-// ═══════════════════════════════════════════════════════════
 // Hungarian optimality tests (Munkres vs greedy)
 // ═══════════════════════════════════════════════════════════
 
@@ -261,52 +207,4 @@ TEST(HungarianSolverTest, MoreColsThanRows) {
     EXPECT_EQ(result.assignment[1], 2);  // cost 2
     EXPECT_DOUBLE_EQ(result.total_cost, 3.0);
     EXPECT_EQ(result.unmatched_cols.size(), 1u);  // col 0 unmatched
-}
-
-// ═══════════════════════════════════════════════════════════
-// SortTracker name() + reset() tests
-// ═══════════════════════════════════════════════════════════
-
-TEST(SortTrackerTest, NameReturnsSort) {
-    SortTracker tracker;
-    EXPECT_EQ(tracker.name(), "sort");
-}
-
-TEST(SortTrackerTest, ResetClearsState) {
-    SortTracker tracker;
-
-    // Feed a detection to create tracks
-    Detection2DList det_list;
-    det_list.detections.push_back({100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0});
-    (void)tracker.update(det_list);
-
-    // Internal state should have tracks now — reset clears it
-    tracker.reset();
-
-    // After reset, feeding the same detection should create a NEW track (fresh ID)
-    auto result = tracker.update(det_list);
-    // No confirmed tracks yet (needs 3 hits) — but at least it didn't crash
-    EXPECT_TRUE(result.objects.empty());
-
-    // Feed 2 more to confirm
-    for (int i = 0; i < 2; ++i) {
-        result = tracker.update(det_list);
-    }
-    ASSERT_EQ(result.objects.size(), 1u);
-    // After reset, next_id_ starts back at 1
-    EXPECT_EQ(result.objects[0].track_id, 1u);
-}
-
-// ═══════════════════════════════════════════════════════════
-// ITracker factory tests
-// ═══════════════════════════════════════════════════════════
-
-TEST(TrackerFactoryTest, CreateSortTracker) {
-    auto tracker = create_tracker("sort", nullptr);
-    ASSERT_NE(tracker, nullptr);
-    EXPECT_EQ(tracker->name(), "sort");
-}
-
-TEST(TrackerFactoryTest, UnknownBackendThrows) {
-    EXPECT_THROW(create_tracker("nonexistent", nullptr), std::invalid_argument);
 }

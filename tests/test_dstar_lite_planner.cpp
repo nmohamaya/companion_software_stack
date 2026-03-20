@@ -115,6 +115,12 @@ TEST(GridCellHashTest, SameCellSameHash) {
     EXPECT_EQ(h({3, 4, 5}), h({3, 4, 5}));
 }
 
+TEST(PathPlannerFactory, FactoryCreatesDStarLite) {
+    auto planner = create_path_planner("dstar_lite");
+    EXPECT_NE(planner, nullptr);
+    EXPECT_EQ(planner->name(), "DStarLitePlanner");
+}
+
 TEST(PathPlannerFactory, UnknownThrows) {
     EXPECT_THROW(create_path_planner("nonexistent"), std::runtime_error);
 }

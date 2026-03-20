@@ -22,7 +22,7 @@
 | Process | Simulation Maturity | Real Hardware Maturity |
 |---------|--------------------|-----------------------|
 | P1 Video Capture | Full (Gazebo cameras) | 0% — no V4L2, no ISP |
-| P2 Perception | High (YOLOv8 CPU, SORT tracker, UKF) | 10% — no TensorRT, no thermal |
+| P2 Perception | High (YOLOv8 CPU, ByteTrack tracker, UKF) | 10% — no TensorRT, no thermal |
 | P3 SLAM/VIO/Nav | Medium (IMU preintegrator real, rest simulated) | 5% — no real VO, no factor graph |
 | P4 Mission Planner | High (D* Lite, 3D avoider, FSM, geofence) | 95% — hardware-agnostic |
 | P5 Comms | High (MAVSDK FC link works) | 70% — serial config exists, no real GCS |
@@ -45,8 +45,8 @@
 | P3 | `IVisualFrontend` | 2 | SimulatedVisualFrontend | ORB-SLAM3 (TODO) | GazeboVisualFrontend |
 | P3 | `IStereoMatcher` | 1 | SimulatedStereoMatcher | Real (TODO) | — |
 | P3 | `IVIOBackend` | 2 | SimulatedVIOBackend | MSCKF (TODO) | GazeboVIOBackend |
-| P4 | `IPathPlanner` | 2 | PotentialFieldPlanner | DStarLitePlanner | — |
-| P4 | `IObstacleAvoider` | 2 | PotentialFieldAvoider | ObstacleAvoider3D | — |
+| P4 | `IPathPlanner` | 1 | — | DStarLitePlanner | — |
+| P4 | `IObstacleAvoider` | 1 | — | ObstacleAvoider3D | — |
 | P7 | `IProcessMonitor` | 1 | — | LinuxProcessMonitor | — |
 | IPC | `IPublisher<T>` | 2 | — | ShmPublisher | ZenohPublisher |
 | IPC | `ISubscriber<T>` | 2 | — | ShmSubscriber | ZenohSubscriber |
@@ -78,7 +78,7 @@ All backends selected at runtime via JSON config + factory functions:
 | Capability | Implementation | Why It Stands Out |
 |------------|---------------|-------------------|
 | **GPU Inference** | TensorRT YOLOv8n/YOLOv11n (FP16) | 5-10ms on Orin NX vs 200ms CPU. Non-negotiable for real-time |
-| **Tracking** | Upgrade SORT → **ByteTrack** or **BoT-SORT** | ByteTrack tracks low-confidence detections that SORT drops. BoT-SORT adds Re-ID for occlusion recovery |
+| **Tracking** | ByteTrack done (Issue #163); consider **BoT-SORT** for Re-ID | BoT-SORT adds appearance Re-ID for occlusion recovery beyond IoU matching |
 | **Multi-sensor fusion** | **EKF fusion** with camera + ultrasonic range (TFMini) | Monocular depth is unreliable. A $15 rangefinder gives ground-truth depth for the primary threat axis |
 | **Temporal model** | **Object velocity estimation** via track history + Kalman prediction | Velocity-obstacle (VO) avoidance reacts to where objects *will be* |
 | **Segmentation fallback** | **MobileSAM** or **FastSAM** as `IDetector` backend | Detects novel obstacles (wires, branches) that YOLO misses |
@@ -276,7 +276,7 @@ Add:
 |-------|-------|----------|--------------|
 | #33 | TensorRT YOLOv8 detector backend | P0 | Partial |
 | #128 | Optimize perception latency | P0 | Yes |
-| NEW | ByteTrack/BoT-SORT tracker upgrade | P1 | Yes |
+| ~~NEW~~ | ~~ByteTrack tracker upgrade~~ (done — Issue #163, SORT removed #205) | — | — |
 | NEW | Rangefinder depth fusion in UKF | P1 | Yes |
 | NEW | Ensemble detector (YOLO + thermal + contour) | P2 | Yes |
 
