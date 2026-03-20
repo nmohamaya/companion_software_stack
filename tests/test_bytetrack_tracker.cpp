@@ -252,36 +252,8 @@ TEST(ByteTrackOcclusion, OcclusionRecovery) {
     EXPECT_EQ(out.objects[0].track_id, original_id);
 }
 
-TEST(ByteTrackOcclusion, SortLosesTrackAfterGap) {
-    // SORT has no low-conf recovery — after enough missed frames the track is
-    // pruned and a returning detection gets a new ID.  This documents the
-    // behavioral contrast with ByteTrack's Stage 2 recovery above.
-    SortTracker tracker;
-
-    // Phase 1: 3 frames to confirm
-    auto det = make_det(100, 100, 50, 50, 0.9f);
-    (void)tracker.update(make_det_list({det}));
-    (void)tracker.update(make_det_list({make_det(102, 102, 50, 50, 0.9f)}));
-    auto out = tracker.update(make_det_list({make_det(104, 104, 50, 50, 0.9f)}));
-    ASSERT_EQ(out.objects.size(), 1u);
-    uint32_t original_id = out.objects[0].track_id;
-
-    // Phase 2: 12 empty frames — exceeds SORT's max_age (10), track is pruned
-    for (int i = 0; i < 12; ++i) {
-        (void)tracker.update(make_det_list({}));
-    }
-
-    // Phase 3: detection returns — must get a NEW track ID (old was pruned)
-    // Need 3 frames to re-confirm
-    (void)tracker.update(make_det_list({make_det(114, 114, 50, 50, 0.9f)}));
-    (void)tracker.update(make_det_list({make_det(116, 116, 50, 50, 0.9f)}));
-    out = tracker.update(make_det_list({make_det(118, 118, 50, 50, 0.9f)}));
-    ASSERT_EQ(out.objects.size(), 1u);
-    EXPECT_NE(out.objects[0].track_id, original_id) << "SORT should have lost the original track";
-}
-
 // ═══════════════════════════════════════════════════════════
-// Config & factory (4 tests)
+// Config & factory (5 tests)
 // ═══════════════════════════════════════════════════════════
 
 TEST(ByteTrackConfig, DefaultParams) {
@@ -321,4 +293,8 @@ TEST(ByteTrackConfig, FactoryCreatesBytetrack) {
     auto out = tracker->update(make_det_list({make_det(100, 100, 50, 50, 0.9f)}));
     // First frame, min_hits=3 default → no confirmed tracks yet
     EXPECT_EQ(out.objects.size(), 0u);
+}
+
+TEST(ByteTrackConfig, UnknownBackendThrows) {
+    EXPECT_THROW(create_tracker("nonexistent", nullptr), std::invalid_argument);
 }

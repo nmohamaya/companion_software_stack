@@ -236,8 +236,8 @@ Backend selection is **config-driven**. All backends read from a single JSON:
         }
     },
     "mission_planner": {
-        "path_planner":      { "backend": "potential_field" },  // or "dstar_lite"
-        "obstacle_avoider":  { "backend": "potential_field" },  // or "potential_field_3d"
+        "path_planner":      { "backend": "dstar_lite" },
+        "obstacle_avoider":  { "backend": "potential_field_3d" },
         "geofence": {
             "polygon": [
                 {"x": -50, "y": -50},
@@ -468,22 +468,22 @@ Which pluggable backends are exercised by each scenario:
 
 | Scenario | Path Planner | Obstacle Avoider | Detector | Tracker | Fusion |
 |---|---|---|---|---|---|
-| 01 Nominal | `dstar_lite` | `potential_field_3d` | `simulated` | `sort` | `camera_only` |
+| 01 Nominal | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 02 Obstacles | `dstar_lite` | `potential_field_3d` | `color_contour` | `bytetrack` | `camera_only` |
-| 03 Battery | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 04 FC Link | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 05 Geofence | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 06 Upload | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 07 Thermal | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 08 Stress | `dstar_lite` | `potential_field_3d` | `simulated` | `sort` | `camera_only` |
+| 03 Battery | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 04 FC Link | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 05 Geofence | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 06 Upload | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 07 Thermal | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 08 Stress | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 09 Tracking | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
-| 10 Pause | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 11 Abort | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 12 GCS RTL | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 13 GCS Land | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 14 Alt Breach | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 15 FC Recover | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 16 VIO Failure | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 10 Pause | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 11 Abort | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 12 GCS RTL | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 13 GCS Land | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 14 Alt Breach | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 15 FC Recover | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 16 VIO Failure | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 
 ### Per-Scenario Fault Coverage
 
@@ -527,18 +527,16 @@ unit tests for validation. This section is maintained to guide future scenario d
 Per the "maximise stack coverage in simulation" principle, most scenarios should
 exercise the same backends that would run on real hardware:
 
-- **Tracker**: 14 of 16 scenarios use the SORT tracker (default), but real hardware
-  would use ByteTrack. Consider switching the default tracker to `bytetrack` in
-  `default.json`, or at minimum switching scenarios 01, 08, and other navigation-heavy
-  scenarios to ByteTrack. SORT has 22 unit tests but no scenario validates its
-  tracking quality specifically.
-- **Path planner**: 11 scenarios use `potential_field` (the simple gradient planner).
-  Real hardware would use `dstar_lite` for proper obstacle-aware routing. Scenarios
-  that test fault handling (03-07, 10-16) could use D* Lite without interfering
-  with their fault-injection goals.
-- **Obstacle avoider**: Same pattern — 11 scenarios use the 2D `potential_field`
-  avoider instead of `potential_field_3d`. The 3D variant is what runs on real
-  hardware.
+- **Tracker**: All 16 scenarios now use ByteTrack (default changed from SORT in
+  Issue #205). SORT was removed — ByteTrack strictly supersedes it with two-stage
+  association for better occlusion handling.
+- **Path planner**: All 16 scenarios now use D* Lite (default changed from
+  `potential_field` in Issue #207). PotentialFieldPlanner was removed — D* Lite
+  strictly supersedes it with 3D grid search and obstacle awareness.
+- **Obstacle avoider**: All 16 scenarios now use `potential_field_3d` (default
+  changed from `potential_field` in Issue #207). PotentialFieldAvoider (2D) was
+  removed — ObstacleAvoider3D strictly supersedes it with full 3D repulsion and
+  velocity prediction.
 
 ### Fault Types Never Triggered
 

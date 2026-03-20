@@ -307,8 +307,7 @@ public:
 
 | Key | Class | Notes |
 |-----|-------|-------|
-| `"potential_field"` | `PotentialFieldPlanner` | 2D gradient descent, smoothing=0.35 |
-| `"astar"` | `AStarPlanner` | Grid-based A* with HD-map static obstacles |
+| `"dstar_lite"` | `DStarLitePlanner` | 3D incremental D* Lite search with obstacle awareness |
 
 **Config:** `mission_planner.path_planner.backend`
 
@@ -328,8 +327,9 @@ class IObstacleAvoider {
 
 | Key | Class | Notes |
 |-----|-------|-------|
-| `"potential_field"` | `PotentialFieldAvoider` | 2D repulsive field, influence_radius=5 m |
-| `"3d"` | `ObstacleAvoider3D` | Full 3-D potential field |
+| `"potential_field_3d"` | `ObstacleAvoider3D` | Full 3D repulsive field + velocity prediction |
+| `"3d"` | `ObstacleAvoider3D` | Alias for `potential_field_3d` |
+| `"obstacle_avoider_3d"` | `ObstacleAvoider3D` | Alias for `potential_field_3d` |
 
 **Config:** `mission_planner.obstacle_avoider.backend`
 
