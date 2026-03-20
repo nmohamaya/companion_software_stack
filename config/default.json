@@ -71,6 +71,7 @@
         "radar": {
             "backend": "simulated",
             "enabled": false,
+            "_comment_update_rate": "update_rate_hz reserved for GazeboRadar plugin (#212)",
             "update_rate_hz": 20,
             "max_range_m": 100.0,
             "fov_azimuth_rad": 1.047,

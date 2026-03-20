@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -83,6 +84,20 @@ TEST(RadarDetectionValidation, ConfidenceBelowZeroInvalid) {
     EXPECT_FALSE(det.validate());
 }
 
+TEST(RadarDetectionValidation, NaNFieldInvalid) {
+    drone::ipc::RadarDetection det{};
+    det.range_m    = 5.0f;
+    det.confidence = 0.5f;
+    EXPECT_TRUE(det.validate());
+
+    det.azimuth_rad = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(det.validate());
+
+    det.azimuth_rad         = 0.0f;
+    det.radial_velocity_mps = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(det.validate());
+}
+
 TEST(RadarDetectionValidation, ZeroRangeValid) {
     drone::ipc::RadarDetection det{};
     det.range_m    = 0.0f;
@@ -124,6 +139,13 @@ TEST(RadarDetectionListValidation, MaxDetectionsValid) {
 TEST(RadarDetectionListValidation, OverflowInvalid) {
     drone::ipc::RadarDetectionList list{};
     list.num_detections = drone::ipc::MAX_RADAR_DETECTIONS + 1;
+    EXPECT_FALSE(list.validate());
+}
+
+TEST(RadarDetectionListValidation, InvalidEntryFailsList) {
+    drone::ipc::RadarDetectionList list{};
+    list.num_detections        = 1;
+    list.detections[0].range_m = std::numeric_limits<float>::quiet_NaN();
     EXPECT_FALSE(list.validate());
 }
 

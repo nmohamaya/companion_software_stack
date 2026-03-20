@@ -266,7 +266,7 @@ See `common/ipc/include/ipc/ipc_types.h` for `RadarDetection` and `RadarDetectio
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `init` | `bool init()` | Initialise hardware / start acquisition. Returns false on error. |
-| `read` | `RadarDetectionList read()` | Non-blocking read of latest detections. Returns list with `valid=false` before `init()`. |
+| `read` | `RadarDetectionList read()` | Non-blocking read of latest detections. Before `init()` returns a default-constructed list (`num_detections == 0`). |
 | `is_active` | `bool is_active() const` | True after successful `init()`. |
 | `name` | `std::string name() const` | Human-readable backend identifier (e.g., `"SimulatedRadar"`). |
 

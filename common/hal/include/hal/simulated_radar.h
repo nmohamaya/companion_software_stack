@@ -7,6 +7,7 @@
 #include "hal/iradar.h"
 #include "util/config.h"
 
+#include <algorithm>
 #include <chrono>
 #include <random>
 
@@ -62,7 +63,7 @@ public:
                                   fov_elevation_rad_ / 2.0f;
 
             // Add noise
-            det.range_m       = std::max(0.0f, base_range + range_noise_(rng_));
+            det.range_m       = std::clamp(base_range + range_noise_(rng_), 0.0f, max_range_m_);
             det.azimuth_rad   = std::clamp(base_az + azimuth_noise_(rng_), -fov_azimuth_rad_ / 2.0f,
                                            fov_azimuth_rad_ / 2.0f);
             det.elevation_rad = std::clamp(base_el + elevation_noise_(rng_),

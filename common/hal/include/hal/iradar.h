@@ -22,7 +22,7 @@ public:
     /// Read the latest radar scan. Returns empty list if no data available.
     [[nodiscard]] virtual drone::ipc::RadarDetectionList read() = 0;
 
-    /// True after successful init() and before close().
+    /// True if the radar has been successfully initialised and is currently operational.
     [[nodiscard]] virtual bool is_active() const = 0;
 
     /// Human-readable backend name for logging.

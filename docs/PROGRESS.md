@@ -2359,7 +2359,7 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 - `common/hal/include/hal/hal_factory.h` — `create_radar(cfg, section)` factory function
 - `config/default.json` — `perception.radar` config section (`enabled: false`, `backend: "simulated"`, FoV, range, target count, noise)
 
-**What:** Added a complete radar HAL layer following the same Strategy + factory pattern as the existing `ICamera`, `IIMUSource`, and other HAL interfaces. `IRadar::read()` returns a `RadarDetectionList` IPC struct published on `/radar_detections` (Zenoh key: `drone/perception/radar`). The `SimulatedRadar` backend generates configurable synthetic detections with Gaussian noise for simulation and unit testing. Radar is disabled by default in `config/default.json` and can be enabled without recompiling.
+**What:** Added a complete radar HAL layer following the same Strategy + factory pattern as the existing `ICamera`, `IIMUSource`, and other HAL interfaces. `IRadar::read()` returns a `RadarDetectionList` IPC struct published on `/radar_detections` (Zenoh key: `radar/detections`). The `SimulatedRadar` backend generates configurable synthetic detections with Gaussian noise for simulation and unit testing. Radar is disabled by default in `config/default.json` and can be enabled without recompiling.
 
 **Why:** Radar provides complementary obstacle detection to the vision pipeline — it works in low-light and smoke conditions where cameras fail, and gives direct velocity (Doppler) measurements that the camera-based fusion cannot provide. The HAL layer ensures process code is agnostic to the physical sensor (TI AWR1843, Ainstein US-D1, or simulated), following the project's hardware abstraction principle.
 

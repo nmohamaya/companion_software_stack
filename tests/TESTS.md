@@ -308,10 +308,10 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 | `RadarDetectionValidation` | 6 | Valid detection accepted; negative range rejected; confidence above 1.0 rejected; confidence below 0.0 rejected; zero range valid; boundary confidence (0.0 and 1.0) valid |
 | `RadarDetectionListValidation` | 4 | Valid list accepted; empty list (count=0) valid; max-capacity list (count=MAX_RADAR_DETECTIONS) valid; overflow (count > MAX_RADAR_DETECTIONS) rejected |
 | `RadarDetectionTriviallyCopyable` | 1 | `static_assert(std::is_trivially_copyable_v<RadarDetection>)` and `RadarDetectionList` pass |
-| `SimulatedRadarTest` | 11 | `init()` returns true; `is_active()` false before init; `name()` returns `"SimulatedRadar"`; `read()` returns invalid list before init; `read()` returns valid list after init; target count matches config; FoV limits clamp azimuth; range limits clamp detections; all detections have confidence in [0, 1]; noise distribution is zero-mean over many samples; consecutive reads have non-decreasing timestamps |
+| `SimulatedRadarTest` | 11 | `init()` returns true; `is_active()` false before init; `name()` returns `"SimulatedRadar"`; `read()` returns empty list before init; `read()` returns valid list after init; target count matches config; FoV limits clamp azimuth; range limits clamp detections; all detections have confidence in [0, 1]; noise distribution is non-trivial over many samples; consecutive reads have non-decreasing timestamps |
 | `RadarFactoryTest` | 3 | `create_radar("simulated")` returns `SimulatedRadar`; default backend is `"simulated"`; unknown backend throws `std::runtime_error` |
-| `SimulatedRadarConfigTest` | 1 | Custom `fov_deg`, `max_range_m`, `num_targets`, `noise_stddev` from config are applied |
-| `RadarTopicTest` | 1 | `RADAR_DETECTIONS_TOPIC` constant equals `"/radar_detections"` |
+| `SimulatedRadarConfigTest` | 1 | Custom `fov_azimuth_rad`, `fov_elevation_rad`, `max_range_m`, `num_targets`, `noise.*` from config are applied |
+| `RadarTopicTest` | 1 | `ipc::topics::RADAR_DETECTIONS` constant equals `"/radar_detections"` |
 
 **Why these tests matter:** Radar is a safety-critical sensor path — incorrect range or confidence values flowing into the obstacle avoidance stack could suppress or trigger avoidance incorrectly. The validation tests enforce the wire-format invariants that downstream processes depend on. The noise distribution test guards against bias that would systematically shift range estimates.
 

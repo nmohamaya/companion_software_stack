@@ -557,7 +557,10 @@ struct RadarDetection {
     uint32_t track_id{0};
 
     [[nodiscard]] bool validate() const {
-        return range_m >= 0.0f && confidence >= 0.0f && confidence <= 1.0f;
+        return std::isfinite(range_m) && std::isfinite(azimuth_rad) &&
+               std::isfinite(elevation_rad) && std::isfinite(radial_velocity_mps) &&
+               std::isfinite(rcs_dbsm) && std::isfinite(snr_db) && std::isfinite(confidence) &&
+               range_m >= 0.0f && confidence >= 0.0f && confidence <= 1.0f;
     }
 };
 
@@ -568,7 +571,13 @@ struct RadarDetectionList {
     uint32_t       num_detections{0};
     RadarDetection detections[MAX_RADAR_DETECTIONS];
 
-    [[nodiscard]] bool validate() const { return num_detections <= MAX_RADAR_DETECTIONS; }
+    [[nodiscard]] bool validate() const {
+        if (num_detections > MAX_RADAR_DETECTIONS) return false;
+        for (uint32_t i = 0; i < num_detections; ++i) {
+            if (!detections[i].validate()) return false;
+        }
+        return true;
+    }
 };
 
 static_assert(std::is_trivially_copyable_v<RadarDetection>,
