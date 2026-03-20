@@ -62,7 +62,7 @@
             "TAKEOFF",
             "EXECUTING",
             "FAULT_FC_LINK_LOST",
-            "LOITER",
+            "→ LOITER",
             "GCS command: MISSION_START",
             "Mission complete"
         ],

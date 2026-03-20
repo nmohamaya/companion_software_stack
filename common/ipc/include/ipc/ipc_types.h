@@ -524,17 +524,17 @@ static_assert(std::is_trivially_copyable_v<ThreadHealth>,
 // ═══════════════════════════════════════════════════════════
 struct alignas(64) FaultOverrides {
     // FC state overrides (consumed by Process 5 comms)
-    float   battery_percent;  // <0 = no override
-    float   battery_voltage;  // <0 = no override
-    int32_t fc_connected;     // <0 = no override, 0 = disconnected, 1 = connected
+    float   battery_percent = -1.0f;  // <0 = no override
+    float   battery_voltage = -1.0f;  // <0 = no override
+    int32_t fc_connected    = -1;     // <0 = no override, 0 = disconnected, 1 = connected
     // System health overrides (consumed by Process 7 system monitor)
-    int32_t thermal_zone;       // <0 = no override, 0-3 = zone
-    float   cpu_temp_override;  // <0 = no override
+    int32_t thermal_zone      = -1;     // <0 = no override, 0-3 = zone
+    float   cpu_temp_override = -1.0f;  // <0 = no override
     // VIO quality override (consumed by Process 3 SLAM/VIO)
-    int32_t vio_quality;  // <0 = no override, 0-3 = quality level
+    int32_t vio_quality = -1;  // <0 = no override, 0-3 = quality level
     // Sequence counter – incremented by the injector so consumers can
     // detect new writes vs stale values.
-    uint64_t sequence;
+    uint64_t sequence = 0;
 };
 
 static_assert(std::is_trivially_copyable_v<FaultOverrides>,

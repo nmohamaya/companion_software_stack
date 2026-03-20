@@ -391,7 +391,17 @@ static int cmd_sequence(const std::string& json_file) {
             publish_via_bus<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS, warmup);
         }
         if (need_fault) {
+            // Warmup must use sentinel "no-override" values (all -1), NOT
+            // zero-init.  A zero-init FaultOverrides has vio_quality=0 which
+            // P3 interprets as "override quality to LOST", causing a false
+            // FAULT_VIO_LOST in the mission planner.
             drone::ipc::FaultOverrides warmup{};
+            warmup.battery_percent   = -1.0f;
+            warmup.battery_voltage   = -1.0f;
+            warmup.fc_connected      = -1;
+            warmup.thermal_zone      = -1;
+            warmup.cpu_temp_override = -1.0f;
+            warmup.vio_quality       = -1;
             publish_via_bus<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES,
                                                         warmup);
         }
