@@ -41,7 +41,7 @@ inline void safe_name_copy(char (&dst)[N], const char* src) {
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
-    dst[N - 1] = '\0';  // Belt-and-suspenders — strncpy(N-1) + memset already guarantees this
+    dst[N - 1] = '\0';  // Belt-and-suspenders — strncpy(N-1) + fill_n already guarantees this
 }
 
 }  // namespace drone::util
