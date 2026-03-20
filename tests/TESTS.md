@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [P2 — Perception](#p2--perception) | 5 | 124 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 82 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 83 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -464,7 +464,7 @@ states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 12 tests
+### test_obstacle_avoider_3d.cpp — 13 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor.
