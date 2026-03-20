@@ -10,6 +10,7 @@
 
 #include "util/config.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 #include <spdlog/spdlog.h>
@@ -39,7 +40,40 @@ std::unique_ptr<IDetector> create_detector(const std::string& backend, const dro
         return std::make_unique<ColorContourDetector>();
     }
     if (backend == "simulated" || backend.empty()) {
-        return std::make_unique<SimulatedDetector>();
+        SimulatedDetectorConfig sim_cfg;
+        if (cfg) {
+            sim_cfg.min_detections = cfg->get<int>("perception.detector.sim.min_detections",
+                                                   sim_cfg.min_detections);
+            sim_cfg.max_detections = cfg->get<int>("perception.detector.sim.max_detections",
+                                                   sim_cfg.max_detections);
+            sim_cfg.margin_px      = cfg->get<float>("perception.detector.sim.margin_px",
+                                                     sim_cfg.margin_px);
+            sim_cfg.size_min_px    = cfg->get<float>("perception.detector.sim.size_min_px",
+                                                     sim_cfg.size_min_px);
+            sim_cfg.size_max_px    = cfg->get<float>("perception.detector.sim.size_max_px",
+                                                     sim_cfg.size_max_px);
+            sim_cfg.confidence_min = cfg->get<float>("perception.detector.sim.confidence_min",
+                                                     sim_cfg.confidence_min);
+            sim_cfg.confidence_max = cfg->get<float>("perception.detector.sim.confidence_max",
+                                                     sim_cfg.confidence_max);
+            sim_cfg.num_classes    = cfg->get<int>("perception.detector.sim.num_classes",
+                                                   sim_cfg.num_classes);
+        }
+
+        // Sanitize ranges to prevent UB in std::uniform_*_distribution
+        sim_cfg.min_detections = std::max(0, sim_cfg.min_detections);
+        if (sim_cfg.max_detections < sim_cfg.min_detections)
+            sim_cfg.max_detections = sim_cfg.min_detections;
+        sim_cfg.margin_px   = std::max(0.0f, sim_cfg.margin_px);
+        sim_cfg.size_min_px = std::max(0.0f, sim_cfg.size_min_px);
+        if (sim_cfg.size_max_px < sim_cfg.size_min_px) sim_cfg.size_max_px = sim_cfg.size_min_px;
+        sim_cfg.confidence_min = std::clamp(sim_cfg.confidence_min, 0.0f, 1.0f);
+        sim_cfg.confidence_max = std::clamp(sim_cfg.confidence_max, 0.0f, 1.0f);
+        if (sim_cfg.confidence_max < sim_cfg.confidence_min)
+            sim_cfg.confidence_max = sim_cfg.confidence_min;
+        sim_cfg.num_classes = std::max(1, sim_cfg.num_classes);
+
+        return std::make_unique<SimulatedDetector>(sim_cfg);
     }
     throw std::runtime_error("Unknown detector backend: " + backend);
 }

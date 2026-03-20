@@ -41,7 +41,23 @@
             "backend": "simulated",
             "confidence_threshold": 0.5,
             "nms_threshold": 0.4,
-            "max_detections": 64
+            "max_detections": 64,
+            "min_contour_area": 80,
+            "subsample": 2,
+            "max_fps": 0,
+            "confidence_max": 0.95,
+            "confidence_base": 0.5,
+            "confidence_area_scale": 50.0,
+            "sim": {
+                "min_detections": 1,
+                "max_detections": 5,
+                "margin_px": 50.0,
+                "size_min_px": 40.0,
+                "size_max_px": 200.0,
+                "confidence_min": 0.4,
+                "confidence_max": 0.99,
+                "num_classes": 5
+            }
         },
         "tracker": {
             "backend": "sort",
@@ -54,7 +70,15 @@
         },
         "fusion": {
             "camera_weight": 1.0,
-            "camera_height_m": 1.5
+            "camera_height_m": 1.5,
+            "depth": {
+                "covariance_init": 5.0,
+                "bbox_h_threshold": 10.0,
+                "depth_min_m": 1.0,
+                "depth_max_m": 40.0,
+                "ray_down_threshold": 0.01,
+                "fallback_depth_m": 8.0
+            }
         }
     },
 
@@ -81,7 +105,10 @@
         "landed_altitude_m": 0.5,
         "rtl_min_dwell_seconds": 5,
         "path_planner": {
-            "backend": "potential_field"
+            "backend": "potential_field",
+            "ramp_dist_m": 3.0,
+            "min_speed_mps": 1.0,
+            "snap_search_radius": 8
         },
         "obstacle_avoider": {
             "backend": "potential_field"
@@ -89,7 +116,11 @@
         "obstacle_avoidance": {
             "min_distance_m": 2.0,
             "influence_radius_m": 5.0,
-            "repulsive_gain": 2.0
+            "repulsive_gain": 2.0,
+            "max_correction_mps": 3.0,
+            "min_confidence": 0.3,
+            "prediction_dt_s": 0.5,
+            "max_age_ms": 500
         },
         "geofence": {
             "polygon": [
@@ -100,7 +131,8 @@
             ],
             "altitude_floor_m": 0.0,
             "altitude_ceiling_m": 120.0,
-            "warning_margin_m": 5.0
+            "warning_margin_m": 5.0,
+            "altitude_tolerance_m": 0.5
         },
         "waypoints": [
             {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},

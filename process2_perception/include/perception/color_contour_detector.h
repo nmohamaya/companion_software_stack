@@ -144,6 +144,12 @@ public:
         max_detections_   = cfg.get<int>("perception.detector.max_detections", 20);
         subsample_        = std::max(1, cfg.get<int>("perception.detector.subsample", 2));
         max_fps_          = cfg.get<int>("perception.detector.max_fps", 0);
+        confidence_max_   = std::clamp(cfg.get<float>("perception.detector.confidence_max", 0.95f),
+                                       0.0f, 1.0f);
+        confidence_base_  = std::clamp(cfg.get<float>("perception.detector.confidence_base", 0.5f),
+                                       0.0f, 1.0f);
+        confidence_area_scale_ =
+            std::max(0.0f, cfg.get<float>("perception.detector.confidence_area_scale", 50.0f));
 
         // Try to read custom color ranges from config
         if (cfg.has("perception.detector.colors")) {
@@ -227,7 +233,8 @@ public:
                 // uint32_t overflow on large frames (e.g. > ~4K resolution).
                 float area_ratio = static_cast<float>(bbox.area()) /
                                    (static_cast<float>(width) * static_cast<float>(height));
-                det.confidence = std::min(0.95f, 0.5f + area_ratio * 50.0f);
+                det.confidence = std::min(confidence_max_,
+                                          confidence_base_ + area_ratio * confidence_area_scale_);
 
                 all_detections.push_back(det);
             }
@@ -267,10 +274,13 @@ public:
 
 private:
     std::vector<HsvRange> color_ranges_;
-    int                   min_contour_area_ = 80;
-    int                   max_detections_   = 20;
-    int                   subsample_        = 2;
-    int                   max_fps_          = 0;
+    int                   min_contour_area_      = 80;
+    int                   max_detections_        = 20;
+    int                   subsample_             = 2;
+    int                   max_fps_               = 0;
+    float                 confidence_max_        = 0.95f;  // ceiling for confidence score
+    float                 confidence_base_       = 0.5f;   // base confidence before area scaling
+    float                 confidence_area_scale_ = 50.0f;  // area_ratio multiplier for confidence
 
     // Reusable per-frame buffers (avoid heap churn on every detect() call).
     // color_map_: subsampled grid; each cell holds a color index or kNoColor.

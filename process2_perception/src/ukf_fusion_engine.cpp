@@ -4,6 +4,7 @@
 #include "perception/ukf_fusion_engine.h"
 
 #include "perception/fusion_engine.h"
+#include "util/config.h"
 
 #include <algorithm>
 #include <cmath>
@@ -308,11 +309,26 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 // ═══════════════════════════════════════════════════════════
 // Fusion engine factory
 // ═══════════════════════════════════════════════════════════
-std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&                    backend,
-                                                    const CalibrationData&                calib,
-                                                    [[maybe_unused]] const drone::Config* cfg) {
+std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backend,
+                                                    const CalibrationData& calib,
+                                                    const drone::Config*   cfg) {
     if (backend == "camera_only") {
-        return std::make_unique<CameraOnlyFusionEngine>(calib);
+        DepthEstimationConfig depth_cfg;
+        if (cfg) {
+            depth_cfg.covariance_init  = cfg->get<float>("perception.fusion.depth.covariance_init",
+                                                         depth_cfg.covariance_init);
+            depth_cfg.bbox_h_threshold = cfg->get<float>("perception.fusion.depth.bbox_h_threshold",
+                                                         depth_cfg.bbox_h_threshold);
+            depth_cfg.depth_min_m      = cfg->get<float>("perception.fusion.depth.depth_min_m",
+                                                         depth_cfg.depth_min_m);
+            depth_cfg.depth_max_m      = cfg->get<float>("perception.fusion.depth.depth_max_m",
+                                                         depth_cfg.depth_max_m);
+            depth_cfg.ray_down_threshold = cfg->get<float>(
+                "perception.fusion.depth.ray_down_threshold", depth_cfg.ray_down_threshold);
+            depth_cfg.fallback_depth_m = cfg->get<float>("perception.fusion.depth.fallback_depth_m",
+                                                         depth_cfg.fallback_depth_m);
+        }
+        return std::make_unique<CameraOnlyFusionEngine>(calib, depth_cfg);
     }
     if (backend == "ukf") {
         return std::make_unique<UKFFusionEngine>(calib);

@@ -38,7 +38,7 @@ FusedObjectList CameraOnlyFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.has_camera          = true;
         fused.heading             = 0.0f;
         fused.timestamp_ns        = trk.timestamp_ns;
-        fused.position_covariance = Eigen::Matrix3f::Identity() * 5.0f;
+        fused.position_covariance = Eigen::Matrix3f::Identity() * depth_cfg_.covariance_init;
 
         // position_2d is the Kalman-filtered bbox center in pixels.
         // Unproject through the pinhole model to get a unit ray in camera frame:
@@ -66,15 +66,17 @@ FusedObjectList CameraOnlyFusionEngine::fuse(const TrackedObjectList& tracked) {
         //    approach); use a conservative 8 m estimate so the avoider inside its
         //    5 m influence radius reacts well before contact.
         float depth;
-        if (trk.bbox_h > 10.0f) {
+        if (trk.bbox_h > depth_cfg_.bbox_h_threshold) {
             // Primary: apparent-size monocular depth
-            depth = std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h, 1.0f, 40.0f);
-        } else if (ray_down > 0.01f) {
+            depth = std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h,
+                               depth_cfg_.depth_min_m, depth_cfg_.depth_max_m);
+        } else if (ray_down > depth_cfg_.ray_down_threshold) {
             // Ground-plane fallback
-            depth = std::clamp(calib_.camera_height_m / ray_down, 1.0f, 40.0f);
+            depth = std::clamp(calib_.camera_height_m / ray_down, depth_cfg_.depth_min_m,
+                               depth_cfg_.depth_max_m);
         } else {
             // Near-horizon conservative estimate (was 20 m — too far for 5 m influence radius)
-            depth = 8.0f;
+            depth = depth_cfg_.fallback_depth_m;
         }
 
         // Camera-frame position (forward, right, down)
