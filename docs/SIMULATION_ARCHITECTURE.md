@@ -64,7 +64,7 @@ flowchart TB
     subgraph TOOLS["Test Tooling"]
         FI["fault_injector CLI<br/><i>Writes to /fault_overrides<br/>sideband channel</i>"]
         SR["run_scenario.sh<br/><i>Launch → Inject → Verify</i>"]
-        SCEN["Scenario Configs<br/><i>15 JSON scenario files</i>"]
+        SCEN["Scenario Configs<br/><i>16 JSON scenario files</i>"]
     end
 
     subgraph EXTERNAL["External Systems (Tier 2 only)"]
@@ -99,6 +99,7 @@ flowchart TB
     P2 ---|HAL| SD
 
     FI -.->|inject| SHM11
+    SHM11 -.->|override| P3
     SHM11 -.->|override| P5
     SHM11 -.->|override| P7
     SR -.->|orchestrate| FI
@@ -156,7 +157,7 @@ These run identically in sim and on hardware:
 | Component | Process | Description |
 |---|---|---|
 | Mission FSM | P4 | State machine: IDLE → PREFLIGHT → TAKEOFF → EXECUTING → RTL → LANDING → COMPLETE |
-| FaultManager | P4 | Battery: WARN / RTL / CRIT (3-tier with `FAULT_BATTERY_RTL`), FC link loss, geofence breach |
+| FaultManager | P4 | Battery 3-tier (WARN/RTL/CRIT), FC link loss, geofence breach, VIO quality degradation (debounced), thermal |
 | Geofence | P4 | Point-in-polygon + altitude checks with warning margin |
 | A* Path Planner | P4 | 3D occupancy grid, A* search, path smoothing |
 | ObstacleAvoider3D | P4 | Velocity-space potential field with prediction |
@@ -236,8 +237,8 @@ Backend selection is **config-driven**. All backends read from a single JSON:
         }
     },
     "mission_planner": {
-        "path_planner":      { "backend": "potential_field" },  // or "astar"
-        "obstacle_avoider":  { "backend": "potential_field" },  // or "potential_field_3d" (3D variant)
+        "path_planner":      { "backend": "potential_field" },  // or "dstar_lite", "astar"
+        "obstacle_avoider":  { "backend": "potential_field" },  // or "potential_field_3d"
         "geofence": {
             "polygon": [
                 {"x": -50, "y": -50},
@@ -254,7 +255,9 @@ Backend selection is **config-driven**. All backends read from a single JSON:
         "battery_rtl_percent": 20.0,
         "battery_crit_percent": 10.0,
         "fc_link_lost_timeout_ms": 3000,
-        "fc_link_rtl_timeout_ms": 15000
+        "fc_link_rtl_timeout_ms": 15000,
+        "vio_quality_loiter_threshold": 1,
+        "vio_quality_rtl_threshold": 0
     }
 }
 ```
@@ -334,6 +337,7 @@ Comms, P7 System Monitor) continue their normal publish loops and
 ```mermaid
 flowchart LR
     FI[fault_injector] -->|write| FO["/fault_overrides<br/>(ShmFaultOverrides)"]
+    FO -->|read| P3[P3 SLAM/VIO]
     FO -->|read| P5[P5 Comms]
     FO -->|read| P7[P7 System Monitor]
     P5 -->|publish| FC["/fc_state<br/>(merged)"]
@@ -354,18 +358,27 @@ flowchart LR
 - **Same IPC transport**: The `/fault_overrides` channel uses the
   same Zenoh transport as all other IPC channels.
 
-### ShmFaultOverrides Struct
+### FaultOverrides Struct
 
 ```cpp
-struct alignas(64) ShmFaultOverrides {
-    float    battery_percent;   // <0 = no override
-    float    battery_voltage;   // <0 = no override
-    int32_t  fc_connected;      // <0 = no override, 0/1 = state
-    int32_t  thermal_zone;      // <0 = no override, 0-3 = zone
-    float    cpu_temp_override;  // <0 = no override
-    uint64_t sequence;          // incremented by injector
+struct alignas(64) FaultOverrides {
+    // FC state overrides (consumed by Process 5 comms)
+    float   battery_percent = -1.0f;  // <0 = no override
+    float   battery_voltage = -1.0f;  // <0 = no override
+    int32_t fc_connected    = -1;     // <0 = no override, 0 = disconnected, 1 = connected
+    // System health overrides (consumed by Process 7 system monitor)
+    int32_t thermal_zone      = -1;     // <0 = no override, 0-3 = zone
+    float   cpu_temp_override = -1.0f;  // <0 = no override
+    // VIO quality override (consumed by Process 3 SLAM/VIO)
+    int32_t vio_quality = -1;  // <0 = no override, 0-3 = quality level
+    // Sequence counter
+    uint64_t sequence = 0;     // incremented by injector
 };
 ```
+
+All override fields default to `-1` (no override) via default member initializers.
+This ensures that `FaultOverrides{}` produces safe "no override" semantics —
+a zero-initialized struct would activate every override at its most dangerous value.
 
 ### Available Commands
 
@@ -376,6 +389,8 @@ struct alignas(64) ShmFaultOverrides {
 | `fc_reconnect` | `fc_connected = 1` | Release frozen timestamp |
 | `gcs_command <cmd> [p1 p2 p3]` | `/gcs_commands` (direct) | Inject GCS command |
 | `thermal_zone <0-3>` | `thermal_zone` | Override thermal zone |
+| `vio_quality <0-3>` | `vio_quality` | Override VIO pose quality (0=lost, 1=degraded, 2=good, 3=excellent) |
+| `vio_clear` | `vio_quality = -1` | Clear VIO quality override (restore actual VIO health) |
 | `mission_upload <json>` | `/mission_upload` + `/gcs_commands` | Upload new waypoints |
 | `sequence <json>` | Various | Execute timed fault sequence |
 
@@ -387,7 +402,9 @@ struct alignas(64) ShmFaultOverrides {
         {"delay_s": 10, "action": "battery", "value": 28.0},
         {"delay_s": 5,  "action": "fc_disconnect"},
         {"delay_s": 20, "action": "fc_reconnect"},
-        {"delay_s": 2,  "action": "gcs_command", "command": "rtl"}
+        {"delay_s": 2,  "action": "gcs_command", "command": "rtl"},
+        {"delay_s": 3,  "action": "vio_quality", "value": 1},
+        {"delay_s": 10, "action": "vio_clear"}
     ]
 }
 ```
@@ -396,7 +413,7 @@ struct alignas(64) ShmFaultOverrides {
 
 ## Test Scenarios
 
-Fifteen pre-defined scenarios in `config/scenarios/`:
+Sixteen pre-defined scenarios in `config/scenarios/`:
 
 | # | Scenario | Tier | Gazebo | What it Tests |
 |---|---|---|---|---|
@@ -415,6 +432,7 @@ Fifteen pre-defined scenarios in `config/scenarios/`:
 | 13 | GCS Land | 1 | No | GCS LAND at current position (not return-to-launch) |
 | 14 | Altitude Ceiling Breach | 1 | No | Waypoint above geofence ceiling (10 m > 8 m limit) → RTL |
 | 15 | FC Quick Recovery | 1 | No | FC link loss → quick reconnect before RTL timeout → resume |
+| 16 | VIO Failure | 1 | No | VIO quality degradation (quality=1) → LOITER, recovery → fault clears |
 
 ### Scenario JSON Structure
 
@@ -466,6 +484,7 @@ Which pluggable backends are exercised by each scenario:
 | 13 GCS Land | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
 | 14 Alt Breach | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
 | 15 FC Recover | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 16 VIO Failure | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
 
 ### Per-Scenario Fault Coverage
 
@@ -488,6 +507,7 @@ Which fault types and FSM states are exercised:
 | 13 GCS Land | None | NAVIGATE → LAND | LAND |
 | 14 Alt Breach | GEOFENCE_BREACH | NAVIGATE → RTL | — |
 | 15 FC Recover | FC_LINK_LOST | NAVIGATE → LOITER → NAVIGATE | MISSION_START |
+| 16 VIO Failure | VIO_DEGRADED | NAVIGATE → LOITER | — |
 
 ---
 
@@ -500,10 +520,27 @@ unit tests for validation. This section is maintained to guide future scenario d
 
 | Backend | Type | Unit Tests | Why Not Covered |
 |---|---|---|---|
-| `astar` | Path planner | 20 tests | D* Lite supersedes it; consider a scenario variant |
+| `astar` | Path planner | 20 tests | D* Lite supersedes it; A* is kept for fallback but no scenario exercises it |
 | `ukf` | Fusion engine | 6 tests | Camera-only is default; UKF needs thermal input for meaningful testing |
 | `yolov8` | Detector | 24 tests | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
-| SORT tracker | Tracker | 22 tests | Used passively as default, but no scenario validates its tracking quality specifically |
+
+### Backend Coverage Recommendations
+
+Per the "maximise stack coverage in simulation" principle, most scenarios should
+exercise the same backends that would run on real hardware:
+
+- **Tracker**: 14 of 16 scenarios use the SORT tracker (default), but real hardware
+  would use ByteTrack. Consider switching the default tracker to `bytetrack` in
+  `default.json`, or at minimum switching scenarios 01, 08, and other navigation-heavy
+  scenarios to ByteTrack. SORT has 22 unit tests but no scenario validates its
+  tracking quality specifically.
+- **Path planner**: 11 scenarios use `potential_field` (the simple gradient planner).
+  Real hardware would use `dstar_lite` for proper obstacle-aware routing. Scenarios
+  that test fault handling (03-07, 10-16) could use D* Lite without interfering
+  with their fault-injection goals.
+- **Obstacle avoider**: Same pattern — 11 scenarios use the 2D `potential_field`
+  avoider instead of `potential_field_3d`. The 3D variant is what runs on real
+  hardware.
 
 ### Fault Types Never Triggered
 
@@ -511,8 +548,12 @@ unit tests for validation. This section is maintained to guide future scenario d
 |---|---|---|
 | `FAULT_POSE_STALE` | Pose age > 500 ms | Would require freezing VIO output; no injector command for this yet |
 | `FAULT_CRITICAL_PROCESS` | Critical process (comms/SLAM) dead | Would require killing a process mid-scenario; not supported by fault_injector |
-| `FAULT_VIO_DEGRADED` | VIO quality ≤ 1 | Pending PR #190; needs `vio_quality` override in fault_injector |
-| `FAULT_VIO_LOST` | VIO quality = 0 | Pending PR #190; planned as scenario 16 |
+
+> **Previously untested (now resolved):** `FAULT_VIO_DEGRADED` and `FAULT_VIO_LOST`
+> are now tested by scenario 16 (VIO Failure) using the `vio_quality` / `vio_clear`
+> fault injector commands. VIO quality evaluation includes a debounce counter
+> (3 consecutive low readings required) to prevent transient glitches from
+> triggering irreversible RTL. See Issue #201 / PR #202.
 
 ### Subsystems With Partial Coverage
 
@@ -545,9 +586,9 @@ which parameters can be adjusted for manual testing:
 - **Fault timing**: Change `delay_s` in `fault_sequence.steps`
 - **Geofence polygon**: Modify vertices in `geofence.polygon`
 - **Backend selection**: Switch `path_planner.backend` between
-  `"potential_field"` and `"astar"`
+  `"potential_field"`, `"astar"`, and `"dstar_lite"`
 - **Obstacle avoider backend**: `"potential_field"` or
-  `"potential_field_3d"` (3D variant used by stress test)
+  `"potential_field_3d"` (3D variant — used by scenarios 01, 02, 08, 09)
 - **IPC transport**: Zenoh (sole backend, configured via `config/default.json`)
 
 ---
@@ -609,6 +650,7 @@ companion_software_stack/
 │       ├── 13_gcs_land.json
 │       ├── 14_altitude_ceiling_breach.json
 │       ├── 15_fc_quick_recovery.json
+│       ├── 16_vio_failure.json
 │       └── data/
 │           └── upload_waypoints.json
 ├── common/hal/include/hal/
