@@ -202,7 +202,7 @@ O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. The 
 **Interface**: `IFusionEngine` (`ifusion_engine.h`)
 
 ```cpp
-virtual FusedObjectList     fuse(const TrackedObjectList& tracked) = 0;
+[[nodiscard]] virtual FusedObjectList fuse(const TrackedObjectList& tracked) = 0;
 ```
 
 The fusion engine maps 2D tracked objects to 3D camera-frame positions. Output positions are in **camera body frame** (forward=X, right=Y, down=Z); the `fusion_thread` rotates them to world ENU frame using the latest drone pose.

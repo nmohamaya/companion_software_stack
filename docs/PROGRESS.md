@@ -2349,7 +2349,7 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 **What:** Removed the disconnected thermal camera code path to clean up for radar sensor integration. The `set_thermal_detections()` method was never called by any process, and the `SimulatedThermalCamera` HAL backend was unused. Removed: `ThermalFrame` IPC struct, `VIDEO_THERMAL_CAM` topic, `SimulatedThermalCamera` class, `create_thermal_camera()` factory, `update_thermal()` UKF method, `has_thermal` fields from `DetectedObject`/`FusedObject`/`ObjectUKF`, thermal matching logic in `UKFFusionEngine::fuse()`, and 3 thermal-specific tests. CPU/GPU thermal monitoring (`SystemHealth.thermal_zone`, thermal gating in watchdog/restart policy) was intentionally preserved.
 
-**Why:** The thermal camera code path was dead code — `set_thermal_detections()` was never called anywhere in the codebase. Removing it reduces maintenance burden, eliminates confusion between thermal camera and thermal monitoring, and clears the path for radar sensor integration (Issue #211).
+**Why:** The thermal camera code path was dead code — `set_thermal_detections()` was never called anywhere in the codebase. Removing it reduces maintenance burden, eliminates confusion between thermal camera and thermal monitoring, and clears the path for radar sensor integration.
 
 **Files Deleted (1):**
 - `common/hal/include/hal/simulated_thermal_camera.h`
@@ -2366,7 +2366,7 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 - `tests/test_fusion_engine.cpp` — removed `ThermalConfirmationSetsFlag` test and `has_thermal` assertions
 - 8 documentation files updated to remove thermal camera references
 
-**Test impact:** Removed 3 tests (2 ThermalFrame validation + 1 ThermalConfirmationSetsFlag). Net test count: TBD after build.
+**Test impact:** Removed 3 tests (2 ThermalFrame validation + 1 ThermalConfirmationSetsFlag). Test count: 996 → 993.
 
 ---
 
