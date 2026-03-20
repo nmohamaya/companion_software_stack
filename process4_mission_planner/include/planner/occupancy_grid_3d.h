@@ -1,7 +1,8 @@
 // process4_mission_planner/include/planner/occupancy_grid_3d.h
-// 3D occupancy grid for obstacle representation, shared by A* and D* Lite planners.
+// 3D occupancy grid for obstacle representation, used by D* Lite planner.
 //
-// Extracted from astar_planner.h as part of Issue #158.
+// Originally extracted from astar_planner.h as part of Issue #158.
+// A* removed in Issue #203 — D* Lite supersedes it.
 #pragma once
 
 #include "ipc/ipc_types.h"
@@ -48,7 +49,7 @@ struct GridCellHash {
 };
 
 // ─────────────────────────────────────────────────────────────
-// 26-connected neighbour tables (shared by A* and D* Lite)
+// 26-connected neighbour tables (used by D* Lite grid search)
 // ─────────────────────────────────────────────────────────────
 
 /// 26-connected neighbours (face + edge + corner adjacent).
@@ -230,7 +231,7 @@ public:
 
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.
-    /// D* Lite uses this to know which edges changed; A* ignores it.
+    /// D* Lite uses this to know which edges changed.
     std::vector<std::pair<GridCell, bool>> drain_changes() {
         std::vector<std::pair<GridCell, bool>> result;
         result.swap(changed_cells_);

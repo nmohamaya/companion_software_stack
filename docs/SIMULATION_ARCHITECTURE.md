@@ -159,7 +159,7 @@ These run identically in sim and on hardware:
 | Mission FSM | P4 | State machine: IDLE → PREFLIGHT → TAKEOFF → EXECUTING → RTL → LANDING → COMPLETE |
 | FaultManager | P4 | Battery 3-tier (WARN/RTL/CRIT), FC link loss, geofence breach, VIO quality degradation (debounced), thermal |
 | Geofence | P4 | Point-in-polygon + altitude checks with warning margin |
-| A* Path Planner | P4 | 3D occupancy grid, A* search, path smoothing |
+| D* Lite Path Planner | P4 | 3D occupancy grid, incremental D* Lite search, path smoothing |
 | ObstacleAvoider3D | P4 | Velocity-space potential field with prediction |
 | Kalman Tracker | P2 | Multi-object tracking with Hungarian assignment |
 | Fusion Engine | P2 | Camera-only sensor fusion |
@@ -237,7 +237,7 @@ Backend selection is **config-driven**. All backends read from a single JSON:
         }
     },
     "mission_planner": {
-        "path_planner":      { "backend": "potential_field" },  // or "dstar_lite", "astar"
+        "path_planner":      { "backend": "potential_field" },  // or "dstar_lite"
         "obstacle_avoider":  { "backend": "potential_field" },  // or "potential_field_3d"
         "geofence": {
             "polygon": [
@@ -520,7 +520,6 @@ unit tests for validation. This section is maintained to guide future scenario d
 
 | Backend | Type | Unit Tests | Why Not Covered |
 |---|---|---|---|
-| `astar` | Path planner | 20 tests | D* Lite supersedes it; A* is kept for fallback but no scenario exercises it |
 | `ukf` | Fusion engine | 6 tests | Camera-only is default; UKF needs thermal input for meaningful testing |
 | `yolov8` | Detector | 24 tests | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
 
@@ -586,7 +585,7 @@ which parameters can be adjusted for manual testing:
 - **Fault timing**: Change `delay_s` in `fault_sequence.steps`
 - **Geofence polygon**: Modify vertices in `geofence.polygon`
 - **Backend selection**: Switch `path_planner.backend` between
-  `"potential_field"`, `"astar"`, and `"dstar_lite"`
+  `"potential_field"` and `"dstar_lite"`
 - **Obstacle avoider backend**: `"potential_field"` or
   `"potential_field_3d"` (3D variant — used by scenarios 01, 02, 08, 09)
 - **IPC transport**: Zenoh (sole backend, configured via `config/default.json`)

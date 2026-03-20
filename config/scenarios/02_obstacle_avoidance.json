@@ -31,7 +31,7 @@
             "_comment_static_obstacles": "HD-map: pre-loaded obstacle geometry. Camera detections confirm/refresh these and can detect unexpected obstacles.",
             "geofence": {
                 "enabled": false,
-                "_comment": "Geofence disabled for obstacle avoidance scenario — polygon RTL would fire when A* no-path pushes drone toward boundary",
+                "_comment": "Geofence disabled for obstacle avoidance scenario — polygon RTL would fire when planner no-path pushes drone toward boundary",
                 "polygon": [
                     {"x": -20, "y": -20},
                     {"x":  30, "y": -20},
@@ -95,6 +95,6 @@
         "repulsive_gain_range": {"min": 0.5, "max": 30.0, "default": 20.0},
         "cruise_speed_range": {"min": 0.5, "max": 3.0, "default": 1.0, "unit": "m/s"},
         "waypoints_editable": true,
-        "planner_backend_options": ["potential_field", "astar", "dstar_lite"]
+        "planner_backend_options": ["potential_field", "dstar_lite"]
     }
 }
