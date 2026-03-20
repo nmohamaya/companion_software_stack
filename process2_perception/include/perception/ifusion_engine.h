@@ -15,8 +15,8 @@ class Config;
 namespace drone::perception {
 
 /// Abstract fusion engine interface.
-/// Implementations consume tracked 2D objects (and optionally thermal data)
-/// and produce 3D fused objects with position + velocity estimates.
+/// Implementations consume tracked 2D objects and produce 3D fused objects
+/// with position + velocity estimates.
 ///
 /// IMPORTANT TERMINOLOGY NOTE:
 /// Despite the name "fusion", the current backends do NOT perform multi-sensor
@@ -39,10 +39,6 @@ public:
 
     /// Fuse one frame of tracked objects into 3D world-space estimates.
     [[nodiscard]] virtual FusedObjectList fuse(const TrackedObjectList& tracked) = 0;
-
-    /// Provide thermal detections for the current frame (optional).
-    /// Engines that don't use thermal data may ignore this.
-    virtual void set_thermal_detections([[maybe_unused]] const Detection2DList& thermal) {}
 
     /// Human-readable name for logging.
     [[nodiscard]] virtual std::string name() const = 0;

@@ -19,7 +19,7 @@ namespace drone::perception {
 // ObjectUKF
 // ═══════════════════════════════════════════════════════════
 ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth)
-    : track_id(trk.track_id), age(0), has_thermal(false) {
+    : track_id(trk.track_id), age(0) {
     // Initialize state: [x=depth, y=bearing_x*depth, z=0, vx, vy, vz]
     x_    = StateVec::Zero();
     x_(0) = initial_depth;                                 // x (forward)
@@ -195,16 +195,6 @@ void ObjectUKF::update_camera(const TrackedObject& trk, float estimated_depth) {
     P_ = (P_ + P_.transpose()) * 0.5f;
 }
 
-void ObjectUKF::update_thermal(float thermal_confidence) {
-    has_thermal = true;
-    // Thermal confirmation reduces position covariance
-    // (higher confidence → more reduction)
-    float factor = 1.0f - 0.3f * std::min(1.0f, thermal_confidence);
-    P_ *= factor;
-    // Ensure P stays symmetric positive definite
-    P_ = (P_ + P_.transpose()) * 0.5f;
-}
-
 Eigen::Vector3f ObjectUKF::position() const {
     return {x_(0), x_(1), x_(2)};
 }
@@ -227,15 +217,8 @@ float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
     return calib_.camera_height_m * fy / std::max(10.0f, trk.position_2d.y());
 }
 
-void UKFFusionEngine::set_thermal_detections(const Detection2DList& thermal) {
-    thermal_dets_      = thermal;
-    has_thermal_frame_ = true;
-}
-
 void UKFFusionEngine::reset() {
     filters_.clear();
-    thermal_dets_      = {};
-    has_thermal_frame_ = false;
 }
 
 FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
@@ -260,19 +243,6 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         ukf.predict();
         ukf.update_camera(trk, depth);
 
-        // Check for thermal match (simple spatial proximity)
-        if (has_thermal_frame_) {
-            for (const auto& td : thermal_dets_.detections) {
-                auto thermal_center = td.center();
-                // Scale thermal coords to camera coords (rough proportional mapping)
-                float dist = (trk.position_2d - thermal_center).norm();
-                if (dist < 100.0f) {  // within 100px → thermal match
-                    ukf.update_thermal(td.confidence);
-                    break;
-                }
-            }
-        }
-
         seen[trk.track_id] = true;
 
         // Build output
@@ -284,7 +254,6 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.velocity_3d         = ukf.velocity();
         fused.heading             = 0.0f;
         fused.has_camera          = true;
-        fused.has_thermal         = ukf.has_thermal;
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
 
@@ -299,9 +268,6 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             ++it;
         }
     }
-
-    // Clear thermal for next frame
-    has_thermal_frame_ = false;
 
     return output;
 }

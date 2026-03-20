@@ -60,7 +60,7 @@ Production requires implementing the real backend behind each interface.
 | 3.1 | Kalman tracker | Linear KF, 8D constant-velocity | EKF/UKF with constant-turn-rate model, or IMM | P2 | � | UKFFusionEngine implemented (PR #117); KalmanBoxTracker still linear KF |
 | 3.2 | Track association | Greedy nearest-neighbor | Hungarian (Munkres) O(n³) optimal assignment | P2 | 🟢 | O(n³) Kuhn-Munkres in `HungarianSolver` (PR #117) |
 | 3.3 | Appearance features | None — position-only matching | DeepSORT / ByteTrack Re-ID vectors | P2 | 🔴 | Reduces ID switches by ~45% |
-| 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | � | `UKFFusionEngine` with per-object UKF (PR #117); thermal end-to-end wiring pending |
+| 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | � | `UKFFusionEngine` with per-object UKF (PR #117); radar integration pending |
 | 3.5 | ISP pipeline | Raw RGB24 passthrough | Bayer demosaic → white balance → gamma → NV12 | P1 | 🔴 | Use NVIDIA ISP on Jetson |
 
 ---

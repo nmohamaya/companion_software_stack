@@ -1,6 +1,6 @@
 // tests/test_fusion_engine.cpp
 // Unit tests for CameraOnlyFusionEngine, UKFFusionEngine, IFusionEngine factory.
-// UKF + thermal + factory tests added (Phase 1C, Issue #114).
+// UKF + factory tests added (Phase 1C, Issue #114).
 #include "perception/fusion_engine.h"
 #include "perception/ifusion_engine.h"
 #include "perception/kalman_tracker.h"
@@ -199,7 +199,6 @@ TEST(UKFFusionEngineTest, SingleObjectProduces3DEstimate) {
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_EQ(result.objects[0].track_id, 1u);
     EXPECT_TRUE(result.objects[0].has_camera);
-    EXPECT_FALSE(result.objects[0].has_thermal);
     // Position should be non-zero (depth estimated)
     EXPECT_GT(result.objects[0].position_3d.x(), 0.0f);
 }
@@ -242,36 +241,6 @@ TEST(UKFFusionEngineTest, CovarianceReducesWithRepeatedMeasurements) {
     float cov2             = result2.objects[0].position_covariance.trace();
 
     EXPECT_LT(cov2, cov1);  // covariance should decrease
-}
-
-TEST(UKFFusionEngineTest, ThermalConfirmationSetsFlag) {
-    UKFFusionEngine engine(make_test_calib());
-
-    TrackedObjectList tracked;
-    tracked.timestamp_ns   = 1000;
-    tracked.frame_sequence = 1;
-
-    TrackedObject obj;
-    obj.track_id     = 1;
-    obj.class_id     = ObjectClass::PERSON;
-    obj.confidence   = 0.9f;
-    obj.position_2d  = {320.0f, 240.0f};
-    obj.velocity_2d  = Eigen::Vector2f::Zero();
-    obj.timestamp_ns = 1000;
-    tracked.objects.push_back(obj);
-
-    // Provide thermal detection overlapping with the tracked object
-    Detection2DList thermal;
-    thermal.timestamp_ns   = 1000;
-    thermal.frame_sequence = 1;
-    thermal.detections.push_back({300, 220, 40, 40, 0.85f, ObjectClass::PERSON, 1000, 1});
-
-    engine.set_thermal_detections(thermal);
-    auto result = engine.fuse(tracked);
-
-    ASSERT_EQ(result.objects.size(), 1u);
-    EXPECT_TRUE(result.objects[0].has_thermal);
-    EXPECT_TRUE(result.objects[0].has_camera);
 }
 
 TEST(UKFFusionEngineTest, ResetClearsFilters) {

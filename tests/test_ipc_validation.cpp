@@ -64,23 +64,6 @@ TEST(IpcValidation, StereoFrameOversized) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ThermalFrame validation
-// ═══════════════════════════════════════════════════════════
-TEST(IpcValidation, ThermalFrameValid) {
-    ThermalFrame f{};
-    f.width  = 640;
-    f.height = 512;
-    EXPECT_TRUE(f.validate());
-}
-
-TEST(IpcValidation, ThermalFrameOversized) {
-    ThermalFrame f{};
-    f.width  = 1280;
-    f.height = 1024;
-    EXPECT_FALSE(f.validate());
-}
-
-// ═══════════════════════════════════════════════════════════
 // DetectedObject validation
 // ═══════════════════════════════════════════════════════════
 TEST(IpcValidation, DetectedObjectValid) {
@@ -514,7 +497,6 @@ TEST(IpcValidation, MissionStatusInfTarget) {
 TEST(IpcValidation, StructsRemainTriviallyCopyable) {
     static_assert(std::is_trivially_copyable_v<VideoFrame>);
     static_assert(std::is_trivially_copyable_v<StereoFrame>);
-    static_assert(std::is_trivially_copyable_v<ThermalFrame>);
     static_assert(std::is_trivially_copyable_v<DetectedObject>);
     static_assert(std::is_trivially_copyable_v<DetectedObjectList>);
     static_assert(std::is_trivially_copyable_v<Pose>);

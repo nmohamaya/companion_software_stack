@@ -235,20 +235,19 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                          static_cast<uint32_t>(drone::ipc::MAX_DETECTED_OBJECTS));
 
             for (uint32_t i = 0; i < shm_list.num_objects; ++i) {
-                auto& src       = fused.objects[i];
-                auto& dst       = shm_list.objects[i];
-                dst.track_id    = src.track_id;
-                dst.class_id    = static_cast<drone::ipc::ObjectClass>(src.class_id);
-                dst.confidence  = src.confidence;
-                dst.position_x  = src.position_3d.x();
-                dst.position_y  = src.position_3d.y();
-                dst.position_z  = src.position_3d.z();
-                dst.velocity_x  = src.velocity_3d.x();
-                dst.velocity_y  = src.velocity_3d.y();
-                dst.velocity_z  = src.velocity_3d.z();
-                dst.heading     = src.heading;
-                dst.has_camera  = src.has_camera;
-                dst.has_thermal = src.has_thermal;
+                auto& src      = fused.objects[i];
+                auto& dst      = shm_list.objects[i];
+                dst.track_id   = src.track_id;
+                dst.class_id   = static_cast<drone::ipc::ObjectClass>(src.class_id);
+                dst.confidence = src.confidence;
+                dst.position_x = src.position_3d.x();
+                dst.position_y = src.position_3d.y();
+                dst.position_z = src.position_3d.z();
+                dst.velocity_x = src.velocity_3d.x();
+                dst.velocity_y = src.velocity_3d.y();
+                dst.velocity_z = src.velocity_3d.z();
+                dst.heading    = src.heading;
+                dst.has_camera = src.has_camera;
             }
             det_pub.publish(shm_list);
             ++fusion_count;

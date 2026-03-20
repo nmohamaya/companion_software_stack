@@ -1654,7 +1654,7 @@ All call sites fixed to properly handle return values:
 | Process supervision | systemd + ProcessManager | systemd + ProcessManager | **systemd + ProcessManager** |
 | Planning | — | A* 3D grid + potential field fallback | **A* 3D + potential field + potential_field_3d** |
 | Safety subsystems | — | Geofence + 3-tier battery RTL + FC link contingency | **Geofence + FAULT_BATTERY_RTL + FC link freeze** |
-| Perception fusion | weighted merge | UKF (RGB + thermal) | **UKF (RGB + thermal)** |
+| Perception fusion | weighted merge | UKF (RGB + thermal) | **UKF (RGB camera)** |
 | Tracker | greedy IOU | O(n³) Hungarian (Kuhn-Munkres) | **O(n³) Hungarian (Kuhn-Munkres)** |
 | VIO infrastructure | — | Feature extraction + stereo matching + IMU pre-integration | **+ steady_clock timestamps** |
 | Fault conditions | 8 | 11 | **12** (+ FAULT_BATTERY_RTL) |
@@ -2341,4 +2341,33 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-_Last updated after Improvement #49 (documentation refresh, Issue #192). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1008 tests, 48 C++ test files, 150+ scenario checks across 15 scenarios (14 Tier 1 + 1 Tier 2), 9 CI jobs._
+## Improvement #50 — Remove Thermal Camera Code Path (Issue #211)
+
+**Date:** 2026-03-20
+**Category:** Refactor / Cleanup
+**Issue:** [#211](https://github.com/nmohamaya/companion_software_stack/issues/211)
+
+**What:** Removed the disconnected thermal camera code path to clean up for radar sensor integration. The `set_thermal_detections()` method was never called by any process, and the `SimulatedThermalCamera` HAL backend was unused. Removed: `ThermalFrame` IPC struct, `VIDEO_THERMAL_CAM` topic, `SimulatedThermalCamera` class, `create_thermal_camera()` factory, `update_thermal()` UKF method, `has_thermal` fields from `DetectedObject`/`FusedObject`/`ObjectUKF`, thermal matching logic in `UKFFusionEngine::fuse()`, and 3 thermal-specific tests. CPU/GPU thermal monitoring (`SystemHealth.thermal_zone`, thermal gating in watchdog/restart policy) was intentionally preserved.
+
+**Why:** The thermal camera code path was dead code — `set_thermal_detections()` was never called anywhere in the codebase. Removing it reduces maintenance burden, eliminates confusion between thermal camera and thermal monitoring, and clears the path for radar sensor integration (Issue #211).
+
+**Files Deleted (1):**
+- `common/hal/include/hal/simulated_thermal_camera.h`
+
+**Files Modified (10):**
+- `common/ipc/include/ipc/ipc_types.h` — removed `ThermalFrame` struct, `VIDEO_THERMAL_CAM` topic, `has_thermal` from `DetectedObject`
+- `common/hal/include/hal/hal_factory.h` — removed `#include` and `create_thermal_camera()` factory
+- `process2_perception/include/perception/ukf_fusion_engine.h` — removed `update_thermal()`, `has_thermal`, thermal members
+- `process2_perception/include/perception/ifusion_engine.h` — removed `set_thermal_detections()` virtual method
+- `process2_perception/include/perception/types.h` — removed `has_thermal` from `FusedObject`
+- `process2_perception/src/ukf_fusion_engine.cpp` — removed thermal matching, `update_thermal()`, thermal state
+- `process2_perception/src/main.cpp` — removed `has_thermal` propagation
+- `tests/test_ipc_validation.cpp` — removed `ThermalFrame` tests and static_assert
+- `tests/test_fusion_engine.cpp` — removed `ThermalConfirmationSetsFlag` test and `has_thermal` assertions
+- 8 documentation files updated to remove thermal camera references
+
+**Test impact:** Removed 3 tests (2 ThermalFrame validation + 1 ThermalConfirmationSetsFlag). Net test count: TBD after build.
+
+---
+
+_Last updated after Improvement #50 (thermal camera removal, Issue #211). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._

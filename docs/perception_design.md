@@ -203,10 +203,9 @@ O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. The 
 
 ```cpp
 virtual FusedObjectList     fuse(const TrackedObjectList& tracked) = 0;
-virtual void                set_thermal_detections(const Detection2DList& thermal) = 0;
 ```
 
-The fusion engine maps 2D tracked objects to 3D camera-frame positions and optionally incorporates thermal measurements. Output positions are in **camera body frame** (forward=X, right=Y, down=Z); the `fusion_thread` rotates them to world ENU frame using the latest drone pose.
+The fusion engine maps 2D tracked objects to 3D camera-frame positions. Output positions are in **camera body frame** (forward=X, right=Y, down=Z); the `fusion_thread` rotates them to world ENU frame using the latest drone pose.
 
 > **Terminology note:** Despite the name "fusion", the current backends do **not** perform
 > multi-sensor fusion (e.g., fusing camera + LiDAR + radar). What they actually do:
@@ -330,23 +329,11 @@ depth     = camera_height_m * fy / max(10, position_2d.y)
 
 The Kalman gain is computed via `S.ldlt().solve(Pxz^T)` (LDLᵀ decomposition) instead of explicit `S.inverse()` for numerical stability. After the update, symmetry is enforced: `P = (P + Pᵀ) / 2`.
 
-#### Thermal Update Step (`update_thermal`)
-
-When a thermal blob is found within 100 px of a tracked object (in image coordinates), the UKF's position covariance is reduced:
-
-```
-P *= 1.0 - 0.3 * min(1.0, thermal_confidence)
-```
-
-This is not a standard measurement update — it is a confidence-driven covariance shrink. Maximum shrinkage is 30% per thermal observation. `has_thermal` flag is set to `true` on first thermal match and propagated to the `FusedObject` output.
-
 #### Track Lifecycle in UKFFusionEngine
 
 - New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth
 - Each frame: `predict()` then `update_camera()` with tracker output
-- Thermal match check (100 px proximity): `update_thermal()` if matched
 - Tracks not present in the current `TrackedObjectList` (i.e. pruned by SORT) are erased from `filters_`
-- `has_thermal_frame_` is cleared at the end of each `fuse()` call
 
 ---
 
@@ -492,7 +479,6 @@ All keys are under `perception.*` in the active JSON config.
 | `velocity_3d` | Vector3f | 3D velocity estimate (m/s) |
 | `position_covariance` | Matrix3f | 3×3 position uncertainty |
 | `has_camera` | bool | Camera measurement present |
-| `has_thermal` | bool | Thermal match occurred |
 
 ### `ShmDetectedObjectList` (IPC output, world frame)
 
@@ -555,7 +541,6 @@ See [observability.md](observability.md) for histogram interpretation.
 
 | Gap | Details | Tracked |
 |-----|---------|---------|
-| **Thermal inactive in SITL** | `has_thermal` is always `false` in Gazebo. `UKFFusionEngine::update_thermal()` never fires. Requires a simulated thermal topic or bridging the Gazebo thermal plugin. | — |
 | **UKF not default** | The UKF fusion backend is implemented and tested but the default config uses `camera_only`. The UKF backend should be validated in a scenario run before becoming default. | — |
 | **Monocular depth uncertainty** | Depth estimates from apparent size assume a known obstacle height and fixed focal length. Errors propagate into the world-frame position seen by Process 4. The 3×3 `position_covariance` in UKF quantifies this but Process 4 does not currently use it. | — |
 | **Yaw-only camera→world** | The body→world rotation in `fusion_thread` ignores camera pitch/roll. For aggressively pitched manoeuvres the world-frame position will have a systematic error. | — |

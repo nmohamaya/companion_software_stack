@@ -45,20 +45,6 @@ struct StereoFrame {
     }
 };
 
-/// LWIR thermal camera frame (640x512, GRAY8 — 8-bit pseudo-radiometric).
-struct ThermalFrame {
-    uint64_t timestamp_ns;
-    uint64_t sequence_number;
-    uint32_t width;
-    uint32_t height;
-    uint8_t  pixel_data[640 * 512];  // GRAY8 — 1 byte per pixel
-
-    [[nodiscard]] bool validate() const {
-        if (width == 0 || height == 0) return false;
-        return static_cast<uint64_t>(width) * height <= sizeof(pixel_data);
-    }
-};
-
 // ═══════════════════════════════════════════════════════════
 // Detected Objects (Process 2 → Process 4)
 // ═══════════════════════════════════════════════════════════
@@ -83,7 +69,7 @@ struct DetectedObject {
     float       velocity_x, velocity_y, velocity_z;  // m/s
     float       heading;                             // radians
     float       bbox_x, bbox_y, bbox_w, bbox_h;      // image-space
-    bool        has_camera, has_thermal;
+    bool        has_camera;
 
     [[nodiscard]] bool validate() const {
         return std::isfinite(confidence) && confidence >= 0.0f && confidence <= 1.0f &&
@@ -546,7 +532,6 @@ static_assert(std::is_trivially_copyable_v<FaultOverrides>,
 namespace topics {
 constexpr const char* VIDEO_MISSION_CAM = "/drone_mission_cam";
 constexpr const char* VIDEO_STEREO_CAM  = "/drone_stereo_cam";
-constexpr const char* VIDEO_THERMAL_CAM = "/drone_thermal_cam";
 constexpr const char* DETECTED_OBJECTS  = "/detected_objects";
 constexpr const char* SLAM_POSE         = "/slam_pose";
 constexpr const char* MISSION_STATUS    = "/mission_status";

@@ -71,7 +71,7 @@
 | Observability | JSON logging + IPC latency histograms + cross-process correlation IDs |
 | Planning | **D* Lite incremental planner** + A* 3D grid planner + 3D obstacle avoidance + potential field fallback |
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
-| Perception fusion | **UKF** (RGB + thermal camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
+| Perception fusion | **UKF** (RGB camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
 | Integration testing | **9 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
@@ -299,10 +299,10 @@
 - `ITracker` interface + factory pattern (`"sort"` → `MultiObjectTracker`)
 - O(n³) Kuhn-Munkres Hungarian algorithm replacing greedy IOU matching
 
-**Phase 1C — Thermal Camera + UKF Fusion (#114, PR #117):**
-- `SimulatedThermalCamera` HAL backend (LWIR grayscale, thermal noise model)
-- Per-object UKF fusion engine (RGB + thermal → 3D position + velocity)
+**Phase 1C — UKF Fusion (#114, PR #117):**
+- Per-object UKF fusion engine (RGB camera → 3D position + velocity)
 - `IFusionEngine` interface + factory
+- *(Thermal camera code path removed in Issue #211 — replaced by radar sensor roadmap)*
 
 **Phase 2A — VIO Foundation (#115, PR #118):**
 - ORB/FAST feature extraction + stereo matching (disparity-based depth)
@@ -591,7 +591,7 @@
 | Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | **systemd + ProcessManager** |
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
-| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB + thermal)** |
+| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB camera)** |
 | Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **15 scenarios (14 Tier 1 + 1 Tier 2), 14/14 Tier 1 pass on Zenoh** |
 
 ### Process Activity During Simulation
