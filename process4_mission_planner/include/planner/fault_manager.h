@@ -166,16 +166,24 @@ public:
 
         // ── 3. VIO health degradation ────────────────────────
         // Only evaluate VIO quality after we've received at least one valid pose.
-        // Before first pose, pose_timestamp_ns==0 and pose_quality is default (2),
-        // but a zero-initialized Pose would have quality==0 — gating on timestamp
-        // prevents false RTL escalation during startup.
+        // Debounce: require kVioDebounceCount consecutive low-quality readings
+        // before firing, to prevent a single transient glitch (e.g. a zero-init
+        // FaultOverrides warmup) from triggering irreversible RTL.
         if (pose_timestamp_ns > 0) {
             if (pose_quality <= config_.vio_quality_rtl_threshold) {
-                result.active_faults |= FAULT_VIO_LOST;
-                escalate(result, FaultAction::RTL, "VIO tracking lost");
+                vio_low_quality_count_ = std::min(vio_low_quality_count_ + 1, kVioDebounceCount);
+                if (vio_low_quality_count_ >= kVioDebounceCount) {
+                    result.active_faults |= FAULT_VIO_LOST;
+                    escalate(result, FaultAction::RTL, "VIO tracking lost");
+                }
             } else if (pose_quality <= config_.vio_quality_loiter_threshold) {
-                result.active_faults |= FAULT_VIO_DEGRADED;
-                escalate(result, FaultAction::LOITER, "VIO quality degraded");
+                vio_low_quality_count_ = std::min(vio_low_quality_count_ + 1, kVioDebounceCount);
+                if (vio_low_quality_count_ >= kVioDebounceCount) {
+                    result.active_faults |= FAULT_VIO_DEGRADED;
+                    escalate(result, FaultAction::LOITER, "VIO quality degraded");
+                }
+            } else {
+                vio_low_quality_count_ = 0;  // reset on good reading
             }
         }
 
@@ -263,10 +271,11 @@ public:
 
     /// Reset the escalation state (e.g. after landing / new mission).
     void reset() {
-        high_water_mark_   = FaultAction::NONE;
-        high_water_reason_ = "nominal";
-        loiter_start_ns_   = 0;
-        geofence_violated_ = false;
+        high_water_mark_       = FaultAction::NONE;
+        high_water_reason_     = "nominal";
+        loiter_start_ns_       = 0;
+        geofence_violated_     = false;
+        vio_low_quality_count_ = 0;
     }
 
     /// Current high-water mark (highest action ever returned).
@@ -279,11 +288,14 @@ public:
     void set_geofence_violation(bool violated) { geofence_violated_ = violated; }
 
 private:
+    static constexpr int kVioDebounceCount = 3;
+
     FaultConfig config_;
-    FaultAction high_water_mark_   = FaultAction::NONE;
-    const char* high_water_reason_ = "nominal";
-    uint64_t    loiter_start_ns_   = 0;
-    bool        geofence_violated_ = false;
+    FaultAction high_water_mark_       = FaultAction::NONE;
+    const char* high_water_reason_     = "nominal";
+    uint64_t    loiter_start_ns_       = 0;
+    bool        geofence_violated_     = false;
+    int         vio_low_quality_count_ = 0;
 
     /// Escalate to a higher action (no-op if target is lower/equal).
     static void escalate(FaultState& state, FaultAction target, const char* reason) {

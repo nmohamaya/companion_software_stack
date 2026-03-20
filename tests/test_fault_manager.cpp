@@ -619,7 +619,11 @@ TEST(FaultManagerTest, VIODegradedTriggersLoiter) {
     auto         fc     = make_fc_ok();
     uint64_t     now    = 1'000 * S;
 
-    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/1);
+    // Debounce: need 3 consecutive degraded readings before fault fires
+    FaultState result;
+    for (int i = 0; i < 3; ++i) {
+        result = mgr.evaluate(health, fc, now - 10 * MS, now + i * MS, /*pose_quality=*/1);
+    }
 
     EXPECT_EQ(result.recommended_action, FaultAction::LOITER);
     EXPECT_TRUE(result.active_faults & FAULT_VIO_DEGRADED);
@@ -632,7 +636,11 @@ TEST(FaultManagerTest, VIOLostTriggersRTL) {
     auto         fc     = make_fc_ok();
     uint64_t     now    = 1'000 * S;
 
-    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+    // Debounce: need 3 consecutive lost readings before fault fires
+    FaultState result;
+    for (int i = 0; i < 3; ++i) {
+        result = mgr.evaluate(health, fc, now - 10 * MS, now + i * MS, /*pose_quality=*/0);
+    }
 
     EXPECT_EQ(result.recommended_action, FaultAction::RTL);
     EXPECT_TRUE(result.active_faults & FAULT_VIO_LOST);
@@ -670,11 +678,14 @@ TEST(FaultManagerTest, VIODegradedRecoveryStaysEscalated) {
     auto         fc     = make_fc_ok();
     uint64_t     now    = 1'000 * S;
 
-    // First: VIO degraded → LOITER
-    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/1);
+    // Debounce: 3 consecutive degraded readings → LOITER
+    FaultState r1;
+    for (int i = 0; i < 3; ++i) {
+        r1 = mgr.evaluate(health, fc, now - 10 * MS, now + i * MS, /*pose_quality=*/1);
+    }
     EXPECT_EQ(r1.recommended_action, FaultAction::LOITER);
 
-    // Second: VIO recovers to NOMINAL — escalation-only means LOITER persists
+    // VIO recovers to NOMINAL — escalation-only means LOITER persists
     auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * S, /*pose_quality=*/2);
     EXPECT_EQ(r2.recommended_action, FaultAction::LOITER);
     // VIO fault bit should be CLEARED (no active VIO fault)
@@ -688,7 +699,11 @@ TEST(FaultManagerTest, VIOLostPlusBatteryCritHighestWins) {
     fc.battery_remaining = 5.0f;  // critical
     uint64_t now         = 1'000 * S;
 
-    auto result = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+    // Debounce: 3 consecutive lost readings before VIO fault fires
+    FaultState result;
+    for (int i = 0; i < 3; ++i) {
+        result = mgr.evaluate(health, fc, now - 10 * MS, now + i * MS, /*pose_quality=*/0);
+    }
 
     // EMERGENCY_LAND (battery critical) > RTL (VIO lost)
     EXPECT_EQ(result.recommended_action, FaultAction::EMERGENCY_LAND);
@@ -708,6 +723,52 @@ TEST(FaultManagerTest, VIODefaultQualityNoFault) {
     EXPECT_EQ(result.recommended_action, FaultAction::NONE);
     EXPECT_FALSE(result.active_faults & FAULT_VIO_DEGRADED);
     EXPECT_FALSE(result.active_faults & FAULT_VIO_LOST);
+}
+
+TEST(FaultManagerTest, VIODebouncePreventsSingleGlitch) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    // Single bad reading should NOT trigger fault (debounce = 3)
+    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+    EXPECT_EQ(r1.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(r1.active_faults & FAULT_VIO_LOST);
+
+    // Two bad readings — still below debounce threshold
+    auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * MS, /*pose_quality=*/0);
+    EXPECT_EQ(r2.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(r2.active_faults & FAULT_VIO_LOST);
+
+    // Third consecutive bad reading — now it fires
+    auto r3 = mgr.evaluate(health, fc, now - 10 * MS, now + 2 * MS, /*pose_quality=*/0);
+    EXPECT_EQ(r3.recommended_action, FaultAction::RTL);
+    EXPECT_TRUE(r3.active_faults & FAULT_VIO_LOST);
+}
+
+TEST(FaultManagerTest, VIODebounceResetsOnGoodReading) {
+    FaultManager mgr(default_cfg());
+    auto         health = make_healthy();
+    auto         fc     = make_fc_ok();
+    uint64_t     now    = 1'000 * S;
+
+    // Two bad readings (below threshold — no fault yet)
+    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+    EXPECT_FALSE(r1.active_faults & FAULT_VIO_LOST);
+    auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * MS, /*pose_quality=*/0);
+    EXPECT_FALSE(r2.active_faults & FAULT_VIO_LOST);
+
+    // Good reading resets counter — no fault
+    auto r3 = mgr.evaluate(health, fc, now - 10 * MS, now + 2 * MS, /*pose_quality=*/2);
+    EXPECT_EQ(r3.recommended_action, FaultAction::NONE);
+
+    // Two more bad readings — counter restarted, still below threshold
+    auto r4 = mgr.evaluate(health, fc, now - 10 * MS, now + 3 * MS, /*pose_quality=*/0);
+    EXPECT_FALSE(r4.active_faults & FAULT_VIO_LOST);
+    auto r5 = mgr.evaluate(health, fc, now - 10 * MS, now + 4 * MS, /*pose_quality=*/0);
+    EXPECT_EQ(r5.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(r5.active_faults & FAULT_VIO_LOST);
 }
 
 TEST(FaultManagerTest, VIOQualityIgnoredBeforeFirstPose) {
