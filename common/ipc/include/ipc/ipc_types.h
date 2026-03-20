@@ -527,6 +527,51 @@ static_assert(std::is_trivially_copyable_v<FaultOverrides>,
               "FaultOverrides must be trivially copyable for IPC");
 
 // ═══════════════════════════════════════════════════════════
+// Radar Detections (Process 2 → Process 4)
+// ═══════════════════════════════════════════════════════════
+
+/// Single radar return — range, bearing, Doppler velocity.
+struct RadarDetection {
+    uint64_t timestamp_ns{0};
+    float    range_m{0.0f};
+    float    azimuth_rad{0.0f};
+    float    elevation_rad{0.0f};
+    float    radial_velocity_mps{0.0f};
+    float    rcs_dbsm{0.0f};
+    float    snr_db{0.0f};
+    float    confidence{0.0f};
+    uint32_t track_id{0};
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(range_m) && std::isfinite(azimuth_rad) &&
+               std::isfinite(elevation_rad) && std::isfinite(radial_velocity_mps) &&
+               std::isfinite(rcs_dbsm) && std::isfinite(snr_db) && std::isfinite(confidence) &&
+               range_m >= 0.0f && confidence >= 0.0f && confidence <= 1.0f;
+    }
+};
+
+static constexpr uint32_t MAX_RADAR_DETECTIONS = 128;
+
+struct RadarDetectionList {
+    uint64_t       timestamp_ns{0};
+    uint32_t       num_detections{0};
+    RadarDetection detections[MAX_RADAR_DETECTIONS];
+
+    [[nodiscard]] bool validate() const {
+        if (num_detections > MAX_RADAR_DETECTIONS) return false;
+        for (uint32_t i = 0; i < num_detections; ++i) {
+            if (!detections[i].validate()) return false;
+        }
+        return true;
+    }
+};
+
+static_assert(std::is_trivially_copyable_v<RadarDetection>,
+              "RadarDetection must be trivially copyable for IPC");
+static_assert(std::is_trivially_copyable_v<RadarDetectionList>,
+              "RadarDetectionList must be trivially copyable for IPC");
+
+// ═══════════════════════════════════════════════════════════
 // IPC Topic Names — centralised to avoid typos
 // ═══════════════════════════════════════════════════════════
 namespace topics {
@@ -544,6 +589,7 @@ constexpr const char* MISSION_UPLOAD    = "/mission_upload";
 constexpr const char* PAYLOAD_STATUS    = "/payload_status";
 constexpr const char* SYSTEM_HEALTH     = "/system_health";
 constexpr const char* FAULT_OVERRIDES   = "/fault_overrides";
+constexpr const char* RADAR_DETECTIONS  = "/radar_detections";
 
 // ── Per-process thread health channels ──────────────────
 constexpr const char* THREAD_HEALTH_VIDEO_CAPTURE   = "/drone_thread_health_video_capture";

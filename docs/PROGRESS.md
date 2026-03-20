@@ -2341,7 +2341,43 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
-## Improvement #50 — Remove Thermal Camera Code Path (Issue #211)
+## Improvement #50 — IRadar HAL + SimulatedRadar + RadarDetection IPC Types (Issue #209)
+
+**Date:** 2026-03-20
+**Category:** Architecture / HAL / IPC
+**Issue:** [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+**Files Added:**
+
+- `common/hal/include/hal/iradar.h` — `IRadar` pure-virtual interface (`init`, `read`, `is_active`, `name`)
+- `common/hal/include/hal/simulated_radar.h` — `SimulatedRadar` backend with configurable FoV, range, target count, and Gaussian noise model
+- `tests/test_radar_hal.cpp` — 27 unit tests across 7 suites
+
+**Files Modified:**
+
+- `common/ipc/include/ipc/ipc_types.h` — `RadarDetection` struct, `RadarDetectionList` struct, `MAX_RADAR_DETECTIONS = 128`, `/radar_detections` topic constant
+- `common/hal/include/hal/hal_factory.h` — `create_radar(cfg, section)` factory function
+- `config/default.json` — `perception.radar` config section (`enabled: false`, `backend: "simulated"`, FoV, range, target count, noise)
+
+**What:** Added a complete radar HAL layer following the same Strategy + factory pattern as the existing `ICamera`, `IIMUSource`, and other HAL interfaces. `IRadar::read()` returns a `RadarDetectionList` IPC struct published on `/radar_detections` (Zenoh key: `radar/detections`). The `SimulatedRadar` backend generates configurable synthetic detections with Gaussian noise for simulation and unit testing. Radar is disabled by default in `config/default.json` and can be enabled without recompiling.
+
+**Why:** Radar provides complementary obstacle detection to the vision pipeline — it works in low-light and smoke conditions where cameras fail, and gives direct velocity (Doppler) measurements that the camera-based fusion cannot provide. The HAL layer ensures process code is agnostic to the physical sensor (TI AWR1843, Ainstein US-D1, or simulated), following the project's hardware abstraction principle.
+
+**Test impact:** +27 tests, +1 C++ test file. Total: 1035 C++ tests, 49 C++ test files.
+
+| Suite | Tests |
+|-------|-------|
+| `RadarDetectionValidation` | 6 |
+| `RadarDetectionListValidation` | 4 |
+| `RadarDetectionTriviallyCopyable` | 1 |
+| `SimulatedRadarTest` | 11 |
+| `RadarFactoryTest` | 3 |
+| `SimulatedRadarConfigTest` | 1 |
+| `RadarTopicTest` | 1 |
+
+---
+
+## Improvement #51 — Remove Thermal Camera Code Path (Issue #211)
 
 **Date:** 2026-03-20
 **Category:** Refactor / Cleanup
@@ -2366,8 +2402,8 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 - `tests/test_fusion_engine.cpp` — removed `ThermalConfirmationSetsFlag` test and `has_thermal` assertions
 - 8 documentation files updated to remove thermal camera references
 
-**Test impact:** Removed 3 tests (2 ThermalFrame validation + 1 ThermalConfirmationSetsFlag). Test count: 996 → 993.
+**Test impact:** Removed 3 tests (2 ThermalFrame validation + 1 ThermalConfirmationSetsFlag). Test count: 1037 → 1034.
 
 ---
 
-_Last updated after Improvement #50 (thermal camera removal, Issue #211). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._
+_Last updated after Improvement #51 (thermal camera removal, Issue #211). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._

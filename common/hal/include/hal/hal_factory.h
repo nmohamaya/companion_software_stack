@@ -26,6 +26,9 @@
 #include "hal/simulated_gcs_link.h"
 #include "hal/simulated_gimbal.h"
 #include "hal/simulated_imu.h"
+#include "hal/simulated_radar.h"
+
+
 // Optional backends — only included when the dependency is found by CMake
 #ifdef HAVE_MAVSDK
 #include "hal/mavlink_fc_link.h"
@@ -139,6 +142,22 @@ inline std::unique_ptr<IIMUSource> create_imu_source(const drone::Config& cfg,
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
 
     throw std::runtime_error("[HAL] Unknown IMU backend: " + backend);
+}
+
+/// Create a radar backend from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.radar")
+inline std::unique_ptr<IRadar> create_radar(const drone::Config& cfg,
+                                            const std::string&   section = "perception.radar") {
+    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    spdlog::info("[HAL] Creating radar '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedRadar>(cfg, section);
+    }
+    // Future: if (backend == "gazebo") return std::make_unique<GazeboRadar>(...);
+
+    throw std::runtime_error("[HAL] Unknown radar backend: " + backend);
 }
 
 }  // namespace drone::hal
