@@ -189,7 +189,7 @@ F = I₈ with F[0,4]=dt, F[1,5]=dt, F[2,6]=dt, F[3,7]=dt
 
 #### HungarianSolver
 
-O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. The cost matrix is Euclidean center-to-center distance in pixels. Any match above `max_association_cost` (config default 100 px) is treated as no match.
+O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. ByteTrack uses IoU (Intersection over Union) as the cost metric — any match above `max_iou_cost` (config default 0.7) is treated as no match.
 
 - **Input**: `n_tracks × n_detections` cost matrix (doubles)
 - **Output**: assignment vector + lists of unmatched rows and columns
@@ -440,10 +440,12 @@ All keys are under `perception.*` in the active JSON config.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `perception.tracker.backend` | string | `"sort"` | Only `"sort"` is supported |
+| `perception.tracker.backend` | string | `"bytetrack"` | Only `"bytetrack"` is supported (SORT removed in Issue #205) |
 | `perception.tracker.max_age` | int | `10` | Max consecutive misses before deletion |
 | `perception.tracker.min_hits` | int | `3` | Hits required for track confirmation |
-| `perception.tracker.max_association_cost` | float | `100.0` | Max pixel distance for valid association |
+| `perception.tracker.high_conf_threshold` | float | `0.5` | Stage 1 confidence threshold (high-confidence detections) |
+| `perception.tracker.low_conf_threshold` | float | `0.1` | Stage 2 confidence threshold (low-confidence recovery) |
+| `perception.tracker.max_iou_cost` | float | `0.7` | Max IoU cost for valid association |
 
 ### Fusion Engine
 
@@ -505,10 +507,10 @@ Published per frame. Up to `MAX_DETECTED_OBJECTS` entries. Each entry mirrors `F
 
 | Config | Detector | Tracker | Fusion | IPC | Notes |
 |--------|----------|---------|--------|-----|-------|
-| `default.json` | simulated | sort | camera_only | shm | Integration testing only |
-| `gazebo_sitl.json` | color_contour | sort | camera_only | zenoh | Gazebo SITL with Zenoh |
-| `hardware.json` | color_contour | sort | camera_only | shm | Real hardware (yolov8 opt-in) |
-| `zenoh_e2e.json` | (per config) | sort | camera_only | zenoh | End-to-end Zenoh testing |
+| `default.json` | simulated | bytetrack | camera_only | shm | Integration testing only |
+| `gazebo_sitl.json` | color_contour | bytetrack | camera_only | zenoh | Gazebo SITL with Zenoh |
+| `hardware.json` | color_contour | bytetrack | camera_only | shm | Real hardware (yolov8 opt-in) |
+| `zenoh_e2e.json` | (per config) | bytetrack | camera_only | zenoh | End-to-end Zenoh testing |
 
 > To enable the UKF fusion engine, set `"perception.fusion.backend": "ukf"` in the active config or a config overlay.
 
