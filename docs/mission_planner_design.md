@@ -172,18 +172,10 @@ Selected via `mission_planner.path_planner.backend` config key.
 - **Header:** [`ipath_planner.h`](../process4_mission_planner/include/planner/ipath_planner.h)
 - **Factory:** `create_path_planner(backend_name) → unique_ptr<IPathPlanner>`
 
-### PotentialFieldPlanner (`"potential_field"`)
-
-- **Header:** [`ipath_planner.h`](../process4_mission_planner/include/planner/ipath_planner.h)
-- Simple attractive force toward waypoint
-- Speed ramping: 1 m/s minimum floor within 3 m of target
-- EMA velocity smoothing (α = 0.35) to reduce jitter
-- Yaw output: `atan2(dy, dx)` toward waypoint
-
-### DStarLitePlanner (`"dstar_lite"`)
+### DStarLitePlanner (`"dstar_lite"`) — the only path planner
 
 - **Header:** [`dstar_lite_planner.h`](../process4_mission_planner/include/planner/dstar_lite_planner.h)
-- **Tests:** [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) (32 tests)
+- **Tests:** [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) (33 tests)
 
 #### OccupancyGrid3D
 
@@ -201,7 +193,7 @@ Selected via `mission_planner.path_planner.backend` config key.
 - **Dynamic layer** (TTL): Camera-detected objects via `update_obstacles()`. Each occupied cell
   carries a timestamp. Cells expire after TTL (default 2 s) to handle transient detections.
 
-#### A* Search Algorithm
+#### D* Lite Search Algorithm
 
 - **Connectivity:** 26-connected (full 3D neighbourhood including diagonals)
 - **Heuristic:** Euclidean distance (admissible, consistent)
@@ -216,22 +208,14 @@ Selected via `mission_planner.path_planner.backend` config key.
 
 ## Component: Obstacle Avoiders
 
-Two pluggable strategies implement `IObstacleAvoider::avoid(planned, pose, objects) → ShmTrajectoryCmd`.
+`IObstacleAvoider::avoid(planned, pose, objects) → ShmTrajectoryCmd`.
 Selected via `mission_planner.obstacle_avoider.backend` config key.
+PotentialFieldAvoider (2D) removed in Issue #207 — ObstacleAvoider3D is the only implementation.
 
 ### IObstacleAvoider Interface
 
 - **Header:** [`iobstacle_avoider.h`](../process4_mission_planner/include/planner/iobstacle_avoider.h)
 - **Factory:** `create_obstacle_avoider(backend, influence_radius, repulsive_gain)`
-
-### PotentialFieldAvoider (`"potential_field"`)
-
-- **Header:** [`iobstacle_avoider.h`](../process4_mission_planner/include/planner/iobstacle_avoider.h)
-- 2D repulsive field (XY only, no Z component)
-- Influence radius: 5 m (configurable)
-- Inverse-square force decay
-- Clamped corrections: max ±2 m/s per axis
-- Staleness check: ignores objects older than 500 ms
 
 ### ObstacleAvoider3D (`"3d"` / `"obstacle_avoider_3d"` / `"potential_field_3d"`)
 

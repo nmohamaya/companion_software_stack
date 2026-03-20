@@ -81,7 +81,7 @@ of which backend is plugged in.
 | `IDetector` | `process2_perception/include/perception/detector_interface.h` | `SimulatedDetector`, `OpenCvYoloDetector`, `ColorContourDetector` |
 | `IPublisher<T>` | `common/ipc/include/ipc/ipublisher.h` | `ShmPublisher<T>`, `ZenohPublisher<T>` |
 | `ISubscriber<T>` | `common/ipc/include/ipc/isubscriber.h` | `ShmSubscriber<T>`, `ZenohSubscriber<T>` |
-| `IPathPlanner` | `process4_mission_planner/include/planner/ipath_planner.h` | `PotentialFieldPlanner` |
+| `IPathPlanner` | `process4_mission_planner/include/planner/ipath_planner.h` | `DStarLitePlanner` |
 | `IVisualFrontend` | `process3_slam_vio_nav/include/slam/ivisual_frontend.h` | `SimulatedVisualFrontend`, `GazeboVisualFrontend` |
 | `IProcessMonitor` | `process7_system_monitor/include/monitor/iprocess_monitor.h` | `LinuxProcessMonitor` |
 

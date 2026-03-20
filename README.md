@@ -114,8 +114,8 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 | `IGimbal` | Gimbal control | `SimulatedGimbal` — rate-limited slew model | — | UART / PWM gimbal protocol |
 | `IIMUSource` | Inertial measurement | `SimulatedIMU` — noisy synthetic accel + gyro | `GazeboIMU` (gz-transport) | SPI / I2C IMU driver |
 | `IVisualFrontend` | Pose estimation | `SimulatedVisualFrontend` — circular trajectory + noise | `GazeboVisualFrontend` (gz-transport odometry) | ORB-SLAM3 / VINS-Fusion |
-| `IPathPlanner` | Path planning | `PotentialFieldPlanner` — attractive force + EMA smoothing | — | RRT* / D* Lite |
-| `IObstacleAvoider` | Obstacle avoidance | `PotentialFieldAvoider` — repulsive force + clamping | — | VFH+ / 3D-VFH |
+| `IPathPlanner` | Path planning | `DStarLitePlanner` — 3D incremental search + obstacle awareness | — | RRT* |
+| `IObstacleAvoider` | Obstacle avoidance | `ObstacleAvoider3D` — 3D repulsive field + velocity prediction | — | VFH+ / 3D-VFH |
 | `IProcessMonitor` | System metrics | `LinuxProcessMonitor` — /proc, /sys | — | — |
 
 ---
@@ -358,29 +358,29 @@ A config-driven **FaultManager** library evaluates system health each loop tick 
 - **NAVIGATE → RTL:** On last waypoint, sends RTL FC command + publishes invalid trajectory (`valid=false`) to stop comms forwarding stale velocity commands
 - **GCS RTL/LAND:** Handles by (1) sending FC command, (2) publishing invalid trajectory, (3) transitioning FSM
 
-#### Path Planning — `IPathPlanner` (Artificial Potential Field)
+#### Path Planning — `IPathPlanner` (D* Lite)
 
 | Aspect | Detail |
 |---|---|
-| **Algorithm** | **Artificial Potential Field** (attractive + repulsive forces) |
-| **NOT used** | RRT, RRT*, A*, D*, PRM, or any sampling/graph-based planner |
-| **Attractive force** | Unit vector toward waypoint × $\min(\text{cruise\_speed},\; \|\mathbf{d}\|)$ |
-| **EMA smoothing** | $\mathbf{v}_t = \alpha \cdot \mathbf{v}_{raw} + (1-\alpha) \cdot \mathbf{v}_{t-1}$, $\alpha = 0.35$ (config: `ema_alpha`, clamped [0.05, 1.0]). Prevents jitter from noisy pose input. |
-| **Speed ramping** | Linear ramp from `cruise_speed` to `min_speed` (1.0 m/s floor) within last 3 m of waypoint |
+| **Algorithm** | **D* Lite** — incremental 3D grid search (Koenig & Likhachev 2002) |
+| **Obstacle awareness** | Two-layer occupancy grid: HD-map static + camera-detected dynamic (TTL 3 s) |
+| **EMA smoothing** | Velocity along first path segment, EMA-smoothed to reduce jitter |
+| **Speed ramping** | Linear ramp from `cruise_speed` to `min_speed` within last 3 m of waypoint |
 | **Waypoint acceptance** | Euclidean distance < `acceptance_radius_m` (2.0 m in Gazebo config) |
-| **Velocity control** | Direct velocity commands — **no PID controller** |
-| **Written from scratch** | Yes — `PotentialFieldPlanner::compute_trajectory()` |
+| **Written from scratch** | Yes — `DStarLitePlanner::do_search()` |
 
-#### Obstacle Avoidance — `IObstacleAvoider` (Potential Field)
+#### Obstacle Avoidance — `IObstacleAvoider` (ObstacleAvoider3D)
 
 | Aspect | Detail |
 |---|---|
-| **Repulsive force** | For each obstacle within $r_{influence}$: $\mathbf{F}_{rep} = \frac{k_{rep}}{d^2} \hat{\mathbf{n}}_{away}$ |
-| **Staleness filter** | Skips objects with timestamp > 500 ms old |
-| **Confidence filter** | Skips objects with confidence < 0.3 |
-| **Repulsion clamp** | Max repulsion capped at ±2.0 m/s per axis |
-| **Config** | `influence_radius_m` = 5.0, `repulsive_gain` = 2.0, `min_distance_m` = 2.0 |
-| **Written from scratch** | Yes — `PotentialFieldAvoider::adjust_trajectory()` |
+| **Repulsive force** | Full 3D (XYZ) inverse-square repulsion within influence radius |
+| **Velocity prediction** | Uses obstacle velocity for predictive avoidance |
+| **Staleness filter** | Skips objects older than configurable `max_age_ms` (default 500 ms) |
+| **Confidence filter** | Skips objects with confidence < `min_confidence` (default 0.3) |
+| **Repulsion clamp** | Max correction capped at `max_correction_mps` per axis (default 3.0 m/s) |
+| **NaN guard** | NaN pose passes through unmodified |
+| **Config** | `influence_radius_m` = 5.0, `repulsive_gain` = 2.0, `max_correction_mps` = 3.0, `prediction_dt_s` = 0.5 |
+| **Written from scratch** | Yes — `ObstacleAvoider3D::avoid()` |
 
 **Gazebo waypoints** (3 waypoints at 5 m altitude):
 
@@ -764,13 +764,11 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| Path planning | 🟡 **Artificial Potential Field** (attractive + repulsive) | **RRT\*** (asymptotically optimal rapidly-exploring random tree) | Handles complex 3D obstacle fields. Write from scratch or use [OMPL](https://ompl.kavrakilab.org/) (BSD). |
-| | | **D\* Lite** — incremental replanning | Efficient for changing environments. Original paper: Koenig & Likhachev 2002. |
-| | | **A\*** on 3D voxel grid (with OctoMap) | Simple, optimal, well-understood. Best paired with an occupancy map. |
+| Path planning | 🟢 **D\* Lite** — incremental 3D grid search | **RRT\*** (asymptotically optimal rapidly-exploring random tree) | Handles complex 3D obstacle fields. Write from scratch or use [OMPL](https://ompl.kavrakilab.org/) (BSD). |
 | | | **MPC** (Model Predictive Control) — receding horizon | Handles dynamics constraints (max velocity, acceleration). Write from scratch or use [acados](https://github.com/acados/acados). |
 | Velocity control | 🔴 **Direct velocity command** — no PID | **Cascaded PID** (position → velocity → acceleration) | Standard for MAVLink offboard control. Gains must be tuned per airframe. |
 | | | **PID with feedforward + anti-windup** | Production-grade controller. Write from scratch; well-documented in Åström & Murray. |
-| Obstacle avoidance | 🟡 Potential field repulsive force ($F \propto 1/d^2$) | **VFH+** (Vector Field Histogram) | Handles sensor noise better. Published: Ulrich & Borenstein 1998. |
+| Obstacle avoidance | 🟢 **ObstacleAvoider3D** — 3D repulsive field + velocity prediction | **VFH+** (Vector Field Histogram) | Handles sensor noise better. Published: Ulrich & Borenstein 1998. |
 | | | **3DVFH+** — volumetric extension for 3D flight | Used in PX4 avoidance stack. |
 | Geofencing | 🔴 Not implemented | **Polygon + altitude geofence** with hard and soft boundaries | Hard fence = forced RTL; soft fence = warning. Standard for Part 107 / BVLOS. |
 | Contingency logic | 🟡 Basic RTL + LAND on low battery | **Fault tree** with priority-ranked contingencies | e.g., comm loss → loiter 30s → RTL; GPS loss → VIO-only mode; battery critical → emergency land nearest. |
@@ -1159,12 +1157,12 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │   └── include/slam/
 │       ├── ivisual_frontend.h        # IVisualFrontend strategy interface
 │       └── types.h                   # Pose, ImuSample, KeyframePolicy
-├── process4_mission_planner/         # FSM + fault manager + potential field planner (1 thread)
+├── process4_mission_planner/         # FSM + fault manager + D* Lite planner (1 thread)
 │   └── include/planner/
 │       ├── mission_fsm.h             # 8-state finite state machine
 │       ├── fault_manager.h           # FaultManager — graceful degradation engine (#61)
-│       ├── ipath_planner.h           # IPathPlanner + PotentialFieldPlanner (EMA)
-│       └── iobstacle_avoider.h       # IObstacleAvoider + PotentialFieldAvoider
+│       ├── ipath_planner.h           # IPathPlanner interface
+│       └── iobstacle_avoider.h       # IObstacleAvoider interface
 ├── process5_comms/                   # MAVLink + GCS comms (5 threads)
 │   └── include/comms/
 │       ├── gcs_link.h                # GCS link implementation

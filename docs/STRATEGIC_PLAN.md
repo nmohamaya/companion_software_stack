@@ -45,8 +45,8 @@
 | P3 | `IVisualFrontend` | 2 | SimulatedVisualFrontend | ORB-SLAM3 (TODO) | GazeboVisualFrontend |
 | P3 | `IStereoMatcher` | 1 | SimulatedStereoMatcher | Real (TODO) | — |
 | P3 | `IVIOBackend` | 2 | SimulatedVIOBackend | MSCKF (TODO) | GazeboVIOBackend |
-| P4 | `IPathPlanner` | 2 | PotentialFieldPlanner | DStarLitePlanner | — |
-| P4 | `IObstacleAvoider` | 2 | PotentialFieldAvoider | ObstacleAvoider3D | — |
+| P4 | `IPathPlanner` | 1 | — | DStarLitePlanner | — |
+| P4 | `IObstacleAvoider` | 1 | — | ObstacleAvoider3D | — |
 | P7 | `IProcessMonitor` | 1 | — | LinuxProcessMonitor | — |
 | IPC | `IPublisher<T>` | 2 | — | ShmPublisher | ZenohPublisher |
 | IPC | `ISubscriber<T>` | 2 | — | ShmSubscriber | ZenohSubscriber |
