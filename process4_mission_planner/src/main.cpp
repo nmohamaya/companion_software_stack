@@ -176,6 +176,12 @@ int main(int argc, char* argv[]) {
                                                  planner_cfg.max_iterations);
     planner_cfg.max_search_time_ms = cfg.get<float>(
         "mission_planner.path_planner.max_search_time_ms", planner_cfg.max_search_time_ms);
+    planner_cfg.ramp_dist_m        = cfg.get<float>("mission_planner.path_planner.ramp_dist_m",
+                                                    planner_cfg.ramp_dist_m);
+    planner_cfg.min_speed_mps      = cfg.get<float>("mission_planner.path_planner.min_speed_mps",
+                                                    planner_cfg.min_speed_mps);
+    planner_cfg.snap_search_radius = cfg.get<int>("mission_planner.path_planner.snap_search_radius",
+                                                  planner_cfg.snap_search_radius);
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
@@ -205,6 +211,8 @@ int main(int argc, char* argv[]) {
         geofence.set_altitude_limits(alt_floor, alt_ceiling);
         geofence.set_warning_margin(
             cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
+        geofence.set_altitude_tolerance(
+            cfg.get<float>("mission_planner.geofence.altitude_tolerance_m", 0.5f));
         geofence.enable(true);
         spdlog::info("Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m",
                      vertices.size(), alt_floor, alt_ceiling,

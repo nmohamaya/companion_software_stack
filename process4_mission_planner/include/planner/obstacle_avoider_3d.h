@@ -14,6 +14,7 @@
 
 #include "ipc/ipc_types.h"
 #include "planner/iobstacle_avoider.h"
+#include "util/config.h"
 
 #include <algorithm>
 #include <chrono>
@@ -41,6 +42,23 @@ public:
     /// Convenience constructor matching PotentialFieldAvoider API.
     ObstacleAvoider3D(float influence_radius, float repulsive_gain)
         : config_{influence_radius, repulsive_gain} {}
+
+    /// Config-driven constructor — reads all avoider params from drone::Config.
+    explicit ObstacleAvoider3D(const drone::Config& cfg) {
+        config_.influence_radius_m = cfg.get<float>(
+            "mission_planner.obstacle_avoidance.influence_radius_m", config_.influence_radius_m);
+        config_.repulsive_gain = cfg.get<float>("mission_planner.obstacle_avoidance.repulsive_gain",
+                                                config_.repulsive_gain);
+        config_.max_correction_mps = cfg.get<float>(
+            "mission_planner.obstacle_avoidance.max_correction_mps", config_.max_correction_mps);
+        config_.min_confidence = cfg.get<float>("mission_planner.obstacle_avoidance.min_confidence",
+                                                config_.min_confidence);
+        config_.prediction_dt_s = cfg.get<float>(
+            "mission_planner.obstacle_avoidance.prediction_dt_s", config_.prediction_dt_s);
+        config_.max_age_ns = static_cast<uint64_t>(cfg.get<int>(
+                                 "mission_planner.obstacle_avoidance.max_age_ms", 500)) *
+                             1'000'000ULL;
+    }
 
     drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
                                     const drone::ipc::Pose&               pose,

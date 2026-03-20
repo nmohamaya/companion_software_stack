@@ -39,6 +39,9 @@ struct GridPlannerConfig {
     float smoothing_alpha    = 0.35f;  // EMA smoothing for velocity output
     int   max_iterations     = 50000;  // search iteration limit
     float max_search_time_ms = 0.0f;   // wall-clock timeout (0 = disabled)
+    float ramp_dist_m        = 3.0f;   // distance to begin speed ramp-down
+    float min_speed_mps      = 1.0f;   // minimum speed during ramp-down
+    int   snap_search_radius = 8;      // goal snap search radius (grid cells)
 };
 
 /// Backward compatibility alias.
@@ -163,11 +166,10 @@ public:
 
         float raw_vx = 0.0f, raw_vy = 0.0f, raw_vz = 0.0f;
         if (dist > 0.01f) {
-            float           speed     = std::min(config_.path_speed_mps, target.speed);
-            constexpr float ramp_dist = 3.0f;
-            constexpr float min_speed = 1.0f;
-            if (dist < ramp_dist && path_index_ + 1 >= cached_path_.size()) {
-                speed = min_speed + (speed - min_speed) * (dist / ramp_dist);
+            float speed = std::min(config_.path_speed_mps, target.speed);
+            if (dist < config_.ramp_dist_m && path_index_ + 1 >= cached_path_.size()) {
+                speed = config_.min_speed_mps +
+                        (speed - config_.min_speed_mps) * (dist / config_.ramp_dist_m);
             }
             raw_vx = (dx / dist) * speed;
             raw_vy = (dy / dist) * speed;
@@ -238,7 +240,7 @@ private:
                                     static_cast<float>(start.y - orig_goal.y) * ax;
                 const bool first_left = (cross >= 0.0f);
 
-                for (int r = 1; r <= 8 && !snapped; ++r) {
+                for (int r = 1; r <= config_.snap_search_radius && !snapped; ++r) {
                     for (int side = 0; side < 2 && !snapped; ++side) {
                         const bool  try_left = (side == 0) ? first_left : !first_left;
                         const float fx       = try_left ? lx : rx;
@@ -272,8 +274,9 @@ private:
             // Fallback: nearest horizontal free cell
             if (!snapped) {
                 float best_dist_sq = 1e9f;
-                for (int dy = -8; dy <= 8; ++dy) {
-                    for (int dx = -8; dx <= 8; ++dx) {
+                for (int dy = -config_.snap_search_radius; dy <= config_.snap_search_radius; ++dy) {
+                    for (int dx = -config_.snap_search_radius; dx <= config_.snap_search_radius;
+                         ++dx) {
                         const float dist_sq = static_cast<float>(dx * dx + dy * dy);
                         if (dist_sq == 0.0f || dist_sq >= best_dist_sq) continue;
                         GridCell c{orig_goal.x + dx, orig_goal.y + dy, orig_goal.z};

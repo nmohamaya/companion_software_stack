@@ -103,6 +103,10 @@ public:
     /// to issue a warning *before* the hard boundary is hit.
     void set_warning_margin(float margin_m) { warning_margin_ = std::max(0.0f, margin_m); }
 
+    /// Set the altitude tolerance (metres) — prevents false positives
+    /// from sensor noise at ground level.
+    void set_altitude_tolerance(float tol_m) { alt_tolerance_ = std::max(0.0f, tol_m); }
+
     /// Enable/disable the geofence.
     void enable(bool on = true) {
         if (on && polygon_.size() < 3) {
@@ -140,8 +144,7 @@ public:
         // ── Altitude check ──────────────────────────────────
         // Tolerance prevents false positives from sensor noise at
         // ground level (e.g. Gazebo reporting -0.3m before takeoff).
-        constexpr float kAltTolerance = 0.5f;  // metres
-        if (alt > alt_ceiling_ + kAltTolerance) {
+        if (alt > alt_ceiling_ + alt_tolerance_) {
             result.violated = true;
             result.reason   = GeofenceViolation::ABOVE_CEILING;
             result.margin_m = alt - alt_ceiling_;
@@ -149,7 +152,7 @@ public:
                              "m";
             return result;
         }
-        if (alt < alt_floor_ - kAltTolerance) {
+        if (alt < alt_floor_ - alt_tolerance_) {
             result.violated = true;
             result.reason   = GeofenceViolation::BELOW_FLOOR;
             result.margin_m = alt_floor_ - alt;
@@ -178,12 +181,14 @@ public:
     [[nodiscard]] float                         alt_ceiling() const { return alt_ceiling_; }
     [[nodiscard]] float                         alt_floor() const { return alt_floor_; }
     [[nodiscard]] float                         warning_margin() const { return warning_margin_; }
+    [[nodiscard]] float                         alt_tolerance() const { return alt_tolerance_; }
 
 private:
     std::vector<GeoVertex> polygon_;
     float                  alt_floor_      = 0.0f;
     float                  alt_ceiling_    = 120.0f;  // AGL metres
     float                  warning_margin_ = 10.0f;   // metres
+    float                  alt_tolerance_  = 0.5f;    // metres — tolerance for sensor noise
     bool                   enabled_        = false;
 
     /// Format altitude with 1 decimal place (avoids misleading int truncation).
