@@ -147,16 +147,17 @@ The detector receives raw pixel data from a `ShmVideoFrame` and returns a list o
 virtual TrackedObjectList update(const Detection2DList& detections) = 0;
 ```
 
-### Backend: `SortTracker` (only backend currently)
+### Backend: `ByteTrackTracker` (sole backend — SORT removed in Issue #205)
 
-Implements the SORT (Simple Online and Realtime Tracking) algorithm with:
+Implements ByteTrack (Zhang et al., ECCV 2022) two-stage association:
 
 1. **Predict** — advance all active `KalmanBoxTracker` instances one step
-2. **Associate** — build cost matrix (Euclidean distance between predicted and detected centers), solve with `HungarianSolver`
-3. **Update** — apply Kalman measurement update for matched pairs
-4. **Spawn** — create new `KalmanBoxTracker` for each unmatched detection
-5. **Prune** — remove tracks with `consecutive_misses > 10` (staleness threshold)
-6. **Emit** — output confirmed tracks (`hits ≥ 3`) as `TrackedObjectList`
+2. **Stage 1** — build IoU cost matrix for ALL tracks vs high-confidence detections, solve with `HungarianSolver`
+3. **Stage 2** — build IoU cost matrix for UNMATCHED tracks vs low-confidence detections, solve with `HungarianSolver` (recovers tracks through occlusion)
+4. **Update** — apply Kalman measurement update for matched pairs
+5. **Spawn** — create new `KalmanBoxTracker` for each unmatched high-confidence detection (low-conf never creates new tracks)
+6. **Prune** — remove tracks exceeding `max_age` consecutive misses
+7. **Emit** — output confirmed tracks (`hits ≥ min_hits`) as `TrackedObjectList`
 
 #### KalmanBoxTracker
 
@@ -345,7 +346,7 @@ This is not a standard measurement update — it is a confidence-driven covarian
 - New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth
 - Each frame: `predict()` then `update_camera()` with tracker output
 - Thermal match check (100 px proximity): `update_thermal()` if matched
-- Tracks not present in the current `TrackedObjectList` (i.e. pruned by SORT) are erased from `filters_`
+- Tracks not present in the current `TrackedObjectList` (i.e. pruned by ByteTrack) are erased from `filters_`
 - `has_thermal_frame_` is cleared at the end of each `fuse()` call
 
 ---
@@ -524,7 +525,7 @@ Latency is tracked from frame capture (P1 `timestamp_ns`) to P2 dequeue.
 |-------|-------------|
 | `process` | `"perception"` |
 | `detection_count` | Objects detected in the current frame |
-| `tracked_objects` | Active track count after SORT association |
+| `tracked_objects` | Active track count after ByteTrack association |
 | `fused_objects` | Objects in the fused world-frame output |
 | `latency_ms` | Frame ingest latency from `log_latency_if_due()` |
 

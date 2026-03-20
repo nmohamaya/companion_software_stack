@@ -60,7 +60,7 @@
             }
         },
         "tracker": {
-            "backend": "sort",
+            "backend": "bytetrack",
             "max_age": 10,
             "min_hits": 3,
             "max_association_cost": 100.0,

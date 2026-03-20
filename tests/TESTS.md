@@ -99,7 +99,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
-| [P2 — Perception](#p2--perception) | 5 | 131 | Kalman tracker (Munkres), ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 5 | 124 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 7 | 79 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -298,20 +298,18 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ## P2 — Perception
 
-### test_kalman_tracker.cpp — 22 tests
+### test_kalman_tracker.cpp — 15 tests
 
-**What it tests:** Multi-object tracking pipeline — Kalman filter, O(n³) Munkres
-Hungarian assignment, SortTracker lifecycle, ITracker factory.
+**What it tests:** Tracking building blocks — Kalman filter (8D state, constant
+velocity model) and O(n³) Munkres Hungarian assignment solver. These are shared
+infrastructure used by ByteTrackTracker.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `KalmanBoxTrackerTest` | 7 | Init from detection, predict step, update step, age increment, `is_confirmed()` after N updates, `is_stale()` after M misses |
+| `KalmanBoxTrackerTest` | 7 | Init from detection, predict step, update step, age increment, `is_confirmed()` after N updates, `is_stale()` after M misses, velocity initially zero |
 | `HungarianSolverTest` | 8 | Empty input, single match, perfect diagonal, max-cost gating, all-too-expensive, rectangular matrices, Munkres optimality (greedy-beats cases) |
-| `MultiObjectTrackerTest` | 3 | Track creation from detections, track pruning after staleness, continuous tracking across frames |
-| `SortTrackerTest` | 2 | `name()` returns "sort", `reset()` clears tracks and resets ID counter |
-| `TrackerFactoryTest` | 2 | Factory creates `SortTracker`, unknown backend throws |
 
-**Key files under test:** `perception/kalman_tracker.h`, `perception/itracker.h`
+**Key files under test:** `perception/kalman_tracker.h`
 
 ---
 
@@ -378,8 +376,8 @@ occlusion recovery, config/factory integration.
 | `ByteTrackCostMatrix` | 2 | Single track/det (1×1 matrix), multiple tracks/dets (2×3 matrix with expected costs) |
 | `ByteTrackAssociation` | 4 | High-conf matched first, low-conf recovers unmatched track, low-conf doesn't create new track, only high-conf creates new tracks |
 | `ByteTrackLifecycle` | 3 | Empty detections, single detection becomes confirmed after `min_hits`, stale tracks pruned after `max_age` |
-| `ByteTrackOcclusion` | 2 | Occlusion recovery (high→low→high conf preserves track ID), SORT comparison (loses track without low-conf recovery) |
-| `ByteTrackConfig` | 4 | Default params, factory with null config, `name()` returns "bytetrack", factory creates working tracker |
+| `ByteTrackOcclusion` | 1 | Occlusion recovery (high→low→high conf preserves track ID) |
+| `ByteTrackConfig` | 5 | Default params, factory with null config, `name()` returns "bytetrack", factory creates working tracker, unknown backend throws |
 
 **Key files under test:** `perception/bytetrack_tracker.h`, `perception/itracker.h`, `perception/kalman_tracker.h`
 
