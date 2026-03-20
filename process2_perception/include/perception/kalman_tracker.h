@@ -1,6 +1,7 @@
 // process2_perception/include/perception/kalman_tracker.h
-// Kalman filter-based 2D bounding box tracker (SORT-style).
-// Implements ITracker interface (Phase 1B, Issue #113).
+// Kalman filter-based 2D bounding box tracker building blocks.
+// Provides KalmanBoxTracker and HungarianSolver used by ByteTrackTracker.
+// Phase 1B (Issue #113). SORT removed in Issue #205 — ByteTrack supersedes it.
 #pragma once
 #include "perception/itracker.h"
 #include "perception/types.h"
@@ -56,24 +57,5 @@ public:
 
     static Result solve(const std::vector<std::vector<double>>& cost, double max_cost = 100.0);
 };
-
-/// Multi-object tracker using SORT algorithm (Kalman + Hungarian).
-/// Implements ITracker for factory-based construction.
-class SortTracker : public ITracker {
-public:
-    [[nodiscard]] TrackedObjectList update(const Detection2DList& detections) override;
-    [[nodiscard]] std::string       name() const override;
-    void                            reset() override;
-
-private:
-    std::vector<KalmanBoxTracker> tracks_;
-    uint32_t                      next_id_ = 1;
-
-    std::vector<std::vector<double>> compute_cost_matrix(
-        const std::vector<Detection2D>& detections) const;
-};
-
-/// Backward-compatible alias.
-using MultiObjectTracker = SortTracker;
 
 }  // namespace drone::perception

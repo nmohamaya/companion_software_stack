@@ -147,16 +147,17 @@ The detector receives raw pixel data from a `ShmVideoFrame` and returns a list o
 virtual TrackedObjectList update(const Detection2DList& detections) = 0;
 ```
 
-### Backend: `SortTracker` (only backend currently)
+### Backend: `ByteTrackTracker` (sole backend — SORT removed in Issue #205)
 
-Implements the SORT (Simple Online and Realtime Tracking) algorithm with:
+Implements ByteTrack (Zhang et al., ECCV 2022) two-stage association:
 
 1. **Predict** — advance all active `KalmanBoxTracker` instances one step
-2. **Associate** — build cost matrix (Euclidean distance between predicted and detected centers), solve with `HungarianSolver`
-3. **Update** — apply Kalman measurement update for matched pairs
-4. **Spawn** — create new `KalmanBoxTracker` for each unmatched detection
-5. **Prune** — remove tracks with `consecutive_misses > 10` (staleness threshold)
-6. **Emit** — output confirmed tracks (`hits ≥ 3`) as `TrackedObjectList`
+2. **Stage 1** — build IoU cost matrix for ALL tracks vs high-confidence detections, solve with `HungarianSolver`
+3. **Stage 2** — build IoU cost matrix for UNMATCHED tracks vs low-confidence detections, solve with `HungarianSolver` (recovers tracks through occlusion)
+4. **Update** — apply Kalman measurement update for matched pairs
+5. **Spawn** — create new `KalmanBoxTracker` for each unmatched high-confidence detection (low-conf never creates new tracks)
+6. **Prune** — remove tracks exceeding `max_age` consecutive misses
+7. **Emit** — output confirmed tracks (`hits ≥ min_hits`) as `TrackedObjectList`
 
 #### KalmanBoxTracker
 
@@ -188,7 +189,7 @@ F = I₈ with F[0,4]=dt, F[1,5]=dt, F[2,6]=dt, F[3,7]=dt
 
 #### HungarianSolver
 
-O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. The cost matrix is Euclidean center-to-center distance in pixels. Any match above `max_association_cost` (config default 100 px) is treated as no match.
+O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. ByteTrack uses IoU (Intersection over Union) as the cost metric — any match above `max_iou_cost` (config default 0.7) is treated as no match.
 
 - **Input**: `n_tracks × n_detections` cost matrix (doubles)
 - **Output**: assignment vector + lists of unmatched rows and columns
@@ -345,7 +346,7 @@ This is not a standard measurement update — it is a confidence-driven covarian
 - New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth
 - Each frame: `predict()` then `update_camera()` with tracker output
 - Thermal match check (100 px proximity): `update_thermal()` if matched
-- Tracks not present in the current `TrackedObjectList` (i.e. pruned by SORT) are erased from `filters_`
+- Tracks not present in the current `TrackedObjectList` (i.e. pruned by ByteTrack) are erased from `filters_`
 - `has_thermal_frame_` is cleared at the end of each `fuse()` call
 
 ---
@@ -439,10 +440,12 @@ All keys are under `perception.*` in the active JSON config.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `perception.tracker.backend` | string | `"sort"` | Only `"sort"` is supported |
+| `perception.tracker.backend` | string | `"bytetrack"` | Only `"bytetrack"` is supported (SORT removed in Issue #205) |
 | `perception.tracker.max_age` | int | `10` | Max consecutive misses before deletion |
 | `perception.tracker.min_hits` | int | `3` | Hits required for track confirmation |
-| `perception.tracker.max_association_cost` | float | `100.0` | Max pixel distance for valid association |
+| `perception.tracker.high_conf_threshold` | float | `0.5` | Stage 1 confidence threshold (high-confidence detections) |
+| `perception.tracker.low_conf_threshold` | float | `0.1` | Stage 2 confidence threshold (low-confidence recovery) |
+| `perception.tracker.max_iou_cost` | float | `0.7` | Max IoU cost for valid association |
 
 ### Fusion Engine
 
@@ -504,10 +507,10 @@ Published per frame. Up to `MAX_DETECTED_OBJECTS` entries. Each entry mirrors `F
 
 | Config | Detector | Tracker | Fusion | IPC | Notes |
 |--------|----------|---------|--------|-----|-------|
-| `default.json` | simulated | sort | camera_only | shm | Integration testing only |
-| `gazebo_sitl.json` | color_contour | sort | camera_only | zenoh | Gazebo SITL with Zenoh |
-| `hardware.json` | color_contour | sort | camera_only | shm | Real hardware (yolov8 opt-in) |
-| `zenoh_e2e.json` | (per config) | sort | camera_only | zenoh | End-to-end Zenoh testing |
+| `default.json` | simulated | bytetrack | camera_only | shm | Integration testing only |
+| `gazebo_sitl.json` | color_contour | bytetrack | camera_only | zenoh | Gazebo SITL with Zenoh |
+| `hardware.json` | color_contour | bytetrack | camera_only | shm | Real hardware (yolov8 opt-in) |
+| `zenoh_e2e.json` | (per config) | bytetrack | camera_only | zenoh | End-to-end Zenoh testing |
 
 > To enable the UKF fusion engine, set `"perception.fusion.backend": "ukf"` in the active config or a config overlay.
 
@@ -524,7 +527,7 @@ Latency is tracked from frame capture (P1 `timestamp_ns`) to P2 dequeue.
 |-------|-------------|
 | `process` | `"perception"` |
 | `detection_count` | Objects detected in the current frame |
-| `tracked_objects` | Active track count after SORT association |
+| `tracked_objects` | Active track count after ByteTrack association |
 | `fused_objects` | Objects in the fused world-frame output |
 | `latency_ms` | Frame ingest latency from `log_latency_if_due()` |
 

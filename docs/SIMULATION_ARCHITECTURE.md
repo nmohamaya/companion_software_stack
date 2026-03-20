@@ -469,22 +469,22 @@ Which pluggable backends are exercised by each scenario:
 
 | Scenario | Path Planner | Obstacle Avoider | Detector | Tracker | Fusion |
 |---|---|---|---|---|---|
-| 01 Nominal | `dstar_lite` | `potential_field_3d` | `simulated` | `sort` | `camera_only` |
+| 01 Nominal | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 02 Obstacles | `dstar_lite` | `potential_field_3d` | `color_contour` | `bytetrack` | `camera_only` |
-| 03 Battery | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 04 FC Link | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 05 Geofence | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 06 Upload | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 07 Thermal | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 08 Stress | `dstar_lite` | `potential_field_3d` | `simulated` | `sort` | `camera_only` |
+| 03 Battery | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 04 FC Link | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 05 Geofence | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 06 Upload | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 07 Thermal | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 08 Stress | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 09 Tracking | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
-| 10 Pause | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 11 Abort | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 12 GCS RTL | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 13 GCS Land | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 14 Alt Breach | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 15 FC Recover | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
-| 16 VIO Failure | `potential_field` | `potential_field` | `simulated` | `sort` | `camera_only` |
+| 10 Pause | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 11 Abort | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 12 GCS RTL | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 13 GCS Land | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 14 Alt Breach | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 15 FC Recover | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
+| 16 VIO Failure | `potential_field` | `potential_field` | `simulated` | `bytetrack` | `camera_only` |
 
 ### Per-Scenario Fault Coverage
 
@@ -528,11 +528,9 @@ unit tests for validation. This section is maintained to guide future scenario d
 Per the "maximise stack coverage in simulation" principle, most scenarios should
 exercise the same backends that would run on real hardware:
 
-- **Tracker**: 14 of 16 scenarios use the SORT tracker (default), but real hardware
-  would use ByteTrack. Consider switching the default tracker to `bytetrack` in
-  `default.json`, or at minimum switching scenarios 01, 08, and other navigation-heavy
-  scenarios to ByteTrack. SORT has 22 unit tests but no scenario validates its
-  tracking quality specifically.
+- **Tracker**: All 16 scenarios now use ByteTrack (default changed from SORT in
+  Issue #205). SORT was removed — ByteTrack strictly supersedes it with two-stage
+  association for better occlusion handling.
 - **Path planner**: 11 scenarios use `potential_field` (the simple gradient planner).
   Real hardware would use `dstar_lite` for proper obstacle-aware routing. Scenarios
   that test fault handling (03-07, 10-16) could use D* Lite without interfering

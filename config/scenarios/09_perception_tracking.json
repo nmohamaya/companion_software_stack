@@ -1,8 +1,8 @@
 {
-    "_comment": "Scenario 9: Perception Tracking — ByteTrack backend-switching smoke test",
+    "_comment": "Scenario 9: Perception Tracking — ByteTrack tuning smoke test",
     "scenario": {
         "name": "perception_tracking",
-        "description": "Smoke test for ByteTrack tracker backend switching. Verifies the tracker is instantiated and the mission completes with ByteTrack active. Does not assert two-stage association behavior (no observable log markers for Stage 1/Stage 2 yet). Tier 1 — no Gazebo required.",
+        "description": "Smoke test for ByteTrack tracker. Verifies the tracker is instantiated and the mission completes with ByteTrack active. Tune high_conf/low_conf thresholds and max_iou_cost to test two-stage association behavior. Tier 1 — no Gazebo required.",
         "tier": 1,
         "timeout_s": 90,
         "requires_gazebo": false
@@ -74,11 +74,11 @@
     },
     "manual_controls": {
         "_comment": "Adjustable perception tracking parameters",
-        "tracker_backend_options": ["sort", "bytetrack"],
+        "tracker_backend_options": ["bytetrack"],
         "high_conf_threshold_range": {"min": 0.3, "max": 0.8, "default": 0.5},
         "low_conf_threshold_range": {"min": 0.05, "max": 0.4, "default": 0.1},
         "max_iou_cost_range": {"min": 0.3, "max": 0.9, "default": 0.7},
         "waypoints_editable": true,
-        "notes": "Switch tracker_backend to 'sort' to compare SORT vs ByteTrack tracking behavior. ByteTrack should maintain track IDs through low-confidence periods where SORT would lose them."
+        "notes": "ByteTrack is the sole tracker backend. Tune thresholds to test two-stage association behavior."
     }
 }

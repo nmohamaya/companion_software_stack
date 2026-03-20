@@ -1,6 +1,6 @@
 // process2_perception/src/kalman_tracker.cpp
-// KalmanBoxTracker + HungarianSolver (Munkres) + SortTracker implementation.
-// Phase 1B (Issue #113): proper O(n³) Hungarian, ITracker interface.
+// KalmanBoxTracker + HungarianSolver (Munkres) implementation + tracker factory.
+// Phase 1B (Issue #113). SORT removed in Issue #205 — ByteTrack supersedes it.
 #include "perception/kalman_tracker.h"
 
 #include "perception/bytetrack_tracker.h"
@@ -219,104 +219,10 @@ HungarianSolver::Result HungarianSolver::solve(const std::vector<std::vector<dou
 }
 
 // ═══════════════════════════════════════════════════════════
-// SortTracker (SORT algorithm) — implements ITracker
-// ═══════════════════════════════════════════════════════════
-std::string SortTracker::name() const {
-    return "sort";
-}
-
-void SortTracker::reset() {
-    tracks_.clear();
-    next_id_ = 1;
-}
-
-std::vector<std::vector<double>> SortTracker::compute_cost_matrix(
-    const std::vector<Detection2D>& detections) const {
-    std::vector<std::vector<double>> cost(tracks_.size(),
-                                          std::vector<double>(detections.size(), 0.0));
-
-    for (size_t t = 0; t < tracks_.size(); ++t) {
-        auto pred        = tracks_[t].predicted_bbox();
-        auto pred_center = pred.center();
-        for (size_t d = 0; d < detections.size(); ++d) {
-            auto   det_center = detections[d].center();
-            double dist       = (pred_center - det_center).norm();
-            cost[t][d]        = dist;
-        }
-    }
-    return cost;
-}
-
-TrackedObjectList SortTracker::update(const Detection2DList& det_list) {
-    // Step 1: Predict all existing tracks
-    for (auto& track : tracks_) {
-        track.predict();
-    }
-
-    // Step 2: Associate detections to tracks
-    auto cost   = compute_cost_matrix(det_list.detections);
-    auto result = HungarianSolver::solve(cost, 100.0);
-
-    // Step 3: Update matched tracks
-    for (size_t t = 0; t < tracks_.size(); ++t) {
-        int d = result.assignment[t];
-        if (d >= 0) {
-            tracks_[t].update(det_list.detections[d]);
-        }
-    }
-
-    // Step 4: Create new tracks for unmatched detections
-    // When there are no existing tracks, all detections are unmatched
-    if (tracks_.empty()) {
-        for (size_t d = 0; d < det_list.detections.size(); ++d) {
-            tracks_.emplace_back(det_list.detections[d], next_id_++);
-        }
-    } else {
-        for (int d : result.unmatched_cols) {
-            tracks_.emplace_back(det_list.detections[d], next_id_++);
-        }
-    }
-
-    // Step 5: Remove stale tracks
-    tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
-                                 [](const KalmanBoxTracker& t) { return t.is_stale(); }),
-                  tracks_.end());
-
-    // Step 6: Build output
-    TrackedObjectList output;
-    output.timestamp_ns   = det_list.timestamp_ns;
-    output.frame_sequence = det_list.frame_sequence;
-
-    for (const auto& track : tracks_) {
-        if (!track.is_confirmed()) continue;
-
-        TrackedObject obj;
-        obj.track_id     = track.track_id;
-        obj.class_id     = track.class_id;
-        obj.confidence   = track.confidence;
-        auto pred        = track.predicted_bbox();
-        obj.position_2d  = pred.center();
-        obj.velocity_2d  = track.velocity();
-        obj.bbox_w       = pred.w;
-        obj.bbox_h       = pred.h;
-        obj.age          = track.age;
-        obj.hits         = track.hits;
-        obj.misses       = track.consecutive_misses;
-        obj.timestamp_ns = det_list.timestamp_ns;
-        obj.state        = TrackedObject::State::CONFIRMED;
-        output.objects.push_back(obj);
-    }
-    return output;
-}
-
-// ═══════════════════════════════════════════════════════════
 // Tracker factory  (ITracker)
 // ═══════════════════════════════════════════════════════════
 std::unique_ptr<ITracker> create_tracker(const std::string&                    backend,
                                          [[maybe_unused]] const drone::Config* cfg) {
-    if (backend == "sort") {
-        return std::make_unique<SortTracker>();
-    }
     if (backend == "bytetrack") {
         ByteTrackTracker::Params params;
         if (cfg) {
