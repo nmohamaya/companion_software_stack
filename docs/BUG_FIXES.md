@@ -570,6 +570,42 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 ---
 
+### Fix #165 — VIO False-Positive RTL from Zero-Initialized FaultOverrides (Issue #201)
+
+**Date fixed:** 2026-03-20
+**Severity:** Critical (safety — irreversible RTL on healthy vehicle)
+**Status:** FIXED (PR #202)
+**Files:** `common/ipc/include/ipc/ipc_types.h`,
+           `process4_mission_planner/include/planner/fault_manager.h`,
+           `tools/fault_injector/main.cpp`,
+           `config/scenarios/15_fc_quick_recovery.json`
+
+**Bug:** When the fault injector started up and published a warmup `FaultOverrides{}`, the zero-initialized `vio_quality = 0` was interpreted by P3 as "override VIO quality to LOST". P4's `FaultManager` evaluated VIO as lost and escalated to RTL. The escalation-only policy (`high_water_mark_`) then locked in RTL permanently — even after the real VIO came up healthy at quality=2. The drone would RTL on every mission that used fault injection, regardless of whether a VIO fault was intended.
+
+**Root Cause:** Three compounding issues:
+
+1. **Sentinel/value collision in FaultOverrides.** The `vio_quality` field used `0` as both "no override" (zero-init default) and "quality = LOST" (a valid override value). The correct sentinel is `-1` (negative = no override), matching the pattern used by `fc_connected` and `thermal_zone`. But `FaultOverrides` had no default member initializers, so `FaultOverrides{}` produced all-zero fields — activating every override at its most dangerous value.
+
+2. **No debounce on VIO quality evaluation.** A single low-quality reading (even a transient warmup artifact) immediately fired `FAULT_VIO_LOST` → RTL. In a real flight, VIO quality can flicker during vibration or lighting changes; a single-sample trigger is too aggressive for an irreversible action.
+
+3. **Overly broad scenario log pattern.** Scenario 15 (`fc_quick_recovery`) checked `log_contains: "LOITER"` which matched the FaultMgr threshold config dump line `loiter_esc=30s` — a false positive that masked the fact the scenario was actually failing to reach the FSM LOITER state.
+
+**Fix:** Three changes:
+
+1. **Default member initializers on FaultOverrides** (`ipc_types.h`): All override fields now default to `-1` (no override): `battery_percent = -1.0f`, `fc_connected = -1`, `thermal_zone = -1`, `vio_quality = -1`, etc. `FaultOverrides{}` now produces safe "no override" semantics.
+
+2. **VIO quality debounce** (`fault_manager.h`): Added `kVioDebounceCount = 3` — requires 3 consecutive low-quality readings before firing `FAULT_VIO_DEGRADED` or `FAULT_VIO_LOST`. Counter resets on any good reading and in `reset()`. This prevents transient warmup artifacts from triggering irreversible RTL.
+
+3. **Scenario LOITER pattern** (`15_fc_quick_recovery.json`): Narrowed from `"LOITER"` to `"→ LOITER"` to match only FSM state transitions, not config dump lines.
+
+**Impact:** Fault injection scenarios no longer cause spurious VIO-triggered RTL. The debounce also protects real flights from single-frame VIO quality glitches.
+
+**Found by:** Scenario 15 (`fc_quick_recovery`) failure investigation — "Mission complete" log line never appeared because the drone was permanently stuck in RTL from the warmup-triggered VIO false positive.
+
+**Regression tests:** `VIODebouncePreventsSingleGlitch`, `VIODebounceResetsOnGoodReading` in `test_fault_manager.cpp`. Updated 4 existing VIO tests for debounce semantics.
+
+---
+
 ## Comms (Process 5)
 
 ---
