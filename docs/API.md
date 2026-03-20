@@ -142,6 +142,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/gcs_commands` | `drone/comms/gcs_command` |
 | `/payload_status` | `drone/payload/status` |
 | `/system_health` | `drone/monitor/health` |
+| `/radar_detections` | `drone/perception/radar` |
 
 ### `MessageBusFactory` — Config-Driven Backend Selection
 
@@ -174,6 +175,47 @@ sub->receive(out);
 - Wildcard subscriptions: `drone/**` captures all channels
 - Liveliness tokens for process death detection
 - Configurable QoS (reliable/best-effort, history depth)
+
+---
+
+## 1.5 IPC Message Types (`common/ipc/include/ipc/ipc_types.h`)
+
+Key wire-format structs used across pub/sub topics. All must be trivially copyable.
+
+### `RadarDetection` — Issue [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+Single radar return from an `IRadar` backend.
+
+```cpp
+struct RadarDetection {
+    uint64_t timestamp_ns;  // monotonic clock nanoseconds
+    float range_m;          // metres (must be ≥ 0)
+    float azimuth_rad;      // radians
+    float elevation_rad;    // radians
+    float velocity_mps;     // radial velocity, m/s
+    float confidence;       // 0.0–1.0
+    bool valid;             // false if reading failed
+};
+```
+
+### `RadarDetectionList` — Issue [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+Fixed-capacity list of radar returns published on `/radar_detections`.
+
+```cpp
+constexpr uint32_t MAX_RADAR_DETECTIONS = 128;
+
+struct RadarDetectionList {
+    uint64_t timestamp_ns;
+    uint32_t count;                            // number of valid entries (≤ MAX_RADAR_DETECTIONS)
+    RadarDetection detections[MAX_RADAR_DETECTIONS];
+    bool valid;
+};
+```
+
+**Topic:** `/radar_detections` → Zenoh key `drone/perception/radar`
+**Publisher:** P2 (perception) or a dedicated radar process
+**Subscribers:** P4 (mission planner) for obstacle avoidance fusion
 
 ---
 
@@ -362,6 +404,41 @@ FaultManager uses this field (via the `pose_quality` parameter to `evaluate()`) 
 | `disk_interval` | 10 | Check disk every N calls |
 
 **Factory:** `create_process_monitor(backend, ...)` — backends: `"linux"`
+
+---
+
+### `IRadar` — `drone::hal` — Issue [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+**Header:** `common/hal/include/hal/iradar.h`
+**Used by:** P2 (perception) or a dedicated radar process
+
+Radar sensor interface. Returns a `RadarDetectionList` each call to `read()`. Designed for short-range obstacle detection and velocity measurement.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `init` | `bool init()` | Initialise hardware / start acquisition. Returns false on error. |
+| `read` | `RadarDetectionList read()` | Non-blocking read of latest detections. Returns list with `valid=false` before `init()`. |
+| `is_active` | `bool is_active() const` | True after successful `init()`. |
+| `name` | `std::string name() const` | Human-readable backend identifier (e.g., `"SimulatedRadar"`). |
+
+| Key | Class | Notes |
+| --- | ----- | ----- |
+| `"simulated"` | `SimulatedRadar` | Configurable FoV, range, target count, and Gaussian noise model. |
+
+**Config section:** `perception.radar`
+
+**Key config keys:**
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| `enabled` | `false` | Enable radar sensor |
+| `backend` | `"simulated"` | Backend selection |
+| `fov_deg` | 120.0 | Horizontal field-of-view in degrees |
+| `max_range_m` | 50.0 | Maximum detection range in metres |
+| `num_targets` | 5 | Simulated target count (`SimulatedRadar`) |
+| `noise_stddev` | 0.1 | Range noise standard deviation in metres |
+
+**Factory:** `create_radar(cfg, section)` — returns `std::unique_ptr<IRadar>`
 
 ---
 

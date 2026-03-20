@@ -99,6 +99,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Simulated](#hal--simulated) | 1 | 30 | Simulated hardware backends and HAL factory |
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
+| [HAL — Radar](#hal--radar) | 1 | 27 | IRadar interface, SimulatedRadar, factory, config, topic |
 | [P2 — Perception](#p2--perception) | 5 | 131 | Kalman tracker (Munkres), ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 7 | 79 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
@@ -116,7 +117,7 @@ bash deploy/build.sh --test-filter watchdog
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 150+ | 15 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (14 Tier 1 + 1 Tier 2) |
-| **Total** | **48 C++ + 4 shell** | **1008 + 42 + 150+** | |
+| **Total** | **49 C++ + 4 shell** | **1035 + 42 + 150+** | |
 
 ---
 
@@ -293,6 +294,28 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 | `MavlinkFCLinkTest` | 14 | Factory creation, `name()`, graceful connection failure, flight mode string mapping, arm/disarm commands, trajectory send, interface compliance |
 
 **Key files under test:** `hal/mavlink_fc_link.h`, `hal/hal_factory.h`
+
+---
+
+## HAL — Radar
+
+### test_radar_hal.cpp — 27 tests
+
+**What it tests:** `IRadar` interface, `SimulatedRadar` backend, HAL factory radar path, config-driven construction, and the `/radar_detections` IPC topic constant.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `RadarDetectionValidation` | 6 | Valid detection accepted; negative range rejected; confidence above 1.0 rejected; confidence below 0.0 rejected; zero range valid; boundary confidence (0.0 and 1.0) valid |
+| `RadarDetectionListValidation` | 4 | Valid list accepted; empty list (count=0) valid; max-capacity list (count=MAX_RADAR_DETECTIONS) valid; overflow (count > MAX_RADAR_DETECTIONS) rejected |
+| `RadarDetectionTriviallyCopyable` | 1 | `static_assert(std::is_trivially_copyable_v<RadarDetection>)` and `RadarDetectionList` pass |
+| `SimulatedRadarTest` | 11 | `init()` returns true; `is_active()` false before init; `name()` returns `"SimulatedRadar"`; `read()` returns invalid list before init; `read()` returns valid list after init; target count matches config; FoV limits clamp azimuth; range limits clamp detections; all detections have confidence in [0, 1]; noise distribution is zero-mean over many samples; consecutive reads have non-decreasing timestamps |
+| `RadarFactoryTest` | 3 | `create_radar("simulated")` returns `SimulatedRadar`; default backend is `"simulated"`; unknown backend throws `std::runtime_error` |
+| `SimulatedRadarConfigTest` | 1 | Custom `fov_deg`, `max_range_m`, `num_targets`, `noise_stddev` from config are applied |
+| `RadarTopicTest` | 1 | `RADAR_DETECTIONS_TOPIC` constant equals `"/radar_detections"` |
+
+**Why these tests matter:** Radar is a safety-critical sensor path — incorrect range or confidence values flowing into the obstacle avoidance stack could suppress or trigger avoidance incorrectly. The validation tests enforce the wire-format invariants that downstream processes depend on. The noise distribution test guards against bias that would systematically shift range estimates.
+
+**Key files under test:** `hal/iradar.h`, `hal/simulated_radar.h`, `hal/hal_factory.h`, `ipc/ipc_types.h`
 
 ---
 

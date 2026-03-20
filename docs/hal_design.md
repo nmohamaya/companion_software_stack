@@ -251,6 +251,35 @@ struct ImuReading {
 
 ---
 
+### 2.6 IRadar
+
+**Header:** `common/hal/include/hal/iradar.h`
+
+Radar sensor interface for short-range obstacle detection and velocity measurement. Used by P2 (perception) or a dedicated radar process. Returns `RadarDetectionList` IPC structs on `/radar_detections`.
+
+#### Data Structures
+
+See `common/ipc/include/ipc/ipc_types.h` for `RadarDetection` and `RadarDetectionList` (capacity: `MAX_RADAR_DETECTIONS = 128`).
+
+#### Interface
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `init` | `bool init()` | Initialise hardware / start acquisition. Returns false on error. |
+| `read` | `RadarDetectionList read()` | Non-blocking read of latest detections. Returns list with `valid=false` before `init()`. |
+| `is_active` | `bool is_active() const` | True after successful `init()`. |
+| `name` | `std::string name() const` | Human-readable backend identifier (e.g., `"SimulatedRadar"`). |
+
+#### Backends
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"simulated"` | `SimulatedRadar` | Configurable FoV, range, target count, and Gaussian noise model. |
+
+**Config section:** `perception.radar`
+
+---
+
 ## 3. Factory Functions
 
 All factory calls live in `common/hal/include/hal/hal_factory.h`.  Each
@@ -273,6 +302,9 @@ std::unique_ptr<IGimbal>   create_gimbal(const Config& cfg, const std::string& s
 
 // Inertial sensor
 std::unique_ptr<IIMUSource> create_imu_source(const Config& cfg, const std::string& section);
+
+// Radar
+std::unique_ptr<IRadar>     create_radar(const Config& cfg, const std::string& section);
 
 } // namespace drone::hal
 ```
@@ -366,6 +398,7 @@ Default thresholds: `cpu_warn=90`, `mem_warn=90`, `temp_warn=80°C`,
 | `IGCSLink` | ✓ | ✓ (via FC) | UDP (future) |
 | `IGimbal` | ✓ | — | SIYI (future) |
 | `IIMUSource` | ✓ | ✓ (HAVE_GAZEBO) | BMI088 (future) |
+| `IRadar` | ✓ | — | TI AWR1843 (future) |
 
 ---
 
