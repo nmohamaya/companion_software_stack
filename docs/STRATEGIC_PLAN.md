@@ -24,7 +24,7 @@
 | P1 Video Capture | Full (Gazebo cameras) | 0% — no V4L2, no ISP |
 | P2 Perception | High (YOLOv8 CPU, SORT tracker, UKF) | 10% — no TensorRT, no thermal |
 | P3 SLAM/VIO/Nav | Medium (IMU preintegrator real, rest simulated) | 5% — no real VO, no factor graph |
-| P4 Mission Planner | High (A*, 3D avoider, FSM, geofence) | 95% — hardware-agnostic |
+| P4 Mission Planner | High (D* Lite, 3D avoider, FSM, geofence) | 95% — hardware-agnostic |
 | P5 Comms | High (MAVSDK FC link works) | 70% — serial config exists, no real GCS |
 | P6 Payload | Low (stub gimbal only) | 0% — no real driver |
 | P7 System Monitor | High (Linux /proc, supervisor, watchdog) | 80% — needs Jetson thermal zones |
@@ -45,7 +45,7 @@
 | P3 | `IVisualFrontend` | 2 | SimulatedVisualFrontend | ORB-SLAM3 (TODO) | GazeboVisualFrontend |
 | P3 | `IStereoMatcher` | 1 | SimulatedStereoMatcher | Real (TODO) | — |
 | P3 | `IVIOBackend` | 2 | SimulatedVIOBackend | MSCKF (TODO) | GazeboVIOBackend |
-| P4 | `IPathPlanner` | 2 | PotentialFieldPlanner | AStarPathPlanner | — |
+| P4 | `IPathPlanner` | 2 | PotentialFieldPlanner | DStarLitePlanner | — |
 | P4 | `IObstacleAvoider` | 2 | PotentialFieldAvoider | ObstacleAvoider3D | — |
 | P7 | `IProcessMonitor` | 1 | — | LinuxProcessMonitor | — |
 | IPC | `IPublisher<T>` | 2 | — | ShmPublisher | ZenohPublisher |
@@ -103,10 +103,10 @@ All backends selected at runtime via JSON config + factory functions:
 | Capability | Implementation | Rationale |
 |------------|---------------|-----------|
 | **Velocity obstacles** | ORCA/HRVO as `IObstacleAvoider` | Predicts collision with *moving* objects |
-| **Dynamic replanning** | D* Lite replacing A* for known-map updates | Re-plans without recomputing from scratch |
+| **Dynamic replanning** | D* Lite for known-map incremental updates | Re-plans without recomputing from scratch |
 | **Mission scripting** | Lua or JSON DSL with conditionals | "If object detected, orbit. If battery < 30%, skip WPs." |
 | **Polygon geofence** | Keep-in/keep-out polygon + altitude zones | Current cylinder geofence is basic |
-| **A* timeout guard** | `max_search_time_ms` (default 50ms) in `AStarConfig` | Prevents main loop blocking on pathological grids |
+| **D* Lite timeout guard** | `max_search_time_ms` (default 50ms) in `GridPlannerConfig` | Prevents main loop blocking on pathological grids |
 
 ### P1, P5, P6: Filling the Gaps
 
@@ -310,7 +310,7 @@ Add:
 | #125 | SHM segment ownership cleanup | P2 |
 | #124 | fault_injector via MessageBus | P2 |
 | #129 | PX4 exit teardown fix | P1 |
-| NEW | A* search timeout guard | P1 |
+| ~~NEW~~ | ~~A\* search timeout guard~~ (removed — D\* Lite has timeout built-in) | — |
 | NEW | Mission planner main() refactor into FSM class | P1 |
 | NEW | JSON Schema config validation | P2 |
 | NEW | Architecture Decision Records | P2 |

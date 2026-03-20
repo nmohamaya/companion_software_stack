@@ -44,9 +44,6 @@ struct GridPlannerConfig {
     int   snap_search_radius = 8;      // goal snap search radius (grid cells)
 };
 
-/// Backward compatibility alias.
-using AStarConfig = GridPlannerConfig;
-
 // ─────────────────────────────────────────────────────────────
 // IGridPlanner — extended interface for grid-based planners
 // ─────────────────────────────────────────────────────────────

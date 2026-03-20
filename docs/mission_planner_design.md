@@ -180,14 +180,14 @@ Selected via `mission_planner.path_planner.backend` config key.
 - EMA velocity smoothing (α = 0.35) to reduce jitter
 - Yaw output: `atan2(dy, dx)` toward waypoint
 
-### AStarPathPlanner (`"astar"`)
+### DStarLitePlanner (`"dstar_lite"`)
 
-- **Header:** [`astar_planner.h`](../process4_mission_planner/include/planner/astar_planner.h)
-- **Tests:** [`test_astar_planner.cpp`](../tests/test_astar_planner.cpp) (23 tests)
+- **Header:** [`dstar_lite_planner.h`](../process4_mission_planner/include/planner/dstar_lite_planner.h)
+- **Tests:** [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) (32 tests)
 
 #### OccupancyGrid3D
 
-3D voxel grid backing the A* search:
+3D voxel grid backing the D* Lite search:
 
 | Parameter | Default |
 |-----------|---------|
@@ -463,7 +463,7 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | `rtl_acceptance_radius_m` | float | 1.5 | Horizontal distance to trigger LAND during RTL |
 | `landed_altitude_m` | float | 0.5 | Altitude threshold for "landed" detection |
 | `rtl_min_dwell_seconds` | int | 5 | Min time in RTL before sending LAND |
-| `path_planner.backend` | string | `"potential_field"` | `"potential_field"` or `"astar"` |
+| `path_planner.backend` | string | `"potential_field"` | `"potential_field"` or `"dstar_lite"` |
 | `obstacle_avoider.backend` | string | `"potential_field"` | `"potential_field"`, `"3d"`, etc. |
 | `obstacle_avoidance.influence_radius_m` | float | 5.0 | Repulsive field radius |
 | `obstacle_avoidance.repulsive_gain` | float | 2.0 | Repulsive force multiplier |
@@ -494,7 +494,7 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
 | [`test_mission_fsm.cpp`](../tests/test_mission_fsm.cpp) | 7 | FSM transitions, waypoint loading, radius check |
-| [`test_astar_planner.cpp`](../tests/test_astar_planner.cpp) | 23 | Grid, A* search, goal-snap, factory |
+| [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) | 32 | Grid, D* Lite search, incremental replan, goal-snap, factory |
 | [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) | 12 | 3D repulsion, predictive, NaN, factory |
 | [`test_geofence.cpp`](../tests/test_geofence.cpp) | 21 | Polygon, altitude, margin, NaN/Inf |
 | [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 31 | All 10 faults, escalation, loiter timeout, FC contingency |

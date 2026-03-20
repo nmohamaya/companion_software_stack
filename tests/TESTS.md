@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [P2 — Perception](#p2--perception) | 5 | 131 | Kalman tracker (Munkres), ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 90 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, A* planner, D* Lite planner |
+| [P4 — Mission Planner](#p4--mission-planner) | 7 | 79 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -466,37 +466,23 @@ states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
 
 ---
 
-### test_astar_planner.cpp — 20 tests
+### test_dstar_lite_planner.cpp — 32 tests
 
-**What it tests:** A* 3D grid path planner — occupancy grid, A* search algorithm,
-`AStarPathPlanner` (IPathPlanner implementation), factory registration, wall-clock timeout.
+**What it tests:** D* Lite incremental path planner — occupancy grid basics, change tracking,
+D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLitePlanner`
+(IPathPlanner implementation) integration, grid cell hashing, factory registration.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `OccupancyGrid3DTest` | 6 | Empty grid, world↔grid round-trip, in-bounds check, obstacle inflation, low-confidence skip, clear resets |
-| `AStarSearchTest` | 8 | Trivial start=goal, straight line, 3D obstacle detour, unreachable goal, blocked start BFS escape, out-of-bounds goal, max iterations limit, diagonal world coords, wall-clock timeout |
-| `AStarPathPlannerTest` | 3 | Plan returns valid cmd, fallback when blocked (goal snap), name check, grid accessor, cached path accessor |
-| `PathPlannerFactory` | 2 | A* backend registered, unknown throws |
 | `GridCellHashTest` | 2 | Different cells → different hashes, same cell → same hash |
-
-**Key files under test:** `planner/astar_planner.h`, `planner/occupancy_grid_3d.h`, `planner/planner_factory.h`
-
----
-
-### test_dstar_lite_planner.cpp — 23 tests
-
-**What it tests:** D* Lite incremental path planner — change tracking in occupancy grid,
-D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLitePlanner`
-(IPathPlanner implementation) integration.
-
-| Suite | Tests | What is validated |
-|-------|-------|-------------------|
 | `ChangeTrackingTest` | 4 | New cell insertions recorded, expired cells recorded, drain clears buffer, static obstacle changes tracked |
 | `DStarLiteSearchTest` | 6 | Trivial start=goal, straight line path, 3D obstacle detour, unreachable goal → direct fallback, blocked start BFS escape, out-of-bounds goal |
 | `DStarLiteIncrementalTest` | 4 | New obstacle on path triggers replan (no occupied waypoints), obstacle removed shortens path, goal change reinitialises, drone movement updates km |
 | `DStarLiteTimeoutTest` | 2 | Max search time enforced, fallback on timeout |
 | `DStarLiteIntegrationTest` | 6 | Plan returns valid cmd, goal snapping works, EMA smoothing, speed ramping near target, update obstacles integration, factory registered |
 | `DStarLiteNameTest` | 1 | Name is "DStarLitePlanner" |
+| `PathPlannerFactory` | 1 | Unknown backend throws |
 
 **Key files under test:** `planner/dstar_lite_planner.h`, `planner/occupancy_grid_3d.h`, `planner/grid_planner_base.h`, `planner/planner_factory.h`
 

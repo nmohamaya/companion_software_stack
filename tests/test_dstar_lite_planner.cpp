@@ -17,6 +17,109 @@
 using namespace drone::planner;
 
 // ═════════════════════════════════════════════════════════════
+// OccupancyGrid3D basic tests (ported from test_astar_planner.cpp)
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, EmptyGridHasNoOccupied) {
+    OccupancyGrid3D grid(0.5f, 50.0f, 1.5f);
+    EXPECT_EQ(grid.occupied_count(), 0u);
+    EXPECT_FALSE(grid.is_occupied({0, 0, 0}));
+}
+
+TEST(OccupancyGrid3DTest, WorldToGridRoundTrip) {
+    OccupancyGrid3D grid(0.5f, 50.0f, 1.5f);
+
+    auto cell  = grid.world_to_grid(2.5f, -1.0f, 3.0f);
+    auto world = grid.grid_to_world(cell);
+
+    EXPECT_NEAR(world[0], 2.5f, 0.5f);
+    EXPECT_NEAR(world[1], -1.0f, 0.5f);
+    EXPECT_NEAR(world[2], 3.0f, 0.5f);
+}
+
+TEST(OccupancyGrid3DTest, InBoundsCheck) {
+    OccupancyGrid3D grid(1.0f, 10.0f, 1.0f);
+    EXPECT_TRUE(grid.in_bounds({0, 0, 0}));
+    EXPECT_TRUE(grid.in_bounds({10, 10, 10}));
+    EXPECT_FALSE(grid.in_bounds({11, 0, 0}));
+    EXPECT_FALSE(grid.in_bounds({0, -11, 0}));
+}
+
+TEST(OccupancyGrid3DTest, UpdateFromObjectsInflates) {
+    OccupancyGrid3D grid(1.0f, 20.0f, 2.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+
+    drone::ipc::Pose pose{};
+    grid.update_from_objects(objects, pose);
+
+    EXPECT_TRUE(grid.is_occupied({5, 5, 5}));
+    EXPECT_TRUE(grid.is_occupied({6, 5, 5}));
+    EXPECT_TRUE(grid.is_occupied({5, 6, 5}));
+    EXPECT_FALSE(grid.is_occupied({0, 0, 0}));
+    EXPECT_GT(grid.occupied_count(), 1u);
+}
+
+TEST(OccupancyGrid3DTest, LowConfidenceSkipped) {
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.1f;  // below 0.3 threshold
+
+    drone::ipc::Pose pose{};
+    grid.update_from_objects(objects, pose);
+
+    EXPECT_EQ(grid.occupied_count(), 0u);
+}
+
+TEST(OccupancyGrid3DTest, ClearResetsGrid) {
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+
+    drone::ipc::Pose pose{};
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.occupied_count(), 0u);
+
+    grid.clear();
+    EXPECT_EQ(grid.occupied_count(), 0u);
+}
+
+// ═════════════════════════════════════════════════════════════
+// GridCellHash + factory tests (ported from test_astar_planner.cpp)
+// ═════════════════════════════════════════════════════════════
+
+TEST(GridCellHashTest, DifferentCellsDifferentHashes) {
+    GridCellHash h;
+    EXPECT_NE(h({0, 0, 0}), h({1, 0, 0}));
+    EXPECT_NE(h({0, 0, 0}), h({0, 1, 0}));
+    EXPECT_NE(h({0, 0, 0}), h({0, 0, 1}));
+}
+
+TEST(GridCellHashTest, SameCellSameHash) {
+    GridCellHash h;
+    EXPECT_EQ(h({3, 4, 5}), h({3, 4, 5}));
+}
+
+TEST(PathPlannerFactory, UnknownThrows) {
+    EXPECT_THROW(create_path_planner("nonexistent"), std::runtime_error);
+}
+
+// ═════════════════════════════════════════════════════════════
 // Change tracking tests (OccupancyGrid3D)
 // ═════════════════════════════════════════════════════════════
 
