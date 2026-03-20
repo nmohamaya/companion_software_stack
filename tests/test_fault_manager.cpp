@@ -753,18 +753,22 @@ TEST(FaultManagerTest, VIODebounceResetsOnGoodReading) {
     auto         fc     = make_fc_ok();
     uint64_t     now    = 1'000 * S;
 
-    // Two bad readings (below threshold)
-    mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
-    mgr.evaluate(health, fc, now - 10 * MS, now + 1 * MS, /*pose_quality=*/0);
+    // Two bad readings (below threshold — no fault yet)
+    auto r1 = mgr.evaluate(health, fc, now - 10 * MS, now, /*pose_quality=*/0);
+    EXPECT_FALSE(r1.active_faults & FAULT_VIO_LOST);
+    auto r2 = mgr.evaluate(health, fc, now - 10 * MS, now + 1 * MS, /*pose_quality=*/0);
+    EXPECT_FALSE(r2.active_faults & FAULT_VIO_LOST);
 
-    // Good reading resets counter
-    mgr.evaluate(health, fc, now - 10 * MS, now + 2 * MS, /*pose_quality=*/2);
+    // Good reading resets counter — no fault
+    auto r3 = mgr.evaluate(health, fc, now - 10 * MS, now + 2 * MS, /*pose_quality=*/2);
+    EXPECT_EQ(r3.recommended_action, FaultAction::NONE);
 
     // Two more bad readings — counter restarted, still below threshold
-    mgr.evaluate(health, fc, now - 10 * MS, now + 3 * MS, /*pose_quality=*/0);
-    auto r = mgr.evaluate(health, fc, now - 10 * MS, now + 4 * MS, /*pose_quality=*/0);
-    EXPECT_EQ(r.recommended_action, FaultAction::NONE);
-    EXPECT_FALSE(r.active_faults & FAULT_VIO_LOST);
+    auto r4 = mgr.evaluate(health, fc, now - 10 * MS, now + 3 * MS, /*pose_quality=*/0);
+    EXPECT_FALSE(r4.active_faults & FAULT_VIO_LOST);
+    auto r5 = mgr.evaluate(health, fc, now - 10 * MS, now + 4 * MS, /*pose_quality=*/0);
+    EXPECT_EQ(r5.recommended_action, FaultAction::NONE);
+    EXPECT_FALSE(r5.active_faults & FAULT_VIO_LOST);
 }
 
 TEST(FaultManagerTest, VIOQualityIgnoredBeforeFirstPose) {
