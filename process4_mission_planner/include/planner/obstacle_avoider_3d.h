@@ -1,7 +1,7 @@
 // process4_mission_planner/include/planner/obstacle_avoider_3d.h
 // 3D Velocity-Obstacle–inspired avoider.
 //
-// Extends the 2D PotentialFieldAvoider to full 3D:
+// Full 3D obstacle avoidance:
 //   - Considers obstacle Z positions (not just XY)
 //   - Adds vertical repulsive force component
 //   - Uses obstacle velocity for predictive avoidance (if available)
@@ -10,6 +10,7 @@
 // Plugs into the existing IObstacleAvoider interface.
 //
 // Implements Epic #110 Phase 3 — 3D obstacle avoidance.
+// PotentialFieldAvoider (2D) removed in Issue #207 — this is the only avoider.
 #pragma once
 
 #include "ipc/ipc_types.h"
@@ -39,7 +40,7 @@ class ObstacleAvoider3D final : public IObstacleAvoider {
 public:
     explicit ObstacleAvoider3D(const ObstacleAvoider3DConfig& config = {}) : config_(config) {}
 
-    /// Convenience constructor matching PotentialFieldAvoider API.
+    /// Convenience constructor with influence radius and repulsive gain.
     ObstacleAvoider3D(float influence_radius, float repulsive_gain)
         : config_{influence_radius, repulsive_gain} {}
 
@@ -152,11 +153,8 @@ private:
 namespace drone::planner {
 
 inline std::unique_ptr<IObstacleAvoider> create_obstacle_avoider(
-    const std::string& backend = "potential_field", float influence_radius = 5.0f,
+    const std::string& backend = "potential_field_3d", float influence_radius = 5.0f,
     float repulsive_gain = 2.0f, const drone::Config* cfg = nullptr) {
-    if (backend == "potential_field") {
-        return std::make_unique<PotentialFieldAvoider>(influence_radius, repulsive_gain);
-    }
     if (backend == "3d" || backend == "obstacle_avoider_3d" || backend == "potential_field_3d") {
         if (cfg) {
             return std::make_unique<ObstacleAvoider3D>(*cfg);

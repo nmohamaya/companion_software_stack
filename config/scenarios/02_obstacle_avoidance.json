@@ -95,6 +95,6 @@
         "repulsive_gain_range": {"min": 0.5, "max": 30.0, "default": 20.0},
         "cruise_speed_range": {"min": 0.5, "max": 3.0, "default": 1.0, "unit": "m/s"},
         "waypoints_editable": true,
-        "planner_backend_options": ["potential_field", "dstar_lite"]
+        "planner_backend_options": ["dstar_lite"]
     }
 }

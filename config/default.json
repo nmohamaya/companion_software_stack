@@ -105,13 +105,13 @@
         "landed_altitude_m": 0.5,
         "rtl_min_dwell_seconds": 5,
         "path_planner": {
-            "backend": "potential_field",
+            "backend": "dstar_lite",
             "ramp_dist_m": 3.0,
             "min_speed_mps": 1.0,
             "snap_search_radius": 8
         },
         "obstacle_avoider": {
-            "backend": "potential_field"
+            "backend": "potential_field_3d"
         },
         "obstacle_avoidance": {
             "min_distance_m": 2.0,
