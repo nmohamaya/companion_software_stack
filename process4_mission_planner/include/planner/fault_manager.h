@@ -171,12 +171,14 @@ public:
         // FaultOverrides warmup) from triggering irreversible RTL.
         if (pose_timestamp_ns > 0) {
             if (pose_quality <= config_.vio_quality_rtl_threshold) {
-                if (++vio_low_quality_count_ >= kVioDebounceCount) {
+                vio_low_quality_count_ = std::min(vio_low_quality_count_ + 1, kVioDebounceCount);
+                if (vio_low_quality_count_ >= kVioDebounceCount) {
                     result.active_faults |= FAULT_VIO_LOST;
                     escalate(result, FaultAction::RTL, "VIO tracking lost");
                 }
             } else if (pose_quality <= config_.vio_quality_loiter_threshold) {
-                if (++vio_low_quality_count_ >= kVioDebounceCount) {
+                vio_low_quality_count_ = std::min(vio_low_quality_count_ + 1, kVioDebounceCount);
+                if (vio_low_quality_count_ >= kVioDebounceCount) {
                     result.active_faults |= FAULT_VIO_DEGRADED;
                     escalate(result, FaultAction::LOITER, "VIO quality degraded");
                 }
