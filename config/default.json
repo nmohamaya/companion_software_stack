@@ -68,6 +68,23 @@
             "low_conf_threshold": 0.1,
             "max_iou_cost": 0.7
         },
+        "radar": {
+            "backend": "simulated",
+            "enabled": false,
+            "_comment_update_rate": "update_rate_hz reserved for GazeboRadar plugin (#212)",
+            "update_rate_hz": 20,
+            "max_range_m": 100.0,
+            "fov_azimuth_rad": 1.047,
+            "fov_elevation_rad": 0.262,
+            "noise": {
+                "range_std_m": 0.3,
+                "azimuth_std_rad": 0.026,
+                "elevation_std_rad": 0.026,
+                "velocity_std_mps": 0.1
+            },
+            "false_alarm_rate": 0.02,
+            "num_targets": 3
+        },
         "fusion": {
             "camera_weight": 1.0,
             "camera_height_m": 1.5,

@@ -236,3 +236,6 @@ add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
 
 # ── Mission State Tick tests (Issue #154) ──────────────────
 add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)
+
+# ── Radar HAL tests (Issue #209) ──────────────────────────
+add_drone_test(test_radar_hal          test_radar_hal.cpp)

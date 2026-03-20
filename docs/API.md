@@ -142,6 +142,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/gcs_commands` | `drone/comms/gcs_command` |
 | `/payload_status` | `drone/payload/status` |
 | `/system_health` | `drone/monitor/health` |
+| `/radar_detections` | `radar/detections` |
 
 ### `MessageBusFactory` — Config-Driven Backend Selection
 
@@ -174,6 +175,48 @@ sub->receive(out);
 - Wildcard subscriptions: `drone/**` captures all channels
 - Liveliness tokens for process death detection
 - Configurable QoS (reliable/best-effort, history depth)
+
+---
+
+## 1.5 IPC Message Types (`common/ipc/include/ipc/ipc_types.h`)
+
+Key wire-format structs used across pub/sub topics. All must be trivially copyable.
+
+### `RadarDetection` — Issue [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+Single radar return from an `IRadar` backend.
+
+```cpp
+struct RadarDetection {
+    uint64_t timestamp_ns;        // monotonic clock nanoseconds
+    float    range_m;             // metres (must be ≥ 0)
+    float    azimuth_rad;         // radians
+    float    elevation_rad;       // radians
+    float    radial_velocity_mps; // radial velocity, m/s
+    float    rcs_dbsm;           // radar cross-section, dBsm
+    float    snr_db;             // signal-to-noise ratio, dB
+    float    confidence;         // 0.0–1.0
+    uint32_t track_id;           // stable track identifier (0 = untracked)
+};
+```
+
+### `RadarDetectionList` — Issue [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+Fixed-capacity list of radar returns published on `/radar_detections`.
+
+```cpp
+constexpr uint32_t MAX_RADAR_DETECTIONS = 128;
+
+struct RadarDetectionList {
+    uint64_t       timestamp_ns;
+    uint32_t       num_detections;  // number of valid entries (≤ MAX_RADAR_DETECTIONS)
+    RadarDetection detections[MAX_RADAR_DETECTIONS];
+};
+```
+
+**Topic:** `/radar_detections` → Zenoh key `radar/detections`
+**Publisher:** P2 (perception) or a dedicated radar process
+**Subscribers:** P4 (mission planner) for obstacle avoidance fusion
 
 ---
 
@@ -362,6 +405,46 @@ FaultManager uses this field (via the `pose_quality` parameter to `evaluate()`) 
 | `disk_interval` | 10 | Check disk every N calls |
 
 **Factory:** `create_process_monitor(backend, ...)` — backends: `"linux"`
+
+---
+
+### `IRadar` — `drone::hal` — Issue [#209](https://github.com/nmohamaya/companion_software_stack/issues/209)
+
+**Header:** `common/hal/include/hal/iradar.h`
+**Used by:** P2 (perception) or a dedicated radar process
+
+Radar sensor interface. Returns a `RadarDetectionList` each call to `read()`. Designed for short-range obstacle detection and velocity measurement.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `init` | `bool init()` | Initialise hardware / start acquisition. Returns false on error. |
+| `read` | `RadarDetectionList read()` | Non-blocking read of latest detections. Before successful `init()`, returns an empty list (`num_detections == 0`). |
+| `is_active` | `bool is_active() const` | True after successful `init()`. |
+| `name` | `std::string name() const` | Human-readable backend identifier (e.g., `"SimulatedRadar"`). |
+
+| Key | Class | Notes |
+| --- | ----- | ----- |
+| `"simulated"` | `SimulatedRadar` | Configurable FoV, range, target count, and Gaussian noise model. |
+
+**Config section:** `perception.radar`
+
+**Key config keys:**
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| `enabled` | `false` | Enable radar sensor |
+| `backend` | `"simulated"` | Backend selection |
+| `fov_azimuth_rad` | 1.047 | Horizontal field-of-view in radians (~60° half-angle) |
+| `fov_elevation_rad` | 0.262 | Vertical field-of-view in radians (~15° half-angle) |
+| `max_range_m` | 100.0 | Maximum detection range in metres |
+| `num_targets` | 3 | Simulated target count (`SimulatedRadar`) |
+| `noise.range_std_m` | 0.3 | Range noise standard deviation in metres |
+| `noise.azimuth_std_rad` | 0.026 | Azimuth noise standard deviation in radians |
+| `noise.elevation_std_rad` | 0.026 | Elevation noise standard deviation in radians |
+| `noise.velocity_std_mps` | 0.1 | Velocity noise standard deviation in m/s |
+| `false_alarm_rate` | 0.02 | Probability of false alarm per scan |
+
+**Factory:** `create_radar(cfg, section)` — returns `std::unique_ptr<IRadar>`
 
 ---
 
