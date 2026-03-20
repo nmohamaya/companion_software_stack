@@ -54,9 +54,9 @@ struct HsvRange {
 // RGB → HSV conversion (single pixel)
 // ═══════════════════════════════════════════════════════════
 struct HsvPixel {
-    float h;  // [0, 360)
-    float s;  // [0, 1]
-    float v;  // [0, 1]
+    float h = 0.0f;  // [0, 360)
+    float s = 0.0f;  // [0, 1]
+    float v = 0.0f;  // [0, 1]
 };
 
 inline HsvPixel rgb_to_hsv(uint8_t r8, uint8_t g8, uint8_t b8) {
@@ -119,8 +119,8 @@ private:
 // Bounding box from connected component
 // ═══════════════════════════════════════════════════════════
 struct ComponentBBox {
-    int x_min, y_min, x_max, y_max;
-    int pixel_count;
+    int x_min = 0, y_min = 0, x_max = 0, y_max = 0;
+    int pixel_count = 0;
 
     int width() const { return x_max - x_min + 1; }
     int height() const { return y_max - y_min + 1; }

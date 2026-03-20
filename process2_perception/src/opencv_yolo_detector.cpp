@@ -118,7 +118,8 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
     const int rows = output.size[1];  // 84 (4 bbox + 80 classes)
     const int cols = output.size[2];  // 8400 proposals
 
-    // Pointer to raw data
+    // Pointer to raw data — assert float dtype before reinterpret_cast
+    CV_Assert(output.type() == CV_32F);
     float* data = reinterpret_cast<float*>(output.data);
 
     // Scale factors from input_size back to original image

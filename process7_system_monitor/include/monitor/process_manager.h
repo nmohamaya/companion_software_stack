@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -570,7 +571,10 @@ private:
             while ((entry = ::readdir(dir)) != nullptr) {
                 // Skip . and ..
                 if (entry->d_name[0] == '.') continue;
-                int fd = std::atoi(entry->d_name);
+                int        fd  = 0;
+                const auto end = entry->d_name + std::strlen(entry->d_name);
+                auto [ptr, ec] = std::from_chars(entry->d_name, end, fd);
+                if (ec != std::errc{} || ptr != end) continue;
                 if (fd > min_fd && fd != dir_fd) {
                     ::close(fd);
                 }
