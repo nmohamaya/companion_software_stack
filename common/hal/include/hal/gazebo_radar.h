@@ -175,10 +175,10 @@ public:
                                                        float v_min, float v_max) {
         float azimuth   = (h_count > 1) ? h_min + static_cast<float>(h_idx) * (h_max - h_min) /
                                                     static_cast<float>(h_count - 1)
-                                        : 0.0f;
+                                        : 0.5f * (h_min + h_max);
         float elevation = (v_count > 1) ? v_min + static_cast<float>(v_idx) * (v_max - v_min) /
                                                       static_cast<float>(v_count - 1)
-                                        : 0.0f;
+                                        : 0.5f * (v_min + v_max);
         return {azimuth, elevation};
     }
 
@@ -215,7 +215,10 @@ private:
         const int total_rays    = h_count * std::max(v_count, 1);
         const int ray_data_size = msg.ranges_size();
 
-        uint32_t next_tid = next_track_id_;
+        // Lock RNG + track ID for thread safety (gz-transport callbacks may be
+        // dispatched from different threads across subscription reconnects)
+        std::lock_guard<std::mutex> rng_lock(rng_mutex_);
+        uint32_t                    next_tid = next_track_id_;
 
         for (int i = 0; i < std::min(total_rays, ray_data_size); ++i) {
             if (list.num_detections >= drone::ipc::MAX_RADAR_DETECTIONS) break;
@@ -234,8 +237,9 @@ private:
             // Build detection from ray geometry + body velocity
             auto det = ray_to_detection(range, az, el, vx, vy, vz);
 
-            // Add noise
-            det.range_m       = std::clamp(det.range_m + range_noise_(rng_), 0.0f, max_range_m_);
+            // Add noise — clamp range to [rng_min, rng_max] to avoid
+            // physically invalid sub-minimum-range detections
+            det.range_m       = std::clamp(det.range_m + range_noise_(rng_), rng_min, rng_max);
             det.azimuth_rad   = std::clamp(det.azimuth_rad + azimuth_noise_(rng_),
                                            -fov_azimuth_rad_ / 2.0f, fov_azimuth_rad_ / 2.0f);
             det.elevation_rad = std::clamp(det.elevation_rad + elevation_noise_(rng_),
@@ -318,7 +322,8 @@ private:
     float              body_vy_{0.0f};
     float              body_vz_{0.0f};
 
-    // ── RNG for noise injection ───────────────────────────────
+    // ── RNG for noise injection (guarded by rng_mutex_) ───────
+    mutable std::mutex                            rng_mutex_;
     mutable std::mt19937                          rng_{42};
     mutable std::normal_distribution<float>       range_noise_;
     mutable std::normal_distribution<float>       azimuth_noise_;

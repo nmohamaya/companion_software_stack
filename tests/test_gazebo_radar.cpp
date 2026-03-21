@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -208,11 +209,17 @@ TEST(GazeboRadarTest, SNRDecreasesWithRange) {
 }
 
 TEST(GazeboRadarTest, FOVMappingSingleRay) {
-    // Single horizontal ray → azimuth should be 0
+    // Single horizontal ray → azimuth should be midpoint of min/max
     auto [az, el] = drone::hal::GazeboRadarBackend::ray_index_to_angles(0, 0, 1, 1, -0.5f, 0.5f,
                                                                         -0.1f, 0.1f);
-    EXPECT_FLOAT_EQ(az, 0.0f);
-    EXPECT_FLOAT_EQ(el, 0.0f);
+    EXPECT_FLOAT_EQ(az, 0.0f);  // midpoint of (-0.5, 0.5)
+    EXPECT_FLOAT_EQ(el, 0.0f);  // midpoint of (-0.1, 0.1)
+
+    // Non-symmetric FOV: midpoint should be (min+max)/2, not 0
+    auto [az2, el2] = drone::hal::GazeboRadarBackend::ray_index_to_angles(0, 0, 1, 1, 0.1f, 0.5f,
+                                                                          -0.2f, 0.0f);
+    EXPECT_FLOAT_EQ(az2, 0.3f);   // midpoint of (0.1, 0.5)
+    EXPECT_FLOAT_EQ(el2, -0.1f);  // midpoint of (-0.2, 0.0)
 }
 
 TEST(GazeboRadarTest, FOVMappingMultipleRays) {
@@ -301,7 +308,7 @@ TEST(GazeboRadarFallbackTest, FactoryCreatesSimulatedBackend) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     auto radar = drone::hal::create_radar(cfg, "perception.radar");
     ASSERT_NE(radar, nullptr);
     EXPECT_EQ(radar->name(), "SimulatedRadar");
@@ -316,7 +323,7 @@ TEST(GazeboRadarFallbackTest, GazeboBackendThrowsWithoutLib) {
         }
     })");
     drone::Config cfg;
-    cfg.load(path);
+    ASSERT_TRUE(cfg.load(path));
     EXPECT_THROW(drone::hal::create_radar(cfg, "perception.radar"), std::runtime_error);
 }
 
