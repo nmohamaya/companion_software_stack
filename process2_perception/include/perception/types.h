@@ -91,6 +91,7 @@ struct FusedObject {
     Eigen::Vector3f velocity_3d         = Eigen::Vector3f::Zero();
     float           heading             = 0.0f;
     bool            has_camera          = false;
+    bool            has_radar           = false;
     Eigen::Matrix3f position_covariance = Eigen::Matrix3f::Identity();
     uint64_t        timestamp_ns        = 0;
 };
