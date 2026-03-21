@@ -167,6 +167,44 @@ the following platform-specific assumptions need attention.
 | 8.11 | GPU acceleration | No CUDA/TensorRT/libargus code yet (listed as future in 1.4, 3.5) | N/A | **High when added** — vendor lock-in | Future TensorRT detector locks to NVIDIA. Qualcomm equivalent: SNPE/QNN. NXP: eIQ/TFLite. Plan for `IInferenceEngine` HAL |
 | 8.12 | Camera API | `ICamera` abstraction exists; V4L2 backend planned | `icamera.h`, `hal_factory.h` | **Low** — V4L2 works on all Linux | Qualcomm may prefer `libcamera` or proprietary ISP pipeline. NXP supports V4L2 natively |
 | 8.13 | Cross-compilation | Currently native x86/aarch64 build only | `CMakeLists.txt` | **Medium** — need toolchain files | Each SoC vendor provides a cross-toolchain; CMake toolchain file needed per target |
+| 8.14 | GPU rendering / EGL | `gpu_lidar` and `depth_camera` sensors require GPU ray-casting via EGL. On dual-GPU systems (integrated + discrete NVIDIA), the EGL loader defaults to Mesa DRI2 instead of the NVIDIA ICD, causing silent sensor failure | `deploy/launch_gazebo.sh`, any Gazebo launch script | **High** — sensors silently produce no data | See detailed notes below. Currently mitigated by forcing NVIDIA EGL env vars in `launch_gazebo.sh`. On Jetson (single GPU), this is a non-issue. On x86 with NVIDIA dGPU, the env vars are required. On Intel-only or AMD systems, `gpu_lidar` requires Mesa EGL to work correctly — do not set NVIDIA vars |
+
+### 8.14 — GPU Rendering / EGL Platform Notes
+
+**Problem discovered:** During Gazebo SITL testing with `gpu_lidar` (used as radar geometric backbone), the sensor silently failed to publish data. Cameras and IMU worked fine. Root cause: the EGL loader on a dual-GPU laptop (Intel iGPU + NVIDIA dGPU) selected Mesa DRI2 instead of the NVIDIA EGL ICD. The ogre2 rendering engine requires a working EGL context for GPU ray-casting; without it, `gpu_lidar` and `depth_camera` sensors produce zero frames with no error message.
+
+**Current mitigation** (in `deploy/launch_gazebo.sh`):
+
+```bash
+if command -v nvidia-smi &>/dev/null; then
+    export __NV_PRIME_RENDER_OFFLOAD=1
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    if [[ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ]]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+    fi
+fi
+```
+
+**Hardware platform matrix:**
+
+| Platform | GPU | EGL Status | Action Required |
+| -------- | --- | ---------- | --------------- |
+| **Dev laptop** (x86, dual GPU) | Intel iGPU + NVIDIA dGPU | Broken without env vars | Force NVIDIA EGL ICD (current fix) |
+| **NVIDIA Jetson Orin** (aarch64) | Tegra GPU (single) | Works natively | None — NVIDIA is the only EGL provider |
+| **Intel NUC / x86 server** | Intel iGPU only | Mesa EGL | Do NOT set NVIDIA vars; ensure `mesa-libEGL` is installed |
+| **AMD GPU system** | AMD dGPU | Mesa EGL (AMDGPU) | Do NOT set NVIDIA vars; ensure `mesa-libEGL` is installed |
+| **Qualcomm QRB5165** (aarch64) | Adreno GPU | Qualcomm EGL | Needs Qualcomm EGL ICD; untested with Gazebo |
+| **Headless server** (no GPU) | None | Software rendering | `gpu_lidar` will not work; fall back to `lidar` (CPU) or `SimulatedRadar` HAL |
+
+**When moving to new hardware:**
+
+1. Run `eglinfo` (from `mesa-utils-extra`) to verify which EGL vendor is active
+2. Test `gpu_lidar` with a minimal world: `gz sim -r -s --headless-rendering test_world.sdf` and check `gz topic -i -t /radar_lidar/scan` for publisher presence
+3. If no publisher appears, check the Gazebo server log for `libEGL warning: pci id for fd` messages
+4. Set the appropriate EGL vendor environment variables for the target GPU
+5. On Jetson, the NVIDIA JetPack SDK configures EGL correctly out of the box — no intervention needed
+
+**Long-term recommendation:** Add a GPU/EGL health check to the launch script that verifies `gpu_lidar` has at least one publisher within 5 seconds of Gazebo startup. If not, log a diagnostic message pointing to the EGL configuration. This was filed as GitHub Issue #217.
 
 ### Platform Migration Priority
 
@@ -177,6 +215,7 @@ If switching from Jetson Orin to another SoC, address in this order:
 3. **Cross-compilation toolchain** (8.13) — can't build without it
 4. **Thread affinity topology** (8.4) — big.LITTLE core assignment may differ
 5. **Camera ISP pipeline** (8.12) — Jetson libargus vs Qualcomm Camera2 vs NXP V4L2
+6. **GPU rendering / EGL** (8.14) — `gpu_lidar` silent failure on dual-GPU systems; verify EGL vendor on new hardware
 
 Items 8.1, 8.5–8.10 are low-risk on any Linux-based SoC and can be addressed opportunistically.
 

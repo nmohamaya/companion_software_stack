@@ -1256,3 +1256,159 @@ validation at startup with a clear error message.
 **Fix:** Changed Phase 4 collection to use the remaining timeout budget: `remaining = timeout - elapsed - 5s` (5s reserved for cleanup). Minimum 5 seconds maintained as a floor.
 
 **Found by:** Scenario 09 passed all checks except "Mission complete" — waypoints were reached but the runner killed the stack too early.
+
+---
+
+### Bug #34 — `gazebo_sitl.json` Missing `tracker.backend` Crashes Perception (#212)
+
+**Date discovered:** 2026-03-21
+**Severity:** High
+**Status:** FIXED (PR #218)
+**File:** `config/gazebo_sitl.json`
+
+**Bug:** Perception process crashes immediately on Gazebo SITL launch with:
+```
+terminate called after throwing an instance of 'std::invalid_argument'
+  what():  Unknown tracker backend: sort
+```
+All processes downstream (mission_planner, comms, payload_manager, etc.) are killed by the system monitor when perception dies, causing total stack failure.
+
+**Root Cause:** `gazebo_sitl.json` overrides the `perception.tracker` section but omits the `backend` key. `default.json` has `"backend": "bytetrack"`, but when `gazebo_sitl.json` overrides the `tracker` block, the deep-merge replaces the entire sub-object. The code in `process2_perception/src/main.cpp:328` reads `perception.tracker.backend` with a default of `"sort"` — a legacy backend that was removed when ByteTrack was introduced. The `create_tracker()` factory only recognizes `"bytetrack"`, so `"sort"` throws `std::invalid_argument`.
+
+**Why it wasn't caught earlier:** Scenario 02 (obstacle avoidance) explicitly sets `"backend": "bytetrack"` in its config overrides, masking the base config bug. The new scenario 17 (radar) was the first Gazebo scenario without a tracker override.
+
+**Fix:** Added `"backend": "bytetrack"` to the `perception.tracker` section in `gazebo_sitl.json`.
+
+**Lessons learned:**
+1. Config deep-merge replaces entire sub-objects — any overridden section must include ALL required keys, not just the ones being changed.
+2. Default parameter values in code (`"sort"`) can become stale when implementations are removed. Consider making defaults match the only available implementation, or remove default values entirely to force explicit configuration.
+3. Scenario configs should test the base config path, not just override everything. Scenario 17 caught this because it didn't override the tracker.
+
+**Found by:** Running Tier 2 scenario 17 (radar_gazebo) for the first time. Perception crashed, system monitor reported `DIED: payload_manager, slam_vio_nav, mission_planner`.
+
+**Regression test:** Scenario 17 now passes 14/14 with the fix.
+
+---
+
+### Bug #35 — Radar HAL Backend Created But Never Instantiated by Any Process (#212)
+
+**Date discovered:** 2026-03-21
+**Severity:** High
+**Status:** FIXED (PR #218)
+**Files:** `process2_perception/src/main.cpp`, `process2_perception/CMakeLists.txt`
+
+**Bug:** The `GazeboRadarBackend` and `SimulatedRadar` HAL implementations existed and passed all unit tests, but no process in the stack actually created them. Perception subscribed to `radar/detections` via IPC (Zenoh), but nobody published to that topic. The entire radar data path was disconnected:
+
+```
+[Missing] Gazebo gpu_lidar → GazeboRadarBackend → ??? → IPC → UKF fusion engine
+```
+
+The `create_radar()` factory was only called in unit tests (`test_radar_hal.cpp`, `test_gazebo_radar.cpp`), never in any process's `main()`.
+
+**Root Cause:** Issue #209 (IRadar HAL) created the interface and backends. Issue #210 (radar UKF) added the subscriber in perception's fusion thread. But the step in between — creating the HAL and publishing to IPC — was never implemented. The architecture assumed a publisher would exist, but nobody built it.
+
+**Fix:** Added a `radar_read_thread` to the perception process that:
+1. Creates the radar HAL backend via `create_radar(cfg, "perception.radar")` (config-driven: `"simulated"` or `"gazebo"`)
+2. Calls `radar->init()` to start the backend
+3. Polls `radar->read()` at the configured update rate (default 20 Hz)
+4. Publishes `RadarDetectionList` to IPC on the `/radar_detections` topic
+5. The existing fusion thread subscriber picks it up and feeds it to the UKF
+
+Also added `drone_hal` to perception's `target_link_libraries` in CMakeLists.txt (was missing — perception linked `drone_ipc` and `drone_util` but not `drone_hal`).
+
+The radar thread is **opt-in** via `perception.radar.enabled` (default: `false`), so it doesn't affect any existing configuration.
+
+**Lessons learned:**
+1. End-to-end data flow testing is essential — unit tests can pass for each component individually while the overall pipeline is disconnected.
+2. When adding IPC subscribers, verify the corresponding publisher exists in a running process.
+3. HAL factories are useless without a process that calls them.
+
+**Found by:** Scenario 17 showed `[GazeboRadar] Subscribed to scan` but no `[GazeboRadar] First scan` — the subscription succeeded but no data arrived. Investigation revealed the publisher side was missing entirely.
+
+**Regression test:** Scenario 17 now verifies both `GazeboRadar.*Subscribed to scan` and `GazeboRadar.*First scan`.
+
+---
+
+### Bug #36 — NVIDIA EGL Failure Breaks gpu_lidar in Gazebo SITL (#217)
+
+**Date discovered:** 2026-03-21
+**Severity:** High
+**Status:** FIXED (PR #218)
+**File:** `deploy/launch_gazebo.sh`
+
+**Bug:** Gazebo's `gpu_lidar` sensor silently fails to publish scan data on systems with both integrated and discrete NVIDIA GPUs. The sensor is registered (topic appears in `gz topic -l`), the HAL backend subscribes successfully, but no `LaserScan` messages are ever published. Cameras and IMU sensors work fine.
+
+The Gazebo server log shows:
+```
+libEGL warning: pci id for fd 56: 10de:1fb9, driver (null)
+libEGL warning: egl: failed to create dri2 screen
+```
+
+**Root Cause:** On systems with dual GPUs (integrated + discrete NVIDIA), the EGL loader defaults to the Mesa DRI2 backend instead of the NVIDIA EGL ICD. The `gpu_lidar` sensor requires GPU ray-casting through the ogre2 rendering engine, which needs a working EGL context. When EGL falls back to Mesa's DRI2 and that fails, the rendering scene initializes without GPU ray-casting support. The `gpu_lidar` sensor creates its `GpuRays` object but the rendering backend never produces frames — the sensor silently publishes nothing.
+
+Camera sensors work because ogre2's camera rendering path has a software fallback that doesn't require GPU ray-casting. IMU, magnetometer, and other physics-based sensors don't use rendering at all.
+
+**Diagnostic steps that identified the issue:**
+1. `gz topic -i -t /radar_lidar/scan` → "No publishers" (topic exists because subscriber created it)
+2. `gz topic -i -t /camera` → Has publisher (camera works)
+3. Created minimal standalone Gazebo world with just a `gpu_lidar` sensor → Same failure
+4. PX4's own lidar sensors (built-in `lidar_sensor_link`) also had no publishers → system-wide issue
+5. Checked PX4 SITL log → EGL warnings confirmed
+6. Set NVIDIA EGL env vars → `gpu_lidar` immediately started publishing
+
+**Fix:** Added NVIDIA EGL environment variable block to `deploy/launch_gazebo.sh`:
+```bash
+if command -v nvidia-smi &>/dev/null; then
+    export __NV_PRIME_RENDER_OFFLOAD=1
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    if [[ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ]]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+    fi
+fi
+```
+
+The guard (`nvidia-smi` check) ensures these variables are only set on NVIDIA systems. On systems without NVIDIA GPUs, the block is skipped entirely.
+
+**Why this is subtle and hard to diagnose:**
+1. **Silent failure** — `gpu_lidar` doesn't log an error, it just never publishes. No crash, no warning from Gazebo.
+2. **Topic appears to exist** — `gz topic -l` shows the topic because subscribers create it. Only `gz topic -i` (which shows publishers separately) reveals the problem.
+3. **Other sensors work** — Cameras, IMU, everything else is fine, so the stack appears healthy.
+4. **Subscription succeeds** — `gz::transport::Node::Subscribe()` returns true even when there's no publisher. gz-transport is pub/sub decoupled.
+5. **EGL errors buried in logs** — The EGL warnings appear in the PX4 SITL log (not Gazebo's log), interleaved with hundreds of other messages.
+
+**Lessons learned:**
+1. When a gz-transport subscriber receives no data, check `gz topic -i -t <topic>` for publisher presence — don't assume the topic has a publisher just because `gz topic -l` lists it.
+2. `gpu_lidar` and `depth_camera` sensors require actual GPU rendering. If the EGL context fails, these sensors fail silently. Camera sensors may still work via fallback paths.
+3. On dual-GPU systems, always force the NVIDIA EGL ICD explicitly.
+4. Add a "sensor health check" to Gazebo HAL backends — if `scan_count_ == 0` after N seconds of being active, log a warning about possible rendering failure.
+
+**Found by:** Scenario 17 passed all checks except `[GazeboRadar] First scan`. Investigation chain: logs → topic inspection → standalone Gazebo test → EGL diagnosis → env var fix.
+
+**Regression test:** Scenario 17 now verifies `GazeboRadar.*First scan` (scan data received from gpu_lidar).
+
+---
+
+### Bug #37 — Scenario Log Checks Fail for Log Lines Containing Square Brackets
+
+**Date discovered:** 2026-03-21
+**Severity:** Low
+**Status:** FIXED (PR #218)
+**File:** `config/scenarios/17_radar_gazebo.json`
+
+**Bug:** Scenario pass criteria like `"[GazeboRadar] First scan"` always fail even when the log line exists, because the scenario runner uses `grep -qai` which interprets `[GazeboRadar]` as a character class matching any single character in `{G,a,z,e,b,o,R,d,r}`, not the literal string `[GazeboRadar]`.
+
+**Root Cause:** `run_scenario.sh` and `run_scenario_gazebo.sh` pass `log_contains` patterns directly to `grep -qai` (line 631). Square brackets are regex metacharacters. The pattern `[GazeboRadar] First scan` matches `a First scan` or `G First scan` but not `[GazeboRadar] First scan`.
+
+**Fix:** Changed scenario 17's log patterns to use regex-compatible patterns without literal brackets:
+```json
+"GazeboRadar.*Subscribed to scan"    // instead of "[GazeboRadar] Subscribed to scan"
+"GazeboRadar.*First scan"            // instead of "[GazeboRadar] First scan"
+```
+
+**Lessons learned:** All scenario `log_contains` patterns are treated as regex by `grep`. When matching log lines that contain square brackets (common in `spdlog` output like `[ModuleName]`), either:
+- Use the text inside the brackets without them: `GazeboRadar.*First scan`
+- Or escape them: `\[GazeboRadar\] First scan`
+
+Existing scenarios (01–16) don't hit this because their patterns don't contain brackets.
+
+**Found by:** Scenario 17 reported "Log missing: [GazeboRadar] Subscribed to scan" even though `grep "GazeboRadar" combined.log` showed the line was present.
