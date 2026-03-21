@@ -38,6 +38,7 @@ flowchart TB
         SHM9["/fc_commands"]
         SHM10["/mission_upload"]
         SHM11["/fault_overrides"]
+        SHM12["/radar_detections"]
     end
 
     subgraph HAL["Hardware Abstraction Layer (Swappable Backends)"]
@@ -49,10 +50,12 @@ flowchart TB
             SG["SimulatedGCSLink<br/><i>UDP stub</i>"]
             SGim["SimulatedGimbal<br/><i>Slew-rate limited</i>"]
             SD["SimulatedDetector<br/><i>Random 2D detections</i>"]
+            SRad["SimulatedRadar<br/><i>Random targets + noise</i>"]
         end
         subgraph GAZEBO["Gazebo Backends (Tier 2)"]
             GC["GazeboCameraBackend<br/><i>gz-transport subscriber</i>"]
             GI["GazeboIMUBackend<br/><i>gz-transport IMU data</i>"]
+            GR["GazeboRadarBackend<br/><i>gpu_lidar → radar detections</i>"]
         end
         subgraph HARDWARE["Real Hardware Backends"]
             ML["MavlinkFCLink<br/><i>MAVSDK MAVLink v2</i>"]
@@ -96,6 +99,8 @@ flowchart TB
     P5 ---|HAL| SG
     P6 ---|HAL| SGim
     P2 ---|HAL| SD
+    P2 ---|HAL| SRad
+    P2 ---|HAL| GR
 
     FI -.->|inject| SHM11
     SHM11 -.->|override| P3
@@ -106,6 +111,7 @@ flowchart TB
 
     GC ---|gz-transport| GZ
     GI ---|gz-transport| GZ
+    GR ---|gz-transport| GZ
     ML ---|MAVLink UDP| PX4
     PX4 ---|SDF plugin| GZ
     GZ --- WORLD
@@ -130,6 +136,7 @@ flowchart TB
 | **Camera** | `SimulatedCamera` (gradient) | `GazeboCameraBackend` (rendered) |
 | **IMU** | `SimulatedIMU` (noise model) | `GazeboIMUBackend` (physics) |
 | **FC Link** | `SimulatedFCLink` (stub) | `MavlinkFCLink` (MAVSDK) |
+| **Radar** | `SimulatedRadar` (random targets) | `GazeboRadarBackend` (gpu_lidar + Doppler) |
 | **Detector** | `SimulatedDetector` (random) | `SimulatedDetector` or YOLO |
 | **Physics** | None (open-loop) | Gazebo (closed-loop) |
 | **Speed** | Fast (seconds) | Slow (minutes) |
@@ -161,7 +168,7 @@ These run identically in sim and on hardware:
 | D* Lite Path Planner | P4 | 3D occupancy grid, incremental D* Lite search, path smoothing |
 | ObstacleAvoider3D | P4 | Velocity-space potential field with prediction |
 | Kalman Tracker | P2 | Multi-object tracking with Hungarian assignment |
-| Fusion Engine | P2 | Camera-only sensor fusion |
+| Fusion Engine | P2 | Camera + radar UKF sensor fusion |
 | VIO Backend | P3 | Visual-inertial odometry with sliding window (sim uses `steady_clock` timestamps) |
 | IMU Pre-integrator | P3 | IMU measurement integration between keyframes |
 | Watchdog | P7 | Thread heartbeat monitoring, process management |
@@ -176,7 +183,160 @@ These run identically in sim and on hardware:
 | `IFCLink` | `SimulatedFCLink` | — | `MavlinkFCLink` |
 | `IGCSLink` | `SimulatedGCSLink` | — | UDP GCS (future) |
 | `IGimbal` | `SimulatedGimbal` | — | Serial gimbal (future) |
+| `IRadar` | `SimulatedRadar` | `GazeboRadarBackend` | TI AWR1843 (future) |
 | `IDetector` | `SimulatedDetector` | — | `OpenCVYOLODetector` |
+
+---
+
+## Gazebo Radar Backend — Design Deep Dive
+
+Gazebo (Garden/Harmonic) has **no native radar sensor type**. There is also no mature
+open-source radar plugin for gz-sim — CARLA and LGSVL have radar sensors, but those
+are entirely different simulators (Unreal-based). The Gazebo community's established
+workaround is to repurpose `gpu_lidar` as a geometric backbone and post-process
+returns into radar-like data.
+
+### Why HAL-Backend-Subscribes-to-gz-Transport (Not a Custom Plugin)
+
+Our codebase already follows this pattern for camera and IMU: `GazeboCameraBackend`
+and `GazeboIMUBackend` subscribe to gz-transport topics published by Gazebo's built-in
+sensors — no custom `.so` plugin, no SDF `<plugin>` XML, no Gazebo API coupling.
+
+| Concern | Custom Gazebo Plugin | HAL Backend (our approach) |
+| --- | --- | --- |
+| Build coupling | Must compile `.so` against Gazebo internal API; breaks on version bumps | Only depends on gz-transport message types (stable across versions) |
+| Plugin loading | Requires SDF plugin XML, GZ_SIM_SYSTEM_PLUGIN_PATH, .so deployment | No plugin loading — just a gz-transport subscriber |
+| Domain logic | Inside Gazebo server process | In our codebase, under our control and review |
+| Testability | Need Gazebo running to test any logic | Can unit-test conversion logic with mock messages |
+| HAL consistency | Separate code path from SimulatedRadar | Same IRadar interface, same noise pattern |
+| Maintenance | Two codebases (plugin + HAL backend) | Single HAL backend |
+
+### Architecture
+
+```text
+┌─────────────────────┐     gz-transport topics     ┌──────────────────────┐
+│  Gazebo Server       │  ── /radar_lidar/scan ───▶  │  GazeboRadarBackend  │
+│  (built-in sensors:  │     (LaserScan)              │  (HAL backend)       │
+│   gpu_lidar, odom)   │  ── /model/.../odometry ──▶  │                      │
+│                      │     (Odometry)               │  → RadarDetectionList│
+└─────────────────────┘                              └──────────────────────┘
+```
+
+The `GazeboRadarBackend` subscribes to **two gz-transport topics**:
+
+1. **`gz::msgs::LaserScan`** on `/radar_lidar/scan` — provides per-ray range and
+   bearing angles from a `gpu_lidar` sensor configured as a radar FOV (32 horizontal
+   rays × 8 vertical rays, 60° × 15° FOV, 0.5–100 m range, 20 Hz update rate).
+
+2. **`gz::msgs::Odometry`** on `/model/{model}/odometry` — provides body-frame
+   velocity for Doppler radial velocity projection.
+
+### Scan Callback Pipeline
+
+For each `LaserScan` message received, the scan callback (`on_scan`) processes
+every valid lidar ray through this pipeline:
+
+```text
+For each ray with valid range (finite, within [range_min, range_max]):
+  │
+  ├─ 1. Compute azimuth/elevation from ray index + scan FOV geometry
+  │     az = h_min + h_idx * (h_max - h_min) / (h_count - 1)
+  │     el = v_min + v_idx * (v_max - v_min) / (v_count - 1)
+  │
+  ├─ 2. Compute Cartesian position from spherical coordinates
+  │     x = range * cos(el) * cos(az)
+  │     y = range * cos(el) * sin(az)
+  │     z = range * sin(el)
+  │
+  ├─ 3. Project body velocity onto radial direction → Doppler
+  │     Radial unit vector: rx = cos(el)*cos(az), ry = cos(el)*sin(az), rz = sin(el)
+  │     radial_velocity = vx*rx + vy*ry + vz*rz
+  │
+  ├─ 4. Add Gaussian noise (same std::normal_distribution pattern as SimulatedRadar)
+  │     range     += N(0, range_std_m)        — default 0.3 m
+  │     azimuth   += N(0, azimuth_std_rad)    — default 0.026 rad (~1.5°)
+  │     elevation += N(0, elevation_std_rad)  — default 0.026 rad (~1.5°)
+  │     velocity  += N(0, velocity_std_mps)   — default 0.1 m/s
+  │
+  ├─ 5. Compute SNR from range (simplified radar equation)
+  │     snr_db = max(0, 30 - 20*log10(max(1, range)))
+  │     confidence = clamp(snr_db / 30, 0, 1)
+  │
+  └─ 6. Build RadarDetection and append to RadarDetectionList
+```
+
+After all valid rays are processed:
+
+```text
+  ├─ 7. Inject false alarms at configurable rate (default 2%)
+  │     Random range/azimuth/elevation within FOV, low SNR (3 dB), low confidence (0.1)
+  │
+  └─ 8. Store RadarDetectionList under mutex → available via read()
+```
+
+### Doppler Velocity Projection
+
+The key insight enabling radar simulation from lidar data is that Doppler radial
+velocity can be computed from the body velocity and the ray direction. For a target
+at azimuth `az` and elevation `el`, the radial unit vector is:
+
+```text
+r̂ = [cos(el)·cos(az), cos(el)·sin(az), sin(el)]
+```
+
+The radial velocity (what a real radar would measure) is the dot product:
+
+```text
+v_radial = v_body · r̂ = vx·cos(el)·cos(az) + vy·cos(el)·sin(az) + vz·sin(el)
+```
+
+This correctly produces:
+- Full body speed for targets directly ahead (`az=0, el=0`)
+- `cos(45°) ≈ 0.707×` for targets at 45° azimuth
+- Zero radial velocity for targets at 90° (perpendicular)
+- Vertical velocity contribution via `sin(el)` for elevated targets
+
+### SDF Sensor Configuration
+
+The `gpu_lidar` sensor is attached to `radar_lidar_link` on the `x500_companion` model
+(`sim/models/x500_companion/model.sdf`):
+
+| Parameter | Value | Rationale |
+| --- | --- | --- |
+| Horizontal samples | 32 | ~1.9° per ray across 60° FOV |
+| Horizontal FOV | ±0.5236 rad (±30°) | Matches typical automotive radar |
+| Vertical samples | 8 | ~1.9° per ray across 15° FOV |
+| Vertical FOV | ±0.1309 rad (±7.5°) | Narrow vertical typical of radar |
+| Range | 0.5–100 m | Short-range obstacle detection |
+| Update rate | 20 Hz | Matches radar update rate config |
+| Topic | `/radar_lidar/scan` | Distinct from any camera lidar |
+| Noise | None | Noise injected in HAL backend, not sensor |
+
+### Thread Safety
+
+- **`mutex_`** guards `cached_detections_` — written by `on_scan()` callback thread,
+  read by `read()` from the perception process thread.
+- **`odom_mutex_`** guards `body_vx_/vy_/vz_` — written by `on_odom()` callback,
+  read by `on_scan()`. Separate mutex avoids contention between the two topic callbacks.
+- **`std::atomic<bool> active_`** — checked at the top of both callbacks to skip
+  processing after `shutdown()`.
+
+### Testing Without Gazebo
+
+The static helper methods `ray_to_detection()` and `ray_index_to_angles()` are
+deliberately exposed as public static functions. This allows 17 unit tests to verify:
+
+| Test Category | What is Validated |
+| --- | --- |
+| Ray-to-detection conversion | Range, azimuth, elevation preserved; SNR computed from range |
+| Doppler projection | Forward velocity → full radial velocity; oblique angles → cosine projection; vertical → sine projection |
+| SNR vs range | Closer targets produce higher SNR and confidence values |
+| FOV mapping | Single ray → center angles; multi-ray → min/max/center correctly distributed |
+| Factory integration | `backend="gazebo"` creates `GazeboRadarBackend`; `backend="simulated"` still works |
+| Lifecycle | `is_active()` false before `init()`; double `init()` returns false; `read()` returns empty before data |
+
+All tests compile and run without Gazebo installed (conversion logic is pure math).
+The `HAVE_GAZEBO` compile guard only affects the gz-transport subscription calls.
 
 ---
 
@@ -412,7 +572,7 @@ a zero-initialized struct would activate every override at its most dangerous va
 
 ## Test Scenarios
 
-Sixteen pre-defined scenarios in `config/scenarios/`:
+Seventeen pre-defined scenarios in `config/scenarios/`:
 
 | # | Scenario | Tier | Gazebo | What it Tests |
 |---|---|---|---|---|
@@ -432,6 +592,7 @@ Sixteen pre-defined scenarios in `config/scenarios/`:
 | 14 | Altitude Ceiling Breach | 1 | No | Waypoint above geofence ceiling (10 m > 8 m limit) → RTL |
 | 15 | FC Quick Recovery | 1 | No | FC link loss → quick reconnect before RTL timeout → resume |
 | 16 | VIO Failure | 1 | No | VIO quality degradation (quality=1) → LOITER, recovery → fault clears |
+| 17 | Radar Gazebo | 2 | Yes | GazeboRadarBackend produces detections, UKF fusion consumes them |
 
 ### Scenario JSON Structure
 
@@ -484,6 +645,7 @@ Which pluggable backends are exercised by each scenario:
 | 14 Alt Breach | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 15 FC Recover | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 16 VIO Failure | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 17 Radar Gazebo | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `ukf` + radar |
 
 ### Per-Scenario Fault Coverage
 
@@ -507,6 +669,7 @@ Which fault types and FSM states are exercised:
 | 14 Alt Breach | GEOFENCE_BREACH | NAVIGATE → RTL | — |
 | 15 FC Recover | FC_LINK_LOST | NAVIGATE → LOITER → NAVIGATE | MISSION_START |
 | 16 VIO Failure | VIO_DEGRADED | NAVIGATE → LOITER | — |
+| 17 Radar Gazebo | None | IDLE → TAKEOFF → NAVIGATE → RTL → LAND | — |
 
 ---
 
@@ -517,10 +680,12 @@ unit tests for validation. This section is maintained to guide future scenario d
 
 ### Backends Never Tested in Scenarios
 
-| Backend | Type | Unit Tests | Why Not Covered |
-|---|---|---|---|
-| `ukf` | Fusion engine | 5 tests | Camera-only is default; UKF provides temporal smoothing but needs scenario validation |
-| `yolov8` | Detector | 24 tests | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
+| Backend  | Type     | Unit Tests | Why Not Covered                                        |
+|----------|----------|------------|--------------------------------------------------------|
+| `yolov8` | Detector | 24 tests   | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
+
+> **Previously untested (now resolved):** `ukf` fusion engine is now exercised by scenario 17
+> (Radar Gazebo) which enables radar fusion with `GazeboRadarBackend`. See Issue #210 / #212.
 
 ### Backend Coverage Recommendations
 
@@ -564,7 +729,7 @@ exercise the same backends that would run on real hardware:
 
 ### Tier 2 Limitations
 
-Only **scenario 02** runs on Gazebo SITL. The following fault scenarios would
+Only **scenarios 02 and 17** run on Gazebo SITL. The following fault scenarios would
 benefit from Gazebo validation but are currently Tier 1 only:
 
 - Battery degradation (03) — PX4 has its own battery model; Tier 1 uses injected values
@@ -647,12 +812,16 @@ companion_software_stack/
 │       ├── 14_altitude_ceiling_breach.json
 │       ├── 15_fc_quick_recovery.json
 │       ├── 16_vio_failure.json
+│       ├── 17_radar_gazebo.json
 │       └── data/
 │           └── upload_waypoints.json
 ├── common/hal/include/hal/
 │   ├── icamera.h                     # HAL interface
 │   ├── simulated_camera.h            # Tier 1 backend
 │   ├── gazebo_camera.h               # Tier 2 backend
+│   ├── iradar.h                      # Radar HAL interface
+│   ├── simulated_radar.h             # Tier 1 radar (random targets)
+│   ├── gazebo_radar.h                # Tier 2 radar (gpu_lidar → detections)
 │   └── hal_factory.h                 # Config-driven factory
 ├── tools/
 │   └── fault_injector/
