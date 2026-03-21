@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 5 | 124 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera), color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 5 | 132 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar), color contour, YOLOv8 |
 | [P4 — Mission Planner](#p4--mission-planner) | 8 | 83 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -117,7 +117,7 @@ bash deploy/build.sh --test-filter watchdog
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 150+ | 15 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (14 Tier 1 + 1 Tier 2) |
-| **Total** | **49 C++ + 4 shell** | **1037 + 42 + 150+** | |
+| **Total** | **49 C++ + 4 shell** | **1015 + 42 + 150+** | |
 
 ---
 
@@ -336,9 +336,9 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 13 tests
+### test_fusion_engine.cpp — 21 tests
 
-**What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF),
+**What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
 IFusionEngine factory.
 
 | Suite | Tests | What is validated |
@@ -347,6 +347,14 @@ IFusionEngine factory.
 | `FusionFactoryTest` | 3 | Factory creates `camera_only` and `ukf` backends, unknown backend throws |
 | `UKFFusionEngineTest` | 5 | Empty input, 3D position estimate, covariance convergence, reset clears state, name |
 | `CameraOnlyFusionEngineTest` | 1 | Name returns "camera_only" |
+| `RadarMeasurementModel` | 1 | Nonlinear radar h(x): Cartesian → [range, azimuth, elevation, radial_velocity] mapping correctness |
+| `RadarUpdateReducesCovariance` | 1 | UKF covariance trace shrinks after a radar measurement update |
+| `CameraRadarFusionTighterThanEither` | 1 | Combined camera+radar covariance trace is smaller than camera-only or radar-only |
+| `RadarGateRejectsOutlier` | 1 | Mahalanobis gate rejects a detection beyond `gate_threshold` standard deviations |
+| `RadarNoiseConfig` | 1 | `RadarNoiseConfig` struct fields accepted; non-default stds propagate into `R` matrix |
+| `RadarDisabledByDefault` | 1 | `set_radar_detections()` no-op on `IFusionEngine` base; `has_radar` stays false |
+| `SetRadarDetectionsAndFuse` | 1 | `UKFFusionEngine::set_radar_detections()` stores data; `fuse()` performs radar update and sets `has_radar` |
+| `HasRadarFlagOnlyWhenMatched` | 1 | `FusedObject::has_radar` is true only for tracks that received a matched radar detection |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
 

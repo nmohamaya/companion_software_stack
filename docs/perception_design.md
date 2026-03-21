@@ -85,6 +85,7 @@ Each stage is independently pipelined. Backpressure is handled by lock-free SPSC
 |-----------|----------------------------|--------------|------------------|
 | Subscribe | `VIDEO_MISSION_CAM` | `drone::ipc::VideoFrame` | Process 1 → Process 2 |
 | Subscribe | `SLAM_POSE` | `drone::ipc::Pose` | Process 3 → Process 2 (fusion thread) |
+| Subscribe | `RADAR_DETECTIONS` | `drone::ipc::RadarDetectionList` | Radar HAL → Process 2 (fusion thread, Issue #210) |
 | Publish | `DETECTED_OBJECTS` | `drone::ipc::DetectedObjectList` | Process 2 → Process 4 |
 | Publish | `THREAD_HEALTH_PERCEPTION` | `drone::ipc::ThreadHealth` | Process 2 → Process 7 |
 
@@ -208,17 +209,18 @@ O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. Byte
 
 The fusion engine maps 2D tracked objects to 3D camera-frame positions. Output positions are in **camera body frame** (forward=X, right=Y, down=Z); the `fusion_thread` rotates them to world ENU frame using the latest drone pose.
 
-> **Terminology note:** Despite the name "fusion", the current backends do **not** perform
-> multi-sensor fusion (e.g., fusing camera + LiDAR + radar). What they actually do:
+> **Terminology note:** The name "fusion" covers two different things depending on backend:
 >
 > 1. **`camera_only`** — Monocular depth estimation via pinhole geometry (apparent-size
 >    formula). Input: single RGB camera tracked 2D bboxes. Output: 3D camera-frame positions.
-> 2. **`ukf`** — Per-object Unscented Kalman Filter for temporal smoothing of the monocular
->    3D estimates. Still single-camera input.
+>    No multi-sensor fusion.
+> 2. **`ukf`** — Per-object Unscented Kalman Filter with **camera + radar multi-sensor fusion**
+>    (Issue #210). Camera provides a bearing+depth measurement; radar provides range, azimuth,
+>    elevation, and radial velocity via a nonlinear measurement model. Tracks updated by both
+>    sensors have tighter covariance than either sensor alone.
 >
 > The **stereo camera** feeds P3 (VIO/SLAM) for pose estimation, **not** P2 perception.
-> True multi-sensor fusion would require integrating stereo depth, LiDAR point clouds,
-> or radar returns — none of which are implemented yet.
+> LiDAR point-cloud fusion is not yet implemented.
 
 ### Backend: `camera_only`
 
@@ -330,11 +332,47 @@ depth     = camera_height_m * fy / max(10, position_2d.y)
 
 The Kalman gain is computed via `S.ldlt().solve(Pxz^T)` (LDLᵀ decomposition) instead of explicit `S.inverse()` for numerical stability. After the update, symmetry is enforced: `P = (P + Pᵀ) / 2`.
 
+#### Radar Measurement Model (`update_radar`) — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+`ObjectUKF::update_radar()` implements a nonlinear measurement model that converts the 6D Cartesian state to spherical radar observables:
+
+```
+h(x) = [range, azimuth, elevation, radial_velocity]
+```
+
+where:
+```
+range             = sqrt(x² + y² + z²)
+azimuth           = atan2(y, x)
+elevation         = atan2(-z, sqrt(x² + y²))
+radial_velocity   = (x·vx + y·vy + z·vz) / range
+```
+
+The 4×4 measurement noise matrix `R` is diagonal, built from `RadarNoiseConfig`:
+```
+R = diag(range_std_m², azimuth_std_rad², elevation_std_rad², velocity_std_mps²)
+```
+
+Sigma points are propagated through `h(x)` to capture the nonlinearity (no linearisation / no Jacobian required). The update uses the same LDLᵀ Kalman gain and symmetry-enforcement as the camera update.
+
+#### Gated Mahalanobis Radar Association
+
+`UKFFusionEngine::fuse()` performs camera update first, then for each track attempts to find a matching radar detection:
+
+1. Convert each `RadarDetection` from spherical to Cartesian camera frame
+2. For each track, compute the predicted radar measurement `z_pred = h(x_pred)` and innovation covariance `S`
+3. Compute the Mahalanobis distance `d² = (z - z_pred)ᵀ S⁻¹ (z - z_pred)` for each detection
+4. Accept the closest detection with `d < gate_threshold` (configurable, default 5.0 std devs)
+5. Call `update_radar()` on the matched track; set `FusedObject::has_radar = true`
+
+Detections that fall outside the gate are silently ignored (no new tracks are spawned from radar-only observations in this implementation).
+
 #### Track Lifecycle in UKFFusionEngine
 
 - New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth
-- Each frame: `predict()` then `update_camera()` with tracker output
+- Each frame: `predict()` → `update_camera()` → gated radar association → `update_radar()` (if matched)
 - Tracks not present in the current `TrackedObjectList` (i.e. pruned by ByteTrack) are erased from `filters_`
+- `FusedObject::has_radar` is set to `true` only when a radar detection passes the Mahalanobis gate for that track
 
 ---
 
@@ -445,6 +483,12 @@ All keys are under `perception.*` in the active JSON config.
 | `perception.fusion.cy` | float | `540.0` | Principal point y (px) |
 | `perception.fusion.camera_height_m` | float | `1.5` | Camera height above ground (m) — for ground-plane depth |
 | `perception.fusion.assumed_obstacle_height_m` | float | `3.0` | Known obstacle height (m) — for apparent-size depth |
+| `perception.fusion.radar.enabled` | bool | `false` | Enable radar measurement updates in the UKF (Issue #210) |
+| `perception.fusion.radar.range_std_m` | float | `0.5` | Radar range noise std (m) |
+| `perception.fusion.radar.azimuth_std_rad` | float | `0.05` | Radar azimuth noise std (rad) |
+| `perception.fusion.radar.elevation_std_rad` | float | `0.05` | Radar elevation noise std (rad) |
+| `perception.fusion.radar.velocity_std_mps` | float | `0.3` | Radar radial velocity noise std (m/s) |
+| `perception.fusion.radar.gate_threshold` | float | `5.0` | Mahalanobis gate threshold (std devs); detections beyond this are rejected |
 
 ---
 
@@ -481,7 +525,8 @@ All keys are under `perception.*` in the active JSON config.
 | `position_3d` | Vector3f | 3D position (camera body frame before transform) |
 | `velocity_3d` | Vector3f | 3D velocity estimate (m/s) |
 | `position_covariance` | Matrix3f | 3×3 position uncertainty |
-| `has_camera` | bool | Camera measurement present |
+| `has_camera` | bool | Camera measurement present this cycle |
+| `has_radar` | bool | Radar detection matched and applied this cycle (Issue #210) |
 
 ### `ShmDetectedObjectList` (IPC output, world frame)
 
@@ -545,6 +590,8 @@ See [observability.md](observability.md) for histogram interpretation.
 | Gap | Details | Tracked |
 |-----|---------|---------|
 | **UKF not default** | The UKF fusion backend is implemented and tested but the default config uses `camera_only`. The UKF backend should be validated in a scenario run before becoming default. | — |
+| **Radar fusion disabled by default** | `perception.fusion.radar.enabled` defaults to `false`. Enable it together with `perception.fusion.backend: "ukf"` to get camera+radar fusion. A Gazebo scenario validating the full radar UKF path is not yet written. | [#210](https://github.com/nmohamaya/companion_software_stack/issues/210) |
+| **Radar-only track spawning not implemented** | The radar association loop only updates existing camera-initiated tracks. A radar detection with no corresponding camera track is silently ignored. Future work: spawn tracks from radar-only detections for non-visible obstacles. | — |
 | **Monocular depth uncertainty** | Depth estimates from apparent size assume a known obstacle height and fixed focal length. Errors propagate into the world-frame position seen by Process 4. The 3×3 `position_covariance` in UKF quantifies this but Process 4 does not currently use it. | — |
 | **Yaw-only camera→world** | The body→world rotation in `fusion_thread` ignores camera pitch/roll. For aggressively pitched manoeuvres the world-frame position will have a systematic error. | — |
 | **SimulatedDetector produces random positions** | The default config uses `simulated` detector, so the SPSC queues are always exercised but the object positions carry no semantic meaning. Switch to `color_contour` or `yolov8` for meaningful output. | — |

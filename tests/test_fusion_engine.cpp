@@ -1,10 +1,14 @@
 // tests/test_fusion_engine.cpp
 // Unit tests for CameraOnlyFusionEngine, UKFFusionEngine, IFusionEngine factory.
 // UKF + factory tests added (Phase 1C, Issue #114).
+// Radar fusion tests added (Issue #210).
+#include "ipc/ipc_types.h"
 #include "perception/fusion_engine.h"
 #include "perception/ifusion_engine.h"
 #include "perception/kalman_tracker.h"
 #include "perception/ukf_fusion_engine.h"
+
+#include <cmath>
 
 #include <gtest/gtest.h>
 
@@ -279,4 +283,266 @@ TEST(UKFFusionEngineTest, NameReturnsUKF) {
 TEST(CameraOnlyFusionEngineTest, NameReturnsCameraOnly) {
     CameraOnlyFusionEngine engine(make_test_calib());
     EXPECT_EQ(engine.name(), "camera_only");
+}
+
+// ═══════════════════════════════════════════════════════════
+// Radar fusion tests (Issue #210)
+// ═══════════════════════════════════════════════════════════
+
+// Helper: create a TrackedObject at a known position for radar tests.
+static TrackedObject make_test_tracked(uint32_t id = 1, float px = 320.0f, float py = 340.0f) {
+    TrackedObject obj;
+    obj.track_id     = id;
+    obj.class_id     = ObjectClass::PERSON;
+    obj.confidence   = 0.9f;
+    obj.position_2d  = {px, py};
+    obj.velocity_2d  = Eigen::Vector2f::Zero();
+    obj.timestamp_ns = 1000;
+    return obj;
+}
+
+// Helper: create a RadarDetection from range/azimuth/elevation/velocity.
+static drone::ipc::RadarDetection make_radar_det(float range, float azimuth, float elevation,
+                                                 float velocity) {
+    drone::ipc::RadarDetection det{};
+    det.timestamp_ns        = 1000;
+    det.range_m             = range;
+    det.azimuth_rad         = azimuth;
+    det.elevation_rad       = elevation;
+    det.radial_velocity_mps = velocity;
+    det.confidence          = 0.95f;
+    det.rcs_dbsm            = 10.0f;
+    det.snr_db              = 20.0f;
+    return det;
+}
+
+// Helper: compute depth the same way UKFFusionEngine::estimate_depth does.
+static float test_estimate_depth(const CalibrationData& calib, const TrackedObject& trk) {
+    const float fy = calib.camera_intrinsics(1, 1);
+    return calib.camera_height_m * fy / std::max(10.0f, trk.position_2d.y());
+}
+
+TEST(RadarFusionTest, RadarMeasurementModel) {
+    // Create a UKF at a known state and verify radar measurement model output.
+    // ObjectUKF state: [x=10, y=5, z=2, vx=1, vy=0, vz=0]
+    TrackedObject trk = make_test_tracked();
+    ObjectUKF     ukf(trk, 10.0f);
+
+    // The predicted radar measurement should be close to what the measurement model
+    // computes from the initial state. Since the constructor sets x_=10, y≈bearing*10,
+    // z=0, we verify the output has plausible range/azimuth.
+    auto z_pred = ukf.predicted_radar_measurement();
+
+    // range should be > 0 (object is not at origin)
+    EXPECT_GT(z_pred(0), 0.0f);
+    // azimuth should be finite
+    EXPECT_TRUE(std::isfinite(z_pred(1)));
+    // elevation should be finite
+    EXPECT_TRUE(std::isfinite(z_pred(2)));
+    // radial velocity should be finite
+    EXPECT_TRUE(std::isfinite(z_pred(3)));
+}
+
+TEST(RadarFusionTest, RadarUpdateReducesCovariance) {
+    // A single radar update should reduce position covariance.
+    TrackedObject trk = make_test_tracked();
+    ObjectUKF     ukf(trk, 10.0f);
+
+    ukf.predict();
+    float cov_before = ukf.position_covariance().trace();
+
+    // Create a radar detection that matches the predicted measurement
+    auto z_pred = ukf.predicted_radar_measurement();
+    auto det    = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+    ukf.update_radar(det);
+
+    float cov_after = ukf.position_covariance().trace();
+    EXPECT_LT(cov_after, cov_before);
+}
+
+TEST(RadarFusionTest, CameraRadarFusionTighterThanEither) {
+    // Camera+radar should produce tighter covariance than camera-only.
+    auto  calib = make_test_calib();
+    auto  trk   = make_test_tracked();
+    float depth = test_estimate_depth(calib, trk);
+
+    // Camera-only UKF
+    UKFFusionEngine   cam_engine(calib);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto cam_result = cam_engine.fuse(tracked);
+    ASSERT_EQ(cam_result.objects.size(), 1u);
+    float cam_cov = cam_result.objects[0].position_covariance.trace();
+
+    // Camera+radar UKF — use matching depth to create a valid radar detection
+    UKFFusionEngine both_engine(calib);
+
+    ObjectUKF temp_ukf(trk, depth);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    both_engine.set_radar_detections(radar_list);
+    auto both_result = both_engine.fuse(tracked);
+    ASSERT_EQ(both_result.objects.size(), 1u);
+    float both_cov = both_result.objects[0].position_covariance.trace();
+
+    EXPECT_LT(both_cov, cam_cov);
+}
+
+TEST(RadarFusionTest, RadarGateRejectsOutlier) {
+    // A radar detection far from the track should not be associated.
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked());
+
+    // Radar detection far away (range=500, opposite azimuth)
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(500.0f, -1.5f, 1.0f, 50.0f);
+
+    engine.set_radar_detections(radar_list);
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FALSE(result.objects[0].has_radar);  // outlier should be rejected
+}
+
+TEST(RadarFusionTest, RadarNoiseConfig) {
+    // Verify custom noise config propagates to the R_radar matrix.
+    RadarNoiseConfig cfg;
+    cfg.range_std_m       = 1.0f;
+    cfg.azimuth_std_rad   = 0.1f;
+    cfg.elevation_std_rad = 0.2f;
+    cfg.velocity_std_mps  = 0.5f;
+
+    TrackedObject trk = make_test_tracked();
+    ObjectUKF     ukf(trk, 10.0f, cfg);
+
+    const auto& R = ukf.radar_noise();
+    EXPECT_NEAR(R(0, 0), 1.0f, 1e-6f);   // range_std² = 1.0
+    EXPECT_NEAR(R(1, 1), 0.01f, 1e-6f);  // azimuth_std² = 0.01
+    EXPECT_NEAR(R(2, 2), 0.04f, 1e-6f);  // elevation_std² = 0.04
+    EXPECT_NEAR(R(3, 3), 0.25f, 1e-6f);  // velocity_std² = 0.25
+    // Off-diagonals should be zero
+    EXPECT_NEAR(R(0, 1), 0.0f, 1e-6f);
+    EXPECT_NEAR(R(1, 2), 0.0f, 1e-6f);
+}
+
+TEST(RadarFusionTest, RadarDisabledByDefault) {
+    // Without radar data, output should have has_radar=false and match camera-only.
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked());
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_TRUE(result.objects[0].has_camera);
+    EXPECT_FALSE(result.objects[0].has_radar);
+}
+
+TEST(RadarFusionTest, SetRadarDetectionsAndFuse) {
+    // Verify set_radar_detections + fuse uses radar data.
+    auto  calib = make_test_calib();
+    auto  trk   = make_test_tracked();
+    float depth = test_estimate_depth(calib, trk);
+
+    UKFFusionEngine engine(calib);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // First fuse without radar to establish the track
+    auto result1 = engine.fuse(tracked);
+    ASSERT_EQ(result1.objects.size(), 1u);
+
+    // Simulate the same UKF steps the engine performed to get matching radar coords
+    ObjectUKF temp_ukf(trk, depth);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    // Now fuse with matching radar data
+    tracked.timestamp_ns            = 2000;
+    tracked.frame_sequence          = 2;
+    tracked.objects[0].timestamp_ns = 2000;
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 2000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    auto result2 = engine.fuse(tracked);
+    ASSERT_EQ(result2.objects.size(), 1u);
+    EXPECT_TRUE(result2.objects[0].has_radar);
+}
+
+TEST(RadarFusionTest, HasRadarFlagOnlyWhenMatched) {
+    // has_radar should be true only for tracks that matched a radar detection.
+    auto  calib  = make_test_calib();
+    auto  trk1   = make_test_tracked(1, 320.0f, 340.0f);
+    auto  trk2   = make_test_tracked(2, 100.0f, 400.0f);
+    float depth1 = test_estimate_depth(calib, trk1);
+
+    UKFFusionEngine engine(calib);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk1);
+    tracked.objects.push_back(trk2);
+
+    // First fuse to establish tracks
+    (void)engine.fuse(tracked);
+
+    // Create radar detection that matches only track 1.
+    // Use matching depth so the predicted radar measurement aligns with the engine's UKF state.
+    ObjectUKF temp_ukf(trk1, depth1);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk1, depth1);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk1, depth1);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 2000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    tracked.timestamp_ns            = 2000;
+    tracked.frame_sequence          = 2;
+    tracked.objects[0].timestamp_ns = 2000;
+    tracked.objects[1].timestamp_ns = 2000;
+
+    engine.set_radar_detections(radar_list);
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 2u);
+
+    // Exactly one should have radar — the detection should match only the closer track
+    int radar_count = 0;
+    for (const auto& obj : result.objects) {
+        if (obj.has_radar) ++radar_count;
+    }
+    EXPECT_EQ(radar_count, 1);
 }

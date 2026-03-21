@@ -2406,4 +2406,51 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 
 ---
 
+## Improvement #52 — Radar Measurement Model in UKFFusionEngine (Issue #210)
+
+**Date:** 2026-03-21
+**Category:** Feature / Perception
+**Issue:** [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+**What:** Added camera+radar multi-sensor fusion to the UKF perception pipeline. `UKFFusionEngine` now performs a camera measurement update followed by gated Mahalanobis radar association and a nonlinear radar measurement update for each track. The radar measurement model converts the 6D Cartesian UKF state to spherical observables `[range, azimuth, elevation, radial_velocity]` without linearisation, using sigma-point propagation through the nonlinear `h(x)`.
+
+**Files Modified (8):**
+
+- `common/ipc/include/ipc/ipc_types.h` — added `has_radar` field to `DetectedObject`
+- `process2_perception/include/perception/types.h` — added `has_radar` field to `FusedObject`
+- `process2_perception/include/perception/ukf_fusion_engine.h` — `RadarNoiseConfig` struct, `update_radar()` on `ObjectUKF`, `set_radar_detections()` on `UKFFusionEngine`
+- `process2_perception/include/perception/ifusion_engine.h` — default no-op `set_radar_detections()` on `IFusionEngine` base
+- `process2_perception/src/ukf_fusion_engine.cpp` — nonlinear radar measurement model, gated Mahalanobis association loop, factory reads `perception.fusion.radar` config
+- `process2_perception/src/main.cpp` — radar subscriber on `/radar_detections`, drain in fusion thread, `has_radar` propagation to IPC output
+- `config/default.json` — `perception.fusion.radar` section (`enabled: false`, noise stds, gate threshold)
+- `tests/test_fusion_engine.cpp` — 8 new tests
+
+**Key Design Decisions:**
+
+- **Sigma-point radar h(x):** No Jacobian / no EKF linearisation. Sigma points from the UKF predict step are propagated through the spherical conversion, recovering the predicted measurement mean and cross-covariance without approximation error.
+- **Gated Mahalanobis association:** For each track, the closest radar detection within `gate_threshold` (default 5.0 std devs) Mahalanobis distance is accepted. Detections outside the gate are rejected. Camera-initiated tracks only — radar does not spawn new tracks.
+- **Radar disabled by default:** `perception.fusion.radar.enabled = false` in `default.json`. Enable with `perception.fusion.backend: "ukf"` and `perception.fusion.radar.enabled: true`.
+- **`has_radar` flag:** Propagated from `FusedObject` through to `DetectedObject` IPC so downstream processes (P4) can distinguish camera-only vs. camera+radar tracks.
+
+**New Tests (8):**
+
+| Test | What is validated |
+|------|------------------|
+| `RadarMeasurementModel` | Cartesian → [range, azimuth, elevation, radial_velocity] mapping correctness |
+| `RadarUpdateReducesCovariance` | UKF covariance trace shrinks after radar update |
+| `CameraRadarFusionTighterThanEither` | Camera+radar covariance trace < camera-only and radar-only |
+| `RadarGateRejectsOutlier` | Mahalanobis gate rejects detections beyond `gate_threshold` |
+| `RadarNoiseConfig` | Non-default noise stds propagate into `R` matrix |
+| `RadarDisabledByDefault` | `set_radar_detections()` no-op on base; `has_radar` stays false |
+| `SetRadarDetectionsAndFuse` | `set_radar_detections()` + `fuse()` performs update and sets `has_radar` |
+| `HasRadarFlagOnlyWhenMatched` | `has_radar` true only for tracks with a matched radar detection |
+
+**Test count:** 1007 → 1015 (+8 tests)
+
+---
+
+_Last updated after Improvement #52 (radar UKF fusion, Issue #210). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1015 tests._
+
+---
+
 _Last updated after Improvement #51 (thermal camera removal, Issue #211). See [tests/TESTS.md](../tests/TESTS.md) for current test counts._

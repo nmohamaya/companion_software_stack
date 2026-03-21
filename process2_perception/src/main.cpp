@@ -139,9 +139,12 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 // ── Fusion thread ───────────────────────────────────────────
 // pose_sub  — IPC subscriber for drone/slam/pose (Pose).
 //             Used to rotate camera-frame detections into world frame.
-static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                  tracked_queue,
-                          drone::ipc::IPublisher<drone::ipc::DetectedObjectList>& det_pub,
-                          drone::ipc::ISubscriber<drone::ipc::Pose>&              pose_sub,
+// radar_sub — IPC subscriber for radar detections (RadarDetectionList).
+//             Fed into fusion engine for camera+radar multi-sensor fusion.
+static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                   tracked_queue,
+                          drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
+                          drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
+                          drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
                           std::atomic<bool>& running, IFusionEngine& engine) {
     spdlog::info("[Fusion] Thread started — backend: {}", engine.name());
 
@@ -162,6 +165,18 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
             while (pose_sub.receive(p)) {
                 latest_pose = p;
                 has_pose    = true;
+            }
+        }
+
+        // Drain latest radar detections (non-blocking — keep the most recent)
+        {
+            drone::ipc::RadarDetectionList radar_list{};
+            bool                           got_radar = false;
+            while (radar_sub.receive(radar_list)) {
+                got_radar = true;
+            }
+            if (got_radar) {
+                engine.set_radar_detections(radar_list);
             }
         }
 
@@ -248,6 +263,7 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                 dst.velocity_z = src.velocity_3d.z();
                 dst.heading    = src.heading;
                 dst.has_camera = src.has_camera;
+                dst.has_radar  = src.has_radar;
             }
             det_pub.publish(shm_list);
             ++fusion_count;
@@ -342,8 +358,13 @@ int main(int argc, char* argv[]) {
     // Subscribe to drone pose for the camera→world transform in the fusion thread
     auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
 
+    // Subscribe to radar detections for multi-sensor fusion
+    auto radar_sub =
+        bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
+
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
-                         std::ref(*pose_sub), std::ref(g_running), std::ref(*fusion_engine));
+                         std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
+                         std::ref(*fusion_engine));
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;

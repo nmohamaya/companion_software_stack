@@ -1,6 +1,6 @@
 // process2_perception/src/ukf_fusion_engine.cpp
-// UKF fusion engine implementation.
-// Phase 1C (Issue #114).
+// UKF fusion engine implementation — camera + radar measurement models.
+// Phase 1C (Issue #114), radar fusion (Issue #210).
 #include "perception/ukf_fusion_engine.h"
 
 #include "perception/fusion_engine.h"
@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <Eigen/Cholesky>
 #include <Eigen/LU>
@@ -18,7 +19,8 @@ namespace drone::perception {
 // ═══════════════════════════════════════════════════════════
 // ObjectUKF
 // ═══════════════════════════════════════════════════════════
-ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth)
+ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth,
+                     const RadarNoiseConfig& radar_cfg)
     : track_id(trk.track_id), age(0) {
     // Initialize state: [x=depth, y=bearing_x*depth, z=0, vx, vy, vz]
     x_    = StateVec::Zero();
@@ -44,8 +46,15 @@ ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth)
     Q_(4, 4) = 1.0f;
     Q_(5, 5) = 0.5f;
 
-    // Measurement noise
+    // Camera measurement noise
     R_ = MeasMat::Identity() * 2.0f;
+
+    // Radar measurement noise: diag([range², azimuth², elevation², velocity²])
+    R_radar_       = RadarMeasMat::Zero();
+    R_radar_(0, 0) = radar_cfg.range_std_m * radar_cfg.range_std_m;
+    R_radar_(1, 1) = radar_cfg.azimuth_std_rad * radar_cfg.azimuth_std_rad;
+    R_radar_(2, 2) = radar_cfg.elevation_std_rad * radar_cfg.elevation_std_rad;
+    R_radar_(3, 3) = radar_cfg.velocity_std_mps * radar_cfg.velocity_std_mps;
 }
 
 std::vector<ObjectUKF::StateVec> ObjectUKF::generate_sigma_points() const {
@@ -195,6 +204,94 @@ void ObjectUKF::update_camera(const TrackedObject& trk, float estimated_depth) {
     P_ = (P_ + P_.transpose()) * 0.5f;
 }
 
+// ═══════════════════════════════════════════════════════════
+// Radar measurement model and update
+// ═══════════════════════════════════════════════════════════
+
+ObjectUKF::RadarMeasVec ObjectUKF::radar_measurement_model(const StateVec& s) {
+    const float x  = s(0);
+    const float y  = s(1);
+    const float z  = s(2);
+    const float vx = s(3);
+    const float vy = s(4);
+    const float vz = s(5);
+
+    const float range_sq = x * x + y * y + z * z;
+    const float range    = std::sqrt(std::max(range_sq, 1e-6f));  // avoid zero
+    const float xy_dist  = std::sqrt(std::max(x * x + y * y, 1e-6f));
+
+    RadarMeasVec z_out;
+    z_out(0) = range;                               // range
+    z_out(1) = std::atan2(y, x);                    // azimuth
+    z_out(2) = std::atan2(z, xy_dist);              // elevation
+    z_out(3) = (x * vx + y * vy + z * vz) / range;  // radial velocity
+    return z_out;
+}
+
+ObjectUKF::RadarMeasVec ObjectUKF::predicted_radar_measurement() const {
+    return radar_measurement_model(x_);
+}
+
+void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
+    constexpr int   n      = STATE_DIM;
+    constexpr float lambda = kAlpha * kAlpha * (n + kKappa) - n;
+
+    auto sigma = generate_sigma_points();
+
+    // Propagate sigma points through radar measurement model
+    std::vector<RadarMeasVec> z_sigma(2 * n + 1);
+    for (int i = 0; i < 2 * n + 1; ++i) {
+        z_sigma[i] = radar_measurement_model(sigma[i]);
+    }
+
+    // Weights
+    float w0_mean = lambda / (n + lambda);
+    float w0_cov  = w0_mean + (1.0f - kAlpha * kAlpha + kBeta);
+    float wi      = 1.0f / (2.0f * (n + lambda));
+
+    // Mean predicted measurement
+    RadarMeasVec z_mean = w0_mean * z_sigma[0];
+    for (int i = 1; i < 2 * n + 1; ++i) {
+        z_mean += wi * z_sigma[i];
+    }
+
+    // Innovation covariance S = Pzz + R_radar
+    RadarMeasVec dz0 = z_sigma[0] - z_mean;
+    RadarMeasMat S   = w0_cov * (dz0 * dz0.transpose());
+    for (int i = 1; i < 2 * n + 1; ++i) {
+        RadarMeasVec dzi = z_sigma[i] - z_mean;
+        S += wi * (dzi * dzi.transpose());
+    }
+    S += R_radar_;
+
+    // Cross-covariance Pxz
+    using RadarCrossMat = Eigen::Matrix<float, STATE_DIM, RADAR_MEAS_DIM>;
+    StateVec      dx0   = sigma[0] - x_;
+    RadarCrossMat Pxz   = w0_cov * (dx0 * dz0.transpose());
+    for (int i = 1; i < 2 * n + 1; ++i) {
+        StateVec     dxi = sigma[i] - x_;
+        RadarMeasVec dzi = z_sigma[i] - z_mean;
+        Pxz += wi * (dxi * dzi.transpose());
+    }
+
+    // Kalman gain (solve via LDLT for numerical stability)
+    RadarCrossMat K = (S.ldlt().solve(Pxz.transpose())).transpose();
+
+    // Actual radar measurement
+    RadarMeasVec z_actual;
+    z_actual(0) = det.range_m;
+    z_actual(1) = det.azimuth_rad;
+    z_actual(2) = det.elevation_rad;
+    z_actual(3) = det.radial_velocity_mps;
+
+    // Update
+    x_ += K * (z_actual - z_mean);
+    P_ -= K * S * K.transpose();
+
+    // Ensure P stays symmetric positive definite
+    P_ = (P_ + P_.transpose()) * 0.5f;
+}
+
 Eigen::Vector3f ObjectUKF::position() const {
     return {x_(0), x_(1), x_(2)};
 }
@@ -210,7 +307,8 @@ Eigen::Matrix3f ObjectUKF::position_covariance() const {
 // ═══════════════════════════════════════════════════════════
 // UKFFusionEngine
 // ═══════════════════════════════════════════════════════════
-UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib) : calib_(calib) {}
+UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseConfig& radar_cfg)
+    : calib_(calib), radar_cfg_(radar_cfg) {}
 
 float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
     const float fy = calib_.camera_intrinsics(1, 1);
@@ -219,6 +317,12 @@ float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
 
 void UKFFusionEngine::reset() {
     filters_.clear();
+    has_radar_data_ = false;
+}
+
+void UKFFusionEngine::set_radar_detections(const drone::ipc::RadarDetectionList& detections) {
+    radar_dets_     = detections;
+    has_radar_data_ = true;
 }
 
 FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
@@ -229,19 +333,68 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     // Track which UKF filters are still active this frame
     std::unordered_map<uint32_t, bool> seen;
 
+    // Track which radar detections have been matched (greedy, one-to-one)
+    std::vector<bool> radar_matched;
+    if (has_radar_data_) {
+        radar_matched.resize(radar_dets_.num_detections, false);
+    }
+
     for (const auto& trk : tracked.objects) {
         float depth = estimate_depth(trk);
 
         auto it = filters_.find(trk.track_id);
         if (it == filters_.end()) {
             // New track — create UKF
-            filters_.emplace(trk.track_id, ObjectUKF(trk, depth));
+            filters_.emplace(trk.track_id, ObjectUKF(trk, depth, radar_cfg_));
             it = filters_.find(trk.track_id);
         }
 
         auto& ukf = it->second;
         ukf.predict();
         ukf.update_camera(trk, depth);
+
+        // Radar association: find best matching radar detection within gate
+        bool matched_radar = false;
+        if (has_radar_data_ && radar_dets_.num_detections > 0) {
+            auto z_pred = ukf.predicted_radar_measurement();
+
+            float    best_dist = std::numeric_limits<float>::max();
+            uint32_t best_idx  = 0;
+
+            for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
+                if (radar_matched[ri]) continue;
+
+                const auto&             rdet = radar_dets_.detections[ri];
+                ObjectUKF::RadarMeasVec z_actual;
+                z_actual(0) = rdet.range_m;
+                z_actual(1) = rdet.azimuth_rad;
+                z_actual(2) = rdet.elevation_rad;
+                z_actual(3) = rdet.radial_velocity_mps;
+
+                // Innovation (residual)
+                ObjectUKF::RadarMeasVec innovation = z_actual - z_pred;
+
+                // Mahalanobis distance: d² = innovation^T * R_radar^{-1} * innovation
+                // Use R_radar as approximation of innovation covariance for gating
+                // (full S would require sigma point propagation — R is a cheaper proxy)
+                const auto& R_inv_diag = ukf.radar_noise().diagonal();
+                float       mahal_sq   = 0.0f;
+                for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
+                    mahal_sq += (innovation(d) * innovation(d)) / R_inv_diag(d);
+                }
+
+                if (mahal_sq < radar_cfg_.gate_threshold && mahal_sq < best_dist) {
+                    best_dist = mahal_sq;
+                    best_idx  = ri;
+                }
+            }
+
+            if (best_dist < radar_cfg_.gate_threshold) {
+                ukf.update_radar(radar_dets_.detections[best_idx]);
+                radar_matched[best_idx] = true;
+                matched_radar           = true;
+            }
+        }
 
         seen[trk.track_id] = true;
 
@@ -254,6 +407,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.velocity_3d         = ukf.velocity();
         fused.heading             = 0.0f;
         fused.has_camera          = true;
+        fused.has_radar           = matched_radar;
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
 
@@ -268,6 +422,9 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             ++it;
         }
     }
+
+    // Clear radar data after use
+    has_radar_data_ = false;
 
     return output;
 }
@@ -297,7 +454,20 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
         return std::make_unique<CameraOnlyFusionEngine>(calib, depth_cfg);
     }
     if (backend == "ukf") {
-        return std::make_unique<UKFFusionEngine>(calib);
+        RadarNoiseConfig radar_cfg;
+        if (cfg) {
+            radar_cfg.range_std_m       = cfg->get<float>("perception.fusion.radar.range_std_m",
+                                                          radar_cfg.range_std_m);
+            radar_cfg.azimuth_std_rad   = cfg->get<float>("perception.fusion.radar.azimuth_std_rad",
+                                                          radar_cfg.azimuth_std_rad);
+            radar_cfg.elevation_std_rad = cfg->get<float>(
+                "perception.fusion.radar.elevation_std_rad", radar_cfg.elevation_std_rad);
+            radar_cfg.velocity_std_mps = cfg->get<float>("perception.fusion.radar.velocity_std_mps",
+                                                         radar_cfg.velocity_std_mps);
+            radar_cfg.gate_threshold   = cfg->get<float>("perception.fusion.radar.gate_threshold",
+                                                         radar_cfg.gate_threshold);
+        }
+        return std::make_unique<UKFFusionEngine>(calib, radar_cfg);
     }
     throw std::invalid_argument("Unknown fusion engine backend: " + backend);
 }

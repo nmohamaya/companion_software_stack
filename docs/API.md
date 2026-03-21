@@ -218,6 +218,21 @@ struct RadarDetectionList {
 **Publisher:** P2 (perception) or a dedicated radar process
 **Subscribers:** P4 (mission planner) for obstacle avoidance fusion
 
+### `DetectedObject` — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+IPC output struct for a single fused object, published as part of `DetectedObjectList` on `/detected_objects`.
+
+The `has_radar` flag was added in Issue #210 to indicate that the UKF track was updated with at least one matched radar detection during the current fusion cycle.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `position` | `Vector3f` | World-frame ENU position (m) |
+| `velocity` | `Vector3f` | World-frame ENU velocity (m/s) |
+| `class_id` | `uint8_t` | `ObjectClass` enum value |
+| `heading` | `float` | Heading (rad); always 0.0 currently |
+| `has_camera` | `bool` | Camera measurement present this cycle |
+| `has_radar` | `bool` | Radar measurement matched and applied this cycle (Issue #210) |
+
 ---
 
 ## 2. IPC Layer — Request-Response Services
@@ -445,6 +460,74 @@ Radar sensor interface. Returns a `RadarDetectionList` each call to `read()`. De
 | `false_alarm_rate` | 0.02 | Probability of false alarm per scan |
 
 **Factory:** `create_radar(cfg, section)` — returns `std::unique_ptr<IRadar>`
+
+---
+
+### `IFusionEngine` — `drone::perception` — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+**Header:** `process2_perception/include/perception/ifusion_engine.h`
+**Used by:** Process 2 (Perception), fusion thread
+
+Abstract interface for the per-frame fusion step that maps 2D tracked objects to 3D camera-frame positions. The `set_radar_detections()` method was added in Issue #210 to allow the fusion thread to forward radar data into the engine before calling `fuse()`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `fuse` | `[[nodiscard]] FusedObjectList fuse(const TrackedObjectList& tracked)` | Fuse tracked 2D objects into 3D estimates. Returns `FusedObjectList`. |
+| `set_radar_detections` | `virtual void set_radar_detections(const RadarDetectionList&)` | Store latest radar scan for the next `fuse()` call. Default no-op (base class). `UKFFusionEngine` overrides this. |
+| `name` | `virtual std::string name() const = 0` | Implementation name for logging |
+
+| Implementation | Description |
+|----------------|-------------|
+| `CameraOnlyFusionEngine` | Stateless monocular depth estimation (pinhole apparent-size formula). No radar support. |
+| `UKFFusionEngine` | Per-track Unscented Kalman Filter. Supports camera update and gated Mahalanobis radar association + update. |
+
+**Factory:** `create_fusion_engine(backend, cfg)` — backends: `"camera_only"`, `"ukf"`
+
+---
+
+### `RadarNoiseConfig` — `drone::perception` — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+**Header:** `process2_perception/include/perception/ukf_fusion_engine.h`
+
+Configurable noise standard deviations for the radar measurement model used by `UKFFusionEngine::update_radar()`. Passed to the factory when `perception.fusion.radar.enabled` is true.
+
+```cpp
+struct RadarNoiseConfig {
+    float range_std_m       = 0.5f;   // range noise std (metres)
+    float azimuth_std_rad   = 0.05f;  // azimuth noise std (radians)
+    float elevation_std_rad = 0.05f;  // elevation noise std (radians)
+    float velocity_std_mps  = 0.3f;   // radial velocity noise std (m/s)
+    float gate_threshold    = 5.0f;   // Mahalanobis gate threshold (std devs)
+};
+```
+
+**Config keys** (under `perception.fusion.radar`):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `false` | Enable radar measurement updates in the UKF |
+| `range_std_m` | `0.5` | Range noise standard deviation (m) |
+| `azimuth_std_rad` | `0.05` | Azimuth noise standard deviation (rad) |
+| `elevation_std_rad` | `0.05` | Elevation noise standard deviation (rad) |
+| `velocity_std_mps` | `0.3` | Radial velocity noise standard deviation (m/s) |
+| `gate_threshold` | `5.0` | Mahalanobis distance gate; detections beyond this are rejected |
+
+---
+
+### `FusedObject` — `drone::perception` — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+**Header:** `process2_perception/include/perception/types.h`
+
+Per-track fusion output (camera body frame before world-ENU rotation). The `has_radar` field was added in Issue #210.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `track_id` | `uint32_t` | Matches `TrackedObject::track_id` |
+| `position_3d` | `Vector3f` | 3D position in camera body frame |
+| `velocity_3d` | `Vector3f` | 3D velocity estimate (m/s) |
+| `position_covariance` | `Matrix3f` | 3×3 position covariance (UKF only; fixed `5·I₃` for camera_only) |
+| `has_camera` | `bool` | Camera measurement applied this cycle |
+| `has_radar` | `bool` | Radar detection matched and applied this cycle (Issue #210) |
 
 ---
 
