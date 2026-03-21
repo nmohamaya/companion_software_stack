@@ -129,6 +129,53 @@
       <child>companion_imu_link</child>
     </joint>
 
+    <!-- ═══ Radar Backbone (gpu_lidar as radar geometric sensor) ═══ -->
+    <!-- Gazebo has no native radar sensor. We use gpu_lidar for range/bearing
+         geometry; the GazeboRadarBackend HAL converts rays to radar detections
+         with noise + Doppler (Issue #212). -->
+    <link name="radar_lidar_link">
+      <pose relative_to="base_link">0.10 0 -0.02 0 0 0</pose>
+      <inertial>
+        <mass>0.02</mass>
+        <inertia>
+          <ixx>0.00001</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.00001</iyy><iyz>0</iyz><izz>0.00001</izz>
+        </inertia>
+      </inertial>
+      <sensor name="radar_lidar" type="gpu_lidar">
+        <gz_frame_id>radar_lidar_link</gz_frame_id>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>32</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.5236</min_angle>
+              <max_angle>0.5236</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>8</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.1309</min_angle>
+              <max_angle>0.1309</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.5</min>
+            <max>100</max>
+            <resolution>0.01</resolution>
+          </range>
+        </ray>
+        <always_on>1</always_on>
+        <update_rate>20</update_rate>
+        <visualize>false</visualize>
+        <topic>/radar_lidar/scan</topic>
+      </sensor>
+    </link>
+    <joint name="radar_lidar_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>radar_lidar_link</child>
+    </joint>
+
     <!-- ═══ 3-D Odometry publisher (ground truth for SLAM in sim) ═══ -->
     <plugin
       filename="gz-sim-odometry-publisher-system"

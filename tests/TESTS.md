@@ -319,6 +319,19 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ---
 
+### test_gazebo_radar.cpp — 17 tests
+
+**What it tests:** `GazeboRadarBackend` — Gazebo radar HAL that converts gpu_lidar rays + odometry into `RadarDetectionList` with noise and Doppler.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `GazeboRadarTest` | 15 | Factory creation, topic-based naming, subscription via `init()`, double-init rejection, empty read before data, message counts, `ray_to_detection()` conversion (zero velocity, forward Doppler, oblique Doppler, vertical Doppler), SNR vs range, FOV mapping (single ray, multi-ray horizontal, vertical), factory gazebo/simulated backends |
+| `GazeboRadarFallbackTest` | 2 | Fallback to simulated when `HAVE_GAZEBO` is not defined; gazebo backend throws `std::runtime_error` |
+
+**Key files under test:** `hal/gazebo_radar.h`, `hal/hal_factory.h`
+
+---
+
 ## P2 — Perception
 
 ### test_kalman_tracker.cpp — 15 tests
@@ -1144,7 +1157,7 @@ is not available.
 | Guard | Tests affected | Dependency |
 |-------|---------------|------------|
 | `HAVE_ZENOH` | `test_zenoh_ipc`, `test_zenoh_liveliness`, `test_zenoh_network` | Zenoh C++ 1.7.2 |
-| `HAVE_GAZEBO` | `test_gazebo_camera`, `test_gazebo_imu` | Gazebo Harmonic + gz-transport |
+| `HAVE_GAZEBO` | `test_gazebo_camera`, `test_gazebo_imu`, `test_gazebo_radar` | Gazebo Harmonic + gz-transport |
 | `HAVE_MAVSDK` | `test_mavlink_fc_link` | MAVSDK 2.12.12 |
 | `HAVE_OPENCV` | `test_opencv_yolo_detector` (inference tests) | OpenCV 4.10.0 + YOLOv8 ONNX model ✓ (available at `models/yolov8n.onnx`) |
 
