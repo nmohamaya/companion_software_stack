@@ -239,3 +239,6 @@ add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)
 
 # ── Radar HAL tests (Issue #209) ──────────────────────────
 add_drone_test(test_radar_hal          test_radar_hal.cpp)
+
+# ── Gazebo Radar Backend tests (Issue #212) ───────────────
+add_drone_test(test_gazebo_radar       test_gazebo_radar.cpp)
