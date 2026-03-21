@@ -15,6 +15,13 @@
 
 namespace drone::perception {
 
+/// Wrap angle to [-π, π].
+inline float wrap_angle(float a) {
+    while (a > static_cast<float>(M_PI)) a -= 2.0f * static_cast<float>(M_PI);
+    while (a < -static_cast<float>(M_PI)) a += 2.0f * static_cast<float>(M_PI);
+    return a;
+}
+
 /// Configurable radar measurement noise parameters.
 struct RadarNoiseConfig {
     float range_std_m       = 0.3f;    // ±0.3 m
@@ -93,7 +100,8 @@ private:
 class UKFFusionEngine : public IFusionEngine {
 public:
     explicit UKFFusionEngine(const CalibrationData&  calib,
-                             const RadarNoiseConfig& radar_cfg = RadarNoiseConfig{});
+                             const RadarNoiseConfig& radar_cfg     = RadarNoiseConfig{},
+                             bool                    radar_enabled = false);
 
     FusedObjectList fuse(const TrackedObjectList& tracked) override;
     std::string     name() const override { return "ukf"; }
@@ -109,6 +117,7 @@ private:
 
     drone::ipc::RadarDetectionList radar_dets_;
     bool                           has_radar_data_{false};
+    bool                           radar_enabled_{false};
 
     float estimate_depth(const TrackedObject& trk) const;
 };

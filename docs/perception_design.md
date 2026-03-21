@@ -344,7 +344,7 @@ where:
 ```
 range             = sqrt(x² + y² + z²)
 azimuth           = atan2(y, x)
-elevation         = atan2(-z, sqrt(x² + y²))
+elevation         = atan2(z, sqrt(x² + y²))
 radial_velocity   = (x·vx + y·vy + z·vz) / range
 ```
 
@@ -353,16 +353,16 @@ The 4×4 measurement noise matrix `R` is diagonal, built from `RadarNoiseConfig`
 R = diag(range_std_m², azimuth_std_rad², elevation_std_rad², velocity_std_mps²)
 ```
 
-Sigma points are propagated through `h(x)` to capture the nonlinearity (no linearisation / no Jacobian required). The update uses the same LDLᵀ Kalman gain and symmetry-enforcement as the camera update.
+Sigma points are propagated through `h(x)` to capture the nonlinearity (no linearisation / no Jacobian required). The predicted measurement mean for the angular components (azimuth at index 1, elevation at index 2) is computed via a circular mean (`atan2(Σ sin, Σ cos)`) to handle ±π wrapping correctly. All residuals involving angular components are wrapped with `wrap_angle()` before computing the innovation covariance `S`, the cross-covariance `Pxz`, and the final innovation. The update uses the same LDLᵀ Kalman gain and symmetry-enforcement as the camera update.
 
 #### Gated Mahalanobis Radar Association
 
 `UKFFusionEngine::fuse()` performs camera update first, then for each track attempts to find a matching radar detection:
 
-1. Convert each `RadarDetection` from spherical to Cartesian camera frame
-2. For each track, compute the predicted radar measurement `z_pred = h(x_pred)` and innovation covariance `S`
-3. Compute the Mahalanobis distance `d² = (z - z_pred)ᵀ S⁻¹ (z - z_pred)` for each detection
-4. Accept the closest detection with `d < gate_threshold` (configurable, default 5.0 std devs)
+1. For each track, compute the predicted radar measurement `z_pred = h(x_pred)` directly in spherical space (no Cartesian conversion)
+2. Compute the angle-wrapped innovation `δz = z_actual - z_pred` (azimuth and elevation wrapped via `wrap_angle()`)
+3. Compute the Mahalanobis distance `d² = δzᵀ R_radar_⁻¹ δz` using `R_radar_` as an approximation of the innovation covariance (cheaper than full sigma-point `S`; solved via Cholesky)
+4. Accept the closest detection with `d² < gate_threshold` (χ²(4) at 95% = 9.21)
 5. Call `update_radar()` on the matched track; set `FusedObject::has_radar = true`
 
 Detections that fall outside the gate are silently ignored (no new tracks are spawned from radar-only observations in this implementation).
@@ -483,12 +483,12 @@ All keys are under `perception.*` in the active JSON config.
 | `perception.fusion.cy` | float | `540.0` | Principal point y (px) |
 | `perception.fusion.camera_height_m` | float | `1.5` | Camera height above ground (m) — for ground-plane depth |
 | `perception.fusion.assumed_obstacle_height_m` | float | `3.0` | Known obstacle height (m) — for apparent-size depth |
-| `perception.fusion.radar.enabled` | bool | `false` | Enable radar measurement updates in the UKF (Issue #210) |
-| `perception.fusion.radar.range_std_m` | float | `0.5` | Radar range noise std (m) |
-| `perception.fusion.radar.azimuth_std_rad` | float | `0.05` | Radar azimuth noise std (rad) |
-| `perception.fusion.radar.elevation_std_rad` | float | `0.05` | Radar elevation noise std (rad) |
-| `perception.fusion.radar.velocity_std_mps` | float | `0.3` | Radar radial velocity noise std (m/s) |
-| `perception.fusion.radar.gate_threshold` | float | `5.0` | Mahalanobis gate threshold (std devs); detections beyond this are rejected |
+| `perception.fusion.radar.enabled` | bool | `false` | Enable radar measurement updates in the UKF (Issue #210); controls `UKFFusionEngine`, not `RadarNoiseConfig` |
+| `perception.fusion.radar.range_std_m` | float | `0.3` | Radar range noise std (m) |
+| `perception.fusion.radar.azimuth_std_rad` | float | `0.026` | Radar azimuth noise std (rad) |
+| `perception.fusion.radar.elevation_std_rad` | float | `0.026` | Radar elevation noise std (rad) |
+| `perception.fusion.radar.velocity_std_mps` | float | `0.1` | Radar radial velocity noise std (m/s) |
+| `perception.fusion.radar.gate_threshold` | float | `9.21` | χ²(4) Mahalanobis gate at 95% confidence; detections beyond this are rejected |
 
 ---
 

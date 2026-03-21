@@ -8,6 +8,7 @@
 #include "perception/kalman_tracker.h"
 #include "perception/ukf_fusion_engine.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <gtest/gtest.h>
@@ -323,24 +324,27 @@ static float test_estimate_depth(const CalibrationData& calib, const TrackedObje
 }
 
 TEST(RadarFusionTest, RadarMeasurementModel) {
-    // Create a UKF at a known state and verify radar measurement model output.
-    // ObjectUKF state: [x=10, y=5, z=2, vx=1, vy=0, vz=0]
-    TrackedObject trk = make_test_tracked();
+    // ObjectUKF constructor with initial_depth=10 sets:
+    //   x_ = [10, 320*0.001*10=3.2, 0, 0, 0, 0]
+    // So the object is ~10m forward, ~3.2m lateral, on the horizontal plane.
+    TrackedObject trk = make_test_tracked();  // position_2d = {320, 340}
     ObjectUKF     ukf(trk, 10.0f);
 
-    // The predicted radar measurement should be close to what the measurement model
-    // computes from the initial state. Since the constructor sets x_=10, y≈bearing*10,
-    // z=0, we verify the output has plausible range/azimuth.
     auto z_pred = ukf.predicted_radar_measurement();
 
-    // range should be > 0 (object is not at origin)
-    EXPECT_GT(z_pred(0), 0.0f);
-    // azimuth should be finite
-    EXPECT_TRUE(std::isfinite(z_pred(1)));
-    // elevation should be finite
-    EXPECT_TRUE(std::isfinite(z_pred(2)));
-    // radial velocity should be finite
-    EXPECT_TRUE(std::isfinite(z_pred(3)));
+    // range = sqrt(10² + 3.2² + 0²) ≈ 10.5
+    const float expected_range = std::sqrt(10.0f * 10.0f + 3.2f * 3.2f);
+    EXPECT_NEAR(z_pred(0), expected_range, 0.1f);
+
+    // azimuth = atan2(3.2, 10) ≈ 0.309 rad
+    const float expected_azimuth = std::atan2(3.2f, 10.0f);
+    EXPECT_NEAR(z_pred(1), expected_azimuth, 0.01f);
+
+    // elevation ≈ 0 (z=0, on horizontal plane)
+    EXPECT_NEAR(z_pred(2), 0.0f, 0.01f);
+
+    // radial velocity ≈ 0 (velocity is zero)
+    EXPECT_NEAR(z_pred(3), 0.0f, 0.01f);
 }
 
 TEST(RadarFusionTest, RadarUpdateReducesCovariance) {
@@ -378,7 +382,7 @@ TEST(RadarFusionTest, CameraRadarFusionTighterThanEither) {
     float cam_cov = cam_result.objects[0].position_covariance.trace();
 
     // Camera+radar UKF — use matching depth to create a valid radar detection
-    UKFFusionEngine both_engine(calib);
+    UKFFusionEngine both_engine(calib, RadarNoiseConfig{}, true);
 
     ObjectUKF temp_ukf(trk, depth);
     temp_ukf.predict();
@@ -401,7 +405,7 @@ TEST(RadarFusionTest, CameraRadarFusionTighterThanEither) {
 TEST(RadarFusionTest, RadarGateRejectsOutlier) {
     // A radar detection far from the track should not be associated.
     auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib);
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true);
 
     TrackedObjectList tracked;
     tracked.timestamp_ns   = 1000;
@@ -463,7 +467,7 @@ TEST(RadarFusionTest, SetRadarDetectionsAndFuse) {
     auto  trk   = make_test_tracked();
     float depth = test_estimate_depth(calib, trk);
 
-    UKFFusionEngine engine(calib);
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true);
 
     TrackedObjectList tracked;
     tracked.timestamp_ns   = 1000;
@@ -505,7 +509,7 @@ TEST(RadarFusionTest, HasRadarFlagOnlyWhenMatched) {
     auto  trk2   = make_test_tracked(2, 100.0f, 400.0f);
     float depth1 = test_estimate_depth(calib, trk1);
 
-    UKFFusionEngine engine(calib);
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true);
 
     TrackedObjectList tracked;
     tracked.timestamp_ns   = 1000;

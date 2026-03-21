@@ -2428,7 +2428,7 @@ _Last updated after Improvement #42 (API.md/ROADMAP.md SHM cleanup, Issue #155).
 **Key Design Decisions:**
 
 - **Sigma-point radar h(x):** No Jacobian / no EKF linearisation. Sigma points from the UKF predict step are propagated through the spherical conversion, recovering the predicted measurement mean and cross-covariance without approximation error.
-- **Gated Mahalanobis association:** For each track, the closest radar detection within `gate_threshold` (default 5.0 std devs) Mahalanobis distance is accepted. Detections outside the gate are rejected. Camera-initiated tracks only — radar does not spawn new tracks.
+- **Gated Mahalanobis association:** For each track, the closest radar detection within `gate_threshold` (default 9.21, χ²(4) at 95%) is accepted. Gating uses `R_radar_` as the innovation covariance proxy (cheaper than full sigma-point S). Detections outside the gate are rejected. Camera-initiated tracks only — radar does not spawn new tracks.
 - **Radar disabled by default:** `perception.fusion.radar.enabled = false` in `default.json`. Enable with `perception.fusion.backend: "ukf"` and `perception.fusion.radar.enabled: true`.
 - **`has_radar` flag:** Propagated from `FusedObject` through to `DetectedObject` IPC so downstream processes (P4) can distinguish camera-only vs. camera+radar tracks.
 

@@ -350,7 +350,7 @@ IFusionEngine factory.
 | `RadarMeasurementModel` | 1 | Nonlinear radar h(x): Cartesian → [range, azimuth, elevation, radial_velocity] mapping correctness |
 | `RadarUpdateReducesCovariance` | 1 | UKF covariance trace shrinks after a radar measurement update |
 | `CameraRadarFusionTighterThanEither` | 1 | Combined camera+radar covariance trace is smaller than camera-only or radar-only |
-| `RadarGateRejectsOutlier` | 1 | Mahalanobis gate rejects a detection beyond `gate_threshold` standard deviations |
+| `RadarGateRejectsOutlier` | 1 | Mahalanobis gate rejects a detection whose χ²(4) distance exceeds `gate_threshold` (default 9.21) |
 | `RadarNoiseConfig` | 1 | `RadarNoiseConfig` struct fields accepted; non-default stds propagate into `R` matrix |
 | `RadarDisabledByDefault` | 1 | `set_radar_detections()` no-op on `IFusionEngine` base; `has_radar` stays false |
 | `SetRadarDetectionsAndFuse` | 1 | `UKFFusionEngine::set_radar_detections()` stores data; `fuse()` performs radar update and sets `has_radar` |

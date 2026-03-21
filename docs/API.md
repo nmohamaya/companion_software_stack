@@ -489,15 +489,15 @@ Abstract interface for the per-frame fusion step that maps 2D tracked objects to
 
 **Header:** `process2_perception/include/perception/ukf_fusion_engine.h`
 
-Configurable noise standard deviations for the radar measurement model used by `UKFFusionEngine::update_radar()`. Passed to the factory when `perception.fusion.radar.enabled` is true.
+Configurable noise standard deviations for the radar measurement model used by `UKFFusionEngine::update_radar()`. Applied whenever the `ukf` backend is active and radar detections are provided.
 
 ```cpp
 struct RadarNoiseConfig {
-    float range_std_m       = 0.5f;   // range noise std (metres)
-    float azimuth_std_rad   = 0.05f;  // azimuth noise std (radians)
-    float elevation_std_rad = 0.05f;  // elevation noise std (radians)
-    float velocity_std_mps  = 0.3f;   // radial velocity noise std (m/s)
-    float gate_threshold    = 5.0f;   // Mahalanobis gate threshold (std devs)
+    float range_std_m       = 0.3f;   // range noise std (metres)
+    float azimuth_std_rad   = 0.026f; // azimuth noise std (radians)
+    float elevation_std_rad = 0.026f; // elevation noise std (radians)
+    float velocity_std_mps  = 0.1f;   // radial velocity noise std (m/s)
+    float gate_threshold    = 9.21f;  // χ²(4) gate at 95% confidence
 };
 ```
 
@@ -505,12 +505,11 @@ struct RadarNoiseConfig {
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `enabled` | `false` | Enable radar measurement updates in the UKF |
-| `range_std_m` | `0.5` | Range noise standard deviation (m) |
-| `azimuth_std_rad` | `0.05` | Azimuth noise standard deviation (rad) |
-| `elevation_std_rad` | `0.05` | Elevation noise standard deviation (rad) |
-| `velocity_std_mps` | `0.3` | Radial velocity noise standard deviation (m/s) |
-| `gate_threshold` | `5.0` | Mahalanobis distance gate; detections beyond this are rejected |
+| `range_std_m` | `0.3` | Range noise standard deviation (m) |
+| `azimuth_std_rad` | `0.026` | Azimuth noise standard deviation (rad) |
+| `elevation_std_rad` | `0.026` | Elevation noise standard deviation (rad) |
+| `velocity_std_mps` | `0.1` | Radial velocity noise standard deviation (m/s) |
+| `gate_threshold` | `9.21` | χ²(4) Mahalanobis gate at 95% confidence; detections beyond this are rejected |
 
 ---
 
