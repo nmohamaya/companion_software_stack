@@ -59,7 +59,7 @@
         ],
         "log_must_not_contain": [
             "EMERGENCY_LAND",
-            "[GazeboRadar] Failed to subscribe"
+            "GazeboRadar.*Failed to subscribe"
         ],
         "processes_alive": [
             "video_capture", "perception", "slam_vio_nav",

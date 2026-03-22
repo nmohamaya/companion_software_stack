@@ -27,6 +27,7 @@
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <thread>

@@ -15,10 +15,13 @@
 
 namespace drone::perception {
 
+/// Local pi constant — avoids dependence on non-standard M_PI macro.
+inline constexpr float kPi = 3.14159265358979323846f;
+
 /// Wrap angle to [-π, π].
 inline float wrap_angle(float a) {
-    while (a > static_cast<float>(M_PI)) a -= 2.0f * static_cast<float>(M_PI);
-    while (a < -static_cast<float>(M_PI)) a += 2.0f * static_cast<float>(M_PI);
+    while (a > kPi) a -= 2.0f * kPi;
+    while (a < -kPi) a += 2.0f * kPi;
     return a;
 }
 
