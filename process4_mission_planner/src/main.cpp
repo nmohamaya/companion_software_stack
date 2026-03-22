@@ -182,6 +182,18 @@ int main(int argc, char* argv[]) {
                                                     planner_cfg.min_speed_mps);
     planner_cfg.snap_search_radius = cfg.get<int>("mission_planner.path_planner.snap_search_radius",
                                                   planner_cfg.snap_search_radius);
+
+    // Occupancy grid overrides (scenario configs use occupancy_grid.* keys;
+    // read after path_planner.* so scenario-specific values take priority)
+    planner_cfg.resolution_m       = cfg.get<float>("mission_planner.occupancy_grid.resolution_m",
+                                                    planner_cfg.resolution_m);
+    planner_cfg.inflation_radius_m = cfg.get<float>(
+        "mission_planner.occupancy_grid.inflation_radius_m", planner_cfg.inflation_radius_m);
+    planner_cfg.cell_ttl_s = cfg.get<float>("mission_planner.occupancy_grid.dynamic_obstacle_ttl_s",
+                                            planner_cfg.cell_ttl_s);
+    planner_cfg.min_confidence = cfg.get<float>("mission_planner.occupancy_grid.min_confidence",
+                                                planner_cfg.min_confidence);
+
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());

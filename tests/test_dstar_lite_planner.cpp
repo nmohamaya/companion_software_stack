@@ -706,3 +706,114 @@ TEST(DStarLitePlannerTest, NameIsCorrect) {
     DStarLitePlanner planner;
     EXPECT_EQ(planner.name(), "DStarLitePlanner");
 }
+
+// ═════════════════════════════════════════════════════════════
+// Config wiring tests (Issue #228)
+// ═════════════════════════════════════════════════════════════
+
+TEST(GridPlannerConfigTest, CellTTL_PassedToGrid) {
+    // Custom TTL should propagate through GridPlannerConfig → GridPlannerBase → OccupancyGrid3D.
+    // We verify indirectly: a cell inserted at t=0 should expire after the configured TTL.
+    GridPlannerConfig cfg;
+    cfg.cell_ttl_s = 1.0f;  // 1s TTL (shorter than default 3s)
+    DStarLitePlanner planner(cfg);
+
+    // Insert an object into the grid
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0]            = {};
+    objects.objects[0].confidence = 0.9f;
+    objects.objects[0].position_x = 10.0f;
+    objects.objects[0].position_y = 10.0f;
+    objects.objects[0].position_z = 2.0f;
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(objects, pose);
+    EXPECT_GT(planner.grid().occupied_count(), 0u);
+
+    // Wait for TTL to expire (1s + margin)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+
+    // Trigger another update with zero objects to run expiry
+    drone::ipc::DetectedObjectList empty{};
+    empty.num_objects = 0;
+    empty.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    planner.update_obstacles(empty, pose);
+    EXPECT_EQ(planner.grid().occupied_count(), 0u);
+}
+
+TEST(OccupancyGrid3DTest, MinConfidence_Configurable) {
+    // Objects below the configured min_confidence should be rejected by the grid.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, 3.0f, 0.5f);  // min_confidence = 0.5
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects = 2;
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+
+    // Object 0: confidence 0.4 — below threshold, should be rejected
+    objects.objects[0]            = {};
+    objects.objects[0].confidence = 0.4f;
+    objects.objects[0].position_x = 10.0f;
+    objects.objects[0].position_y = 10.0f;
+    objects.objects[0].position_z = 2.0f;
+
+    // Object 1: confidence 0.6 — above threshold, should be accepted
+    objects.objects[1]            = {};
+    objects.objects[1].confidence = 0.6f;
+    objects.objects[1].position_x = -10.0f;
+    objects.objects[1].position_y = -10.0f;
+    objects.objects[1].position_z = 2.0f;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    grid.update_from_objects(objects, pose);
+
+    // Only the high-confidence object should have populated cells
+    auto cell_high = grid.world_to_grid(-10.0f, -10.0f, 2.0f);
+    auto cell_low  = grid.world_to_grid(10.0f, 10.0f, 2.0f);
+    EXPECT_TRUE(grid.is_occupied(cell_high));
+    EXPECT_FALSE(grid.is_occupied(cell_low));
+}
+
+TEST(OccupancyGrid3DTest, DefaultMinConfidence_IsZeroPointThree) {
+    // Default min_confidence should be 0.3 (backward compatibility)
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, 3.0f);  // no min_confidence arg
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects = 1;
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+
+    // Object at confidence 0.25 — below default 0.3
+    objects.objects[0]            = {};
+    objects.objects[0].confidence = 0.25f;
+    objects.objects[0].position_x = 10.0f;
+    objects.objects[0].position_y = 10.0f;
+    objects.objects[0].position_z = 2.0f;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    grid.update_from_objects(objects, pose);
+
+    auto cell = grid.world_to_grid(10.0f, 10.0f, 2.0f);
+    EXPECT_FALSE(grid.is_occupied(cell));
+}

@@ -106,11 +106,12 @@ inline constexpr float kCosts[26] = {
 class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
-                             float cell_ttl_s = 3.0f)
+                             float cell_ttl_s = 3.0f, float min_confidence = 0.3f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
-        , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f)) {}
+        , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f))
+        , min_confidence_(min_confidence) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -169,25 +170,13 @@ public:
                                                   static_cast<float>(drone_pose.translation[2]));
 
         // Stamp newly detected cells
-        int accepted = 0;
-        int excluded = 0;
+        int accepted       = 0;
+        int excluded_cells = 0;
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
-            if (obj.confidence < 0.3f) continue;
+            if (obj.confidence < min_confidence_) continue;
 
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
-
-            // Self-exclusion: skip if inflated object zone would overlap drone cell.
-            // Uses Chebyshev distance — skips the entire 3×3×3 neighbourhood
-            // to prevent the planner start node from being blocked.
-            const int dx_drone = std::abs(center.x - drone_cell.x);
-            const int dy_drone = std::abs(center.y - drone_cell.y);
-            const int dz_drone = std::abs(center.z - drone_cell.z);
-            if (dx_drone <= inflation_cells_ && dy_drone <= inflation_cells_ &&
-                dz_drone <= inflation_cells_) {
-                ++excluded;
-                continue;
-            }
             ++accepted;
 
             for (int dz = -inflation_cells_; dz <= inflation_cells_; ++dz) {
@@ -195,6 +184,16 @@ public:
                     for (int dx = -inflation_cells_; dx <= inflation_cells_; ++dx) {
                         if (dx * dx + dy * dy + dz * dz <= inflation_cells_ * inflation_cells_) {
                             GridCell c{center.x + dx, center.y + dy, center.z + dz};
+                            // Self-exclusion: never mark the drone's own cell or any cell
+                            // in its immediate 3×3×3 neighbourhood (Chebyshev distance ≤ 1)
+                            // as occupied — this prevents the planner start node from being
+                            // blocked while still populating the rest of the obstacle footprint.
+                            if (std::abs(c.x - drone_cell.x) <= 1 &&
+                                std::abs(c.y - drone_cell.y) <= 1 &&
+                                std::abs(c.z - drone_cell.z) <= 1) {
+                                ++excluded_cells;
+                                continue;
+                            }
                             if (in_bounds(c)) {
                                 bool was_absent = (occupied_.count(c) == 0);
                                 occupied_[c]    = now_ns;
@@ -223,13 +222,13 @@ public:
 
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
-            spdlog::debug("[Grid] {} objs (accepted={}, excluded={}), {} occupied cells, "
+            spdlog::debug("[Grid] {} objs (accepted={}, excluded_cells={}), {} occupied cells, "
                           "drone=({},{},{})",
-                          objects.num_objects, accepted, excluded, occupied_.size(), drone_cell.x,
-                          drone_cell.y, drone_cell.z);
+                          objects.num_objects, accepted, excluded_cells, occupied_.size(),
+                          drone_cell.x, drone_cell.y, drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{4}); ++i) {
                 const auto& obj = objects.objects[i];
-                if (obj.confidence >= 0.3f) {
+                if (obj.confidence >= min_confidence_) {
                     spdlog::debug("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
                                   obj.position_x, obj.position_y, obj.position_z, obj.confidence);
                 }
@@ -283,6 +282,7 @@ private:
     int      half_extent_cells_;
     int      inflation_cells_;
     uint64_t cell_ttl_ns_;
+    float    min_confidence_;
     uint64_t diag_tick_{0};  // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
