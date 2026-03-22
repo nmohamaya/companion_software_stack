@@ -75,7 +75,7 @@
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
 | Integration testing | **9 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
-| Bug fixes | **44** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Bug fixes | **45** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
 ---
 

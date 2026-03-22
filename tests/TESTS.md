@@ -528,7 +528,7 @@ factory registration (including `"potential_field_3d"` alias), name accessor.
 
 ---
 
-### test_dstar_lite_planner.cpp — 33 tests
+### test_dstar_lite_planner.cpp — 36 tests
 
 **What it tests:** D* Lite incremental path planner — occupancy grid basics, change tracking,
 D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLitePlanner`
@@ -536,7 +536,7 @@ D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLite
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `OccupancyGrid3DTest` | 6 | Empty grid, world↔grid round-trip, in-bounds check, obstacle inflation, low-confidence skip, clear resets |
+| `OccupancyGrid3DTest` | 8 | Empty grid, world↔grid round-trip, in-bounds check, obstacle inflation, low-confidence skip, clear resets, configurable min_confidence threshold, default min_confidence backward compat |
 | `GridCellHashTest` | 2 | Different cells → different hashes, same cell → same hash |
 | `ChangeTrackingTest` | 4 | New cell insertions recorded, expired cells recorded, drain clears buffer, static obstacle changes tracked |
 | `DStarLiteSearchTest` | 6 | Trivial start=goal, straight line path, 3D obstacle detour, unreachable goal → direct fallback, blocked start BFS escape, out-of-bounds goal |
@@ -544,6 +544,7 @@ D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLite
 | `DStarLiteTimeoutTest` | 2 | Max search time enforced, fallback on timeout |
 | `DStarLiteIntegrationTest` | 6 | Plan returns valid cmd, goal snapping works, EMA smoothing, speed ramping near target, update obstacles integration, factory registered |
 | `DStarLiteNameTest` | 1 | Name is "DStarLitePlanner" |
+| `GridPlannerConfigTest` | 1 | cell_ttl_s propagates through config to OccupancyGrid3D (cells expire after configured TTL) |
 | `PathPlannerFactory` | 2 | Factory creates D* Lite, unknown backend throws |
 
 **Key files under test:** `planner/dstar_lite_planner.h`, `planner/occupancy_grid_3d.h`, `planner/grid_planner_base.h`, `planner/planner_factory.h`
@@ -1195,4 +1196,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1045 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #225: Radar ground-plane filter + avoider dead zone fix (4 new tests). All 1045 tests passing.*
+*Last updated: March 2026 — 1048 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #228: Occupancy grid config wiring + avoidance tuning (3 new tests). All 1048 tests passing.*
