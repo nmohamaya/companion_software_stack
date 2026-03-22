@@ -2,7 +2,7 @@
     "_comment": "Scenario 17: Radar Gazebo SITL — verify GazeboRadarBackend produces detections",
     "scenario": {
         "name": "radar_gazebo",
-        "description": "Fly a short mission with Gazebo radar backend enabled. Validates that GazeboRadarBackend receives gpu_lidar scans, converts them to RadarDetectionList, and the UKF fusion engine consumes them. Requires Gazebo with x500_companion model.",
+        "description": "Fly a short mission with Gazebo radar backend enabled. Validates that GazeboRadarBackend subscribes to gz-transport topics, receives gpu_lidar scans, converts them to RadarDetectionList, and the UKF fusion engine consumes them. Requires Gazebo with x500_companion model and working GPU (NVIDIA EGL).",
         "tier": 2,
         "timeout_s": 60,
         "requires_gazebo": true
@@ -54,7 +54,8 @@
         "log_contains": [
             "TAKEOFF",
             "EXECUTING",
-            "[GazeboRadar] First scan"
+            "GazeboRadar.*Subscribed to scan",
+            "GazeboRadar.*First scan"
         ],
         "log_must_not_contain": [
             "EMERGENCY_LAND",

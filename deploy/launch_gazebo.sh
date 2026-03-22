@@ -82,6 +82,20 @@ fi
 # Ensure system libstdc++ is used instead of Anaconda's older version
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# ── NVIDIA EGL for GPU-accelerated sensors (gpu_lidar, depth_camera) ──
+# Gazebo's ogre2 rendering needs a working EGL context. On systems with
+# both integrated and discrete GPUs, the EGL loader may pick the wrong
+# device (Mesa DRI2 instead of NVIDIA), causing gpu_lidar to fail silently.
+# Force the NVIDIA EGL ICD so gpu_lidar ray-casting works.  Issue #217.
+if command -v nvidia-smi &>/dev/null; then
+    export __NV_PRIME_RENDER_OFFLOAD=1
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    # Force NVIDIA EGL vendor if the ICD file exists
+    if [[ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ]]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+    fi
+fi
+
 # Register custom model path so PX4/Gazebo can find x500_companion
 export GZ_SIM_RESOURCE_PATH="${PROJECT_DIR}/sim/models:${PX4_DIR}/Tools/simulation/gz/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 

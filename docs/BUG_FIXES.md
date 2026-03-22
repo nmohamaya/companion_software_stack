@@ -1256,3 +1256,265 @@ validation at startup with a clear error message.
 **Fix:** Changed Phase 4 collection to use the remaining timeout budget: `remaining = timeout - elapsed - 5s` (5s reserved for cleanup). Minimum 5 seconds maintained as a floor.
 
 **Found by:** Scenario 09 passed all checks except "Mission complete" — waypoints were reached but the runner killed the stack too early.
+
+---
+
+### Bug #34 — `gazebo_sitl.json` Missing `tracker.backend` Crashes Perception (#212)
+
+**Date discovered:** 2026-03-21
+**Severity:** High
+**Status:** FIXED (PR #218)
+**File:** `config/gazebo_sitl.json`
+
+**Bug:** Perception process crashes immediately on Gazebo SITL launch with:
+```
+terminate called after throwing an instance of 'std::invalid_argument'
+  what():  Unknown tracker backend: sort
+```
+All processes downstream (mission_planner, comms, payload_manager, etc.) are killed by the system monitor when perception dies, causing total stack failure.
+
+**Root Cause:** `gazebo_sitl.json` overrides the `perception.tracker` section but omits the `backend` key. `default.json` has `"backend": "bytetrack"`, but when `gazebo_sitl.json` overrides the `tracker` block, the deep-merge replaces the entire sub-object. The code in `process2_perception/src/main.cpp:328` reads `perception.tracker.backend` with a default of `"sort"` — a legacy backend that was removed when ByteTrack was introduced. The `create_tracker()` factory only recognizes `"bytetrack"`, so `"sort"` throws `std::invalid_argument`.
+
+**Why it wasn't caught earlier:** Scenario 02 (obstacle avoidance) explicitly sets `"backend": "bytetrack"` in its config overrides, masking the base config bug. The new scenario 17 (radar) was the first Gazebo scenario without a tracker override.
+
+**Fix:** Added `"backend": "bytetrack"` to the `perception.tracker` section in `gazebo_sitl.json`.
+
+**Lessons learned:**
+1. Config deep-merge replaces entire sub-objects — any overridden section must include ALL required keys, not just the ones being changed.
+2. Default parameter values in code (`"sort"`) can become stale when implementations are removed. Consider making defaults match the only available implementation, or remove default values entirely to force explicit configuration.
+3. Scenario configs should test the base config path, not just override everything. Scenario 17 caught this because it didn't override the tracker.
+
+**Found by:** Running Tier 2 scenario 17 (radar_gazebo) for the first time. Perception crashed, system monitor reported `DIED: payload_manager, slam_vio_nav, mission_planner`.
+
+**Regression test:** Scenario 17 now passes 14/14 with the fix.
+
+---
+
+### Bug #35 — Radar HAL Backend Created But Never Instantiated by Any Process (#212)
+
+**Date discovered:** 2026-03-21
+**Severity:** High
+**Status:** FIXED (PR #218)
+**Files:** `process2_perception/src/main.cpp`, `process2_perception/CMakeLists.txt`
+
+**Bug:** The `GazeboRadarBackend` and `SimulatedRadar` HAL implementations existed and passed all unit tests, but no process in the stack actually created them. Perception subscribed to `radar/detections` via IPC (Zenoh), but nobody published to that topic. The entire radar data path was disconnected:
+
+```
+[Missing] Gazebo gpu_lidar → GazeboRadarBackend → ??? → IPC → UKF fusion engine
+```
+
+The `create_radar()` factory was only called in unit tests (`test_radar_hal.cpp`, `test_gazebo_radar.cpp`), never in any process's `main()`.
+
+**Root Cause:** Issue #209 (IRadar HAL) created the interface and backends. Issue #210 (radar UKF) added the subscriber in perception's fusion thread. But the step in between — creating the HAL and publishing to IPC — was never implemented. The architecture assumed a publisher would exist, but nobody built it.
+
+**Fix:** Added a `radar_read_thread` to the perception process that:
+1. Creates the radar HAL backend via `create_radar(cfg, "perception.radar")` (config-driven: `"simulated"` or `"gazebo"`)
+2. Calls `radar->init()` to start the backend
+3. Polls `radar->read()` at the configured update rate (default 20 Hz)
+4. Publishes `RadarDetectionList` to IPC on the `/radar_detections` topic
+5. The existing fusion thread subscriber picks it up and feeds it to the UKF
+
+Also added `drone_hal` to perception's `target_link_libraries` in CMakeLists.txt (was missing — perception linked `drone_ipc` and `drone_util` but not `drone_hal`).
+
+The radar thread is **opt-in** via `perception.radar.enabled` (default: `false`), so it doesn't affect any existing configuration.
+
+**Lessons learned:**
+1. End-to-end data flow testing is essential — unit tests can pass for each component individually while the overall pipeline is disconnected.
+2. When adding IPC subscribers, verify the corresponding publisher exists in a running process.
+3. HAL factories are useless without a process that calls them.
+
+**Found by:** Scenario 17 showed `[GazeboRadar] Subscribed to scan` but no `[GazeboRadar] First scan` — the subscription succeeded but no data arrived. Investigation revealed the publisher side was missing entirely.
+
+**Regression test:** Scenario 17 now verifies both `GazeboRadar.*Subscribed to scan` and `GazeboRadar.*First scan`.
+
+---
+
+### Bug #36 — NVIDIA EGL Failure Breaks gpu_lidar in Gazebo SITL (#217)
+
+**Date discovered:** 2026-03-21
+**Severity:** High
+**Status:** FIXED (PR #218)
+**File:** `deploy/launch_gazebo.sh`
+
+**Bug:** Gazebo's `gpu_lidar` sensor silently fails to publish scan data on systems with both integrated and discrete NVIDIA GPUs. The sensor is registered (topic appears in `gz topic -l`), the HAL backend subscribes successfully, but no `LaserScan` messages are ever published. Cameras and IMU sensors work fine.
+
+The Gazebo server log shows:
+```
+libEGL warning: pci id for fd 56: 10de:1fb9, driver (null)
+libEGL warning: egl: failed to create dri2 screen
+```
+
+**Root Cause:** On systems with dual GPUs (integrated + discrete NVIDIA), the EGL loader defaults to the Mesa DRI2 backend instead of the NVIDIA EGL ICD. The `gpu_lidar` sensor requires GPU ray-casting through the ogre2 rendering engine, which needs a working EGL context. When EGL falls back to Mesa's DRI2 and that fails, the rendering scene initializes without GPU ray-casting support. The `gpu_lidar` sensor creates its `GpuRays` object but the rendering backend never produces frames — the sensor silently publishes nothing.
+
+Camera sensors work because ogre2's camera rendering path has a software fallback that doesn't require GPU ray-casting. IMU, magnetometer, and other physics-based sensors don't use rendering at all.
+
+**Diagnostic steps that identified the issue:**
+1. `gz topic -i -t /radar_lidar/scan` → "No publishers" (topic exists because subscriber created it)
+2. `gz topic -i -t /camera` → Has publisher (camera works)
+3. Created minimal standalone Gazebo world with just a `gpu_lidar` sensor → Same failure
+4. PX4's own lidar sensors (built-in `lidar_sensor_link`) also had no publishers → system-wide issue
+5. Checked PX4 SITL log → EGL warnings confirmed
+6. Set NVIDIA EGL env vars → `gpu_lidar` immediately started publishing
+
+**Fix:** Added NVIDIA EGL environment variable block to `deploy/launch_gazebo.sh`:
+```bash
+if command -v nvidia-smi &>/dev/null; then
+    export __NV_PRIME_RENDER_OFFLOAD=1
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    if [[ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ]]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+    fi
+fi
+```
+
+The guard (`nvidia-smi` check) ensures these variables are only set on NVIDIA systems. On systems without NVIDIA GPUs, the block is skipped entirely.
+
+**Why this is subtle and hard to diagnose:**
+1. **Silent failure** — `gpu_lidar` doesn't log an error, it just never publishes. No crash, no warning from Gazebo.
+2. **Topic appears to exist** — `gz topic -l` shows the topic because subscribers create it. Only `gz topic -i` (which shows publishers separately) reveals the problem.
+3. **Other sensors work** — Cameras, IMU, everything else is fine, so the stack appears healthy.
+4. **Subscription succeeds** — `gz::transport::Node::Subscribe()` returns true even when there's no publisher. gz-transport is pub/sub decoupled.
+5. **EGL errors buried in logs** — The EGL warnings appear in the PX4 SITL log (not Gazebo's log), interleaved with hundreds of other messages.
+
+**Lessons learned:**
+1. When a gz-transport subscriber receives no data, check `gz topic -i -t <topic>` for publisher presence — don't assume the topic has a publisher just because `gz topic -l` lists it.
+2. `gpu_lidar` and `depth_camera` sensors require actual GPU rendering. If the EGL context fails, these sensors fail silently. Camera sensors may still work via fallback paths.
+3. On dual-GPU systems, always force the NVIDIA EGL ICD explicitly.
+4. Add a "sensor health check" to Gazebo HAL backends — if `scan_count_ == 0` after N seconds of being active, log a warning about possible rendering failure.
+
+**Found by:** Scenario 17 passed all checks except `[GazeboRadar] First scan`. Investigation chain: logs → topic inspection → standalone Gazebo test → EGL diagnosis → env var fix.
+
+**Regression test:** Scenario 17 now verifies `GazeboRadar.*First scan` (scan data received from gpu_lidar).
+
+---
+
+### Bug #37 — Scenario Log Checks Fail for Log Lines Containing Square Brackets
+
+**Date discovered:** 2026-03-21
+**Severity:** Low
+**Status:** FIXED (PR #218)
+**File:** `config/scenarios/17_radar_gazebo.json`
+
+**Bug:** Scenario pass criteria like `"[GazeboRadar] First scan"` always fail even when the log line exists, because the scenario runner uses `grep -qai` which interprets `[GazeboRadar]` as a character class matching any single character in `{G,a,z,e,b,o,R,d,r}`, not the literal string `[GazeboRadar]`.
+
+**Root Cause:** `run_scenario.sh` and `run_scenario_gazebo.sh` pass `log_contains` patterns directly to `grep -qai` (line 631). Square brackets are regex metacharacters. The pattern `[GazeboRadar] First scan` matches `a First scan` or `G First scan` but not `[GazeboRadar] First scan`.
+
+**Fix:** Changed scenario 17's log patterns to use regex-compatible patterns without literal brackets:
+```json
+"GazeboRadar.*Subscribed to scan"    // instead of "[GazeboRadar] Subscribed to scan"
+"GazeboRadar.*First scan"            // instead of "[GazeboRadar] First scan"
+```
+
+**Lessons learned:** All scenario `log_contains` patterns are treated as regex by `grep`. When matching log lines that contain square brackets (common in `spdlog` output like `[ModuleName]`), either:
+- Use the text inside the brackets without them: `GazeboRadar.*First scan`
+- Or escape them: `\[GazeboRadar\] First scan`
+
+Existing scenarios (01–16) don't hit this because their patterns don't contain brackets.
+
+**Found by:** Scenario 17 reported "Log missing: [GazeboRadar] Subscribed to scan" even though `grep "GazeboRadar" combined.log` showed the line was present.
+
+---
+
+### Bug #38 — VIO Failure Scenario Triggers Unexpected Geofence Breach in Gazebo SITL
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (PR #218)
+**File:** `config/scenarios/16_vio_failure.json`
+
+**Bug:** The `vio_failure` scenario (scenario 16) passes consistently in Tier 1 (simulated backends) but fails intermittently in Tier 2 (Gazebo SITL). The failure is `FAULT_GEOFENCE_BREACH` appearing in logs, which the scenario's `log_must_not_contain` disallows.
+
+**Symptoms:**
+```
+✗ Log unexpectedly contains: FAULT_GEOFENCE_BREACH
+  First match:
+  [FaultMgr] Escalation: LOITER → RTL (reason: geofence breach) active_faults=[FAULT_GEOFENCE_BREACH]
+```
+
+**Root Cause:** When VIO quality is injected as degraded (quality=1), the mission planner enters LOITER. In Tier 1 with simulated backends, loiter holds position perfectly (simulated pose doesn't drift). In Gazebo SITL with real physics simulation, the drone drifts during loiter because the VIO system is actually degraded — PX4's position estimate becomes unreliable, and the drone slowly wanders. If it drifts far enough, it crosses the default geofence boundary (100×100m square centered at origin), triggering `FAULT_GEOFENCE_BREACH`.
+
+This is correct system behaviour — a drone with degraded VIO *should* drift, and the geofence *should* catch it. But the scenario's purpose is to test VIO fault detection and LOITER response, not geofence interaction.
+
+**Fix:** Added `"geofence": {"enabled": false}` to the scenario's `config_overrides` for `mission_planner`, with a comment explaining why:
+
+```json
+"geofence": {
+    "enabled": false,
+    "_comment": "Geofence disabled — VIO degradation causes SITL drift during loiter, which can cross default geofence boundaries. This scenario tests VIO fault handling, not geofence."
+}
+```
+
+**Lessons learned:**
+
+1. Tier 1 (simulated) and Tier 2 (Gazebo SITL) scenarios can behave differently due to physics simulation fidelity. A scenario that passes in Tier 1 may fail in Tier 2 for valid physical reasons.
+2. Fault injection scenarios should disable unrelated safety systems that could trigger secondary faults. The VIO failure scenario tests VIO fault handling — geofence is orthogonal and should be isolated.
+3. When a scenario fails only in Gazebo, check if the failure is caused by realistic physical effects (drift, latency, actuator lag) that the simulated backend doesn't model.
+
+**Found by:** Full Tier 2 Gazebo scenario suite run during radar integration validation (2026-03-22). Passed in Tier 1 (17/17) but failed in Tier 2 (16/17).
+
+---
+
+### Bug #39 — Radar Read Thread Tight Loop at Invalid Update Rates (#212)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (PR #218)
+**File:** `process2_perception/src/main.cpp`
+
+**Bug:** The radar read thread computed its sleep period as `milliseconds(1000 / std::max(update_rate_hz, 1))`. For update rates above 1000 Hz (e.g., from a misconfigured `perception.radar.update_rate_hz`), integer division produces `0ms`, causing a tight busy-loop that pins a CPU core at 100%. For rates of 0 or negative, `std::max` clamped to 1 Hz, but this was undocumented and not logged.
+
+**Root Cause:** No input validation or clamping on the `update_rate_hz` config parameter before computing the sleep period. Integer division of `1000 / rate` truncates to zero for rate > 1000.
+
+**Fix:** Added explicit clamping to `[1, 1000]` Hz with a warning log when the configured rate is out of range. Replaced the integer division with `std::chrono::seconds(1) / effective_rate_hz` for clearer intent. Added the effective rate and period to the startup log message.
+
+```cpp
+constexpr int kMinRateHz = 1;
+constexpr int kMaxRateHz = 1000;
+int effective_rate_hz = update_rate_hz;
+if (effective_rate_hz < kMinRateHz || effective_rate_hz > kMaxRateHz) {
+    spdlog::warn("[Radar] Invalid update rate {} Hz — clamping to [{}, {}]",
+                 update_rate_hz, kMinRateHz, kMaxRateHz);
+    effective_rate_hz = std::clamp(effective_rate_hz, kMinRateHz, kMaxRateHz);
+}
+const auto period = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::seconds(1)) / effective_rate_hz;
+```
+
+**Lessons learned:**
+
+1. Always validate config-driven loop rates before computing sleep periods — integer division can silently produce zero.
+2. Log the effective (post-clamp) value at startup so operators can spot misconfiguration without debugging.
+3. For safety-critical threads, prefer `std::chrono` duration arithmetic over manual `1000 / rate` calculations.
+
+**Found by:** Copilot code review on PR #218.
+
+---
+
+### Bug #40 — Radar Publisher Readiness Not Checked Before Thread Launch (#212)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (PR #218)
+**File:** `process2_perception/src/main.cpp`
+
+**Bug:** The radar read thread was launched whenever `radar` (HAL pointer) and `radar_pub` (publisher pointer) were both non-null. However, `bus.advertise()` can return a publisher where `is_ready() == false` (e.g., if the Zenoh `declare_publisher` call fails due to session issues). In this case, the thread would start, poll the radar HAL, and call `radar_pub.publish()` on every read — but all publishes silently no-op because the underlying Zenoh publisher is not declared. This wastes CPU and gives operators a false impression that radar data is flowing.
+
+**Root Cause:** The launch condition only checked pointer validity (`radar && radar_pub`) but not publisher operational readiness (`radar_pub->is_ready()`).
+
+**Fix:** Added `radar_pub->is_ready()` to the launch condition. If the HAL is active but the publisher isn't ready, a warning is logged and the thread is not started:
+
+```cpp
+if (radar && radar_pub && radar_pub->is_ready()) {
+    t_radar = std::thread(radar_read_thread, ...);
+} else if (radar) {
+    spdlog::warn("[Radar] HAL active but publisher not ready — radar read thread disabled");
+}
+```
+
+**Lessons learned:**
+
+1. Always check `is_ready()` on IPC publishers before launching threads that depend on them. A non-null publisher pointer does not guarantee it can publish.
+2. Zenoh publisher declaration can fail silently (session closed, resource limit, network partition). The `is_ready()` check catches this.
+3. Log clearly when a subsystem is disabled due to infrastructure failure — silent degradation is harder to diagnose than explicit warnings.
+
+**Found by:** Copilot code review on PR #218.

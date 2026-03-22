@@ -3,6 +3,8 @@
 // Reads video frames from SHM, runs detection → tracking → fusion,
 // publishes fused objects to SHM.
 
+#include "hal/hal_factory.h"
+#include "hal/iradar.h"
 #include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/zenoh_liveliness.h"
@@ -281,6 +283,48 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
     spdlog::info("[Fusion] Thread stopped after {} cycles", fusion_count);
 }
 
+// ── Radar HAL read thread ──────────────────────────────────
+// Polls the radar HAL backend at its configured update rate and publishes
+// RadarDetectionList to IPC for consumption by the fusion thread.
+static void radar_read_thread(drone::hal::IRadar&                                     radar,
+                              drone::ipc::IPublisher<drone::ipc::RadarDetectionList>& radar_pub,
+                              std::atomic<bool>& running, int update_rate_hz) {
+    // Clamp update rate to a sane range to prevent tight loops or division issues
+    constexpr int kMinRateHz        = 1;
+    constexpr int kMaxRateHz        = 1000;
+    int           effective_rate_hz = update_rate_hz;
+    if (effective_rate_hz < kMinRateHz || effective_rate_hz > kMaxRateHz) {
+        spdlog::warn("[Radar] Invalid update rate {} Hz — clamping to [{}, {}]", update_rate_hz,
+                     kMinRateHz, kMaxRateHz);
+        effective_rate_hz = std::clamp(effective_rate_hz, kMinRateHz, kMaxRateHz);
+    }
+
+    const auto period =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(1)) /
+        effective_rate_hz;
+
+    spdlog::info("[Radar] Read thread started — backend: {}, rate: {} Hz, period: {} ms",
+                 radar.name(), effective_rate_hz, period.count());
+
+    auto hb = drone::util::ScopedHeartbeat("radar_read", true);
+
+    uint64_t read_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        auto detections = radar.read();
+        if (detections.num_detections > 0) {
+            radar_pub.publish(detections);
+            ++read_count;
+        }
+
+        std::this_thread::sleep_for(period);
+    }
+
+    spdlog::info("[Radar] Read thread stopped — {} publishes", read_count);
+}
+
 // ═══════════════════════════════════════════════════════════
 // main()
 // ═══════════════════════════════════════════════════════════
@@ -344,6 +388,32 @@ int main(int argc, char* argv[]) {
     auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);
     spdlog::info("[Perception] Fusion   backend: {} ({})", fusion_backend, fusion_engine->name());
 
+    // ── Create radar HAL + publisher (optional) ────────────
+    bool radar_enabled = cfg.get<bool>("perception.radar.enabled", false);
+    std::unique_ptr<drone::hal::IRadar>                                     radar;
+    std::unique_ptr<drone::ipc::IPublisher<drone::ipc::RadarDetectionList>> radar_pub;
+    int radar_update_rate_hz = cfg.get<int>("perception.radar.update_rate_hz", 20);
+
+    if (radar_enabled) {
+        try {
+            radar = drone::hal::create_radar(cfg, "perception.radar");
+            if (!radar->init()) {
+                spdlog::error("[Radar] HAL init() failed — radar disabled");
+                radar.reset();
+            } else {
+                radar_pub = bus.advertise<drone::ipc::RadarDetectionList>(
+                    drone::ipc::topics::RADAR_DETECTIONS);
+                spdlog::info("[Perception] Radar HAL: {} — publishing to {}", radar->name(),
+                             drone::ipc::topics::RADAR_DETECTIONS);
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("[Radar] Failed to create HAL backend: {} — radar disabled", e.what());
+            radar.reset();
+        }
+    } else {
+        spdlog::info("[Perception] Radar disabled (perception.radar.enabled=false)");
+    }
+
     // ── Internal SPSC queues ────────────────────────────────
     drone::SPSCRing<Detection2DList, 4>   inference_to_tracker;
     drone::SPSCRing<TrackedObjectList, 4> tracker_to_fusion;
@@ -365,6 +435,15 @@ int main(int argc, char* argv[]) {
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
                          std::ref(*fusion_engine));
+
+    // Launch radar read thread if HAL is active and publisher is ready
+    std::thread t_radar;
+    if (radar && radar_pub && radar_pub->is_ready()) {
+        t_radar = std::thread(radar_read_thread, std::ref(*radar), std::ref(*radar_pub),
+                              std::ref(g_running), radar_update_rate_hz);
+    } else if (radar) {
+        spdlog::warn("[Radar] HAL active but publisher not ready — radar read thread disabled");
+    }
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
@@ -388,6 +467,7 @@ int main(int argc, char* argv[]) {
     t_inference.join();
     t_tracker.join();
     t_fusion.join();
+    if (t_radar.joinable()) t_radar.join();
 
     spdlog::info("=== Perception process stopped ===");
     return 0;
