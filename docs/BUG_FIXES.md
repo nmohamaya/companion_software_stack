@@ -1549,3 +1549,30 @@ if (radar && radar_pub && radar_pub->is_ready()) {
 3. Log clearly when a subsystem is disabled due to infrastructure failure — silent degradation is harder to diagnose than explicit warnings.
 
 **Found by:** Copilot code review on PR #218.
+
+---
+
+### Bug #41 — ObstacleAvoider3D Dead Zone Applies Zero Repulsion at Close Range (#225)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (Issue #225)
+**File:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`
+
+**Bug:** ObstacleAvoider3D applied zero repulsion when obstacles were closer than 0.1m (dead zone). At the most critical distances, the drone got no push-away force. The inverse-square repulsion formula was guarded by `dist > 0.1f`, meaning any obstacle within 10cm produced no correction vector at all.
+
+**Root Cause:** The condition `dist > 0.1f` was intended to prevent divide-by-zero in the inverse-square calculation, but 0.1m is far too large a threshold. The formula only needs protection at ~0.01m, and the result is already clamped by `max_correction_mps` anyway — so even without the guard, the output cannot blow up to infinity.
+
+**Fix:** Changed threshold from `0.1f` to `0.01f`:
+
+```cpp
+if (dist > 0.01f) {
+```
+
+**Lessons learned:**
+
+1. Divide-by-zero guards must be sized to the actual numerical danger zone, not arbitrary "safe" values. A 10cm dead zone in an obstacle avoider is a safety hazard.
+2. When a downstream clamp already bounds the output (e.g., `max_correction_mps`), the guard threshold can be much tighter.
+3. Scenario-level SITL testing catches bugs that unit tests miss — the drone physically flying into obstacles revealed what static analysis could not.
+
+**Found by:** Scenario 18 Gazebo SITL testing — drone flew into obstacles with no reactive avoidance at close range.

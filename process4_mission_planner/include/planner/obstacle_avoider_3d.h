@@ -109,7 +109,7 @@ public:
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-            if (dist < config_.influence_radius_m && dist > 0.1f) {
+            if (dist < config_.influence_radius_m && dist > 0.01f) {
                 // Inverse-square repulsive force (decays with distance)
                 float repulsion = config_.repulsive_gain / (dist * dist);
 

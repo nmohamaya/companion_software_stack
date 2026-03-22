@@ -245,3 +245,39 @@ TEST(ObstacleAvoider3DTest, ConvenienceConstructor) {
     ObstacleAvoider3D avoider(8.0f, 3.0f);
     EXPECT_EQ(avoider.name(), "ObstacleAvoider3D");
 }
+
+// ═════════════════════════════════════════════════════════════
+// Dead zone fix: very close objects (Issue #225)
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, VeryCloseObjectMaxRepulsion) {
+    // Objects at distance 0.05m (between old 0.1m threshold and new 0.01m)
+    // should now receive maximum repulsion (clamped by max_correction_mps).
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.max_correction_mps = 3.0f;
+    config.min_confidence     = 0.3f;
+
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 0.05f;  // 5cm ahead of drone
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // The obstacle is 5cm away — repulsion should be at max clamp in -X direction.
+    // Before the fix (dist > 0.1f), this would have been zero repulsion.
+    EXPECT_LT(result.velocity_x, cmd.velocity_x);
+    // The correction should hit the max clamp
+    float correction_x = result.velocity_x - cmd.velocity_x;
+    EXPECT_NEAR(correction_x, -config.max_correction_mps, 0.1f);
+}
