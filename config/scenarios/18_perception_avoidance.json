@@ -1,0 +1,86 @@
+{
+    "_comment": "Scenario 18: Perception-Driven Obstacle Avoidance — no HD-map, D* Lite dynamic layer only",
+    "scenario": {
+        "name": "perception_avoidance",
+        "description": "Navigate through an obstacle field using ONLY camera-detected obstacles — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses depth estimates, and D* Lite replans dynamically via update_from_objects(). Validates the full perception→planning loop for unknown environments. ObstacleAvoider3D is minimized so D* Lite is the primary avoidance mechanism.",
+        "tier": 2,
+        "timeout_s": 90,
+        "requires_gazebo": true
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 5.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 2.0,
+                "influence_radius_m": 0.5,
+                "repulsive_gain": 0.1,
+                "max_correction_mps": 1.0,
+                "_comment": "Minimized reactive avoidance — D* Lite dynamic layer is primary"
+            },
+            "occupancy_grid": {
+                "dynamic_obstacle_ttl_s": 3.0,
+                "resolution_m": 1.0,
+                "_comment": "3s TTL keeps detected obstacles in the grid long enough for replanning"
+            },
+            "static_obstacles": [],
+            "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding detected obstacles"
+            },
+            "waypoints": [
+                {"x": 1,  "y": 7,  "z": 4, "yaw": 1.43,  "speed": 2.0, "payload_trigger": false, "_comment": "Toward RED box Gz(7,1)=our(1,7) h=5m — must detect and avoid"},
+                {"x": 7,  "y": 15, "z": 4, "yaw": 0.38,  "speed": 2.0, "payload_trigger": false, "_comment": "Toward YELLOW box Gz(15,7)=our(7,15) h=4m — must detect and avoid"},
+                {"x": 8,  "y": 8,  "z": 4, "yaw": -2.27, "speed": 2.0, "payload_trigger": false, "_comment": "Toward GREEN cyl Gz(8,8)=our(8,8) h=5m — must detect and avoid"},
+                {"x": 4,  "y": 4,  "z": 4, "yaw": -2.36, "speed": 2.0, "payload_trigger": false, "_comment": "Toward ORANGE box Gz(4,4)=our(4,4) h=3m — drone at z=4 may fly over"},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": 0,     "speed": 2.0, "payload_trigger": false, "_comment": "Return home"}
+            ]
+        },
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "confidence_threshold": 0.3,
+                "max_detections": 64
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "_comment": "ByteTrack two-stage association for robust obstacle tracking"
+            },
+            "fusion": {
+                "backend": "ukf",
+                "radar": {
+                    "enabled": false,
+                    "_comment": "Camera-only perception — radar disabled to isolate vision-based avoidance"
+                }
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "Path planner: DStarLitePlanner",
+            "Obstacle avoider: ObstacleAvoider3D",
+            "backend: bytetrack",
+            "TAKEOFF",
+            "EXECUTING",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    }
+}

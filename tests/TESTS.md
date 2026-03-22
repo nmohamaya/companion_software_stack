@@ -31,7 +31,7 @@
 # Gazebo SITL integration (requires PX4 + Gazebo Harmonic)
 ./tests/run_tests.sh gazebo-e2e
 
-# Gazebo SITL scenario runner (all 17 scenarios with PX4 + Gazebo + Zenoh)
+# Gazebo SITL scenario runner (all 18 scenarios with PX4 + Gazebo + Zenoh)
 ./tests/run_scenario_gazebo.sh --all
 ./tests/run_scenario_gazebo.sh --all --gui   # with 3D window
 ./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json
@@ -116,7 +116,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
-| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 170+ | 17 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (15 Tier 1 + 2 Tier 2) |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 170+ | 18 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (15 Tier 1 + 3 Tier 2) |
 | **Total** | **49 C++ + 5 shell** | **1031 + 42 + 170+** | |
 
 ---
@@ -1087,6 +1087,9 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 13 — GCS Land | 1 | No | — | GCS LAND command mid-mission |
 | 14 — Altitude Ceiling Breach | 1 | No | — | Waypoint above geofence ceiling → RTL |
 | 15 — FC Quick Recovery | 1 | No | — | FC link lost + quick reconnect → LOITER then resume |
+| 16 — VIO Failure | 2 | Yes | 6 | VIO degradation fault → LOITER/RTL escalation (geofence disabled — VIO drift crosses boundary in SITL) |
+| 17 — Radar Gazebo | 2 | Yes | 8 | GazeboRadarBackend subscribes to gpu_lidar scan topic, converts to RadarDetectionList, UKF fusion consumes detections |
+| 18 — Perception Avoidance | 2 | Yes | 8 | Camera-only obstacle avoidance — no HD-map, D* Lite dynamic layer replans from color_contour detections |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
@@ -1111,25 +1114,25 @@ diagrams and detailed setup instructions.
 
 ### run_scenario_gazebo.sh — Gazebo SITL Scenario Runner
 
-**What it tests:** All 17 scenarios (15 Tier 1 + 2 Tier 2) running on PX4 SITL + Gazebo
+**What it tests:** All 18 scenarios (15 Tier 1 + 3 Tier 2) running on PX4 SITL + Gazebo
 Harmonic with real MAVLink telemetry, Gazebo camera/IMU sensors, and Zenoh IPC.
 Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
 via `fault_injector`, and verifies pass criteria against actual process logs.
 
-**Pass criteria per scenario (170+ total checks across 17 scenarios):**
+**Pass criteria per scenario (170+ total checks across 18 scenarios):**
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
 - `shm_segments_exist` — SHM segments that must be present at verification time (legacy; skipped when `EFFECTIVE_IPC == zenoh`, which is the sole backend)
 
-All 17 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
+All 18 scenarios also include an `OBSTACLE COLLISION` guard in `log_must_not_contain`
 to catch unexpected collisions (Fix #40).
 
 **Run (Tier 2 — Gazebo SITL):**
 ```bash
 ./tests/run_scenario_gazebo.sh --list                                    # list
 ./tests/run_scenario_gazebo.sh config/scenarios/01_nominal_mission.json   # one
-./tests/run_scenario_gazebo.sh --all                                     # all 17 scenarios
+./tests/run_scenario_gazebo.sh --all                                     # all 18 scenarios
 ./tests/run_scenario_gazebo.sh --all --gui                               # with 3D window
 ./tests/run_scenario_gazebo.sh --dry-run config/scenarios/02_obstacle_avoidance.json
 ```
@@ -1144,7 +1147,7 @@ to catch unexpected collisions (Fix #40).
 **Requires:** PX4 SITL (`$PX4_DIR`, default `~/PX4-Autopilot`), Gazebo Harmonic,
 `fault_injector` built. Logs output to `drone_logs/scenarios_gazebo/<scenario_name>/`.
 
-**Status (March 2026):** 17/17 scenarios passing in Tier 1; 17/17 passing in Tier 2 Gazebo SITL. Scenario 17 (radar_gazebo) added for Issue #212. See ADR-009 for Tier 1 vs Tier 2 test strategy.
+**Status (March 2026):** 18/18 scenarios passing in Tier 1; 18/18 passing in Tier 2 Gazebo SITL. Scenario 17 (radar_gazebo) added for Issue #212. Scenario 18 (perception_avoidance) added for Issue #222. See ADR-009 for Tier 1 vs Tier 2 test strategy.
 
 ---
 
@@ -1173,4 +1176,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1031 unit tests across 49 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 17 scenarios (15 Tier 1 + 2 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #210: UKF radar fusion. Issue #212: GazeboRadarBackend + radar HAL thread. All 1031 tests passing.*
+*Last updated: March 2026 — 1031 unit tests across 49 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #210: UKF radar fusion. Issue #212: GazeboRadarBackend + radar HAL thread. Issue #222: perception-driven obstacle avoidance scenario. All 1031 tests passing.*
