@@ -13,7 +13,7 @@ target_include_directories(perception PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(perception PRIVATE
-    drone_ipc drone_util Eigen3::Eigen
+    drone_ipc drone_util drone_hal Eigen3::Eigen
 )
 
 # Optional OpenCV + YOLOv8 DNN detector

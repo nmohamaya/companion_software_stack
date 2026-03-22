@@ -204,6 +204,60 @@ Selected via `mission_planner.path_planner.backend` config key.
 - **Velocity output:** Direction along first path segment, EMA-smoothed
 - **Caching:** Re-plans only when goal or obstacle state changes
 
+### Planner + Avoider Pipeline (per-tick during NAVIGATE)
+
+The path planner and obstacle avoider are **two distinct stages** that run in sequence
+every tick inside P4. Both are entirely part of our stack — Gazebo (or real hardware)
+only provides raw sensor data; all planning and avoidance logic runs on the companion
+computer.
+
+```text
+                     Our Stack (P4 — mission_planner)
+                     ════════════════════════════════
+                                                                        External
+  Perception (P2)                                                       ════════
+  ┌──────────────┐
+  │ Camera frames │──→ color_contour / YOLO detector ──→ ByteTrack tracker
+  │ Radar scans   │──→ UKF fusion engine                                Gazebo / Real HW
+  └──────────────┘                                                      provides raw
+        │                                                               sensor data only
+        ▼
+  /detected_objects (IPC)
+        │
+        ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  Stage 1: D* Lite Path Planner                                   │
+  │  ─────────────────────────────                                   │
+  │  • Builds 3D occupancy grid from HD-map + camera detections      │
+  │  • Searches for collision-free path from current pose → waypoint │
+  │  • If path found → outputs velocity along first path segment     │
+  │  • If NO path found (e.g. waypoint is at obstacle location)      │
+  │    → logs "Planner fallback: no obstacle-free path"              │
+  │    → outputs direct-line velocity toward waypoint                │
+  └──────────────────────────┬───────────────────────────────────────┘
+                             │ planned velocity
+                             ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  Stage 2: ObstacleAvoider3D (3D Potential Field)                 │
+  │  ───────────────────────────────────────────────                  │
+  │  • Computes repulsive forces from nearby detected objects        │
+  │  • Inverse-square decay within influence_radius_m                │
+  │  • Predictive: uses object velocities for 0.5s look-ahead       │
+  │  • Modifies the planned velocity to steer around obstacles       │
+  │  • Even when Stage 1 falls back to direct-line, Stage 2 still   │
+  │    pushes the drone away — this is the safety net                │
+  └──────────────────────────┬───────────────────────────────────────┘
+                             │ corrected velocity
+                             ▼
+                    /trajectory_cmd (IPC) → P5 (comms) → flight controller
+```
+
+**Key point:** When scenario logs show "Planner fallback: no obstacle-free path," the drone
+is **not** flying blind. The D* Lite planner couldn't find a grid path (common when waypoints
+are placed at obstacle locations), but the ObstacleAvoider3D still applies real-time repulsive
+forces to steer around obstacles. The two stages are complementary — the planner handles
+global route planning, the avoider handles local reactive avoidance.
+
 ---
 
 ## Component: Obstacle Avoiders

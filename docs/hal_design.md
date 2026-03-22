@@ -275,6 +275,7 @@ See `common/ipc/include/ipc/ipc_types.h` for `RadarDetection` and `RadarDetectio
 | Key | Class | Notes |
 |-----|-------|-------|
 | `"simulated"` | `SimulatedRadar` | Configurable FoV, range, target count, and Gaussian noise model. |
+| `"gazebo"` | `GazeboRadarBackend` | gpu_lidar + odometry via gz-transport; noise injected in HAL (requires `HAVE_GAZEBO`). |
 
 **Config section:** `perception.radar`
 
@@ -397,7 +398,7 @@ Default thresholds: `cpu_warn=90`, `mem_warn=90`, `temp_warn=80°C`,
 | `IGCSLink` | ✓ | ✓ (via FC) | UDP (future) |
 | `IGimbal` | ✓ | — | SIYI (future) |
 | `IIMUSource` | ✓ | ✓ (HAVE_GAZEBO) | BMI088 (future) |
-| `IRadar` | ✓ | — | TI AWR1843 (future) |
+| `IRadar` | ✓ | ✓ (HAVE_GAZEBO) | TI AWR1843 (future) |
 
 ---
 

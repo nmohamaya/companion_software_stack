@@ -36,7 +36,7 @@ Production requires implementing the real backend behind each interface.
 | 1.10 | Path planner | `DStarLitePlanner` — 3D grid, incremental D* Lite search, obstacle inflation, two-layer occupancy (HD-map static + camera TTL 3 s), BFS start-escape | RRT* | P2 | 🟢 | D* Lite + HD-map verified in Gazebo SITL scenario 02 (7/7 WP, 0 collisions); incremental replanning handles dynamic environments |
 | 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) + scenario 02 with HD-map (Fix #35). PotentialFieldAvoider (2D) removed in Issue #207 |
 | 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; all simulated code and data type fields removed |
-| 1.13 | Radar | Removed (Phase 1A, PR #117) | mmWave radar driver (TI AWR, etc.) | P2 | 🔴 | Need HAL `IRadar` interface; all simulated code and data type fields removed |
+| 1.13 | Radar | `SimulatedRadar` + `GazeboRadarBackend` (gpu_lidar → radar detections) | mmWave radar driver (TI AWR1843, etc.) | P2 | 🟡 | `IRadar` interface exists (Issue #209); SimulatedRadar + GazeboRadarBackend + UKF fusion implemented (Issues #210, #212). Real hardware driver TBD |
 
 ---
 
@@ -60,7 +60,7 @@ Production requires implementing the real backend behind each interface.
 | 3.1 | Kalman tracker | Linear KF, 8D constant-velocity | EKF/UKF with constant-turn-rate model, or IMM | P2 | � | UKFFusionEngine implemented (PR #117); KalmanBoxTracker still linear KF |
 | 3.2 | Track association | Greedy nearest-neighbor | Hungarian (Munkres) O(n³) optimal assignment | P2 | 🟢 | O(n³) Kuhn-Munkres in `HungarianSolver` (PR #117) |
 | 3.3 | Appearance features | None — position-only matching | DeepSORT / ByteTrack Re-ID vectors | P2 | 🔴 | Reduces ID switches by ~45% |
-| 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | � | `UKFFusionEngine` with per-object UKF (PR #117); radar integration pending |
+| 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | � | `UKFFusionEngine` with per-object UKF (PR #117); radar measurement model added (Issues #210, #212) — camera + radar fusion operational |
 | 3.5 | ISP pipeline | Raw RGB24 passthrough | Bayer demosaic → white balance → gamma → NV12 | P1 | 🔴 | Use NVIDIA ISP on Jetson |
 
 ---
@@ -143,6 +143,81 @@ TSan instruments memory accesses at **compile time**. Pre-built shared libraries
 | 5.6 | HD-map obstacle avoidance | Two-layer A* occupancy grid (permanent HD-map static layer + 3 s TTL camera confirmation layer). Verified in Gazebo SITL scenario 02: 7/7 waypoints reached, 0 collisions (Fix #35). | 2026-03-09 |
 | 5.7 | Proximity collision detection | NAVIGATE loop checks drone ENU position against all HD-map obstacles each tick (`radius_m + 0.5 m` XY, `height_m + 0.5 m` Z). Throttled 2 s cooldown. Supplements disarm-based crash check (Fix #36). | 2026-03-09 |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens — 7 tokens active, P7 monitors deaths (PR #57, Phase F) | 2026-03-01 |
+
+---
+
+## 8. Hardware Platform Portability
+
+The codebase currently targets **Linux/aarch64 (NVIDIA Jetson Orin)**. If the compute
+platform changes (e.g., Qualcomm QRB5165, NXP i.MX8, Intel x86, or a custom SBC),
+the following platform-specific assumptions need attention.
+
+| # | Area | Current Assumption | Files Affected | Impact | Notes |
+|---|------|-------------------|----------------|--------|-------|
+| 8.1 | `M_PI` constant | Uses `M_PI` from `<cmath>` (POSIX extension, not ISO C++) | `ukf_fusion_engine.h`, `test_gazebo_radar.cpp`, several perception files | **Low** — works on all Linux variants | Replace with `std::numbers::pi_v<float>` (C++20) or a local `constexpr` if targeting MSVC or strict ISO mode |
+| 8.2 | `/proc` filesystem | Reads `/proc/stat`, `/proc/meminfo`, `/proc/self/exe`, `/proc/self/fd` for CPU, memory, binary path, FD enumeration | `sys_info.h`, `process_manager.h`, `process7_system_monitor/src/main.cpp` | **High** — breaks on non-Linux | Qualcomm/NXP Linux BSPs have `/proc`; QNX/VxWorks do not. Need `ISystemInfo` abstraction if leaving Linux |
+| 8.3 | Thermal sysfs paths | Reads `/sys/devices/virtual/thermal/thermal_zone0/temp` (Jetson-specific) with fallback to `/sys/class/thermal/thermal_zone0/temp` | `sys_info.h` | **High** — path varies per SoC | Qualcomm uses different thermal zone numbering; NXP has `/sys/class/thermal/thermal_zone1/temp`. Make path configurable |
+| 8.4 | Thread affinity | `pthread_setaffinity_np()`, `CPU_ZERO`/`CPU_SET` (GNU extensions, not POSIX) | `realtime.h` | **Medium** — not portable | macOS/QNX use different APIs. Qualcomm/NXP Linux BSPs support these but core topology differs (big.LITTLE) |
+| 8.5 | `pthread_setname_np()` | GNU extension for naming threads | `realtime.h` | **Low** — gracefully degradable | Wrap in `#ifdef __GLIBC__` or use `prctl(PR_SET_NAME)` |
+| 8.6 | Process management | `fork()`/`execvp()`/`waitpid()`/`kill()` POSIX model | `process_manager.h` | **Low on Linux variants** | All Linux BSPs (Qualcomm, NXP, Intel) support POSIX. Only breaks if moving to RTOS |
+| 8.7 | Wire format endianness | Raw `reinterpret_cast` on IPC structs; magic `0x4E4F5244` assumes little-endian | `wire_format.h`, `ipc_types.h` | **Medium** — breaks on big-endian | All current targets (ARM64, x86) are LE. Only matters if GCS runs on a BE system or if targeting PowerPC |
+| 8.8 | `__attribute__((packed))` | GCC-specific struct packing on `WireHeader` | `wire_format.h` | **Low** — Clang supports it too | Use `#pragma pack(push, 1)` for MSVC compatibility if needed |
+| 8.9 | Cache-line alignment | `alignas(64)` on SPSC ring indices, IPC structs | `spsc_ring.h`, `ipc_types.h` | **Low** — correct but may be suboptimal | 64 bytes is correct for Cortex-A (Qualcomm/NXP) and x86. Not a correctness issue |
+| 8.10 | systemd integration | `sd_notify()`, `sd_watchdog_enabled()` guarded by `#ifdef HAVE_SYSTEMD` | `sd_notify.h`, all process `main.cpp` files | **None** — already optional | Gracefully no-ops when disabled; Qualcomm/NXP Linux typically use systemd |
+| 8.11 | GPU acceleration | No CUDA/TensorRT/libargus code yet (listed as future in 1.4, 3.5) | N/A | **High when added** — vendor lock-in | Future TensorRT detector locks to NVIDIA. Qualcomm equivalent: SNPE/QNN. NXP: eIQ/TFLite. Plan for `IInferenceEngine` HAL |
+| 8.12 | Camera API | `ICamera` abstraction exists; V4L2 backend planned | `icamera.h`, `hal_factory.h` | **Low** — V4L2 works on all Linux | Qualcomm may prefer `libcamera` or proprietary ISP pipeline. NXP supports V4L2 natively |
+| 8.13 | Cross-compilation | Currently native x86/aarch64 build only | `CMakeLists.txt` | **Medium** — need toolchain files | Each SoC vendor provides a cross-toolchain; CMake toolchain file needed per target |
+| 8.14 | GPU rendering / EGL | `gpu_lidar` and `depth_camera` sensors require GPU ray-casting via EGL. On dual-GPU systems (integrated + discrete NVIDIA), the EGL loader defaults to Mesa DRI2 instead of the NVIDIA ICD, causing silent sensor failure | `deploy/launch_gazebo.sh`, any Gazebo launch script | **High** — sensors silently produce no data | See detailed notes below. Currently mitigated by forcing NVIDIA EGL env vars in `launch_gazebo.sh`. On Jetson (single GPU), this is a non-issue. On x86 with NVIDIA dGPU, the env vars are required. On Intel-only or AMD systems, `gpu_lidar` requires Mesa EGL to work correctly — do not set NVIDIA vars |
+
+### 8.14 — GPU Rendering / EGL Platform Notes
+
+**Problem discovered:** During Gazebo SITL testing with `gpu_lidar` (used as radar geometric backbone), the sensor silently failed to publish data. Cameras and IMU worked fine. Root cause: the EGL loader on a dual-GPU laptop (Intel iGPU + NVIDIA dGPU) selected Mesa DRI2 instead of the NVIDIA EGL ICD. The ogre2 rendering engine requires a working EGL context for GPU ray-casting; without it, `gpu_lidar` and `depth_camera` sensors produce zero frames with no error message.
+
+**Current mitigation** (in `deploy/launch_gazebo.sh`):
+
+```bash
+if command -v nvidia-smi &>/dev/null; then
+    export __NV_PRIME_RENDER_OFFLOAD=1
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    if [[ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ]]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+    fi
+fi
+```
+
+**Hardware platform matrix:**
+
+| Platform | GPU | EGL Status | Action Required |
+| -------- | --- | ---------- | --------------- |
+| **Dev laptop** (x86, dual GPU) | Intel iGPU + NVIDIA dGPU | Broken without env vars | Force NVIDIA EGL ICD (current fix) |
+| **NVIDIA Jetson Orin** (aarch64) | Tegra GPU (single) | Works natively | None — NVIDIA is the only EGL provider |
+| **Intel NUC / x86 server** | Intel iGPU only | Mesa EGL | Do NOT set NVIDIA vars; ensure `mesa-libEGL` is installed |
+| **AMD GPU system** | AMD dGPU | Mesa EGL (AMDGPU) | Do NOT set NVIDIA vars; ensure `mesa-libEGL` is installed |
+| **Qualcomm QRB5165** (aarch64) | Adreno GPU | Qualcomm EGL | Needs Qualcomm EGL ICD; untested with Gazebo |
+| **Headless server** (no GPU) | None | Software rendering | `gpu_lidar` will not work; fall back to `lidar` (CPU) or `SimulatedRadar` HAL |
+
+**When moving to new hardware:**
+
+1. Run `eglinfo` (from `mesa-utils-extra`) to verify which EGL vendor is active
+2. Test `gpu_lidar` with a minimal world: `gz sim -r -s --headless-rendering test_world.sdf` and check `gz topic -i -t /radar_lidar/scan` for publisher presence
+3. If no publisher appears, check the Gazebo server log for `libEGL warning: pci id for fd` messages
+4. Set the appropriate EGL vendor environment variables for the target GPU
+5. On Jetson, the NVIDIA JetPack SDK configures EGL correctly out of the box — no intervention needed
+
+**Long-term recommendation:** Add a GPU/EGL health check to the launch script that verifies `gpu_lidar` has at least one publisher within 5 seconds of Gazebo startup. If not, log a diagnostic message pointing to the EGL configuration. This was filed as GitHub Issue #217.
+
+### Platform Migration Priority
+
+If switching from Jetson Orin to another SoC, address in this order:
+
+1. **Thermal sysfs paths** (8.3) — immediate crash/misread on different SoC thermal zone layout
+2. **GPU/inference acceleration** (8.11) — TensorRT models won't run; need SNPE/QNN (Qualcomm) or eIQ (NXP)
+3. **Cross-compilation toolchain** (8.13) — can't build without it
+4. **Thread affinity topology** (8.4) — big.LITTLE core assignment may differ
+5. **Camera ISP pipeline** (8.12) — Jetson libargus vs Qualcomm Camera2 vs NXP V4L2
+6. **GPU rendering / EGL** (8.14) — `gpu_lidar` silent failure on dual-GPU systems; verify EGL vendor on new hardware
+
+Items 8.1, 8.5–8.10 are low-risk on any Linux-based SoC and can be addressed opportunistically.
 
 ---
 

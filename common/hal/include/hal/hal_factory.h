@@ -37,6 +37,7 @@
 #ifdef HAVE_GAZEBO
 #include "hal/gazebo_camera.h"
 #include "hal/gazebo_imu.h"
+#include "hal/gazebo_radar.h"
 #endif
 
 #include "util/config.h"
@@ -155,7 +156,11 @@ inline std::unique_ptr<IRadar> create_radar(const drone::Config& cfg,
     if (backend == "simulated") {
         return std::make_unique<SimulatedRadar>(cfg, section);
     }
-    // Future: if (backend == "gazebo") return std::make_unique<GazeboRadar>(...);
+#ifdef HAVE_GAZEBO
+    if (backend == "gazebo") {
+        return std::make_unique<GazeboRadarBackend>(cfg, section);
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown radar backend: " + backend);
 }

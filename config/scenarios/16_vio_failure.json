@@ -11,6 +11,10 @@
         "mission_planner": {
             "takeoff_altitude_m": 5.0,
             "static_obstacles": [],
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — VIO degradation causes SITL drift during loiter, which can cross default geofence boundaries. This scenario tests VIO fault handling, not geofence."
+            },
             "waypoints": [
                 {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
                 {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false}
