@@ -452,6 +452,14 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 const float range_diff = std::abs(rdet.range_m - z_pred(0));
                 if (range_diff > range_3sigma) continue;
 
+                // Altitude gate: reject if radar return body-frame z differs
+                // too much from the track's estimated z position.
+                {
+                    const float radar_z = rdet.range_m * std::sin(rdet.elevation_rad);
+                    const float track_z = ukf.position()(2);
+                    if (std::abs(radar_z - track_z) > radar_cfg_.altitude_gate_m) continue;
+                }
+
                 ObjectUKF::RadarMeasVec z_actual;
                 z_actual(0) = rdet.range_m;
                 z_actual(1) = rdet.azimuth_rad;
@@ -566,6 +574,8 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                 "perception.fusion.radar.ground_filter_enabled", radar_cfg.ground_filter_enabled);
             radar_cfg.min_object_altitude_m = cfg->get<float>(
                 "perception.fusion.radar.min_object_altitude_m", radar_cfg.min_object_altitude_m);
+            radar_cfg.altitude_gate_m = cfg->get<float>("perception.fusion.radar.altitude_gate_m",
+                                                        radar_cfg.altitude_gate_m);
         }
         return std::make_unique<UKFFusionEngine>(calib, radar_cfg, radar_enabled);
     }

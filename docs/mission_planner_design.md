@@ -274,13 +274,33 @@ PotentialFieldAvoider (2D) removed in Issue #207 — ObstacleAvoider3D is the on
 ### ObstacleAvoider3D (`"3d"` / `"obstacle_avoider_3d"` / `"potential_field_3d"`)
 
 - **Header:** [`obstacle_avoider_3d.h`](../process4_mission_planner/include/planner/obstacle_avoider_3d.h)
-- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (12 tests)
-- Full 3D repulsive field (includes Z component)
+- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (16 tests)
+- Full 3D repulsive field (includes Z component via configurable `vertical_gain`)
 - Predictive avoidance: uses object velocities for 0.5 s look-ahead
 - Inverse-square force decay with configurable repulsive gain
-- Clamped corrections: max ±3 m/s per axis
-- Filters: stale objects (>500 ms), low-confidence (<0.3)
+- Clamped corrections: max ±`max_correction_mps` per axis (default 3.0)
+- Filters: stale objects (>`max_age_ms`, default 500 ms), low-confidence (<0.3)
 - NaN input protection
+
+#### Path-Aware Mode (Issue #229)
+
+When `path_aware = true` (default), the avoider prevents reactive repulsion from fighting the planner's intended direction. This is critical when D* Lite has already computed an optimal route around obstacles — without path-awareness, the repulsive field can push the drone *backward* along the planned path, causing oscillation or route deviation.
+
+**Algorithm:**
+1. Compute the planned velocity direction: `dir = normalize(planned_velocity)`
+2. Project the repulsive force onto the planned direction: `along = dot(repulsion, dir)`
+3. If `along < 0` (repulsion opposes planned direction), strip the opposing component: `repulsion -= along * dir`
+4. The remaining lateral component provides a "nudge" perpendicular to the path without fighting the planner
+
+**Effect:** The avoider only applies corrections that are lateral (perpendicular) to the planned trajectory. D* Lite handles macro-level rerouting; the avoider handles micro-level lateral nudges for obstacles that appear between replanning cycles.
+
+**Configuration:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `path_aware` | `true` | Enable path-aware lateral-only mode |
+| `vertical_gain` | `1.0` | Z-axis repulsion multiplier (0.0 = lateral-only, 1.0 = full 3D) |
+| `max_age_ms` | `500` | Maximum object age before filtering |
+| `max_correction_mps` | `3.0` | Per-axis correction clamp |
 
 ---
 

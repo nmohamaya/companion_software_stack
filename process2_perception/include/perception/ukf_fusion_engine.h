@@ -34,6 +34,7 @@ struct RadarNoiseConfig {
     float gate_threshold        = 9.21f;   // χ²(4) at 95% confidence
     float min_object_altitude_m = 0.3f;    // reject radar returns below this AGL
     bool  ground_filter_enabled = true;    // enable/disable ground-plane filter
+    float altitude_gate_m       = 2.0f;    // reject radar-track pairs with |body_z diff| > this
 };
 
 /// Per-object UKF state for 3D tracking.

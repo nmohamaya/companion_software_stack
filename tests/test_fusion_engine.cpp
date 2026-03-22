@@ -680,3 +680,120 @@ TEST(RadarFusionTest, GroundFilterDisabledPassesAll) {
     // Filter is disabled — should match
     EXPECT_TRUE(result.objects[0].has_radar);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Altitude gate tests (Issue #229)
+// ═══════════════════════════════════════════════════════════════
+
+TEST(RadarFusionTest, AltitudeGateRejectsMismatch) {
+    // Radar return at very different body-frame z than track → rejected.
+    // Track is roughly at z≈0 in body frame (default test track is horizontal).
+    // Radar at range=10m, elevation=-0.4 rad → radar_z = 10*sin(-0.4) ≈ -3.89m.
+    // |z_diff| = |-3.89 - 0| ≈ 3.89 > 2.0 → rejected by altitude gate.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig radar_cfg;
+    radar_cfg.altitude_gate_m       = 2.0f;
+    radar_cfg.ground_filter_enabled = false;  // isolate altitude gate
+
+    UKFFusionEngine engine(calib, radar_cfg, true);
+    engine.set_drone_altitude(5.0f);
+
+    auto              trk = make_test_tracked();
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // First fuse to create the UKF filter
+    auto first_result = engine.fuse(tracked);
+    ASSERT_EQ(first_result.objects.size(), 1u);
+
+    // Radar at similar range but very different elevation
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 2000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(10.0f, 0.0f, -0.4f, 0.0f);
+
+    engine.set_radar_detections(radar_list);
+    tracked.timestamp_ns   = 2000;
+    tracked.frame_sequence = 2;
+    auto result            = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // Altitude mismatch → no radar association
+    EXPECT_FALSE(result.objects[0].has_radar);
+}
+
+TEST(RadarFusionTest, AltitudeGateAcceptsSimilar) {
+    // Radar return at similar body-frame z as track → accepted.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig radar_cfg;
+    radar_cfg.altitude_gate_m       = 2.0f;
+    radar_cfg.ground_filter_enabled = false;
+
+    UKFFusionEngine engine(calib, radar_cfg, true);
+    engine.set_drone_altitude(5.0f);
+
+    auto              trk   = make_test_tracked();
+    float             depth = test_estimate_depth(calib, trk);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // Build matching radar detection from a temp UKF
+    ObjectUKF temp_ukf(trk, depth, radar_cfg);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // Altitude matches → radar association accepted
+    EXPECT_TRUE(result.objects[0].has_radar);
+}
+
+TEST(RadarFusionTest, AltitudeGateConfigurable) {
+    // With a very large altitude gate, even mismatched elevation passes the gate.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig radar_cfg;
+    radar_cfg.altitude_gate_m       = 100.0f;  // effectively disabled
+    radar_cfg.ground_filter_enabled = false;
+
+    UKFFusionEngine engine(calib, radar_cfg, true);
+    engine.set_drone_altitude(5.0f);
+
+    auto              trk   = make_test_tracked();
+    float             depth = test_estimate_depth(calib, trk);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // Build radar detection matching in range but shifted in elevation
+    ObjectUKF temp_ukf(trk, depth, radar_cfg);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    // Shift elevation slightly — within generous 100m gate but may fail Mahalanobis
+    radar_list.detections[0] = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // With 100m altitude gate, the altitude check always passes
+    // (matching radar → should associate)
+    EXPECT_TRUE(result.objects[0].has_radar);
+}

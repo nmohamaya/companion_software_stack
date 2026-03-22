@@ -58,7 +58,8 @@ public:
     explicit GazeboRadarBackend(const drone::Config& cfg, const std::string& section)
         : max_range_m_(cfg.get<float>(section + ".max_range_m", 100.0f))
         , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad", 1.047f))
-        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 0.262f))
+        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 0.698f))
+        , ground_filter_alt_m_(cfg.get<float>(section + ".ground_filter_alt_m", 0.5f))
         , false_alarm_rate_(cfg.get<float>(section + ".false_alarm_rate", 0.02f))
         , scan_topic_(cfg.get<std::string>(section + ".gz_scan_topic", "/radar_lidar/scan"))
         , odom_topic_(
@@ -234,6 +235,13 @@ private:
             auto [az, el] = ray_index_to_angles(h_idx, v_idx, h_count, std::max(v_count, 1), h_min,
                                                 h_max, v_min, v_max);
 
+            // Ground rejection: compute ray's world-frame altitude and skip
+            // returns below ground_filter_alt_m_ (Issue #229).
+            // object_alt = drone_alt + range * sin(elevation)
+            const float object_alt = drone_altitude_m_.load(std::memory_order_acquire) +
+                                     range * std::sin(el);
+            if (object_alt < ground_filter_alt_m_) continue;
+
             // Build detection from ray geometry + body velocity
             auto det = ray_to_detection(range, az, el, vx, vy, vz);
 
@@ -295,6 +303,13 @@ private:
             body_vz_ = static_cast<float>(linear.z());
         }
 
+        // Extract altitude from odometry pose for HAL-level ground filtering.
+        // Gazebo Odometry pose.position.z is the drone's world-frame altitude.
+        if (msg.has_pose()) {
+            drone_altitude_m_.store(static_cast<float>(msg.pose().position().z()),
+                                    std::memory_order_release);
+        }
+
         odom_count_.fetch_add(1, std::memory_order_acq_rel);
     }
 
@@ -302,6 +317,7 @@ private:
     float       max_range_m_;
     float       fov_azimuth_rad_;
     float       fov_elevation_rad_;
+    float       ground_filter_alt_m_;  // reject rays resolving below this altitude AGL
     float       false_alarm_rate_;
     std::string scan_topic_;
     std::string odom_topic_;
@@ -321,6 +337,9 @@ private:
     float              body_vx_{0.0f};
     float              body_vy_{0.0f};
     float              body_vz_{0.0f};
+
+    // ── Drone altitude for HAL-level ground filtering ────────
+    std::atomic<float> drone_altitude_m_{0.0f};
 
     // ── RNG for noise injection (guarded by rng_mutex_) ───────
     mutable std::mutex                            rng_mutex_;

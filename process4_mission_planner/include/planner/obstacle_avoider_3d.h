@@ -35,6 +35,7 @@ struct ObstacleAvoider3DConfig {
     float    prediction_dt_s    = 0.5f;            // look-ahead time for velocity-based prediction
     float    vertical_gain      = 1.0f;            // scale factor for Z repulsion (0=lateral only)
     uint64_t max_age_ns         = 500'000'000ULL;  // max age of object data (500ms)
+    bool     path_aware         = true;            // remove repulsion opposing planned direction
 };
 
 class ObstacleAvoider3D final : public IObstacleAvoider {
@@ -67,6 +68,8 @@ public:
             max_age_ms = 0;
         }
         config_.max_age_ns = static_cast<uint64_t>(max_age_ms) * 1'000'000ULL;
+        config_.path_aware = cfg.get<bool>("mission_planner.obstacle_avoidance.path_aware",
+                                           config_.path_aware);
     }
 
     drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
@@ -134,6 +137,32 @@ public:
                                  config_.max_correction_mps);
         total_rep_z = std::clamp(total_rep_z, -config_.max_correction_mps,
                                  config_.max_correction_mps);
+
+        // Path-aware repulsion: remove the component that opposes the planned
+        // direction.  This prevents the avoider from fighting the planner when
+        // obstacles sit between the drone and its goal (Issue #229).
+        if (config_.path_aware) {
+            const float planned_mag = std::sqrt(cmd.velocity_x * cmd.velocity_x +
+                                                cmd.velocity_y * cmd.velocity_y +
+                                                cmd.velocity_z * cmd.velocity_z);
+            if (planned_mag > 0.01f) {
+                const float inv_mag = 1.0f / planned_mag;
+                const float dir_x   = cmd.velocity_x * inv_mag;
+                const float dir_y   = cmd.velocity_y * inv_mag;
+                const float dir_z   = cmd.velocity_z * inv_mag;
+
+                // Dot product: positive = repulsion along planned dir,
+                //              negative = repulsion opposing planned dir.
+                const float along = total_rep_x * dir_x + total_rep_y * dir_y + total_rep_z * dir_z;
+
+                // Strip the opposing component; keep forward and lateral.
+                if (along < 0.0f) {
+                    total_rep_x -= along * dir_x;
+                    total_rep_y -= along * dir_y;
+                    total_rep_z -= along * dir_z;
+                }
+            }
+        }
 
         cmd.velocity_x += total_rep_x;
         cmd.velocity_y += total_rep_y;
