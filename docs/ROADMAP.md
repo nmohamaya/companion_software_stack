@@ -563,6 +563,7 @@
 | [#217](https://github.com/nmohamaya/companion_software_stack/issues/217) | NVIDIA EGL broader scope — hardware deployment | Reliability | **Open** (deferred to hardware phase) |
 | [#220](https://github.com/nmohamaya/companion_software_stack/issues/220) | P3 slam_vio_nav unclamped loop rates | Bug | **Open** |
 | ~~[#222](https://github.com/nmohamaya/companion_software_stack/issues/222)~~ | ~~Perception-driven obstacle avoidance scenario (no HD-map)~~ ✅ | Testing | **Closed** (Improvement #54) |
+| ~~[#224](https://github.com/nmohamaya/companion_software_stack/issues/224)~~ | ~~Fix Perception Fusion Pipeline — SPSC Overflow + Radar Fusion Bottleneck~~ ✅ | Bug Fix / Perf | **Closed** (Improvement #55, Fix #42) |
 
 ---
 

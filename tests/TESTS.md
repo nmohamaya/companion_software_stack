@@ -115,9 +115,10 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 10 | IVisualFrontend, IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
+| [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 170+ | 18 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (15 Tier 1 + 3 Tier 2) |
-| **Total** | **49 C++ + 5 shell** | **1031 + 42 + 170+** | |
+| **Total** | **50 C++ + 5 shell** | **1041 + 42 + 170+** | |
 
 ---
 
@@ -1002,6 +1003,20 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 ---
 
+## Utility — Triple Buffer
+
+### test_triple_buffer.cpp — 10 tests
+
+**What it tests:** `TripleBuffer<T>` lock-free latest-value handoff between producer and consumer threads.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `TripleBufferTest` | 10 | Default construction, single write/read, multiple writes (reader gets latest), no-new-data returns false, concurrent producer-consumer stress, move-only types, large payloads, write-never-blocks guarantee, atomic CAS correctness (no torn reads), reset/clear semantics |
+
+**Key files under test:** `util/triple_buffer.h`
+
+---
+
 ## Utility — Diagnostics
 
 ### test_diagnostic.cpp — 12 tests
@@ -1176,4 +1191,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1031 unit tests across 49 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #210: UKF radar fusion. Issue #212: GazeboRadarBackend + radar HAL thread. Issue #222: perception-driven obstacle avoidance scenario. All 1031 tests passing.*
+*Last updated: March 2026 — 1041 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #224: TripleBuffer replaces SPSC rings in perception fusion pipeline (10 new tests). All 1041 tests passing.*

@@ -22,10 +22,10 @@
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
 #include "util/signal_handler.h"
-#include "util/spsc_ring.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
+#include "util/triple_buffer.h"
 
 #include <algorithm>
 #include <atomic>
@@ -40,14 +40,13 @@ static std::atomic<bool> g_running{true};
 
 // ── Inference thread ────────────────────────────────────────
 static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
-                             drone::SPSCRing<Detection2DList, 4>&             output_queue,
+                             drone::TripleBuffer<Detection2DList>&            output_queue,
                              std::atomic<bool>& running, IDetector& detector) {
     spdlog::info("[Inference] Thread started — using detector: {}", detector.name());
 
     auto hb = drone::util::ScopedHeartbeat("inference", true);
 
-    uint64_t frame_count      = 0;
-    uint64_t queue_drop_count = 0;
+    uint64_t frame_count = 0;
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::VideoFrame frame;
@@ -69,41 +68,36 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
             diag.add_metric("Detect", "n_detections",
                             static_cast<double>(det_list.detections.size()));
 
-            if (!output_queue.try_push(std::move(det_list))) {
-                ++queue_drop_count;
-                diag.add_warning("Queue", "inference→tracker SPSC overflow (drop #" +
-                                              std::to_string(queue_drop_count) + ")");
-            }
+            output_queue.write(std::move(det_list));
             ++frame_count;
 
             if (diag.has_warnings() || diag.has_errors()) {
                 diag.log_summary("Inference");
             } else if (frame_count % 100 == 0) {
-                spdlog::info("[Inference] Processed {} frames ({} queue drops)", frame_count,
-                             queue_drop_count);
+                spdlog::info("[Inference] Processed {} frames (writes={})", frame_count,
+                             output_queue.write_count());
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
-    spdlog::info("[Inference] Thread stopped — {} frames, {} queue drops", frame_count,
-                 queue_drop_count);
+    spdlog::info("[Inference] Thread stopped — {} frames, {} writes", frame_count,
+                 output_queue.write_count());
 }
 
 // ── Tracker thread ──────────────────────────────────────────
-static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
-                           drone::SPSCRing<TrackedObjectList, 4>& output_queue,
+static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
+                           drone::TripleBuffer<TrackedObjectList>& output_queue,
                            std::atomic<bool>& running, ITracker& tracker) {
     spdlog::info("[Tracker] Thread started — backend: {}", tracker.name());
 
     auto hb = drone::util::ScopedHeartbeat("tracker", true);
 
-    constexpr uint64_t kStatusInterval  = 50;  // Log tracker status every N cycles
-    uint64_t           cycle_count      = 0;
-    uint64_t           queue_drop_count = 0;
+    constexpr uint64_t kStatusInterval = 50;  // Log tracker status every N cycles
+    uint64_t           cycle_count     = 0;
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
-        auto det_opt = input_queue.try_pop();
+        auto det_opt = input_queue.read();
         if (det_opt) {
             drone::util::FrameDiagnostics diag(det_opt->frame_sequence);
 
@@ -115,17 +109,13 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
             diag.add_metric("Track", "n_tracks", static_cast<double>(tracked.objects.size()));
 
             if (!tracked.objects.empty()) {
-                if (!output_queue.try_push(std::move(tracked))) {
-                    ++queue_drop_count;
-                    diag.add_warning("Queue", "tracker→fusion SPSC overflow (drop #" +
-                                                  std::to_string(queue_drop_count) + ")");
-                }
+                output_queue.write(std::move(tracked));
             }
             ++cycle_count;
 
             if (cycle_count % kStatusInterval == 0) {
-                spdlog::info("[Tracker] Status: backend={}, cycles={}, drops={}", tracker.name(),
-                             cycle_count, queue_drop_count);
+                spdlog::info("[Tracker] Status: backend={}, cycles={}, writes={}", tracker.name(),
+                             cycle_count, output_queue.write_count());
             }
 
             if (diag.has_warnings() || diag.has_errors()) {
@@ -135,8 +125,8 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
-    spdlog::info("[Tracker] Thread stopped — {} cycles, {} queue drops", cycle_count,
-                 queue_drop_count);
+    spdlog::info("[Tracker] Thread stopped — {} cycles, {} writes", cycle_count,
+                 output_queue.write_count());
 }
 
 // ── Fusion thread ───────────────────────────────────────────
@@ -144,12 +134,13 @@ static void tracker_thread(drone::SPSCRing<Detection2DList, 4>&   input_queue,
 //             Used to rotate camera-frame detections into world frame.
 // radar_sub — IPC subscriber for radar detections (RadarDetectionList).
 //             Fed into fusion engine for camera+radar multi-sensor fusion.
-static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                   tracked_queue,
+static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&                  tracked_queue,
                           drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
                           drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
                           drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
-                          std::atomic<bool>& running, IFusionEngine& engine) {
-    spdlog::info("[Fusion] Thread started — backend: {}", engine.name());
+                          std::atomic<bool>& running, IFusionEngine& engine, int fusion_rate_hz) {
+    spdlog::info("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
+                 fusion_rate_hz);
 
     auto hb = drone::util::ScopedHeartbeat("fusion", true);
 
@@ -158,6 +149,10 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
     // Cached latest drone pose (world frame: North, East, Up)
     drone::ipc::Pose latest_pose{};
     bool             has_pose = false;
+
+    // Rate limiting — sleep_until for consistent cadence
+    const auto period    = std::chrono::milliseconds(1000 / fusion_rate_hz);
+    auto       next_tick = std::chrono::steady_clock::now();
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -183,8 +178,8 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
             }
         }
 
-        // Fuse when tracking data arrives
-        if (auto topt = tracked_queue.try_pop()) {
+        // Fuse when tracking data arrives (latest-value, never stale)
+        if (auto topt = tracked_queue.read()) {
             drone::util::FrameDiagnostics diag(fusion_count);
 
             auto fused = [&]() {
@@ -277,11 +272,14 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
                 spdlog::info("[Fusion] {} cycles, {} fused objects this frame", fusion_count,
                              fused.objects.size());
             }
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
+
+        // Rate-limited sleep — consistent cadence regardless of work done
+        next_tick += period;
+        std::this_thread::sleep_until(next_tick);
     }
-    spdlog::info("[Fusion] Thread stopped after {} cycles", fusion_count);
+    spdlog::info("[Fusion] Thread stopped after {} cycles (reads={})", fusion_count,
+                 tracked_queue.read_count());
 }
 
 // ── Radar HAL read thread ──────────────────────────────────
@@ -415,9 +413,9 @@ int main(int argc, char* argv[]) {
         spdlog::info("[Perception] Radar disabled (perception.radar.enabled=false)");
     }
 
-    // ── Internal SPSC queues ────────────────────────────────
-    drone::SPSCRing<Detection2DList, 4>   inference_to_tracker;
-    drone::SPSCRing<TrackedObjectList, 4> tracker_to_fusion;
+    // ── Internal triple buffers (lock-free latest-value handoff) ──
+    drone::TripleBuffer<Detection2DList>   inference_to_tracker;
+    drone::TripleBuffer<TrackedObjectList> tracker_to_fusion;
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread, std::ref(*video_sub), std::ref(inference_to_tracker),
@@ -433,9 +431,10 @@ int main(int argc, char* argv[]) {
     auto radar_sub =
         bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
 
+    const int   fusion_rate_hz = std::clamp(cfg.get<int>("perception.fusion.rate_hz", 30), 1, 100);
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
-                         std::ref(*fusion_engine));
+                         std::ref(*fusion_engine), fusion_rate_hz);
 
     // Launch radar read thread if HAL is active and publisher is ready
     std::thread t_radar;

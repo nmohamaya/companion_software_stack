@@ -2529,4 +2529,37 @@ The `ObstacleAvoider3D` potential field is minimized (`repulsive_gain: 0.1`, `in
 
 ---
 
-_Last updated after Improvement #54 (perception-driven avoidance scenario, Issue #222). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1031 tests, 18 scenarios._
+### Improvement #55 — Fix Perception Fusion Pipeline: SPSC Overflow + Radar Optimization (Issue #224)
+
+**Date:** 2026-03-22
+**Category:** Bug Fix / Performance
+**Files Added:**
+
+- `common/util/include/util/triple_buffer.h`
+- `tests/test_triple_buffer.cpp`
+
+**Files Modified:**
+
+- `process2_perception/src/main.cpp` — replaced both SPSC rings with `TripleBuffer`, added fusion rate limiting (30 Hz configurable)
+- `process2_perception/src/ukf_fusion_engine.cpp` — hoisted Cholesky decomposition out of inner radar association loop, added range pre-gate
+- `config/scenarios/18_perception_avoidance.json` — enabled radar (camera+radar fusion)
+- `config/default.json` — added `perception.fusion.rate_hz: 30`
+- `tests/CMakeLists.txt` — registered `test_triple_buffer`
+- `docs/BUG_FIXES.md` — Fix #42
+- `tests/TESTS.md` — added triple buffer test entry, updated counts
+- `docs/PROGRESS.md` — this entry
+- `docs/ROADMAP.md` — marked #224 done
+
+**What:** Fixed a critical perception fusion pipeline bottleneck where the SPSC ring between the tracker and fusion threads was dropping 58% of tracked frames (22K+ frames lost during Scenario 18). The root cause was twofold: (1) SPSC rings are the wrong primitive for latest-value handoff — they drop when full; (2) the UKF radar association loop recomputed Cholesky decomposition `O(N*M)` times instead of `O(N)`.
+
+The fix introduces a lock-free `TripleBuffer<T>` that provides wait-free latest-value semantics — the writer always succeeds (overwrites back buffer), the reader always gets the most recent complete value, neither side ever blocks or drops. A subtle race condition was caught and fixed during implementation: the original design used separate atomics for `new_data_` and `latest_idx_`, creating a window where the reader could miss updates. The fix atomically couples both into a single CAS operation on `latest_idx_`.
+
+The UKF Cholesky decomposition was hoisted out of the inner association loop (computed once per track instead of once per track-detection pair), and a range pre-gate was added to skip obviously distant radar detections before computing full Mahalanobis distance.
+
+**Why:** Scenario 18 (perception-driven avoidance with camera+radar fusion) exposed the bottleneck — the fusion thread's output rate was far below the tracker's input rate, meaning the drone was making avoidance decisions on stale perception data. This is a safety-critical issue: stale fusion output means delayed obstacle detection.
+
+**Test count:** 1031 → 1041 (+10 TripleBuffer unit tests)
+
+---
+
+_Last updated after Improvement #55 (perception fusion pipeline fix, Issue #224). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1041 tests, 18 scenarios._
