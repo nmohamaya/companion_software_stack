@@ -138,6 +138,12 @@
             "min_speed_mps": 1.0,
             "snap_search_radius": 8
         },
+        "occupancy_grid": {
+            "resolution_m": 0.5,
+            "inflation_radius_m": 1.5,
+            "dynamic_obstacle_ttl_s": 3.0,
+            "min_confidence": 0.3
+        },
         "obstacle_avoider": {
             "backend": "potential_field_3d"
         },
