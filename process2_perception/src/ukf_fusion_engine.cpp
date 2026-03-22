@@ -397,10 +397,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 }
             }
             if (filtered > 0) {
-                spdlog::debug("[UKF] Ground filter: rejected {}/{} radar detections "
-                              "(alt < {:.1f}m)",
-                              filtered, radar_dets_.num_detections,
-                              radar_cfg_.min_object_altitude_m);
+                spdlog::info("[UKF] Ground filter: rejected {}/{} radar detections "
+                             "(alt < {:.1f}m)",
+                             filtered, radar_dets_.num_detections,
+                             radar_cfg_.min_object_altitude_m);
             }
         }
 
