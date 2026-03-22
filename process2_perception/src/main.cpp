@@ -289,13 +289,26 @@ static void fusion_thread(drone::SPSCRing<TrackedObjectList, 4>&                
 static void radar_read_thread(drone::hal::IRadar&                                     radar,
                               drone::ipc::IPublisher<drone::ipc::RadarDetectionList>& radar_pub,
                               std::atomic<bool>& running, int update_rate_hz) {
-    spdlog::info("[Radar] Read thread started — backend: {}, rate: {} Hz", radar.name(),
-                 update_rate_hz);
+    // Clamp update rate to a sane range to prevent tight loops or division issues
+    constexpr int kMinRateHz        = 1;
+    constexpr int kMaxRateHz        = 1000;
+    int           effective_rate_hz = update_rate_hz;
+    if (effective_rate_hz < kMinRateHz || effective_rate_hz > kMaxRateHz) {
+        spdlog::warn("[Radar] Invalid update rate {} Hz — clamping to [{}, {}]", update_rate_hz,
+                     kMinRateHz, kMaxRateHz);
+        effective_rate_hz = std::clamp(effective_rate_hz, kMinRateHz, kMaxRateHz);
+    }
+
+    const auto period =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(1)) /
+        effective_rate_hz;
+
+    spdlog::info("[Radar] Read thread started — backend: {}, rate: {} Hz, period: {} ms",
+                 radar.name(), effective_rate_hz, period.count());
 
     auto hb = drone::util::ScopedHeartbeat("radar_read", true);
 
-    const auto period     = std::chrono::milliseconds(1000 / std::max(update_rate_hz, 1));
-    uint64_t   read_count = 0;
+    uint64_t read_count = 0;
 
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -423,11 +436,13 @@ int main(int argc, char* argv[]) {
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
                          std::ref(*fusion_engine));
 
-    // Launch radar read thread if HAL is active
+    // Launch radar read thread if HAL is active and publisher is ready
     std::thread t_radar;
-    if (radar && radar_pub) {
+    if (radar && radar_pub && radar_pub->is_ready()) {
         t_radar = std::thread(radar_read_thread, std::ref(*radar), std::ref(*radar_pub),
                               std::ref(g_running), radar_update_rate_hz);
+    } else if (radar) {
+        spdlog::warn("[Radar] HAL active but publisher not ready — radar read thread disabled");
     }
 
     // ── Thread watchdog + health publisher ──────────────────
