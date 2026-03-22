@@ -557,6 +557,13 @@
 | ~~[#158](https://github.com/nmohamaya/companion_software_stack/issues/158)~~ | ~~D* Lite Incremental Path Planner~~ ✅ | Feature / Refactor | **Closed** (Improvement #43) |
 | ~~[#163](https://github.com/nmohamaya/companion_software_stack/issues/163)~~ | ~~ByteTrack Multi-Object Tracker~~ ✅ | Feature | **Closed** (Improvement #44, PR #165) |
 | [#167](https://github.com/nmohamaya/companion_software_stack/issues/167) | Scenario configs for ByteTrack + new perception tracking scenario | Bug fix / Testing | **Open** |
+| ~~[#210](https://github.com/nmohamaya/companion_software_stack/issues/210)~~ | ~~UKF Radar Fusion — radar measurement model + association~~ ✅ | Feature | **Closed** (PR #218) |
+| ~~[#211](https://github.com/nmohamaya/companion_software_stack/issues/211)~~ | ~~Remove Thermal Camera — replaced by radar sensor~~ ✅ | Refactor | **Closed** (PR #214) |
+| ~~[#212](https://github.com/nmohamaya/companion_software_stack/issues/212)~~ | ~~Gazebo Radar Backend — gpu_lidar HAL + radar HAL thread~~ ✅ | Feature | **Closed** (PRs #218, #219, #221) |
+| [#217](https://github.com/nmohamaya/companion_software_stack/issues/217) | NVIDIA EGL broader scope — hardware deployment | Reliability | **Open** (deferred to hardware phase) |
+| [#220](https://github.com/nmohamaya/companion_software_stack/issues/220) | P3 slam_vio_nav unclamped loop rates | Bug | **Open** |
+| ~~[#222](https://github.com/nmohamaya/companion_software_stack/issues/222)~~ | ~~Perception-driven obstacle avoidance scenario (no HD-map)~~ ✅ | Testing | **Closed** (Improvement #54) |
+| ~~[#224](https://github.com/nmohamaya/companion_software_stack/issues/224)~~ | ~~Fix Perception Fusion Pipeline — SPSC Overflow + Radar Fusion Bottleneck~~ ✅ | Bug Fix / Perf | **Closed** (Improvement #55, Fix #42) |
 
 ---
 

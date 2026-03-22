@@ -86,6 +86,7 @@
             "num_targets": 3
         },
         "fusion": {
+            "rate_hz": 30,
             "camera_weight": 1.0,
             "camera_height_m": 1.5,
             "depth": {

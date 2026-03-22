@@ -1,0 +1,94 @@
+{
+    "_comment": "Scenario 18: Perception-Driven Obstacle Avoidance — no HD-map, D* Lite dynamic layer only",
+    "scenario": {
+        "name": "perception_avoidance",
+        "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity, and D* Lite replans dynamically via update_from_objects(). Validates the full multi-sensor perception→planning loop for unknown environments. ObstacleAvoider3D is minimized so D* Lite is the primary avoidance mechanism.",
+        "tier": 2,
+        "timeout_s": 180,
+        "requires_gazebo": true
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 5.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 2.0,
+                "influence_radius_m": 3.0,
+                "repulsive_gain": 1.0,
+                "max_correction_mps": 2.0,
+                "_comment": "Moderate reactive avoidance as safety net — D* Lite dynamic layer is primary, but potential field deflects if replan is late"
+            },
+            "occupancy_grid": {
+                "dynamic_obstacle_ttl_s": 3.0,
+                "resolution_m": 1.0,
+                "_comment": "3s TTL keeps detected obstacles in the grid long enough for replanning"
+            },
+            "static_obstacles": [],
+            "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding detected obstacles"
+            },
+            "waypoints": [
+                {"x": -2, "y": 10, "z": 4, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false, "_comment": "Fly north — RED Gz(7,1)=our(1,7) visible to east. Drone should detect and mark in grid."},
+                {"x": 5,  "y": 12, "z": 4, "yaw": 0,     "speed": 2.0, "payload_trigger": false, "_comment": "Fly east — path passes 3m from RED. D* Lite should route around if grid cell is occupied."},
+                {"x": 12, "y": 10, "z": 4, "yaw": -0.46, "speed": 2.0, "payload_trigger": false, "_comment": "Continue east — GREEN Gz(8,8)=our(8,8) and YELLOW Gz(15,7)=our(7,15) visible ahead/side."},
+                {"x": 12, "y": 2,  "z": 4, "yaw": -1.57, "speed": 2.0, "payload_trigger": false, "_comment": "Fly south — clear corridor east of obstacle field."},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36, "speed": 2.0, "payload_trigger": false, "_comment": "Return home — ORANGE Gz(4,4)=our(4,4) near path, drone should route around."}
+            ],
+            "_comment_waypoints": "Waypoints route AROUND the obstacle field, not through it. Obstacles are visible from the flight path so the camera can detect them and populate the D* Lite grid. This validates detection+grid population without requiring instant reaction time."
+        },
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "confidence_threshold": 0.3,
+                "max_detections": 64
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "_comment": "ByteTrack two-stage association for robust obstacle tracking"
+            },
+            "radar": {
+                "backend": "gazebo",
+                "enabled": true,
+                "update_rate_hz": 20,
+                "_comment": "Radar enabled — camera+radar fusion validates full multi-sensor pipeline"
+            },
+            "fusion": {
+                "backend": "ukf",
+                "rate_hz": 30,
+                "radar": {
+                    "enabled": true,
+                    "_comment": "Camera+radar UKF fusion — validates full perception→planning pipeline"
+                }
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "Path planner: DStarLitePlanner",
+            "Obstacle avoider: ObstacleAvoider3D",
+            "backend: bytetrack",
+            "TAKEOFF",
+            "EXECUTING",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    }
+}

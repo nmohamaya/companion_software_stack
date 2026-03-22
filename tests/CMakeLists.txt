@@ -40,6 +40,9 @@ endfunction()
 # ── SPSC Ring tests ──────────────────────────────────────────
 add_drone_test(test_spsc_ring       test_spsc_ring.cpp)
 
+# ── Triple Buffer tests ─────────────────────────────────────
+add_drone_test(test_triple_buffer   test_triple_buffer.cpp)
+
 # ── Kalman tracker tests ─────────────────────────────────────
 add_drone_test(test_kalman_tracker  test_kalman_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
