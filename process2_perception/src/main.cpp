@@ -157,10 +157,10 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
 
-        // Drain latest pose (non-blocking — keep the most recent)
+        // Read latest pose (ZenohSubscriber is latest-value, not queue — single read)
         {
             drone::ipc::Pose p{};
-            while (pose_sub.receive(p)) {
+            if (pose_sub.receive(p)) {
                 latest_pose = p;
                 has_pose    = true;
             }
@@ -171,14 +171,10 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             engine.set_drone_altitude(static_cast<float>(latest_pose.translation[2]));
         }
 
-        // Drain latest radar detections (non-blocking — keep the most recent)
+        // Read latest radar detections (latest-value — single read)
         {
             drone::ipc::RadarDetectionList radar_list{};
-            bool                           got_radar = false;
-            while (radar_sub.receive(radar_list)) {
-                got_radar = true;
-            }
-            if (got_radar) {
+            if (radar_sub.receive(radar_list)) {
                 engine.set_radar_detections(radar_list);
             }
         }

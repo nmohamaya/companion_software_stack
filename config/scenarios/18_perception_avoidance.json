@@ -19,7 +19,8 @@
                 "influence_radius_m": 3.0,
                 "repulsive_gain": 1.0,
                 "max_correction_mps": 2.0,
-                "_comment": "Moderate reactive avoidance as safety net — D* Lite dynamic layer is primary, but potential field deflects if replan is late"
+                "vertical_gain": 0.0,
+                "_comment": "Lateral-only reactive avoidance — vertical_gain=0 prevents altitude runaway from objects below the drone. D* Lite dynamic layer is primary."
             },
             "occupancy_grid": {
                 "dynamic_obstacle_ttl_s": 3.0,

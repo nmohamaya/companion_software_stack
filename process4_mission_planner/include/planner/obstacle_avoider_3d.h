@@ -33,6 +33,7 @@ struct ObstacleAvoider3DConfig {
     float    max_correction_mps = 3.0f;            // max velocity correction per axis
     float    min_confidence     = 0.3f;            // minimum object confidence to consider
     float    prediction_dt_s    = 0.5f;            // look-ahead time for velocity-based prediction
+    float    vertical_gain      = 1.0f;            // scale factor for Z repulsion (0=lateral only)
     uint64_t max_age_ns         = 500'000'000ULL;  // max age of object data (500ms)
 };
 
@@ -56,6 +57,8 @@ public:
                                                 config_.min_confidence);
         config_.prediction_dt_s = cfg.get<float>(
             "mission_planner.obstacle_avoidance.prediction_dt_s", config_.prediction_dt_s);
+        config_.vertical_gain = cfg.get<float>("mission_planner.obstacle_avoidance.vertical_gain",
+                                               config_.vertical_gain);
         const int default_max_age_ms = static_cast<int>(config_.max_age_ns / 1'000'000ULL);
         int       max_age_ms         = cfg.get<int>("mission_planner.obstacle_avoidance.max_age_ms",
                                                     default_max_age_ms);
@@ -116,7 +119,7 @@ public:
                 // Direction: away from obstacle (negative of relative vector)
                 total_rep_x -= (dx / dist) * repulsion;
                 total_rep_y -= (dy / dist) * repulsion;
-                total_rep_z -= (dz / dist) * repulsion;
+                total_rep_z -= (dz / dist) * repulsion * config_.vertical_gain;
 
                 spdlog::debug("[Avoider3D] Obstacle at ({:.1f},{:.1f},{:.1f}), "
                               "dist={:.1f}m, rep={:.2f}",
