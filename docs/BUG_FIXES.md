@@ -1412,3 +1412,109 @@ The guard (`nvidia-smi` check) ensures these variables are only set on NVIDIA sy
 Existing scenarios (01–16) don't hit this because their patterns don't contain brackets.
 
 **Found by:** Scenario 17 reported "Log missing: [GazeboRadar] Subscribed to scan" even though `grep "GazeboRadar" combined.log` showed the line was present.
+
+---
+
+### Bug #38 — VIO Failure Scenario Triggers Unexpected Geofence Breach in Gazebo SITL
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (PR #218)
+**File:** `config/scenarios/16_vio_failure.json`
+
+**Bug:** The `vio_failure` scenario (scenario 16) passes consistently in Tier 1 (simulated backends) but fails intermittently in Tier 2 (Gazebo SITL). The failure is `FAULT_GEOFENCE_BREACH` appearing in logs, which the scenario's `log_must_not_contain` disallows.
+
+**Symptoms:**
+```
+✗ Log unexpectedly contains: FAULT_GEOFENCE_BREACH
+  First match:
+  [FaultMgr] Escalation: LOITER → RTL (reason: geofence breach) active_faults=[FAULT_GEOFENCE_BREACH]
+```
+
+**Root Cause:** When VIO quality is injected as degraded (quality=1), the mission planner enters LOITER. In Tier 1 with simulated backends, loiter holds position perfectly (simulated pose doesn't drift). In Gazebo SITL with real physics simulation, the drone drifts during loiter because the VIO system is actually degraded — PX4's position estimate becomes unreliable, and the drone slowly wanders. If it drifts far enough, it crosses the default geofence boundary (100×100m square centered at origin), triggering `FAULT_GEOFENCE_BREACH`.
+
+This is correct system behaviour — a drone with degraded VIO *should* drift, and the geofence *should* catch it. But the scenario's purpose is to test VIO fault detection and LOITER response, not geofence interaction.
+
+**Fix:** Added `"geofence": {"enabled": false}` to the scenario's `config_overrides` for `mission_planner`, with a comment explaining why:
+
+```json
+"geofence": {
+    "enabled": false,
+    "_comment": "Geofence disabled — VIO degradation causes SITL drift during loiter, which can cross default geofence boundaries. This scenario tests VIO fault handling, not geofence."
+}
+```
+
+**Lessons learned:**
+
+1. Tier 1 (simulated) and Tier 2 (Gazebo SITL) scenarios can behave differently due to physics simulation fidelity. A scenario that passes in Tier 1 may fail in Tier 2 for valid physical reasons.
+2. Fault injection scenarios should disable unrelated safety systems that could trigger secondary faults. The VIO failure scenario tests VIO fault handling — geofence is orthogonal and should be isolated.
+3. When a scenario fails only in Gazebo, check if the failure is caused by realistic physical effects (drift, latency, actuator lag) that the simulated backend doesn't model.
+
+**Found by:** Full Tier 2 Gazebo scenario suite run during radar integration validation (2026-03-22). Passed in Tier 1 (17/17) but failed in Tier 2 (16/17).
+
+---
+
+### Bug #39 — Radar Read Thread Tight Loop at Invalid Update Rates (#212)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (PR #218)
+**File:** `process2_perception/src/main.cpp`
+
+**Bug:** The radar read thread computed its sleep period as `milliseconds(1000 / std::max(update_rate_hz, 1))`. For update rates above 1000 Hz (e.g., from a misconfigured `perception.radar.update_rate_hz`), integer division produces `0ms`, causing a tight busy-loop that pins a CPU core at 100%. For rates of 0 or negative, `std::max` clamped to 1 Hz, but this was undocumented and not logged.
+
+**Root Cause:** No input validation or clamping on the `update_rate_hz` config parameter before computing the sleep period. Integer division of `1000 / rate` truncates to zero for rate > 1000.
+
+**Fix:** Added explicit clamping to `[1, 1000]` Hz with a warning log when the configured rate is out of range. Replaced the integer division with `std::chrono::seconds(1) / effective_rate_hz` for clearer intent. Added the effective rate and period to the startup log message.
+
+```cpp
+constexpr int kMinRateHz = 1;
+constexpr int kMaxRateHz = 1000;
+int effective_rate_hz = update_rate_hz;
+if (effective_rate_hz < kMinRateHz || effective_rate_hz > kMaxRateHz) {
+    spdlog::warn("[Radar] Invalid update rate {} Hz — clamping to [{}, {}]",
+                 update_rate_hz, kMinRateHz, kMaxRateHz);
+    effective_rate_hz = std::clamp(effective_rate_hz, kMinRateHz, kMaxRateHz);
+}
+const auto period = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::seconds(1)) / effective_rate_hz;
+```
+
+**Lessons learned:**
+
+1. Always validate config-driven loop rates before computing sleep periods — integer division can silently produce zero.
+2. Log the effective (post-clamp) value at startup so operators can spot misconfiguration without debugging.
+3. For safety-critical threads, prefer `std::chrono` duration arithmetic over manual `1000 / rate` calculations.
+
+**Found by:** Copilot code review on PR #218.
+
+---
+
+### Bug #40 — Radar Publisher Readiness Not Checked Before Thread Launch (#212)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (PR #218)
+**File:** `process2_perception/src/main.cpp`
+
+**Bug:** The radar read thread was launched whenever `radar` (HAL pointer) and `radar_pub` (publisher pointer) were both non-null. However, `bus.advertise()` can return a publisher where `is_ready() == false` (e.g., if the Zenoh `declare_publisher` call fails due to session issues). In this case, the thread would start, poll the radar HAL, and call `radar_pub.publish()` on every read — but all publishes silently no-op because the underlying Zenoh publisher is not declared. This wastes CPU and gives operators a false impression that radar data is flowing.
+
+**Root Cause:** The launch condition only checked pointer validity (`radar && radar_pub`) but not publisher operational readiness (`radar_pub->is_ready()`).
+
+**Fix:** Added `radar_pub->is_ready()` to the launch condition. If the HAL is active but the publisher isn't ready, a warning is logged and the thread is not started:
+
+```cpp
+if (radar && radar_pub && radar_pub->is_ready()) {
+    t_radar = std::thread(radar_read_thread, ...);
+} else if (radar) {
+    spdlog::warn("[Radar] HAL active but publisher not ready — radar read thread disabled");
+}
+```
+
+**Lessons learned:**
+
+1. Always check `is_ready()` on IPC publishers before launching threads that depend on them. A non-null publisher pointer does not guarantee it can publish.
+2. Zenoh publisher declaration can fail silently (session closed, resource limit, network partition). The `is_ready()` check catches this.
+3. Log clearly when a subsystem is disabled due to infrastructure failure — silent degradation is harder to diagnose than explicit warnings.
+
+**Found by:** Copilot code review on PR #218.
