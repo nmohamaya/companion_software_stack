@@ -369,6 +369,37 @@ Same treatment applied to `Detection2D` (8 fields) and `FusedObject` (11 fields)
 
 ---
 
+### Fix #42 — Perception Fusion SPSC Overflow Dropping 22K+ Tracked Frames (Issue #224)
+
+**Date:** 2026-03-22
+**Severity:** Critical
+**Status:** FIXED (PR for Issue #224)
+**Files:** `process2_perception/src/main.cpp`, `common/util/include/util/triple_buffer.h`, `process2_perception/src/ukf_fusion_engine.cpp`
+
+**Bug:** The SPSC ring buffer between the tracker thread and the fusion thread in P2 (perception) dropped 58% of tracked frames (22K+ frames lost during Scenario 18 testing). The fusion thread could not keep up with the tracker's output rate because the UKF radar association loop was computing Cholesky decomposition `O(n_tracks x n_detections)` times, creating a bottleneck that caused the fixed-size ring to overflow silently.
+
+**Root Cause:** Two compounding issues:
+
+1. **SPSC ring overflow:** The fixed-capacity SPSC ring between tracker and fusion was a poor fit for a "latest value" handoff pattern. When the consumer (fusion) fell behind, the producer (tracker) had no choice but to drop frames — there was no backpressure mechanism, and the ring silently rejected pushes when full.
+2. **UKF Cholesky bottleneck:** The radar measurement association loop in `ukf_fusion_engine.cpp` recomputed the Cholesky decomposition of the innovation covariance matrix for every `(track, detection)` pair. With N tracks and M detections, this was `O(N*M)` Cholesky calls when only `O(N)` were needed (one per track, since the track covariance doesn't change within a single association pass).
+
+**Fix:**
+
+1. **Replaced SPSC rings with lock-free triple buffer** (`common/util/include/util/triple_buffer.h`). The triple buffer provides wait-free latest-value semantics: the writer always succeeds (overwrites the back buffer), and the reader always gets the most recent complete value. No data is dropped, and neither side blocks. A subtle race condition was identified and fixed during implementation — the original design used separate atomics for `new_data_` and `latest_idx_`, which could cause the reader to miss updates or read stale data. The fix couples both into a single atomic CAS on `latest_idx_`.
+2. **Hoisted Cholesky decomposition** out of the inner radar association loop in `ukf_fusion_engine.cpp` — now computed once per track per fusion cycle.
+3. **Added range pre-gate** to skip radar detections that are obviously too far from a track before computing the full Mahalanobis distance.
+4. **Added configurable fusion rate limiting** (default 30 Hz via `perception.fusion.rate_hz`) to prevent the fusion thread from spinning faster than needed.
+
+**Lessons learned:**
+
+1. SPSC rings are the wrong primitive for "latest value" handoff between threads running at different rates. A triple buffer (or similar latest-value container) is the correct abstraction — it never blocks and never drops.
+2. When profiling shows an inner-loop bottleneck, check for hoistable invariants. The Cholesky decomposition depended only on the track's covariance, not on which detection was being tested.
+3. Race conditions involving multiple atomics that must be consistent require either a single wider atomic or a CAS loop — two separate atomics with independent stores are never sequentially consistent.
+
+**Found by:** Scenario 18 (perception_avoidance) testing — fusion output rate was far below expected, and frame drop counters showed 58% loss.
+
+---
+
 ## SLAM / VIO (Process 3)
 
 ---
