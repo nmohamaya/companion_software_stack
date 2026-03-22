@@ -65,7 +65,9 @@
                 "rate_hz": 30,
                 "radar": {
                     "enabled": true,
-                    "_comment": "Camera+radar UKF fusion — validates full perception→planning pipeline"
+                    "ground_filter_enabled": true,
+                    "min_object_altitude_m": 0.3,
+                    "_comment": "Camera+radar UKF fusion with ground-plane filter — rejects radar returns below 0.3m AGL"
                 }
             }
         }
@@ -78,6 +80,7 @@
             "Path planner: DStarLitePlanner",
             "Obstacle avoider: ObstacleAvoider3D",
             "backend: bytetrack",
+            "Ground filter: rejected",
             "TAKEOFF",
             "EXECUTING",
             "Mission complete"

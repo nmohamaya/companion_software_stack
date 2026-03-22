@@ -166,6 +166,11 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             }
         }
 
+        // Pass drone altitude for radar ground-plane filtering
+        if (has_pose) {
+            engine.set_drone_altitude(static_cast<float>(latest_pose.translation[2]));
+        }
+
         // Drain latest radar detections (non-blocking — keep the most recent)
         {
             drone::ipc::RadarDetectionList radar_list{};

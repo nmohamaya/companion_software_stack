@@ -355,6 +355,11 @@ void UKFFusionEngine::set_radar_detections(const drone::ipc::RadarDetectionList&
     has_radar_data_ = true;
 }
 
+void UKFFusionEngine::set_drone_altitude(float altitude_m) {
+    drone_altitude_m_ = altitude_m;
+    has_altitude_     = true;
+}
+
 FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     FusedObjectList output;
     output.timestamp_ns   = tracked.timestamp_ns;
@@ -376,6 +381,28 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
     if (has_radar_data_) {
         radar_matched.resize(radar_dets_.num_detections, false);
+
+        // Ground-plane filter: reject radar detections that resolve below a minimum
+        // altitude threshold.  object_alt = drone_alt + range * sin(elevation).
+        // Ground returns have negative elevation and resolve near Z=0.
+        if (radar_cfg_.ground_filter_enabled && has_altitude_) {
+            int filtered = 0;
+            for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
+                const auto& rdet       = radar_dets_.detections[ri];
+                const float object_alt = drone_altitude_m_ +
+                                         rdet.range_m * std::sin(rdet.elevation_rad);
+                if (object_alt < radar_cfg_.min_object_altitude_m) {
+                    radar_matched[ri] = true;  // skip in association loop
+                    ++filtered;
+                }
+            }
+            if (filtered > 0) {
+                spdlog::debug("[UKF] Ground filter: rejected {}/{} radar detections "
+                              "(alt < {:.1f}m)",
+                              filtered, radar_dets_.num_detections,
+                              radar_cfg_.min_object_altitude_m);
+            }
+        }
 
         // All UKFs share the same R_radar — grab from any existing filter or
         // create a temporary to get the noise matrix.
@@ -535,6 +562,10 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                                                          radar_cfg.velocity_std_mps);
             radar_cfg.gate_threshold   = cfg->get<float>("perception.fusion.radar.gate_threshold",
                                                          radar_cfg.gate_threshold);
+            radar_cfg.ground_filter_enabled = cfg->get<bool>(
+                "perception.fusion.radar.ground_filter_enabled", radar_cfg.ground_filter_enabled);
+            radar_cfg.min_object_altitude_m = cfg->get<float>(
+                "perception.fusion.radar.min_object_altitude_m", radar_cfg.min_object_altitude_m);
         }
         return std::make_unique<UKFFusionEngine>(calib, radar_cfg, radar_enabled);
     }

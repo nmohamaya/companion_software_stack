@@ -45,6 +45,10 @@ public:
     /// Provide radar detections for the next fuse() call.
     /// Default no-op — only UKFFusionEngine uses radar data.
     virtual void set_radar_detections(const drone::ipc::RadarDetectionList& /*detections*/) {}
+
+    /// Provide current drone altitude (AGL) for radar ground-plane filtering.
+    /// Default no-op — only UKFFusionEngine uses altitude data.
+    virtual void set_drone_altitude(float /*altitude_m*/) {}
 };
 
 /// Factory: create a fusion engine from a backend name.

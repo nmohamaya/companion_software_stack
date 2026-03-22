@@ -2562,4 +2562,26 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #55 (perception fusion pipeline fix, Issue #224). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1041 tests, 18 scenarios._
+### Improvement #56 — Radar ground-plane filter + avoider dead zone fix (Issue #225)
+
+**Date:** 2026-03-22
+**Category:** Feature / Bug Fix
+**Files Modified:**
+
+- `process2_perception/include/perception/ifusion_engine.h` — added ground-plane filter interface
+- `process2_perception/include/perception/ukf_fusion_engine.h` — ground-plane filter implementation
+- `process2_perception/src/ukf_fusion_engine.cpp` — radar ground-plane elevation filter rejects detections below configurable AGL threshold
+- `process2_perception/src/main.cpp` — wired ground filter config
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — fixed dead zone threshold (0.1m → 0.01m)
+- `config/default.json` — added ground filter elevation threshold parameter
+- `config/scenarios/18_perception_avoidance.json` — updated for ground filter testing
+
+**What:** Radar ground-plane elevation filter rejects detections below 0.3m AGL before UKF association. This prevents ground clutter from entering the fusion pipeline and generating false obstacle tracks. Avoider dead zone fix changes the minimum distance threshold from 0.1m to 0.01m, ensuring maximum repulsion force at close range instead of zero force.
+
+**Why:** Scenario 18 Gazebo SITL testing revealed two issues: (1) radar ground returns were creating phantom obstacles that disrupted path planning, and (2) the obstacle avoider applied zero repulsion when obstacles were closer than 0.1m — at the most critical distances, the drone got no push-away force. The dead zone bug was a safety issue: the inverse-square repulsion formula only needs divide-by-zero protection at ~0.01m, not 0.1m.
+
+**Test count:** 1041 → 1045 (+3 ground filter tests in test_fusion_engine.cpp, +1 dead zone test in test_obstacle_avoider_3d.cpp)
+
+---
+
+_Last updated after Improvement #56 (radar ground-plane filter + avoider dead zone fix, Issue #225). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1045 tests, 18 scenarios._
