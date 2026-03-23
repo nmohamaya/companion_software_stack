@@ -337,7 +337,12 @@ Eigen::Matrix3f ObjectUKF::position_covariance() const {
 // ═══════════════════════════════════════════════════════════
 UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseConfig& radar_cfg,
                                  bool radar_enabled)
-    : calib_(calib), radar_cfg_(radar_cfg), radar_enabled_(radar_enabled) {}
+    : calib_(calib), radar_cfg_(radar_cfg), radar_enabled_(radar_enabled) {
+    spdlog::info("[UKF] radar_enabled={}, ground_filter_enabled={}, ground_filter_alt_m={:.2f}, "
+                 "altitude_gate_m={:.1f}, gate_threshold={:.1f}",
+                 radar_enabled_, radar_cfg_.ground_filter_enabled, radar_cfg_.min_object_altitude_m,
+                 radar_cfg_.altitude_gate_m, radar_cfg_.gate_threshold);
+}
 
 float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
     const float fy = calib_.camera_intrinsics(1, 1);
