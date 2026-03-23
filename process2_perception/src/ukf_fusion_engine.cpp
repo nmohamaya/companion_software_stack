@@ -404,18 +404,22 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             }
         }
 
-        // All UKFs share the same R_radar — grab from any existing filter or
-        // create a temporary to get the noise matrix.
-        if (!filters_.empty()) {
-            const auto& R_radar = filters_.begin()->second.radar_noise();
-            radar_llt.compute(R_radar);
-            radar_llt_ok = (radar_llt.info() == Eigen::Success);
-            if (!radar_llt_ok) {
-                // Precompute diagonal inverse fallback
-                const auto& diag = R_radar.diagonal();
-                for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
-                    if (diag(d) > 0.0f) R_diag_inv(d) = 1.0f / diag(d);
-                }
+        // All UKFs share the same R_radar (diagonal, built from radar_cfg_).
+        // Build it directly from config so it's available even on the first
+        // frame when filters_ is still empty.
+        ObjectUKF::RadarMeasMat R_radar = ObjectUKF::RadarMeasMat::Zero();
+        R_radar(0, 0)                   = radar_cfg_.range_std_m * radar_cfg_.range_std_m;
+        R_radar(1, 1)                   = radar_cfg_.azimuth_std_rad * radar_cfg_.azimuth_std_rad;
+        R_radar(2, 2) = radar_cfg_.elevation_std_rad * radar_cfg_.elevation_std_rad;
+        R_radar(3, 3) = radar_cfg_.velocity_std_mps * radar_cfg_.velocity_std_mps;
+
+        radar_llt.compute(R_radar);
+        radar_llt_ok = (radar_llt.info() == Eigen::Success);
+        if (!radar_llt_ok) {
+            // Precompute diagonal inverse fallback
+            const auto& diag = R_radar.diagonal();
+            for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
+                if (diag(d) > 0.0f) R_diag_inv(d) = 1.0f / diag(d);
             }
         }
     }
