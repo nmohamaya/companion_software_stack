@@ -2634,4 +2634,32 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #58 (occupancy grid config wiring + avoidance tuning, Issue #228). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1048 tests, 18 scenarios._
+### Improvement #59 — Radar Fusion Fix: FOV, Ground Filter, Altitude Gate, Path-Aware Avoider (Issue #229)
+
+**Date:** 2026-03-23
+**Category:** Bug Fix / Feature
+**Files Modified:**
+
+- `sim/models/x500_companion/model.sdf` — radar pitch -5° downward tilt, vertical samples 8→16, vertical FOV ±7.5°→±20°
+- `common/hal/include/hal/gazebo_radar.h` — HAL-level ground filter: computes `object_alt = drone_altitude + range*sin(elevation)`, rejects below threshold
+- `process2_perception/include/perception/ukf_fusion_engine.h` — added `altitude_gate_m` to `RadarNoiseConfig`
+- `process2_perception/src/ukf_fusion_engine.cpp` — altitude gate logic: rejects radar-track associations where `|radar_z - track_z| > altitude_gate_m`
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — path-aware mode: strips backward repulsion opposing planned direction
+- `config/default.json` — added `fov_elevation_rad`, `ground_filter_alt_m`, `altitude_gate_m` defaults
+- `config/scenarios/18_perception_avoidance.json` — re-enabled avoider (gain 0→1), added path_aware, ground filter, altitude gate config
+- `tests/test_fusion_engine.cpp` — 3 new altitude gate tests
+- `tests/test_obstacle_avoider_3d.cpp` — 4 new path-aware avoider tests, added `path_aware=false` to vertical gain tests
+
+**What:** Fixed radar sensor fusion degrading obstacle avoidance (camera-only = perfect; camera+radar = clips obstacles). Three root causes:
+
+1. **Gazebo radar FOV too narrow:** Beams missed obstacle tops at 5m altitude. Fix: wider FOV (±20°), more vertical samples (16), downward tilt (-5°).
+2. **Ground returns corrupt UKF tracks:** Radar beams reflecting off the ground plane entered fusion as false obstacle positions. Fix: HAL-level ground filter using drone altitude from odometry + range*sin(elevation), rejecting returns below 0.5m AGL. UKF altitude gate (body-frame Z consistency check) as second line of defense.
+3. **Reactive avoider fights D* Lite:** Inverse-square repulsion pushed drone backward along planned path. Fix: path-aware mode strips opposing repulsion component, leaving only lateral nudge perpendicular to planned trajectory.
+
+**Why:** Issue #228 identified the radar degrades avoidance but could only work around it (disabled avoider, raised ground filter threshold). This fix addresses all three root causes, allowing the full camera+radar+reactive avoider stack to operate together. D* Lite handles macro rerouting, path-aware avoider handles micro lateral nudges.
+
+**Test count:** 1050 → 1057 (+3 altitude gate tests, +4 path-aware avoider tests)
+
+---
+
+_Last updated after Improvement #59 (radar fusion fix, Issue #229). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1057 tests, 18 scenarios._

@@ -397,25 +397,29 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 }
             }
             if (filtered > 0) {
-                spdlog::info("[UKF] Ground filter: rejected {}/{} radar detections "
-                             "(alt < {:.1f}m)",
-                             filtered, radar_dets_.num_detections,
-                             radar_cfg_.min_object_altitude_m);
+                spdlog::debug("[UKF] Ground filter: rejected {}/{} radar detections "
+                              "(alt < {:.1f}m)",
+                              filtered, radar_dets_.num_detections,
+                              radar_cfg_.min_object_altitude_m);
             }
         }
 
-        // All UKFs share the same R_radar — grab from any existing filter or
-        // create a temporary to get the noise matrix.
-        if (!filters_.empty()) {
-            const auto& R_radar = filters_.begin()->second.radar_noise();
-            radar_llt.compute(R_radar);
-            radar_llt_ok = (radar_llt.info() == Eigen::Success);
-            if (!radar_llt_ok) {
-                // Precompute diagonal inverse fallback
-                const auto& diag = R_radar.diagonal();
-                for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
-                    if (diag(d) > 0.0f) R_diag_inv(d) = 1.0f / diag(d);
-                }
+        // All UKFs share the same R_radar (diagonal, built from radar_cfg_).
+        // Build it directly from config so it's available even on the first
+        // frame when filters_ is still empty.
+        ObjectUKF::RadarMeasMat R_radar = ObjectUKF::RadarMeasMat::Zero();
+        R_radar(0, 0)                   = radar_cfg_.range_std_m * radar_cfg_.range_std_m;
+        R_radar(1, 1)                   = radar_cfg_.azimuth_std_rad * radar_cfg_.azimuth_std_rad;
+        R_radar(2, 2) = radar_cfg_.elevation_std_rad * radar_cfg_.elevation_std_rad;
+        R_radar(3, 3) = radar_cfg_.velocity_std_mps * radar_cfg_.velocity_std_mps;
+
+        radar_llt.compute(R_radar);
+        radar_llt_ok = (radar_llt.info() == Eigen::Success);
+        if (!radar_llt_ok) {
+            // Precompute diagonal inverse fallback
+            const auto& diag = R_radar.diagonal();
+            for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
+                if (diag(d) > 0.0f) R_diag_inv(d) = 1.0f / diag(d);
             }
         }
     }
@@ -451,6 +455,14 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 // float comparison before the expensive Mahalanobis computation.
                 const float range_diff = std::abs(rdet.range_m - z_pred(0));
                 if (range_diff > range_3sigma) continue;
+
+                // Altitude gate: reject if radar return body-frame z differs
+                // too much from the track's estimated z position.
+                {
+                    const float radar_z = rdet.range_m * std::sin(rdet.elevation_rad);
+                    const float track_z = ukf.position()(2);
+                    if (std::abs(radar_z - track_z) > radar_cfg_.altitude_gate_m) continue;
+                }
 
                 ObjectUKF::RadarMeasVec z_actual;
                 z_actual(0) = rdet.range_m;
@@ -566,6 +578,8 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                 "perception.fusion.radar.ground_filter_enabled", radar_cfg.ground_filter_enabled);
             radar_cfg.min_object_altitude_m = cfg->get<float>(
                 "perception.fusion.radar.min_object_altitude_m", radar_cfg.min_object_altitude_m);
+            radar_cfg.altitude_gate_m = cfg->get<float>("perception.fusion.radar.altitude_gate_m",
+                                                        radar_cfg.altitude_gate_m);
         }
         return std::make_unique<UKFFusionEngine>(calib, radar_cfg, radar_enabled);
     }

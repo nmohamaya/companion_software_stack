@@ -80,6 +80,7 @@ TEST(ObstacleAvoider3DTest, CloseObjectRepelsInXYZ) {
     ObstacleAvoider3DConfig config;
     config.influence_radius_m = 10.0f;
     config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;  // test isotropic base repulsion
     ObstacleAvoider3D avoider(config);
 
     auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
@@ -257,6 +258,7 @@ TEST(ObstacleAvoider3DTest, VerticalGainZero_EliminatesZRepulsion) {
     config.influence_radius_m = 5.0f;
     config.repulsive_gain     = 2.0f;
     config.vertical_gain      = 0.0f;
+    config.path_aware         = false;  // test isotropic vertical gain
     ObstacleAvoider3D avoider(config);
 
     auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
@@ -284,6 +286,7 @@ TEST(ObstacleAvoider3DTest, VerticalGainOne_ProducesZRepulsion) {
     config.influence_radius_m = 5.0f;
     config.repulsive_gain     = 2.0f;
     config.vertical_gain      = 1.0f;
+    config.path_aware         = false;  // test isotropic vertical gain
     ObstacleAvoider3D avoider(config);
 
     auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
@@ -315,6 +318,7 @@ TEST(ObstacleAvoider3DTest, VeryCloseObjectMaxRepulsion) {
     config.repulsive_gain     = 2.0f;
     config.max_correction_mps = 3.0f;
     config.min_confidence     = 0.3f;
+    config.path_aware         = false;  // test isotropic base repulsion
 
     ObstacleAvoider3D avoider(config);
 
@@ -337,4 +341,117 @@ TEST(ObstacleAvoider3DTest, VeryCloseObjectMaxRepulsion) {
     // The correction should hit the max clamp
     float correction_x = result.velocity_x - cmd.velocity_x;
     EXPECT_NEAR(correction_x, -config.max_correction_mps, 0.1f);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Path-aware avoider tests (Issue #229)
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, PathAwareNoBackwardsPush) {
+    // Obstacle directly ahead on the planned path.
+    // path_aware removes the component opposing planned direction.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.max_correction_mps = 3.0f;
+    config.path_aware         = true;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);  // flying +X
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;  // directly ahead
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;  // same altitude
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Obstacle directly along planned direction → repulsion is entirely -X.
+    // path_aware removes this opposing component, leaving vx ~= planned.
+    EXPECT_GE(result.velocity_x, cmd.velocity_x - 0.01f);
+}
+
+TEST(ObstacleAvoider3DTest, PathAwareLateralPreserved) {
+    // Obstacle to the side of planned path → lateral repulsion preserved.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.max_correction_mps = 3.0f;
+    config.path_aware         = true;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);  // flying +X
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 0.0f;  // at same X as drone
+    objects.objects[0].position_y = 2.0f;  // to the right
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Repulsion in -Y is perpendicular to planned direction (+X) → kept.
+    EXPECT_LT(result.velocity_y, -0.1f);
+    // X velocity unchanged (repulsion is purely lateral)
+    EXPECT_NEAR(result.velocity_x, cmd.velocity_x, 0.1f);
+}
+
+TEST(ObstacleAvoider3DTest, PathAwareSameDirectionPreserved) {
+    // Obstacle behind drone → repulsion pushes +X (same as planned).
+    // along > 0 → component kept.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.max_correction_mps = 3.0f;
+    config.path_aware         = true;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);  // flying +X
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = -3.0f;  // behind drone
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Repulsion pushes +X (away from obstacle behind), along planned direction → kept.
+    EXPECT_GT(result.velocity_x, cmd.velocity_x);
+}
+
+TEST(ObstacleAvoider3DTest, PathAwareDisabledFallback) {
+    // path_aware=false → old isotropic behavior (obstacle ahead reduces vx).
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.max_correction_mps = 3.0f;
+    config.path_aware         = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Old behavior: obstacle ahead → backwards push applied → vx reduced.
+    EXPECT_LT(result.velocity_x, cmd.velocity_x);
 }

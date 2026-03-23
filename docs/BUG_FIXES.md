@@ -1173,6 +1173,36 @@ This exclusion is safe — the TSan leg still runs all 277 core tests (SHM IPC, 
 
 ---
 
+### Bug #45 — Gazebo Radar FOV Too Narrow for Obstacle Detection at Flight Altitude
+
+**Date:** 2026-03-23
+**Severity:** High (radar misses obstacles entirely)
+**Root Cause:** The Gazebo radar sensor model had ±7.5° vertical FOV with 8 vertical samples and 0° pitch. At 5m flight altitude, beams passed over obstacle tops without intersecting them.
+**Fix:** Expanded vertical FOV to ±20°, increased vertical samples to 16, added -5° downward tilt. File: `sim/models/x500_companion/model.sdf`.
+**Found by:** Systematic isolation testing in Scenario 18 — camera-only avoidance worked perfectly, adding radar degraded performance.
+
+---
+
+### Bug #46 — Radar Ground Returns Corrupt UKF Obstacle Tracks
+
+**Date:** 2026-03-23
+**Severity:** High (false obstacle positions from ground clutter)
+**Root Cause:** Radar beams reflecting off the ground plane were accepted by the Mahalanobis gate (angular match close enough) and applied as UKF updates to airborne obstacle tracks, pulling their estimated positions toward the ground.
+**Fix:** Two-layer defense: (1) HAL-level ground filter in `gazebo_radar.h` computes `object_alt = drone_altitude + range*sin(elevation)` and rejects returns below 0.5m AGL. (2) UKF altitude gate in `ukf_fusion_engine.cpp` rejects associations where `|radar_z - track_z| > altitude_gate_m` (default 2.0m). Files: `common/hal/include/hal/gazebo_radar.h`, `process2_perception/src/ukf_fusion_engine.cpp`.
+**Found by:** Observing UKF track positions drifting downward when radar was enabled, despite camera detections being correct.
+
+---
+
+### Bug #47 — Reactive Avoider Fights D* Lite Planned Path
+
+**Date:** 2026-03-23
+**Severity:** Medium (oscillation and route deviation)
+**Root Cause:** The ObstacleAvoider3D inverse-square repulsive field pushed the drone backward along the planned path when obstacles were between drone and next waypoint. This opposed D* Lite's optimal reroute, causing oscillation.
+**Fix:** Path-aware mode (`path_aware = true`): computes dot product of repulsion with planned velocity direction; if repulsion opposes planned direction (dot < 0), strips the opposing component. Only lateral nudges perpendicular to the planned trajectory remain. File: `process4_mission_planner/include/planner/obstacle_avoider_3d.h`.
+**Found by:** Issue #228 isolation testing — disabling the reactive avoider (gain=0) allowed D* Lite to navigate perfectly, confirming the avoider was the source of backwards push.
+
+---
+
 ## Open Bugs
 
 ---
