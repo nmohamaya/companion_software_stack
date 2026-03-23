@@ -183,8 +183,8 @@ int main(int argc, char* argv[]) {
     planner_cfg.snap_search_radius = cfg.get<int>("mission_planner.path_planner.snap_search_radius",
                                                   planner_cfg.snap_search_radius);
 
-    // Occupancy grid overrides (scenario configs use occupancy_grid.* keys;
-    // read after path_planner.* so scenario-specific values take priority)
+    // Occupancy-grid-specific settings: scenario configs use occupancy_grid.* keys
+    // to configure these fields instead of the path_planner.* defaults.
     planner_cfg.resolution_m       = cfg.get<float>("mission_planner.occupancy_grid.resolution_m",
                                                     planner_cfg.resolution_m);
     planner_cfg.inflation_radius_m = cfg.get<float>(
