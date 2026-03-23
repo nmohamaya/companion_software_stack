@@ -156,17 +156,39 @@ public:
     /// Insert obstacles from a detected object list.
     /// Updates timestamps for observed cells; stale cells expire after TTL.
     void update_from_objects(const drone::ipc::DetectedObjectList& objects,
-                             const drone::ipc::Pose& /* drone_pose */) {
+                             const drone::ipc::Pose&               drone_pose) {
         const auto     now    = std::chrono::steady_clock::now();
         const uint64_t now_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
 
+        // Drone grid cell — used for self-exclusion zone.
+        // Objects whose inflated region would overlap the drone's cell are skipped
+        // to prevent the planner start node from being blocked.
+        const GridCell drone_cell = world_to_grid(static_cast<float>(drone_pose.translation[0]),
+                                                  static_cast<float>(drone_pose.translation[1]),
+                                                  static_cast<float>(drone_pose.translation[2]));
+
         // Stamp newly detected cells
+        int accepted = 0;
+        int excluded = 0;
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             if (obj.confidence < 0.3f) continue;
 
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
+
+            // Self-exclusion: skip if inflated object zone would overlap drone cell.
+            // Uses Chebyshev distance — skips the entire 3×3×3 neighbourhood
+            // to prevent the planner start node from being blocked.
+            const int dx_drone = std::abs(center.x - drone_cell.x);
+            const int dy_drone = std::abs(center.y - drone_cell.y);
+            const int dz_drone = std::abs(center.z - drone_cell.z);
+            if (dx_drone <= inflation_cells_ && dy_drone <= inflation_cells_ &&
+                dz_drone <= inflation_cells_) {
+                ++excluded;
+                continue;
+            }
+            ++accepted;
 
             for (int dz = -inflation_cells_; dz <= inflation_cells_; ++dz) {
                 for (int dy = -inflation_cells_; dy <= inflation_cells_; ++dy) {
@@ -195,6 +217,21 @@ public:
                     it = occupied_.erase(it);
                 } else {
                     ++it;
+                }
+            }
+        }
+
+        // Diagnostic: log grid state periodically
+        if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
+            spdlog::debug("[Grid] {} objs (accepted={}, excluded={}), {} occupied cells, "
+                          "drone=({},{},{})",
+                          objects.num_objects, accepted, excluded, occupied_.size(), drone_cell.x,
+                          drone_cell.y, drone_cell.z);
+            for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{4}); ++i) {
+                const auto& obj = objects.objects[i];
+                if (obj.confidence >= 0.3f) {
+                    spdlog::debug("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
+                                  obj.position_x, obj.position_y, obj.position_z, obj.confidence);
                 }
             }
         }
@@ -246,6 +283,7 @@ private:
     int      half_extent_cells_;
     int      inflation_cells_;
     uint64_t cell_ttl_ns_;
+    uint64_t diag_tick_{0};  // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;

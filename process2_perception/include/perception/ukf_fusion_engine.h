@@ -27,11 +27,13 @@ inline float wrap_angle(float a) {
 
 /// Configurable radar measurement noise parameters.
 struct RadarNoiseConfig {
-    float range_std_m       = 0.3f;    // ±0.3 m
-    float azimuth_std_rad   = 0.026f;  // ±1.5°
-    float elevation_std_rad = 0.026f;  // ±1.5°
-    float velocity_std_mps  = 0.1f;    // ±0.1 m/s
-    float gate_threshold    = 9.21f;   // χ²(4) at 95% confidence
+    float range_std_m           = 0.3f;    // ±0.3 m
+    float azimuth_std_rad       = 0.026f;  // ±1.5°
+    float elevation_std_rad     = 0.026f;  // ±1.5°
+    float velocity_std_mps      = 0.1f;    // ±0.1 m/s
+    float gate_threshold        = 9.21f;   // χ²(4) at 95% confidence
+    float min_object_altitude_m = 0.3f;    // reject radar returns below this AGL
+    bool  ground_filter_enabled = true;    // enable/disable ground-plane filter
 };
 
 /// Per-object UKF state for 3D tracking.
@@ -113,6 +115,11 @@ public:
     /// Provide radar detections for the next fuse() call.
     void set_radar_detections(const drone::ipc::RadarDetectionList& detections) override;
 
+    /// Provide current drone altitude for radar ground-plane filtering.
+    /// @param altitude_m  World-frame z with ground at z=0 (i.e. AGL when
+    ///                    the world origin sits on the ground plane).
+    void set_drone_altitude(float altitude_m) override;
+
 private:
     CalibrationData                         calib_;
     RadarNoiseConfig                        radar_cfg_;
@@ -121,6 +128,8 @@ private:
     drone::ipc::RadarDetectionList radar_dets_;
     bool                           has_radar_data_{false};
     bool                           radar_enabled_{false};
+    float                          drone_altitude_m_{0.0f};
+    bool                           has_altitude_{false};
 
     float estimate_depth(const TrackedObject& trk) const;
 };

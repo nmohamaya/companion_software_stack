@@ -550,3 +550,133 @@ TEST(RadarFusionTest, HasRadarFlagOnlyWhenMatched) {
     }
     EXPECT_EQ(radar_count, 1);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Radar ground-plane filter tests (Issue #225)
+// ═══════════════════════════════════════════════════════════════
+
+TEST(RadarFusionTest, GroundFilterRejectsLowAltitude) {
+    // Construct a radar detection that WOULD match the camera track via
+    // Mahalanobis gating (same range/azimuth/elevation as predicted), then
+    // override its elevation to resolve below the ground filter threshold.
+    // This ensures the ground filter is the actual reason for rejection.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig radar_cfg;
+    radar_cfg.ground_filter_enabled = true;
+    radar_cfg.min_object_altitude_m = 0.3f;
+
+    UKFFusionEngine engine(calib, radar_cfg, true);
+    engine.set_drone_altitude(5.0f);
+
+    auto              trk   = make_test_tracked();
+    float             depth = test_estimate_depth(calib, trk);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // First fuse to create the UKF filter for this track
+    auto first_result = engine.fuse(tracked);
+    ASSERT_EQ(first_result.objects.size(), 1u);
+
+    // Build a detection from the track's predicted radar measurement
+    // (this would pass association), then corrupt elevation to be ground-level.
+    ObjectUKF temp_ukf(trk, depth, radar_cfg);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 2000;
+    radar_list.num_detections = 1;
+    // Use predicted range/azimuth for gate match, but set elevation so
+    // object_alt = 5.0 + range*sin(el) < 0.3m  →  sin(el) < (0.3-5.0)/range
+    radar_list.detections[0] = make_radar_det(z_pred(0), z_pred(1), -0.5f, z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    tracked.timestamp_ns   = 2000;
+    tracked.frame_sequence = 2;
+    auto result            = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // The ground filter should reject this despite matching range/azimuth
+    EXPECT_FALSE(result.objects[0].has_radar);
+}
+
+TEST(RadarFusionTest, GroundFilterPassesHighAltitude) {
+    // Radar detection at zero elevation (horizontal) resolves at drone altitude.
+    // drone_altitude=5.0m, elevation≈0 → object_alt ≈ 5.0m → above 0.3m → accepted.
+    // Provide radar on the FIRST fuse() call so the engine's internal UKF matches.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig radar_cfg;
+    radar_cfg.ground_filter_enabled = true;
+    radar_cfg.min_object_altitude_m = 0.3f;
+
+    UKFFusionEngine engine(calib, radar_cfg, true);
+    engine.set_drone_altitude(5.0f);
+
+    auto              trk   = make_test_tracked();
+    float             depth = test_estimate_depth(calib, trk);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // Build a matching radar detection from a temp UKF (same as CameraRadarFusion test)
+    ObjectUKF temp_ukf(trk, depth, radar_cfg);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    // Ensure elevation resolves above threshold
+    ASSERT_GT(5.0f + z_pred(0) * std::sin(z_pred(2)), radar_cfg.min_object_altitude_m);
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // The high-altitude detection should have passed the filter and matched
+    EXPECT_TRUE(result.objects[0].has_radar);
+}
+
+TEST(RadarFusionTest, GroundFilterDisabledPassesAll) {
+    // With ground_filter_enabled=false, detections that would normally be filtered
+    // should still be considered for association.  Provide radar on first fuse().
+    auto             calib = make_test_calib();
+    RadarNoiseConfig radar_cfg;
+    radar_cfg.ground_filter_enabled = false;
+    radar_cfg.min_object_altitude_m = 0.3f;
+
+    UKFFusionEngine engine(calib, radar_cfg, true);
+    engine.set_drone_altitude(5.0f);
+
+    auto              trk   = make_test_tracked();
+    float             depth = test_estimate_depth(calib, trk);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    // Build a matching radar detection
+    ObjectUKF temp_ukf(trk, depth, radar_cfg);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // Filter is disabled — should match
+    EXPECT_TRUE(result.objects[0].has_radar);
+}

@@ -400,6 +400,36 @@ Same treatment applied to `Detection2D` (8 fields) and `FusedObject` (11 fields)
 
 ---
 
+### Bug #42 — Fusion Thread Infinite Loop from ZenohSubscriber Latest-Value Semantics (#225)
+
+**Date discovered:** 2026-03-22
+**Severity:** Critical
+**Status:** FIXED (Issue #225)
+**File:** `process2_perception/src/main.cpp`
+
+**Bug:** The perception fusion thread used `while (pose_sub.receive(p))` and `while (radar_sub.receive(radar_list))` drain loops to read IPC data each iteration. With ZenohSubscriber's latest-value semantics, `receive()` sets `has_data_ = true` on the first callback but **never clears it** — so once any data arrives, `receive()` returns `true` forever. The drain loops became infinite spins, and the fusion thread never published fused objects. Zero detected objects ever reached the mission planner.
+
+**Root Cause:** `ZenohSubscriber::receive()` was designed for latest-value (not queue) semantics, but the consumer code used a `while()` drain pattern appropriate for a queue-based subscriber. The mismatch meant the loop never terminated.
+
+**Fix:** Changed both `while()` drain loops to single `if()` reads — one latest-value read per iteration:
+
+```cpp
+// Before (infinite loop):
+while (pose_sub.receive(p)) { latest_pose = p; has_pose = true; }
+// After (single read):
+if (pose_sub.receive(p)) { latest_pose = p; has_pose = true; }
+```
+
+**Lessons learned:**
+
+1. When switching IPC backends (SHM queue → Zenoh latest-value), audit ALL consumer drain patterns. A `while(receive())` pattern that works with a queue is an infinite loop with latest-value semantics.
+2. The failure was silent — the fusion thread appeared alive (heartbeat OK) but produced zero output. Watchdogs detect stuck threads, not threads that are spinning productively on the wrong thing.
+3. Integration testing with real Gazebo SITL revealed this instantly — unit tests couldn't catch it because they don't exercise the full IPC→fusion→planner pipeline.
+
+**Found by:** Scenario 18 Gazebo SITL testing — planner received zero detected objects despite camera producing detections.
+
+---
+
 ## SLAM / VIO (Process 3)
 
 ---
@@ -1549,3 +1579,95 @@ if (radar && radar_pub && radar_pub->is_ready()) {
 3. Log clearly when a subsystem is disabled due to infrastructure failure — silent degradation is harder to diagnose than explicit warnings.
 
 **Found by:** Copilot code review on PR #218.
+
+---
+
+### Bug #43 — Occupancy Grid Self-Blocking: Detected Objects Block D* Lite Start Node (#225)
+
+**Date discovered:** 2026-03-22
+**Severity:** High
+**Status:** FIXED (Issue #225)
+**File:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`
+
+**Bug:** Objects detected near the drone had their inflation zones placed on the drone's own grid cell. This marked the D* Lite start node as occupied → `g(start) = infinity` → planner immediately fell back to direct-line navigation every frame. With 181+ fallbacks per run, D* Lite was effectively disabled.
+
+**Root Cause:** `update_from_objects()` applied inflation uniformly to all detected objects, including those whose inflated footprint overlapped the drone's current cell. The `drone_pose` parameter was already passed to the method but was unused (`/* drone_pose */`).
+
+**Fix:** Added self-exclusion zone — skip objects whose inflated zone would overlap the drone's grid cell:
+
+```cpp
+const GridCell drone_cell = world_to_grid(...drone_pose...);
+// For each object:
+const int dx_drone = std::abs(center.x - drone_cell.x);
+const int dy_drone = std::abs(center.y - drone_cell.y);
+const int dz_drone = std::abs(center.z - drone_cell.z);
+if (dx_drone <= inflation_cells_ && dy_drone <= inflation_cells_ &&
+    dz_drone <= inflation_cells_) {
+    ++excluded;
+    continue;  // skip — would block start node
+}
+```
+
+**Lessons learned:**
+
+1. An occupancy grid that can block its own planner's start node renders the planner useless. Self-exclusion is a required invariant.
+2. The symptom (constant D* Lite fallbacks) was visible in logs but not obviously connected to grid self-blocking without inspecting the grid cell coordinates.
+3. Diagnostic logging (accepted/excluded counts, drone cell position) was essential for diagnosing this in a running simulation.
+
+**Found by:** Scenario 18 Gazebo SITL testing — D* Lite logged 181+ "no obstacle-free path" fallbacks per run.
+
+---
+
+### Bug #44 — ObstacleAvoider3D Vertical Repulsion Causes Altitude Runaway (#225)
+
+**Date discovered:** 2026-03-22
+**Severity:** High
+**Status:** FIXED (Issue #225)
+**File:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`, `config/scenarios/18_perception_avoidance.json`
+
+**Bug:** When objects were detected below the drone (e.g., ground-level obstacles at 2m while drone at 5m), the 3D obstacle avoider applied full vertical repulsion pushing the drone upward. As the drone rose, monocular depth estimates degraded (longer range = less accurate), placing objects at higher positions, which maintained upward repulsion — a positive feedback loop. The drone climbed to 94m altitude instead of navigating waypoints.
+
+**Root Cause:** `ObstacleAvoider3D::avoid()` applied the same repulsive gain to all three axes (X, Y, Z). For a drone flying above obstacles, vertical repulsion is counterproductive — it should route around obstacles laterally (handled by D* Lite), not climb indefinitely.
+
+**Fix:** Added `vertical_gain` configuration parameter (default 1.0 for backward compatibility). The Z repulsion is scaled by this factor:
+
+```cpp
+total_rep_z -= (dz / dist) * repulsion * config_.vertical_gain;
+```
+
+Set to `0.0` in Scenario 18 for lateral-only reactive avoidance, since D* Lite handles routing around obstacles.
+
+**Lessons learned:**
+
+1. 3D repulsive force fields need axis-specific tuning for aerial vehicles. Vertical repulsion from ground-level objects creates a runaway loop because rising doesn't resolve the obstacle — it just degrades perception.
+2. Monocular depth estimation accuracy degrades with range; a system that pushes the drone farther from obstacles also makes its perception of those obstacles less accurate.
+3. The combination of D* Lite (strategic routing) + lateral-only reactive avoidance (tactical correction) is more robust than full 3D reactive avoidance for obstacle fields.
+
+**Found by:** Scenario 18 Gazebo SITL testing — drone climbed to 94m instead of navigating 5m-altitude waypoints.
+
+---
+
+### Bug #41 — ObstacleAvoider3D Dead Zone Applies Zero Repulsion at Close Range (#225)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (Issue #225)
+**File:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`
+
+**Bug:** ObstacleAvoider3D applied zero repulsion when obstacles were closer than 0.1m (dead zone). At the most critical distances, the drone got no push-away force. The inverse-square repulsion formula was guarded by `dist > 0.1f`, meaning any obstacle within 10cm produced no correction vector at all.
+
+**Root Cause:** The condition `dist > 0.1f` was intended to prevent divide-by-zero in the inverse-square calculation, but 0.1m is far too large a threshold. The formula only needs protection at ~0.01m, and the result is already clamped by `max_correction_mps` anyway — so even without the guard, the output cannot blow up to infinity.
+
+**Fix:** Changed threshold from `0.1f` to `0.01f`:
+
+```cpp
+if (dist > 0.01f) {
+```
+
+**Lessons learned:**
+
+1. Divide-by-zero guards must be sized to the actual numerical danger zone, not arbitrary "safe" values. A 10cm dead zone in an obstacle avoider is a safety hazard.
+2. When a downstream clamp already bounds the output (e.g., `max_correction_mps`), the guard threshold can be much tighter.
+3. Scenario-level SITL testing catches bugs that unit tests miss — the drone physically flying into obstacles revealed what static analysis could not.
+
+**Found by:** Scenario 18 Gazebo SITL testing — drone flew into obstacles with no reactive avoidance at close range.

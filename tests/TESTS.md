@@ -100,8 +100,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 5 | 132 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 83 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P2 — Perception](#p2--perception) | 5 | 135 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar), color contour, YOLOv8 |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 84 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -118,7 +118,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 170+ | 18 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (15 Tier 1 + 3 Tier 2) |
-| **Total** | **50 C++ + 5 shell** | **1041 + 42 + 170+** | |
+| **Total** | **50 C++ + 5 shell** | **1045 + 42 + 170+** | |
 
 ---
 
@@ -350,7 +350,7 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 21 tests
+### test_fusion_engine.cpp — 24 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
 IFusionEngine factory.
@@ -369,6 +369,9 @@ IFusionEngine factory.
 | `RadarDisabledByDefault` | 1 | `set_radar_detections()` no-op on `IFusionEngine` base; `has_radar` stays false |
 | `SetRadarDetectionsAndFuse` | 1 | `UKFFusionEngine::set_radar_detections()` stores data; `fuse()` performs radar update and sets `has_radar` |
 | `HasRadarFlagOnlyWhenMatched` | 1 | `FusedObject::has_radar` is true only for tracks that received a matched radar detection |
+| `GroundFilterRejectsLowAltitude` | 1 | Radar detections below 0.3m AGL are rejected before UKF association |
+| `GroundFilterPassesHighAltitude` | 1 | Radar detections above the elevation threshold pass through to UKF |
+| `GroundFilterDisabledPassesAll` | 1 | When ground filter is disabled, all radar detections reach UKF regardless of altitude |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
 
@@ -509,7 +512,7 @@ states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 13 tests
+### test_obstacle_avoider_3d.cpp — 14 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor.
@@ -519,6 +522,7 @@ factory registration (including `"potential_field_3d"` alias), name accessor.
 | `ObstacleAvoider3DTest` | 7 | No objects pass-through, stale objects ignored, close object repels in XYZ, low confidence ignored, correction clamped, prediction shifts repulsion, NaN pose pass-through |
 | `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown throws |
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
+| `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 
@@ -1191,4 +1195,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1041 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #224: TripleBuffer replaces SPSC rings in perception fusion pipeline (10 new tests). All 1041 tests passing.*
+*Last updated: March 2026 — 1045 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #225: Radar ground-plane filter + avoider dead zone fix (4 new tests). All 1045 tests passing.*

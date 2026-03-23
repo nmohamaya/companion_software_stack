@@ -102,6 +102,84 @@ git worktree add -b refactor/issue-211-remove-thermal .claude/worktrees/agent-21
 
 **When to use:** Any work spanning 3+ related issues, or when the user explicitly wants `main` kept stable during development. For single-issue work, branching directly from `main` is fine.
 
+#### Real-World Example: Perception Avoidance Integration (Issues #222, #224, #225)
+
+This is the exact sequence used to develop the perception-driven obstacle avoidance feature, which spanned scenario setup (#222), fusion pipeline fixes (#224), and avoidance tuning (#225).
+
+**Situation:** Issue #222 (Scenario 18 setup) was developed on a feature branch targeting `main` and merged via PR #223. After testing revealed two more issues (#224 pipeline fix, #225 tuning), we needed to keep `main` demo-ready while iterating on a multi-issue feature.
+
+**Step 1 — Create the integration branch from main:**
+
+```bash
+git checkout main && git pull
+git checkout -b feature/perception-avoidance-integration
+git push -u origin feature/perception-avoidance-integration
+```
+
+**Step 2 — Retarget the already-merged PR:**
+
+PR #223 had already been merged to `main`. To bring that work into the integration branch, we cherry-picked/merged it:
+
+```bash
+# On the integration branch, merge the commit(s) from the already-merged PR
+git merge --squash origin/feature/issue-222-scenario-18   # or cherry-pick the commit
+git commit -m "feat(#222): Scenario 18 — perception-driven obstacle avoidance"
+```
+
+> **Key scenario — PRs already targeting main:** If a PR is still open and targeting `main`, retarget it to the integration branch before merging:
+>
+> ```bash
+> # Using GitHub CLI:
+> gh pr edit 223 --base feature/perception-avoidance-integration
+>
+> # If gh pr edit fails (e.g. GraphQL/projects-classic error), use the REST API:
+> gh api repos/OWNER/REPO/pulls/223 -X PATCH -f base=feature/perception-avoidance-integration
+> ```
+
+**Step 3 — Subsequent issues branch from the integration branch:**
+
+```bash
+# Issue #224 (pipeline fix) — branch from integration, not main
+git checkout feature/perception-avoidance-integration
+git checkout -b feature/issue-224-fusion-pipeline-fix
+# ... implement, push, create PR targeting feature/perception-avoidance-integration
+
+# Issue #225 (tuning) — branch from integration after #224 merges
+git checkout feature/perception-avoidance-integration && git pull
+git checkout -b feature/issue-225-avoidance-tuning
+# ... implement, push, create PR targeting feature/perception-avoidance-integration
+```
+
+**Step 4 — Final merge to main (when all sub-issues are done):**
+
+```bash
+# Create a single PR: feature/perception-avoidance-integration → main
+gh pr create --base main --head feature/perception-avoidance-integration \
+  --title "feat: Perception-driven obstacle avoidance (Issues #222, #224, #225)" \
+  --body "Complete camera+radar perception pipeline with tuned avoidance."
+
+# After review + CI green → squash merge to main
+# Delete the integration branch
+```
+
+**Result:**
+
+```text
+main (demo-ready throughout)
+  └── feature/perception-avoidance-integration
+        ├── PR: Issue #222 — Scenario 18 setup (merged from main, retargeted)
+        ├── PR: Issue #224 — Fusion pipeline fix (SPSC→TripleBuffer, UKF optimization)
+        ├── PR: Issue #225 — Radar filtering
+        └── PR: Issue #226 — Post-collision recovery
+```
+
+**Lessons from this example:**
+
+1. **It's OK to create the integration branch after work has started.** If early PRs already targeted `main`, retarget them or cherry-pick their commits into the integration branch.
+2. **Use the REST API as a fallback** when `gh pr edit` fails due to GitHub's GraphQL projects-classic limitations.
+3. **Each sub-issue PR gets reviewed independently** on the integration branch. The final PR to `main` is the fully-tested aggregate.
+4. **Run scenario tests on the integration branch** before the final merge — this is where integration bugs surface (e.g., radar ground-plane flooding wasn't visible until camera+radar+fusion were all running together).
+
 ### Cleanup
 
 ```bash

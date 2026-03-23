@@ -2562,4 +2562,51 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #55 (perception fusion pipeline fix, Issue #224). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1041 tests, 18 scenarios._
+### Improvement #56 — Radar ground-plane filter + avoider dead zone fix (Issue #225)
+
+**Date:** 2026-03-22
+**Category:** Feature / Bug Fix
+**Files Modified:**
+
+- `process2_perception/include/perception/ifusion_engine.h` — added ground-plane filter interface
+- `process2_perception/include/perception/ukf_fusion_engine.h` — ground-plane filter implementation
+- `process2_perception/src/ukf_fusion_engine.cpp` — radar ground-plane elevation filter rejects detections below configurable AGL threshold
+- `process2_perception/src/main.cpp` — wired current pose altitude into fusion engine for ground-plane filtering
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — fixed dead zone threshold (0.1m → 0.01m)
+- `config/default.json` — added ground filter elevation threshold parameter
+- `config/scenarios/18_perception_avoidance.json` — updated for ground filter testing
+
+**What:** Radar ground-plane elevation filter rejects detections below 0.3m AGL before UKF association. This prevents ground clutter from entering the fusion pipeline and generating false obstacle tracks. Avoider dead zone fix changes the minimum distance threshold from 0.1m to 0.01m, ensuring maximum repulsion force at close range instead of zero force.
+
+**Why:** Scenario 18 Gazebo SITL testing revealed two issues: (1) radar ground returns were creating phantom obstacles that disrupted path planning, and (2) the obstacle avoider applied zero repulsion when obstacles were closer than 0.1m — at the most critical distances, the drone got no push-away force. The dead zone bug was a safety issue: the inverse-square repulsion formula only needs divide-by-zero protection at ~0.01m, not 0.1m.
+
+**Test count:** 1041 → 1045 (+3 ground filter tests in test_fusion_engine.cpp, +1 dead zone test in test_obstacle_avoider_3d.cpp)
+
+---
+
+### Improvement #57 — Fix Fusion Thread Hang, Grid Self-Blocking, and Altitude Runaway (Issue #225)
+
+**Date:** 2026-03-22
+**Category:** Bug Fix (3 bugs)
+**Files Modified:**
+
+- `process2_perception/src/main.cpp` — fixed ZenohSubscriber drain loop (while → if)
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — added self-exclusion zone + diagnostic logging
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — added vertical_gain config parameter
+- `config/scenarios/18_perception_avoidance.json` — set vertical_gain=0.0 for lateral-only avoidance
+
+**What:** Three bugs discovered and fixed during Scenario 18 Gazebo SITL testing:
+
+1. **Fusion thread infinite loop (Critical):** `ZenohSubscriber::receive()` never clears `has_data_`, so `while(receive())` drain loops became infinite spins. Zero fused objects reached the planner. Fix: `while` → `if` (single latest-value read).
+
+2. **Occupancy grid self-blocking (High):** Detected objects near the drone had their inflation zones placed on the drone's grid cell, blocking the D* Lite start node. 181+ fallbacks/run. Fix: skip objects whose inflated zone overlaps the drone cell.
+
+3. **Altitude runaway (High):** Vertical repulsion from objects below the drone created a positive feedback loop (drone at 5m rose to 94m). Fix: added `vertical_gain` config param, set to 0.0 in Scenario 18 for lateral-only reactive avoidance.
+
+**Why:** Each bug independently prevented Scenario 18 from working. Bug 1 broke the entire perception→planner pipeline. Bug 2 disabled D* Lite path planning. Bug 3 made the drone climb indefinitely instead of navigating waypoints. Together, these represent the gap between unit-tested components and a working end-to-end simulation.
+
+**Test count:** 1045 (no new tests — bugs found via Gazebo SITL integration testing)
+
+---
+
+_Last updated after Improvement #57 (3 runtime bugs fixed, Issue #225). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1045 tests, 18 scenarios._
