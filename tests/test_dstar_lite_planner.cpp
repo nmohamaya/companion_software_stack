@@ -715,7 +715,7 @@ TEST(GridPlannerConfigTest, CellTTL_PassedToGrid) {
     // Custom TTL should propagate through GridPlannerConfig → GridPlannerBase → OccupancyGrid3D.
     // We verify indirectly: a cell inserted at t=0 should expire after the configured TTL.
     GridPlannerConfig cfg;
-    cfg.cell_ttl_s = 1.0f;  // 1s TTL (shorter than default 3s)
+    cfg.cell_ttl_s = 0.05f;  // 50ms TTL — short to keep test fast
     DStarLitePlanner planner(cfg);
 
     // Insert an object into the grid
@@ -738,16 +738,12 @@ TEST(GridPlannerConfigTest, CellTTL_PassedToGrid) {
     planner.update_obstacles(objects, pose);
     EXPECT_GT(planner.grid().occupied_count(), 0u);
 
-    // Wait for TTL to expire (1s + margin)
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    // Wait for TTL to expire (50ms + margin)
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
 
     // Trigger another update with zero objects to run expiry
     drone::ipc::DetectedObjectList empty{};
     empty.num_objects = 0;
-    empty.timestamp_ns =
-        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now().time_since_epoch())
-                                  .count());
     planner.update_obstacles(empty, pose);
     EXPECT_EQ(planner.grid().occupied_count(), 0u);
 }
