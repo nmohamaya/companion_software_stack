@@ -177,7 +177,9 @@ public:
 
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
 
-            // Self-exclusion: skip if inflated object zone would overlap drone cell
+            // Self-exclusion: skip if inflated object zone would overlap drone cell.
+            // Uses Chebyshev distance — skips the entire 3×3×3 neighbourhood
+            // to prevent the planner start node from being blocked.
             const int dx_drone = std::abs(center.x - drone_cell.x);
             const int dy_drone = std::abs(center.y - drone_cell.y);
             const int dz_drone = std::abs(center.z - drone_cell.z);
@@ -221,15 +223,15 @@ public:
 
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
-            spdlog::info("[Grid] {} objs (accepted={}, excluded={}), {} occupied cells, "
-                         "drone=({},{},{})",
-                         objects.num_objects, accepted, excluded, occupied_.size(), drone_cell.x,
-                         drone_cell.y, drone_cell.z);
+            spdlog::debug("[Grid] {} objs (accepted={}, excluded={}), {} occupied cells, "
+                          "drone=({},{},{})",
+                          objects.num_objects, accepted, excluded, occupied_.size(), drone_cell.x,
+                          drone_cell.y, drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{4}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= 0.3f) {
-                    spdlog::info("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
-                                 obj.position_x, obj.position_y, obj.position_z, obj.confidence);
+                    spdlog::debug("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
+                                  obj.position_x, obj.position_y, obj.position_z, obj.confidence);
                 }
             }
         }
