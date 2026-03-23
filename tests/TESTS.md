@@ -350,10 +350,10 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 24 tests
+### test_fusion_engine.cpp — 27 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
-IFusionEngine factory.
+IFusionEngine factory, altitude gate, ground filter.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -372,6 +372,9 @@ IFusionEngine factory.
 | `GroundFilterRejectsLowAltitude` | 1 | Radar detections below 0.3m AGL are rejected before UKF association |
 | `GroundFilterPassesHighAltitude` | 1 | Radar detections above the elevation threshold pass through to UKF |
 | `GroundFilterDisabledPassesAll` | 1 | When ground filter is disabled, all radar detections reach UKF regardless of altitude |
+| `AltitudeGateRejectsMismatch` | 1 | Radar-track association rejected when body-frame Z difference exceeds `altitude_gate_m` |
+| `AltitudeGateAcceptsSimilar` | 1 | Radar-track association accepted when body-frame Z difference is within `altitude_gate_m` |
+| `AltitudeGateConfigurable` | 1 | `altitude_gate_m` can be configured to a custom value and correctly gates associations |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
 
@@ -512,10 +515,11 @@ states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 14 tests
+### test_obstacle_avoider_3d.cpp — 18 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
-factory registration (including `"potential_field_3d"` alias), name accessor.
+factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
+path-aware mode.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -523,6 +527,8 @@ factory registration (including `"potential_field_3d"` alias), name accessor.
 | `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown throws |
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
+| `VerticalGainTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
+| `PathAwareAvoider` | 2 | Path-aware mode strips backward repulsion opposing planned direction, lateral repulsion preserved |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 
@@ -1016,7 +1022,7 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `TripleBufferTest` | 10 | Default construction, single write/read, multiple writes (reader gets latest), no-new-data returns false, concurrent producer-consumer stress, move-only types, large payloads, write-never-blocks guarantee, atomic CAS correctness (no torn reads), reset/clear semantics |
+| `TripleBufferTest` | 10 | Default construction, single write/read, multiple writes (reader gets latest), no-new-data returns false, concurrent producer-consumer stress, move-only types, large payloads, write-never-blocks guarantee, atomic CAS correctness (no torn reads) |
 
 **Key files under test:** `util/triple_buffer.h`
 
@@ -1196,4 +1202,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1048 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #228: Occupancy grid config wiring + avoidance tuning (3 new tests). All 1048 tests passing.*
+*Last updated: March 2026 — 1057 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #229: Radar FOV fix, HAL ground filter, UKF altitude gate, path-aware avoider (7 new tests). All 1057 tests passing.*

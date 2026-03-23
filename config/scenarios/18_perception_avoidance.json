@@ -2,7 +2,7 @@
     "_comment": "Scenario 18: Perception-Driven Obstacle Avoidance — no HD-map, D* Lite dynamic layer only",
     "scenario": {
         "name": "perception_avoidance",
-        "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity, and D* Lite replans dynamically via update_from_objects(). Validates the full perception→planning loop for unknown environments. D* Lite is the sole avoidance mechanism (reactive avoider disabled pending Issue #229).",
+        "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity (with altitude gate), and D* Lite replans dynamically via update_from_objects(). Path-aware ObstacleAvoider3D provides lateral nudge without fighting the planner. Validates the full multi-sensor perception→planning loop for unknown environments.",
         "tier": 2,
         "timeout_s": 180,
         "requires_gazebo": true
@@ -17,10 +17,11 @@
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
                 "influence_radius_m": 3.0,
-                "repulsive_gain": 0.0,
+                "repulsive_gain": 1.0,
                 "max_correction_mps": 2.0,
                 "vertical_gain": 0.0,
-                "_comment": "Reactive avoider disabled (gain=0) — fights D* Lite when objects are between drone and goal (Issue #229). D* Lite is sole avoidance."
+                "path_aware": true,
+                "_comment": "Path-aware lateral-only avoider: backwards push stripped, vertical_gain=0 prevents flying above obstacles (Issue #229). D* Lite is primary."
             },
             "occupancy_grid": {
                 "resolution_m": 1.0,
@@ -61,7 +62,8 @@
                 "backend": "gazebo",
                 "enabled": true,
                 "update_rate_hz": 20,
-                "_comment": "Radar HAL active but ground filter rejects all returns (Issue #229 — Gazebo radar model needs FOV fix)"
+                "ground_filter_alt_m": 0.5,
+                "_comment": "Radar enabled — HAL ground filter rejects returns below 0.5m AGL using drone altitude from odometry (Issue #229)"
             },
             "fusion": {
                 "backend": "ukf",
@@ -69,8 +71,9 @@
                 "radar": {
                     "enabled": true,
                     "ground_filter_enabled": true,
-                    "min_object_altitude_m": 1.0,
-                    "_comment": "1.0m AGL filter effectively disables radar fusion — Gazebo radar returns are all ground-level (Issue #229)"
+                    "min_object_altitude_m": 0.3,
+                    "altitude_gate_m": 2.0,
+                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate (Issue #229) — rejects ground returns and altitude-mismatched associations"
                 }
             }
         }
@@ -83,7 +86,7 @@
             "Path planner: DStarLitePlanner",
             "Obstacle avoider: ObstacleAvoider3D",
             "backend: bytetrack",
-            "Ground filter:",
+            "ground_filter_alt_m",
             "TAKEOFF",
             "EXECUTING",
             "Mission complete"

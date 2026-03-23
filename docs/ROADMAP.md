@@ -565,6 +565,7 @@
 | ~~[#222](https://github.com/nmohamaya/companion_software_stack/issues/222)~~ | ~~Perception-driven obstacle avoidance scenario (no HD-map)~~ ✅ | Testing | **Closed** (Improvement #54) |
 | ~~[#224](https://github.com/nmohamaya/companion_software_stack/issues/224)~~ | ~~Fix Perception Fusion Pipeline — SPSC Overflow + Radar Fusion Bottleneck~~ ✅ | Bug Fix / Perf | **Closed** (Improvement #55, Fix #42) |
 | ~~[#225](https://github.com/nmohamaya/companion_software_stack/issues/225)~~ | ~~Radar ground-plane filter + avoider dead zone fix~~ ✅ | Feature / Bug Fix | **Closed** (Improvement #56, Fix #41) |
+| ~~[#229](https://github.com/nmohamaya/companion_software_stack/issues/229)~~ | ~~Radar fusion fix: FOV, ground filter, altitude gate, path-aware avoider~~ ✅ | Bug Fix / Feature | **Closed** (Improvement #59, Fix #45–47) |
 
 ---
 
@@ -572,10 +573,10 @@
 
 | Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | **Epic #110 (Current)** |
 |--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|
-| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **1045** |
-| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **1045** |
+| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **1057** |
+| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **1057** |
 | Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | **42** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **29** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **32** |
 | Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
 | HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **9** |
 | IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **Zenoh (sole)** |
@@ -599,7 +600,7 @@
 | Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | **systemd + ProcessManager** |
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
-| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB camera)** |
+| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB camera + radar)** |
 | Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **15 scenarios (14 Tier 1 + 1 Tier 2), 14/14 Tier 1 pass on Zenoh** |
 
 ### Process Activity During Simulation
@@ -616,4 +617,4 @@
 
 ---
 
-*Last updated after Issue #225 (radar ground-plane filter + avoider dead zone fix) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1045 tests, 50 C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing. 44 bug fixes total. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Issue #229 (radar fusion fix: FOV, ground filter, altitude gate, path-aware avoider) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1057 tests, 50 C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing. 47 bug fixes total. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

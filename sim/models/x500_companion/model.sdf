@@ -134,7 +134,7 @@
          geometry; the GazeboRadarBackend HAL converts rays to radar detections
          with noise + Doppler (Issue #212). -->
     <link name="radar_lidar_link">
-      <pose relative_to="base_link">0.10 0 -0.02 0 0 0</pose>
+      <pose relative_to="base_link">0.10 0 -0.02 0 -0.087 0</pose>
       <inertial>
         <mass>0.02</mass>
         <inertia>
@@ -153,10 +153,10 @@
               <max_angle>0.5236</max_angle>
             </horizontal>
             <vertical>
-              <samples>8</samples>
+              <samples>16</samples>
               <resolution>1</resolution>
-              <min_angle>-0.1309</min_angle>
-              <max_angle>0.1309</max_angle>
+              <min_angle>-0.3491</min_angle>
+              <max_angle>0.3491</max_angle>
             </vertical>
           </scan>
           <range>

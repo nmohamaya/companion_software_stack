@@ -3,6 +3,7 @@
 #include "util/triple_buffer.h"
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <thread>
 #include <vector>
@@ -171,7 +172,7 @@ TEST(TripleBufferTest, HighContentionStress) {
     std::thread consumer([&]() {
         uint64_t prev     = 0;
         uint64_t read_cnt = 0;
-        while (!done.load(std::memory_order_acquire) || true) {
+        while (true) {
             auto v = buf.read();
             if (v.has_value()) {
                 // Monotonically increasing — no corruption
@@ -179,7 +180,7 @@ TEST(TripleBufferTest, HighContentionStress) {
                 prev = *v;
                 ++read_cnt;
             }
-            // Simulate ~30Hz consumer (33ms period)
+            // Simulate ~1kHz consumer
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             if (done.load(std::memory_order_acquire)) {
                 // Drain final value

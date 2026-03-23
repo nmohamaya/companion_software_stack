@@ -365,7 +365,30 @@ Sigma points are propagated through `h(x)` to capture the nonlinearity (no linea
 4. Accept the closest detection with `d² < gate_threshold` (χ²(4) at 95% = 9.21)
 5. Call `update_radar()` on the matched track; set `FusedObject::has_radar = true`
 
-Detections that fall outside the gate are silently ignored (no new tracks are spawned from radar-only observations in this implementation).
+Detections that fall outside the gate are silently ignored (no new tracks are spawned from radar-only observations in this implementation). This camera-confirmed architecture ensures that only radar readings matching existing camera-initiated tracks flow through fusion — radar cannot independently create obstacle tracks.
+
+#### Altitude Gate (Issue #229)
+
+Before Mahalanobis gating, an altitude consistency check rejects radar-track associations where the radar return's body-frame Z coordinate diverges too far from the track's estimated Z:
+
+```
+if |radar_z - track_z| > altitude_gate_m:
+    skip association (do not attempt Mahalanobis gate)
+```
+
+Default `altitude_gate_m = 2.0`. This prevents ground returns that pass the HAL filter (see below) from corrupting airborne obstacle tracks — even if the angular match is close, the altitude mismatch causes rejection.
+
+#### HAL Ground Filter (Issue #229)
+
+The Gazebo radar HAL (`gazebo_radar.h`) applies a ground-plane filter before publishing detections to the fusion engine. For each radar return:
+
+```
+object_alt = drone_altitude + range * sin(elevation)
+if object_alt < ground_filter_alt_m:
+    reject (ground return)
+```
+
+`drone_altitude` is obtained from the Gazebo odometry topic via `std::atomic<float>`. Default `ground_filter_alt_m = 0.5` m. This rejects radar beams reflecting off the ground plane before they reach the UKF, preventing ground clutter from spawning spurious obstacle associations.
 
 #### Track Lifecycle in UKFFusionEngine
 
