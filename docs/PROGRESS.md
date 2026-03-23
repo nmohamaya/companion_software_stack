@@ -2609,4 +2609,29 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #57 (3 runtime bugs fixed, Issue #225). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1045 tests, 18 scenarios._
+### Improvement #58 — Occupancy Grid Config Wiring + Avoidance Tuning (Issue #228)
+
+**Date:** 2026-03-22
+**Category:** Bug Fix / Tuning
+**Files Modified:**
+
+- `process4_mission_planner/include/planner/grid_planner_base.h` — added `cell_ttl_s`, `min_confidence` to config; passed to grid constructor
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — configurable `min_confidence`, cell-level self-exclusion
+- `process4_mission_planner/src/main.cpp` — read `occupancy_grid.*` config keys
+- `config/default.json` — added `occupancy_grid` section
+- `config/scenarios/18_perception_avoidance.json` — tuned for clean obstacle avoidance
+
+**What:** Fixed silently-ignored `occupancy_grid` config section and tuned Scenario 18 for clean obstacle avoidance through systematic isolation testing. Key findings:
+
+1. **Config wiring bug:** `occupancy_grid.*` JSON keys (resolution, inflation, TTL) were never read by `main.cpp` — fixed by adding `occupancy_grid.*` config reads after `path_planner.*` reads.
+2. **Self-exclusion too aggressive:** Changed from "exclude entire object near drone" to "exclude only cells within ±1 of drone cell" — nearby obstacles now populate most of their grid footprint.
+3. **Reactive avoider fights D* Lite:** Inverse-square repulsion pushes drone backwards when objects are between drone and goal. Disabled (gain=0) — D* Lite alone navigates perfectly (Issue #229).
+4. **Radar degrades avoidance:** Camera-only avoids all objects; adding radar causes collision with GREEN obstacle. Ground filter raised to 1.0m AGL as workaround (Issue #229).
+
+**Why:** Scenario 18 Gazebo SITL testing showed the drone going backwards or clipping obstacles despite D* Lite having a valid grid. Systematic isolation (camera-only → +radar → +reactive avoider) identified each layer's contribution.
+
+**Test count:** 1045 → 1048 (+3 config wiring tests in test_dstar_lite_planner.cpp)
+
+---
+
+_Last updated after Improvement #58 (occupancy grid config wiring + avoidance tuning, Issue #228). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1048 tests, 18 scenarios._

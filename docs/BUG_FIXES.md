@@ -1671,3 +1671,28 @@ if (dist > 0.01f) {
 3. Scenario-level SITL testing catches bugs that unit tests miss — the drone physically flying into obstacles revealed what static analysis could not.
 
 **Found by:** Scenario 18 Gazebo SITL testing — drone flew into obstacles with no reactive avoidance at close range.
+
+---
+
+### Bug #45 — Occupancy Grid Config Section Silently Ignored (#228)
+
+**Date discovered:** 2026-03-22
+**Severity:** Medium
+**Status:** FIXED (Issue #228)
+**Files:** `process4_mission_planner/include/planner/grid_planner_base.h`, `process4_mission_planner/src/main.cpp`
+
+**Bug:** Scenario JSON configs specified `occupancy_grid.resolution_m`, `occupancy_grid.inflation_radius_m`, and `occupancy_grid.dynamic_obstacle_ttl_s`, but `main.cpp` only read from `path_planner.*` keys. The entire `occupancy_grid` section was silently ignored. Additionally, `GridPlannerConfig` had no `cell_ttl_s` field and `OccupancyGrid3D`'s 4th constructor parameter (TTL) was never passed.
+
+**Root Cause:** The `occupancy_grid` config section was added to scenario JSON files but never wired through to the code. Config reads in `main.cpp` only covered `path_planner.*` keys. The grid constructor defaulted to `cell_ttl_s=3.0f` which happened to match the scenario default — masking the bug.
+
+**Fix:** Added `cell_ttl_s` and `min_confidence` fields to `GridPlannerConfig`. Updated `GridPlannerBase` constructor to pass all 5 parameters to `OccupancyGrid3D`. Added `occupancy_grid.*` config reads in `main.cpp` after `path_planner.*` reads (so scenario-specific values take priority). Added `occupancy_grid` section to `config/default.json`.
+
+**Lessons learned:**
+
+1. Config sections that exist in JSON but have no corresponding `cfg.get<>()` calls are silently dead code. A config schema validator would catch this.
+2. When constructor parameters have default values that happen to match the desired behavior, the bug is invisible until someone tries to change the config.
+3. Test config wiring explicitly — don't assume JSON keys reach their destination.
+
+**Found by:** Issue #228 investigation — discovered during root cause analysis of why tuning parameters had no effect.
+
+**Regression tests:** `GridPlannerConfig_CellTTL_PassedToGrid`, `OccupancyGrid_MinConfidence_Configurable`, `OccupancyGrid_DefaultMinConfidence_IsZeroPointThree` in `test_dstar_lite_planner.cpp`.

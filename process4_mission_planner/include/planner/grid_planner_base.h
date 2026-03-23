@@ -42,6 +42,8 @@ struct GridPlannerConfig {
     float ramp_dist_m        = 3.0f;   // distance to begin speed ramp-down
     float min_speed_mps      = 1.0f;   // minimum speed during ramp-down
     int   snap_search_radius = 8;      // goal snap search radius (grid cells)
+    float cell_ttl_s         = 3.0f;   // dynamic obstacle TTL in occupancy grid
+    float min_confidence     = 0.3f;   // minimum object confidence for grid insertion
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -72,7 +74,8 @@ class GridPlannerBase : public IGridPlanner {
 public:
     explicit GridPlannerBase(const GridPlannerConfig& config = {})
         : config_(config)
-        , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m) {}
+        , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
+                config.cell_ttl_s, config.min_confidence) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
