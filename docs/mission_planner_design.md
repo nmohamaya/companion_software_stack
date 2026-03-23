@@ -274,7 +274,7 @@ PotentialFieldAvoider (2D) removed in Issue #207 — ObstacleAvoider3D is the on
 ### ObstacleAvoider3D (`"3d"` / `"obstacle_avoider_3d"` / `"potential_field_3d"`)
 
 - **Header:** [`obstacle_avoider_3d.h`](../process4_mission_planner/include/planner/obstacle_avoider_3d.h)
-- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (16 tests)
+- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (18 tests)
 - Full 3D repulsive field (includes Z component via configurable `vertical_gain`)
 - Predictive avoidance: uses object velocities for 0.5 s look-ahead
 - Inverse-square force decay with configurable repulsive gain

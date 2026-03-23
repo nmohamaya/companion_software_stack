@@ -786,8 +786,9 @@ TEST(RadarFusionTest, AltitudeGateConfigurable) {
     drone::ipc::RadarDetectionList radar_list{};
     radar_list.timestamp_ns   = 1000;
     radar_list.num_detections = 1;
-    // Shift elevation slightly — within generous 100m gate but may fail Mahalanobis
-    radar_list.detections[0] = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+    // Shift altitude by 10m — exceeds default 2m gate but within configured 100m gate
+    float mismatched_alt     = z_pred(2) + 10.0f;
+    radar_list.detections[0] = make_radar_det(z_pred(0), z_pred(1), mismatched_alt, z_pred(3));
 
     engine.set_radar_detections(radar_list);
     auto result = engine.fuse(tracked);

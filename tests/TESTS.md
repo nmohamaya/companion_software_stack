@@ -1022,7 +1022,7 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `TripleBufferTest` | 10 | Default construction, single write/read, multiple writes (reader gets latest), no-new-data returns false, concurrent producer-consumer stress, move-only types, large payloads, write-never-blocks guarantee, atomic CAS correctness (no torn reads), reset/clear semantics |
+| `TripleBufferTest` | 10 | Default construction, single write/read, multiple writes (reader gets latest), no-new-data returns false, concurrent producer-consumer stress, move-only types, large payloads, write-never-blocks guarantee, atomic CAS correctness (no torn reads) |
 
 **Key files under test:** `util/triple_buffer.h`
 
