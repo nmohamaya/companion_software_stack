@@ -616,4 +616,4 @@
 
 ---
 
-*Last updated after Issue #225 (radar ground-plane filter + avoider dead zone fix) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1045 tests, 50 C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing. 41 bug fixes total. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Issue #225 (radar ground-plane filter + avoider dead zone fix) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1045 tests, 50 C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing. 44 bug fixes total. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

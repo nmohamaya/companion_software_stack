@@ -81,7 +81,7 @@
             "Path planner: DStarLitePlanner",
             "Obstacle avoider: ObstacleAvoider3D",
             "backend: bytetrack",
-            "Ground filter: rejected",
+            "Ground filter:",
             "TAKEOFF",
             "EXECUTING",
             "Mission complete"

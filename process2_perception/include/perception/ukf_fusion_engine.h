@@ -115,7 +115,9 @@ public:
     /// Provide radar detections for the next fuse() call.
     void set_radar_detections(const drone::ipc::RadarDetectionList& detections) override;
 
-    /// Provide current drone altitude (AGL) for radar ground-plane filtering.
+    /// Provide current drone altitude for radar ground-plane filtering.
+    /// @param altitude_m  World-frame z with ground at z=0 (i.e. AGL when
+    ///                    the world origin sits on the ground plane).
     void set_drone_altitude(float altitude_m) override;
 
 private:

@@ -556,9 +556,10 @@ TEST(RadarFusionTest, HasRadarFlagOnlyWhenMatched) {
 // ═══════════════════════════════════════════════════════════════
 
 TEST(RadarFusionTest, GroundFilterRejectsLowAltitude) {
-    // Radar detection at negative elevation resolving below 0.3m AGL should be rejected.
-    // drone_altitude=5.0m, range=10m, elevation=-0.5rad
-    // → object_alt = 5.0 + 10*sin(-0.5) ≈ 5.0 - 4.79 ≈ 0.21m → below 0.3m → rejected
+    // Construct a radar detection that WOULD match the camera track via
+    // Mahalanobis gating (same range/azimuth/elevation as predicted), then
+    // override its elevation to resolve below the ground filter threshold.
+    // This ensures the ground filter is the actual reason for rejection.
     auto             calib = make_test_calib();
     RadarNoiseConfig radar_cfg;
     radar_cfg.ground_filter_enabled = true;
@@ -567,7 +568,8 @@ TEST(RadarFusionTest, GroundFilterRejectsLowAltitude) {
     UKFFusionEngine engine(calib, radar_cfg, true);
     engine.set_drone_altitude(5.0f);
 
-    auto              trk = make_test_tracked();
+    auto              trk   = make_test_tracked();
+    float             depth = test_estimate_depth(calib, trk);
     TrackedObjectList tracked;
     tracked.timestamp_ns   = 1000;
     tracked.frame_sequence = 1;
@@ -577,11 +579,19 @@ TEST(RadarFusionTest, GroundFilterRejectsLowAltitude) {
     auto first_result = engine.fuse(tracked);
     ASSERT_EQ(first_result.objects.size(), 1u);
 
-    // Now provide a ground-return radar detection
+    // Build a detection from the track's predicted radar measurement
+    // (this would pass association), then corrupt elevation to be ground-level.
+    ObjectUKF temp_ukf(trk, depth, radar_cfg);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
     drone::ipc::RadarDetectionList radar_list{};
     radar_list.timestamp_ns   = 2000;
     radar_list.num_detections = 1;
-    radar_list.detections[0]  = make_radar_det(10.0f, 0.0f, -0.5f, 0.0f);
+    // Use predicted range/azimuth for gate match, but set elevation so
+    // object_alt = 5.0 + range*sin(el) < 0.3m  →  sin(el) < (0.3-5.0)/range
+    radar_list.detections[0] = make_radar_det(z_pred(0), z_pred(1), -0.5f, z_pred(3));
 
     engine.set_radar_detections(radar_list);
     tracked.timestamp_ns   = 2000;
@@ -589,7 +599,7 @@ TEST(RadarFusionTest, GroundFilterRejectsLowAltitude) {
     auto result            = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
 
-    // The ground detection should have been filtered — no radar match
+    // The ground filter should reject this despite matching range/azimuth
     EXPECT_FALSE(result.objects[0].has_radar);
 }
 

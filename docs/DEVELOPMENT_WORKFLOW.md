@@ -167,9 +167,10 @@ gh pr create --base main --head feature/perception-avoidance-integration \
 ```text
 main (demo-ready throughout)
   └── feature/perception-avoidance-integration
-        ├── PR #223: Issue #222 — Scenario 18 setup (merged from main, retargeted)
-        ├── PR #xxx: Issue #224 — Fusion pipeline fix (SPSC→TripleBuffer, UKF optimization)
-        └── PR #xxx: Issue #225 — Radar filtering + post-collision recovery
+        ├── PR: Issue #222 — Scenario 18 setup (merged from main, retargeted)
+        ├── PR: Issue #224 — Fusion pipeline fix (SPSC→TripleBuffer, UKF optimization)
+        ├── PR: Issue #225 — Radar filtering
+        └── PR: Issue #226 — Post-collision recovery
 ```
 
 **Lessons from this example:**

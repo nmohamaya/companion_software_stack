@@ -166,7 +166,8 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             }
         }
 
-        // Pass drone altitude for radar ground-plane filtering
+        // Pass drone altitude for radar ground-plane filtering.
+        // translation[2] is world-frame z (AGL when world origin is on the ground).
         if (has_pose) {
             engine.set_drone_altitude(static_cast<float>(latest_pose.translation[2]));
         }

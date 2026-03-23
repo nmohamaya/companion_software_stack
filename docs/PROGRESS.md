@@ -2571,7 +2571,7 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 - `process2_perception/include/perception/ifusion_engine.h` — added ground-plane filter interface
 - `process2_perception/include/perception/ukf_fusion_engine.h` — ground-plane filter implementation
 - `process2_perception/src/ukf_fusion_engine.cpp` — radar ground-plane elevation filter rejects detections below configurable AGL threshold
-- `process2_perception/src/main.cpp` — wired ground filter config
+- `process2_perception/src/main.cpp` — wired current pose altitude into fusion engine for ground-plane filtering
 - `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — fixed dead zone threshold (0.1m → 0.01m)
 - `config/default.json` — added ground filter elevation threshold parameter
 - `config/scenarios/18_perception_avoidance.json` — updated for ground filter testing

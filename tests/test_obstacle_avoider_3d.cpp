@@ -247,6 +247,63 @@ TEST(ObstacleAvoider3DTest, ConvenienceConstructor) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════
+// Vertical gain control (Issue #225)
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, VerticalGainZero_EliminatesZRepulsion) {
+    // With vertical_gain=0, Z correction should be zero while X/Y are still active.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.vertical_gain      = 0.0f;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 2.0f;  // 2m ahead
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 3.0f;  // 2m below drone — would produce Z repulsion
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // X should be repelled (obstacle is ahead)
+    EXPECT_LT(result.velocity_x, cmd.velocity_x);
+    // Z should be unchanged — vertical_gain=0 eliminates Z repulsion
+    EXPECT_FLOAT_EQ(result.velocity_z, cmd.velocity_z);
+}
+
+TEST(ObstacleAvoider3DTest, VerticalGainOne_ProducesZRepulsion) {
+    // With vertical_gain=1 (default), an obstacle below the drone should push it up.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.vertical_gain      = 1.0f;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 2.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 3.0f;  // 2m below drone
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Z should increase (pushed away from obstacle below)
+    EXPECT_GT(result.velocity_z, cmd.velocity_z);
+}
+
+// ═════════════════════════════════════════════════════════════
 // Dead zone fix: very close objects (Issue #225)
 // ═════════════════════════════════════════════════════════════
 
