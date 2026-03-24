@@ -2662,4 +2662,23 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #59 (radar fusion fix, Issue #229). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1057 tests, 18 scenarios._
+### Improvement #60 — D* Lite Queue Performance Fix: O(N) → O(log N) Removal (Issue #234)
+
+**Date:** 2026-03-24
+**Category:** Performance
+**Files Modified:**
+
+- `common/hal/include/hal/dstar_lite_planner.h` — replaced O(N) linear-scan `remove_from_queue()` with O(log N) iterator-cached version using `queue_index_` (`unordered_map<GridCell, set::iterator>`). Added `queue_insert()` helper. All insert/erase/clear sites updated.
+- `config/gazebo_sitl.json` — `max_search_time_ms` 50 → 100
+- `config/scenarios/18_perception_avoidance.json` — added `max_search_time_ms: 200` override
+- `tests/test_dstar_lite_planner.cpp` — 3 new tests (LargeGridWithObstacles, IncrementalReplan, QueueIndexConsistent)
+
+**What:** The D* Lite planner's priority queue used `std::set` for ordered iteration but `remove_from_queue()` performed an O(N) linear scan to find and erase nodes. This was called ~26 times per node expansion during replanning, making large-grid replans hit the `max_search_time_ms` wall-clock timeout and fall back to direct-to-goal. Replaced with an iterator index (`unordered_map<GridCell, set::iterator>`) so removal is O(log N) via direct iterator erase. All queue mutation sites (insert, erase, clear) maintain the index.
+
+**Why:** Scenario 18 (perception avoidance) with a dense dynamic obstacle field caused D* Lite to time out on replans, falling back to direct paths that flew through obstacles. The O(N) removal was the bottleneck — fixing it keeps replanning well within the time budget even on large grids.
+
+**Test count:** 1057 → 1060 (+3 queue performance/consistency tests)
+
+---
+
+_Last updated after Improvement #60 (D* Lite queue performance fix, Issue #234). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1060 tests, 18 scenarios._

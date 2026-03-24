@@ -667,6 +667,31 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 ---
 
+### Bug #48 — D* Lite Queue Removal O(N) Linear Scan Causes Replan Timeout (#234)
+
+**Date discovered:** 2026-03-24
+**Severity:** High
+**Status:** FIXED (Issue #234)
+**Files:** `common/hal/include/hal/dstar_lite_planner.h`, `config/gazebo_sitl.json`, `config/scenarios/18_perception_avoidance.json`
+
+**Bug:** D* Lite replanning timed out on large or dense grids, causing fallback to direct-to-goal paths that flew through obstacles. The planner's priority queue (`std::set`) supported O(log N) ordered iteration and insertion, but `remove_from_queue()` performed an O(N) linear scan (`std::find_if` over the entire set) to locate the node to erase. This was called ~26 times per node expansion during replanning. On grids with hundreds of nodes, the cumulative O(N) scans exceeded `max_search_time_ms`, triggering the timeout fallback.
+
+**Root Cause:** `remove_from_queue()` did not cache iterators from insertion. Each removal required a full linear scan of the `std::set` to find the matching `GridCell`, turning what should be an O(log N) operation into O(N).
+
+**Fix:** Added `queue_index_` (`std::unordered_map<GridCell, std::set<...>::iterator>`) that caches the iterator returned by `std::set::insert()`. Removal now looks up the iterator in O(1) from the map and erases via iterator in O(log N). Added `queue_insert()` helper to ensure all insertion sites maintain the index. All erase and clear sites updated to keep the index consistent. Also increased `max_search_time_ms` from 50 → 100 in `gazebo_sitl.json` and added a 200 ms override in Scenario 18.
+
+**Lessons learned:**
+
+1. `std::set` provides O(log N) operations only when using iterators directly. Searching by value (via `std::find_if`) degrades to O(N) and defeats the purpose of the ordered container.
+2. When a priority queue requires both ordered iteration and efficient removal-by-key, an iterator index (side map) is the standard O(log N) solution.
+3. Wall-clock timeouts in planners can mask performance regressions — the planner appears to "work" (returns a fallback path) but the quality degrades silently.
+
+**Found by:** Scenario 18 Gazebo testing — D* Lite replans timed out on dense dynamic obstacle grids, causing direct-to-goal fallback paths through obstacles.
+
+**Regression tests:** `LargeGridWithObstacles`, `IncrementalReplan`, `QueueIndexConsistent` in `test_dstar_lite_planner.cpp`.
+
+---
+
 ## Comms (Process 5)
 
 ---

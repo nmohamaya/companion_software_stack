@@ -164,6 +164,7 @@ private:
         g_.clear();
         rhs_.clear();
         U_.clear();
+        queue_index_.clear();
         km_          = 0.0f;
         last_start_  = start;
         last_goal_   = goal;
@@ -173,7 +174,7 @@ private:
         grid_.drain_changes();
 
         rhs_[goal] = 0.0f;
-        U_.insert({calculate_key(goal), goal});
+        queue_insert(goal, calculate_key(goal));
 
         spdlog::debug("[D*Lite] Initialized: start=({},{},{}) goal=({},{},{})", start.x, start.y,
                       start.z, goal.x, goal.y, goal.z);
@@ -203,18 +204,23 @@ private:
 
         // Re-insert if locally inconsistent
         if (g(u) != rhs(u)) {
-            U_.insert({calculate_key(u), u});
+            queue_insert(u, calculate_key(u));
         }
     }
 
-    // ── Remove a cell from the priority queue ────────────────
+    // ── Queue helpers (O(log N) via reverse index) ─────────────
+    void queue_insert(const GridCell& cell, const Key& key) {
+        auto [sit, inserted] = U_.insert({key, cell});
+        if (inserted) {
+            queue_index_[cell] = sit;
+        }
+    }
+
     void remove_from_queue(const GridCell& u) {
-        // Linear scan — the set is typically small after incremental changes.
-        for (auto sit = U_.begin(); sit != U_.end(); ++sit) {
-            if (sit->cell == u) {
-                U_.erase(sit);
-                return;
-            }
+        auto it = queue_index_.find(u);
+        if (it != queue_index_.end()) {
+            U_.erase(it->second);
+            queue_index_.erase(it);
         }
     }
 
@@ -256,10 +262,11 @@ private:
             Key      k_old = top_it->key;
             Key      k_new = calculate_key(u);
             U_.erase(top_it);
+            queue_index_.erase(u);
 
             if (k_old < k_new) {
                 // Key has changed — re-insert with updated key
-                U_.insert({k_new, u});
+                queue_insert(u, k_new);
             } else if (g(u) > rhs(u)) {
                 // Over-consistent → make consistent
                 g_[u] = rhs(u);
@@ -339,13 +346,14 @@ private:
     }
 
     // ── D* Lite state ────────────────────────────────────────
-    std::unordered_map<GridCell, float, GridCellHash> g_;
-    std::unordered_map<GridCell, float, GridCellHash> rhs_;
-    std::set<QueueEntry>                              U_;
-    GridCell                                          last_start_{};
-    GridCell                                          last_goal_{};
-    float                                             km_          = 0.0f;
-    bool                                              initialized_ = false;
+    std::unordered_map<GridCell, float, GridCellHash>                          g_;
+    std::unordered_map<GridCell, float, GridCellHash>                          rhs_;
+    std::set<QueueEntry>                                                       U_;
+    std::unordered_map<GridCell, std::set<QueueEntry>::iterator, GridCellHash> queue_index_;
+    GridCell                                                                   last_start_{};
+    GridCell                                                                   last_goal_{};
+    float                                                                      km_          = 0.0f;
+    bool                                                                       initialized_ = false;
 };
 
 }  // namespace drone::planner
