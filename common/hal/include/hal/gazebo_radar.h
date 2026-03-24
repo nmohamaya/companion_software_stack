@@ -238,9 +238,13 @@ private:
             // Ground rejection: compute ray's world-frame altitude and skip
             // returns below ground_filter_alt_m_ (Issue #229).
             // object_alt = drone_alt + range * sin(elevation)
-            const float object_alt = drone_altitude_m_.load(std::memory_order_acquire) +
-                                     range * std::sin(el);
-            if (object_alt < ground_filter_alt_m_) continue;
+            // Skip filter if no odometry altitude received yet — avoids dropping
+            // all detections when the vehicle spawns above ground.
+            if (has_altitude_.load(std::memory_order_acquire)) {
+                const float object_alt = drone_altitude_m_.load(std::memory_order_acquire) +
+                                         range * std::sin(el);
+                if (object_alt < ground_filter_alt_m_) continue;
+            }
 
             // Build detection from ray geometry + body velocity
             auto det = ray_to_detection(range, az, el, vx, vy, vz);
@@ -308,6 +312,7 @@ private:
         if (msg.has_pose()) {
             drone_altitude_m_.store(static_cast<float>(msg.pose().position().z()),
                                     std::memory_order_release);
+            has_altitude_.store(true, std::memory_order_release);
         }
 
         odom_count_.fetch_add(1, std::memory_order_acq_rel);
@@ -340,6 +345,7 @@ private:
 
     // ── Drone altitude for HAL-level ground filtering ────────
     std::atomic<float> drone_altitude_m_{0.0f};
+    std::atomic<bool>  has_altitude_{false};
 
     // ── RNG for noise injection (guarded by rng_mutex_) ───────
     mutable std::mutex                            rng_mutex_;
