@@ -50,6 +50,12 @@ protected:
             need_init = true;
         }
 
+        // km_ too large → key recycling wastes iterations (drone moved far)
+        if (initialized_ && km_ > 10.0f) {
+            spdlog::info("[D*Lite] km_={:.1f} > 10 — reinitialising to avoid key churn", km_);
+            need_init = true;
+        }
+
         if (need_init) {
             initialize(start, goal);
         } else {
@@ -83,7 +89,10 @@ protected:
         bool ok = compute_shortest_path();
 
         if (!ok || g(last_start_) >= kInf) {
-            spdlog::debug("[D*Lite] No path found — direct line fallback");
+            spdlog::info("[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} "
+                         "queue={} occupied={}",
+                         last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
+                         last_goal_.z, g(last_start_), U_.size(), grid_.occupied_count());
             return false;
         }
 
@@ -140,6 +149,11 @@ private:
     float cost(const GridCell& a, const GridCell& b) const {
         if (grid_.is_occupied(a) || grid_.is_occupied(b)) return kInf;
         if (!grid_.in_bounds(a) || !grid_.in_bounds(b)) return kInf;
+        // Z-band: prune cells outside the flight altitude band to prevent
+        // 3D search from wasting iterations exploring irrelevant altitudes.
+        if (z_band_cells_ > 0) {
+            if (b.z < z_min_ || b.z > z_max_) return kInf;
+        }
         int dx = std::abs(a.x - b.x);
         int dy = std::abs(a.y - b.y);
         int dz = std::abs(a.z - b.z);
@@ -170,14 +184,21 @@ private:
         last_goal_   = goal;
         initialized_ = true;
 
+        // Compute Z-band limits from start/goal altitudes
+        z_band_cells_ = config_.z_band_cells;
+        if (z_band_cells_ > 0) {
+            z_min_ = std::min(start.z, goal.z) - z_band_cells_;
+            z_max_ = std::max(start.z, goal.z) + z_band_cells_;
+        }
+
         // Drain any pending changes since we're doing a full init
         grid_.drain_changes();
 
         rhs_[goal] = 0.0f;
         queue_insert(goal, calculate_key(goal));
 
-        spdlog::debug("[D*Lite] Initialized: start=({},{},{}) goal=({},{},{})", start.x, start.y,
-                      start.z, goal.x, goal.y, goal.z);
+        spdlog::info("[D*Lite] Init: start=({},{},{}) goal=({},{},{}) z_band=[{},{}]", start.x,
+                     start.y, start.z, goal.x, goal.y, goal.z, z_min_, z_max_);
     }
 
     // ── Update vertex ────────────────────────────────────────
@@ -245,15 +266,15 @@ private:
 
             ++iterations;
             if (iterations > config_.max_iterations) {
-                spdlog::debug("[D*Lite] Hit iteration limit {}", config_.max_iterations);
+                spdlog::info("[D*Lite] Hit iteration limit {}", config_.max_iterations);
                 break;
             }
 
             // Check wall-clock timeout every 64 iterations
             if (use_timeout && (iterations & 63) == 0) {
                 if (std::chrono::steady_clock::now() >= deadline) {
-                    spdlog::debug("[D*Lite] Timeout after {} iterations ({:.1f}ms limit)",
-                                  iterations, config_.max_search_time_ms);
+                    spdlog::info("[D*Lite] Timeout after {} iterations ({:.1f}ms limit)",
+                                 iterations, config_.max_search_time_ms);
                     break;
                 }
             }
@@ -292,8 +313,8 @@ private:
             }
         }
 
-        spdlog::debug("[D*Lite] compute_shortest_path: {} iterations, queue size {}", iterations,
-                      U_.size());
+        spdlog::debug("[D*Lite] search: {} iters, queue={}, g(start)={:.0f}", iterations, U_.size(),
+                      g(last_start_));
         return g(last_start_) < kInf;
     }
 
@@ -354,6 +375,9 @@ private:
     GridCell                                                                   last_goal_{};
     float                                                                      km_          = 0.0f;
     bool                                                                       initialized_ = false;
+    int                                                                        z_band_cells_ = 0;
+    int                                                                        z_min_        = -50;
+    int                                                                        z_max_        = 50;
 };
 
 }  // namespace drone::planner
