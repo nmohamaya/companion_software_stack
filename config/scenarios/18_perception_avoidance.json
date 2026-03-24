@@ -12,7 +12,7 @@
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 5.0,
             "cruise_speed_mps": 1.5,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 200},
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 200, "z_band_cells": 3},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,

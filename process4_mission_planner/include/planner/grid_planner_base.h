@@ -44,6 +44,8 @@ struct GridPlannerConfig {
     int   snap_search_radius = 8;      // goal snap search radius (grid cells)
     float cell_ttl_s         = 3.0f;   // dynamic obstacle TTL in occupancy grid
     float min_confidence     = 0.3f;   // minimum object confidence for grid insertion
+    int   z_band_cells       = 0;      // Z-band limit: restrict search to ±N cells around
+                                       // start/goal Z range (0 = unlimited, full 3D search)
 };
 
 // ─────────────────────────────────────────────────────────────

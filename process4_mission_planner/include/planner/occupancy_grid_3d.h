@@ -222,11 +222,11 @@ public:
 
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
-            spdlog::debug("[Grid] {} objs (accepted={}, excluded_cells={}), {} occupied cells, "
-                          "drone=({},{},{})",
-                          objects.num_objects, accepted, excluded_cells, occupied_.size(),
-                          drone_cell.x, drone_cell.y, drone_cell.z);
-            for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{4}); ++i) {
+            spdlog::info("[Grid] {} objs (accepted={}, excluded_cells={}), {} occupied cells, "
+                         "drone=({},{},{})",
+                         objects.num_objects, accepted, excluded_cells, occupied_.size(),
+                         drone_cell.x, drone_cell.y, drone_cell.z);
+            for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
                     spdlog::debug("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,

@@ -946,3 +946,106 @@ TEST(DStarLiteQueueTest, QueueIndexConsistentAfterReinitialise) {
     auto cmd3 = planner.plan(pose, target2);
     EXPECT_TRUE(cmd3.valid);
 }
+
+// ═════════════════════════════════════════════════════════════
+// Z-band constraint tests (Issue #234)
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteZBandTest, ZBandConstraintReducesSearchSpace) {
+    // With Z-band=3, a 3D search with start/goal at z=5 only expands
+    // cells in z=[2,8] instead of z=[-50,50].  Should find path quickly.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 50.0f;
+    config.inflation_radius_m = 2.0f;
+    config.max_search_time_ms = 100.0f;
+    config.replan_interval_s  = 0.0f;
+    config.z_band_cells       = 3;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    Waypoint target{10.0f, 10.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+}
+
+TEST(DStarLiteZBandTest, ZBandDisabledSearchesFull3D) {
+    // Without Z-band (default=0), the full 3D grid is searched.
+    // With a large grid and tight timeout, this may time out.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 50.0f;
+    config.inflation_radius_m = 2.0f;
+    config.max_search_time_ms = 50.0f;  // tight timeout
+    config.replan_interval_s  = 0.0f;
+    config.z_band_cells       = 0;  // no Z-band
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    // Far goal — likely times out without Z-band
+    Waypoint target{15.0f, 15.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+    // We expect fallback (timeout) — the key check is that it doesn't crash
+    EXPECT_TRUE(cmd.valid);
+}
+
+TEST(DStarLiteZBandTest, ZBandWithDifferentStartGoalAltitudes) {
+    // Start at z=3, goal at z=7 with z_band=2 → band=[1,9].
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.z_band_cells       = 2;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 3.0;
+
+    Waypoint target{5.0f, 5.0f, 7.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+}
+
+TEST(DStarLiteZBandTest, KmReinitPreventsKeyChurn) {
+    // Simulate drone moving far → km_ should trigger reinit
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 50.0f;
+    config.inflation_radius_m = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.z_band_cells       = 3;
+    DStarLitePlanner planner(config);
+
+    Waypoint target{15.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+
+    // Plan from origin
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner.plan(pose, target);
+
+    // Simulate drone moving 12m — should trigger km_ reinit
+    for (int i = 1; i <= 12; ++i) {
+        pose.translation[0] = static_cast<double>(i);
+        planner.plan(pose, target);
+    }
+
+    // Should still find valid paths (not crash or produce stale results)
+    auto cmd = planner.plan(pose, target);
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+}

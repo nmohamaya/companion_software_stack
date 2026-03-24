@@ -193,6 +193,8 @@ int main(int argc, char* argv[]) {
                                             planner_cfg.cell_ttl_s);
     planner_cfg.min_confidence = cfg.get<float>("mission_planner.occupancy_grid.min_confidence",
                                                 planner_cfg.min_confidence);
+    planner_cfg.z_band_cells   = cfg.get<int>("mission_planner.path_planner.z_band_cells",
+                                              planner_cfg.z_band_cells);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
