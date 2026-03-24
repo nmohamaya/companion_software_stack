@@ -276,8 +276,13 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             }
         }
 
-        // Rate-limited sleep — consistent cadence regardless of work done
+        // Rate-limited sleep — reset next_tick if we fell behind to avoid
+        // catch-up spinning (sleep_until returning immediately for many iterations).
         next_tick += period;
+        auto now = std::chrono::steady_clock::now();
+        if (now > next_tick) {
+            next_tick = now;
+        }
         std::this_thread::sleep_until(next_tick);
     }
     spdlog::info("[Fusion] Thread stopped after {} cycles (reads={})", fusion_count,

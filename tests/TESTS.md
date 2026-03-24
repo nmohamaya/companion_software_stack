@@ -527,8 +527,8 @@ path-aware mode.
 | `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown throws |
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
-| `VerticalGainTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
-| `PathAwareAvoider` | 2 | Path-aware mode strips backward repulsion opposing planned direction, lateral repulsion preserved |
+| `ObstacleAvoider3DTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
+| `ObstacleAvoider3DTest` | 4 | Path-aware mode: strips backward repulsion, preserves lateral, preserves same-direction, disabled fallback |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 
@@ -1115,7 +1115,7 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 15 — FC Quick Recovery | 1 | No | — | FC link lost + quick reconnect → LOITER then resume |
 | 16 — VIO Failure | 2 | Yes | 6 | VIO degradation fault → LOITER/RTL escalation (geofence disabled — VIO drift crosses boundary in SITL) |
 | 17 — Radar Gazebo | 2 | Yes | 8 | GazeboRadarBackend subscribes to gpu_lidar scan topic, converts to RadarDetectionList, UKF fusion consumes detections |
-| 18 — Perception Avoidance | 2 | Yes | 8 | Camera-only obstacle avoidance — no HD-map, D* Lite dynamic layer replans from color_contour detections |
+| 18 — Perception Avoidance | 2 | Yes | 8 | Camera + radar obstacle avoidance with UKF fusion — no HD-map, D* Lite dynamic layer replans from color_contour detections and radar tracks |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash
