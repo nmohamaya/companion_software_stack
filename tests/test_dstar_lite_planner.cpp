@@ -813,3 +813,136 @@ TEST(OccupancyGrid3DTest, DefaultMinConfidence_IsZeroPointThree) {
     auto cell = grid.world_to_grid(10.0f, 10.0f, 2.0f);
     EXPECT_FALSE(grid.is_occupied(cell));
 }
+
+// ═════════════════════════════════════════════════════════════
+// Queue performance tests (Issue #234)
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteQueueTest, LargeGridWithObstaclesCompletesWithinTimeout) {
+    // With the O(log N) queue_index_ fix, a densely-occupied grid should
+    // complete search within the timeout rather than falling back.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 50.0f;
+    config.inflation_radius_m = 2.0f;
+    config.max_search_time_ms = 200.0f;
+    config.max_iterations     = 500000;
+    config.replan_interval_s  = 0.0f;
+    DStarLitePlanner planner(config);
+
+    // Add obstacles to populate the grid — simulate detected objects
+    drone::ipc::DetectedObjectList objects{};
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    objects.num_objects = 6;
+    // Scatter obstacles across the grid
+    float positions[][3] = {{5, 5, 3}, {10, 8, 3}, {15, 3, 3}, {8, 12, 3}, {20, 7, 3}, {12, 15, 3}};
+    for (uint32_t i = 0; i < objects.num_objects; ++i) {
+        objects.objects[i]            = {};
+        objects.objects[i].confidence = 0.9f;
+        objects.objects[i].position_x = positions[i][0];
+        objects.objects[i].position_y = positions[i][1];
+        objects.objects[i].position_z = positions[i][2];
+    }
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 4.0;
+    planner.update_obstacles(objects, pose);
+
+    // Plan from origin to far side — must route around obstacles
+    Waypoint target{25.0f, 0.0f, 4.0f, 0.0f, 2.0f, 3.0f, false};
+
+    auto start_time = std::chrono::steady_clock::now();
+    auto cmd        = planner.plan(pose, target);
+    auto elapsed_ms =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start_time)
+            .count();
+
+    EXPECT_TRUE(cmd.valid);
+    // Should complete well within timeout — the O(log N) fix makes this fast
+    EXPECT_LT(elapsed_ms, 200.0f);
+}
+
+TEST(DStarLiteQueueTest, IncrementalReplanWithManyChanges) {
+    // Verify incremental replanning stays fast when obstacles are added
+    // frame-by-frame (the real-world perception scenario).
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 30.0f;
+    config.inflation_radius_m = 2.0f;
+    config.max_search_time_ms = 100.0f;
+    config.max_iterations     = 500000;
+    config.replan_interval_s  = 0.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 4.0;
+
+    Waypoint target{20.0f, 10.0f, 4.0f, 0.0f, 2.0f, 3.0f, false};
+
+    // Initial plan (no obstacles) — should succeed
+    auto cmd = planner.plan(pose, target);
+    EXPECT_TRUE(cmd.valid);
+
+    // Add obstacles incrementally (simulating perception detections)
+    for (int frame = 0; frame < 5; ++frame) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.timestamp_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+        objects.num_objects           = 1;
+        objects.objects[0]            = {};
+        objects.objects[0].confidence = 0.9f;
+        objects.objects[0].position_x = 5.0f + static_cast<float>(frame) * 3.0f;
+        objects.objects[0].position_y = 5.0f;
+        objects.objects[0].position_z = 4.0f;
+        planner.update_obstacles(objects, pose);
+
+        auto start_time = std::chrono::steady_clock::now();
+        cmd             = planner.plan(pose, target);
+        auto elapsed_ms =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start_time)
+                .count();
+
+        EXPECT_TRUE(cmd.valid);
+        // Each incremental replan should be fast
+        EXPECT_LT(elapsed_ms, 100.0f);
+    }
+}
+
+TEST(DStarLiteQueueTest, QueueIndexConsistentAfterReinitialise) {
+    // When the planner reinitialises (goal change), the queue_index_ must
+    // be cleared and rebuilt correctly.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 3.0;
+
+    // Plan to first goal
+    Waypoint target1{10.0f, 0.0f, 3.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd1 = planner.plan(pose, target1);
+    EXPECT_TRUE(cmd1.valid);
+
+    // Change goal — triggers reinitialise
+    Waypoint target2{0.0f, 10.0f, 3.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd2 = planner.plan(pose, target2);
+    EXPECT_TRUE(cmd2.valid);
+
+    // Plan again to second goal — should still work (no stale iterators)
+    auto cmd3 = planner.plan(pose, target2);
+    EXPECT_TRUE(cmd3.valid);
+}

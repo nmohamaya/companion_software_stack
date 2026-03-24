@@ -107,7 +107,7 @@
         "rtl_min_dwell_seconds": 5,
         "path_planner": {
             "backend": "dstar_lite",
-            "max_search_time_ms": 50
+            "max_search_time_ms": 100
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"
