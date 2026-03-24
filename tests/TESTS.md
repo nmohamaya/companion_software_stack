@@ -101,7 +101,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
 | [P2 — Perception](#p2--perception) | 5 | 135 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 97 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 98 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -436,14 +436,14 @@ occlusion recovery, config/factory integration.
 
 ## P4 — Mission Planner
 
-### test_mission_fsm.cpp — 12 tests
+### test_mission_fsm.cpp — 13 tests
 
 **What it tests:** `MissionFSM` state machine — the core flight mission
 lifecycle.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionFSMTest` | 12 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset), next_waypoint accessor |
+| `MissionFSMTest` | 13 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor |
 
 **Key files under test:** `planner/mission_fsm.h`
 

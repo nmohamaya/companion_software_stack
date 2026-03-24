@@ -2718,8 +2718,8 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 - `MissionFSM::next_waypoint()` — returns pointer to the next waypoint (or nullptr if at last)
 - `MissionFSM::waypoint_overshot()` — dot-product overshoot check against approach vector
 
-**Test count:** 1064 → 1070 (+5 FSM unit tests, +1 integration test).
+**Test count:** 1064 → 1071 (+6 FSM unit tests, +1 integration test).
 
 ---
 
-_Last updated after Improvement #62 (waypoint overshoot detection, Issue #236). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1070 tests, 18 scenarios._
+_Last updated after Improvement #62 (waypoint overshoot detection, Issue #236). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1071 tests, 18 scenarios._

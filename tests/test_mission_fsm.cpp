@@ -152,6 +152,15 @@ TEST(MissionFSMTest, OvershootWithLateralOffset) {
     EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 3.0f, 5.0f));
 }
 
+TEST(MissionFSMTest, NoOvershootWhenFarFromWaypoint) {
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    // Drone at (20,0,5) — "past" WP0 in dot-product sense but 10m away
+    // (proximity zone = 3 × 2.0 = 6m), so overshoot must NOT trigger
+    EXPECT_FALSE(fsm.waypoint_overshot(20.0f, 0.0f, 5.0f));
+}
+
 TEST(MissionFSMTest, NextWaypointAccessor) {
     MissionFSM fsm;
     fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});

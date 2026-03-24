@@ -79,16 +79,26 @@ public:
 
     /// Check if the drone has passed the current waypoint along the approach
     /// vector toward the next waypoint (dot-product sign check).
+    /// Only triggers when the drone is within `overshoot_proximity_factor` ×
+    /// acceptance_radius of the waypoint — prevents premature advancement when
+    /// the drone is far away and merely "ahead" in the dot-product sense.
     /// Returns false for the last waypoint — it always requires acceptance radius.
     [[nodiscard]] bool waypoint_overshot(float px, float py, float pz) const {
         const Waypoint* wp  = current_waypoint();
         const Waypoint* nwp = next_waypoint();
         if (!wp || !nwp) return false;
 
-        // Approach vector: current_wp → next_wp
-        float ax = nwp->x - wp->x, ay = nwp->y - wp->y, az = nwp->z - wp->z;
         // Drone offset from current WP
         float dx = px - wp->x, dy = py - wp->y, dz = pz - wp->z;
+        float dist_sq = dx * dx + dy * dy + dz * dz;
+
+        // Must be within proximity zone (3× acceptance radius) to qualify
+        constexpr float kProximityFactor = 3.0f;
+        float           proximity_r      = wp->radius * kProximityFactor;
+        if (dist_sq > proximity_r * proximity_r) return false;
+
+        // Approach vector: current_wp → next_wp
+        float ax = nwp->x - wp->x, ay = nwp->y - wp->y, az = nwp->z - wp->z;
 
         // Positive dot product means drone is past WP along approach direction
         return (dx * ax + dy * ay + dz * az) > 0.0f;
