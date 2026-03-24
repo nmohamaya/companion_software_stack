@@ -692,6 +692,38 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 ---
 
+### Bug #49 — D* Lite 3D Search Explores Full Z-Axis, Causing Timeout at Flight Altitude (#234)
+
+**Date discovered:** 2026-03-24
+**Severity:** High
+**Status:** FIXED (Issue #234)
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`, `process4_mission_planner/include/planner/grid_planner_base.h`, `config/scenarios/18_perception_avoidance.json`
+
+**Bug:** Even after the O(N)→O(log N) queue fix (Bug #48), D* Lite never found a path in Scenario 18 — 203/203 frames fell back to direct line, 0 successful paths. The drone oscillated near the first obstacle and eventually went unstable. Diagnostic logging revealed the search timed out at 200ms with only ~2800 iterations and a queue of 2000+ nodes, despite only 70-80 occupied cells in the grid.
+
+**Root Cause:** Two issues:
+
+1. **Unbounded Z-axis search**: The grid spans ±50m in all axes (100³ = 1M cells) but the drone and obstacles were all at z=4-5m. D* Lite's 26-connectivity 3D expansion explored z=-50..+50, wasting iterations on irrelevant altitudes. A 12-cell distance in 3D requires ~7200 cell expansions (sphere volume), but the 200ms timeout only allowed ~2800.
+
+2. **km_ key recycling**: As the drone moved, `km_` accumulated via `heuristic(last_start, new_start)`. All queue keys include `km_`, so when nodes were popped, their keys were stale (calculated with a smaller `km_`). The `k_old < k_new` check re-inserted them, wasting iterations recycling nodes instead of making forward progress.
+
+**Fix:**
+
+1. Added `z_band_cells` config parameter: restricts D* Lite's cost function to return Inf for cells outside ±N cells of the start/goal Z range. With `z_band_cells=3`, the search volume drops from 100³ to 100²×7 — a ~14x reduction. First search completes in 95 iterations (was timing out at 2800).
+2. Added `km_` reinit threshold (>10.0): when the accumulated heuristic correction exceeds 10, reinitialize D* Lite for a fresh search instead of fighting key churn. Fresh search after reinit completes in ~97 iterations.
+
+**Lessons learned:**
+
+1. 3D path planning with 26-connectivity has cubic expansion cost — always constrain the search space to the relevant altitude band for fixed-wing or rotorcraft scenarios.
+2. D* Lite's `km_` correction is exact in theory but degrades in practice when the start moves continuously (every frame at 10Hz). A reinit threshold is more practical than unbounded accumulation.
+3. Diagnostic logging at info level (grid state, search stats) is essential for understanding planner behavior in simulation — promote these during development.
+
+**Found by:** Scenario 18 Gazebo testing with diagnostic logging — grid had only 70 occupied cells but search timed out exploring irrelevant Z layers.
+
+**Regression tests:** `ZBandConstraintReducesSearchSpace`, `ZBandDisabledSearchesFull3D`, `ZBandWithDifferentStartGoalAltitudes`, `KmReinitPreventsKeyChurn` in `test_dstar_lite_planner.cpp`.
+
+---
+
 ## Comms (Process 5)
 
 ---

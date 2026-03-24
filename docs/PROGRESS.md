@@ -2681,4 +2681,25 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #60 (D* Lite queue performance fix, Issue #234). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1060 tests, 18 scenarios._
+### Improvement #61 — D* Lite Z-Band Constraint + km Reinit for 3D Search (Issue #234)
+
+**Date:** 2026-03-24
+**Category:** Performance / Bug Fix
+**Files Modified:**
+
+- `process4_mission_planner/include/planner/dstar_lite_planner.h` — added `z_band_cells_` Z-axis constraint (prunes cells outside ±N of flight altitude in cost function), `km_` reinit threshold (>10.0), promoted key diagnostic logs to info level
+- `process4_mission_planner/include/planner/grid_planner_base.h` — added `z_band_cells` to `GridPlannerConfig`
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — promoted grid summary log to info, increased object dump to 8 entries
+- `process4_mission_planner/src/main.cpp` — wire `z_band_cells` from config
+- `config/scenarios/18_perception_avoidance.json` — set `z_band_cells: 3`
+- `tests/test_dstar_lite_planner.cpp` — 4 new Z-band tests
+
+**What:** D* Lite's 3D search with 26-connectivity explored the full z=[-50,+50] range even when drone and obstacles were at z=4-5m. This caused the search to time out at 200ms with only ~2800 iterations (needed ~7000 for a 12-cell distance in 3D). Additionally, `km_` accumulated as the drone moved, inflating all queue keys and causing expensive re-insertion of stale nodes. The Z-band constraint limits the search to ±N cells around start/goal Z, reducing volume ~14x. The `km_` reinit threshold triggers a fresh search when the heuristic correction grows too large.
+
+**Why:** Even after the O(N)→O(log N) queue fix, Scenario 18 D* Lite never found a path (0/203 frames successful). The Z-band reduces first-search from ~7000 iterations to ~95. With `km_` reinit, incremental updates stay at 6-100 iterations per frame.
+
+**Test count:** 1060 → 1064 (+4 Z-band tests). Scenario 18 passes (18/18 checks, all 5 waypoints reached).
+
+---
+
+_Last updated after Improvement #61 (D* Lite Z-band + km reinit, Issue #234). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1064 tests, 18 scenarios._
