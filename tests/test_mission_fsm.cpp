@@ -111,3 +111,56 @@ TEST(MissionFSMTest, StateNames) {
     EXPECT_STREQ(state_name(MissionState::RTL), "RTL");
     EXPECT_STREQ(state_name(MissionState::LAND), "LAND");
 }
+
+// ═══════════════════════════════════════════════════════════
+// Waypoint overshoot detection (Issue #236)
+// ═══════════════════════════════════════════════════════════
+
+TEST(MissionFSMTest, OvershootDetectedWhenPastWaypoint) {
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    // Drone at (15,0,5) — past WP0 (10,0,5) toward WP1 (20,0,5)
+    EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 0.0f, 5.0f));
+}
+
+TEST(MissionFSMTest, NoOvershootWhenBeforeWaypoint) {
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    // Drone at (5,0,5) — behind WP0 relative to WP1
+    EXPECT_FALSE(fsm.waypoint_overshot(5.0f, 0.0f, 5.0f));
+}
+
+TEST(MissionFSMTest, NoOvershootOnLastWaypoint) {
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    // Advance to last waypoint
+    EXPECT_TRUE(fsm.advance_waypoint());
+    EXPECT_EQ(fsm.current_wp_index(), 1u);
+
+    // Drone past last WP — must NOT report overshoot (require acceptance radius)
+    EXPECT_FALSE(fsm.waypoint_overshot(25.0f, 0.0f, 5.0f));
+}
+
+TEST(MissionFSMTest, OvershootWithLateralOffset) {
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    // Drone at (15,3,5) — past WP0 along approach vector but laterally offset
+    EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 3.0f, 5.0f));
+}
+
+TEST(MissionFSMTest, NextWaypointAccessor) {
+    MissionFSM fsm;
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    const auto* nwp = fsm.next_waypoint();
+    ASSERT_NE(nwp, nullptr);
+    EXPECT_FLOAT_EQ(nwp->x, 20.0f);
+
+    // Advance to last — no next waypoint
+    EXPECT_TRUE(fsm.advance_waypoint());
+    EXPECT_EQ(fsm.next_waypoint(), nullptr);
+}

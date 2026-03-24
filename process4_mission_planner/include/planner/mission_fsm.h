@@ -72,6 +72,28 @@ public:
         return nullptr;
     }
 
+    [[nodiscard]] const Waypoint* next_waypoint() const {
+        if (current_wp_ + 1 < waypoints_.size()) return &waypoints_[current_wp_ + 1];
+        return nullptr;
+    }
+
+    /// Check if the drone has passed the current waypoint along the approach
+    /// vector toward the next waypoint (dot-product sign check).
+    /// Returns false for the last waypoint — it always requires acceptance radius.
+    [[nodiscard]] bool waypoint_overshot(float px, float py, float pz) const {
+        const Waypoint* wp  = current_waypoint();
+        const Waypoint* nwp = next_waypoint();
+        if (!wp || !nwp) return false;
+
+        // Approach vector: current_wp → next_wp
+        float ax = nwp->x - wp->x, ay = nwp->y - wp->y, az = nwp->z - wp->z;
+        // Drone offset from current WP
+        float dx = px - wp->x, dy = py - wp->y, dz = pz - wp->z;
+
+        // Positive dot product means drone is past WP along approach direction
+        return (dx * ax + dy * ay + dz * az) > 0.0f;
+    }
+
     [[nodiscard]] bool advance_waypoint() {
         if (current_wp_ + 1 < waypoints_.size()) {
             ++current_wp_;

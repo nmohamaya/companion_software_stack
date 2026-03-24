@@ -2702,4 +2702,24 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #61 (D* Lite Z-band + km reinit, Issue #234). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1064 tests, 18 scenarios._
+### Improvement #62 — Waypoint Overshoot Detection (Issue #236)
+
+**Date:** 2026-03-24
+**Category:** Navigation / Mission Planning
+**Files Modified:**
+- `process4_mission_planner/include/planner/mission_fsm.h`
+- `process4_mission_planner/include/planner/mission_state_tick.h`
+
+**What:** Added direction-aware waypoint overshoot detection to the mission FSM. When the drone has passed a waypoint along the approach vector toward the next waypoint, the FSM now advances automatically instead of requiring the drone to double back into the acceptance radius. Uses a dot-product sign check against the current→next waypoint vector. The final waypoint always requires the acceptance radius (no overshoot shortcut).
+
+**Why:** During Scenario 18 (perception avoidance) Gazebo testing, the drone would fly past waypoints near obstacles and then reverse course to enter the acceptance sphere — causing jerky flight and sometimes re-entering obstacle zones it had already avoided.
+
+**New methods:**
+- `MissionFSM::next_waypoint()` — returns pointer to the next waypoint (or nullptr if at last)
+- `MissionFSM::waypoint_overshot()` — dot-product overshoot check against approach vector
+
+**Test count:** 1064 → 1070 (+5 FSM unit tests, +1 integration test).
+
+---
+
+_Last updated after Improvement #62 (waypoint overshoot detection, Issue #236). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1070 tests, 18 scenarios._
