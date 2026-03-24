@@ -101,7 +101,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
 | [P2 — Perception](#p2--perception) | 5 | 135 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 87 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 91 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -534,11 +534,12 @@ path-aware mode.
 
 ---
 
-### test_dstar_lite_planner.cpp — 39 tests
+### test_dstar_lite_planner.cpp — 43 tests
 
 **What it tests:** D* Lite incremental path planner — occupancy grid basics, change tracking,
-D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLitePlanner`
-(IPathPlanner implementation) integration, grid cell hashing, factory registration.
+D* Lite search algorithm, incremental replanning, wall-clock timeout, Z-band constraint,
+km reinit, `DStarLitePlanner` (IPathPlanner implementation) integration, grid cell hashing,
+factory registration.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -552,6 +553,7 @@ D* Lite search algorithm, incremental replanning, wall-clock timeout, `DStarLite
 | `DStarLiteNameTest` | 1 | Name is "DStarLitePlanner" |
 | `GridPlannerConfigTest` | 1 | cell_ttl_s propagates through config to OccupancyGrid3D (cells expire after configured TTL) |
 | `DStarLiteQueuePerfTest` | 3 | Large grid with obstacles completes within timeout, incremental replan after obstacle insertion, queue index stays consistent with set contents across insert/erase/clear |
+| `DStarLiteZBandTest` | 4 | Z-band constraint reduces search space, disabled Z-band searches full 3D, different start/goal altitudes compute correct band, km reinit prevents key churn after drone movement |
 | `PathPlannerFactory` | 2 | Factory creates D* Lite, unknown backend throws |
 
 **Key files under test:** `planner/dstar_lite_planner.h`, `planner/occupancy_grid_3d.h`, `planner/grid_planner_base.h`, `planner/planner_factory.h`
@@ -1203,4 +1205,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1060 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #234: D* Lite queue performance fix — O(N) to O(log N) removal (3 new tests). All 1060 tests passing.*
+*Last updated: March 2026 — 1064 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #234: D* Lite Z-band constraint + km reinit (4 new tests). All 1064 tests passing.*
