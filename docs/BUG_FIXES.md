@@ -672,7 +672,7 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 **Date discovered:** 2026-03-24
 **Severity:** High
 **Status:** FIXED (Issue #234)
-**Files:** `common/hal/include/hal/dstar_lite_planner.h`, `config/gazebo_sitl.json`, `config/scenarios/18_perception_avoidance.json`
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`, `config/gazebo_sitl.json`, `config/scenarios/18_perception_avoidance.json`
 
 **Bug:** D* Lite replanning timed out on large or dense grids, causing fallback to direct-to-goal paths that flew through obstacles. The planner's priority queue (`std::set`) supported O(log N) ordered iteration and insertion, but `remove_from_queue()` performed an O(N) linear scan (`std::find_if` over the entire set) to locate the node to erase. This was called ~26 times per node expansion during replanning. On grids with hundreds of nodes, the cumulative O(N) scans exceeded `max_search_time_ms`, triggering the timeout fallback.
 

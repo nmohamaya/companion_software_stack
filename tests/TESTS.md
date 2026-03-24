@@ -552,7 +552,7 @@ factory registration.
 | `DStarLiteIntegrationTest` | 6 | Plan returns valid cmd, goal snapping works, EMA smoothing, speed ramping near target, update obstacles integration, factory registered |
 | `DStarLiteNameTest` | 1 | Name is "DStarLitePlanner" |
 | `GridPlannerConfigTest` | 1 | cell_ttl_s propagates through config to OccupancyGrid3D (cells expire after configured TTL) |
-| `DStarLiteQueuePerfTest` | 3 | Large grid with obstacles completes within timeout, incremental replan after obstacle insertion, queue index stays consistent with set contents across insert/erase/clear |
+| `DStarLiteQueueTest` | 3 | Large grid with obstacles completes within timeout, incremental replan after obstacle insertion, planner returns valid cmd while meeting timing budget |
 | `DStarLiteZBandTest` | 4 | Z-band constraint reduces search space, disabled Z-band searches full 3D, different start/goal altitudes compute correct band, km reinit prevents key churn after drone movement |
 | `PathPlannerFactory` | 2 | Factory creates D* Lite, unknown backend throws |
 

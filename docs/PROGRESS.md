@@ -2668,7 +2668,7 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 **Category:** Performance
 **Files Modified:**
 
-- `common/hal/include/hal/dstar_lite_planner.h` — replaced O(N) linear-scan `remove_from_queue()` with O(log N) iterator-cached version using `queue_index_` (`unordered_map<GridCell, set::iterator>`). Added `queue_insert()` helper. All insert/erase/clear sites updated.
+- `process4_mission_planner/include/planner/dstar_lite_planner.h` — replaced O(N) linear-scan `remove_from_queue()` with O(log N) iterator-cached version using `queue_index_` (`unordered_map<GridCell, set::iterator>`). Added `queue_insert()` helper. All insert/erase/clear sites updated.
 - `config/gazebo_sitl.json` — `max_search_time_ms` 50 → 100
 - `config/scenarios/18_perception_avoidance.json` — added `max_search_time_ms: 200` override
 - `tests/test_dstar_lite_planner.cpp` — 3 new tests (LargeGridWithObstacles, IncrementalReplan, QueueIndexConsistent)
