@@ -142,7 +142,21 @@ codebase.
 
 | Key | Type | Default | Range | Description |
 |-----|------|---------|-------|-------------|
-| `mission_planner.path_planner.backend` | `string` | `"potential_field"` | `"potential_field"`, `"astar"` | Path planning algorithm |
+| `mission_planner.path_planner.backend` | `string` | `"potential_field"` | `"potential_field"`, `"dstar_lite"` | Path planning algorithm. D* Lite uses incremental 8-connected horizontal grid search. |
+| `mission_planner.path_planner.max_search_time_ms` | `float` | `0.0` | 0–5000 | Wall-clock search timeout (ms). 0 = disabled (iteration limit only). |
+| `mission_planner.path_planner.max_iterations` | `int` | `50000` | 1000–1000000 | Maximum search iterations per replan. |
+| `mission_planner.path_planner.replan_interval_s` | `float` | `1.0` | 0.0–10.0 | Minimum seconds between replans. Lower = more responsive but less path following. |
+| `mission_planner.path_planner.z_band_cells` | `int` | `0` | 0–50 | Z-band constraint: restrict search to ±N cells around start/goal Z. 0 = unlimited. |
+
+### 6.2.1 Occupancy Grid
+
+| Key | Type | Default | Range | Description |
+|-----|------|---------|-------|-------------|
+| `mission_planner.occupancy_grid.resolution_m` | `float` | `0.5` | 0.25–5.0 | Grid cell size (m). Larger = faster search, coarser avoidance. |
+| `mission_planner.occupancy_grid.inflation_radius_m` | `float` | `1.5` | 0.5–10.0 | Obstacle inflation radius (m). Inflated as 2D disk in XY at detection Z level. |
+| `mission_planner.occupancy_grid.dynamic_obstacle_ttl_s` | `float` | `3.0` | 0.5–30.0 | TTL for dynamic (camera-detected) obstacle cells. Cells not re-observed within this window are expired. |
+| `mission_planner.occupancy_grid.min_confidence` | `float` | `0.3` | 0.0–1.0 | Minimum detection confidence to insert into the grid. |
+| `mission_planner.occupancy_grid.promotion_hits` | `int` | `0` | 0–100 | Promote dynamic cells to permanent static layer after this many observations. 0 = disabled. At 10 Hz perception, 10 hits ≈ 1 second of consistent detection. |
 
 ### 6.3 Obstacle Avoider
 

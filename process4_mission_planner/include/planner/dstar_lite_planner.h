@@ -32,6 +32,21 @@ public:
 
     std::string name() const override { return "DStarLitePlanner"; }
 
+private:
+    // 8-connected horizontal neighbours for 2D search at flight altitude.
+    // Includes 4 cardinal (±x, ±y) + 4 diagonal (±x,±y) directions, all dz=0.
+    // Diagonal moves allow the path to go NE/NW/SE/SW directly instead of
+    // producing staircase patterns that confuse the path-follower.
+    static constexpr int kNumNeighbors          = 8;
+    static constexpr int kHorizNeighbours[8][3] = {
+        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},  {0, -1, 0},  // cardinal
+        {1, 1, 0}, {1, -1, 0}, {-1, 1, 0}, {-1, -1, 0}  // diagonal
+    };
+    static constexpr float kHorizCosts[8] = {
+        1.0f,   1.0f,   1.0f,   1.0f,   // cardinal
+        1.414f, 1.414f, 1.414f, 1.414f  // diagonal
+    };
+
 protected:
     bool do_search(const GridCell& start, const GridCell& goal,
                    std::vector<std::array<float, 3>>& out_world_path) override {
@@ -71,9 +86,10 @@ protected:
                 } else {
                     for (const auto& [cell, is_occupied] : changes) {
                         // Update all neighbours of the changed cell
-                        for (int n = 0; n < 26; ++n) {
-                            GridCell nb{cell.x + kNeighbours[n][0], cell.y + kNeighbours[n][1],
-                                        cell.z + kNeighbours[n][2]};
+                        for (int n = 0; n < kNumNeighbors; ++n) {
+                            GridCell nb{cell.x + kHorizNeighbours[n][0],
+                                        cell.y + kHorizNeighbours[n][1],
+                                        cell.z + kHorizNeighbours[n][2]};
                             if (grid_.in_bounds(nb)) {
                                 update_vertex(nb);
                             }
@@ -86,18 +102,37 @@ protected:
         }
 
         // ── Run compute_shortest_path ────────────────────────
-        bool ok = compute_shortest_path();
+        auto search_t0 = std::chrono::steady_clock::now();
+        bool ok        = compute_shortest_path();
+        auto search_ms =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - search_t0)
+                .count();
 
         if (!ok || g(last_start_) >= kInf) {
             spdlog::info("[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} "
-                         "queue={} occupied={}",
+                         "queue={} occupied={} search={:.0f}ms",
                          last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
-                         last_goal_.z, g(last_start_), U_.size(), grid_.occupied_count());
+                         last_goal_.z, g(last_start_), U_.size(), grid_.occupied_count(),
+                         search_ms);
             return false;
         }
 
         // ── Extract path ─────────────────────────────────────
-        return extract_path(last_start_, last_goal_, out_world_path);
+        bool path_ok = extract_path(last_start_, last_goal_, out_world_path);
+        if (path_ok && out_world_path.size() >= 2) {
+            auto& first = out_world_path[1];  // first step (index 0 is start)
+            auto& last  = out_world_path.back();
+            spdlog::info("[D*Lite] Path OK: {} pts, search={:.0f}ms, "
+                         "first=({:.0f},{:.0f},{:.0f}) last=({:.0f},{:.0f},{:.0f}) "
+                         "g(start)={:.0f} occupied={}",
+                         out_world_path.size(), search_ms, first[0], first[1], first[2], last[0],
+                         last[1], last[2], g(last_start_), grid_.occupied_count());
+        } else {
+            spdlog::info("[D*Lite] Path extraction FAILED: search={:.0f}ms g(start)={:.1f} "
+                         "occupied={}",
+                         search_ms, g(last_start_), grid_.occupied_count());
+        }
+        return path_ok;
     }
 
 private:
@@ -147,7 +182,14 @@ private:
 
     // ── Edge cost ────────────────────────────────────────────
     float cost(const GridCell& a, const GridCell& b) const {
-        if (grid_.is_occupied(a) || grid_.is_occupied(b)) return kInf;
+        // Start and goal cells are always passable:
+        // - Start: the drone is physically there; old TTL cells may linger from
+        //   before the drone arrived (self-exclusion only prevents NEW insertions).
+        // - Goal: snap may have placed it in a cell that later became occupied;
+        //   the drone still needs to navigate toward it.
+        if ((a != last_start_ && a != last_goal_ && grid_.is_occupied(a)) ||
+            (b != last_start_ && b != last_goal_ && grid_.is_occupied(b)))
+            return kInf;
         if (!grid_.in_bounds(a) || !grid_.in_bounds(b)) return kInf;
         // Z-band: prune cells outside the flight altitude band to prevent
         // 3D search from wasting iterations exploring irrelevant altitudes.
@@ -174,15 +216,23 @@ private:
     }
 
     // ── Initialize ───────────────────────────────────────────
-    void initialize(const GridCell& start, const GridCell& goal) {
+    void initialize(const GridCell& start, const GridCell& goal_in) {
         g_.clear();
         rhs_.clear();
         U_.clear();
         queue_index_.clear();
         km_          = 0.0f;
         last_start_  = start;
-        last_goal_   = goal;
         initialized_ = true;
+
+        // 2D mode (horizontal-only neighbours): snap goal Z to start Z so the
+        // search stays at a single altitude level.  The velocity command handles Z.
+        GridCell goal = goal_in;
+        if (goal.z != start.z) {
+            spdlog::debug("[D*Lite] 2D mode: snapping goal Z {} → {}", goal.z, start.z);
+            goal.z = start.z;
+        }
+        last_goal_ = goal;
 
         // Compute Z-band limits from start/goal altitudes
         z_band_cells_ = config_.z_band_cells;
@@ -197,8 +247,8 @@ private:
         rhs_[goal] = 0.0f;
         queue_insert(goal, calculate_key(goal));
 
-        spdlog::info("[D*Lite] Init: start=({},{},{}) goal=({},{},{}) z_band=[{},{}]", start.x,
-                     start.y, start.z, goal.x, goal.y, goal.z, z_min_, z_max_);
+        spdlog::info("[D*Lite] Init: start=({},{},{}) goal=({},{},{}) neighbors={}", start.x,
+                     start.y, start.z, goal.x, goal.y, goal.z, kNumNeighbors);
     }
 
     // ── Update vertex ────────────────────────────────────────
@@ -207,9 +257,9 @@ private:
 
         // Compute rhs as min over successors
         float min_rhs = kInf;
-        for (int n = 0; n < 26; ++n) {
-            GridCell s_prime{u.x + kNeighbours[n][0], u.y + kNeighbours[n][1],
-                             u.z + kNeighbours[n][2]};
+        for (int n = 0; n < kNumNeighbors; ++n) {
+            GridCell s_prime{u.x + kHorizNeighbours[n][0], u.y + kHorizNeighbours[n][1],
+                             u.z + kHorizNeighbours[n][2]};
             if (grid_.in_bounds(s_prime)) {
                 float c = cost(u, s_prime);
                 if (c < kInf) {
@@ -292,9 +342,9 @@ private:
                 // Over-consistent → make consistent
                 g_[u] = rhs(u);
                 // Update predecessors
-                for (int n = 0; n < 26; ++n) {
-                    GridCell s{u.x + kNeighbours[n][0], u.y + kNeighbours[n][1],
-                               u.z + kNeighbours[n][2]};
+                for (int n = 0; n < kNumNeighbors; ++n) {
+                    GridCell s{u.x + kHorizNeighbours[n][0], u.y + kHorizNeighbours[n][1],
+                               u.z + kHorizNeighbours[n][2]};
                     if (grid_.in_bounds(s)) {
                         update_vertex(s);
                     }
@@ -303,9 +353,9 @@ private:
                 // Under-consistent → reset and update
                 g_[u] = kInf;
                 update_vertex(u);
-                for (int n = 0; n < 26; ++n) {
-                    GridCell s{u.x + kNeighbours[n][0], u.y + kNeighbours[n][1],
-                               u.z + kNeighbours[n][2]};
+                for (int n = 0; n < kNumNeighbors; ++n) {
+                    GridCell s{u.x + kHorizNeighbours[n][0], u.y + kHorizNeighbours[n][1],
+                               u.z + kHorizNeighbours[n][2]};
                     if (grid_.in_bounds(s)) {
                         update_vertex(s);
                     }
@@ -333,9 +383,9 @@ private:
             float    best_cost = kInf;
             GridCell best_next = current;
 
-            for (int n = 0; n < 26; ++n) {
-                GridCell nb{current.x + kNeighbours[n][0], current.y + kNeighbours[n][1],
-                            current.z + kNeighbours[n][2]};
+            for (int n = 0; n < kNumNeighbors; ++n) {
+                GridCell nb{current.x + kHorizNeighbours[n][0], current.y + kHorizNeighbours[n][1],
+                            current.z + kHorizNeighbours[n][2]};
                 if (!grid_.in_bounds(nb)) continue;
                 float c = cost(current, nb);
                 if (c >= kInf) continue;

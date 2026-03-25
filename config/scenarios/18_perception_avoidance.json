@@ -12,23 +12,24 @@
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 3.0,
             "cruise_speed_mps": 1.5,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 500, "z_band_cells": 3},
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 2.0},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
-                "influence_radius_m": 3.0,
-                "repulsive_gain": 1.0,
-                "max_correction_mps": 2.0,
+                "influence_radius_m": 5.0,
+                "repulsive_gain": 1.5,
+                "max_correction_mps": 1.0,
                 "vertical_gain": 0.0,
                 "path_aware": true,
-                "_comment": "Path-aware lateral-only avoider: backwards push stripped, vertical_gain=0 prevents flying above obstacles (Issue #229). D* Lite is primary."
+                "_comment": "D* Lite routes around obstacles; avoider provides strong safety nudge. 5m influence catches obstacles before the planner grid does. max_correction < cruise_speed so avoidance can't overpower planned path."
             },
             "occupancy_grid": {
-                "resolution_m": 1.0,
+                "resolution_m": 2.0,
                 "inflation_radius_m": 2.0,
-                "dynamic_obstacle_ttl_s": 5.0,
-                "min_confidence": 0.3,
-                "_comment": "1m grid, 2m inflation (2 cells), 5s TTL for robust obstacle persistence across replanning cycles."
+                "dynamic_obstacle_ttl_s": 1.5,
+                "min_confidence": 0.5,
+                "promotion_hits": 10,
+                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell). Short 1.5s TTL prevents stale detections walling off flight direction. Cells observed 10+ times are promoted to permanent static layer."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
@@ -37,13 +38,13 @@
                 "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding detected obstacles"
             },
             "waypoints": [
-                {"x": -2, "y": 10, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED Gz(7,1)=our(1,7) visible to east."},
-                {"x": 5,  "y": 12, "z": 4, "yaw": 0,     "speed": 1.5, "payload_trigger": false, "_comment": "Fly east — path passes 3m from RED. D* Lite routes around."},
-                {"x": 12, "y": 10, "z": 4, "yaw": -0.46, "speed": 1.5, "payload_trigger": false, "_comment": "Continue east — GREEN Gz(8,8)=our(8,8) and YELLOW Gz(15,7)=our(7,15) visible."},
-                {"x": 12, "y": 2,  "z": 4, "yaw": -1.57, "speed": 1.5, "payload_trigger": false, "_comment": "Fly south — clear corridor east of obstacle field."},
-                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36, "speed": 1.5, "payload_trigger": false, "_comment": "Return home — ORANGE Gz(4,4)=our(4,4) near path, drone routes around."}
+                {"x": 0,  "y": 18, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) ~3m to the right."},
+                {"x": 12, "y": 18, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": false, "_comment": "Fly east — clear corridor north of obstacle field."},
+                {"x": 20, "y": 8,  "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) and BLUE(18,5) nearby."},
+                {"x": 12, "y": 0,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly southwest — path passes south of BLUE."},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home — ORANGE(5,3) near path, drone routes around."}
             ],
-            "_comment_waypoints": "Waypoints route AROUND the obstacle field at 1.5 m/s. Camera detects obstacles and populates D* Lite grid for dynamic replanning."
+            "_comment_waypoints": "Waypoints route through field with 4 well-spaced obstacles (≥10m apart). Camera detects obstacles, D* Lite routes around."
         },
         "perception": {
             "detector": {
