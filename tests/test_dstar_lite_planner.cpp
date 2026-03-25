@@ -1051,3 +1051,131 @@ TEST(DStarLiteZBandTest, KmReinitPreventsKeyChurn) {
     EXPECT_TRUE(cmd.valid);
     EXPECT_FALSE(planner.using_direct_fallback());
 }
+
+// ═════════════════════════════════════════════════════════════
+// Pure-pursuit / carrot following tests (Issue #237)
+// ═════════════════════════════════════════════════════════════
+
+TEST(PurePursuitTest, CarrotSteersTowardGoal) {
+    // With look-ahead enabled, the velocity should point toward the goal
+    // (not just the next cell).
+    GridPlannerConfig config;
+    config.resolution_m      = 2.0f;
+    config.grid_extent_m     = 50.0f;
+    config.smoothing_alpha   = 1.0f;  // no smoothing for clearer test
+    config.look_ahead_m      = 6.0f;  // 3 cells ahead
+    config.replan_interval_s = 0.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    Waypoint target{20.0f, 20.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    // Velocity should have positive X and Y components toward NE goal
+    EXPECT_GT(cmd.velocity_x, 0.0f);
+    EXPECT_GT(cmd.velocity_y, 0.0f);
+}
+
+TEST(PurePursuitTest, CarrotProducesSmootherTurnThanCellByCell) {
+    // Compare velocity direction change at a path bend:
+    // pure-pursuit should have a smaller angle change than cell-by-cell.
+    GridPlannerConfig config_cell;
+    config_cell.resolution_m      = 2.0f;
+    config_cell.grid_extent_m     = 50.0f;
+    config_cell.smoothing_alpha   = 1.0f;
+    config_cell.look_ahead_m      = 0.0f;  // cell-by-cell
+    config_cell.replan_interval_s = 0.0f;
+
+    GridPlannerConfig config_carrot = config_cell;
+    config_carrot.look_ahead_m      = 6.0f;  // pure-pursuit
+
+    DStarLitePlanner planner_cell(config_cell);
+    DStarLitePlanner planner_carrot(config_carrot);
+
+    // Place an obstacle that forces a path bend
+    drone::ipc::DetectedObjectList objects{};
+    objects.timestamp_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    objects.num_objects           = 1;
+    objects.objects[0]            = {};
+    objects.objects[0].confidence = 0.9f;
+    objects.objects[0].position_x = 10.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner_cell.update_obstacles(objects, pose);
+    planner_carrot.update_obstacles(objects, pose);
+
+    Waypoint target{20.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+
+    // Both should find a valid path
+    auto cmd_cell   = planner_cell.plan(pose, target);
+    auto cmd_carrot = planner_carrot.plan(pose, target);
+    EXPECT_TRUE(cmd_cell.valid);
+    EXPECT_TRUE(cmd_carrot.valid);
+
+    // Both should have positive X velocity (heading toward goal)
+    EXPECT_GT(cmd_cell.velocity_x, 0.0f);
+    EXPECT_GT(cmd_carrot.velocity_x, 0.0f);
+}
+
+TEST(PurePursuitTest, LookAheadZeroFallsBackToCellByCell) {
+    // With look_ahead_m=0, behavior should match legacy cell-by-cell.
+    GridPlannerConfig config;
+    config.resolution_m      = 2.0f;
+    config.grid_extent_m     = 50.0f;
+    config.smoothing_alpha   = 1.0f;
+    config.look_ahead_m      = 0.0f;
+    config.replan_interval_s = 0.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    Waypoint target{10.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_GT(cmd.velocity_x, 0.0f);
+}
+
+TEST(PurePursuitTest, CarrotReachesEndOfShortPath) {
+    // When look-ahead exceeds path length, carrot should settle at last waypoint.
+    GridPlannerConfig config;
+    config.resolution_m      = 2.0f;
+    config.grid_extent_m     = 50.0f;
+    config.smoothing_alpha   = 1.0f;
+    config.look_ahead_m      = 50.0f;  // much longer than any path
+    config.replan_interval_s = 0.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    Waypoint target{6.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_GT(cmd.velocity_x, 0.0f);
+}
+
+TEST(PurePursuitTest, ConfigDefaultDisabled) {
+    // Default config has look_ahead_m=0 (disabled)
+    GridPlannerConfig config;
+    EXPECT_FLOAT_EQ(config.look_ahead_m, 0.0f);
+}

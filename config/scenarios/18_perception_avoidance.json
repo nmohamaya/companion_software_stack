@@ -11,8 +11,11 @@
         "mission_planner": {
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 3.0,
+            "overshoot_proximity_factor": 5.0,
             "cruise_speed_mps": 1.5,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 2.0},
+            "survey_duration_s": 25.0,
+            "survey_yaw_rate": 0.3,
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 2.0, "look_ahead_m": 0.0, "smoothing_alpha": 0.2},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
@@ -89,6 +92,7 @@
             "backend: bytetrack",
             "ground_filter_alt_m",
             "TAKEOFF",
+            "Survey complete",
             "EXECUTING",
             "Mission complete"
         ],

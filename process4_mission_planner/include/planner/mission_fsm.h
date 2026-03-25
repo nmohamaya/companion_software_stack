@@ -21,6 +21,7 @@ inline const char* state_name(MissionState s) {
         case MissionState::RTL: return "RTL";
         case MissionState::LAND: return "LAND";
         case MissionState::EMERGENCY: return "EMERGENCY";
+        case MissionState::SURVEY: return "SURVEY";
         default: return "UNKNOWN";
     }
 }
@@ -37,13 +38,15 @@ struct Waypoint {
 /// Mission planner FSM — manages the mission lifecycle.
 class MissionFSM {
 public:
-    MissionFSM() : state_(MissionState::IDLE) {}
+    explicit MissionFSM(float overshoot_proximity_factor = 3.0f)
+        : state_(MissionState::IDLE), overshoot_proximity_factor_(overshoot_proximity_factor) {}
 
     [[nodiscard]] MissionState state() const { return state_; }
 
     /// Process an event and transition state.
     void on_arm() { transition(MissionState::PREFLIGHT); }
     void on_takeoff() { transition(MissionState::TAKEOFF); }
+    void on_survey() { transition(MissionState::SURVEY); }
     void on_navigate() { transition(MissionState::NAVIGATE); }
     void on_loiter() { transition(MissionState::LOITER); }
     void on_rtl() { transition(MissionState::RTL); }
@@ -92,9 +95,8 @@ public:
         float dx = px - wp->x, dy = py - wp->y, dz = pz - wp->z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
 
-        // Must be within proximity zone (3× acceptance radius) to qualify
-        constexpr float kProximityFactor = 3.0f;
-        float           proximity_r      = wp->radius * kProximityFactor;
+        // Must be within proximity zone to qualify (configurable via overshoot_proximity_factor)
+        float proximity_r = wp->radius * overshoot_proximity_factor_;
         if (dist_sq > proximity_r * proximity_r) return false;
 
         // Approach vector: current_wp → next_wp
@@ -134,6 +136,7 @@ public:
 
 private:
     MissionState          state_;
+    float                 overshoot_proximity_factor_{3.0f};
     std::vector<Waypoint> waypoints_;
     size_t                current_wp_      = 0;
     bool                  fault_triggered_ = false;

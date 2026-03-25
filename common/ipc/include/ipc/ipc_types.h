@@ -128,7 +128,8 @@ enum class MissionState : uint8_t {
     LOITER    = 4,
     RTL       = 5,
     LAND      = 6,
-    EMERGENCY = 7
+    EMERGENCY = 7,
+    SURVEY    = 8  // Post-takeoff obstacle survey before navigation
 };
 
 // ═══════════════════════════════════════════════════════════

@@ -48,6 +48,8 @@ struct GridPlannerConfig {
                                        // start/goal Z range (0 = unlimited, full 3D search)
     int promotion_hits = 0;            // Promote dynamic cell to static after N observations
                                        // (0 = disabled, no promotion)
+    float look_ahead_m = 0.0f;         // Pure-pursuit look-ahead distance along path
+                                       // (0 = disabled, use cell-by-cell following)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -174,17 +176,37 @@ public:
         float goal_z = snap_valid_ ? snapped_world_z_ : target.z;
 
         if (!cached_path_.empty() && path_index_ < cached_path_.size()) {
-            auto& wp = cached_path_[path_index_];
-            goal_x   = wp[0];
-            goal_y   = wp[1];
-            goal_z   = wp[2];
-
-            float dx   = goal_x - px;
-            float dy   = goal_y - py;
-            float dz   = goal_z - pz;
-            float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist < config_.resolution_m * 1.5f && path_index_ + 1 < cached_path_.size()) {
-                ++path_index_;
+            if (config_.look_ahead_m > 0.0f) {
+                // Pure-pursuit mode: advance conservatively (half-cell), carrot
+                // handles smooth following — no need for aggressive skipping.
+                while (path_index_ + 1 < cached_path_.size()) {
+                    auto& wp   = cached_path_[path_index_];
+                    float dx   = wp[0] - px;
+                    float dy   = wp[1] - py;
+                    float dz   = wp[2] - pz;
+                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist >= config_.resolution_m * 0.5f) break;
+                    ++path_index_;
+                }
+                auto carrot = find_carrot(px, py, pz);
+                goal_x      = carrot[0];
+                goal_y      = carrot[1];
+                goal_z      = carrot[2];
+            } else {
+                // Legacy cell-by-cell: advance when close, target next waypoint
+                while (path_index_ + 1 < cached_path_.size()) {
+                    auto& wp   = cached_path_[path_index_];
+                    float dx   = wp[0] - px;
+                    float dy   = wp[1] - py;
+                    float dz   = wp[2] - pz;
+                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist >= config_.resolution_m * 1.5f) break;
+                    ++path_index_;
+                }
+                auto& wp = cached_path_[path_index_];
+                goal_x   = wp[0];
+                goal_y   = wp[1];
+                goal_z   = wp[2];
             }
         }
 
@@ -349,6 +371,49 @@ private:
         }
 
         return goal;
+    }
+
+    /// Pure-pursuit carrot: walk forward along cached_path_ from path_index_
+    /// by look_ahead_m and return the interpolated point.
+    [[nodiscard]] std::array<float, 3> find_carrot(float px, float py, float pz) const {
+        // Start from the current waypoint on the path
+        size_t idx      = path_index_;
+        float  remain_m = config_.look_ahead_m;
+
+        // Consume distance from drone to first path waypoint
+        {
+            auto& wp   = cached_path_[idx];
+            float dx   = wp[0] - px;
+            float dy   = wp[1] - py;
+            float dz   = wp[2] - pz;
+            float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist >= remain_m) {
+                // Carrot is between drone and first waypoint
+                float t = remain_m / dist;
+                return {px + dx * t, py + dy * t, pz + dz * t};
+            }
+            remain_m -= dist;
+        }
+
+        // Walk along subsequent path segments
+        while (idx + 1 < cached_path_.size()) {
+            auto& a    = cached_path_[idx];
+            auto& b    = cached_path_[idx + 1];
+            float dx   = b[0] - a[0];
+            float dy   = b[1] - a[1];
+            float dz   = b[2] - a[2];
+            float slen = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (slen >= remain_m) {
+                // Interpolate within this segment
+                float t = remain_m / slen;
+                return {a[0] + dx * t, a[1] + dy * t, a[2] + dz * t};
+            }
+            remain_m -= slen;
+            ++idx;
+        }
+
+        // Exhausted path — return last waypoint
+        return cached_path_.back();
     }
 
     // Cached path
