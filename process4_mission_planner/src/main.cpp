@@ -125,8 +125,10 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Load mission from config or use defaults ────────────
-    MissionFSM fsm;
-    auto       wp_json = cfg.section("mission_planner.waypoints");
+    const float overshoot_proximity = cfg.get<float>("mission_planner.overshoot_proximity_factor",
+                                                     3.0f);
+    MissionFSM  fsm(overshoot_proximity);
+    auto        wp_json = cfg.section("mission_planner.waypoints");
     if (wp_json.is_array() && !wp_json.empty()) {
         std::vector<Waypoint> waypoints;
         const float default_radius = cfg.get<float>("mission_planner.acceptance_radius_m", 2.0f);
@@ -197,6 +199,8 @@ int main(int argc, char* argv[]) {
                                               planner_cfg.promotion_hits);
     planner_cfg.z_band_cells   = cfg.get<int>("mission_planner.path_planner.z_band_cells",
                                               planner_cfg.z_band_cells);
+    planner_cfg.look_ahead_m   = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
+                                                planner_cfg.look_ahead_m);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
@@ -242,8 +246,11 @@ int main(int argc, char* argv[]) {
     const float rtl_acceptance_m = cfg.get<float>("mission_planner.rtl_acceptance_radius_m", 1.5f);
     const float landed_alt_m     = cfg.get<float>("mission_planner.landed_altitude_m", 0.5f);
     const int   rtl_min_dwell_s  = cfg.get<int>("mission_planner.rtl_min_dwell_seconds", 5);
+    const float survey_duration  = cfg.get<float>("mission_planner.survey_duration_s", 0.0f);
+    const float survey_yaw_rate  = cfg.get<float>("mission_planner.survey_yaw_rate", 0.3f);
 
-    MissionStateTick state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s});
+    MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s,
+                                      survey_duration, survey_yaw_rate});
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
     auto                  send_fc = [&](drone::ipc::FCCommandType cmd, float p) {

@@ -161,6 +161,16 @@ TEST(MissionFSMTest, NoOvershootWhenFarFromWaypoint) {
     EXPECT_FALSE(fsm.waypoint_overshot(20.0f, 0.0f, 5.0f));
 }
 
+TEST(MissionFSMTest, ConfigurableProximityFactorAllowsFarOvershoot) {
+    // With factor=7.0, proximity zone = 7 × 2.0 = 14m — 10m away should trigger
+    MissionFSM fsm(7.0f);
+    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+
+    // Same position as NoOvershootWhenFarFromWaypoint (10m from WP0),
+    // but larger proximity factor now allows detection
+    EXPECT_TRUE(fsm.waypoint_overshot(20.0f, 0.0f, 5.0f));
+}
+
 TEST(MissionFSMTest, NextWaypointAccessor) {
     MissionFSM fsm;
     fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});

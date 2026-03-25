@@ -290,6 +290,7 @@ public:
     [[nodiscard]] float  resolution() const { return resolution_; }
     [[nodiscard]] size_t occupied_count() const { return occupied_.size(); }
     [[nodiscard]] size_t static_count() const { return static_occupied_.size(); }
+    [[nodiscard]] int    promoted_count() const { return promoted_count_; }
 
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.

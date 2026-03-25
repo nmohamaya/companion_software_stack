@@ -31,6 +31,8 @@ struct StateTickConfig {
     float rtl_acceptance_m{1.5f};
     float landed_alt_m{0.5f};
     int   rtl_min_dwell_s{5};
+    float survey_duration_s{0.0f};  // Post-takeoff obstacle survey duration (0 = skip)
+    float survey_yaw_rate{0.3f};    // Yaw rate during survey (rad/s, ~0.3 = full 360 in ~21s)
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -54,6 +56,9 @@ public:
         switch (fsm.state()) {
             case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
             case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;
+            case MissionState::SURVEY:
+                tick_survey(fsm, pose, objects, grid_planner, traj_pub);
+                break;
             case MissionState::NAVIGATE:
                 tick_navigate(fsm, pose, fc_state, objects, planner, grid_planner, avoider,
                               obstacle_layer, traj_pub, payload_pub, send_fc, correlation_id, diag);
@@ -90,6 +95,12 @@ private:
     bool     home_warn_logged_ = false;
     bool     fault_exec_reset_ = false;
     uint64_t debug_tick_       = 0;  // DEBUG(#234): periodic avoider comparison logging
+
+    // Survey state
+    bool                                  survey_started_ = false;
+    std::chrono::steady_clock::time_point survey_start_time_{};
+    float                                 survey_start_yaw_ = 0.0f;
+    uint64_t                              survey_log_tick_  = 0;
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
                                                            std::chrono::seconds(10);
@@ -144,7 +155,80 @@ private:
                 }
                 return;
             }
-            spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE", fc_state.rel_alt);
+            if (config_.survey_duration_s > 0.0f) {
+                spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — SURVEY for {:.0f}s",
+                             fc_state.rel_alt, config_.survey_duration_s);
+                fsm.on_survey();
+            } else {
+                spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE",
+                             fc_state.rel_alt);
+                fsm.on_navigate();
+                spdlog::info("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
+            }
+        }
+    }
+
+    // ── SURVEY: hover + slow yaw rotation to detect obstacles ────
+    void tick_survey(MissionFSM& fsm, const drone::ipc::Pose& pose,
+                     const drone::ipc::DetectedObjectList& objects, IGridPlanner* grid_planner,
+                     drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& traj_pub) {
+        auto now = std::chrono::steady_clock::now();
+        if (!survey_started_) {
+            survey_start_time_ = now;
+            survey_started_    = true;
+            // Extract initial yaw from pose quaternion [w, x, y, z]
+            double qw = pose.quaternion[0], qx = pose.quaternion[1];
+            double qy = pose.quaternion[2], qz = pose.quaternion[3];
+            survey_start_yaw_ = static_cast<float>(
+                std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+            spdlog::info("[Survey] Start yaw={:.2f} rad, rotating at {:.2f} rad/s for {:.0f}s",
+                         survey_start_yaw_, config_.survey_yaw_rate, config_.survey_duration_s);
+        }
+
+        // Feed detections into the occupancy grid during survey
+        if (grid_planner) {
+            grid_planner->update_obstacles(objects, pose);
+        }
+
+        float elapsed_s = std::chrono::duration<float>(now - survey_start_time_).count();
+
+        // Publish hover command with incrementing yaw for slow rotation.
+        // IFCLink::send_trajectory only accepts absolute yaw (no yaw_rate),
+        // so we compute the target yaw from elapsed time × yaw rate.
+        float target_yaw = survey_start_yaw_ + config_.survey_yaw_rate * elapsed_s;
+
+        drone::ipc::TrajectoryCmd cmd{};
+        cmd.timestamp_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+        cmd.valid      = true;
+        cmd.velocity_x = 0.0f;
+        cmd.velocity_y = 0.0f;
+        cmd.velocity_z = 0.0f;
+        cmd.target_yaw = target_yaw;
+        cmd.target_x   = static_cast<float>(pose.translation[0]);
+        cmd.target_y   = static_cast<float>(pose.translation[1]);
+        cmd.target_z   = static_cast<float>(pose.translation[2]);
+        traj_pub.publish(cmd);
+
+        // Access grid diagnostics via GridPlannerBase
+        auto* base = dynamic_cast<GridPlannerBase*>(grid_planner);
+
+        // Log progress periodically
+        if (survey_log_tick_++ % 30 == 0) {
+            int promoted = base ? base->grid().promoted_count() : 0;
+            int static_n = base ? static_cast<int>(base->grid().static_count()) : 0;
+            spdlog::info("[Survey] {:.0f}/{:.0f}s — {} static cells ({} promoted), yaw_rate={:.2f}",
+                         elapsed_s, config_.survey_duration_s, static_n, promoted,
+                         config_.survey_yaw_rate);
+        }
+
+        // Survey complete — transition to NAVIGATE
+        if (elapsed_s >= config_.survey_duration_s) {
+            int promoted = base ? base->grid().promoted_count() : 0;
+            int static_n = base ? static_cast<int>(base->grid().static_count()) : 0;
+            spdlog::info("[Planner] Survey complete ({:.0f}s) — {} static obstacles ({} promoted)"
+                         " — NAVIGATE",
+                         elapsed_s, static_n, promoted);
             fsm.on_navigate();
             spdlog::info("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
         }
