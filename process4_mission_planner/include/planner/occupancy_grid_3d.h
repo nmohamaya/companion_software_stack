@@ -106,19 +106,24 @@ inline constexpr float kCosts[26] = {
 class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
-                             float cell_ttl_s = 3.0f, float min_confidence = 0.3f)
+                             float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
+                             int promotion_hits = 0)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
         , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f))
-        , min_confidence_(min_confidence) {}
+        , min_confidence_(min_confidence)
+        , promotion_hits_(promotion_hits) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
     void clear() { clear_dynamic(); }
 
     /// Clear only the dynamic / TTL-based obstacle layer.
-    void clear_dynamic() { occupied_.clear(); }
+    void clear_dynamic() {
+        occupied_.clear();
+        hit_count_.clear();
+    }
 
     /// Clear only the static HD-map obstacle layer.
     void clear_static() { static_occupied_.clear(); }
@@ -179,26 +184,45 @@ public:
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
             ++accepted;
 
-            for (int dz = -inflation_cells_; dz <= inflation_cells_; ++dz) {
-                for (int dy = -inflation_cells_; dy <= inflation_cells_; ++dy) {
-                    for (int dx = -inflation_cells_; dx <= inflation_cells_; ++dx) {
-                        if (dx * dx + dy * dy + dz * dz <= inflation_cells_ * inflation_cells_) {
-                            GridCell c{center.x + dx, center.y + dy, center.z + dz};
-                            // Self-exclusion: never mark the drone's own cell or any cell
-                            // in its immediate 3×3×3 neighbourhood (Chebyshev distance ≤ 1)
-                            // as occupied — this prevents the planner start node from being
-                            // blocked while still populating the rest of the obstacle footprint.
-                            if (std::abs(c.x - drone_cell.x) <= 1 &&
-                                std::abs(c.y - drone_cell.y) <= 1 &&
-                                std::abs(c.z - drone_cell.z) <= 1) {
-                                ++excluded_cells;
-                                continue;
+            // 2D disk inflation: only inflate in XY at the object's Z level.
+            // The path planner runs a 2D horizontal search, so vertical
+            // inflation wastes memory and floods the grid. A single-layer
+            // disk at the detection Z is sufficient because the search is
+            // snapped to the drone's flight altitude.
+            for (int dy = -inflation_cells_; dy <= inflation_cells_; ++dy) {
+                for (int dx = -inflation_cells_; dx <= inflation_cells_; ++dx) {
+                    if (dx * dx + dy * dy <= inflation_cells_ * inflation_cells_) {
+                        GridCell c{center.x + dx, center.y + dy, center.z};
+                        // Self-exclusion: never mark the drone's own cell or any cell
+                        // in its immediate 3×3 neighbourhood (Chebyshev distance ≤ 1)
+                        // as occupied — this prevents the planner start node from being
+                        // blocked while still populating the rest of the obstacle footprint.
+                        if (std::abs(c.x - drone_cell.x) <= 1 &&
+                            std::abs(c.y - drone_cell.y) <= 1 && c.z == drone_cell.z) {
+                            ++excluded_cells;
+                            continue;
+                        }
+                        if (in_bounds(c)) {
+                            // Already promoted — no need to track in dynamic layer
+                            if (static_occupied_.count(c) > 0) continue;
+
+                            bool was_absent = (occupied_.count(c) == 0);
+                            occupied_[c]    = now_ns;
+                            if (was_absent) {
+                                changed_cells_.push_back({c, true});
                             }
-                            if (in_bounds(c)) {
-                                bool was_absent = (occupied_.count(c) == 0);
-                                occupied_[c]    = now_ns;
-                                if (was_absent) {
-                                    changed_cells_.push_back({c, true});
+
+                            // Promotion: if this cell has been observed enough times,
+                            // move it to the permanent static layer so it persists
+                            // even after the drone flies away and detections stop.
+                            if (promotion_hits_ > 0) {
+                                int& hits = hit_count_[c];
+                                ++hits;
+                                if (hits >= promotion_hits_) {
+                                    static_occupied_.insert(c);
+                                    occupied_.erase(c);
+                                    hit_count_.erase(c);
+                                    ++promoted_count_;
                                 }
                             }
                         }
@@ -213,6 +237,7 @@ public:
             for (auto it = occupied_.begin(); it != occupied_.end();) {
                 if (now_ns - it->second > cell_ttl_ns_) {
                     changed_cells_.push_back({it->first, false});
+                    hit_count_.erase(it->first);  // reset observation count
                     it = occupied_.erase(it);
                 } else {
                     ++it;
@@ -222,10 +247,11 @@ public:
 
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
-            spdlog::info("[Grid] {} objs (accepted={}, excluded_cells={}), {} occupied cells, "
-                         "drone=({},{},{})",
+            spdlog::info("[Grid] {} objs (accepted={}, excluded_cells={}), {} dynamic, {} static "
+                         "(promoted={}), drone=({},{},{})",
                          objects.num_objects, accepted, excluded_cells, occupied_.size(),
-                         drone_cell.x, drone_cell.y, drone_cell.z);
+                         static_occupied_.size(), promoted_count_, drone_cell.x, drone_cell.y,
+                         drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -283,13 +309,18 @@ private:
     int      inflation_cells_;
     uint64_t cell_ttl_ns_;
     float    min_confidence_;
-    uint64_t diag_tick_{0};  // for periodic diagnostic logging
+    int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
+    int      promoted_count_{0};  // total cells promoted (diagnostic)
+    uint64_t diag_tick_{0};       // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;
     // Camera-confirmation layer: cells observed by perception, expire after TTL.
     // Refreshed each detection cycle; also catches unexpected/dynamic obstacles.
     std::unordered_map<GridCell, uint64_t, GridCellHash> occupied_;
+    // Hit counter for promotion: tracks how many update cycles each cell has been observed.
+    // Cells that reach promotion_hits_ are moved to static_occupied_ and removed from here.
+    std::unordered_map<GridCell, int, GridCellHash> hit_count_;
     // Change tracking for incremental planners (D* Lite).
     std::vector<std::pair<GridCell, bool>> changed_cells_;
 };

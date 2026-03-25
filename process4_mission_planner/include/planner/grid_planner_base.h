@@ -46,6 +46,8 @@ struct GridPlannerConfig {
     float min_confidence     = 0.3f;   // minimum object confidence for grid insertion
     int   z_band_cells       = 0;      // Z-band limit: restrict search to ±N cells around
                                        // start/goal Z range (0 = unlimited, full 3D search)
+    int promotion_hits = 0;            // Promote dynamic cell to static after N observations
+                                       // (0 = disabled, no promotion)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -77,7 +79,7 @@ public:
     explicit GridPlannerBase(const GridPlannerConfig& config = {})
         : config_(config)
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
-                config.cell_ttl_s, config.min_confidence) {}
+                config.cell_ttl_s, config.min_confidence, config.promotion_hits) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
@@ -122,13 +124,37 @@ public:
             GridCell goal  = grid_.world_to_grid(target.x, target.y, target.z);
 
             // ── Goal snapping — cached per waypoint ──────────
-            goal = snap_goal(start, goal, target);
+            GridCell pre_snap = goal;
+            goal              = snap_goal(start, goal, target);
+            if (goal != pre_snap) {
+                spdlog::info("[PlanBase] Goal snapped: ({},{},{}) → ({},{},{})", pre_snap.x,
+                             pre_snap.y, pre_snap.z, goal.x, goal.y, goal.z);
+            }
 
             // ── Delegate to subclass search ──────────────────
             std::vector<std::array<float, 3>> search_path;
-            bool                              found = do_search(start, goal, search_path);
+            auto                              replan_t0 = std::chrono::steady_clock::now();
+            bool                              found     = do_search(start, goal, search_path);
+            auto                              replan_ms = std::chrono::duration<float, std::milli>(
+                                 std::chrono::steady_clock::now() - replan_t0)
+                                 .count();
 
             if (found && search_path.size() >= 2) {
+                // DEBUG(#234): Log path direction vs goal direction
+                auto& p1      = search_path[1];
+                float path_dx = p1[0] - px, path_dy = p1[1] - py;
+                float goal_dx = target.x - px, goal_dy = target.y - py;
+                float path_mag = std::sqrt(path_dx * path_dx + path_dy * path_dy);
+                float goal_mag = std::sqrt(goal_dx * goal_dx + goal_dy * goal_dy);
+                float dot      = 0.0f;
+                if (path_mag > 0.01f && goal_mag > 0.01f) {
+                    dot = (path_dx * goal_dx + path_dy * goal_dy) / (path_mag * goal_mag);
+                }
+                spdlog::info("[PlanBase] Replan: path_dir=({:.1f},{:.1f}) goal_dir=({:.1f},{:.1f}) "
+                             "dot={:.2f} path_pts={} search={:.0f}ms",
+                             path_dx, path_dy, goal_dx, goal_dy, dot, search_path.size(),
+                             replan_ms);
+
                 cached_path_     = std::move(search_path);
                 path_index_      = 1;  // skip start cell
                 last_plan_time_  = now;
@@ -137,6 +163,8 @@ public:
                 cached_path_.clear();
                 path_index_      = 0;
                 direct_fallback_ = true;
+                spdlog::info("[PlanBase] Search failed — direct fallback (took {:.0f}ms)",
+                             replan_ms);
             }
         }
 
@@ -193,6 +221,16 @@ public:
         cmd.target_y   = target.y;
         cmd.target_z   = target.z;
         cmd.target_yaw = target.yaw;
+
+        // Periodic diagnostic: velocity, path state, position
+        if (diag_tick_++ % 50 == 0) {
+            spdlog::info("[PlanBase] pos=({:.1f},{:.1f},{:.1f}) vel=({:.2f},{:.2f},{:.2f}) "
+                         "raw=({:.2f},{:.2f},{:.2f}) path={}/{} fallback={} "
+                         "goal_xy=({:.1f},{:.1f})",
+                         px, py, pz, smooth_vx_, smooth_vy_, smooth_vz_, raw_vx, raw_vy, raw_vz,
+                         path_index_, cached_path_.size(), direct_fallback_ ? 1 : 0, goal_x,
+                         goal_y);
+        }
 
         return cmd;
     }
@@ -328,6 +366,9 @@ private:
     float smooth_vx_ = 0.0f;
     float smooth_vy_ = 0.0f;
     float smooth_vz_ = 0.0f;
+
+    // Diagnostic tick counter
+    uint64_t diag_tick_ = 0;
 };
 
 }  // namespace drone::planner

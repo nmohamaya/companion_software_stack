@@ -82,13 +82,14 @@ private:
     SharedFlightState flight_state_;
 
     // Tracking variables
-    bool  takeoff_sent_     = false;
-    float home_x_           = 0.0f;
-    float home_y_           = 0.0f;
-    float home_z_           = 0.0f;
-    bool  home_recorded_    = false;
-    bool  home_warn_logged_ = false;
-    bool  fault_exec_reset_ = false;
+    bool     takeoff_sent_     = false;
+    float    home_x_           = 0.0f;
+    float    home_y_           = 0.0f;
+    float    home_z_           = 0.0f;
+    bool     home_recorded_    = false;
+    bool     home_warn_logged_ = false;
+    bool     fault_exec_reset_ = false;
+    uint64_t debug_tick_       = 0;  // DEBUG(#234): periodic avoider comparison logging
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
                                                            std::chrono::seconds(10);
@@ -203,6 +204,22 @@ private:
                 drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");
                 return avoider.avoid(planned, pose, objects);
             }();
+
+            // DEBUG(#234): Compare planner output vs avoider output to detect
+            // whether the avoider is deflecting the drone away from the planned path.
+            if (debug_tick_++ % 30 == 0) {
+                float dvx  = traj.velocity_x - planned.velocity_x;
+                float dvy  = traj.velocity_y - planned.velocity_y;
+                float dvz  = traj.velocity_z - planned.velocity_z;
+                float dmag = std::sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
+                spdlog::info(
+                    "[DEBUG] plan_vel=({:.2f},{:.2f},{:.2f}) avoid_vel=({:.2f},{:.2f},{:.2f})"
+                    " delta=({:.2f},{:.2f},{:.2f}) |d|={:.2f} wp={}/{}",
+                    planned.velocity_x, planned.velocity_y, planned.velocity_z, traj.velocity_x,
+                    traj.velocity_y, traj.velocity_z, dvx, dvy, dvz, dmag,
+                    fsm.current_wp_index() + 1, fsm.total_waypoints());
+            }
+
             traj_pub.publish(traj);
 
             const float px = static_cast<float>(pose.translation[0]);

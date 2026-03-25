@@ -724,6 +724,74 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 ---
 
+### Bug #50 — D* Lite 4-Connected Search Produces Staircase Paths Perpendicular to Goal (#234)
+
+**Date discovered:** 2026-03-25
+**Severity:** High
+**Status:** FIXED (Issue #234)
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`
+
+**Bug:** After reducing D* Lite from 26-connected to 4-connected (horizontal only) to make the search 2D, the planner consistently found paths whose first step was perpendicular or opposite to the goal direction. Diagnostic logging showed `dot` products between path direction and goal direction near 0.0 or negative. The drone drifted south/east instead of flying north toward the first waypoint at (0,18).
+
+**Root Cause:** 4-connected movement only allows axis-aligned steps (±X, ±Y). To reach a goal at a diagonal, the path produces a staircase — first going east, then north, alternating. With a 2-second replan interval and 2m cell size, the drone only followed the first 1-2 cells of each staircase before replanning. Each new staircase started with the same perpendicular step, so the drone never made progress toward the goal.
+
+**Fix:** Changed from 4-connected to 8-connected horizontal search with a dedicated `kHorizNeighbours[8]` table containing the 4 cardinal (±X, ±Y) and 4 diagonal (±X±Y) directions, all at dz=0. Diagonal moves cost √2 (1.414). This allows paths to go NE/NW/SE/SW directly, producing first-step directions aligned with the goal (dot ≈ 1.0). Also unconditionally snap goal Z to start Z since all neighbours are horizontal.
+
+**Found by:** Diagnostic logging (`[PlanBase] Replan: path_dir=... goal_dir=... dot=...`) showed path direction consistently perpendicular to goal.
+
+**Regression tests:** All 43 existing D* Lite tests pass with 8-connected search.
+
+**Debug logging:** Temporary diagnostic logging added to trace this and related issues is documented in [`docs/DEBUG_LOGGING_234.md`](DEBUG_LOGGING_234.md) — remove debug code after Issue #234 closes.
+
+---
+
+### Bug #51 — 3D Sphere Inflation Floods Occupancy Grid at Fine Resolution (#234)
+
+**Date discovered:** 2026-03-25
+**Severity:** High
+**Status:** FIXED (Issue #234)
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`
+
+**Bug:** At 1m grid resolution with 3m inflation radius, each detected obstacle inflated into ~123 cells (3D sphere of radius 3). With 10 detections per frame, the grid reached 1200+ occupied cells within 2 seconds. The path planner could not find any route through the flooded grid — `queue=0` with `occupied=1284`.
+
+**Root Cause:** The inflation loop iterated over a full 3D sphere (`dx²+dy²+dz²` ≤ r²), but the path search runs in 2D (horizontal only). All cells at z±1, z±2, z±3 were wasted — never examined by the planner but contributing to hash map size and `occupied_count()`. At inflation_cells=3, the sphere volume is (4/3)π(3)³ ≈ 113 cells vs a 2D disk of π(3)² ≈ 28 cells — a 4x overhead.
+
+**Fix:** Changed the dynamic obstacle inflation from a 3D sphere to a 2D disk at the detection Z level. Removed the `dz` loop entirely; cells are only inflated in the XY plane (`dx²+dy²` ≤ r²). Self-exclusion zone also simplified from 3D Chebyshev to same-Z-level check.
+
+**Impact:** At 1m/3m resolution/inflation: 28 cells per detection (was 123). At 2m/2m: 3 cells (was 7). Grid stays manageable even with many concurrent detections.
+
+**Found by:** Grid diagnostic log (`[Grid] ... occupied=1284`) showed runaway cell count incompatible with pathfinding.
+
+**Debug logging:** See [`docs/DEBUG_LOGGING_234.md`](DEBUG_LOGGING_234.md) for temporary diagnostic logging added during investigation.
+
+---
+
+### Bug #52 — Dynamic Obstacles Expire from Grid Before Return Leg, Causing Collision (#234)
+
+**Date discovered:** 2026-03-25
+**Severity:** Medium
+**Status:** FIXED (Issue #234)
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`,
+           `process4_mission_planner/include/planner/grid_planner_base.h`,
+           `process4_mission_planner/src/main.cpp`,
+           `config/scenarios/18_perception_avoidance.json`
+
+**Bug:** In Scenario 18, the drone detected the ORANGE obstacle at (5,3) during takeoff and the outbound leg but collided with it on the return leg 60+ seconds later. The obstacle was correctly detected and inserted into the occupancy grid, but expired after 1.5s TTL. By the time the drone returned, the grid had no memory of the obstacle and the planner routed directly through it.
+
+**Root Cause:** The TTL-based dynamic layer is designed for short-term reactive avoidance, not mapping. There was no mechanism to remember obstacles seen earlier in the mission. Obstacles detected with high confidence over many frames were treated the same as a single noisy detection.
+
+**Fix:** Added a promotion mechanism: cells observed `promotion_hits` times (configurable, default 0 = disabled) are moved from the TTL-based dynamic layer to the permanent `static_occupied_` layer. Once promoted, they persist for the entire mission regardless of TTL expiry. Hit counts reset when a cell expires from TTL (not seen for `cell_ttl_s`), preventing slow accumulation from intermittent noise. New config parameter: `mission_planner.occupancy_grid.promotion_hits`. Scenario 18 uses `promotion_hits=10` (~1s of observation at 10Hz).
+
+**Impact:** In Scenario 18, 45 cells were promoted across all 4 obstacles during the outbound legs. On the return leg, the orange obstacle was permanently in the grid and the planner routed around it. All 5 waypoints reached, mission complete.
+
+**Found by:** Gazebo SITL testing — drone consistently collided with the orange obstacle on the return leg despite detecting it during takeoff.
+
+**Regression tests:** All 43 D* Lite tests + 12 static obstacle layer tests pass.
+
+**Debug logging:** See [`docs/DEBUG_LOGGING_234.md`](DEBUG_LOGGING_234.md) for temporary diagnostic logging added during investigation.
+
+---
+
 ## Comms (Process 5)
 
 ---
