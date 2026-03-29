@@ -289,19 +289,31 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
-            // DEBUG(#234): Compare planner output vs avoider output to detect
-            // whether the avoider is deflecting the drone away from the planned path.
-            if (debug_tick_++ % 30 == 0) {
-                float dvx  = traj.velocity_x - planned.velocity_x;
-                float dvy  = traj.velocity_y - planned.velocity_y;
-                float dvz  = traj.velocity_z - planned.velocity_z;
-                float dmag = std::sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
-                spdlog::info(
-                    "[DEBUG] plan_vel=({:.2f},{:.2f},{:.2f}) avoid_vel=({:.2f},{:.2f},{:.2f})"
-                    " delta=({:.2f},{:.2f},{:.2f}) |d|={:.2f} wp={}/{}",
-                    planned.velocity_x, planned.velocity_y, planned.velocity_z, traj.velocity_x,
-                    traj.velocity_y, traj.velocity_z, dvx, dvy, dvz, dmag,
-                    fsm.current_wp_index() + 1, fsm.total_waypoints());
+            // DEBUG(#237): Full diagnostic every 10 ticks (~1s at 10Hz)
+            if (debug_tick_++ % 10 == 0) {
+                const float dpx        = static_cast<float>(pose.translation[0]);
+                const float dpy        = static_cast<float>(pose.translation[1]);
+                const float dpz        = static_cast<float>(pose.translation[2]);
+                float       dvx        = traj.velocity_x - planned.velocity_x;
+                float       dvy        = traj.velocity_y - planned.velocity_y;
+                float       dvz        = traj.velocity_z - planned.velocity_z;
+                float       dmag       = std::sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
+                float       dist_to_wp = std::sqrt((dpx - wp->x) * (dpx - wp->x) +
+                                                   (dpy - wp->y) * (dpy - wp->y) +
+                                                   (dpz - wp->z) * (dpz - wp->z));
+                auto*       base       = dynamic_cast<GridPlannerBase*>(grid_planner);
+                int         occ  = base ? static_cast<int>(base->grid().occupied_count()) : -1;
+                int         stat = base ? static_cast<int>(base->grid().static_count()) : -1;
+                int         prom = base ? base->grid().promoted_count() : -1;
+                bool        fb   = grid_planner && grid_planner->using_direct_fallback();
+                spdlog::info("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
+                             " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
+                             " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
+                             " grid: occ={} static={} promoted={} fallback={}",
+                             dpx, dpy, dpz, fsm.current_wp_index() + 1, fsm.total_waypoints(),
+                             wp->x, wp->y, wp->z, dist_to_wp, planned.velocity_x,
+                             planned.velocity_y, planned.velocity_z, traj.velocity_x,
+                             traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb);
             }
 
             traj_pub.publish(traj);

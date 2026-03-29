@@ -2722,4 +2722,44 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #62 (waypoint overshoot detection, Issue #236). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1071 tests, 18 scenarios._
+---
+
+### Improvement #63 — Epic #237: Accurate Obstacle Detection, Classification & Grid Population (Issue #237)
+
+**Date:** 2026-03-28 / 2026-03-29
+**Category:** Perception / Navigation / Sensor Fusion
+**Files Modified:**
+
+- `process2_perception/src/ukf_fusion_engine.cpp` — A1 (bearing-only init + radar range snap), A2 (size estimation), A3 (covariance-aware dormant merge), dormant pool pollution fix
+- `process2_perception/include/perception/ukf_fusion_engine.h` — A1/A3/B1: `set_radar_confirmed_depth()`, `set_depth_covariance()`, `radar_update_count`, covariance-aware `find_nearest_dormant()`
+- `process2_perception/include/perception/types.h` — A2: `estimated_radius_m`, `estimated_height_m`, `radar_update_count` on FusedObject
+- `process2_perception/include/perception/ifusion_engine.h` — `set_drone_pose()`, `set_drone_altitude()` interface methods
+- `process2_perception/src/main.cpp` — A2: IPC wiring for size/radar fields
+- `common/ipc/include/ipc/ipc_types.h` — A2: IPC wire-format fields
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — A2 (per-object inflation), B1 (radar-confirmed static promotion)
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — C1: Z-leak fix (2D path-aware stripping)
+- `process4_mission_planner/include/planner/grid_planner_base.h` — C2: backward path rejection
+- `process4_mission_planner/include/planner/mission_fsm.h` — Survey phase FSM state
+- `process4_mission_planner/include/planner/mission_state_tick.h` — Survey phase tick, DIAG logging
+- `config/scenarios/18_perception_avoidance.json` — C3: smoothing_alpha 0.35->0.5, replan_interval_s 1.0->0.5
+
+**What:** Full perception-to-grid pipeline overhaul for Scenario 18 obstacle avoidance:
+
+- **A1:** Camera-only tracks get high depth uncertainty (P(0,0)=100); radar-init snaps accurate range (P(0,0)=0.5) via bearing-only gate (0.15 rad). Uses each sensor's strength: camera for bearing, radar for range.
+- **A2:** Size estimation back-projects camera bbox using radar range: `radius = bbox_w * range / (2*fx)`. Grid uses per-object radius for inflation instead of fixed radius.
+- **A3:** Covariance-aware dormant merge radius: `2*sigma_max` clamped [1.0, 5.0]m instead of fixed 5m. Prevents cross-obstacle contamination.
+- **B1:** Radar-confirmed tracks (>=3 radar updates) get immediate static grid promotion, bypassing hit-count accumulation.
+- **C1:** Z-leak fix: 2D path-aware stripping when vertical_gain=0.
+- **C2:** Backward path rejection: D* Lite paths with dot < 0 vs goal direction rejected.
+- **C3:** Config tuning for faster reaction and more frequent replans.
+- **Dormant pool fix:** Camera-only tracks excluded from dormant pool (prevents phantom pollution).
+
+**Why:** After 4+ Gazebo runs, drone kept hitting obstacles due to: inaccurate monocular depth, dormant pool contamination with phantoms, fixed grid inflation ignoring obstacle size, and Z-leak altitude loss.
+
+**Gazebo results:** 2/3 runs passed (all obstacles avoided). 1 run hit RED due to dormant pool pollution (fixed post-run).
+
+**Test count:** 1071 → 1097 (+26 tests: dormant re-ID, D* Lite, fusion engine, mission FSM, obstacle avoider).
+
+---
+
+_Last updated after Improvement #63 (Epic #237, Issue #237). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1097 tests, 18 scenarios._

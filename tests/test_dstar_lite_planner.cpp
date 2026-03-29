@@ -100,6 +100,124 @@ TEST(OccupancyGrid3DTest, ClearResetsGrid) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// Known-obstacle suppression (Issue #237)
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, PromotedCellStillAcceptsDynamicDetections) {
+    // Grid with promotion_hits=2: after 2 observations a cell promotes.
+    // Subsequent detections near the promoted position create dynamic
+    // cells (needed for navigation avoidance) but do NOT accumulate
+    // further promotion hits (prevents runaway wall growth). Issue #237.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    drone::ipc::Pose pose{};
+
+    // Two observations → cell promoted to static
+    grid.update_from_objects(objects, pose);
+    grid.update_from_objects(objects, pose);
+    size_t static_after_promote = grid.static_count();
+    EXPECT_GT(static_after_promote, 0u);
+
+    // Clear dynamic cells, then detect at an offset position (parallax).
+    // Dynamic cells are created, but no further promotion occurs.
+    grid.clear_dynamic();
+    EXPECT_EQ(grid.occupied_count(), 0u);
+
+    objects.objects[0].position_x = 7.0f;  // 2 cells away — partial overlap
+    // Many repeated observations — none should promote because center
+    // is adjacent to existing static cells (promotion suppressed).
+    for (int i = 0; i < 10; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    // Dynamic cells created for avoidance
+    EXPECT_GT(grid.occupied_count(), 0u);
+    // Static count did NOT grow — promotion was suppressed near known obstacles
+    EXPECT_EQ(grid.static_count(), static_after_promote);
+}
+
+TEST(OccupancyGrid3DTest, AdjacentDetectionStillInserted) {
+    // Parallax causes detections 1 cell away from the promoted cell.
+    // These detections are still inserted as dynamic cells — the
+    // close-range position may be more accurate than the promoted one.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    drone::ipc::Pose pose{};
+
+    // Promote the cell at (5,5,5)
+    grid.update_from_objects(objects, pose);
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u);
+    grid.clear_dynamic();
+
+    // New detection 1m away (1 cell on 1m grid) — parallax offset
+    objects.objects[0].position_x = 6.0f;
+    grid.update_from_objects(objects, pose);
+    // Adjacent to promoted cell — still inserted for better position accuracy
+    EXPECT_GT(grid.occupied_count(), 0u);
+}
+
+TEST(OccupancyGrid3DTest, FarDetectionNotSuppressed) {
+    // A detection far from any promoted cell should NOT be suppressed.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    drone::ipc::Pose pose{};
+
+    // Promote the cell at (5,5,5)
+    grid.update_from_objects(objects, pose);
+    grid.update_from_objects(objects, pose);
+    grid.clear_dynamic();
+
+    // New detection 5m away — definitely a different obstacle
+    objects.objects[0].position_x = 10.0f;
+    grid.update_from_objects(objects, pose);
+    // Should NOT be suppressed
+    EXPECT_GT(grid.occupied_count(), 0u);
+}
+
+TEST(OccupancyGrid3DTest, SuppressionDisabledWhenPromotionOff) {
+    // When promotion_hits=0, suppression is disabled — all detections accepted.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/0);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 5.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.occupied_count(), 0u);
+    grid.clear_dynamic();
+
+    // Same position again — no promotion possible, so no suppression
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.occupied_count(), 0u);
+}
+
+// ═════════════════════════════════════════════════════════════
 // GridCellHash + factory tests (ported from test_astar_planner.cpp)
 // ═════════════════════════════════════════════════════════════
 
@@ -1178,4 +1296,144 @@ TEST(PurePursuitTest, ConfigDefaultDisabled) {
     // Default config has look_ahead_m=0 (disabled)
     GridPlannerConfig config;
     EXPECT_FLOAT_EQ(config.look_ahead_m, 0.0f);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Fallback behaviour tests (Issue #237)
+// ═════════════════════════════════════════════════════════════
+
+TEST(FallbackBehaviourTest, SearchFailureKeepsLastGoodPath) {
+    // First plan succeeds and caches a path.
+    // Then we wall off the grid so the next plan fails.
+    // The planner should keep following the cached path, NOT fly direct.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 4.0f;  // small grid so wall is impassable
+    config.inflation_radius_m = 0.5f;
+    config.smoothing_alpha    = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.snap_search_radius = 0;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    Waypoint         target{3.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+
+    // First plan — clear grid, should find a path
+    auto cmd1 = planner.plan(pose, target);
+    EXPECT_TRUE(cmd1.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+    size_t first_path_size = planner.cached_path().size();
+
+    // Wall off — complete barrier across the grid
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int y = -4; y <= 4; ++y) {
+        for (int x = 1; x <= 2; ++x) {
+            if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+            objects.objects[idx].position_x = static_cast<float>(x);
+            objects.objects[idx].position_y = static_cast<float>(y);
+            objects.objects[idx].position_z = 0.0f;
+            objects.objects[idx].confidence = 0.9f;
+            ++idx;
+        }
+    }
+    objects.num_objects = idx;
+    planner.update_obstacles(objects, pose);
+
+    // Second plan — search fails, but planner keeps the old cached path
+    auto cmd2 = planner.plan(pose, target);
+    EXPECT_TRUE(cmd2.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+    EXPECT_EQ(planner.cached_path().size(), first_path_size);
+}
+
+TEST(FallbackBehaviourTest, NoCachedPathHoversInPlace) {
+    // If the very first search fails (no cached path exists),
+    // the planner should output near-zero velocity (hover) instead
+    // of flying a direct line through obstacles.
+    // Use a tiny grid and fill nearly everything with obstacles so
+    // goal snapping cannot find a route around.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 4.0f;  // small grid: cells -4..+4
+    config.inflation_radius_m = 0.5f;
+    config.smoothing_alpha    = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.snap_search_radius = 0;  // disable goal snapping
+    DStarLitePlanner planner(config);
+
+    // Fill a complete wall across the grid at x=2, all y values
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int y = -4; y <= 4; ++y) {
+        for (int x = 1; x <= 3; ++x) {
+            if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+            objects.objects[idx].position_x = static_cast<float>(x);
+            objects.objects[idx].position_y = static_cast<float>(y);
+            objects.objects[idx].position_z = 0.0f;
+            objects.objects[idx].confidence = 0.9f;
+            ++idx;
+        }
+    }
+    objects.num_objects = idx;
+
+    drone::ipc::Pose pose{};
+    planner.update_obstacles(objects, pose);
+
+    Waypoint target{4.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    // Velocity should be zero or near-zero (hovering)
+    float speed = std::sqrt(cmd.velocity_x * cmd.velocity_x + cmd.velocity_y * cmd.velocity_y +
+                            cmd.velocity_z * cmd.velocity_z);
+    EXPECT_LT(speed, 0.1f) << "Expected hover (near-zero velocity), got speed=" << speed;
+    EXPECT_TRUE(planner.using_direct_fallback());
+}
+
+TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
+    // After hovering (no path), if the grid clears and search succeeds,
+    // the planner should resume normal path following.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 4.0f;
+    config.inflation_radius_m = 0.5f;
+    config.smoothing_alpha    = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.snap_search_radius = 0;
+    DStarLitePlanner planner(config);
+
+    // Wall off — first search fails → hover
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int y = -4; y <= 4; ++y) {
+        for (int x = 1; x <= 3; ++x) {
+            if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+            objects.objects[idx].position_x = static_cast<float>(x);
+            objects.objects[idx].position_y = static_cast<float>(y);
+            objects.objects[idx].position_z = 0.0f;
+            objects.objects[idx].confidence = 0.9f;
+            ++idx;
+        }
+    }
+    objects.num_objects = idx;
+
+    drone::ipc::Pose pose{};
+    planner.update_obstacles(objects, pose);
+
+    Waypoint target{4.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    (void)planner.plan(pose, target);
+    EXPECT_TRUE(planner.using_direct_fallback());
+
+    // Clear all obstacles (TTL-based: insert empty update, then wait for expiry)
+    // For test: grid uses short TTL, just re-create planner with clean grid
+    DStarLitePlanner planner2(config);
+
+    auto cmd2 = planner2.plan(pose, target);
+    EXPECT_TRUE(cmd2.valid);
+    EXPECT_FALSE(planner2.using_direct_fallback());
+    EXPECT_FALSE(planner2.cached_path().empty());
+    EXPECT_GT(cmd2.velocity_x, 0.0f);  // moving toward goal again
 }

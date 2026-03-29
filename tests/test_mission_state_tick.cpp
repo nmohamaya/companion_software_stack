@@ -300,19 +300,23 @@ TEST_F(MissionStateTickTest, LandStaysIfLandNotSent) {
 // NAVIGATE: waypoint overshoot advances to next (Issue #236)
 // ═══════════════════════════════════════════════════════════
 TEST_F(MissionStateTickTest, WaypointOvershootAdvancesToNext) {
-    // Get to NAVIGATE
+    // Override mission with 3 waypoints so WP1 has a previous WP for overshoot detection
+    fsm.load_mission(
+        {{0, 0, 5, 0, 2, 3, false}, {10, 0, 5, 0, 2, 3, true}, {20, 0, 5, 0, 2, 3, false}});
+
+    // Get to NAVIGATE and advance to WP1
     fsm.on_takeoff();
     fsm.on_navigate();
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
     ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
-    ASSERT_EQ(fsm.current_wp_index(), 0u);
+    ASSERT_EQ(fsm.current_wp_index(), 1u);
 
-    // WP0=(10,0,5), WP1=(20,0,5) per SetUp.
-    // Place drone at (15,0,5) — past WP0 toward WP1, but outside acceptance radius (2m).
+    // Place drone at (15,0,5) — past WP1 along approach direction (WP0→WP1 = +X)
     auto pose = make_pose(15, 0, 5);
     auto fc   = make_fc(true, 5.0f);
 
     do_tick(pose, fc);
 
-    // Should have advanced past WP0 due to overshoot detection
-    EXPECT_EQ(fsm.current_wp_index(), 1u);
+    // Should have advanced past WP1 due to overshoot detection
+    EXPECT_EQ(fsm.current_wp_index(), 2u);
 }

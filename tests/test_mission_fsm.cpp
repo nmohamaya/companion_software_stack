@@ -116,29 +116,45 @@ TEST(MissionFSMTest, StateNames) {
 // Waypoint overshoot detection (Issue #236)
 // ═══════════════════════════════════════════════════════════
 
-TEST(MissionFSMTest, OvershootDetectedWhenPastWaypoint) {
+TEST(MissionFSMTest, NoOvershootOnFirstWaypoint) {
     MissionFSM fsm;
     fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
 
-    // Drone at (15,0,5) — past WP0 (10,0,5) toward WP1 (20,0,5)
+    // WP0 has no previous waypoint — overshoot never triggers for first WP
+    EXPECT_FALSE(fsm.waypoint_overshot(15.0f, 0.0f, 5.0f));
+}
+
+TEST(MissionFSMTest, OvershootDetectedWhenPastWaypoint) {
+    // 3 waypoints: (0,0,5) → (10,0,5) → (20,0,5) — all collinear along X
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
+
+    // Drone at (15,0,5) — past WP1 along approach direction (WP0→WP1 = +X)
     EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 0.0f, 5.0f));
 }
 
 TEST(MissionFSMTest, NoOvershootWhenBeforeWaypoint) {
     MissionFSM fsm;
-    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
 
-    // Drone at (5,0,5) — behind WP0 relative to WP1
+    // Drone at (5,0,5) — behind WP1 along approach direction (WP0→WP1 = +X)
     EXPECT_FALSE(fsm.waypoint_overshot(5.0f, 0.0f, 5.0f));
 }
 
 TEST(MissionFSMTest, NoOvershootOnLastWaypoint) {
     MissionFSM fsm;
-    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
-
-    // Advance to last waypoint
-    EXPECT_TRUE(fsm.advance_waypoint());
-    EXPECT_EQ(fsm.current_wp_index(), 1u);
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // WP1
+    (void)fsm.advance_waypoint();  // WP2 (last)
+    EXPECT_EQ(fsm.current_wp_index(), 2u);
 
     // Drone past last WP — must NOT report overshoot (require acceptance radius)
     EXPECT_FALSE(fsm.waypoint_overshot(25.0f, 0.0f, 5.0f));
@@ -146,17 +162,23 @@ TEST(MissionFSMTest, NoOvershootOnLastWaypoint) {
 
 TEST(MissionFSMTest, OvershootWithLateralOffset) {
     MissionFSM fsm;
-    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
 
-    // Drone at (15,3,5) — past WP0 along approach vector but laterally offset
+    // Drone at (15,3,5) — past WP1 along approach vector but laterally offset
     EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 3.0f, 5.0f));
 }
 
 TEST(MissionFSMTest, NoOvershootWhenFarFromWaypoint) {
     MissionFSM fsm;
-    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
 
-    // Drone at (20,0,5) — "past" WP0 in dot-product sense but 10m away
+    // Drone at (20,0,5) — "past" WP1 in dot-product sense but 10m away
     // (proximity zone = 3 × 2.0 = 6m), so overshoot must NOT trigger
     EXPECT_FALSE(fsm.waypoint_overshot(20.0f, 0.0f, 5.0f));
 }
@@ -164,9 +186,12 @@ TEST(MissionFSMTest, NoOvershootWhenFarFromWaypoint) {
 TEST(MissionFSMTest, ConfigurableProximityFactorAllowsFarOvershoot) {
     // With factor=7.0, proximity zone = 7 × 2.0 = 14m — 10m away should trigger
     MissionFSM fsm(7.0f);
-    fsm.load_mission({{10, 0, 5, 0, 2.0f, 3.0f, false}, {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
 
-    // Same position as NoOvershootWhenFarFromWaypoint (10m from WP0),
+    // Same position as NoOvershootWhenFarFromWaypoint (10m from WP1),
     // but larger proximity factor now allows detection
     EXPECT_TRUE(fsm.waypoint_overshot(20.0f, 0.0f, 5.0f));
 }

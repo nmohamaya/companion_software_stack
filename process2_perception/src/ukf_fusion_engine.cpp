@@ -20,16 +20,19 @@ namespace drone::perception {
 // ObjectUKF
 // ═══════════════════════════════════════════════════════════
 ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth,
-                     const RadarNoiseConfig& radar_cfg)
+                     const RadarNoiseConfig& radar_cfg, const CameraIntrinsics& intrinsics)
     : track_id(trk.track_id), age(0) {
-    // Initialize state: [x=depth, y=bearing_x*depth, z=0, vx, vy, vz]
-    x_    = StateVec::Zero();
-    x_(0) = initial_depth;                                 // x (forward)
-    x_(1) = trk.position_2d.x() * 0.001f * initial_depth;  // y (lateral, from pixel)
-    x_(2) = 0.0f;                                          // z (altitude, relative)
-    x_(3) = trk.velocity_2d.x() * 0.1f;                    // vx
-    x_(4) = trk.velocity_2d.y() * 0.1f;                    // vy
-    x_(5) = 0.0f;                                          // vz
+    // Initialize state: [x=depth, y=bearing_x*depth, z=bearing_y*depth, vx, vy, vz]
+    // Bearing computed via pinhole camera model: (pixel - principal_point) / focal_length
+    const float bearing_x = (trk.position_2d.x() - intrinsics.cx) / std::max(1.0f, intrinsics.fx);
+    const float bearing_y = (trk.position_2d.y() - intrinsics.cy) / std::max(1.0f, intrinsics.fy);
+    x_                    = StateVec::Zero();
+    x_(0)                 = initial_depth;               // x (forward / depth)
+    x_(1)                 = bearing_x * initial_depth;   // y (lateral, from calibrated bearing)
+    x_(2)                 = bearing_y * initial_depth;   // z (vertical, from calibrated bearing)
+    x_(3)                 = trk.velocity_2d.x() * 0.1f;  // vx
+    x_(4)                 = trk.velocity_2d.y() * 0.1f;  // vy
+    x_(5)                 = 0.0f;                        // vz
 
     // Initial covariance — high uncertainty
     P_       = StateMat::Identity() * 10.0f;
@@ -55,6 +58,23 @@ ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth,
     R_radar_(1, 1) = radar_cfg.azimuth_std_rad * radar_cfg.azimuth_std_rad;
     R_radar_(2, 2) = radar_cfg.elevation_std_rad * radar_cfg.elevation_std_rad;
     R_radar_(3, 3) = radar_cfg.velocity_std_mps * radar_cfg.velocity_std_mps;
+}
+
+void ObjectUKF::set_radar_confirmed_depth(float radar_range) {
+    // Rewrite depth (x) and lateral/vertical (y, z) using the radar range
+    // while preserving the bearing direction from the camera.
+    const float old_depth = std::max(x_(0), 0.1f);
+    const float scale     = radar_range / old_depth;
+    x_(0)                 = radar_range;
+    x_(1) *= scale;  // lateral scales with depth
+    x_(2) *= scale;  // vertical scales with depth
+
+    // Tighten depth covariance: radar range is ±0.3m, so P(0,0) ≈ 0.09.
+    // Use 0.5 to be slightly conservative (accounts for body-frame uncertainty).
+    P_(0, 0) = 0.5f;
+    // Lateral/vertical covariance stays at initial values (bearing-driven).
+
+    ++radar_update_count;
 }
 
 std::vector<ObjectUKF::StateVec> ObjectUKF::generate_sigma_points() const {
@@ -140,7 +160,8 @@ void ObjectUKF::predict(float dt) {
     ++age;
 }
 
-void ObjectUKF::update_camera(const TrackedObject& trk, float estimated_depth) {
+void ObjectUKF::update_camera(const TrackedObject& trk, float estimated_depth,
+                              const CameraIntrinsics& intrinsics) {
     constexpr int   n      = STATE_DIM;
     constexpr float lambda = kAlpha * kAlpha * (n + kKappa) - n;
 
@@ -191,10 +212,10 @@ void ObjectUKF::update_camera(const TrackedObject& trk, float estimated_depth) {
     // Kalman gain (solve without forming S.inverse() for numerical stability)
     CrossMat K = (S.ldlt().solve(Pxz.transpose())).transpose();
 
-    // Actual measurement
-    float   bearing_x = trk.position_2d.x() * 0.001f;  // pixel → rough bearing
-    float   bearing_y = trk.position_2d.y() * 0.001f;
-    MeasVec z_actual(bearing_x, bearing_y, estimated_depth);
+    // Actual measurement — pinhole camera unprojection for calibrated bearings
+    const float bearing_x = (trk.position_2d.x() - intrinsics.cx) / std::max(1.0f, intrinsics.fx);
+    const float bearing_y = (trk.position_2d.y() - intrinsics.cy) / std::max(1.0f, intrinsics.fy);
+    MeasVec     z_actual(bearing_x, bearing_y, estimated_depth);
 
     // Update
     x_ += K * (z_actual - z_mean);
@@ -302,10 +323,12 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
     // Kalman gain (solve via LDLT for numerical stability)
     RadarCrossMat K = (S.ldlt().solve(Pxz.transpose())).transpose();
 
-    // Actual radar measurement
+    // Actual radar measurement.
+    // Negate azimuth: Gazebo lidar uses FLU convention (positive = left),
+    // but the UKF body frame is FRD (positive azimuth = right).
     RadarMeasVec z_actual;
     z_actual(0) = det.range_m;
-    z_actual(1) = det.azimuth_rad;
+    z_actual(1) = -det.azimuth_rad;
     z_actual(2) = det.elevation_rad;
     z_actual(3) = det.radial_velocity_mps;
 
@@ -318,6 +341,8 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
 
     // Ensure P stays symmetric positive definite
     P_ = (P_ + P_.transpose()) * 0.5f;
+
+    ++radar_update_count;
 }
 
 Eigen::Vector3f ObjectUKF::position() const {
@@ -336,22 +361,125 @@ Eigen::Matrix3f ObjectUKF::position_covariance() const {
 // UKFFusionEngine
 // ═══════════════════════════════════════════════════════════
 UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseConfig& radar_cfg,
-                                 bool radar_enabled)
-    : calib_(calib), radar_cfg_(radar_cfg), radar_enabled_(radar_enabled) {
+                                 bool radar_enabled, float dormant_merge_radius_m, int max_dormant)
+    : calib_(calib)
+    , radar_cfg_(radar_cfg)
+    , radar_enabled_(radar_enabled)
+    , dormant_merge_radius_m_(dormant_merge_radius_m)
+    , max_dormant_(max_dormant) {
     spdlog::info("[UKF] radar_enabled={}, ground_filter_enabled={}, ground_filter_alt_m={:.2f}, "
-                 "altitude_gate_m={:.1f}, gate_threshold={:.1f}",
+                 "altitude_gate_m={:.1f}, gate_threshold={:.1f}, dormant_merge_radius={:.1f}m, "
+                 "max_dormant={}",
                  radar_enabled_, radar_cfg_.ground_filter_enabled, radar_cfg_.min_object_altitude_m,
-                 radar_cfg_.altitude_gate_m, radar_cfg_.gate_threshold);
+                 radar_cfg_.altitude_gate_m, radar_cfg_.gate_threshold, dormant_merge_radius_m_,
+                 max_dormant_);
 }
 
 float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
     const float fy = calib_.camera_intrinsics(1, 1);
-    return calib_.camera_height_m * fy / std::max(10.0f, trk.position_2d.y());
+    const float cy = calib_.camera_intrinsics(1, 2);
+
+    // Four-tier depth estimation:
+    //
+    // 1. Horizon-truncated bbox: when the bbox top is at or above the horizon
+    //    (pixel row ≤ cy), the obstacle extends above the visible frame.
+    //    The apparent-size formula would undercount bbox_h and overestimate
+    //    depth.  Fall back to ground-plane depth from the bbox bottom.
+    //
+    // 2. Apparent-size (primary): depth = assumed_height * fy / bbox_h
+    //    Most reliable when the full obstacle height is visible.
+    //
+    // 3. Ground-plane (fallback): depth = camera_height / ray_down
+    //    For objects below the horizon with unreliable bbox height.
+    //
+    // 4. Near-horizon fallback: conservative 8m estimate.
+    constexpr float kBboxHThreshold  = 10.0f;
+    constexpr float kDepthMinM       = 1.0f;
+    constexpr float kDepthMaxM       = 40.0f;
+    constexpr float kRayDownMinThres = 0.01f;
+    constexpr float kFallbackDepthM  = 8.0f;
+    constexpr float kHorizonMarginPx = 5.0f;  // bbox top within 5px of cy = truncated
+
+    const float ds = calib_.depth_scale;
+
+    // Bbox top in pixel coords (centroid - half height)
+    const float bbox_top = trk.position_2d.y() - trk.bbox_h * 0.5f;
+
+    // Tier 1: Horizon-truncated — bbox top at or above optical center.
+    // The obstacle extends above the frame, so bbox_h < true projected height.
+    // Use the bbox BOTTOM to estimate depth via ground-plane geometry:
+    //   depth = drone_altitude * fy / (bbox_bottom - cy)
+    // where bbox_bottom is the pixel row of the obstacle base (assumed ground level).
+    if (bbox_top <= cy + kHorizonMarginPx && trk.bbox_h > kBboxHThreshold) {
+        const float bbox_bottom   = trk.position_2d.y() + trk.bbox_h * 0.5f;
+        const float ray_down_base = (bbox_bottom - cy) / std::max(1.0f, fy);
+        if (ray_down_base > kRayDownMinThres && has_altitude_) {
+            // Use actual drone altitude for ground-plane depth when available
+            return std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
+                              kDepthMaxM);
+        }
+        if (ray_down_base > kRayDownMinThres) {
+            return std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM, kDepthMaxM);
+        }
+    }
+
+    // Tier 2: Full-height apparent-size depth (bbox fully visible)
+    if (trk.bbox_h > kBboxHThreshold) {
+        return std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds, kDepthMinM,
+                          kDepthMaxM);
+    }
+
+    // Tier 3: Ground-plane fallback for small detections
+    const float ray_down = (trk.position_2d.y() - cy) / std::max(1.0f, fy);
+    if (ray_down > kRayDownMinThres) {
+        return std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM);
+    }
+
+    // Tier 4: Near-horizon conservative estimate
+    return kFallbackDepthM * ds;
 }
 
 void UKFFusionEngine::reset() {
     filters_.clear();
+    dormant_obstacles_.clear();
+    track_to_dormant_.clear();
     has_radar_data_ = false;
+}
+
+void UKFFusionEngine::set_drone_pose(float north, float east, float up, float yaw) {
+    drone_north_ = north;
+    drone_east_  = east;
+    drone_up_    = up;
+    drone_yaw_   = yaw;
+    has_pose_    = true;
+}
+
+Eigen::Vector3f UKFFusionEngine::body_to_world(const Eigen::Vector3f& body) const {
+    const float cos_y = std::cos(drone_yaw_);
+    const float sin_y = std::sin(drone_yaw_);
+    return {drone_north_ + body.x() * cos_y - body.y() * sin_y,
+            drone_east_ + body.x() * sin_y + body.y() * cos_y, drone_up_ - body.z()};
+}
+
+int UKFFusionEngine::find_nearest_dormant(const Eigen::Vector3f& world_pos,
+                                          const Eigen::Matrix3f& pos_cov) const {
+    // Covariance-aware merge radius (A3): use 2σ of the largest position
+    // uncertainty axis, clamped to [1.0, dormant_merge_radius_m_].
+    // Radar-confirmed tracks (small P) get tight radius → no cross-contamination.
+    // Camera-only tracks (large P) get wider radius → correct re-identification.
+    const float sigma_max      = std::sqrt(std::max(pos_cov(0, 0), pos_cov(1, 1)));
+    const float dynamic_radius = std::clamp(2.0f * sigma_max, 1.0f, dormant_merge_radius_m_);
+
+    int   best_idx  = -1;
+    float best_dist = dynamic_radius;
+    for (int i = 0; i < static_cast<int>(dormant_obstacles_.size()); ++i) {
+        const float dist = (dormant_obstacles_[i].world_pos.head<2>() - world_pos.head<2>()).norm();
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx  = i;
+        }
+    }
+    return best_idx;
 }
 
 void UKFFusionEngine::set_radar_detections(const drone::ipc::RadarDetectionList& detections) {
@@ -429,19 +557,120 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         }
     }
 
+    const CameraIntrinsics cam_intr{calib_.camera_intrinsics(0, 0), calib_.camera_intrinsics(1, 1),
+                                    calib_.camera_intrinsics(0, 2), calib_.camera_intrinsics(1, 2)};
+
     for (const auto& trk : tracked.objects) {
-        float depth = estimate_depth(trk);
+        float depth           = estimate_depth(trk);
+        bool  radar_init_used = false;
 
         auto it = filters_.find(trk.track_id);
         if (it == filters_.end()) {
-            // New track — create UKF
-            filters_.emplace(trk.track_id, ObjectUKF(trk, depth, radar_cfg_));
+            // Radar-initialized depth: for new tracks, check if an unmatched
+            // radar detection exists at a similar bearing.  Radar range is far
+            // more accurate than monocular depth estimation, so prefer it.
+            // Match on azimuth/elevation only (bearing-only gate).
+            if (has_radar_data_ && radar_enabled_) {
+                const float bearing_x = (trk.position_2d.x() - cam_intr.cx) /
+                                        std::max(1.0f, cam_intr.fx);
+                const float bearing_y = (trk.position_2d.y() - cam_intr.cy) /
+                                        std::max(1.0f, cam_intr.fy);
+                // Camera bearing → predicted azimuth/elevation in body frame (FRD)
+                const float cam_az = std::atan2(bearing_x, 1.0f);  // atan2(right, forward)
+                const float cam_el = std::atan2(bearing_y, std::sqrt(1.0f + bearing_x * bearing_x));
+
+                constexpr float kBearingGateRad  = 0.15f;  // ~8.6° bearing tolerance
+                float           best_range       = -1.0f;
+                float           best_bearing_err = kBearingGateRad;
+
+                for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
+                    if (radar_matched[ri]) continue;
+                    const auto& rdet = radar_dets_.detections[ri];
+                    // Negate azimuth: Gazebo FLU → UKF FRD
+                    const float az_err    = std::abs(wrap_angle(-rdet.azimuth_rad - cam_az));
+                    const float el_err    = std::abs(wrap_angle(rdet.elevation_rad - cam_el));
+                    const float total_err = az_err + el_err;
+                    if (az_err < kBearingGateRad && el_err < kBearingGateRad &&
+                        total_err < best_bearing_err) {
+                        best_bearing_err = total_err;
+                        best_range       = rdet.range_m;
+                    }
+                }
+                if (best_range > 0.0f) {
+                    spdlog::info("[UKF] Radar-init: track {} cam_depth={:.1f}m → "
+                                 "radar_range={:.1f}m",
+                                 trk.track_id, depth, best_range);
+                    depth           = best_range;
+                    radar_init_used = true;
+                }
+            }
+
+            // New track — create UKF with calibrated camera intrinsics.
+            filters_.emplace(trk.track_id, ObjectUKF(trk, depth, radar_cfg_, cam_intr));
             it = filters_.find(trk.track_id);
+
+            // Adjust depth covariance based on depth source.
+            // Radar range (±0.3m) → tight covariance.
+            // Monocular depth → high uncertainty, especially at long range.
+            if (radar_init_used) {
+                it->second.set_radar_confirmed_depth(depth);
+            } else {
+                it->second.set_depth_covariance(100.0f);
+            }
+
+            // Dormant re-identification: only radar-confirmed tracks enter the
+            // dormant pool. Camera-only tracks have wildly uncertain depth
+            // (P(0,0)=100) and would pollute the pool with phantom positions.
+            if (has_pose_ && radar_init_used) {
+                Eigen::Vector3f world_pos = body_to_world(it->second.position());
+                int didx = find_nearest_dormant(world_pos, it->second.position_covariance());
+                if (didx >= 0) {
+                    // Re-identified — merge into existing dormant obstacle
+                    auto& dobs = dormant_obstacles_[didx];
+                    dobs.observations++;
+                    const float alpha = 1.0f / static_cast<float>(dobs.observations);
+                    dobs.world_pos    = (1.0f - alpha) * dobs.world_pos + alpha * world_pos;
+                    dobs.last_seen_ns = tracked.timestamp_ns;
+                    track_to_dormant_[trk.track_id] = didx;
+                    spdlog::info("[UKF] Re-ID: track {} → dormant #{} at ({:.1f},{:.1f}), "
+                                 "obs={}, dist={:.1f}m",
+                                 trk.track_id, didx, dobs.world_pos.x(), dobs.world_pos.y(),
+                                 dobs.observations,
+                                 (world_pos.head<2>() - dobs.world_pos.head<2>()).norm());
+                } else {
+                    // New obstacle — create dormant entry
+                    if (static_cast<int>(dormant_obstacles_.size()) < max_dormant_) {
+                        dormant_obstacles_.push_back({world_pos, 1, tracked.timestamp_ns});
+                        track_to_dormant_[trk.track_id] =
+                            static_cast<int>(dormant_obstacles_.size()) - 1;
+                        spdlog::info("[UKF] New obstacle: track {} → dormant #{} at "
+                                     "({:.1f},{:.1f})",
+                                     trk.track_id, static_cast<int>(dormant_obstacles_.size()) - 1,
+                                     world_pos.x(), world_pos.y());
+                    }
+                }
+            }
+        } else {
+            // Existing track — update its dormant entry position if mapped.
+            // Only update from radar-confirmed tracks to prevent camera-only
+            // depth drift from corrupting dormant world positions.
+            if (has_pose_ && it->second.radar_update_count > 0) {
+                auto dit = track_to_dormant_.find(trk.track_id);
+                if (dit != track_to_dormant_.end() && dit->second >= 0 &&
+                    dit->second < static_cast<int>(dormant_obstacles_.size())) {
+                    auto&           dobs      = dormant_obstacles_[dit->second];
+                    Eigen::Vector3f world_pos = body_to_world(it->second.position());
+                    dobs.observations++;
+                    const float alpha = 1.0f / static_cast<float>(dobs.observations);
+                    dobs.world_pos    = (1.0f - alpha) * dobs.world_pos + alpha * world_pos;
+                    dobs.last_seen_ns = tracked.timestamp_ns;
+                }
+            }
         }
 
         auto& ukf = it->second;
         ukf.predict();
-        ukf.update_camera(trk, depth);
+        ukf.update_camera(trk, depth, cam_intr);
 
         // Radar association: find best matching radar detection within gate
         bool matched_radar = false;
@@ -469,9 +698,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     if (std::abs(radar_z - track_z) > radar_cfg_.altitude_gate_m) continue;
                 }
 
+                // Negate azimuth: Gazebo FLU → UKF FRD convention
                 ObjectUKF::RadarMeasVec z_actual;
                 z_actual(0) = rdet.range_m;
-                z_actual(1) = rdet.azimuth_rad;
+                z_actual(1) = -rdet.azimuth_rad;
                 z_actual(2) = rdet.elevation_rad;
                 z_actual(3) = rdet.radial_velocity_mps;
 
@@ -507,6 +737,34 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             }
         }
 
+        // Late dormant entry: if an existing track just got its first radar
+        // update, it now has reliable depth — create/re-ID a dormant entry.
+        if (has_pose_ && matched_radar && ukf.radar_update_count == 1 &&
+            track_to_dormant_.find(trk.track_id) == track_to_dormant_.end()) {
+            Eigen::Vector3f world_pos = body_to_world(ukf.position());
+            int             didx      = find_nearest_dormant(world_pos, ukf.position_covariance());
+            if (didx >= 0) {
+                auto& dobs = dormant_obstacles_[didx];
+                dobs.observations++;
+                const float alpha = 1.0f / static_cast<float>(dobs.observations);
+                dobs.world_pos    = (1.0f - alpha) * dobs.world_pos + alpha * world_pos;
+                dobs.last_seen_ns = tracked.timestamp_ns;
+                track_to_dormant_[trk.track_id] = didx;
+                spdlog::info("[UKF] Re-ID (late radar): track {} → dormant #{} at "
+                             "({:.1f},{:.1f}), obs={}, dist={:.1f}m",
+                             trk.track_id, didx, dobs.world_pos.x(), dobs.world_pos.y(),
+                             dobs.observations,
+                             (world_pos.head<2>() - dobs.world_pos.head<2>()).norm());
+            } else if (static_cast<int>(dormant_obstacles_.size()) < max_dormant_) {
+                dormant_obstacles_.push_back({world_pos, 1, tracked.timestamp_ns});
+                track_to_dormant_[trk.track_id] = static_cast<int>(dormant_obstacles_.size()) - 1;
+                spdlog::info("[UKF] New obstacle (late radar): track {} → dormant #{} "
+                             "at ({:.1f},{:.1f})",
+                             trk.track_id, static_cast<int>(dormant_obstacles_.size()) - 1,
+                             world_pos.x(), world_pos.y());
+            }
+        }
+
         seen[trk.track_id] = true;
 
         // Build output
@@ -521,13 +779,35 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.has_radar           = matched_radar;
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
+        fused.radar_update_count  = ukf.radar_update_count;
+
+        // Size estimation (A2): back-project camera bbox using UKF range.
+        // Only meaningful when range is reliable (radar-confirmed or close range).
+        const float range = ukf.position().norm();
+        if (range > 1.0f && trk.bbox_w > 5.0f && trk.bbox_h > 5.0f) {
+            fused.estimated_radius_m = (trk.bbox_w * range) / (2.0f * cam_intr.fx);
+            fused.estimated_height_m = (trk.bbox_h * range) / cam_intr.fy;
+        }
+
+        // If this track is re-identified with a dormant obstacle, output the
+        // averaged world-frame position instead of the raw UKF body-frame estimate.
+        // This produces stable, consistent positions across viewing angles.
+        auto dit = track_to_dormant_.find(trk.track_id);
+        if (has_pose_ && dit != track_to_dormant_.end() && dit->second >= 0 &&
+            dit->second < static_cast<int>(dormant_obstacles_.size()) &&
+            dormant_obstacles_[dit->second].observations > 1) {
+            fused.position_3d    = dormant_obstacles_[dit->second].world_pos;
+            fused.in_world_frame = true;
+        }
 
         output.objects.push_back(fused);
     }
 
-    // Remove stale filters (not seen this frame)
+    // Remove stale filters (not seen this frame).
+    // Their dormant entries persist — only the active UKF filter is removed.
     for (auto it = filters_.begin(); it != filters_.end();) {
         if (seen.find(it->first) == seen.end()) {
+            track_to_dormant_.erase(it->first);
             it = filters_.erase(it);
         } else {
             ++it;
@@ -586,7 +866,11 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
             radar_cfg.altitude_gate_m = cfg->get<float>("perception.fusion.radar.altitude_gate_m",
                                                         radar_cfg.altitude_gate_m);
         }
-        return std::make_unique<UKFFusionEngine>(calib, radar_cfg, radar_enabled);
+        float dormant_merge_radius =
+            cfg ? cfg->get<float>("perception.fusion.dormant_merge_radius_m", 5.0f) : 5.0f;
+        int max_dormant = cfg ? cfg->get<int>("perception.fusion.max_dormant", 32) : 32;
+        return std::make_unique<UKFFusionEngine>(calib, radar_cfg, radar_enabled,
+                                                 dormant_merge_radius, max_dormant);
     }
     throw std::invalid_argument("Unknown fusion engine backend: " + backend);
 }

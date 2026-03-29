@@ -176,22 +176,45 @@ public:
 
         // Stamp newly detected cells
         int accepted       = 0;
+        int suppressed     = 0;
         int excluded_cells = 0;
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             if (obj.confidence < min_confidence_) continue;
 
             GridCell center = world_to_grid(obj.position_x, obj.position_y, obj.position_z);
+
+            // Known-obstacle suppression: split into two behaviours.
+            // 1. Dynamic cells are ALWAYS created (close-range detections
+            //    during navigation are more accurate than survey positions).
+            // 2. Promotion is SUPPRESSED near existing static cells to
+            //    prevent parallax from growing runaway walls of promoted
+            //    cells that block D* Lite paths (Issue #237).
+            bool skip_promotion = false;
+            if (promotion_hits_ > 0 && near_static_cell_(center)) {
+                ++suppressed;
+                skip_promotion = true;
+            }
             ++accepted;
+
+            // Per-object inflation: use estimated radius if available (from
+            // camera bbox + radar range back-projection), otherwise fall back
+            // to the configured inflation radius.  This gives accurate grid
+            // footprints for radar-confirmed obstacles.
+            const int obj_inflation =
+                (obj.estimated_radius_m > 0.0f)
+                    ? std::max(1, static_cast<int>(std::ceil(
+                                      (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)))
+                    : inflation_cells_;
 
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
             // inflation wastes memory and floods the grid. A single-layer
             // disk at the detection Z is sufficient because the search is
             // snapped to the drone's flight altitude.
-            for (int dy = -inflation_cells_; dy <= inflation_cells_; ++dy) {
-                for (int dx = -inflation_cells_; dx <= inflation_cells_; ++dx) {
-                    if (dx * dx + dy * dy <= inflation_cells_ * inflation_cells_) {
+            for (int dy = -obj_inflation; dy <= obj_inflation; ++dy) {
+                for (int dx = -obj_inflation; dx <= obj_inflation; ++dx) {
+                    if (dx * dx + dy * dy <= obj_inflation * obj_inflation) {
                         GridCell c{center.x + dx, center.y + dy, center.z};
                         // Self-exclusion: never mark the drone's own cell or any cell
                         // in its immediate 3×3 neighbourhood (Chebyshev distance ≤ 1)
@@ -212,10 +235,29 @@ public:
                                 changed_cells_.push_back({c, true});
                             }
 
-                            // Promotion: if this cell has been observed enough times,
-                            // move it to the permanent static layer so it persists
-                            // even after the drone flies away and detections stop.
-                            if (promotion_hits_ > 0) {
+                            // Promotion to static layer.  Two paths:
+                            // 1. Radar-confirmed (≥3 radar updates): immediate
+                            //    promotion — radar range is accurate, no need to
+                            //    wait for hit-count accumulation.
+                            // 2. Camera-only: promote after promotion_hits
+                            //    observations to build confidence.
+                            // Skip promotion for detections near existing static
+                            // cells — these are parallax echoes that would grow
+                            // the promoted wall beyond the real obstacle footprint.
+                            constexpr uint32_t kRadarConfirmedThreshold = 3;
+                            const bool         radar_confirmed          = obj.radar_update_count >=
+                                                         kRadarConfirmedThreshold;
+
+                            if (radar_confirmed && !skip_promotion) {
+                                // Radar-confirmed → immediate static promotion
+                                if (static_occupied_.count(c) == 0) {
+                                    static_occupied_.insert(c);
+                                    occupied_.erase(c);
+                                    hit_count_.erase(c);
+                                    changed_cells_.push_back({c, true});
+                                    ++promoted_count_;
+                                }
+                            } else if (promotion_hits_ > 0 && !skip_promotion) {
                                 int& hits = hit_count_[c];
                                 ++hits;
                                 if (hits >= promotion_hits_) {
@@ -247,11 +289,11 @@ public:
 
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
-            spdlog::info("[Grid] {} objs (accepted={}, excluded_cells={}), {} dynamic, {} static "
-                         "(promoted={}), drone=({},{},{})",
-                         objects.num_objects, accepted, excluded_cells, occupied_.size(),
-                         static_occupied_.size(), promoted_count_, drone_cell.x, drone_cell.y,
-                         drone_cell.z);
+            spdlog::info("[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
+                         "{} dynamic, {} static (promoted={}), drone=({},{},{})",
+                         objects.num_objects, accepted, suppressed, excluded_cells,
+                         occupied_.size(), static_occupied_.size(), promoted_count_, drone_cell.x,
+                         drone_cell.y, drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -305,6 +347,22 @@ public:
     [[nodiscard]] size_t pending_changes() const { return changed_cells_.size(); }
 
 private:
+    /// Check whether a grid cell is at or adjacent (Chebyshev ≤ 1) to any
+    /// already-promoted static cell.  Used for known-obstacle suppression:
+    /// once an obstacle has been promoted, further detections at the same
+    /// grid location are redundant and would only create phantom dynamic
+    /// cells from parallax/multi-track artefacts.
+    [[nodiscard]] bool near_static_cell_(const GridCell& center) const {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (static_occupied_.count({center.x + dx, center.y + dy, center.z}) > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     float    resolution_;
     int      half_extent_cells_;
     int      inflation_cells_;

@@ -157,84 +157,139 @@ public:
                              path_dx, path_dy, goal_dx, goal_dy, dot, search_path.size(),
                              replan_ms);
 
-                cached_path_     = std::move(search_path);
-                path_index_      = 1;  // skip start cell
-                last_plan_time_  = now;
-                direct_fallback_ = false;
+                // Reject backward paths — when the first step points away from
+                // the goal (dot < 0) and we have a usable cached path, keep the
+                // old path rather than flying in the wrong direction (Issue #237).
+                if (dot < 0.0f && !cached_path_.empty()) {
+                    spdlog::warn("[PlanBase] Rejecting backward path (dot={:.2f}) — "
+                                 "keeping cached path ({} pts, idx {})",
+                                 dot, cached_path_.size(), path_index_);
+                    last_plan_time_ = now;  // wait for next replan cycle
+                } else {
+                    cached_path_     = std::move(search_path);
+                    path_index_      = 1;  // skip start cell
+                    last_plan_time_  = now;
+                    direct_fallback_ = false;
+                }
             } else {
-                cached_path_.clear();
-                path_index_      = 0;
-                direct_fallback_ = true;
-                spdlog::info("[PlanBase] Search failed — direct fallback (took {:.0f}ms)",
-                             replan_ms);
+                if (!cached_path_.empty()) {
+                    // Keep following the last good path — much safer than
+                    // a direct line which flies through obstacles.
+                    direct_fallback_ = false;
+                    last_plan_time_  = now;  // avoid hammering failed replans
+                    spdlog::warn("[PlanBase] Search failed — keeping last good path "
+                                 "({} pts, idx {}) (took {:.0f}ms)",
+                                 cached_path_.size(), path_index_, replan_ms);
+                } else {
+                    // No cached path at all — hover in place (zero velocity)
+                    // rather than flying a direct line through obstacles.
+                    direct_fallback_ = true;
+                    spdlog::warn("[PlanBase] Search failed, no cached path — "
+                                 "hovering in place (took {:.0f}ms)",
+                                 replan_ms);
+                }
             }
+        }
+
+        // ── Hover if no path exists and search failed ────────
+        if (direct_fallback_ && cached_path_.empty()) {
+            // No path found and no cached path — hold XY position,
+            // but still drive toward target altitude.
+            smooth_vx_ *= (1.0f - config_.smoothing_alpha);
+            smooth_vy_ *= (1.0f - config_.smoothing_alpha);
+            float dz_hover = target.z - pz;
+            float vz_max   = std::min(config_.path_speed_mps, target.speed);
+            float raw_vz_h = (std::abs(dz_hover) > 0.1f) ? std::clamp(dz_hover, -vz_max, vz_max)
+                                                         : 0.0f;
+            smooth_vz_     = config_.smoothing_alpha * raw_vz_h +
+                         (1.0f - config_.smoothing_alpha) * smooth_vz_;
+            cmd.velocity_x = smooth_vx_;
+            cmd.velocity_y = smooth_vy_;
+            cmd.velocity_z = smooth_vz_;
+            cmd.target_x   = target.x;
+            cmd.target_y   = target.y;
+            cmd.target_z   = target.z;
+            cmd.target_yaw = target.yaw;
+
+            if (diag_tick_++ % 50 == 0) {
+                spdlog::warn("[PlanBase] HOVERING — no valid path to "
+                             "({:.1f},{:.1f},{:.1f}), vel=({:.2f},{:.2f},{:.2f})",
+                             target.x, target.y, target.z, smooth_vx_, smooth_vy_, smooth_vz_);
+            }
+            return cmd;
         }
 
         // ── Follow path or go direct ────────────────────────
         float goal_x = snap_valid_ ? snapped_world_x_ : target.x;
         float goal_y = snap_valid_ ? snapped_world_y_ : target.y;
-        float goal_z = snap_valid_ ? snapped_world_z_ : target.z;
 
         if (!cached_path_.empty() && path_index_ < cached_path_.size()) {
             if (config_.look_ahead_m > 0.0f) {
                 // Pure-pursuit mode: advance conservatively (half-cell), carrot
                 // handles smooth following — no need for aggressive skipping.
                 while (path_index_ + 1 < cached_path_.size()) {
-                    auto& wp   = cached_path_[path_index_];
-                    float dx   = wp[0] - px;
-                    float dy   = wp[1] - py;
-                    float dz   = wp[2] - pz;
-                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                    if (dist >= config_.resolution_m * 0.5f) break;
+                    auto& wp      = cached_path_[path_index_];
+                    float dx      = wp[0] - px;
+                    float dy      = wp[1] - py;
+                    float dist_xy = std::sqrt(dx * dx + dy * dy);
+                    if (dist_xy >= config_.resolution_m * 0.5f) break;
                     ++path_index_;
                 }
                 auto carrot = find_carrot(px, py, pz);
                 goal_x      = carrot[0];
                 goal_y      = carrot[1];
-                goal_z      = carrot[2];
             } else {
                 // Legacy cell-by-cell: advance when close, target next waypoint
                 while (path_index_ + 1 < cached_path_.size()) {
-                    auto& wp   = cached_path_[path_index_];
-                    float dx   = wp[0] - px;
-                    float dy   = wp[1] - py;
-                    float dz   = wp[2] - pz;
-                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                    if (dist >= config_.resolution_m * 1.5f) break;
+                    auto& wp      = cached_path_[path_index_];
+                    float dx      = wp[0] - px;
+                    float dy      = wp[1] - py;
+                    float dist_xy = std::sqrt(dx * dx + dy * dy);
+                    if (dist_xy >= config_.resolution_m * 1.5f) break;
                     ++path_index_;
                 }
                 auto& wp = cached_path_[path_index_];
                 goal_x   = wp[0];
                 goal_y   = wp[1];
-                goal_z   = wp[2];
             }
         }
 
         // ── Velocity command toward current goal ────────────
-        float dx   = goal_x - px;
-        float dy   = goal_y - py;
-        float dz   = goal_z - pz;
-        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        // XY: follow path waypoints (D* Lite routing around obstacles)
+        // Z:  always drive toward target waypoint altitude — D* Lite paths
+        //     use the drone's current Z which can drift/collapse, so altitude
+        //     must be controlled independently.
+        float dx      = goal_x - px;
+        float dy      = goal_y - py;
+        float dz_alt  = target.z - pz;  // altitude error toward waypoint Z
+        float dist_xy = std::sqrt(dx * dx + dy * dy);
 
         float raw_vx = 0.0f, raw_vy = 0.0f, raw_vz = 0.0f;
-        if (dist > 0.01f) {
+        if (dist_xy > 0.01f) {
             float speed = std::min(config_.path_speed_mps, target.speed);
-            if (dist < config_.ramp_dist_m && path_index_ + 1 >= cached_path_.size()) {
+            if (dist_xy < config_.ramp_dist_m && path_index_ + 1 >= cached_path_.size()) {
                 speed = config_.min_speed_mps +
-                        (speed - config_.min_speed_mps) * (dist / config_.ramp_dist_m);
+                        (speed - config_.min_speed_mps) * (dist_xy / config_.ramp_dist_m);
             }
-            raw_vx = (dx / dist) * speed;
-            raw_vy = (dy / dist) * speed;
-            raw_vz = (dz / dist) * speed;
+            raw_vx = (dx / dist_xy) * speed;
+            raw_vy = (dy / dist_xy) * speed;
+        }
+        // Altitude: proportional correction clamped to cruise speed
+        if (std::abs(dz_alt) > 0.1f) {
+            float vz_max = std::min(config_.path_speed_mps, target.speed);
+            raw_vz       = std::clamp(dz_alt, -vz_max, vz_max);
         }
 
-        // EMA smoothing
+        // EMA smoothing — XY uses the configured alpha; Z uses a faster
+        // alpha (0.8) so altitude corrections propagate in 1-2 ticks rather
+        // than 5+.  Altitude is a simple proportional controller, not path-
+        // following, so sluggish response lets small perturbations compound.
         smooth_vx_ = config_.smoothing_alpha * raw_vx +
                      (1.0f - config_.smoothing_alpha) * smooth_vx_;
         smooth_vy_ = config_.smoothing_alpha * raw_vy +
                      (1.0f - config_.smoothing_alpha) * smooth_vy_;
-        smooth_vz_ = config_.smoothing_alpha * raw_vz +
-                     (1.0f - config_.smoothing_alpha) * smooth_vz_;
+        constexpr float kAltAlpha = 0.8f;
+        smooth_vz_                = kAltAlpha * raw_vz + (1.0f - kAltAlpha) * smooth_vz_;
 
         cmd.velocity_x = smooth_vx_;
         cmd.velocity_y = smooth_vy_;

@@ -142,24 +142,43 @@ public:
         // direction.  This prevents the avoider from fighting the planner when
         // obstacles sit between the drone and its goal (Issue #229).
         if (config_.path_aware) {
-            const float planned_mag = std::sqrt(cmd.velocity_x * cmd.velocity_x +
-                                                cmd.velocity_y * cmd.velocity_y +
-                                                cmd.velocity_z * cmd.velocity_z);
-            if (planned_mag > 0.01f) {
-                const float inv_mag = 1.0f / planned_mag;
-                const float dir_x   = cmd.velocity_x * inv_mag;
-                const float dir_y   = cmd.velocity_y * inv_mag;
-                const float dir_z   = cmd.velocity_z * inv_mag;
+            if (config_.vertical_gain == 0.0f) {
+                // 2D stripping — never inject Z from XY repulsion (Issue #237).
+                // With vertical_gain=0, total_rep_z is guaranteed zero from the
+                // repulsion loop.  3D stripping would leak Z via dir_z when the
+                // planned command has a vertical component.
+                const float mag_xy =
+                    std::sqrt(cmd.velocity_x * cmd.velocity_x + cmd.velocity_y * cmd.velocity_y);
+                if (mag_xy > 0.01f) {
+                    const float inv   = 1.0f / mag_xy;
+                    const float dx    = cmd.velocity_x * inv;
+                    const float dy    = cmd.velocity_y * inv;
+                    const float along = total_rep_x * dx + total_rep_y * dy;
+                    if (along < 0.0f) {
+                        total_rep_x -= along * dx;
+                        total_rep_y -= along * dy;
+                        // total_rep_z stays at 0 — no Z injection
+                    }
+                }
+            } else {
+                // Full 3D stripping when vertical avoidance is active.
+                const float planned_mag = std::sqrt(cmd.velocity_x * cmd.velocity_x +
+                                                    cmd.velocity_y * cmd.velocity_y +
+                                                    cmd.velocity_z * cmd.velocity_z);
+                if (planned_mag > 0.01f) {
+                    const float inv_mag = 1.0f / planned_mag;
+                    const float dir_x   = cmd.velocity_x * inv_mag;
+                    const float dir_y   = cmd.velocity_y * inv_mag;
+                    const float dir_z   = cmd.velocity_z * inv_mag;
 
-                // Dot product: positive = repulsion along planned dir,
-                //              negative = repulsion opposing planned dir.
-                const float along = total_rep_x * dir_x + total_rep_y * dir_y + total_rep_z * dir_z;
+                    const float along = total_rep_x * dir_x + total_rep_y * dir_y +
+                                        total_rep_z * dir_z;
 
-                // Strip the opposing component; keep forward and lateral.
-                if (along < 0.0f) {
-                    total_rep_x -= along * dir_x;
-                    total_rep_y -= along * dir_y;
-                    total_rep_z -= along * dir_z;
+                    if (along < 0.0f) {
+                        total_rep_x -= along * dir_x;
+                        total_rep_y -= along * dir_y;
+                        total_rep_z -= along * dir_z;
+                    }
                 }
             }
         }

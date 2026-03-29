@@ -94,6 +94,10 @@ struct FusedObject {
     bool            has_radar           = false;
     Eigen::Matrix3f position_covariance = Eigen::Matrix3f::Identity();
     uint64_t        timestamp_ns        = 0;
+    bool            in_world_frame     = false;  // true = position already in world frame (re-ID'd)
+    float           estimated_radius_m = 0.0f;   // back-projected obstacle radius from bbox+range
+    float           estimated_height_m = 0.0f;   // back-projected obstacle height from bbox+range
+    uint32_t        radar_update_count = 0;      // number of radar updates (for trust weighting)
 };
 
 struct FusedObjectList {
@@ -114,6 +118,7 @@ struct CalibrationData {
     Eigen::Matrix3f camera_intrinsics = Eigen::Matrix3f::Identity();
     float           camera_height_m   = 1.5f;  // camera height above ground
     float assumed_obstacle_height_m   = 3.0f;  // assumed obstacle height for apparent-size depth
+    float depth_scale = 0.7f;  // conservative depth scaling (<1.0 places obstacles closer)
 };
 
 }  // namespace drone::perception
