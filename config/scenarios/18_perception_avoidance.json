@@ -15,24 +15,24 @@
             "cruise_speed_mps": 1.5,
             "survey_duration_s": 25.0,
             "survey_yaw_rate": 0.3,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 2.0, "look_ahead_m": 0.0, "smoothing_alpha": 0.2},
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
-                "influence_radius_m": 5.0,
-                "repulsive_gain": 1.5,
-                "max_correction_mps": 1.0,
+                "influence_radius_m": 8.0,
+                "repulsive_gain": 3.0,
+                "max_correction_mps": 1.5,
                 "vertical_gain": 0.0,
                 "path_aware": true,
-                "_comment": "D* Lite routes around obstacles; avoider provides strong safety nudge. 5m influence catches obstacles before the planner grid does. max_correction < cruise_speed so avoidance can't overpower planned path."
+                "_comment": "D* Lite is the primary avoidance. Avoider is a strong safety net: 8m influence (early reaction), 1.5 max correction (100% of cruise), gain=3.0. Compensates for depth estimation uncertainty and 5m-tall obstacles at 4m flight altitude."
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,
                 "inflation_radius_m": 2.0,
-                "dynamic_obstacle_ttl_s": 1.5,
-                "min_confidence": 0.5,
-                "promotion_hits": 10,
-                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell). Short 1.5s TTL prevents stale detections walling off flight direction. Cells observed 10+ times are promoted to permanent static layer."
+                "dynamic_obstacle_ttl_s": 1.0,
+                "min_confidence": 0.4,
+                "promotion_hits": 8,
+                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell) — keeps corridors between obstacles open for D* Lite (8.6m gap between RED/GREEN minus 2m radii minus 4m total inflation = 2.6m free). ObstacleAvoider3D (8m influence) handles close-range safety. 1.0s TTL. min_confidence=0.4 lets enough detections through for reliable promotion. promotion_hits=8: low enough for parallax-diluted cells to promote within 25s survey."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
@@ -44,7 +44,7 @@
                 {"x": 0,  "y": 18, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) ~3m to the right."},
                 {"x": 12, "y": 18, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": false, "_comment": "Fly east — clear corridor north of obstacle field."},
                 {"x": 20, "y": 8,  "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) and BLUE(18,5) nearby."},
-                {"x": 12, "y": 0,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly southwest — path passes south of BLUE."},
+                {"x": 12, "y": 0,  "z": 4, "yaw": -1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly southwest — yaw faces south so camera sees BLUE(18,5) during approach."},
                 {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home — ORANGE(5,3) near path, drone routes around."}
             ],
             "_comment_waypoints": "Waypoints route through field with 4 well-spaced obstacles (≥10m apart). Camera detects obstacles, D* Lite routes around."
@@ -72,6 +72,8 @@
             "fusion": {
                 "backend": "ukf",
                 "rate_hz": 30,
+                "depth_scale": 1.0,
+                "assumed_obstacle_height_m": 5.0,
                 "radar": {
                     "enabled": true,
                     "ground_filter_enabled": true,

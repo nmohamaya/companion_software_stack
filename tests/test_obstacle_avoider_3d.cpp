@@ -430,6 +430,40 @@ TEST(ObstacleAvoider3DTest, PathAwareSameDirectionPreserved) {
     EXPECT_GT(result.velocity_x, cmd.velocity_x);
 }
 
+TEST(ObstacleAvoider3DTest, PathAwareNoZLeakWhenVerticalGainZero) {
+    // Regression: with vertical_gain=0 and path_aware=true, 3D stripping
+    // injected Z via `total_rep_z -= along * dir_z` when the planned command
+    // had a vertical component.  The fix uses 2D-only stripping (Issue #237).
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.max_correction_mps = 3.0f;
+    config.vertical_gain      = 0.0f;
+    config.path_aware         = true;
+    ObstacleAvoider3D avoider(config);
+
+    // Planned command: flying +X with a Z correction (altitude hold)
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.5f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Obstacle directly ahead — produces strong -X repulsion that opposes
+    // the planned +X direction.  With the old 3D stripping this leaked into Z.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Z must be EXACTLY the planned value — no Z injection from path-aware stripping
+    EXPECT_FLOAT_EQ(result.velocity_z, cmd.velocity_z);
+    // X repulsion should still be stripped (path-aware removes opposing component)
+    EXPECT_GE(result.velocity_x, cmd.velocity_x - 0.01f);
+}
+
 TEST(ObstacleAvoider3DTest, PathAwareDisabledFallback) {
     // path_aware=false → old isotropic behavior (obstacle ahead reduces vx).
     ObstacleAvoider3DConfig config;

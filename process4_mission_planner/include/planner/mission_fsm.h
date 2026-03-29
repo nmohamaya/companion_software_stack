@@ -87,9 +87,9 @@ public:
     /// the drone is far away and merely "ahead" in the dot-product sense.
     /// Returns false for the last waypoint — it always requires acceptance radius.
     [[nodiscard]] bool waypoint_overshot(float px, float py, float pz) const {
-        const Waypoint* wp  = current_waypoint();
-        const Waypoint* nwp = next_waypoint();
-        if (!wp || !nwp) return false;
+        const Waypoint* wp = current_waypoint();
+        if (!wp || current_wp_ == 0) return false;               // No overshoot for first WP
+        if (current_wp_ + 1 >= waypoints_.size()) return false;  // Last WP needs acceptance
 
         // Drone offset from current WP
         float dx = px - wp->x, dy = py - wp->y, dz = pz - wp->z;
@@ -99,10 +99,11 @@ public:
         float proximity_r = wp->radius * overshoot_proximity_factor_;
         if (dist_sq > proximity_r * proximity_r) return false;
 
-        // Approach vector: current_wp → next_wp
-        float ax = nwp->x - wp->x, ay = nwp->y - wp->y, az = nwp->z - wp->z;
+        // Approach vector: previous_wp → current_wp (direction drone was traveling)
+        const auto& prev = waypoints_[current_wp_ - 1];
+        float       ax = wp->x - prev.x, ay = wp->y - prev.y, az = wp->z - prev.z;
 
-        // Positive dot product means drone is past WP along approach direction
+        // Positive dot product means drone is past WP along the approach direction
         return (dx * ax + dy * ay + dz * az) > 0.0f;
     }
 

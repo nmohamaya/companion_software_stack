@@ -71,6 +71,9 @@ struct DetectedObject {
     float       bbox_x, bbox_y, bbox_w, bbox_h;      // image-space
     bool        has_camera;
     bool        has_radar;
+    float       estimated_radius_m;  // back-projected obstacle radius (0 = unknown)
+    float       estimated_height_m;  // back-projected obstacle height (0 = unknown)
+    uint32_t    radar_update_count;  // number of radar updates received
 
     [[nodiscard]] bool validate() const {
         return std::isfinite(confidence) && confidence >= 0.0f && confidence <= 1.0f &&

@@ -25,6 +25,14 @@ inline float wrap_angle(float a) {
     return a;
 }
 
+/// Camera intrinsic parameters for pinhole unprojection.
+struct CameraIntrinsics {
+    float fx = 277.0f;  // focal length x
+    float fy = 277.0f;  // focal length y
+    float cx = 320.0f;  // principal point x
+    float cy = 240.0f;  // principal point y
+};
+
 /// Configurable radar measurement noise parameters.
 struct RadarNoiseConfig {
     float range_std_m           = 0.3f;    // ±0.3 m
@@ -53,13 +61,15 @@ public:
 
     /// Initialize from a 2D tracked object + estimated depth.
     explicit ObjectUKF(const TrackedObject& trk, float initial_depth,
-                       const RadarNoiseConfig& radar_cfg = RadarNoiseConfig{});
+                       const RadarNoiseConfig& radar_cfg      = RadarNoiseConfig{},
+                       const CameraIntrinsics& cam_intrinsics = CameraIntrinsics{});
 
     /// Predict step (constant-velocity model).
     void predict(float dt = 1.0f / 30.0f);
 
     /// Update with camera measurement (bearing + depth estimate).
-    void update_camera(const TrackedObject& trk, float estimated_depth);
+    void update_camera(const TrackedObject& trk, float estimated_depth,
+                       const CameraIntrinsics& cam_intrinsics = CameraIntrinsics{});
 
     /// Update with radar measurement (range, azimuth, elevation, radial velocity).
     void update_radar(const drone::ipc::RadarDetection& det);
@@ -81,6 +91,13 @@ public:
 
     uint32_t track_id{0};
     uint32_t age{0};
+    uint32_t radar_update_count{0};  ///< Number of radar updates received (for B1 trust)
+
+    /// Tighten depth covariance after radar provides accurate range.
+    void set_radar_confirmed_depth(float radar_range);
+
+    /// Set depth covariance P(0,0) — used to inflate uncertainty for camera-only tracks.
+    void set_depth_covariance(float p00) { P_(0, 0) = p00; }
 
 private:
     /// Generate sigma points using unscented transform.
@@ -101,13 +118,24 @@ private:
     RadarMeasMat R_radar_;  // radar measurement noise
 };
 
+/// A dormant obstacle remembered in world frame after its ByteTrack track was lost.
+/// When a new track appears near a dormant obstacle, it is re-identified as the
+/// same physical object — preventing duplicate grid entries from parallax.
+struct DormantObstacle {
+    Eigen::Vector3f world_pos    = Eigen::Vector3f::Zero();  // averaged world-frame centroid
+    int             observations = 0;                        // number of merged track observations
+    uint64_t        last_seen_ns = 0;                        // timestamp of last observation
+};
+
 /// UKF-based fusion engine with camera + radar fusion.
 /// Maintains per-object UKF instances, matched by track_id.
+/// Dormant obstacle pool enables cross-view re-identification (Issue #237).
 class UKFFusionEngine : public IFusionEngine {
 public:
     explicit UKFFusionEngine(const CalibrationData&  calib,
-                             const RadarNoiseConfig& radar_cfg     = RadarNoiseConfig{},
-                             bool                    radar_enabled = false);
+                             const RadarNoiseConfig& radar_cfg = RadarNoiseConfig{},
+                             bool radar_enabled = false, float dormant_merge_radius_m = 5.0f,
+                             int max_dormant = 32);
 
     FusedObjectList fuse(const TrackedObjectList& tracked) override;
     std::string     name() const override { return "ukf"; }
@@ -121,6 +149,14 @@ public:
     ///                    the world origin sits on the ground plane).
     void set_drone_altitude(float altitude_m) override;
 
+    /// Provide full drone pose for world-frame dormant re-identification.
+    void set_drone_pose(float north, float east, float up, float yaw) override;
+
+    /// Access dormant obstacles (for testing).
+    [[nodiscard]] const std::vector<DormantObstacle>& dormant_obstacles() const {
+        return dormant_obstacles_;
+    }
+
 private:
     CalibrationData                         calib_;
     RadarNoiseConfig                        radar_cfg_;
@@ -132,7 +168,26 @@ private:
     float                          drone_altitude_m_{0.0f};
     bool                           has_altitude_{false};
 
-    float estimate_depth(const TrackedObject& trk) const;
+    // Drone pose for body→world transform (dormant re-ID)
+    float drone_north_{0.0f};
+    float drone_east_{0.0f};
+    float drone_up_{0.0f};
+    float drone_yaw_{0.0f};
+    bool  has_pose_{false};
+
+    // Dormant obstacle pool — world-frame memory of lost tracks
+    std::vector<DormantObstacle> dormant_obstacles_;
+    float                        dormant_merge_radius_m_;
+    int                          max_dormant_;
+
+    // Map active track_id → index into dormant_obstacles_ (-1 = no match)
+    std::unordered_map<uint32_t, int> track_to_dormant_;
+
+    float           estimate_depth(const TrackedObject& trk) const;
+    Eigen::Vector3f body_to_world(const Eigen::Vector3f& body) const;
+    int             find_nearest_dormant(const Eigen::Vector3f& world_pos,
+                                         const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *
+                                                                          10.0f) const;
 };
 
 }  // namespace drone::perception

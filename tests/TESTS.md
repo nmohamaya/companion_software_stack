@@ -350,10 +350,10 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 27 tests
+### test_fusion_engine.cpp — 35 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
-IFusionEngine factory, altitude gate, ground filter.
+IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -375,6 +375,7 @@ IFusionEngine factory, altitude gate, ground filter.
 | `AltitudeGateRejectsMismatch` | 1 | Radar-track association rejected when body-frame Z difference exceeds `altitude_gate_m` |
 | `AltitudeGateAcceptsSimilar` | 1 | Radar-track association accepted when body-frame Z difference is within `altitude_gate_m` |
 | `AltitudeGateConfigurable` | 1 | `altitude_gate_m` can be configured to a custom value and correctly gates associations |
+| `DormantReIDTest` | 8 | Radar-confirmed track creates dormant entry, re-ID merges at similar world position, world-frame flag output, pool cap respected, reset clears state, no dormant without pose, camera-only excluded from pool, distant tracks get separate entries |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
 

@@ -1328,6 +1328,45 @@ This exclusion is safe — the TSan leg still runs all 277 core tests (SHM IPC, 
 
 ---
 
+### Fix #237a — Dormant Pool Pollution: Camera-Only Phantoms Fill 32-Entry Pool (Issue #237)
+
+**Date:** 2026-03-29
+**Severity:** High (causes obstacle collisions in Gazebo Scenario 18)
+**Files:** `process2_perception/src/ukf_fusion_engine.cpp`, `tests/test_fusion_engine.cpp`
+
+**Bug:** During the 360-degree survey yaw scan, camera-only tracks with default 40m depth were projected to world frame at various yaw angles, creating phantom dormant entries at wildly wrong positions (25-60m from origin). These filled the 32-entry dormant pool before real obstacles got proper entries. The static grid then received cells at wrong positions, leaving real obstacles (e.g., RED at (3,15)) with no grid coverage. Drone flew through RED at 0.86m from center (inside 1.0m radius).
+
+**Root Cause:** The dormant pool creation and update logic had no depth-quality gate. Any new track — including camera-only tracks with `P(0,0)=100` (depth completely uncertain) — could create and update dormant entries. The body-to-world projection of a 40m default depth at arbitrary yaw angles produces positions scattered across a 60m radius.
+
+**Fix (3 changes):**
+1. New track dormant creation gated on `radar_init_used` — only radar-confirmed tracks enter the pool
+2. Existing track dormant updates gated on `radar_update_count > 0` — prevents camera-only drift
+3. Added "late radar entry" block — when an existing camera-only track gets its first radar update, it can now create/re-ID a dormant entry
+
+**Found by:** Gazebo Scenario 18 Run 3 log analysis — 32 dormant entries at phantom positions, no entry within 3m of RED's actual position.
+
+**Regression test:** `DormantReIDTest.CameraOnlyTrackDoesNotCreateDormant` — verifies camera-only tracks do not enter the dormant pool. All 8 dormant tests updated to use radar-confirmed tracks.
+
+**See also:** [`docs/DEBUG_LOGGING_237.md`](DEBUG_LOGGING_237.md) for full assessment methodology, log analysis commands, and root cause analysis details.
+
+---
+
+### Fix #237b — Z-Leak in 2D Path-Aware Obstacle Avoider (Issue #237)
+
+**Date:** 2026-03-28
+**Severity:** High (causes altitude loss during flight)
+**File:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`
+
+**Bug:** When `vertical_gain=0` (2D avoidance mode), the XY repulsive force computation still used the 3D position vector, leaking Z components into the lateral correction. This caused the drone to lose altitude when flying near obstacles.
+
+**Root Cause:** The path-aware stripping only removed the component opposing the planned direction in 3D, but didn't zero the Z component when the planner wasn't commanding vertical movement.
+
+**Fix:** When `vertical_gain=0`, strip Z from the repulsive force after path-aware projection, ensuring only lateral (XY) corrections remain.
+
+**Found by:** Gazebo Scenario 18 testing — drone altitude dropped from 4.0m to 0.1m near obstacles.
+
+---
+
 ## Open Bugs
 
 ---

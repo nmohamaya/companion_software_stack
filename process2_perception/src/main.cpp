@@ -161,8 +161,15 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
         {
             drone::ipc::Pose p{};
             if (pose_sub.receive(p)) {
+                if (!has_pose) {
+                    spdlog::info("[Fusion] First SLAM pose received: ({:.2f}, {:.2f}, {:.2f})",
+                                 p.translation[0], p.translation[1], p.translation[2]);
+                }
                 latest_pose = p;
                 has_pose    = true;
+            } else if (fusion_count > 0 && fusion_count % 300 == 0 && !has_pose) {
+                spdlog::warn("[Fusion] Still no SLAM pose after {} cycles (sub connected={})",
+                             fusion_count, pose_sub.is_connected());
             }
         }
 
@@ -170,6 +177,17 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
         // translation[2] is world-frame z (AGL when world origin is on the ground).
         if (has_pose) {
             engine.set_drone_altitude(static_cast<float>(latest_pose.translation[2]));
+
+            // Pass full pose for dormant obstacle re-identification.
+            const double qw  = latest_pose.quaternion[0];
+            const double qx  = latest_pose.quaternion[1];
+            const double qy  = latest_pose.quaternion[2];
+            const double qz  = latest_pose.quaternion[3];
+            const float  yaw = static_cast<float>(
+                std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+            engine.set_drone_pose(static_cast<float>(latest_pose.translation[0]),
+                                  static_cast<float>(latest_pose.translation[1]),
+                                  static_cast<float>(latest_pose.translation[2]), yaw);
         }
 
         // Read latest radar detections (latest-value — single read)
@@ -220,6 +238,10 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                 const float du = static_cast<float>(latest_pose.translation[2]);
 
                 for (auto& obj : fused.objects) {
+                    // Re-identified objects already have world-frame positions
+                    // from the dormant obstacle pool — skip the transform.
+                    if (obj.in_world_frame) continue;
+
                     const float cx      = obj.position_3d.x();           // camera forward
                     const float cy      = obj.position_3d.y();           // camera right
                     const float cz      = obj.position_3d.z();           // camera down
@@ -250,20 +272,23 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                          static_cast<uint32_t>(drone::ipc::MAX_DETECTED_OBJECTS));
 
             for (uint32_t i = 0; i < shm_list.num_objects; ++i) {
-                auto& src      = fused.objects[i];
-                auto& dst      = shm_list.objects[i];
-                dst.track_id   = src.track_id;
-                dst.class_id   = static_cast<drone::ipc::ObjectClass>(src.class_id);
-                dst.confidence = src.confidence;
-                dst.position_x = src.position_3d.x();
-                dst.position_y = src.position_3d.y();
-                dst.position_z = src.position_3d.z();
-                dst.velocity_x = src.velocity_3d.x();
-                dst.velocity_y = src.velocity_3d.y();
-                dst.velocity_z = src.velocity_3d.z();
-                dst.heading    = src.heading;
-                dst.has_camera = src.has_camera;
-                dst.has_radar  = src.has_radar;
+                auto& src              = fused.objects[i];
+                auto& dst              = shm_list.objects[i];
+                dst.track_id           = src.track_id;
+                dst.class_id           = static_cast<drone::ipc::ObjectClass>(src.class_id);
+                dst.confidence         = src.confidence;
+                dst.position_x         = src.position_3d.x();
+                dst.position_y         = src.position_3d.y();
+                dst.position_z         = src.position_3d.z();
+                dst.velocity_x         = src.velocity_3d.x();
+                dst.velocity_y         = src.velocity_3d.y();
+                dst.velocity_z         = src.velocity_3d.z();
+                dst.heading            = src.heading;
+                dst.has_camera         = src.has_camera;
+                dst.has_radar          = src.has_radar;
+                dst.estimated_radius_m = src.estimated_radius_m;
+                dst.estimated_height_m = src.estimated_height_m;
+                dst.radar_update_count = src.radar_update_count;
             }
             det_pub.publish(shm_list);
             ++fusion_count;
@@ -389,6 +414,7 @@ int main(int argc, char* argv[]) {
     calib.camera_height_m           = cfg.get<float>("perception.fusion.camera_height_m", 1.5f);
     calib.assumed_obstacle_height_m = cfg.get<float>("perception.fusion.assumed_obstacle_height_m",
                                                      3.0f);
+    calib.depth_scale               = cfg.get<float>("perception.fusion.depth_scale", 0.7f);
 
     std::string fusion_backend = cfg.get<std::string>("perception.fusion.backend", "camera_only");
     auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);

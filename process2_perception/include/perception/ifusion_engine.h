@@ -49,6 +49,10 @@ public:
     /// Provide current drone altitude (AGL) for radar ground-plane filtering.
     /// Default no-op — only UKFFusionEngine uses altitude data.
     virtual void set_drone_altitude(float /*altitude_m*/) {}
+
+    /// Provide full drone pose for world-frame dormant obstacle re-identification.
+    /// Default no-op — only UKFFusionEngine uses this.
+    virtual void set_drone_pose(float /*north*/, float /*east*/, float /*up*/, float /*yaw*/) {}
 };
 
 /// Factory: create a fusion engine from a backend name.
