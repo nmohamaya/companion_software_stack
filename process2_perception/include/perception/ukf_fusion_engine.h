@@ -43,6 +43,14 @@ struct RadarNoiseConfig {
     float min_object_altitude_m = 0.3f;    // reject radar returns below this AGL
     bool  ground_filter_enabled = true;    // enable/disable ground-plane filter
     float altitude_gate_m       = 2.0f;    // reject radar-track pairs with |body_z diff| > this
+
+    // Radar-primary architecture (Phase D) — independent radar track creation
+    float    radar_orphan_proximity_m    = 3.0f;   // min dist to existing track for orphan creation
+    float    radar_adopt_gate_m          = 5.0f;   // max range error for camera adoption
+    float    radar_only_default_radius_m = 1.5f;   // conservative default inflation (no bbox)
+    float    radar_max_orphan_range_m    = 40.0f;  // max range for orphan creation (77GHz ≈ 50m)
+    int      radar_orphan_min_hits       = 1;      // min radar observations before output
+    uint32_t radar_only_promotion_hits   = 3;      // radar hits for static promotion (tunable)
 };
 
 /// Per-object UKF state for 3D tracking.
@@ -63,6 +71,11 @@ public:
     explicit ObjectUKF(const TrackedObject& trk, float initial_depth,
                        const RadarNoiseConfig& radar_cfg      = RadarNoiseConfig{},
                        const CameraIntrinsics& cam_intrinsics = CameraIntrinsics{});
+
+    /// Initialize from a radar detection only (no camera).
+    /// Converts spherical (range, azimuth, elevation) → body-frame FRD Cartesian.
+    explicit ObjectUKF(const drone::ipc::RadarDetection& det, uint32_t id,
+                       const RadarNoiseConfig& radar_cfg = RadarNoiseConfig{});
 
     /// Predict step (constant-velocity model).
     void predict(float dt = 1.0f / 30.0f);
@@ -92,12 +105,17 @@ public:
     uint32_t track_id{0};
     uint32_t age{0};
     uint32_t radar_update_count{0};  ///< Number of radar updates received (for B1 trust)
+    bool     radar_only{false};      ///< True if created from radar without camera (Phase D)
 
     /// Tighten depth covariance after radar provides accurate range.
     void set_radar_confirmed_depth(float radar_range);
 
     /// Set depth covariance P(0,0) — used to inflate uncertainty for camera-only tracks.
     void set_depth_covariance(float p00) { P_(0, 0) = p00; }
+
+    /// Adopt a camera observation into a radar-only track.
+    /// Refines lateral/vertical state from camera bearing and clears radar_only flag.
+    void adopt_camera(const TrackedObject& trk, const CameraIntrinsics& cam_intr);
 
 private:
     /// Generate sigma points using unscented transform.
@@ -183,11 +201,21 @@ private:
     // Map active track_id → index into dormant_obstacles_ (-1 = no match)
     std::unordered_map<uint32_t, int> track_to_dormant_;
 
+    // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
+    uint32_t next_radar_track_id_{0x80000000u};
+
     float           estimate_depth(const TrackedObject& trk) const;
     Eigen::Vector3f body_to_world(const Eigen::Vector3f& body) const;
     int             find_nearest_dormant(const Eigen::Vector3f& world_pos,
                                          const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *
                                                                           10.0f) const;
+
+    /// Try to associate a UKF filter with unmatched radar detections.
+    /// Returns true and updates the filter if a match is found.
+    bool try_associate_radar(ObjectUKF& ukf, std::vector<bool>& radar_matched,
+                             const Eigen::LLT<ObjectUKF::RadarMeasMat>& radar_llt,
+                             bool radar_llt_ok, const ObjectUKF::RadarMeasVec& R_diag_inv,
+                             float range_3sigma);
 };
 
 }  // namespace drone::perception
