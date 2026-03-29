@@ -35,6 +35,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+source "${SCRIPT_DIR}/lib_scenario_logging.sh"
 BIN_DIR="${PROJECT_DIR}/build/bin"
 SCENARIOS_DIR="${PROJECT_DIR}/config/scenarios"
 DEPLOY_DIR="${PROJECT_DIR}/deploy"
@@ -363,9 +364,8 @@ if [[ -z "$SCENARIO_NAME" ]]; then
     exit 2
 fi
 
-SCENARIO_LOG_DIR="${LOG_DIR}/${SCENARIO_NAME}"
-rm -rf "$SCENARIO_LOG_DIR"
-mkdir -p "$SCENARIO_LOG_DIR"
+RUN_START_EPOCH=$(date +%s)
+SCENARIO_LOG_DIR=$(create_run_dir "$LOG_DIR" "$SCENARIO_NAME")
 
 echo ""
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
@@ -467,6 +467,10 @@ sleep 1
 cleanup_scenario() {
     echo ""
     echo "Cleaning up Gazebo scenario..."
+    # If run directory still has _RUNNING suffix, rename to _ABORTED
+    if [[ -n "${SCENARIO_LOG_DIR:-}" && "$SCENARIO_LOG_DIR" == *_RUNNING ]]; then
+        SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    fi
     if [[ -n "$LAUNCHER_PID" ]] && kill -0 "$LAUNCHER_PID" 2>/dev/null; then
         kill -SIGINT "$LAUNCHER_PID" 2>/dev/null || true
         sleep 3
@@ -703,6 +707,29 @@ else
     echo -e "  ${GREEN}PASSED${NC}"
 fi
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
+
+# ── Finalize run: rename dir, generate report, update index ──
+RUN_END_EPOCH=$(date +%s)
+SCENARIO_LOG_DIR=$(finalize_run_dir "$SCENARIO_LOG_DIR" "$PASS" "$FAIL")
+
+SCENARIO_BASE_DIR="${LOG_DIR}/${SCENARIO_NAME}"
+update_latest_symlink "$SCENARIO_BASE_DIR" "$(basename "$SCENARIO_LOG_DIR")"
+
+write_run_metadata "${SCENARIO_LOG_DIR}/run_metadata.json" \
+    "$SCENARIO_NAME" "gazebo" "$SCENARIO_FILE" \
+    "$RUN_START_EPOCH" "$RUN_END_EPOCH" \
+    "$PASS" "$FAIL" "$TOTAL" "$PROJECT_DIR"
+
+REPORT_FILE=$(generate_run_report "$SCENARIO_LOG_DIR" "$SCENARIO_NAME" "gazebo" \
+    "$PASS" "$FAIL" "$TOTAL" "$SCENARIO_FILE" "$PROJECT_DIR")
+
+append_to_index "${LOG_DIR}/runs.jsonl" \
+    "${SCENARIO_LOG_DIR}/run_metadata.json" \
+    "${SCENARIO_NAME}/$(basename "$SCENARIO_LOG_DIR")"
+
+echo ""
+echo -e "  ${CYAN}Report : ${REPORT_FILE}${NC}"
+echo -e "  ${CYAN}Logs   : ${SCENARIO_LOG_DIR}${NC}"
 
 if [[ $FAIL -gt 0 ]]; then
     exit 1
