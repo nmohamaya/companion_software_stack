@@ -617,6 +617,8 @@ TEST(RadarFusionTest, RadarGateRejectsOutlier) {
 
     engine.set_radar_detections(radar_list);
     auto result = engine.fuse(tracked);
+    // Outlier at 500m with extreme elevation (1.0 rad) fails both Mahalanobis gate
+    // and orphan altitude gate — should not create any additional tracks.
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_FALSE(result.objects[0].has_radar);  // outlier should be rejected
 }
@@ -925,10 +927,19 @@ TEST(RadarFusionTest, AltitudeGateRejectsMismatch) {
     tracked.timestamp_ns   = 2000;
     tracked.frame_sequence = 2;
     auto result            = engine.fuse(tracked);
-    ASSERT_EQ(result.objects.size(), 1u);
-
-    // Altitude mismatch → no radar association
-    EXPECT_FALSE(result.objects[0].has_radar);
+    // The altitude-mismatched detection (el=-0.4) is not associated with the
+    // camera track. With radar-primary architecture, it may create a separate
+    // radar-only track if it passes orphan quality gates.
+    ASSERT_GE(result.objects.size(), 1u);
+    // Core assertion: camera track should NOT have radar association
+    bool found_camera = false;
+    for (const auto& obj : result.objects) {
+        if (obj.has_camera) {
+            EXPECT_FALSE(obj.has_radar);
+            found_camera = true;
+        }
+    }
+    EXPECT_TRUE(found_camera);
 }
 
 TEST(RadarFusionTest, AltitudeGateAcceptsSimilar) {
@@ -1248,4 +1259,277 @@ TEST(DormantReIDTest, DistantTrackCreatesNewDormantEntry) {
 
     // Should have 2 separate dormant entries
     EXPECT_EQ(engine.dormant_obstacles().size(), 2u);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Radar-Primary Architecture Tests (Phase D, Issue #242)
+// ═══════════════════════════════════════════════════════════
+
+TEST(RadarPrimaryTest, RadarOnlyConstructorSphericalToCartesian) {
+    // Radar detection at 10m range, 0 azimuth, 0 elevation → (10, 0, 0) in FRD
+    auto      det = make_radar_det(10.0f, 0.0f, 0.0f, 1.0f);
+    ObjectUKF ukf(det, 0x80000001u);
+
+    EXPECT_NEAR(ukf.position()(0), 10.0f, 0.01f);  // forward
+    EXPECT_NEAR(ukf.position()(1), 0.0f, 0.01f);   // lateral
+    EXPECT_NEAR(ukf.position()(2), 0.0f, 0.01f);   // vertical
+    EXPECT_TRUE(ukf.radar_only);
+    EXPECT_EQ(ukf.radar_update_count, 1u);
+    EXPECT_EQ(ukf.track_id, 0x80000001u);
+
+    // Covariance: depth should be tight (radar), lateral loose at range
+    auto P = ukf.position_covariance();
+    EXPECT_LT(P(0, 0), 1.0f);   // depth: tight
+    EXPECT_GT(P(1, 1), 0.01f);  // lateral: range-scaled
+}
+
+TEST(RadarPrimaryTest, RadarOnlyConstructorWithAzimuth) {
+    // Radar at 10m, azimuth=0.3 rad (FLU) → negated for FRD → y < 0
+    auto      det = make_radar_det(10.0f, 0.3f, 0.0f, 0.0f);
+    ObjectUKF ukf(det, 0x80000002u);
+
+    // cos(0) * cos(-0.3) ≈ 0.9553
+    EXPECT_NEAR(ukf.position()(0), 10.0f * std::cos(-0.3f), 0.01f);
+    // cos(0) * sin(-0.3) ≈ -0.2955
+    EXPECT_NEAR(ukf.position()(1), 10.0f * std::sin(-0.3f), 0.01f);
+    EXPECT_NEAR(ukf.position()(2), 0.0f, 0.01f);
+}
+
+TEST(RadarPrimaryTest, RadarOrphanCreatesTrack) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+
+    // Provide radar detection with NO camera tracks
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FALSE(result.objects[0].has_camera);
+    EXPECT_TRUE(result.objects[0].has_radar);
+    EXPECT_EQ(result.objects[0].class_id, ObjectClass::UNKNOWN);
+    EXPECT_GE(result.objects[0].track_id, 0x80000000u);
+    EXPECT_EQ(result.objects[0].radar_update_count, 1u);
+}
+
+TEST(RadarPrimaryTest, RadarOrphanDefaultRadius) {
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_default_radius_m = 1.5f;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(10.0f, 0.8f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FLOAT_EQ(result.objects[0].estimated_radius_m, 1.5f);
+}
+
+TEST(RadarPrimaryTest, RadarOrphanProximityPreventsDuplicate) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    // Camera track at default position (px=320, py=340) with matching radar
+    set_matching_radar(engine, 15.0f);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked(1));
+
+    // Also add a radar detection very close to the camera track's position
+    // (same range/bearing) — it should be consumed by camera association,
+    // not create an orphan
+    auto result = engine.fuse(tracked);
+
+    // Should have exactly 1 object (the camera+radar fused track), not 2
+    EXPECT_EQ(result.objects.size(), 1u);
+    EXPECT_TRUE(result.objects[0].has_camera);
+}
+
+TEST(RadarPrimaryTest, RadarOrphanTrackPersistsAcrossFrames) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    // Frame 1: radar only
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(10.0f, 0.5f, 0.1f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty1;
+    empty1.timestamp_ns   = 1000;
+    empty1.frame_sequence = 1;
+    auto result1          = engine.fuse(empty1);
+    ASSERT_EQ(result1.objects.size(), 1u);
+    uint32_t rid = result1.objects[0].track_id;
+
+    // Frame 2: same radar detection — should re-associate
+    radar.timestamp_ns = 2000;
+    engine.set_radar_detections(radar);
+    TrackedObjectList empty2;
+    empty2.timestamp_ns   = 2000;
+    empty2.frame_sequence = 2;
+    auto result2          = engine.fuse(empty2);
+
+    ASSERT_EQ(result2.objects.size(), 1u);
+    EXPECT_EQ(result2.objects[0].track_id, rid);  // same track
+    EXPECT_EQ(result2.objects[0].radar_update_count, 2u);
+}
+
+TEST(RadarPrimaryTest, RadarOnlyTrackIDHighBit) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 2;
+    radar.detections[0]  = make_radar_det(10.0f, 0.5f, 0.0f, 0.0f);
+    radar.detections[1]  = make_radar_det(20.0f, -0.5f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    for (const auto& obj : result.objects) {
+        EXPECT_GE(obj.track_id, 0x80000000u) << "Radar-only track ID must have high bit set";
+    }
+}
+
+TEST(RadarPrimaryTest, RadarOnlyDormantEntry) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+    engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(10.0f, 0.0f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    engine.fuse(empty);
+
+    ASSERT_EQ(engine.dormant_obstacles().size(), 1u);
+    // Radar at 10m forward, drone at origin facing north → world pos ~(10, 0, 4)
+    const auto& dorm = engine.dormant_obstacles()[0];
+    EXPECT_NEAR(dorm.world_pos.x(), 10.0f, 1.0f);
+    EXPECT_NEAR(dorm.world_pos.y(), 0.0f, 1.0f);
+}
+
+TEST(RadarPrimaryTest, GroundFilterAppliesToOrphans) {
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.ground_filter_enabled = true;
+    rcfg.min_object_altitude_m = 0.3f;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);  // drone at 4m AGL
+
+    // Radar detection at negative elevation (looking down) → low altitude object
+    // alt = 4.0 + 10.0 * sin(-0.5) ≈ 4.0 - 4.79 = -0.79 → below 0.3m threshold
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(10.0f, 0.0f, -0.5f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    // Ground-filtered detection should not create an orphan track
+    EXPECT_EQ(result.objects.size(), 0u);
+}
+
+TEST(RadarPrimaryTest, EmptyCameraListRadarOutput) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    // Three radar detections, no camera
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 3;
+    radar.detections[0]  = make_radar_det(5.0f, 0.3f, 0.0f, 0.0f);
+    radar.detections[1]  = make_radar_det(10.0f, -0.4f, 0.0f, 0.0f);
+    radar.detections[2]  = make_radar_det(18.0f, 0.8f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    // All 3 should produce radar-only objects
+    EXPECT_EQ(result.objects.size(), 3u);
+    for (const auto& obj : result.objects) {
+        EXPECT_FALSE(obj.has_camera);
+        EXPECT_TRUE(obj.has_radar);
+    }
+}
+
+TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    // Frame 1: Radar-only detection at ~15m forward, ~0 lateral
+    // azimuth=0, elevation≈0.197 (matching default test track bearing)
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(15.0f, 0.0f, 0.197f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result1         = engine.fuse(empty);
+    ASSERT_EQ(result1.objects.size(), 1u);
+    EXPECT_GE(result1.objects[0].track_id, 0x80000000u);
+
+    // Frame 2: Camera track at same bearing (px=320, py=340) + radar
+    set_matching_radar(engine, 15.0f);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 2000;
+    tracked.frame_sequence = 2;
+    tracked.objects.push_back(make_test_tracked(42));
+    auto result2 = engine.fuse(tracked);
+
+    // Camera should adopt the radar-only track: 1 object, not 2
+    ASSERT_EQ(result2.objects.size(), 1u);
+    EXPECT_TRUE(result2.objects[0].has_camera);
+    // Track ID should be the camera's track_id (42), not the radar high-bit ID
+    EXPECT_EQ(result2.objects[0].track_id, 42u);
+    EXPECT_EQ(result2.objects[0].class_id, ObjectClass::PERSON);
+    // Track retains radar history from its radar-only origin
+    EXPECT_GE(result2.objects[0].radar_update_count, 1u);
 }
