@@ -238,8 +238,16 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                 const float du = static_cast<float>(latest_pose.translation[2]);
 
                 for (auto& obj : fused.objects) {
+                    // Velocity is always in body FRD frame from the UKF —
+                    // rotate to world frame and flip Z (FRD down → world up).
+                    const float vx      = obj.velocity_3d.x();
+                    const float vy      = obj.velocity_3d.y();
+                    obj.velocity_3d.x() = vx * cos_y - vy * sin_y;
+                    obj.velocity_3d.y() = vx * sin_y + vy * cos_y;
+                    obj.velocity_3d.z() = -obj.velocity_3d.z();
+
                     // Re-identified objects already have world-frame positions
-                    // from the dormant obstacle pool — skip the transform.
+                    // from the dormant obstacle pool — skip position transform.
                     if (obj.in_world_frame) continue;
 
                     const float cx      = obj.position_3d.x();           // camera forward
@@ -248,11 +256,6 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                     obj.position_3d.x() = dn + cx * cos_y - cy * sin_y;  // world North
                     obj.position_3d.y() = de + cx * sin_y + cy * cos_y;  // world East
                     obj.position_3d.z() = du - cz;                       // world Up
-                    // Rotate velocity the same way
-                    const float vx      = obj.velocity_3d.x();
-                    const float vy      = obj.velocity_3d.y();
-                    obj.velocity_3d.x() = vx * cos_y - vy * sin_y;
-                    obj.velocity_3d.y() = vx * sin_y + vy * cos_y;
                 }
             }
 
