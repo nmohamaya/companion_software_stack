@@ -144,9 +144,14 @@ Scenario configs use a `config_overrides` block that is deep-merged over the bas
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `backend` | string | `"camera_only"` | Fusion backend: `"camera_only"` (bearing-only depth estimation) or `"ukf"` (Unscented Kalman Filter with radar support) |
 | `rate_hz` | int | `30` | Fusion update rate |
 | `camera_weight` | float | `1.0` | Camera measurement weight |
 | `camera_height_m` | float | `1.5` | Camera height above ground (for ground-plane depth) |
+| `depth_scale` | float | `0.7` | Global depth scaling factor applied to all depth estimation tiers |
+| `assumed_obstacle_height_m` | float | `3.0` | Assumed obstacle height for apparent-size depth estimation (meters) |
+
+> **Camera intrinsics:** `perception.fusion.fx`, `fy`, `cx`, `cy` (focal lengths and principal point in pixels) are available for Gazebo and hardware configs but are not set in `default.json` — they use code defaults of `fx=500.0`, `fy=500.0`, `cx=960.0`, `cy=540.0`. Override these in `gazebo_sitl.json`, `hardware.json`, or scenario configs to match your camera calibration.
 
 #### Depth Estimation (`perception.fusion.depth.*`)
 
@@ -184,6 +189,8 @@ Scenario configs use a `config_overrides` block that is deep-merged over the bas
 | `imu_rate_hz` | int | `400` | IMU sampling rate |
 | `imu.backend` | string | `"simulated"` | IMU backend: `"simulated"`, `"gazebo"` |
 
+> **Stereo camera intrinsics:** `slam.stereo.fx`, `fy`, `cx`, `cy` (focal lengths and principal point in pixels) are available for Gazebo and hardware configs but are not set in `default.json` — they use code defaults of `fx=350.0`, `fy=350.0`, `cx=320.0`, `cy=240.0`. Override these in `gazebo_sitl.json`, `hardware.json`, or scenario configs to match your stereo camera calibration.
+
 ### Keyframe Selection (`slam.keyframe.*`)
 
 | Key | Type | Default | Description |
@@ -205,9 +212,9 @@ Scenario configs use a `config_overrides` block that is deep-merged over the bas
 | `rtl_acceptance_radius_m` | float | `1.5` | RTL target acceptance radius |
 | `landed_altitude_m` | float | `0.5` | Altitude threshold for "landed" detection |
 | `rtl_min_dwell_seconds` | int | `5` | Minimum dwell at RTL position before landing |
-| `survey_duration_s` | float | — | SURVEY phase duration (if present; omit to skip survey) |
-| `survey_yaw_rate` | float | — | SURVEY phase yaw sweep rate (rad/s) |
-| `overshoot_proximity_factor` | float | — | Waypoint overshoot proximity threshold multiplier |
+| `survey_duration_s` | float | `0.0` | SURVEY phase duration in seconds (`0.0` = skip survey, TAKEOFF transitions directly to NAVIGATE) |
+| `survey_yaw_rate` | float | `0.3` | SURVEY phase yaw sweep rate (rad/s; ~21 s for a full 360 degrees) |
+| `overshoot_proximity_factor` | float | `3.0` | Waypoint overshoot proximity threshold multiplier |
 
 ### Path Planner (`mission_planner.path_planner.*`)
 

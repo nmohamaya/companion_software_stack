@@ -124,7 +124,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `subscribe_lazy` | `unique_ptr<ZenohSubscriber<T>> subscribe_lazy<T>(topic)` | Equivalent to `subscribe()` — Zenoh connections are always async |
 | `to_key_expr` | `static std::string to_key_expr(const std::string& channel_name)` | Map channel name → Zenoh key expression (guards empty input) |
 
-**Why a wrapper?** Maps the 12 channel names to Zenoh hierarchical key expressions. Provides a consistent `advertise<T>()` / `subscribe<T>()` factory interface so process code is agnostic to the transport.
+**Why a wrapper?** Maps channel names to Zenoh hierarchical key expressions. Provides a consistent `advertise<T>()` / `subscribe<T>()` factory interface so process code is agnostic to the transport.
 
 **Key-expression mapping** (channel names → Zenoh topics):
 
@@ -140,9 +140,20 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/fc_commands` | `drone/comms/fc_command` |
 | `/fc_state` | `drone/comms/fc_state` |
 | `/gcs_commands` | `drone/comms/gcs_command` |
+| `/mission_upload` | `drone/mission/upload` |
 | `/payload_status` | `drone/payload/status` |
 | `/system_health` | `drone/monitor/health` |
-| `/radar_detections` | `radar/detections` |
+| `/fault_overrides` | `fault/overrides` * |
+| `/radar_detections` | `radar/detections` * |
+| `/drone_thread_health_video_capture` | `drone/thread/health/video/capture` * |
+| `/drone_thread_health_perception` | `drone/thread/health/perception` * |
+| `/drone_thread_health_slam_vio_nav` | `drone/thread/health/slam/vio/nav` * |
+| `/drone_thread_health_mission_planner` | `drone/thread/health/mission/planner` * |
+| `/drone_thread_health_comms` | `drone/thread/health/comms` * |
+| `/drone_thread_health_payload_manager` | `drone/thread/health/payload/manager` * |
+| `/drone_thread_health_system_monitor` | `drone/thread/health/system/monitor` * |
+
+\* Not in the explicit mapping table — resolved via the fallback rule (strip leading `/`, replace `_` with `/`).
 
 ### `MessageBusFactory` — Config-Driven Backend Selection
 
@@ -237,6 +248,426 @@ The `has_radar` flag was added in Issue #210. Size estimation fields (`estimated
 | `radar_update_count` | `uint32_t` | Number of radar `update_radar()` calls on this track — used for grid promotion threshold (Issue #237) |
 
 **Validation:** `validate()` checks all floats are `isfinite()`, confidence in [0,1], and `estimated_radius_m` / `estimated_height_m` >= 0.
+
+### `VideoFrame`
+
+Raw RGB24 video frame from a mission camera (P1 to P2).
+
+```cpp
+struct VideoFrame {
+    uint64_t timestamp_ns;
+    uint64_t sequence_number;
+    uint32_t width;
+    uint32_t height;
+    uint32_t channels;
+    uint32_t stride;
+    uint8_t  pixel_data[1920 * 1080 * 3];  // RGB24 max (~6 MB)
+};
+```
+
+**Topic:** `/drone_mission_cam` to Zenoh key `drone/video/frame`
+**Publisher:** P1 (video capture)
+**Subscribers:** P2 (perception)
+**Validation:** `validate()` checks non-zero dimensions and that `width * height * channels <= sizeof(pixel_data)`.
+
+### `StereoFrame`
+
+Grayscale stereo pair for VIO/SLAM (P1 to P3).
+
+```cpp
+struct StereoFrame {
+    uint64_t timestamp_ns;
+    uint64_t sequence_number;
+    uint32_t width;
+    uint32_t height;
+    uint8_t  left_data[640 * 480];   // GRAY8
+    uint8_t  right_data[640 * 480];  // GRAY8
+};
+```
+
+**Topic:** `/drone_stereo_cam` to Zenoh key `drone/video/stereo_frame`
+**Publisher:** P1 (video capture)
+**Subscribers:** P3 (SLAM/VIO/Nav)
+**Validation:** `validate()` checks non-zero dimensions and that `width * height` fits each buffer.
+
+### `ObjectClass` (enum)
+
+Classification label for detected objects.
+
+| Value | Name |
+|-------|------|
+| 0 | `UNKNOWN` |
+| 1 | `PERSON` |
+| 2 | `VEHICLE_CAR` |
+| 3 | `VEHICLE_TRUCK` |
+| 4 | `DRONE` |
+| 5 | `ANIMAL` |
+| 6 | `BUILDING` |
+| 7 | `TREE` |
+
+### `DetectedObjectList`
+
+Fixed-capacity list of detected objects published on `/detected_objects`.
+
+```cpp
+constexpr int MAX_DETECTED_OBJECTS = 64;
+
+struct DetectedObjectList {
+    uint64_t       timestamp_ns;
+    uint32_t       frame_sequence;
+    uint32_t       num_objects;       // valid entries (<=  MAX_DETECTED_OBJECTS)
+    DetectedObject objects[MAX_DETECTED_OBJECTS];
+};
+```
+
+**Topic:** `/detected_objects` to Zenoh key `drone/perception/detections`
+**Publisher:** P2 (perception)
+**Subscribers:** P4 (mission planner)
+
+### `MissionState` (enum)
+
+FSM state for the mission planner (published as part of `MissionStatus`).
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 0 | `IDLE` | No mission loaded |
+| 1 | `PREFLIGHT` | Pre-flight checks |
+| 2 | `TAKEOFF` | Taking off |
+| 3 | `NAVIGATE` | Following waypoints |
+| 4 | `LOITER` | Holding position |
+| 5 | `RTL` | Return to launch |
+| 6 | `LAND` | Landing |
+| 7 | `EMERGENCY` | Emergency state |
+| 8 | `SURVEY` | Post-takeoff obstacle survey before navigation |
+
+### `FaultAction` (enum)
+
+Graduated response severity (stored in `MissionStatus::fault_action`).
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 0 | `NONE` | Nominal -- no action |
+| 1 | `WARN` | Alert GCS, continue mission |
+| 2 | `LOITER` | Hold position, wait for recovery |
+| 3 | `RTL` | Return to launch |
+| 4 | `EMERGENCY_LAND` | Land immediately at current position |
+
+### `FaultType` (bitmask enum)
+
+Bitmask of active fault conditions (stored in `MissionStatus::active_faults`). 12 fault conditions total.
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| `1 << 0` | `FAULT_CRITICAL_PROCESS` | Comms or SLAM died |
+| `1 << 1` | `FAULT_POSE_STALE` | No pose update within timeout |
+| `1 << 2` | `FAULT_BATTERY_LOW` | Battery below warning threshold |
+| `1 << 3` | `FAULT_BATTERY_CRITICAL` | Battery below critical threshold |
+| `1 << 4` | `FAULT_THERMAL_WARNING` | Thermal zone 2 (hot) |
+| `1 << 5` | `FAULT_THERMAL_CRITICAL` | Thermal zone 3 (critical) |
+| `1 << 6` | `FAULT_PERCEPTION_DEAD` | Perception process died |
+| `1 << 7` | `FAULT_FC_LINK_LOST` | FC not connected for > timeout |
+| `1 << 8` | `FAULT_GEOFENCE_BREACH` | Outside geofence boundary |
+| `1 << 9` | `FAULT_BATTERY_RTL` | Battery below RTL threshold |
+| `1 << 10` | `FAULT_VIO_DEGRADED` | VIO quality degraded -- triggers LOITER |
+| `1 << 11` | `FAULT_VIO_LOST` | VIO tracking lost -- triggers RTL |
+
+Bitwise operators (`|`, `&`, `|=`, `==`, `!=`) and `to_uint()` / `fault_flags_string()` helpers are provided for bitmask usage.
+
+### `MissionStatus`
+
+Mission planner status (P4 to P5, P7).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `correlation_id` | `uint64_t` | Cross-process trace ID (0 = none) |
+| `state` | `MissionState` | Current FSM state |
+| `current_waypoint` | `uint32_t` | Index of current waypoint |
+| `total_waypoints` | `uint32_t` | Total waypoints in mission |
+| `progress_percent` | `float` | Mission completion percentage |
+| `target_x/y/z` | `float` | Current target position (world frame, m) |
+| `battery_percent` | `float` | Battery level |
+| `mission_active` | `bool` | True if mission is running |
+| `active_faults` | `uint32_t` | Bitmask of `FaultType` (0 = nominal) |
+| `fault_action` | `uint8_t` | Current `FaultAction` severity (0 = NONE) |
+
+**Topic:** `/mission_status` to Zenoh key `drone/mission/status`
+**Publisher:** P4 (mission planner)
+**Subscribers:** P5 (comms), P7 (system monitor)
+
+### `TrajectoryCmd`
+
+Velocity command from planner to flight controller (P4 to P5).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `correlation_id` | `uint64_t` | Cross-process trace ID (0 = none) |
+| `target_x/y/z` | `float` | Target position, world frame (m) |
+| `target_yaw` | `float` | Target heading (radians) |
+| `velocity_x/y/z` | `float` | Velocity command (m/s) |
+| `yaw_rate` | `float` | Yaw rate command (rad/s) |
+| `coordinate_frame` | `uint8_t` | MAVLink frame enum |
+| `valid` | `bool` | False = stop command |
+
+**Topic:** `/trajectory_cmd` to Zenoh key `drone/mission/trajectory`
+
+### `FCCommandType` (enum)
+
+| Value | Name |
+|-------|------|
+| 0 | `NONE` |
+| 1 | `ARM` |
+| 2 | `DISARM` |
+| 3 | `TAKEOFF` |
+| 4 | `SET_MODE` |
+| 5 | `RTL` |
+| 6 | `LAND` |
+
+### `FCCommand`
+
+Flight controller command (P4 to P5).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `correlation_id` | `uint64_t` | Cross-process trace ID (0 = none) |
+| `command` | `FCCommandType` | Command type |
+| `param1` | `float` | TAKEOFF: altitude_m; SET_MODE: mode_id |
+| `sequence_id` | `uint64_t` | Monotonic, for dedup |
+| `valid` | `bool` | Message validity flag |
+
+**Topic:** `/fc_commands` to Zenoh key `drone/comms/fc_command`
+
+### `FCState`
+
+Flight controller telemetry (P5 to P4, P7).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `gps_lat/lon/alt` | `float` | GPS position |
+| `rel_alt` | `float` | Relative altitude (m) |
+| `roll/pitch/yaw` | `float` | Attitude (radians) |
+| `vx/vy/vz` | `float` | Velocity (m/s) |
+| `battery_voltage` | `float` | Battery voltage (0-60V) |
+| `battery_remaining` | `float` | Battery percentage (0-100%) |
+| `flight_mode` | `uint8_t` | FC flight mode |
+| `armed` | `bool` | True if armed |
+| `connected` | `bool` | True if FC link active |
+| `gps_fix_type` | `uint8_t` | GPS fix type |
+| `satellites_visible` | `uint8_t` | GPS satellite count |
+
+**Topic:** `/fc_state` to Zenoh key `drone/comms/fc_state`
+
+### `GCSCommandType` (enum)
+
+| Value | Name |
+|-------|------|
+| 0 | `NONE` |
+| 1 | `ARM` |
+| 2 | `DISARM` |
+| 3 | `TAKEOFF` |
+| 4 | `LAND` |
+| 5 | `RTL` |
+| 6 | `MISSION_START` |
+| 7 | `MISSION_PAUSE` |
+| 8 | `MISSION_ABORT` |
+| 9 | `MISSION_UPLOAD` |
+
+### `GCSCommand`
+
+Ground control station command (P5 to P4).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `correlation_id` | `uint64_t` | Cross-process trace ID (0 = none) |
+| `command` | `GCSCommandType` | Command type |
+| `param1/2/3` | `float` | Command-specific parameters |
+| `sequence_id` | `uint64_t` | Monotonic, for dedup |
+| `valid` | `bool` | Message validity flag |
+
+**Topic:** `/gcs_commands` to Zenoh key `drone/comms/gcs_command`
+
+### `IpcWaypoint`
+
+Single waypoint for mid-flight mission upload.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `x/y/z` | `float` | 0.0 | World-frame position (m) |
+| `yaw` | `float` | 0.0 | Heading (rad) |
+| `radius` | `float` | 2.0 | Acceptance radius (m) |
+| `speed` | `float` | 2.0 | Cruise speed (m/s) |
+| `trigger_payload` | `bool` | false | Capture at this waypoint |
+
+### `MissionUpload`
+
+Mid-flight waypoint upload (P5 to P4). Sent when GCS issues `MISSION_UPLOAD`.
+
+```cpp
+constexpr uint8_t kMaxUploadWaypoints = 32;
+
+struct MissionUpload {
+    uint64_t    timestamp_ns;
+    uint64_t    correlation_id;
+    uint8_t     num_waypoints;      // valid entries (<= kMaxUploadWaypoints)
+    IpcWaypoint waypoints[kMaxUploadWaypoints];
+    bool        valid;
+};
+```
+
+**Topic:** `/mission_upload` to Zenoh key `drone/mission/upload`
+**Publisher:** P5 (comms)
+**Subscribers:** P4 (mission planner)
+
+### `PayloadAction` (enum)
+
+| Value | Name |
+|-------|------|
+| 0 | `NONE` |
+| 1 | `GIMBAL_POINT` |
+| 2 | `CAMERA_CAPTURE` |
+| 3 | `CAMERA_START_VIDEO` |
+| 4 | `CAMERA_STOP_VIDEO` |
+
+### `PayloadCommand`
+
+Gimbal/camera command (P4 to P6).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `correlation_id` | `uint64_t` | Cross-process trace ID (0 = none) |
+| `action` | `PayloadAction` | Payload action type |
+| `gimbal_pitch/yaw` | `float` | Gimbal angles (degrees) |
+| `sequence_id` | `uint64_t` | Monotonic, for dedup |
+| `valid` | `bool` | Message validity flag |
+
+**Topic:** `/payload_commands` to Zenoh key `drone/mission/payload_command`
+
+### `PayloadStatus`
+
+Payload telemetry (P6 to P4, P7).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `gimbal_pitch/yaw` | `float` | Current gimbal angles (degrees) |
+| `images_captured` | `uint32_t` | Total images captured |
+| `recording_video` | `bool` | True if recording |
+| `gimbal_stabilized` | `bool` | True if stabilized |
+| `num_plugins_active` | `uint8_t` | Active payload plugins |
+
+**Topic:** `/payload_status` to Zenoh key `drone/payload/status`
+
+### `Pose`
+
+6-DOF pose from VIO/SLAM (P3 to P4, P5, P6). Aligned to 64 bytes.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `translation[3]` | `double` | x, y, z in world frame (m) |
+| `quaternion[4]` | `double` | w, x, y, z rotation |
+| `velocity[3]` | `double` | vx, vy, vz (m/s) |
+| `covariance[36]` | `double` | 6x6 pose covariance matrix |
+| `quality` | `uint32_t` | 0=lost, 1=degraded, 2=good, 3=excellent (ground truth) |
+
+**Topic:** `/slam_pose` to Zenoh key `drone/slam/pose`
+
+### `ProcessHealthEntry`
+
+Per-process liveness state, embedded in `SystemHealth`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name[32]` | `char[]` | `""` | Process name (e.g. "video_capture") |
+| `alive` | `bool` | false | Last known liveness state |
+| `last_seen_ns` | `uint64_t` | 0 | Timestamp of last liveliness event |
+
+Constant: `kMaxTrackedProcesses = 8` (7 processes + 1 FC link).
+
+### `SystemHealth`
+
+System-wide health report (P7 to all).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_ns` | `uint64_t` | Monotonic clock nanoseconds |
+| `cpu_usage_percent` | `float` | CPU utilization |
+| `memory_usage_percent` | `float` | Memory utilization |
+| `disk_usage_percent` | `float` | Disk utilization |
+| `max_temp_c` | `float` | Maximum temperature (C) |
+| `gpu_temp_c` | `float` | GPU temperature (C) |
+| `cpu_temp_c` | `float` | CPU temperature (C) |
+| `total_healthy/degraded/dead` | `uint32_t` | Process status counts |
+| `power_watts` | `float` | Power consumption |
+| `thermal_zone` | `uint8_t` | 0=normal, 1=warm, 2=hot, 3=critical |
+| `stack_status` | `uint8_t` | StackStatus enum (0=NOMINAL, 1=DEGRADED, 2=CRITICAL) |
+| `total_restarts` | `uint32_t` | Cumulative restart count across all processes |
+| `processes[]` | `ProcessHealthEntry[8]` | Per-process liveness (populated by LivelinessMonitor) |
+| `num_processes` | `uint8_t` | Number of tracked processes |
+| `critical_failure` | `bool` | True if a critical process died |
+
+**Topic:** `/system_health` to Zenoh key `drone/monitor/health`
+
+### `ThreadHealthEntry`
+
+Per-thread liveness state, embedded in `ThreadHealth`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name[32]` | `char[]` | `""` | Thread name (e.g. "mission_cam") |
+| `healthy` | `bool` | true | False when watchdog detects stuck |
+| `critical` | `bool` | false | True for mission-critical threads |
+| `last_ns` | `uint64_t` | 0 | Last heartbeat timestamp (ns) |
+
+Constant: `kMaxTrackedThreads = 16`.
+
+### `ThreadHealth`
+
+Per-process thread health snapshot (each process to P7).
+
+```cpp
+struct ThreadHealth {
+    char              process_name[32];
+    ThreadHealthEntry threads[kMaxTrackedThreads];  // up to 16 threads
+    uint8_t           num_threads;
+    uint64_t          timestamp_ns;
+};
+```
+
+**Topics:** 7 per-process channels:
+- `/drone_thread_health_video_capture`
+- `/drone_thread_health_perception`
+- `/drone_thread_health_slam_vio_nav`
+- `/drone_thread_health_mission_planner`
+- `/drone_thread_health_comms`
+- `/drone_thread_health_payload_manager`
+- `/drone_thread_health_system_monitor`
+
+**Publisher:** Each process (P1-P7)
+**Subscriber:** P7 (system monitor)
+
+### `FaultOverrides`
+
+Fault injection overrides written by the `fault_injector` tool and read by owning processes. Each field uses a sentinel value (< 0) for "no override". Aligned to 64 bytes.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `battery_percent` | `float` | -1.0 | Override FC battery % (< 0 = no override) |
+| `battery_voltage` | `float` | -1.0 | Override FC battery voltage (< 0 = no override) |
+| `fc_connected` | `int32_t` | -1 | Override FC connection (< 0 = no override, 0 = disconnected, 1 = connected) |
+| `thermal_zone` | `int32_t` | -1 | Override thermal zone (< 0 = no override, 0-3 = zone) |
+| `cpu_temp_override` | `float` | -1.0 | Override CPU temperature (< 0 = no override) |
+| `vio_quality` | `int32_t` | -1 | Override VIO quality level (< 0 = no override, 0-3 = quality) |
+| `sequence` | `uint64_t` | 0 | Incremented by injector so consumers detect new writes |
+
+**Topic:** `/fault_overrides` to Zenoh key `fault/overrides`
+**Publisher:** `fault_injector` tool
+**Subscribers:** P5 (comms), P7 (system monitor), P3 (SLAM/VIO)
 
 ---
 
@@ -356,7 +787,7 @@ Config-driven graceful degradation engine. Evaluates system health each loop tic
 | Type | Description |
 |------|-------------|
 | `FaultAction` | Enum: `NONE(0)` < `WARN(1)` < `LOITER(2)` < `RTL(3)` < `EMERGENCY_LAND(4)` |
-| `FaultType` | Bitmask enum: 10 fault conditions (critical process, pose stale, battery low/critical/RTL, thermal warn/critical, perception dead, FC link lost, geofence breach) |
+| `FaultType` | Bitmask enum: 12 fault conditions (critical process, pose stale, battery low/critical/RTL, thermal warn/critical, perception dead, FC link lost, geofence breach, VIO degraded, VIO lost) |
 | `FaultState` | Return type: `recommended_action`, `active_faults` bitmask, `reason` string |
 | `FaultConfig` | Thresholds: `pose_stale_timeout_ns`, `battery_warn_percent`, `battery_crit_percent`, `fc_link_lost_timeout_ns`, `loiter_escalation_timeout_ns` |
 
@@ -826,7 +1257,7 @@ The IPC layer was migrated from POSIX SHM (SeqLock) to **Eclipse Zenoh** in 6 ph
 | `ZenohSession` | `zenoh_session.h` | — | **Implemented** | Singleton Zenoh session per process (intentionally leaked — see BUG_FIXES.md #7) |
 | `ZenohPublisher<T>` | `zenoh_publisher.h` | `IPublisher<T>` | **Implemented** | Serializes `T` to `Bytes` via `vector<uint8_t>`, calls `Publisher::put(Bytes&&)` |
 | `ZenohSubscriber<T>` | `zenoh_subscriber.h` | `ISubscriber<T>` | **Implemented** | Callback-based (`Subscriber<void>`), latest-value cache with mutex + atomics |
-| `ZenohMessageBus` | `zenoh_message_bus.h` | — | **Implemented** | Factory with 12-channel Zenoh topic mapping |
+| `ZenohMessageBus` | `zenoh_message_bus.h` | — | **Implemented** | Factory with Zenoh topic mapping (13 explicit + fallback rule) |
 | `MessageBusFactory` | `message_bus_factory.h` | — | **Implemented** | Config-driven `variant`-based backend selection |
 | `ZenohServiceClient<Req,Resp>` | `zenoh_service_client.h` | `IServiceClient<Req,Resp>` | Planned ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) | Zenoh query-based service client |
 | `ZenohServiceServer<Req,Resp>` | `zenoh_service_server.h` | `IServiceServer<Req,Resp>` | Planned ([#49](https://github.com/nmohamaya/companion_software_stack/issues/49)) | Zenoh queryable-based service server |
