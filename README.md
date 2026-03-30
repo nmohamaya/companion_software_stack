@@ -73,12 +73,23 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | Document | Purpose |
 |----------|---------|
 | [GETTING_STARTED.md](docs/guides/GETTING_STARTED.md) | Detailed setup and first-run guide |
+| **Process Design** | |
+| [video_capture_design.md](docs/design/video_capture_design.md) | P1 camera backends, frame formats, stereo sync |
 | [perception_design.md](docs/design/perception_design.md) | P2 perception pipeline: detector backends, ByteTrack tracker, UKF fusion |
+| [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md) | P3 VIO pipeline, pose quality states, IMU integration |
 | [mission_planner_design.md](docs/design/mission_planner_design.md) | P4 FSM, fault management, D* Lite planner, obstacle avoidance, geofencing |
-| [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, Result\<T,E\>, systemd integration, foundation hardening |
+| [comms_design.md](docs/design/comms_design.md) | P5 MAVLink protocol, thread responsibilities, safety guards |
+| [payload_manager_design.md](docs/design/payload_manager_design.md) | P6 gimbal control, payload actions, rate-limited slew |
+| [system_monitor_design.md](docs/design/system_monitor_design.md) | P7 health metrics, thermal zones, battery monitoring |
+| **Cross-Cutting** | |
 | [API.md](docs/design/API.md) | IPC interfaces, Zenoh pub/sub, HAL interfaces, message types |
+| [hal_design.md](docs/design/hal_design.md) | Hardware Abstraction Layer: interfaces, backends, factory pattern |
+| [ipc_design.md](docs/design/ipc_design.md) | IPC architecture: Zenoh message bus, TripleBuffer, channel design |
+| [error_handling_design.md](docs/design/error_handling_design.md) | Result\<T,E\> monadic error handling, no-exception policy |
+| [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, systemd integration, foundation hardening |
 | [ipc-key-expressions.md](docs/architecture/ipc-key-expressions.md) | Zenoh topic naming convention and complete channel table |
 | [process-health-monitoring.md](docs/architecture/process-health-monitoring.md) | Zenoh liveliness tokens for crash detection |
+| **Guides & Tracking** | |
 | [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
 | [ROADMAP.md](docs/tracking/ROADMAP.md) | Completed milestones and planned production phases |
 | [CPP_PATTERNS_GUIDE.md](docs/guides/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
@@ -219,6 +230,8 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 
 Two capture threads acquire frames from mission camera (1920x1080 RGB, 30 Hz) and stereo camera (640x480 GRAY, 30 Hz), publishing to P2 and P3 respectively. The `SimulatedCamera` generates deterministic gradient patterns; the `GazeboCamera` subscribes to gz-transport image topics for SITL simulation. Real backends would use V4L2 or NVIDIA libargus.
 
+> For camera configuration, frame formats, and backend details, see [video_capture_design.md](docs/design/video_capture_design.md).
+
 ### Process 2 — Perception (4+ threads)
 
 A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrack with Kalman filters and Hungarian assignment), and sensor fusion (camera-only monocular depth or camera+radar UKF). Stages are connected by `drone::TripleBuffer` (lock-free latest-value handoff), so consumers always see the most recent result. An optional `radar_read` thread runs when radar is enabled. Three detector backends are available: simulated (random boxes), color contour (HSV segmentation, pure C++), and YOLOv8-nano (OpenCV DNN, optional).
@@ -228,6 +241,8 @@ A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrac
 ### Process 3 — SLAM/VIO/Nav (4 threads)
 
 Three worker threads plus a main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data, and generates a 6-DOF pose published at 100 Hz. The `Pose.quality` field (0=lost to 3=excellent) reflects VIO health state, consumed by P4's FaultManager for safety response. Backends: `SimulatedVisualFrontend` (circular trajectory with noise) and `GazeboVisualFrontend` (ground-truth odometry).
+
+> For VIO pipeline details, pose quality states, and IMU integration, see [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md).
 
 ### Process 4 — Mission Planner (1 thread, 10 Hz)
 
@@ -239,9 +254,13 @@ The autonomous decision-making core: fault evaluation (10+ fault conditions with
 
 Five threads bridge the companion computer with the flight controller (fc_rx at 10 Hz, fc_tx at 20 Hz via IFCLink/MAVLink) and ground station (gcs_rx/gcs_tx at 2 Hz via IGCSLink/UDP). Key safety mechanisms include an RTL stale-trajectory guard (permanently blocks trajectory forwarding after RTL/LAND), FC command dedup by sequence ID, and trajectory dedup by timestamp.
 
+> For MAVLink protocol details, thread responsibilities, and safety guards, see [comms_design.md](docs/design/comms_design.md).
+
 ### Process 6 — Payload Manager (1 thread, 50 Hz)
 
 Gimbal control using a rate-limited slew algorithm (max 60 deg/s configurable) with pitch limits (-90 to +30 deg) and yaw limits (-180 to +180 deg). Supports gimbal pointing, camera capture, and video start/stop actions. Command dedup by timestamp.
+
+> For gimbal algorithm details, payload actions, and configuration, see [payload_manager_design.md](docs/design/payload_manager_design.md).
 
 ### Process 7 — System Monitor (1 thread, 1 Hz)
 
