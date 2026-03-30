@@ -1246,6 +1246,15 @@ TEST(PurePursuitTest, CarrotProducesSmootherTurnThanCellByCell) {
     // Both should have positive X velocity (heading toward goal)
     EXPECT_GT(cmd_cell.velocity_x, 0.0f);
     EXPECT_GT(cmd_carrot.velocity_x, 0.0f);
+
+    // Smoothness: pure-pursuit should deviate less from a straight line to goal.
+    // Measure |vy/vx| — smaller means more aligned with the forward direction.
+    const float deviation_cell = std::abs(cmd_cell.velocity_y) /
+                                 std::max(0.01f, std::abs(cmd_cell.velocity_x));
+    const float deviation_carrot = std::abs(cmd_carrot.velocity_y) /
+                                   std::max(0.01f, std::abs(cmd_carrot.velocity_x));
+    EXPECT_LE(deviation_carrot, deviation_cell + 0.5f)
+        << "Pure-pursuit (look_ahead=6m) should not deviate more than cell-by-cell";
 }
 
 TEST(PurePursuitTest, LookAheadZeroFallsBackToCellByCell) {
