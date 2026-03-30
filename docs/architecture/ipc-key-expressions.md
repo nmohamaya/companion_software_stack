@@ -50,9 +50,9 @@ drone/{domain}/{topic}
 | 9 | `drone/payload/status` | `/payload_status` | `ShmPayloadStatus` | ~128 B | 1 Hz | P6 | P4, P7 | B |
 | 10 | `drone/monitor/health` | `/system_health` | `ShmSystemHealth` | ~512 B | 1 Hz | P7 | P4 | B |
 | 11 | `drone/video/frame` | `/drone_mission_cam` | `ShmVideoFrame` | ~6 MB | 30 Hz | P1 | P2 | C |
-| 12 | `drone/video/stereo_frame` | `/drone_stereo_cam` | `ShmStereoFrame` | ~600 KB | 30 Hz | P1 | P3 | C |
-| 13 | `mission/upload` | `/mission_upload` | `ShmMissionUpload` | ~2 KB | event | P5 | P4 | B |
-| 14 | — (always POSIX SHM) | `/fault_overrides` | `ShmFaultOverrides` | 64 B | event | fault_injector | P5, P7 | — |
+| 12 | `drone/video/stereo_frame` | `/drone_stereo_cam` | `StereoFrame` | ~600 KB | 30 Hz | P1 | P3 | C |
+| 13 | `drone/mission/upload` | `/mission_upload` | `MissionUpload` | ~2 KB | event | P5 | P4 | B |
+| 14 | — (always POSIX SHM) | `/fault_overrides` | `FaultOverrides` | 64 B | event | fault_injector | P5, P7 | — |
 | 15 | `radar/detections`* | `/radar_detections` | `RadarDetectionList` | ~10 KB | 20 Hz | P2 | P4 | B |
 | 16 | `drone/thread/health/video/capture`* | `/drone_thread_health_video_capture` | `ThreadHealth` | ~1 KB | 1 Hz | P1 | P7 | B |
 | 17 | `drone/thread/health/perception`* | `/drone_thread_health_perception` | `ThreadHealth` | ~1 KB | 1 Hz | P2 | P7 | B |
@@ -128,7 +128,7 @@ auto sub = bus.subscribe("drone/*/status");
 
 Each process declares a **Zenoh liveliness token** on startup using
 `LivelinessToken` from
-[zenoh_liveliness.h](../common/ipc/include/ipc/zenoh_liveliness.h).
+[zenoh_liveliness.h](../../common/ipc/include/ipc/zenoh_liveliness.h).
 The token key expression follows the pattern:
 
 ```
@@ -201,7 +201,7 @@ When `ipc_backend=zenoh`:
 | P2 Perception | `perception/detections`, `radar/detections`, `thread_health/perception` | `video/frame` |
 | P3 SLAM/VIO/Nav | `slam/pose`, `thread_health/slam_vio_nav` | `video/stereo_frame` |
 | P4 Mission Planner | `mission/status`, `mission/trajectory`, `mission/payload_command`, `comms/fc_command`, `thread_health/mission_planner` | `slam/pose`, `perception/detections`, `radar/detections`, `comms/fc_state`, `comms/gcs_command`, `payload/status`, `monitor/health` |
-| P5 Comms | `comms/fc_state`, `comms/gcs_command`, `comms/mission_upload`, `thread_health/comms` | `mission/trajectory`, `comms/fc_command`, `slam/pose`, `mission/status` |
+| P5 Comms | `comms/fc_state`, `comms/gcs_command`, `mission/upload`, `thread_health/comms` | `mission/trajectory`, `comms/fc_command`, `slam/pose`, `mission/status` |
 | P6 Payload Manager | `payload/status`, `thread_health/payload_manager` | `mission/payload_command` |
 | P7 System Monitor | `monitor/health`, `thread_health/system_monitor` | `comms/fc_state` (optional), `thread_health/*` (all 7) |
 

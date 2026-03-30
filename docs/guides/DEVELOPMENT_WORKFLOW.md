@@ -365,6 +365,16 @@ bash tests/test_zenoh_e2e.sh
 3. **CI pipeline runs automatically** — build with `-Werror` + all tests on Ubuntu 24.04
 4. Wait for CI green status
 
+##### PR Size Guidelines
+
+Keep PRs small and focused so reviews are fast and changes are manageable:
+
+- **Target: <400 lines changed** (excluding auto-generated files and test fixtures). Smaller PRs get reviewed faster and are less likely to introduce regressions.
+- **One concern per PR** — a single feature, bug fix, or refactor. Don't bundle unrelated changes.
+- **Split large features into phases** — use sub-issues (e.g., `#100-part-1`, `#100-part-2`) with sequential PRs. Each phase must build and pass tests independently.
+- **Commits should be logical units** — each commit compiles and passes tests on its own. Reviewers often read commit-by-commit.
+- **When splitting isn't practical** (e.g., a tightly coupled refactor that touches many files), explain the scope in the PR description and organize commits to make the review tractable.
+
 #### Step 6: Address Review Feedback
 
 - Respond to all reviewer comments
