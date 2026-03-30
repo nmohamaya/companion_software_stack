@@ -218,11 +218,11 @@ struct RadarDetectionList {
 **Publisher:** P2 (perception) or a dedicated radar process
 **Subscribers:** P4 (mission planner) for obstacle avoidance fusion
 
-### `DetectedObject` — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+### `DetectedObject` — Issues [#210](https://github.com/nmohamaya/companion_software_stack/issues/210), [#237](https://github.com/nmohamaya/companion_software_stack/issues/237)
 
 IPC output struct for a single fused object, published as part of `DetectedObjectList` on `/detected_objects`.
 
-The `has_radar` flag was added in Issue #210 to indicate that the UKF track was updated with at least one matched radar detection during the current fusion cycle.
+The `has_radar` flag was added in Issue #210. Size estimation fields (`estimated_radius_m`, `estimated_height_m`) and `radar_update_count` were added in Epic #237 for per-object grid inflation and radar-confirmed static promotion.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -231,7 +231,12 @@ The `has_radar` flag was added in Issue #210 to indicate that the UKF track was 
 | `class_id` | `uint8_t` | `ObjectClass` enum value |
 | `heading` | `float` | Heading (rad); always 0.0 currently |
 | `has_camera` | `bool` | Camera measurement present this cycle |
-| `has_radar` | `bool` | Radar measurement matched and applied this cycle (Issue #210) |
+| `has_radar` | `bool` | Radar measurement matched/applied this cycle, or radar-init used (Issue #210, #237) |
+| `estimated_radius_m` | `float` | Back-projected obstacle radius from camera bbox + radar range; 0 = unknown (Issue #237) |
+| `estimated_height_m` | `float` | Back-projected obstacle height from camera bbox + radar range; 0 = unknown (Issue #237) |
+| `radar_update_count` | `uint32_t` | Number of radar `update_radar()` calls on this track — used for grid promotion threshold (Issue #237) |
+
+**Validation:** `validate()` checks all floats are `isfinite()`, confidence in [0,1], and `estimated_radius_m` / `estimated_height_m` >= 0.
 
 ---
 
@@ -468,12 +473,14 @@ Radar sensor interface. Returns a `RadarDetectionList` each call to `read()`. De
 **Header:** `process2_perception/include/perception/ifusion_engine.h`
 **Used by:** Process 2 (Perception), fusion thread
 
-Abstract interface for the per-frame fusion step that maps 2D tracked objects to 3D camera-frame positions. The `set_radar_detections()` method was added in Issue #210 to allow the fusion thread to forward radar data into the engine before calling `fuse()`.
+Abstract interface for the per-frame fusion step that maps 2D tracked objects to 3D camera-frame positions. The `set_radar_detections()` method was added in Issue #210. The `set_drone_altitude()` and `set_drone_pose()` methods were added in Epic #237 for radar ground-plane filtering and world-frame dormant re-identification.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `fuse` | `[[nodiscard]] FusedObjectList fuse(const TrackedObjectList& tracked)` | Fuse tracked 2D objects into 3D estimates. Returns `FusedObjectList`. |
 | `set_radar_detections` | `virtual void set_radar_detections(const RadarDetectionList&)` | Store latest radar scan for the next `fuse()` call. Default no-op (base class). `UKFFusionEngine` overrides this. |
+| `set_drone_altitude` | `virtual void set_drone_altitude(float altitude_m)` | Provide drone AGL altitude for radar ground-plane filtering (Issue #237). Default no-op. |
+| `set_drone_pose` | `virtual void set_drone_pose(float north, float east, float up, float yaw)` | Provide full drone pose for body→world transform in dormant re-identification (Issue #237). Default no-op. |
 | `name` | `virtual std::string name() const = 0` | Implementation name for logging |
 
 | Implementation | Description |
@@ -485,21 +492,11 @@ Abstract interface for the per-frame fusion step that maps 2D tracked objects to
 
 ---
 
-### `RadarNoiseConfig` — `drone::perception` — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+### `RadarNoiseConfig` — `drone::perception` — Issues [#210](https://github.com/nmohamaya/companion_software_stack/issues/210), [#237](https://github.com/nmohamaya/companion_software_stack/issues/237)
 
 **Header:** `process2_perception/include/perception/ukf_fusion_engine.h`
 
-Configurable noise standard deviations for the radar measurement model used by `UKFFusionEngine::update_radar()`. Applied whenever the `ukf` backend is active and radar detections are provided.
-
-```cpp
-struct RadarNoiseConfig {
-    float range_std_m       = 0.3f;   // range noise std (metres)
-    float azimuth_std_rad   = 0.026f; // azimuth noise std (radians)
-    float elevation_std_rad = 0.026f; // elevation noise std (radians)
-    float velocity_std_mps  = 0.1f;   // radial velocity noise std (m/s)
-    float gate_threshold    = 9.21f;  // χ²(4) gate at 95% confidence
-};
-```
+Configurable noise and radar-primary parameters for `UKFFusionEngine`. Noise fields control the radar measurement model; radar-primary fields (Epic #237) control independent radar track creation and output gating.
 
 **Config keys** (under `perception.fusion.radar`):
 
@@ -509,7 +506,15 @@ struct RadarNoiseConfig {
 | `azimuth_std_rad` | `0.026` | Azimuth noise standard deviation (rad) |
 | `elevation_std_rad` | `0.026` | Elevation noise standard deviation (rad) |
 | `velocity_std_mps` | `0.1` | Radial velocity noise standard deviation (m/s) |
-| `gate_threshold` | `9.21` | χ²(4) Mahalanobis gate at 95% confidence; detections beyond this are rejected |
+| `gate_threshold` | `9.21` | χ²(4) Mahalanobis gate at 95% confidence |
+| `min_object_altitude_m` | `0.3` | Reject radar returns below this AGL (ground filter) |
+| `ground_filter_enabled` | `true` | Enable/disable ground-plane filter |
+| `altitude_gate_m` | `2.0` | Reject radar-track pairs with body-Z diff > this |
+| `radar_orphan_proximity_m` | `3.0` | Min distance to existing track for orphan creation |
+| `radar_adopt_gate_m` | `5.0` | Max range error for camera adoption of radar-only track |
+| `radar_only_default_radius_m` | `1.5` | Conservative inflation radius for radar-only tracks (no bbox) |
+| `radar_max_orphan_range_m` | `40.0` | Max range for orphan track creation |
+| `orphan_min_hits` | `1` | Min radar observations before radar-only track is output to grid |
 
 ---
 
@@ -517,16 +522,20 @@ struct RadarNoiseConfig {
 
 **Header:** `process2_perception/include/perception/types.h`
 
-Per-track fusion output (camera body frame before world-ENU rotation). The `has_radar` field was added in Issue #210.
+Per-track fusion output (camera body frame before world-ENU rotation). Size estimation and radar fields added in Epic #237.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `track_id` | `uint32_t` | Matches `TrackedObject::track_id` |
-| `position_3d` | `Vector3f` | 3D position in camera body frame |
-| `velocity_3d` | `Vector3f` | 3D velocity estimate (m/s) |
+| `track_id` | `uint32_t` | Matches `TrackedObject::track_id`; radar-only tracks have high bit set (>= `0x80000000`) |
+| `position_3d` | `Vector3f` | 3D position in camera body frame (or world frame if `in_world_frame` is true) |
+| `velocity_3d` | `Vector3f` | 3D velocity estimate (m/s) in body frame |
 | `position_covariance` | `Matrix3f` | 3×3 position covariance (UKF only; fixed `5·I₃` for camera_only) |
 | `has_camera` | `bool` | Camera measurement applied this cycle |
-| `has_radar` | `bool` | Radar detection matched and applied this cycle (Issue #210) |
+| `has_radar` | `bool` | Radar detection matched/applied this cycle, or radar-init used |
+| `in_world_frame` | `bool` | Position is already in world frame (from dormant re-ID pool); skip body→world transform |
+| `estimated_radius_m` | `float` | Back-projected obstacle radius; 0 = unknown |
+| `estimated_height_m` | `float` | Back-projected obstacle height; 0 = unknown |
+| `radar_update_count` | `uint32_t` | Number of `update_radar()` calls — drives grid promotion threshold |
 
 ---
 

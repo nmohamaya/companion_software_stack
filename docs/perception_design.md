@@ -365,7 +365,21 @@ Sigma points are propagated through `h(x)` to capture the nonlinearity (no linea
 4. Accept the closest detection with `d² < gate_threshold` (χ²(4) at 95% = 9.21)
 5. Call `update_radar()` on the matched track; set `FusedObject::has_radar = true`
 
-Detections that fall outside the gate are silently ignored (no new tracks are spawned from radar-only observations in this implementation). This camera-confirmed architecture ensures that only radar readings matching existing camera-initiated tracks flow through fusion — radar cannot independently create obstacle tracks.
+Detections that do not match any existing camera-initiated track are handled by the **radar-primary initialization** path (see below).
+
+#### Radar-Primary Architecture (Issue #237 Phase D)
+
+The radar-primary architecture allows radar to independently create and maintain obstacle tracks, even when no camera detection exists. This is critical for obstacles that are outside the camera FOV, too small for visual detection, or in low-visibility conditions.
+
+**Radar Detection Reservation:** During the radar-init pass, if a radar detection initializes a new camera track (providing depth), that detection index is marked as "reserved" (`radar_matched[best_radar_idx] = true`). This prevents the same physical radar return from being consumed by both initialization and a subsequent `update_radar()` call in the same frame — avoiding double-counting.
+
+**Radar-Only Orphan Tracks:** Radar detections that fail both the Mahalanobis gate (no matching camera track) and the radar-init path are emitted as **orphan tracks** — standalone obstacle positions derived entirely from radar. Orphan output is gated by `radar_orphan_min_hits`: a radar detection must have been seen at least N times (via the dormant re-ID pool) before being emitted as an orphan, suppressing transient radar noise.
+
+**Radar-Confirmed Depth:** When a radar detection matches a camera track during initialization, the UKF state is overridden with the radar-measured depth (`set_radar_confirmed_depth()`). This replaces the monocular pinhole estimate with the more accurate radar range measurement. The `radar_update_count` is only incremented by actual `update_radar()` calls, not by depth snaps, preserving the semantic distinction between "radar contributed range" and "radar contributed a full spherical update."
+
+**Configurable Thresholds:**
+- `radar_promotion_hits` (default 3): Number of radar confirmations needed before a dynamic grid cell is promoted to static in the occupancy grid
+- `radar_orphan_min_hits` (default 1): Minimum radar observations before an orphan track is output
 
 #### Altitude Gate (Issue #229)
 
@@ -390,12 +404,30 @@ if object_alt < ground_filter_alt_m:
 
 `drone_altitude` is obtained from the Gazebo odometry topic via `std::atomic<float>`. Default `ground_filter_alt_m = 0.5` m. This rejects radar beams reflecting off the ground plane before they reach the UKF, preventing ground clutter from spawning spurious obstacle associations.
 
+#### Dormant Re-Identification Pool (Issue #237)
+
+When a radar-confirmed track is pruned by ByteTrack (lost visual contact), it is not simply deleted. Instead, its **world-frame position** is stored in a dormant pool. This provides world-frame obstacle memory — the drone remembers where obstacles were even after they leave the camera FOV.
+
+On each fusion cycle, new radar detections are compared against dormant entries. If a radar detection's world position is within `dormant_merge_radius_m` (default 2.0 m) of a dormant entry, the detection is re-identified as the same obstacle — its track ID is restored and the dormant entry's position is updated.
+
+**Pool constraints:**
+- Maximum `dormant_pool_cap` entries (default 64)
+- Only radar-confirmed tracks enter the pool (camera-only tracks are excluded)
+- Requires a valid drone pose (`set_drone_pose()`) for body→world conversion
+- Pool is cleared on `reset()`
+
+**Output:** Dormant re-identified objects are emitted in the `FusedObjectList` with `in_world_frame = true`, signaling to the mission planner that no further body→world rotation is needed.
+
+#### Velocity Frame Correction
+
+The body→world velocity transform in `process2_perception/src/main.cpp` applies the yaw rotation to **all** objects' velocity vectors, including those already in world frame. This is correct because the UKF estimates velocity in body frame regardless of whether the position was world-frame (dormant re-ID) or body-frame (live camera track). After the velocity rotation, `if (obj.in_world_frame) continue;` skips only the position transform. The Z-sign flip (`velocity_3d.z() = -velocity_3d.z()`) converts from body-frame down-positive to world-frame up-positive.
+
 #### Track Lifecycle in UKFFusionEngine
 
-- New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth
-- Each frame: `predict()` → `update_camera()` → gated radar association → `update_radar()` (if matched)
-- Tracks not present in the current `TrackedObjectList` (i.e. pruned by ByteTrack) are erased from `filters_`
-- `FusedObject::has_radar` is set to `true` only when a radar detection passes the Mahalanobis gate for that track
+- New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth (or radar-confirmed depth if matched)
+- Each frame: `predict()` → `update_camera()` → gated radar association → `update_radar()` (if matched) → orphan emission → dormant re-ID
+- Tracks not present in the current `TrackedObjectList` (i.e. pruned by ByteTrack) are moved to the dormant pool (if radar-confirmed) or erased
+- `FusedObject::has_radar` is set to `true` when a radar detection matches via init or Mahalanobis gate
 
 ---
 
@@ -512,6 +544,11 @@ All keys are under `perception.*` in the active JSON config.
 | `perception.fusion.radar.elevation_std_rad` | float | `0.026` | Radar elevation noise std (rad) |
 | `perception.fusion.radar.velocity_std_mps` | float | `0.1` | Radar radial velocity noise std (m/s) |
 | `perception.fusion.radar.gate_threshold` | float | `9.21` | χ²(4) Mahalanobis gate at 95% confidence; detections beyond this are rejected |
+| `perception.fusion.radar.altitude_gate_m` | float | `2.0` | Max body-frame Z difference for radar-track association (Issue #229) |
+| `perception.fusion.radar.ground_filter_alt_m` | float | `0.5` | Radar returns below this AGL are rejected as ground clutter (Issue #229) |
+| `perception.fusion.radar.radar_orphan_min_hits` | int | `1` | Min radar observations before orphan track output (Issue #237) |
+| `perception.fusion.radar.dormant_merge_radius_m` | float | `2.0` | World-frame merge radius for dormant re-ID pool (Issue #237) |
+| `perception.fusion.radar.dormant_pool_cap` | int | `64` | Max entries in dormant re-ID pool (Issue #237) |
 
 ---
 
@@ -550,6 +587,10 @@ All keys are under `perception.*` in the active JSON config.
 | `position_covariance` | Matrix3f | 3×3 position uncertainty |
 | `has_camera` | bool | Camera measurement present this cycle |
 | `has_radar` | bool | Radar detection matched and applied this cycle (Issue #210) |
+| `in_world_frame` | bool | True if position is already in world ENU (dormant re-ID output) — skip body→world transform |
+| `estimated_radius_m` | float | Estimated obstacle radius from bbox geometry (Issue #237) |
+| `estimated_height_m` | float | Estimated obstacle height from bbox geometry (Issue #237) |
+| `radar_update_count` | uint32 | Number of actual `update_radar()` calls on this track (Issue #237) |
 
 ### `ShmDetectedObjectList` (IPC output, world frame)
 
@@ -562,7 +603,8 @@ Published per frame. Up to `MAX_DETECTED_OBJECTS` entries. Each entry mirrors `F
 | Config | Detector | Tracker | Fusion | IPC | Notes |
 |--------|----------|---------|--------|-----|-------|
 | `default.json` | simulated | bytetrack | camera_only | shm | Integration testing only |
-| `gazebo_sitl.json` | color_contour | bytetrack | camera_only | zenoh | Gazebo SITL with Zenoh |
+| `gazebo_sitl.json` | color_contour | bytetrack | camera_only | zenoh | Gazebo SITL with Zenoh (default) |
+| Scenario 18 config | color_contour | bytetrack | ukf (radar-primary) | zenoh | Gazebo perception_avoidance — full radar+camera UKF fusion |
 | `hardware.json` | color_contour | bytetrack | camera_only | shm | Real hardware (yolov8 opt-in) |
 | `zenoh_e2e.json` | (per config) | bytetrack | camera_only | zenoh | End-to-end Zenoh testing |
 
@@ -613,8 +655,8 @@ See [observability.md](observability.md) for histogram interpretation.
 | Gap | Details | Tracked |
 |-----|---------|---------|
 | **UKF not default** | The UKF fusion backend is implemented and tested but the default config uses `camera_only`. The UKF backend should be validated in a scenario run before becoming default. | — |
-| **Radar fusion disabled by default** | `perception.fusion.radar.enabled` defaults to `false`. Enable it together with `perception.fusion.backend: "ukf"` to get camera+radar fusion. A Gazebo scenario validating the full radar UKF path is not yet written. | [#210](https://github.com/nmohamaya/companion_software_stack/issues/210) |
-| **Radar-only track spawning not implemented** | The radar association loop only updates existing camera-initiated tracks. A radar detection with no corresponding camera track is silently ignored. Future work: spawn tracks from radar-only detections for non-visible obstacles. | — |
+| ~~**Radar fusion disabled by default**~~ | **RESOLVED** (Issue #237). Radar fusion is enabled in Gazebo scenario 18 (`perception_avoidance`). The full radar-primary UKF path is validated in Gazebo SITL with 3/3 PASS runs. | [#210](https://github.com/nmohamaya/companion_software_stack/issues/210) |
+| ~~**Radar-only track spawning not implemented**~~ | **RESOLVED** (Issue #237 Phase D). Radar-primary architecture allows radar to independently initialize camera tracks (radar-confirmed depth) and emit orphan tracks for radar-only detections. Dormant re-ID pool provides world-frame obstacle memory. | [#237](https://github.com/nmohamaya/companion_software_stack/issues/237) |
 | **Monocular depth uncertainty** | Depth estimates from apparent size assume a known obstacle height and fixed focal length. Errors propagate into the world-frame position seen by Process 4. The 3×3 `position_covariance` in UKF quantifies this but Process 4 does not currently use it. | — |
 | **Yaw-only camera→world** | The body→world rotation in `fusion_thread` ignores camera pitch/roll. For aggressively pitched manoeuvres the world-frame position will have a systematic error. | — |
 | **SimulatedDetector produces random positions** | The default config uses `simulated` detector, so the SPSC queues are always exercised but the object positions carry no semantic meaning. Switch to `color_contour` or `yolov8` for meaningful output. | — |

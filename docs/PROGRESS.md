@@ -2762,4 +2762,69 @@ The UKF Cholesky decomposition was hoisted out of the inner association loop (co
 
 ---
 
-_Last updated after Improvement #63 (Epic #237, Issue #237). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1097 tests, 18 scenarios._
+### Improvement #64 — Persistent Timestamped Scenario Logging (Issue #242)
+
+**Date:** 2026-03-29
+**Category:** Testing Infrastructure / Observability
+**Files Created:**
+
+- `tests/lib_scenario_logging.sh` — Shared library (~830 lines): timestamped dirs, metadata, report generation, index
+- `tests/cleanup_old_runs.sh` — Manual retention cleanup (never auto-runs)
+
+**Files Modified:**
+
+- `tests/run_scenario_gazebo.sh` — Source library, replace `rm -rf` with `create_run_dir`, add report/index calls
+- `tests/run_scenario.sh` — Same changes as Gazebo runner
+
+**What:** Every scenario run now gets a unique timestamped directory (`YYYY-MM-DD_HHMMSS_PASS/FAIL/ABORTED`) that is never automatically deleted. Previous runs were destroyed on re-run by `rm -rf`.
+
+Each run produces:
+- `run_report.txt` — Human-readable report with 10 data sections, each with automated threshold-based observations (FSM transitions, survey quality, waypoint progress, obstacle proximity, grid peaks, perception/radar, faults, avoider activity, D* Lite stats, verification checks)
+- `run_metadata.json` — Machine-readable metadata (git commit, branch, duration, pass/fail counts, config hash)
+- `runs.jsonl` — Append-only JSON Lines index for history tracking across all scenarios
+- `latest` symlink — Atomic relative symlink to most recent run
+
+Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on crash (via cleanup trap).
+
+**Why:** No way to compare runs, track regressions, or reference previous test results. Logs were destroyed on every re-run. Now every run is preserved with structured reports for quick analysis.
+
+**Test count:** No change (1097 — infrastructure only, no C++ changes).
+
+---
+
+### Improvement #65 — PR #241 Review Fixes: Radar-Init Reservation, Yaw Wrapping, Config Wiring (Issues #237, #242)
+
+**Date:** 2026-03-30
+**Category:** Bug Fix / Safety / Correctness
+**Files Modified:**
+
+- `process2_perception/src/ukf_fusion_engine.cpp` — Fix #1: radar-init reserves matched detection (prevents double-use); Fix #3: `set_radar_confirmed_depth` no longer inflates `radar_update_count`; Fix #6: "Gazebo lidar" → "Gazebo radar" comment; gate orphan output with `radar_orphan_min_hits`; set `has_radar=true` on radar-init
+- `process2_perception/src/main.cpp` — Fix #11: velocity transform for `in_world_frame` objects (body FRD → world + Z flip)
+- `process4_mission_planner/include/planner/mission_state_tick.h` — Fix #2: wrap `target_yaw` to [-π, π] in SURVEY
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — Fix #4: deduplicate `changed_cells_`; Fix #7: `near_static_cell_()` comment; wire `radar_promotion_hits` parameter
+- `process4_mission_planner/include/planner/grid_planner_base.h` — Fix #5: add `radar_promotion_hits` to `GridPlannerConfig`
+- `process4_mission_planner/src/main.cpp` — Fix #5: read `radar_promotion_hits` from config
+- `common/ipc/include/ipc/ipc_types.h` — Fix #10: extend `validate()` for `estimated_radius_m`, `estimated_height_m`
+- `tests/test_fusion_engine.cpp` — Fix #8–9: correct test comments (3.0m default, horizon-truncation note)
+- `tests/test_dstar_lite_planner.cpp` — Fix #12: add smoothness assertion to `CarrotProducesSmootherTurnThanCellByCell`
+
+**What:** 12 fixes addressing Copilot PR review comments:
+1. **Radar-init detection reservation** — same radar return could initialize multiple camera tracks
+2. **SURVEY target_yaw unbounded** — safety: could send large angles to FC
+3. **`radar_update_count` semantics** — depth snap shouldn't count as radar update (affects promotion threshold)
+4. **Duplicate `changed_cells_`** — D* Lite processed same cell twice
+5. **Unused config knobs wired** — `radar_orphan_min_hits` gates output, `radar_promotion_hits` replaces hardcoded threshold
+6–9. Comment corrections
+10. **IPC validation** — new fields checked for finite/non-negative
+11. **Velocity frame mismatch** — `in_world_frame` objects had body-frame velocity
+12. **Test smoothness assertion** — verifies pure-pursuit is smoother than cell-by-cell
+
+**Why:** PR #241 Copilot review identified real bugs (#1, #2, #3, #11), correctness issues (#4, #5, #10), and documentation gaps (#6–9, #12).
+
+**Gazebo results:** 3/3 runs passed (all obstacles avoided, mission complete). BLUE obstacle consistently close (0.2–0.5m) — Gazebo sim dynamics variation on WP4→WP5 leg.
+
+**Test count:** 1097 → 1108 (+11 tests from Phase D radar-primary + review fix assertions).
+
+---
+
+_Last updated after Improvement #65 (PR #241 review fixes). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1108 tests, 18 scenarios._

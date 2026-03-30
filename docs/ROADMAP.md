@@ -567,6 +567,9 @@
 | ~~[#225](https://github.com/nmohamaya/companion_software_stack/issues/225)~~ | ~~Radar ground-plane filter + avoider dead zone fix~~ ✅ | Feature / Bug Fix | **Closed** (Improvement #56, Fix #41) |
 | ~~[#229](https://github.com/nmohamaya/companion_software_stack/issues/229)~~ | ~~Radar fusion fix: FOV, ground filter, altitude gate, path-aware avoider~~ ✅ | Bug Fix / Feature | **Closed** (Improvement #59, Fix #45–47) |
 | ~~[#234](https://github.com/nmohamaya/companion_software_stack/issues/234)~~ | ~~D* Lite queue performance + Z-band + km reinit~~ ✅ | Performance | **Closed** (Improvement #60-61, Bug #48-49) |
+| ~~[#236](https://github.com/nmohamaya/companion_software_stack/issues/236)~~ | ~~Waypoint overshoot detection~~ ✅ | Feature | **Closed** (Improvement #62) |
+| ~~[#237](https://github.com/nmohamaya/companion_software_stack/issues/237)~~ | ~~Epic: Accurate Obstacle Detection & Grid Population~~ ✅ | Feature / Bug Fix | **Closed** (Improvement #63, PR #241, Bug #237a-b) |
+| ~~[#242](https://github.com/nmohamaya/companion_software_stack/issues/242)~~ | ~~Persistent Timestamped Scenario Logging~~ ✅ | Infrastructure | **Closed** (Improvement #64, PR #241) |
 
 ---
 
@@ -574,10 +577,10 @@
 
 | Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | **Epic #110 (Current)** |
 |--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|
-| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **1071** |
-| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **1071** |
+| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **1108** |
+| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **1108** |
 | Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | **42** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **32** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **34** |
 | Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
 | HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **9** |
 | IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **Zenoh (sole)** |
@@ -601,7 +604,7 @@
 | Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | **systemd + ProcessManager** |
 | Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
 | Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
-| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF (RGB camera + radar)** |
+| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF radar-primary (camera + radar independent tracks, dormant re-ID)** |
 | Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **15 scenarios (14 Tier 1 + 1 Tier 2), 14/14 Tier 1 pass on Zenoh** |
 
 ### Process Activity During Simulation
@@ -618,4 +621,4 @@
 
 ---
 
-*Last updated after Issue #236 (waypoint overshoot detection) — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1070 tests, 50 C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing. 49 bug fixes total. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Epic #237 + Issue #242 — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1108 tests, 50+ C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing (Scenario 18: 3/3 Gazebo runs PASS). 51 bug fixes total. Radar-primary architecture with persistent timestamped scenario logging. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
