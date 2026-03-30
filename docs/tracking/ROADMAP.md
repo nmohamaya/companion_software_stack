@@ -53,7 +53,7 @@
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (D* Lite planner + 3D avoidance + HD-map) |
 | Autonomous flight | ARM → Takeoff → Navigate 7 WPs (D* Lite + 3D avoidance) → RTL → Land → Disarm |
-| CI | GitHub Actions — 5-job pipeline: format gate + 3-leg build matrix (sanitizers) + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md)) |
+| CI | GitHub Actions — 5-job pipeline: format gate + 3-leg build matrix (sanitizers) + coverage ([docs/CI_SETUP.md](../guides/CI_SETUP.md)) |
 | Line coverage | **75.1%** (lcov) |
 | Code style | `.clang-format` enforced via CI format gate (clang-format-18) |
 | Config tunables | 95+ (JSON, dot-path access, schema-validated) |
@@ -63,7 +63,7 @@
 | OpenCV | 4.10.0 from source (core + imgproc + dnn) |
 | MAVSDK | 2.12.12 |
 | Target hardware | **NVIDIA Jetson Orin** (Nano/NX/AGX, aarch64, JetPack 6.x) |
-| IPC framework | **Zenoh 1.7.2** (sole backend, SHM removed) — All 6 migration phases complete + legacy SHM removed ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), PRs #52–#57, Issue #126) |
+| IPC framework | **Zenoh 1.7.2** (sole backend, SHM removed) — All 6 migration phases complete + legacy SHM removed ([ADR-001](../adr/ADR-001-ipc-framework-selection.md), PRs #52–#57, Issue #126) |
 | E2E testing | **42/42** Zenoh smoke-test checks passing (`tests/test_zenoh_e2e.sh`) |
 | Process supervision | **systemd** service units (7 services + target) with `BindsTo` dependencies |
 | Thread watchdog | **ThreadHeartbeat + ThreadWatchdog** — per-thread stuck detection via atomics |
@@ -216,7 +216,7 @@
 
 **Key Deliverables:**
 
-**Three-layer watchdog architecture** ([ADR-004](docs/adr/ADR-004-process-thread-watchdog-architecture.md)):
+**Three-layer watchdog architecture** ([ADR-004](../adr/ADR-004-process-thread-watchdog-architecture.md)):
 
 | Layer | Component | What It Does | PR(s) |
 |-------|-----------|-------------|-------|
