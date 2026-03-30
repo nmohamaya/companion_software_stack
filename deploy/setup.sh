@@ -296,7 +296,7 @@ main() {
     
     header "Setup Complete! ✓"
     echo ""
-    echo "👉 Next: Read docs/GETTING_STARTED.md for more info"
+    echo "👉 Next: Read docs/guides/GETTING_STARTED.md for more info"
     echo "👉 Next: Check https://github.com/nmohamaya/companion_software_stack"
 }
 

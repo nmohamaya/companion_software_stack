@@ -8,7 +8,7 @@ Multi-process C++17 software stack for an autonomous drone companion computer. 7
 
 ## ⚡ Quick Start (5 minutes)
 
-**New to this project?** Start here. For detailed setup, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+**New to this project?** Start here. For detailed setup, see [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md).
 
 ### 1️⃣ Clone & Setup
 
@@ -49,7 +49,7 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 
 - **Deep dive?** Read [Architecture](#architecture) section below
 - **First time contributing?** See [DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md)
-- **Need details?** Check [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- **Need details?** Check [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md)
 - **Troubleshooting?** Jump to [Troubleshooting](#troubleshooting) section
 
 ---
@@ -968,7 +968,7 @@ bash tests/run_tests.sh
 bash deploy/launch_all.sh
 ```
 
-For detailed setup, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+For detailed setup, see [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md).
 
 ## Run
 
