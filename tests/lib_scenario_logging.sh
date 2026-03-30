@@ -15,7 +15,7 @@
 # ═══════════════════════════════════════════════════════════════
 
 # ── Timestamped run directory ────────────────────────────────
-# Creates: <log_dir>/<scenario_name>/YYYY-MM-DD_HHMMSS_RUNNING/
+# Creates: <log_dir>/<scenario_name>/YYYY-MM-DD_HHMMSS[_<pid>]_RUNNING/
 # Returns the path on stdout.
 create_run_dir() {
     local log_dir="$1"
@@ -23,9 +23,9 @@ create_run_dir() {
     local timestamp
     timestamp=$(date +"%Y-%m-%d_%H%M%S")
     local run_dir="${log_dir}/${scenario_name}/${timestamp}_RUNNING"
-    # Handle same-second collision by appending PID
+    # Handle same-second collision by inserting PID before _RUNNING
     if [[ -d "$run_dir" ]]; then
-        run_dir="${run_dir}_$$"
+        run_dir="${log_dir}/${scenario_name}/${timestamp}_$$_RUNNING"
     fi
     mkdir -p "$run_dir"
     echo "$run_dir"
