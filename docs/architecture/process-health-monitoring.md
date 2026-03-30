@@ -80,23 +80,42 @@ auto alive = monitor.get_alive_processes();
 bool comms_ok = monitor.is_alive("comms");
 ```
 
-## ShmSystemHealth Integration
+## SystemHealth Integration
 
-The `ShmSystemHealth` struct now includes per-process liveness:
+The `SystemHealth` struct (defined in `common/ipc/include/ipc/ipc_types.h`)
+includes per-process liveness and stack-level status:
 
 ```cpp
+static constexpr uint8_t kMaxTrackedProcesses = 8;  // 7 processes + 1 FC link
+
 struct ProcessHealthEntry {
-    char     name[32];         // Process name
-    bool     alive;            // Last known state
-    uint64_t last_seen_ns;     // Timestamp of last event
+    char     name[32]     = {};     // Process name (e.g. "video_capture")
+    bool     alive        = false;  // Last known liveness state
+    uint64_t last_seen_ns = 0;     // Timestamp of last liveliness event
 };
 
-struct ShmSystemHealth {
-    // ... existing fields (cpu, mem, disk, temp) ...
+struct SystemHealth {
+    uint64_t timestamp_ns;
+    float    cpu_usage_percent;
+    float    memory_usage_percent;
+    float    disk_usage_percent;
+    float    max_temp_c;
+    float    gpu_temp_c;
+    float    cpu_temp_c;
+    uint32_t total_healthy;
+    uint32_t total_degraded;
+    uint32_t total_dead;
+    float    power_watts;
+    uint8_t  thermal_zone;  // 0=normal, 1=warm, 2=hot, 3=critical
 
-    ProcessHealthEntry processes[8];  // 7 processes + 1 FC link
-    uint8_t  num_processes;
-    bool     critical_failure;        // True if comms or slam_vio_nav died
+    // Stack-level status (Phase 4 supervisor integration)
+    uint8_t  stack_status   = 0;  // StackStatus enum (0=NOMINAL, 1=DEGRADED, 2=CRITICAL)
+    uint32_t total_restarts = 0;  // Cumulative restart count across all processes
+
+    // Process health (populated by LivelinessMonitor)
+    ProcessHealthEntry processes[kMaxTrackedProcesses] = {};
+    uint8_t            num_processes                   = 0;      // Number of tracked processes
+    bool               critical_failure                = false;  // True if a critical process died
 };
 ```
 
@@ -109,6 +128,25 @@ processes dies:
 
 Other process deaths are logged but don't set the critical flag. This
 can be extended via configuration as needed.
+
+## ThreadWatchdog Configuration
+
+The `ThreadWatchdog` detects stuck threads within each process. Default values
+from `config/default.json` under the `watchdog` section:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `thread_stuck_threshold_ms` | 5000 | Time (ms) without a heartbeat touch before a thread is considered stuck |
+| `thread_scan_interval_ms` | 1000 | How often (ms) the watchdog scans all registered threads |
+
+These values can be overridden in `config/default.json`:
+
+```json
+"watchdog": {
+    "thread_stuck_threshold_ms": 5000,
+    "thread_scan_interval_ms": 1000
+}
+```
 
 ## Comparison: Liveliness Tokens vs Custom Heartbeat
 
@@ -133,7 +171,7 @@ When `HAVE_ZENOH` is not defined (SHM-only builds):
 | File | Purpose |
 |------|---------|
 | `common/ipc/include/ipc/zenoh_liveliness.h` | Token + Monitor classes (+ stubs) |
-| `common/ipc/include/ipc/shm_types.h` | `ProcessHealthEntry`, extended `ShmSystemHealth` |
+| `common/ipc/include/ipc/ipc_types.h` | `ProcessHealthEntry`, `SystemHealth` struct |
 | `process{1-7}_*/src/main.cpp` | Token declaration (1 line each) |
 | `process7_system_monitor/src/main.cpp` | Monitor integration + health struct population |
 | `tests/test_zenoh_liveliness.cpp` | Unit tests |
@@ -145,7 +183,7 @@ When `HAVE_ZENOH` is not defined (SHM-only builds):
 - **#30** — Pre-flight check (query `get_alive_processes()` to verify all running)
 - **#41** — Contingency fault tree (liveliness is the detection mechanism)
 - **#50** — Network transport (liveliness works over network links too)
-- **#61** — FaultManager graceful degradation (consumes `ShmSystemHealth` +
+- **#61** — FaultManager graceful degradation (consumes `SystemHealth` +
   `critical_failure` flag to evaluate faults and issue escalating flight-control
   actions: WARN → LOITER → RTL → EMERGENCY_LAND)
 

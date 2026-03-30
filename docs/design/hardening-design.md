@@ -295,6 +295,7 @@ struct RestartPolicy {
     uint32_t max_backoff_ms     = 30000;  // Cap at 30s
     bool     is_critical        = false;  // Stack → CRITICAL on exhaustion
     uint8_t  thermal_gate       = 3;      // Block at thermal_zone >= this
+    uint32_t max_thermal_defer_s = 300;   // Force restart after thermal deferral timeout
 
     [[nodiscard]] uint32_t backoff_ms(uint32_t attempt) const;
     [[nodiscard]] bool is_thermal_blocked(uint8_t thermal_zone) const;
@@ -312,6 +313,10 @@ struct RestartPolicy {
 | 2 | Block at HOT or hotter |
 | 3 | Block at CRITICAL only (default) |
 | 4 | Never block |
+
+**Thermal deferral safety limit (`max_thermal_defer_s`):**
+
+When the thermal gate blocks a restart, the ProcessManager tracks how long the restart has been deferred. If the deferral exceeds `max_thermal_defer_s` (default 300 s / 5 minutes), the ProcessManager forces the restart regardless of thermal state. This prevents a critical process from staying down indefinitely during a sustained thermal event. Set to `0` to disable the limit (no forced restart — thermal gate has absolute authority).
 
 **ProcessConfig** — loads per-process policy from JSON:
 
@@ -672,8 +677,8 @@ Watchdog configuration in `config/default.json`:
 ```json
 {
   "watchdog": {
-    "stuck_threshold_ms": 5000,
-    "scan_interval_ms": 1000,
+    "thread_stuck_threshold_ms": 5000,
+    "thread_scan_interval_ms": 1000,
     "processes": {
       "video_capture": {
         "binary": "build/bin/video_capture",
@@ -714,7 +719,8 @@ Watchdog configuration in `config/default.json`:
 | **P2** | `inference` | Yes | YOLO detection — removes obstacle awareness |
 | **P2** | `tracker` | Yes | Object tracking — stale tracks cause bad planning |
 | **P2** | `fusion` | Yes | Sensor fusion output — downstream depends on it |
-| **P3** | `visual_frontend` | Yes | Visual odometry — no pose without it |
+| **P2** | `radar_read` | Yes | Radar sensor ingestion — conditional on radar enabled |
+| **P3** | `vio_pipeline` | Yes | Visual odometry — no pose without it |
 | **P3** | `imu_reader` | Yes | IMU — no attitude/velocity estimation |
 | **P3** | `pose_publisher` | Yes | Pose output — P4, P5 lose localisation |
 | **P4** | `planning_loop` | Yes | Waypoint + contingency — uncontrolled flight |
@@ -725,7 +731,7 @@ Watchdog configuration in `config/default.json`:
 | **P6** | `payload_loop` | No | Payload — non-essential for safety |
 | **P7** | `health_loop` | No | Monitoring — loss disables telemetry only |
 
-**Summary:** 17 threads — 11 critical, 6 non-critical.
+**Summary:** 18 threads — 12 critical (including conditional `radar_read`), 6 non-critical.
 
 ---
 
