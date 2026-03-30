@@ -73,12 +73,23 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | Document | Purpose |
 |----------|---------|
 | [GETTING_STARTED.md](docs/guides/GETTING_STARTED.md) | Detailed setup and first-run guide |
+| **Process Design** | |
+| [video_capture_design.md](docs/design/video_capture_design.md) | P1 camera backends, frame formats, stereo sync |
 | [perception_design.md](docs/design/perception_design.md) | P2 perception pipeline: detector backends, ByteTrack tracker, UKF fusion |
+| [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md) | P3 VIO pipeline, pose quality states, IMU integration |
 | [mission_planner_design.md](docs/design/mission_planner_design.md) | P4 FSM, fault management, D* Lite planner, obstacle avoidance, geofencing |
-| [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, Result\<T,E\>, systemd integration, foundation hardening |
+| [comms_design.md](docs/design/comms_design.md) | P5 MAVLink protocol, thread responsibilities, safety guards |
+| [payload_manager_design.md](docs/design/payload_manager_design.md) | P6 gimbal control, payload actions, rate-limited slew |
+| [system_monitor_design.md](docs/design/system_monitor_design.md) | P7 health metrics, thermal zones, battery monitoring |
+| **Cross-Cutting** | |
 | [API.md](docs/design/API.md) | IPC interfaces, Zenoh pub/sub, HAL interfaces, message types |
+| [hal_design.md](docs/design/hal_design.md) | Hardware Abstraction Layer: interfaces, backends, factory pattern |
+| [ipc_design.md](docs/design/ipc_design.md) | IPC architecture: Zenoh message bus, TripleBuffer, channel design |
+| [error_handling_design.md](docs/design/error_handling_design.md) | Result\<T,E\> monadic error handling, no-exception policy |
+| [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, systemd integration, foundation hardening |
 | [ipc-key-expressions.md](docs/architecture/ipc-key-expressions.md) | Zenoh topic naming convention and complete channel table |
 | [process-health-monitoring.md](docs/architecture/process-health-monitoring.md) | Zenoh liveliness tokens for crash detection |
+| **Guides & Tracking** | |
 | [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
 | [ROADMAP.md](docs/tracking/ROADMAP.md) | Completed milestones and planned production phases |
 | [CPP_PATTERNS_GUIDE.md](docs/guides/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
