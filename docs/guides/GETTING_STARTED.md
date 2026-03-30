@@ -381,9 +381,9 @@ bash deploy/launch_gazebo.sh --gui
 ## Questions?
 
 - **How do I contribute?** → [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) (Steps 1–9)
-- **What's the architecture?** → [README.md](../README.md#architecture)
-- **How do I debug a crash?** → [docs/DEBUG.md](DEBUG.md)
-- **Real hardware setup?** → [docs/HARDWARE_SETUP.md](HARDWARE_SETUP.md)
+- **What's the architecture?** → [README.md](../../README.md#architecture)
+- **How do I debug a crash?** → [Debugging workflow](../debug/sim_debugging_workflow.md)
+- **Real hardware setup?** → [README.md](../../README.md#launch-on-real-hardware)
 - **IPC message types?** → [docs/API.md](../design/API.md)
 
 ---

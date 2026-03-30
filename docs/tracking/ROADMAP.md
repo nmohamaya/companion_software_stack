@@ -46,7 +46,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | See [tests/TESTS.md](../tests/TESTS.md) for current counts |
+| Unit tests | See [tests/TESTS.md](../../tests/TESTS.md) for current counts |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`, `[[nodiscard]]` enforced) |
 | HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
 | HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
@@ -621,4 +621,4 @@
 
 ---
 
-*Last updated after Epic #237 + Issue #242 — see [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1108 tests, 50+ C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing (Scenario 18: 3/3 Gazebo runs PASS). 51 bug fixes total. Radar-primary architecture with persistent timestamped scenario logging. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Epic #237 + Issue #242 — see [tests/TESTS.md](../../tests/TESTS.md) for current test counts. 1108 tests, 50+ C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing (Scenario 18: 3/3 Gazebo runs PASS). 51 bug fixes total. Radar-primary architecture with persistent timestamped scenario logging. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*

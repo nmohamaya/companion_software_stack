@@ -143,7 +143,7 @@ graph LR
     style Watch fill:#3a1a1a,stroke:#e74c3c,color:#e0e0e0
 ```
 
-**Data flows top-down** through five conceptual layers: Sense → Understand → Decide → Act, with lateral supervision. 21 threads total across 7 Linux processes (3 + 4 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process queues (P2 only) use lock-free SPSC ring buffers.
+**Data flows top-down** through five conceptual layers: Sense → Understand → Decide → Act, with lateral supervision. 21+ threads across 7 Linux processes (3 + 4+ + 4 + 1 + 5 + 1 + 1; P2 adds a radar thread when enabled). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process queues (P2 only) use lock-free SPSC ring buffers.
 
 **Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. In supervised deployments (`--supervised` flag), `ProcessManager` in P7 fork+execs the other processes and handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` stop propagation + `WatchdogSec` on P7) provide OS-level supervision, and P7 runs monitor-only. Sanitizer-clean (ASan/TSan/UBSan). See [tests/TESTS.md](tests/TESTS.md) for test counts, [Epic #88](https://github.com/nmohamaya/companion_software_stack/issues/88) and [docs/architecture/process-health-monitoring.md](docs/architecture/process-health-monitoring.md).
 
@@ -182,7 +182,7 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 | `IVisualFrontend` | Pose estimation | `SimulatedVisualFrontend` — circular trajectory + noise | `GazeboVisualFrontend` (gz-transport odometry) | ORB-SLAM3 / VINS-Fusion |
 | `IPathPlanner` | Path planning | `DStarLitePlanner` — 3D incremental search + obstacle awareness | — | RRT* |
 | `IObstacleAvoider` | Obstacle avoidance | `ObstacleAvoider3D` — 3D repulsive field + velocity prediction | — | VFH+ / 3D-VFH |
-| `IRadar` | Radar detections | `SimulatedRadar` — config-driven synthetic targets | `GazeboRadar` (gpu_lidar + odometry) | SPI/UART radar driver |
+| `IRadar` | Radar detections | `SimulatedRadar` — config-driven synthetic targets | `GazeboRadarBackend` (gpu_lidar + odometry) | SPI/UART radar driver |
 | `IProcessMonitor` | System metrics | `LinuxProcessMonitor` — /proc, /sys | — | — |
 
 ---
@@ -713,7 +713,7 @@ All common libraries are **header-only** and written from scratch.
 
 ### Zenoh IPC (`ZenohPublisher<T>` / `ZenohSubscriber<T>`) — Sole Production Backend
 
-- **Build:** `-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON` (or provide `-DZENOH_CONFIG_PATH` for TLS)
+- **Build:** Zenoh is required and enabled by default. Use `-DALLOW_INSECURE_ZENOH=ON` for insecure/dev setups or `-DZENOH_CONFIG_PATH=/path/to/zenoh.json` for TLS.
 - **Mechanism:** Zenoh pub/sub with SHM zero-copy for large messages (> threshold) and serialized bytes for small messages.
 - **Session:** Singleton `ZenohSession` — heap-allocated, intentionally leaked (avoids Rust atexit panic).
 - **Network:** Same pub/sub API works across processes (SHM) and across machines (TCP/UDP/QUIC) — enables drone↔GCS communication.
@@ -844,7 +844,7 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| Object detection | � `SimulatedDetector`, `ColorContourDetector`, `OpenCvYoloDetector` (CPU, ~7–13 FPS) | **YOLOv8-Nano** via **TensorRT** (INT8 on Jetson Orin: ~2 ms/frame) | Current OpenCV DNN backend is functional but CPU-only. TensorRT gives 10-50× speedup on GPU. Keep `IDetector` interface. |
+| Object detection | 🟡 `SimulatedDetector`, `ColorContourDetector`, `OpenCvYoloDetector` (CPU, ~7–13 FPS) | **YOLOv8-Nano** via **TensorRT** (INT8 on Jetson Orin: ~2 ms/frame) | Current OpenCV DNN backend is functional but CPU-only. TensorRT gives 10-50× speedup on GPU. Keep `IDetector` interface. |
 | | | **RT-DETR** (transformer-based, no NMS needed) | Emerging option. Slower but no post-processing. Publicly available: [PaddleDetection](https://github.com/PaddlePaddle/PaddleDetection) |
 | NMS | 🟢 `OpenCvYoloDetector` runs full NMS (IoU-based) | Production-ready for current scale | For higher throughput: TensorRT's built-in NMS plugin |
 | Tracking — filter | 🟡 **Linear Kalman Filter** (8D constant-velocity) | **Extended Kalman Filter (EKF)** with constant-turn-rate model | Handles manoeuvring targets better. Publicly available reference: [rlabbe/Kalman-and-Bayesian-Filters](https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python) |
