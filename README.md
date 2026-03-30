@@ -54,6 +54,20 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 
 ---
 
+## ⚠️ Safety Disclaimer
+
+**This software controls autonomous flight.** While reasonably tested and documented, **no autonomous software is risk-free.** Users and developers are solely responsible for:
+
+1. **Independent validation** — Test thoroughly in controlled environments before any real flight
+2. **Regulatory compliance** — Ensure your use complies with local aviation regulations (FAA Part 107, EASA regulations, etc.)
+3. **Risk assessment** — Evaluate risks for your specific drone, environment, and mission profile
+4. **Hardware qualification** — Validate sensors, flight controller, and compute platform for your use case
+5. **Fail-safe design** — Implement geofencing, RTL mechanisms, and manual override capabilities
+
+**See [LICENSE](LICENSE) for full liability disclaimers.** The authors provide this software *as-is* without warranties.
+
+---
+
 ## Architecture
 
 ### System Overview
@@ -1299,7 +1313,26 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | MAVSDK | ≥ 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | — | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
 
-> **YOLOv8 License Note:** The optional YOLOv8n model (`models/yolov8n.onnx`, downloaded on demand) is licensed under **AGPL 3.0** by Ultralytics. If deploying with `HAS_OPENCV=ON`, you must either comply with AGPL 3.0 (source disclosure), obtain a [commercial Ultralytics license](https://ultralytics.com/license), or use the built-in `ColorContourDetector` instead. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.
+### Licensing Notes
+
+**YOLOv8 AGPL 3.0 (Important for Deployment)**
+
+The optional YOLOv8n model (`models/yolov8n.onnx`, downloaded on demand) is licensed under **AGPL 3.0** by Ultralytics. 
+
+⚠️ **AGPL 3.0 requires source code disclosure to end-users if you distribute or deploy the software.**
+
+**If using YOLOv8 in production, choose one:**
+1. **Obtain a [commercial Ultralytics license](https://ultralytics.com/license)** (recommended for commercial deployment)
+2. **Use `ColorContourDetector` instead** — project-original HSV-based detector, no license constraint
+3. **Replace with a permissively-licensed model** (e.g., YOLO-World, custom model trained on your data)
+
+During development with simulated backends, YOLOv8 is optional and the license constraint does not apply.
+
+**Zenoh EPL 2.0**
+
+Zenoh is licensed under **EPL 2.0** (Eclipse Public License 2.0), which is permissive but copyleft-lite. Since this stack only *links* Zenoh without modifying it, EPL 2.0 compliance is straightforward. If you modify Zenoh itself, you must disclose those changes under EPL 2.0.
+
+For full license details, see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## Development Workflow
 
