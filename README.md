@@ -163,7 +163,7 @@ graph LR
     style Watch fill:#3a1a1a,stroke:#e74c3c,color:#e0e0e0
 ```
 
-**Data flows top-down** through five conceptual layers: Sense -> Understand -> Decide -> Act, with lateral supervision. 21+ threads across 7 Linux processes (3 + 4+ + 4 + 1 + 5 + 1 + 1; P2 adds a radar thread when enabled). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process queues (P2 only) use lock-free SPSC ring buffers.
+**Data flows top-down** through five conceptual layers: Sense -> Understand -> Decide -> Act, with lateral supervision. 21+ threads across 7 Linux processes (3 + 4+ + 4 + 1 + 5 + 1 + 1; P2 adds a radar thread when enabled). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process handoff (P2 only) uses `drone::TripleBuffer` (lock-free latest-value).
 
 **Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. In supervised deployments (`--supervised` flag), `ProcessManager` in P7 fork+execs the other processes and handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` stop propagation + `WatchdogSec` on P7) provide OS-level supervision, and P7 runs monitor-only. Sanitizer-clean (ASan/TSan/UBSan). See [hardening-design.md](docs/design/hardening-design.md) for the full three-layer watchdog architecture.
 
@@ -219,9 +219,9 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 
 Two capture threads acquire frames from mission camera (1920x1080 RGB, 30 Hz) and stereo camera (640x480 GRAY, 30 Hz), publishing to P2 and P3 respectively. The `SimulatedCamera` generates deterministic gradient patterns; the `GazeboCamera` subscribes to gz-transport image topics for SITL simulation. Real backends would use V4L2 or NVIDIA libargus.
 
-### Process 2 — Perception (4 threads)
+### Process 2 — Perception (4+ threads)
 
-A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrack with Kalman filters and Hungarian assignment), and sensor fusion (camera-only monocular depth or camera+radar UKF). Stages are connected by lock-free SPSC ring buffers (depth 4 each). Three detector backends are available: simulated (random boxes), color contour (HSV segmentation, pure C++), and YOLOv8-nano (OpenCV DNN, optional).
+A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrack with Kalman filters and Hungarian assignment), and sensor fusion (camera-only monocular depth or camera+radar UKF). Stages are connected by `drone::TripleBuffer` (lock-free latest-value handoff), so consumers always see the most recent result. An optional `radar_read` thread runs when radar is enabled. Three detector backends are available: simulated (random boxes), color contour (HSV segmentation, pure C++), and YOLOv8-nano (OpenCV DNN, optional).
 
 > For full pipeline details including Kalman state vectors, association algorithms, fusion backends, and config keys, see [perception_design.md](docs/design/perception_design.md).
 
@@ -616,8 +616,8 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | nlohmann/json | >= 3.11 | JSON config parsing | `apt install nlohmann-json3-dev` | Yes |
 | Google Test | >= 1.14 | Unit testing | `apt install libgtest-dev` | Yes |
 | GCC | >= 11 | C++17 compiler | `apt install build-essential` | Yes |
-| zenohc | >= 1.0 | Zenoh IPC backend (`ZenohMessageBus`) | [Pre-built `.deb`](https://github.com/eclipse-zenoh/zenoh-c/releases) or `deploy/install_dependencies.sh` | Optional (`HAVE_ZENOH`) |
-| zenoh-cpp | >= 1.0 | Header-only C++17 Zenoh bindings | [zenoh-cpp](https://github.com/eclipse-zenoh/zenoh-cpp) or `deploy/install_dependencies.sh` | Optional (with `HAVE_ZENOH`) |
+| zenohc | >= 1.0 | Zenoh IPC backend (`ZenohMessageBus`) | [Pre-built `.deb`](https://github.com/eclipse-zenoh/zenoh-c/releases) or `deploy/install_dependencies.sh` | Yes (configure via `ALLOW_INSECURE_ZENOH` or `ZENOH_CONFIG_PATH`) |
+| zenoh-cpp | >= 1.0 | Header-only C++17 Zenoh bindings | [zenoh-cpp](https://github.com/eclipse-zenoh/zenoh-cpp) or `deploy/install_dependencies.sh` | Yes (required with zenohc) |
 | OpenCV | >= 4.6 | YOLOv8 DNN inference (`OpenCvYoloDetector`) | Build from source or `apt install libopencv-dev` | Optional (`HAS_OPENCV`) |
 | MAVSDK | >= 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | -- | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
@@ -654,4 +654,4 @@ See [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) for the full 
 - Pre-merge checklist
 - Quick reference commands
 
-**CI Pipeline:** 9-job GitHub Actions pipeline — format gate (clang-format-18) -> 7-leg build matrix (shm/zenoh x ASan/TSan/UBSan) -> coverage report (lcov). See [tests/TESTS.md](tests/TESTS.md) for current test counts and [docs/guides/CI_SETUP.md](docs/guides/CI_SETUP.md) for the full DevOps guide.
+**CI Pipeline:** GitHub Actions pipeline — format gate (clang-format-18) -> sanitizer build matrix (ASan/TSan/UBSan, Zenoh-enabled) -> coverage report (lcov). See [tests/TESTS.md](tests/TESTS.md) for current test counts and [docs/guides/CI_SETUP.md](docs/guides/CI_SETUP.md) for the full DevOps guide.
