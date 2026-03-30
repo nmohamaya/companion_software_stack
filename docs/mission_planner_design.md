@@ -34,8 +34,8 @@ rate (default 10 Hz).
 
 **Key responsibilities:**
 - Mission lifecycle management (arm → takeoff → navigate → RTL → land)
-- Path planning via pluggable strategy (A* or potential field)
-- Real-time obstacle avoidance via pluggable strategy (3D repulsive field or 2D potential field)
+- Path planning via D* Lite incremental planner (sole backend — A* removed in Issue #203)
+- Real-time obstacle avoidance via ObstacleAvoider3D (sole backend — 2D potential field removed in Issue #207)
 - Polygon + altitude geofencing with ray-casting
 - 10-type fault evaluation with escalation-only policy (12 with VIO health, PR #190)
 - GCS command handling (RTL, LAND, mid-flight mission upload)
@@ -127,8 +127,13 @@ concurrency bugs at the cost of requiring each step to complete within the 100 m
 ```
    IDLE ──on_arm()──► PREFLIGHT ──on_takeoff()──► TAKEOFF
                                                       │
-                                          on_navigate()│
-                                                      ▼
+                                          survey_duration_s > 0?
+                                           yes │          no │
+                                               ▼             │
+                                            SURVEY           │
+                                               │             │
+                                  on_navigate()│◄────────────┘
+                                               ▼
    EMERGENCY ◄──on_emergency()── NAVIGATE ──on_loiter()──► LOITER
                                     │                        │
                                     │ on_rtl()       on_rtl()│
@@ -137,6 +142,23 @@ concurrency bugs at the cost of requiring each step to complete within the 100 m
 ```
 
 States are defined in `ipc/shm_types.h` as `MissionState` enum (shared across all processes).
+
+### SURVEY State (Issue #237)
+
+Post-takeoff obstacle survey: the drone hovers at takeoff position while performing a slow yaw sweep to populate the occupancy grid before navigating. This gives the D* Lite planner a more complete obstacle picture before the first waypoint leg.
+
+**Behaviour:**
+- Triggered when `survey_duration_s > 0` in config (default 0.0 = skip, TAKEOFF → NAVIGATE directly)
+- Yaw rate: `survey_yaw_rate` (default 0.3 rad/s, ~21 s for a full 360°)
+- Target yaw is wrapped to [-π, π] via `std::fmod` to prevent unbounded growth
+- During the sweep, the occupancy grid is fed camera detections; the log reports static/promoted cell counts
+- Transitions to NAVIGATE when `elapsed_s ≥ survey_duration_s`
+
+**Config:**
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mission_planner.survey_duration_s` | float | 0.0 | Survey hover duration (0 = skip) |
+| `mission_planner.survey_yaw_rate` | float | 0.3 | Yaw rate during survey (rad/s) |
 
 ### Waypoint Struct
 
@@ -158,7 +180,24 @@ struct Waypoint {
 | `current_waypoint()` | Returns pointer to current waypoint (null if past end) |
 | `advance_waypoint()` | Move to next waypoint. Returns false if mission complete |
 | `waypoint_reached(px,py,pz,wp)` | 3D Euclidean distance < acceptance radius |
+| `waypoint_overshot(px,py,pz)` | Direction-aware overshoot check (see below) |
 | `set_fault_triggered(bool)` | Mark current state as fault-caused (blocks normal override) |
+
+### Waypoint Overshoot Detection (Issue #236)
+
+For intermediate waypoints (not the first or last), a dot-product check detects when the drone has overshot the target — i.e. flown past the waypoint without entering the acceptance radius.
+
+**Algorithm:**
+1. Compute the approach vector from the previous waypoint to the current waypoint
+2. Compute the drone's offset from the current waypoint: `offset = drone_pos - wp_pos`
+3. If `dot(offset, approach_vector) > 0` — the drone is "past" the waypoint along the approach direction
+4. **Proximity guard:** Only triggers when the drone is within `acceptance_radius × overshoot_proximity_factor` (default 3.0) of the waypoint — prevents false advancement when the drone is geometrically "past" but far away on a parallel track
+
+**Constraints:**
+- First waypoint (index 0): no overshoot check (no previous waypoint to define approach direction)
+- Last waypoint: always requires full acceptance radius (no overshoot allowed — ensures the mission truly completes)
+
+**Config:** `mission_planner.overshoot_proximity_factor` (float, default 3.0)
 
 ---
 
@@ -190,19 +229,56 @@ Selected via `mission_planner.path_planner.backend` config key.
 **Dual-layer obstacle model:**
 - **Static layer** (permanent): HD-map obstacles via `add_static_obstacle(x, y, radius, height)`.
   Cell inflation radius applied. No TTL — persist forever.
-- **Dynamic layer** (TTL): Camera-detected objects via `update_obstacles()`. Each occupied cell
-  carries a timestamp. Cells expire after TTL (default 2 s) to handle transient detections.
+- **Dynamic layer** (TTL): Camera/radar-detected objects via `update_obstacles()`. Each occupied cell
+  carries a timestamp. Cells expire after TTL (default 3 s) to handle transient detections.
+  Stale cell expiration only runs when `objects.num_objects > 0 || !occupied_.empty()` — a single missed detection frame does not wipe the grid.
+
+**Dynamic → Static Promotion (Issue #237):**
+Two promotion paths convert dynamic cells to permanent static cells:
+
+1. **Camera-only promotion:** When `promotion_hits > 0`, a dynamic cell must be observed `promotion_hits` times before becoming static. Default 0 = disabled.
+2. **Radar-confirmed promotion:** When `FusedObject::radar_update_count >= radar_promotion_hits` (default 3), the cell is immediately promoted to static — radar provides high-confidence range data.
+
+**Promotion suppression:** Cells within Chebyshev distance ≤ 1 of an existing static cell (`near_static_cell_()`) are not promoted. This prevents parallax-induced wall growth from multi-track artefacts.
+
+**2D disk inflation:** Obstacles are inflated only in XY at their Z level (not vertically). Per-object inflation uses `estimated_radius_m` when available (from radar-confirmed detections), otherwise the default `inflation_radius_m`.
+
+**Self-exclusion zone:** The drone's own cell ±1 (3×3 Chebyshev neighbourhood) is never marked occupied, preventing the planner from thinking it is inside an obstacle.
+
+**Change tracking:** `changed_cells_` records occupancy changes for incremental planners (D* Lite). Duplicate entries are suppressed — when a cell is both inserted and promoted in the same frame, only one change is emitted.
 
 #### D* Lite Search Algorithm
 
-- **Connectivity:** 26-connected (full 3D neighbourhood including diagonals)
+- **Connectivity:** 8-connected (2D horizontal movement at flight altitude — Issue #234)
 - **Heuristic:** Euclidean distance (admissible, consistent)
-- **Goal snapping:** If the goal cell is occupied, search lateral neighbours first
-  (avoids vertical oscillation). Prefers ±X/±Y shift over ±Z.
-- **Max iterations:** Bounded to prevent runaway searches (default 10000)
+- **Goal snapping:** If the goal cell is occupied, search lateral neighbours in a spiral up to `snap_search_radius` cells (default 8). Prefers ±X/±Y shift over ±Z.
+- **Max iterations:** Bounded to prevent runaway searches (default 50000, configurable via `max_iterations`)
 - **Fallback:** If no path found, returns direct-line velocity (logged as warning)
 - **Velocity output:** Direction along first path segment, EMA-smoothed
-- **Caching:** Re-plans only when goal or obstacle state changes
+- **Replan interval:** Configurable via `replan_interval_s` (default 0.5 s in scenario 18)
+- **Speed ramping:** Within `ramp_dist_m` of the waypoint, speed is linearly reduced to `min_speed_mps`
+
+#### Z-Band Search Restriction (Issue #234)
+
+When `z_band_cells > 0`, the 3D search space is restricted to a vertical band of ±N cells around the start/goal Z range: `z_min = min(start.z, goal.z) - z_band_cells`, `z_max = max(...) + z_band_cells`. This dramatically reduces search volume for altitude-varying missions. Default is 0 (unlimited).
+
+#### km Reinitialization Threshold (Issue #237)
+
+D* Lite accumulates a `km` correction as the drone moves (`km += heuristic(old_start, new_start)`). When `km > 10.0`, the accumulated heuristic inflation makes incremental updates expensive. The planner reinitializes from scratch.
+
+**Full reinitialization triggers:**
+1. New goal or uninitialized
+2. Queue size > 100,000 (memory bloat)
+3. `km > 10.0` (heuristic inflation — Issue #237)
+4. `changes.size() > 500` (cascading invalidations cheaper to recompute)
+
+#### Backward Path Rejection (Issue #237)
+
+When D* Lite produces a path where the first step points away from the goal (dot-product < 0) and a usable cached path exists, the planner **keeps the old path** rather than commanding the drone backward. This prevents oscillation when replanning produces suboptimal intermediate solutions during grid changes.
+
+#### Pure-Pursuit Carrot Following
+
+When `look_ahead_m > 0` (default 0.0), the planner uses pure-pursuit instead of cell-by-cell path following. `find_carrot()` walks forward along the planned path by the look-ahead distance and interpolates a smooth target point. The drone advances conservatively (half-cell) in carrot mode. When `look_ahead_m = 0` (legacy mode), the planner advances to the next cell when within `resolution_m × 1.5`.
 
 ### Planner + Avoider Pipeline (per-tick during NAVIGATE)
 
@@ -444,7 +520,7 @@ Deduplicates by command timestamp to prevent double-execution on resubscription.
 
 **Header:** [`planner/mission_state_tick.h`](../process4_mission_planner/include/planner/mission_state_tick.h)
 
-Contains all per-tick FSM transition logic (PREFLIGHT / TAKEOFF / NAVIGATE / RTL / LAND / IDLE).
+Contains all per-tick FSM transition logic (PREFLIGHT / TAKEOFF / SURVEY / NAVIGATE / RTL / LAND / IDLE).
 Previously inlined inside the main planning loop; extraction makes each state independently testable.
 
 | Method | Description |
@@ -483,6 +559,7 @@ while (running) {
     8. FSM state machine:
        - PREFLIGHT: send ARM every 3s until FC confirms
        - TAKEOFF: send TAKEOFF, wait for 90% altitude
+       - SURVEY: hover + yaw sweep to populate occupancy grid (if survey_duration_s > 0)
        - NAVIGATE: plan path → avoid obstacles → publish trajectory
                    check waypoint reached → advance or RTL
        - RTL: monitor position → LAND when near home (after min dwell)
@@ -521,10 +598,33 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | `rtl_acceptance_radius_m` | float | 1.5 | Horizontal distance to trigger LAND during RTL |
 | `landed_altitude_m` | float | 0.5 | Altitude threshold for "landed" detection |
 | `rtl_min_dwell_seconds` | int | 5 | Min time in RTL before sending LAND |
-| `path_planner.backend` | string | `"potential_field"` | `"potential_field"` or `"dstar_lite"` |
-| `obstacle_avoider.backend` | string | `"potential_field"` | `"potential_field"`, `"3d"`, etc. |
+| `survey_duration_s` | float | 0.0 | Post-takeoff obstacle survey hover duration (0 = skip) |
+| `survey_yaw_rate` | float | 0.3 | Yaw rate during SURVEY (rad/s) |
+| `overshoot_proximity_factor` | float | 3.0 | Waypoint overshoot proximity zone multiplier |
+| `path_planner.backend` | string | `"dstar_lite"` | Only `"dstar_lite"` is supported (A* removed in Issue #203) |
+| `path_planner.max_iterations` | int | 50000 | D* Lite search iteration limit |
+| `path_planner.replan_interval_s` | float | 0.5 | Replan interval (seconds between replans) |
+| `path_planner.ramp_dist_m` | float | 3.0 | Speed ramp-down distance from waypoint |
+| `path_planner.min_speed_mps` | float | 1.0 | Minimum speed during ramp-down |
+| `path_planner.snap_search_radius` | int | 8 | Goal snap search radius (cells) |
+| `path_planner.z_band_cells` | int | 0 | Z-band search restriction (0 = unlimited) |
+| `path_planner.look_ahead_m` | float | 0.0 | Pure-pursuit carrot look-ahead distance (0 = cell-by-cell) |
+| `occupancy_grid.resolution_m` | float | 0.5 | Grid cell size (metres) |
+| `occupancy_grid.inflation_radius_m` | float | 1.5 | Obstacle inflation radius |
+| `occupancy_grid.dynamic_obstacle_ttl_s` | float | 3.0 | Dynamic obstacle time-to-live |
+| `occupancy_grid.min_confidence` | float | 0.3 | Minimum detection confidence for grid update |
+| `occupancy_grid.promotion_hits` | int | 0 | Camera-only hit count for static promotion (0 = disabled) |
+| `occupancy_grid.radar_promotion_hits` | int | 3 | Radar update count for immediate static promotion |
+| `obstacle_avoider.backend` | string | `"potential_field_3d"` | Only ObstacleAvoider3D is supported (2D removed in Issue #207) |
+| `obstacle_avoidance.min_distance_m` | float | 2.0 | Minimum avoidance trigger distance |
 | `obstacle_avoidance.influence_radius_m` | float | 5.0 | Repulsive field radius |
 | `obstacle_avoidance.repulsive_gain` | float | 2.0 | Repulsive force multiplier |
+| `obstacle_avoidance.max_correction_mps` | float | 3.0 | Per-axis velocity correction clamp |
+| `obstacle_avoidance.min_confidence` | float | 0.3 | Minimum object confidence to consider |
+| `obstacle_avoidance.max_age_ms` | int | 500 | Maximum object age before filtering |
+| `obstacle_avoidance.prediction_dt_s` | float | 0.5 | Look-ahead time for velocity-based prediction |
+| `obstacle_avoidance.path_aware` | bool | true | Enable path-aware lateral-only mode (Issue #229) |
+| `obstacle_avoidance.vertical_gain` | float | 1.0 | Z-axis repulsion multiplier (0 = lateral only) |
 | `geofence.enabled` | bool | true | Enable geofence checking |
 | `geofence.polygon[]` | array | 100×100m square | Boundary vertices `{x, y}` |
 | `geofence.altitude_floor_m` | float | 0.0 | Minimum altitude |
@@ -551,22 +651,24 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
-| [`test_mission_fsm.cpp`](../tests/test_mission_fsm.cpp) | 7 | FSM transitions, waypoint loading, radius check |
-| [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) | 32 | Grid, D* Lite search, incremental replan, goal-snap, factory |
-| [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) | 12 | 3D repulsion, predictive, NaN, factory |
-| [`test_geofence.cpp`](../tests/test_geofence.cpp) | 21 | Polygon, altitude, margin, NaN/Inf |
-| [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 31 | All 10 faults, escalation, loiter timeout, FC contingency |
+| [`test_mission_fsm.cpp`](../tests/test_mission_fsm.cpp) | 15 | FSM transitions, waypoint loading, radius check, overshoot detection |
+| [`test_dstar_lite_planner.cpp`](../tests/test_dstar_lite_planner.cpp) | 55 | Grid, D* Lite search, incremental replan, goal-snap, Z-band, km reinit, carrot smoothing, backward rejection, factory |
+| [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) | 21 | 3D repulsion, predictive, NaN, path-aware mode, vertical_gain, factory |
+| [`test_geofence.cpp`](../tests/test_geofence.cpp) | 24 | Polygon, altitude, margin, NaN/Inf |
+| [`test_fault_manager.cpp`](../tests/test_fault_manager.cpp) | 41 | All 10 faults, escalation, loiter timeout, FC contingency, VIO health |
 | [`test_static_obstacle_layer.cpp`](../tests/test_static_obstacle_layer.cpp) | 12 | Load empty/single/multi HD-map entries, cross-check 2-hit confirmation, low-quality pose skip, collision/no-collision, cooldown throttle, height check |
-| [`test_gcs_command_handler.cpp`](../tests/test_gcs_command_handler.cpp) | 6 | RTL/LAND/MISSION_UPLOAD dispatch, dedup by timestamp, unknown command ignored |
+| [`test_gcs_command_handler.cpp`](../tests/test_gcs_command_handler.cpp) | 20 | RTL/LAND/MISSION_UPLOAD/PAUSE/RESUME dispatch, dedup by timestamp, unknown command ignored |
 | [`test_fault_response_executor.cpp`](../tests/test_fault_response_executor.cpp) | 7 | WARN (no FC cmd), LOITER, RTL, EMERGENCY_LAND, escalation-only policy, non-airborne skip, reset clears state |
-| [`test_mission_state_tick.cpp`](../tests/test_mission_state_tick.cpp) | 10 | PREFLIGHT ARM retry, TAKEOFF altitude threshold, waypoint reached + payload trigger, mission complete → RTL, RTL disarm → IDLE, landed → IDLE + fault reset |
-| **Total** | **129** | |
+| [`test_mission_state_tick.cpp`](../tests/test_mission_state_tick.cpp) | 14 | PREFLIGHT ARM retry, TAKEOFF altitude threshold, SURVEY yaw sweep, waypoint reached + payload trigger, mission complete → RTL, RTL disarm → IDLE, landed → IDLE + fault reset |
+| **Total** | **209** | |
 
 Integration coverage via scenario tests in `config/scenarios/`:
-- `02_obstacle_avoidance.json` — A* planner + 3D avoider with HD-map obstacles
-- `03_geofence.json` — Geofence breach detection
-- `04_battery_rtl.json` — Battery fault escalation
-- `06_fc_link_loss.json` — FC link-loss contingency
+- `01_nominal_mission.json` — 4-WP rectangular flight, no faults
+- `02_obstacle_avoidance.json` — D* Lite + 3D avoider with HD-map obstacles (Tier 2, Gazebo)
+- `03_battery_degradation.json` — Battery fault escalation
+- `04_fc_link_loss.json` — FC link-loss contingency
+- `05_geofence_breach.json` — Geofence breach detection
+- `18_perception_avoidance.json` — Perception-driven obstacle avoidance with radar + camera UKF fusion, D* Lite dynamic replanning, SURVEY phase (Tier 2, Gazebo)
 
 ---
 
@@ -621,11 +723,12 @@ flow diagram and histogram interpretation.
 ## Known Limitations
 
 1. **Single-threaded:** All logic must complete within one loop period (100 ms at 10 Hz).
-   A* search is bounded by max iterations but could still spike on complex grids.
-2. **No dynamic replanning on map change:** A* re-plans per tick, but does not maintain
-   a persistent graph — each search starts fresh.
+   D* Lite search is bounded by `max_iterations` but could still spike on complex grids.
+2. ~~**No dynamic replanning on map change:**~~ **RESOLVED** (Issue #237). D* Lite maintains a persistent graph and re-plans incrementally when the occupancy grid changes. Replan interval is configurable (`replan_interval_s`).
 3. **2D geofence:** Polygon is 2D (XY plane). No 3D volume geofencing.
 4. **No return-path obstacle avoidance during RTL:** RTL delegates to PX4's RTL mode;
    the mission planner only monitors position to intercept with LAND.
 5. **Waypoint yaw not enforced:** The FSM advances waypoints based on position only;
    yaw heading is set via trajectory output but not checked for arrival.
+6. **Carrot mode + geofence interaction:** Pure-pursuit carrot following does not factor geofence boundaries when computing the look-ahead point. A carrot near the geofence edge could momentarily pull the drone toward the boundary.
+7. **D* Lite reinit cost:** When reinitialization triggers fire (large queue, high km, excessive changes), the full search restarts from scratch. On large grids this can cause a one-frame latency spike.

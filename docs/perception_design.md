@@ -226,17 +226,20 @@ The fusion engine maps 2D tracked objects to 3D camera-frame positions. Output p
 
 Class: `CameraOnlyFusionEngine`
 
-Stateless per-frame depth estimation using a three-tier monocular model:
+Stateless per-frame depth estimation using a four-tier monocular model:
 
 #### Depth Estimation Tiers
 
 | Priority | Condition | Formula | Description |
 |----------|-----------|---------|-------------|
-| 1 (primary) | `bbox_h > 10 px` | `depth = assumed_obstacle_height_m × fy / bbox_h` | Pinhole apparent-size formula; accurate for known obstacle height |
-| 2 (fallback) | `ray_down > 0.01` | `depth = camera_height_m / ray_down` | Ground-plane intersection for nadir-view objects |
-| 3 (near-horizon) | otherwise | `depth = 8.0 m` | Conservative estimate for objects near the image horizon |
+| 1 (horizon-truncated) | `bbox_top ≤ cy + 5 px` AND `bbox_h > 10 px` | `depth = drone_altitude × fy / (bbox_bottom − cy)` | Obstacle extends above the visible frame — bbox_h < true projected height. Uses bbox bottom for ground-plane depth instead of apparent size. Falls back to `camera_height_m` if drone altitude unavailable. |
+| 2 (apparent-size) | `bbox_h > 10 px` | `depth = assumed_obstacle_height_m × fy / bbox_h` | Pinhole apparent-size formula; most reliable when full obstacle height is visible |
+| 3 (ground-plane) | `ray_down > 0.01` | `depth = camera_height_m / ray_down` | Ground-plane intersection for objects below horizon with unreliable bbox height |
+| 4 (near-horizon) | otherwise | `depth = 8.0 m` | Conservative estimate for objects near the image horizon |
 
-Depth is clamped to **[1.0, 40.0] m** for tiers 1 and 2. The 8 m near-horizon fallback was chosen so that the mission planner's 5 m influence radius triggers before close approach.
+Depth is clamped to **[1.0, 40.0] m** for tiers 1–3. All tiers are scaled by `depth_scale` (default 0.7). The 8 m near-horizon fallback was chosen so that the mission planner's 5 m influence radius triggers before close approach.
+
+The horizon-truncated tier (Issue #237) was added because close obstacles often extend above the camera frame, making the apparent-size formula undercount `bbox_h` and overestimate depth. The 5 px margin (`kHorizonMarginPx`) around the optical center `cy` triggers the fallback before the bbox literally hits the frame edge.
 
 #### Camera-Frame Position
 
@@ -408,10 +411,14 @@ if object_alt < ground_filter_alt_m:
 
 When a radar-confirmed track is pruned by ByteTrack (lost visual contact), it is not simply deleted. Instead, its **world-frame position** is stored in a dormant pool. This provides world-frame obstacle memory — the drone remembers where obstacles were even after they leave the camera FOV.
 
-On each fusion cycle, new radar detections are compared against dormant entries. If a radar detection's world position is within `dormant_merge_radius_m` (default 2.0 m) of a dormant entry, the detection is re-identified as the same obstacle — its track ID is restored and the dormant entry's position is updated.
+On each fusion cycle, new radar detections are compared against dormant entries using a **covariance-aware merge radius**: `radius = 2σ_max` clamped to `[1.0, dormant_merge_radius_m]`, where `σ_max` is the largest eigenvalue of the position covariance at the time of entry. This means uncertain tracks get a wider re-ID catchment while well-localised tracks require a closer match.
+
+**Camera Adoption (Phase D5):** When a new camera track appears near an existing radar-only filter, the camera can "adopt" the radar filter instead of creating a fresh UKF. The adoption gate checks bearing similarity (`< 0.2 rad`) and range error (`< adopt_gate_m`, default 5.0 m). If both pass, the camera track inherits the radar filter's state — providing immediate radar-quality depth rather than starting with the monocular estimate.
+
+**Late Dormant Entry:** If a camera-only track later receives its first radar update (via Mahalanobis association), a dormant entry is created at that point — not just at track init. This ensures the dormant pool captures obstacles that were initially camera-only but later confirmed by radar.
 
 **Pool constraints:**
-- Maximum `dormant_pool_cap` entries (default 64)
+- Maximum `max_dormant` entries (default 32)
 - Only radar-confirmed tracks enter the pool (camera-only tracks are excluded)
 - Requires a valid drone pose (`set_drone_pose()`) for body→world conversion
 - Pool is cleared on `reset()`
@@ -545,10 +552,17 @@ All keys are under `perception.*` in the active JSON config.
 | `perception.fusion.radar.velocity_std_mps` | float | `0.1` | Radar radial velocity noise std (m/s) |
 | `perception.fusion.radar.gate_threshold` | float | `9.21` | χ²(4) Mahalanobis gate at 95% confidence; detections beyond this are rejected |
 | `perception.fusion.radar.altitude_gate_m` | float | `2.0` | Max body-frame Z difference for radar-track association (Issue #229) |
-| `perception.fusion.radar.ground_filter_alt_m` | float | `0.5` | Radar returns below this AGL are rejected as ground clutter (Issue #229) |
-| `perception.fusion.radar.radar_orphan_min_hits` | int | `1` | Min radar observations before orphan track output (Issue #237) |
-| `perception.fusion.radar.dormant_merge_radius_m` | float | `2.0` | World-frame merge radius for dormant re-ID pool (Issue #237) |
-| `perception.fusion.radar.dormant_pool_cap` | int | `64` | Max entries in dormant re-ID pool (Issue #237) |
+| `perception.fusion.radar.ground_filter_enabled` | bool | `true` | Enable/disable ground-plane altitude filter (Issue #229) |
+| `perception.fusion.radar.min_object_altitude_m` | float | `0.3` | Radar returns below this AGL are rejected as ground clutter (Issue #229) |
+| `perception.fusion.radar.orphan_proximity_m` | float | `3.0` | Min distance to existing track for orphan creation (Phase D) |
+| `perception.fusion.radar.adopt_gate_m` | float | `5.0` | Max range error for camera adoption of radar-only track (Phase D) |
+| `perception.fusion.radar.default_radius_m` | float | `1.5` | Conservative default inflation radius for radar-only objects (no bbox) (Phase D) |
+| `perception.fusion.radar.max_orphan_range_m` | float | `40.0` | Max radar range for orphan track creation (Phase D) |
+| `perception.fusion.radar.orphan_min_hits` | int | `1` | Min radar observations before orphan track output (Issue #237) |
+| `perception.fusion.radar.promotion_hits` | int | `3` | Radar updates needed for static grid promotion (Issue #237) |
+| `perception.fusion.dormant_merge_radius_m` | float | `5.0` | World-frame merge radius for dormant re-ID pool (Issue #237) |
+| `perception.fusion.max_dormant` | int | `32` | Max entries in dormant re-ID pool (Issue #237) |
+| `perception.fusion.depth_scale` | float | `0.7` | Global depth scaling factor applied to all tiers |
 
 ---
 
