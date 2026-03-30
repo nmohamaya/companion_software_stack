@@ -79,7 +79,9 @@ struct DetectedObject {
         return std::isfinite(confidence) && confidence >= 0.0f && confidence <= 1.0f &&
                std::isfinite(position_x) && std::isfinite(position_y) &&
                std::isfinite(position_z) && std::isfinite(velocity_x) &&
-               std::isfinite(velocity_y) && std::isfinite(velocity_z);
+               std::isfinite(velocity_y) && std::isfinite(velocity_z) &&
+               std::isfinite(estimated_radius_m) && estimated_radius_m >= 0.0f &&
+               std::isfinite(estimated_height_m) && estimated_height_m >= 0.0f;
     }
 };
 

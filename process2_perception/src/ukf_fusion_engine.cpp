@@ -140,8 +140,9 @@ void ObjectUKF::set_radar_confirmed_depth(float radar_range) {
     // Use 0.5 to be slightly conservative (accounts for body-frame uncertainty).
     P_(0, 0) = 0.5f;
     // Lateral/vertical covariance stays at initial values (bearing-driven).
-
-    ++radar_update_count;
+    // Note: radar_update_count is NOT incremented here — this is a one-time
+    // depth snap from radar-init, not a proper radar measurement update.
+    // radar_update_count tracks actual update_radar() calls for promotion.
 }
 
 std::vector<ObjectUKF::StateVec> ObjectUKF::generate_sigma_points() const {
@@ -391,7 +392,7 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
     RadarCrossMat K = (S.ldlt().solve(Pxz.transpose())).transpose();
 
     // Actual radar measurement.
-    // Negate azimuth: Gazebo lidar uses FLU convention (positive = left),
+    // Negate azimuth: Gazebo radar uses FLU convention (positive = left),
     // but the UKF body frame is FRD (positive azimuth = right).
     RadarMeasVec z_actual;
     z_actual(0) = det.range_m;
@@ -768,6 +769,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     constexpr float kBearingGateRad  = 0.15f;  // ~8.6° bearing tolerance
                     float           best_range       = -1.0f;
                     float           best_bearing_err = kBearingGateRad;
+                    uint32_t        best_radar_idx   = 0;
 
                     for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
                         if (radar_matched[ri]) continue;
@@ -780,9 +782,11 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                             total_err < best_bearing_err) {
                             best_bearing_err = total_err;
                             best_range       = rdet.range_m;
+                            best_radar_idx   = ri;
                         }
                     }
                     if (best_range > 0.0f) {
+                        radar_matched[best_radar_idx] = true;  // reserve detection
                         spdlog::info("[UKF] Radar-init: track {} cam_depth={:.1f}m → "
                                      "radar_range={:.1f}m",
                                      trk.track_id, depth, best_range);
@@ -964,7 +968,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.velocity_3d         = ukf.velocity();
         fused.heading             = 0.0f;
         fused.has_camera          = true;
-        fused.has_radar           = matched_radar;
+        fused.has_radar           = matched_radar || radar_init_used;
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
         fused.radar_update_count  = ukf.radar_update_count;
@@ -1018,6 +1022,11 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                         dobs.last_seen_ns = output.timestamp_ns;
                     }
                 }
+
+                // Gate output: only emit after min_hits observations
+                if (ukf.radar_update_count <
+                    static_cast<uint32_t>(radar_cfg_.radar_orphan_min_hits))
+                    continue;
 
                 // Build output for re-associated radar-only track
                 FusedObject fused;
@@ -1119,6 +1128,12 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             }
 
             seen[rid] = true;
+
+            // Gate output: only emit radar-only tracks after min_hits observations.
+            // The filter still exists (accumulates future radar hits), but the grid
+            // won't see it until it has enough observations to be trustworthy.
+            if (ukf.radar_update_count < static_cast<uint32_t>(radar_cfg_.radar_orphan_min_hits))
+                continue;
 
             // Build FusedObject output
             FusedObject fused;

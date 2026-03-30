@@ -197,10 +197,13 @@ int main(int argc, char* argv[]) {
                                                 planner_cfg.min_confidence);
     planner_cfg.promotion_hits = cfg.get<int>("mission_planner.occupancy_grid.promotion_hits",
                                               planner_cfg.promotion_hits);
-    planner_cfg.z_band_cells   = cfg.get<int>("mission_planner.path_planner.z_band_cells",
-                                              planner_cfg.z_band_cells);
-    planner_cfg.look_ahead_m   = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
-                                                planner_cfg.look_ahead_m);
+    planner_cfg.radar_promotion_hits =
+        static_cast<uint32_t>(cfg.get<int>("mission_planner.occupancy_grid.radar_promotion_hits",
+                                           static_cast<int>(planner_cfg.radar_promotion_hits)));
+    planner_cfg.z_band_cells = cfg.get<int>("mission_planner.path_planner.z_band_cells",
+                                            planner_cfg.z_band_cells);
+    planner_cfg.look_ahead_m = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
+                                              planner_cfg.look_ahead_m);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
