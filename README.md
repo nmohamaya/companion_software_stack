@@ -240,6 +240,8 @@ Three detector backends are available via the factory (`create_detector()`):
 | `perception.fusion.radar.enabled` | `false` | Enable radar updates in UKF |
 | **Written from scratch** | Yes | `CameraOnlyFusionEngine`, `UKFFusionEngine`, `ObjectUKF` |
 
+> **Note on radar:** The radar sensor was integrated into the stack to test the UKF fusion engine and provide accurate depth information for obstacle avoidance. In simulation (Gazebo SITL), the `GazeboRadarBackend` generates radar detections from the GPU lidar plugin, giving the UKF ground-truth range data to validate fusion correctness. The `camera_only` backend remains the default for deployments without radar hardware.
+
 ---
 
 ### Process 3 — SLAM/VIO/Nav
