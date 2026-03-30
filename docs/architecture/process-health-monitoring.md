@@ -139,7 +139,9 @@ from `config/default.json` under the `watchdog` section:
 | `thread_stuck_threshold_ms` | 5000 | Time (ms) without a heartbeat touch before a thread is considered stuck |
 | `thread_scan_interval_ms` | 1000 | How often (ms) the watchdog scans all registered threads |
 
-These values can be overridden in `config/default.json`:
+These defaults are defined in `ThreadWatchdog::Config` (see `common/util/include/util/thread_watchdog.h`).
+The corresponding keys exist in `config/default.json` but are **not yet wired** into the
+processes — all processes currently construct `ThreadWatchdog` with default settings:
 
 ```json
 "watchdog": {
@@ -147,6 +149,9 @@ These values can be overridden in `config/default.json`:
     "thread_scan_interval_ms": 1000
 }
 ```
+
+> **TODO:** Wire `cfg.get<int>("watchdog.thread_stuck_threshold_ms", 5000)` into each
+> process's `ThreadWatchdog` construction to make these runtime-configurable.
 
 ## Comparison: Liveliness Tokens vs Custom Heartbeat
 

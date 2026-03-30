@@ -731,7 +731,7 @@ Watchdog configuration in `config/default.json`:
 | **P6** | `payload_loop` | No | Payload — non-essential for safety |
 | **P7** | `health_loop` | No | Monitoring — loss disables telemetry only |
 
-**Summary:** 18 threads — 12 critical (including conditional `radar_read`), 6 non-critical.
+**Summary:** 16 threads — 12 critical (including conditional `radar_read`), 4 non-critical.
 
 ---
 
