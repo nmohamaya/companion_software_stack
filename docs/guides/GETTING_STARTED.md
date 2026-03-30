@@ -384,7 +384,7 @@ bash deploy/launch_gazebo.sh --gui
 - **What's the architecture?** → [README.md](../README.md#architecture)
 - **How do I debug a crash?** → [docs/DEBUG.md](DEBUG.md)
 - **Real hardware setup?** → [docs/HARDWARE_SETUP.md](HARDWARE_SETUP.md)
-- **IPC message types?** → [docs/API.md](API.md)
+- **IPC message types?** → [docs/API.md](../design/API.md)
 
 ---
 

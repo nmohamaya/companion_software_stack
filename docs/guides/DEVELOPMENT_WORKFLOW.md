@@ -4,7 +4,7 @@ This project follows a structured development process designed to catch issues e
 
 **Stack:** C++17 · CMake 3.16+ · Google Test · spdlog · Eigen3 · nlohmann/json · Zenoh
 **Repo:** <https://github.com/nmohamaya/companion_software_stack>
-**CI:** GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix + coverage ([docs/CI_SETUP.md](docs/CI_SETUP.md))
+**CI:** GitHub Actions — 9-job pipeline: format gate + 7-leg build matrix + coverage ([docs/CI_SETUP.md](CI_SETUP.md))
 
 ---
 
@@ -292,7 +292,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 - No regressions in existing tests
 - New features must include tests
 - Zenoh test binaries use `RESOURCE_LOCK` to avoid parallel session exhaustion under `ctest -j`
-- See [`tests/TESTS.md`](tests/TESTS.md) for a full index of all test suites, module filters, and instructions for adding new tests
+- See [`tests/TESTS.md`](../../tests/TESTS.md) for a full index of all test suites, module filters, and instructions for adding new tests
 
 > **Note:** On machines with Anaconda installed, you may need `LD_LIBRARY_PATH` / `GTest_DIR` overrides. On clean Ubuntu or in CI, the default CMake invocation works.
 
@@ -780,7 +780,7 @@ When two features must touch the same file (e.g., `result.h`), coordinate:
 - The other rebases after
 - Avoid two branches modifying the same function simultaneously
 
-> **History:** See [CI_ISSUES.md § CI-007](CI_ISSUES.md#ci-007-merge-conflicts--pr-77-branch-vs-main) for a real example of this problem and its resolution.
+> **History:** See [CI_ISSUES.md § CI-007](../tracking/CI_ISSUES.md#ci-007-merge-conflicts--pr-77-branch-vs-main) for a real example of this problem and its resolution.
 
 ### Testing Strategy
 
@@ -833,16 +833,16 @@ When two features must touch the same file (e.g., `result.h`), coordinate:
 
 | Document                                           | Purpose                               | Update Frequency                          |
 | -------------------------------------------------- | ------------------------------------- | ----------------------------------------- |
-| [PROGRESS.md](PROGRESS.md)                         | Track all improvements & features     | After each improvement                    |
-| [BUG_FIXES.md](BUG_FIXES.md)                       | Document all bug fixes                | After each bug fix                        |
-| [ROADMAP.md](ROADMAP.md)                           | Epic/phase tracking & issue registry  | When phases complete or new work planned  |
-| [docs/API.md](docs/API.md)                         | Interface & IPC API reference         | When interfaces or IPC classes change     |
-| [config/default.json](config/default.json)         | Default configuration                 | When adding new tunables                  |
-| [README.md](README.md)                             | Project overview & build instructions | As architecture changes                   |
-| [CI_ISSUES.md](CI_ISSUES.md)                       | CI failure log & root cause analysis  | After every CI-specific failure           |
-| [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | Production checklist & gap analysis   | When readiness status changes             |
-| [tests/TESTS.md](tests/TESTS.md)                   | Test suite index & per-test docs      | When adding or modifying tests            |
-| [docs/CI_SETUP.md](docs/CI_SETUP.md)               | CI pipeline architecture & DevOps     | When CI jobs/matrix change                |
+| [PROGRESS.md](../tracking/PROGRESS.md)                         | Track all improvements & features     | After each improvement                    |
+| [BUG_FIXES.md](../tracking/BUG_FIXES.md)                       | Document all bug fixes                | After each bug fix                        |
+| [ROADMAP.md](../tracking/ROADMAP.md)                           | Epic/phase tracking & issue registry  | When phases complete or new work planned  |
+| [docs/API.md](../design/API.md)                         | Interface & IPC API reference         | When interfaces or IPC classes change     |
+| [config/default.json](../../config/default.json)         | Default configuration                 | When adding new tunables                  |
+| [README.md](../../README.md)                             | Project overview & build instructions | As architecture changes                   |
+| [CI_ISSUES.md](../tracking/CI_ISSUES.md)                       | CI failure log & root cause analysis  | After every CI-specific failure           |
+| [PRODUCTION_READINESS.md](../architecture/PRODUCTION_READINESS.md) | Production checklist & gap analysis   | When readiness status changes             |
+| [tests/TESTS.md](../../tests/TESTS.md)                   | Test suite index & per-test docs      | When adding or modifying tests            |
+| [docs/CI_SETUP.md](CI_SETUP.md)               | CI pipeline architecture & DevOps     | When CI jobs/matrix change                |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices             | When new practices are discovered         |
 
 > **Living Document:** This workflow document is meant to evolve with the project.

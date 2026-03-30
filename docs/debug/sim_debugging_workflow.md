@@ -630,6 +630,6 @@ Scenario Failed
 
 ## Next Steps
 
-- Read the full [Gazebo integration guide](gazebo_setup.md)
+- Read the full [Gazebo integration guide](../guides/gazebo_setup.md)
 - For custom scenarios, see [scenario config format](../config/scenarios/)
 - To add a new scenario, copy an existing one and adjust `_comment`, `timeout_s`, waypoints, and pass_criteria

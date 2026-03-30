@@ -1140,7 +1140,7 @@ before running to explore edge cases.
 **Requires:** `fault_injector` built (`cmake --build build --target fault_injector`);
 Tier 2 scenarios additionally require Gazebo Harmonic + PX4 SITL.
 
-See [docs/SIMULATION_ARCHITECTURE.md](../docs/SIMULATION_ARCHITECTURE.md) for architecture
+See [docs/SIMULATION_ARCHITECTURE.md](../docs/architecture/SIMULATION_ARCHITECTURE.md) for architecture
 diagrams and detailed setup instructions.
 
 ---

@@ -741,7 +741,7 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 **Regression tests:** All 43 existing D* Lite tests pass with 8-connected search.
 
-**Debug logging:** Temporary diagnostic logging added to trace this and related issues is documented in [`docs/DEBUG_LOGGING_234.md`](DEBUG_LOGGING_234.md) — remove debug code after Issue #234 closes.
+**Debug logging:** Temporary diagnostic logging added to trace this and related issues is documented in [`docs/DEBUG_LOGGING_234.md`](../debug/DEBUG_LOGGING_234.md) — remove debug code after Issue #234 closes.
 
 ---
 
@@ -762,7 +762,7 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 **Found by:** Grid diagnostic log (`[Grid] ... occupied=1284`) showed runaway cell count incompatible with pathfinding.
 
-**Debug logging:** See [`docs/DEBUG_LOGGING_234.md`](DEBUG_LOGGING_234.md) for temporary diagnostic logging added during investigation.
+**Debug logging:** See [`docs/DEBUG_LOGGING_234.md`](../debug/DEBUG_LOGGING_234.md) for temporary diagnostic logging added during investigation.
 
 ---
 
@@ -788,7 +788,7 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 **Regression tests:** All 43 D* Lite tests + 12 static obstacle layer tests pass.
 
-**Debug logging:** See [`docs/DEBUG_LOGGING_234.md`](DEBUG_LOGGING_234.md) for temporary diagnostic logging added during investigation.
+**Debug logging:** See [`docs/DEBUG_LOGGING_234.md`](../debug/DEBUG_LOGGING_234.md) for temporary diagnostic logging added during investigation.
 
 ---
 
@@ -1347,7 +1347,7 @@ This exclusion is safe — the TSan leg still runs all 277 core tests (SHM IPC, 
 
 **Regression test:** `DormantReIDTest.CameraOnlyTrackDoesNotCreateDormant` — verifies camera-only tracks do not enter the dormant pool. All 8 dormant tests updated to use radar-confirmed tracks.
 
-**See also:** [`docs/DEBUG_LOGGING_237.md`](DEBUG_LOGGING_237.md) for full assessment methodology, log analysis commands, and root cause analysis details.
+**See also:** [`docs/DEBUG_LOGGING_237.md`](../debug/DEBUG_LOGGING_237.md) for full assessment methodology, log analysis commands, and root cause analysis details.
 
 ---
 

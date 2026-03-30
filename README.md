@@ -1,6 +1,6 @@
 # Drone Companion Computer Software Stack
 
-Multi-process C++17 software stack for an autonomous drone companion computer. 7 independent Linux processes communicate via a **config-driven IPC layer** — POSIX shared memory (default) or **Eclipse Zenoh** zero-copy SHM + network-transparent pub/sub, selectable at build time ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) — completed). All algorithms are **written from scratch** — no external ML/CV/SLAM frameworks are used. Hardware is abstracted behind a HAL layer; the default `simulated` backends generate synthetic data so the full stack runs on any Linux box.
+Multi-process C++17 software stack for an autonomous drone companion computer. 7 independent Linux processes communicate via **Eclipse Zenoh** zero-copy SHM + network-transparent pub/sub ([ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45) — completed). All algorithms are **written from scratch** — no external ML/CV/SLAM frameworks are used. Hardware is abstracted behind a HAL layer; the default `simulated` backends generate synthetic data so the full stack runs on any Linux box.
 
 **Target hardware:** NVIDIA Jetson Orin (Nano/NX/AGX, aarch64, JetPack 6.x, CUDA 12.x)
 
@@ -48,7 +48,7 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 ### 📖 Next Steps
 
 - **Deep dive?** Read [Architecture](#architecture) section below
-- **First time contributing?** See [DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md)
+- **First time contributing?** See [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md)
 - **Need details?** Check [docs/guides/GETTING_STARTED.md](docs/guides/GETTING_STARTED.md)
 - **Troubleshooting?** Jump to [Troubleshooting](#troubleshooting) section
 
@@ -78,6 +78,7 @@ graph LR
         direction TB
         MissionCam["📷 Mission Camera\n1920×1080 @ 30 Hz"]
         StereoCam["📷📷 Stereo Camera\n640×480 @ 30 Hz"]
+        Radar["📡 Radar\n(optional)"]
         IMU["⚡ IMU\n400 Hz"]
         FC["✈️ Flight Controller\nMAVLink"]
         GCS["📡 Ground Station\nUDP"]
@@ -94,7 +95,7 @@ graph LR
 
         subgraph Understand["Understanding Layer"]
             direction LR
-            P2["🧠 P2 Perception\n4 threads · ~30 Hz\nDetect → Track → Fuse"]
+            P2["🧠 P2 Perception\n4+ threads · ~30 Hz\nDetect → Track → Fuse\n+ optional Radar"]
             P3["🗺️ P3 SLAM / VIO\n4 threads · 100 Hz\nStereo + IMU → Pose"]
         end
 
@@ -117,6 +118,7 @@ graph LR
 
     MissionCam --> P1
     StereoCam --> P1
+    Radar -.->|"optional"| P2
     IMU --> P3
     OS --> P7
     FC <--> P5
@@ -143,7 +145,7 @@ graph LR
 
 **Data flows top-down** through five conceptual layers: Sense → Understand → Decide → Act, with lateral supervision. 21 threads total across 7 Linux processes (3 + 4 + 4 + 1 + 5 + 1 + 1). All inter-process communication uses the `IPublisher<T>` / `ISubscriber<T>` abstraction backed by **Eclipse Zenoh** zero-copy SHM + network transport (sole backend since [Issue #126](https://github.com/nmohamaya/companion_software_stack/issues/126)). Intra-process queues (P2 only) use lock-free SPSC ring buffers.
 
-**Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. In supervised deployments (`--supervised` flag), `ProcessManager` in P7 fork+execs the other processes and handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` stop propagation + `WatchdogSec` on P7) provide OS-level supervision, and P7 runs monitor-only. Sanitizer-clean (ASan/TSan/UBSan). See [tests/TESTS.md](tests/TESTS.md) for test counts, [Epic #88](https://github.com/nmohamaya/companion_software_stack/issues/88) and [docs/process-health-monitoring.md](docs/process-health-monitoring.md).
+**Reliability:** Every worker thread registers a `ThreadHeartbeat` (lock-free `atomic_store`, ~1 ns) — `ThreadWatchdog` detects stuck threads via configurable timeout. In supervised deployments (`--supervised` flag), `ProcessManager` in P7 fork+execs the other processes and handles crash recovery with exponential-backoff restart policies and a dependency graph for cascading restarts. In production, seven independent **systemd** service units (`BindsTo=` stop propagation + `WatchdogSec` on P7) provide OS-level supervision, and P7 runs monitor-only. Sanitizer-clean (ASan/TSan/UBSan). See [tests/TESTS.md](tests/TESTS.md) for test counts, [Epic #88](https://github.com/nmohamaya/companion_software_stack/issues/88) and [docs/architecture/process-health-monitoring.md](docs/architecture/process-health-monitoring.md).
 
 ### IPC Channel Map
 
@@ -180,6 +182,7 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 | `IVisualFrontend` | Pose estimation | `SimulatedVisualFrontend` — circular trajectory + noise | `GazeboVisualFrontend` (gz-transport odometry) | ORB-SLAM3 / VINS-Fusion |
 | `IPathPlanner` | Path planning | `DStarLitePlanner` — 3D incremental search + obstacle awareness | — | RRT* |
 | `IObstacleAvoider` | Obstacle avoidance | `ObstacleAvoider3D` — 3D repulsive field + velocity prediction | — | VFH+ / 3D-VFH |
+| `IRadar` | Radar detections | `SimulatedRadar` — config-driven synthetic targets | `GazeboRadar` (gpu_lidar + odometry) | SPI/UART radar driver |
 | `IProcessMonitor` | System metrics | `LinuxProcessMonitor` — /proc, /sys | — | — |
 
 ---
@@ -224,26 +227,27 @@ The `SimulatedCamera` generates a deterministic gradient pattern (not random noi
 
 ```mermaid
 graph LR
-    subgraph P2["P2 Perception — Monocular 3D Object Pipeline"]
+    subgraph P2["P2 Perception — Multi-Sensor 3D Object Pipeline"]
         direction LR
         Infer["1. Detect\nIDetector\n~30 Hz"]
-        Track["2. Track\nKalman + Hungarian\nor ByteTrack"]
-        Fuse["3. Depth Estimate\nPinhole unproject\n+ yaw rotation"]
+        Track["2. Track\nKalman / ByteTrack"]
+        Fuse["3. Fuse\nCamera + Radar UKF\n+ Dormant Re-ID"]
 
         Infer -->|"SPSC(4)"| Track
         Track -->|"SPSC(4)"| Fuse
     end
 
     MissionCam["/drone_mission_cam\n1920x1080 RGB"] --> Infer
+    Radar["IRadar\n(optional)"] --> Fuse
     Pose["/slam_pose\nfrom P3"] --> Fuse
     Fuse -->|"/detected_objects\n3D world frame"| P4["P4 Mission Planner"]
 
     style P2 fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
 ```
 
-Perception runs a three-stage pipeline across 3 worker threads + 1 main thread, connected by lock-free SPSC queues (depth 4 each).
+Perception runs a three-stage pipeline across 3 worker threads + 1 optional radar thread + 1 main thread, connected by lock-free SPSC queues (depth 4 each).
 
-> **Fusion backends:** Two fusion backends are available. The default `camera_only` backend performs **monocular depth estimation** using pinhole geometry. The `ukf` backend (Issue #210, #237) implements **camera + radar multi-sensor fusion** with per-object Unscented Kalman Filters, radar-primary track initialization, and a dormant re-identification pool for world-frame obstacle memory. The stereo camera feeds P3 (VIO), not P2. See [perception_design.md](docs/perception_design.md) for details.
+> **Fusion backends:** Two fusion backends are available. The default `camera_only` backend performs **monocular depth estimation** using pinhole geometry. The `ukf` backend (Issue #210, #237) implements **camera + radar multi-sensor fusion** with per-object Unscented Kalman Filters, radar-primary track initialization, and a dormant re-identification pool for world-frame obstacle memory. The stereo camera feeds P3 (VIO), not P2. See [perception_design.md](docs/design/perception_design.md) for details.
 
 #### 2.1 Detection — `IDetector` Strategy Pattern
 
@@ -296,15 +300,38 @@ Three detector backends are available via the factory (`create_detector()`):
 | Backend | Algorithm | Sensors | Description |
 |---|---|---|---|
 | `camera_only` | Pinhole unproject + apparent-size depth | RGB camera | Monocular depth estimation: $d = h_{cam} \times f_y / \max(10, bbox\_h)$ |
-| `ukf` | Per-object 6D UKF (Unscented Kalman Filter) | RGB camera + radar | Camera provides bearing+depth, radar provides range/azimuth/elevation/Doppler. Radar-primary architecture: radar can independently init tracks, provide confirmed depth, and emit orphan detections. Dormant re-ID pool provides world-frame obstacle memory. |
+| `ukf` | Per-object 6D UKF (Unscented Kalman Filter) | RGB camera + radar | **Radar-primary architecture:** radar independently initialises tracks, provides confirmed depth, and emits orphan detections. Camera provides bearing + 4-tier depth estimation. Dormant re-ID pool provides world-frame obstacle memory across parallax shifts. |
+
+**UKF 4-tier depth estimation** (camera path):
+
+| Tier | Condition | Method |
+|---|---|---|
+| 1. Horizon-truncated | Bbox top at/above horizon | Ground-plane depth from bbox bottom edge |
+| 2. Apparent-size (primary) | Full height visible | `depth = assumed_height × fy / bbox_h` |
+| 3. Ground-plane fallback | Small/unreliable bbox | `depth = camera_height / ray_down` |
+| 4. Near-horizon conservative | Horizontal approach | Fixed 8 m estimate (safe for 5 m influence radius) |
+
+All depths scaled by configurable `depth_scale` and clamped to [1 m, 40 m].
+
+**Dormant re-identification pool:** When a track is lost, its world-frame position is stored in a dormant pool (capacity `max_dormant`, default 32). New tracks appearing within `dormant_merge_radius_m` (default 5 m) of a dormant entry are re-identified as the same physical obstacle, inheriting the world-frame position. This prevents duplicate grid entries from parallax as the drone moves.
+
+**Radar HAL — `IRadar` Strategy Pattern:**
+
+| Backend | Class | Compile Guard | Detail |
+|---|---|---|---|
+| `"simulated"` | `SimulatedRadar` | None | Config-driven synthetic detections with noise and false alarms |
+| `"gazebo"` | `GazeboRadar` | `HAVE_GAZEBO` | Synthesises radar from Gazebo GPU lidar plugin + odometry |
 
 | Config key | Default | Description |
 |---|---|---|
 | `perception.fusion.backend` | `"camera_only"` | Fusion backend selection |
 | `perception.fusion.radar.enabled` | `false` | Enable radar updates in UKF |
+| `perception.fusion.radar.orphan_proximity_m` | 3.0 | Radar orphan association radius |
+| `perception.fusion.radar.adopt_gate_m` | 5.0 | Camera adoption gate for radar tracks |
+| `perception.fusion.radar.ground_filter_enabled` | `true` | Filter below-altitude radar returns |
 | **Written from scratch** | Yes | `CameraOnlyFusionEngine`, `UKFFusionEngine`, `ObjectUKF` |
 
-> **Note on radar:** The radar sensor was integrated into the stack to test the UKF fusion engine and provide accurate depth information for obstacle avoidance. In simulation (Gazebo SITL), the `GazeboRadarBackend` generates radar detections from the GPU lidar plugin, giving the UKF ground-truth range data to validate fusion correctness. The `camera_only` backend remains the default for deployments without radar hardware.
+> **Note on radar:** The radar sensor was integrated to provide accurate depth for obstacle avoidance. In simulation (Gazebo SITL), `GazeboRadar` generates detections from the GPU lidar plugin, giving the UKF ground-truth range data. The `camera_only` backend remains the default for deployments without radar hardware.
 
 ---
 
@@ -364,15 +391,16 @@ graph TD
     subgraph P4["P4 Mission Planner — Autonomous Decision Engine (10 Hz)"]
         direction TB
         Fault["FaultManager\n10 fault conditions\nescalation-only"]
-        FSM["MissionFSM\nIDLE > ARM > TAKEOFF\n> NAVIGATE > RTL > LAND"]
-        Plan["Path Planner\nD* Lite / A* / PotField"]
-        Avoid["Obstacle Avoider\n3D repulsive field"]
+        FSM["MissionFSM\n9 states incl. SURVEY"]
+        Grid["OccupancyGrid3D\nDual-layer promotion"]
+        Plan["D* Lite Planner\nZ-band + carrot following"]
+        Avoid["ObstacleAvoider3D\nPath-aware lateral repulsion"]
 
-        Fault --> FSM --> Plan --> Avoid
+        Fault --> FSM --> Grid --> Plan --> Avoid
     end
 
     Pose["/slam_pose\npose + quality"] --> Fault
-    Objects["/detected_objects"] --> Avoid
+    Objects["/detected_objects"] --> Grid
     FCState["/fc_state"] --> FSM
     Health["/system_health"] --> Fault
     GCS["/gcs_commands"] --> FSM
@@ -408,13 +436,14 @@ A config-driven **FaultManager** library evaluates system health each loop tick 
 #### FSM States
 
 ```
-  ┌──────┐  arm   ┌───────────┐ takeoff ┌─────────┐ navigate ┌──────────┐
-  │ IDLE │──────▶│ PREFLIGHT │───────▶│ TAKEOFF │────────▶│ NAVIGATE │
-  └──────┘       └───────────┘        └─────────┘         └────┬─────┘
-     ▲                                                          │
-     │ landed                                    loiter ┌───────▼───────┐
-     │◀──── LAND ◀──── RTL ◀────────────────────────────│    LOITER     │
-                                                        └───────────────┘
+  ┌──────┐  arm   ┌───────────┐ takeoff ┌─────────┐ survey  ┌────────┐ navigate ┌──────────┐
+  │ IDLE │──────▶│ PREFLIGHT │───────▶│ TAKEOFF │───────▶│ SURVEY │────────▶│ NAVIGATE │
+  └──────┘       └───────────┘        └─────────┘        └────────┘         └────┬─────┘
+     ▲                                      │                                     │
+     │                                      └──── (survey_duration_s = 0) ────────┘
+     │ landed                                                    loiter ┌───────▼───────┐
+     │◀──── LAND ◀──── RTL ◀────────────────────────────────────────────│    LOITER     │
+                                                                        └───────────────┘
                          ▲
                          │ emergency
                     ┌────┴──────┐
@@ -424,16 +453,33 @@ A config-driven **FaultManager** library evaluates system health each loop tick 
 
 **Key state behaviors:**
 - **PREFLIGHT:** Re-sends ARM command every 3 s until `fc_state.armed == true`
-- **TAKEOFF:** Transitions to NAVIGATE when `fc_state.rel_alt >= takeoff_alt * 0.9`
-- **NAVIGATE → RTL:** On last waypoint, sends RTL FC command + publishes invalid trajectory (`valid=false`) to stop comms forwarding stale velocity commands
+- **TAKEOFF:** Transitions to SURVEY (or NAVIGATE if `survey_duration_s = 0`) when `fc_state.rel_alt >= takeoff_alt * 0.9`
+- **SURVEY:** Hovers at takeoff altitude performing a yaw sweep to pre-populate the occupancy grid with nearby obstacles before navigation begins. Duration configurable via `survey_duration_s` (default 0 = skip).
+- **NAVIGATE:** Waypoint overshoot detection via dot-product of approach vector — prevents circling when drone overshoots a waypoint at speed. On last waypoint, sends RTL FC command + publishes invalid trajectory (`valid=false`).
 - **GCS RTL/LAND:** Handles by (1) sending FC command, (2) publishing invalid trajectory, (3) transitioning FSM
+
+#### Occupancy Grid — `OccupancyGrid3D`
+
+| Aspect | Detail |
+|---|---|
+| **Structure** | Hash-map-backed 3D voxel grid (1 m resolution default) |
+| **Static layer** | HD-map obstacles, permanent, no TTL |
+| **Dynamic layer** | Camera/radar-detected obstacles, expire after `cell_ttl_s` (default 3 s) |
+| **Dual-layer promotion** | Camera-only: promote after `promotion_hits` observations. Radar-confirmed (≥3 updates): immediate static promotion |
+| **Inflation** | Per-obstacle 2D disk in XY at detection Z, configurable radius (default 1.5 m) |
+| **Self-exclusion** | Drone's own cell + 3×3 Chebyshev neighbourhood never marked occupied (prevents start-node blockage) |
+| **Suppression** | New cells near existing static cells are suppressed to prevent parallax-echo wall growth |
+| **Written from scratch** | Yes — `OccupancyGrid3D` |
 
 #### Path Planning — `IPathPlanner` (D* Lite)
 
 | Aspect | Detail |
 |---|---|
 | **Algorithm** | **D* Lite** — incremental 3D grid search (Koenig & Likhachev 2002) |
-| **Obstacle awareness** | Two-layer occupancy grid: HD-map static + camera-detected dynamic (TTL 3 s) |
+| **Z-band** | Restricts search to `±z_band_cells` around start/goal altitude, preventing wasted iterations |
+| **km reinit** | Resets search when queue >100k cells, km >10.0, or goal changes — prevents unbounded priority key growth |
+| **Backward rejection** | Rejects paths whose first step points away from goal (dot product <0), keeps cached path instead |
+| **Pure-pursuit carrot** | Walks along cached path by `look_ahead_m` distance, returns interpolated point for smooth curve following |
 | **EMA smoothing** | Velocity along first path segment, EMA-smoothed to reduce jitter |
 | **Speed ramping** | Linear ramp from `cruise_speed` to `min_speed` within last 3 m of waypoint |
 | **Waypoint acceptance** | Euclidean distance < `acceptance_radius_m` (2.0 m in Gazebo config) |
@@ -443,13 +489,15 @@ A config-driven **FaultManager** library evaluates system health each loop tick 
 
 | Aspect | Detail |
 |---|---|
-| **Repulsive force** | Full 3D (XYZ) inverse-square repulsion within influence radius |
+| **Repulsive force** | Inverse-square repulsion within influence radius |
+| **Path-aware mode** | Default on — strips repulsion components that oppose the planned direction (dot-product stripping), preventing the avoider from fighting the planner |
+| **Lateral-only mode** | When `vertical_gain = 0` (default), repulsion is strictly XY — no altitude injection from avoidance |
 | **Velocity prediction** | Uses obstacle velocity for predictive avoidance |
 | **Staleness filter** | Skips objects older than configurable `max_age_ms` (default 500 ms) |
 | **Confidence filter** | Skips objects with confidence < `min_confidence` (default 0.3) |
 | **Repulsion clamp** | Max correction capped at `max_correction_mps` per axis (default 3.0 m/s) |
 | **NaN guard** | NaN pose passes through unmodified |
-| **Config** | `influence_radius_m` = 5.0, `repulsive_gain` = 2.0, `max_correction_mps` = 3.0, `prediction_dt_s` = 0.5 |
+| **Config** | `influence_radius_m` = 5.0, `repulsive_gain` = 2.0, `max_correction_mps` = 3.0, `prediction_dt_s` = 0.5, `path_aware` = true, `vertical_gain` = 0.0 |
 | **Written from scratch** | Yes — `ObstacleAvoider3D::avoid()` |
 
 **Gazebo waypoints** (3 waypoints at 5 m altitude):
@@ -656,14 +704,14 @@ Each segment is wrapped in `ShmBlock { atomic<uint64_t> seq, uint64_t timestamp_
 
 All common libraries are **header-only** and written from scratch.
 
-### SeqLock IPC (`ShmWriter<T>` / `ShmReader<T>`) — Default Backend
+### SeqLock IPC (`ShmWriter<T>` / `ShmReader<T>`) — Legacy Backend
 
 - **Mechanism:** Optimistic sequence-counter concurrency (SeqLock). Writer increments sequence to odd (writing), copies `T`, increments to even (done). Reader retries up to 4 times if sequence is odd or torn.
 - **Memory:** POSIX `shm_open()` + `mmap()`. Each segment holds one `ShmBlock<T>`.
 - **Constraint:** `T` must be `trivially_copyable` (enforced via `static_assert`).
 - **Cleanup:** Writer calls `shm_unlink()` in destructor (RAII).
 
-### Zenoh IPC (`ZenohPublisher<T>` / `ZenohSubscriber<T>`) — Optional Backend
+### Zenoh IPC (`ZenohPublisher<T>` / `ZenohSubscriber<T>`) — Sole Production Backend
 
 - **Build:** `-DENABLE_ZENOH=ON -DALLOW_INSECURE_ZENOH=ON` (or provide `-DZENOH_CONFIG_PATH` for TLS)
 - **Mechanism:** Zenoh pub/sub with SHM zero-copy for large messages (> threshold) and serialized bytes for small messages.
@@ -800,15 +848,15 @@ This section maps every algorithm/component currently in the stack to the produc
 | | | **RT-DETR** (transformer-based, no NMS needed) | Emerging option. Slower but no post-processing. Publicly available: [PaddleDetection](https://github.com/PaddlePaddle/PaddleDetection) |
 | NMS | 🟢 `OpenCvYoloDetector` runs full NMS (IoU-based) | Production-ready for current scale | For higher throughput: TensorRT's built-in NMS plugin |
 | Tracking — filter | 🟡 **Linear Kalman Filter** (8D constant-velocity) | **Extended Kalman Filter (EKF)** with constant-turn-rate model | Handles manoeuvring targets better. Publicly available reference: [rlabbe/Kalman-and-Bayesian-Filters](https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python) |
-| | | **Unscented Kalman Filter (UKF)** | Better nonlinear handling than EKF, no Jacobian derivation. Higher compute cost. |
+| | | ~~**Unscented Kalman Filter (UKF)**~~ | ✅ **DONE** — `ObjectUKF` (6D state) implemented in `UKFFusionEngine` (Issue #210, #237). Per-object UKF with camera + radar measurement models. |
 | | | **Interacting Multiple Model (IMM)** | Bank of 2–3 motion models (CV + CT + CA); best for targets that switch between straight-line and manoeuvring. Production-grade choice. |
 | Tracking — association | 🟡 **Greedy nearest-neighbor** (misnamed HungarianSolver) | **Hungarian (Munkres) algorithm** — $O(n^3)$ optimal assignment | Standard. Write from scratch or use [mcximing/hungarian-algorithm-cpp](https://github.com/mcximing/hungarian-algorithm-cpp) |
 | | | **JPDA** (Joint Probabilistic Data Association) | Handles ambiguous close-proximity targets. Higher compute cost. |
-| Tracking — appearance | 🔴 None — position-only matching | **DeepSORT** — CNN appearance descriptor (128-D Re-ID vector) | Publicly available: [nwojke/deep_sort](https://github.com/nwojke/deep_sort). Reduces ID switches by 45%+. |
-| | | **ByteTrack** — uses low-confidence detections for re-association | Publicly available: [ifzhang/ByteTrack](https://github.com/ifzhang/ByteTrack). Simpler than DeepSORT, competitive accuracy. |
-| Sensor fusion | 🟡 **Camera-only fusion** (pinhole unproject + apparent-size depth) | **EKF/UKF fusion** with per-sensor measurement models | Proper uncertainty propagation via covariance intersection |
+| Tracking — appearance | 🟡 **ByteTrack** (two-stage Hungarian association) | **DeepSORT** — CNN appearance descriptor (128-D Re-ID vector) | Publicly available: [nwojke/deep_sort](https://github.com/nwojke/deep_sort). Reduces ID switches by 45%+. |
+| | | ~~**ByteTrack** — uses low-confidence detections for re-association~~ | ✅ **DONE** — `ByteTrackTracker` implemented (Issue #237). Two-stage: high-confidence match → low-confidence recovery. |
+| Sensor fusion | 🟢 **Camera-only** + **UKF radar-primary** (selectable via config) | ~~**EKF/UKF fusion** with per-sensor measurement models~~ | ✅ **DONE** — `UKFFusionEngine` with radar-primary architecture, 4-tier camera depth, dormant re-ID pool (Issue #210, #237) |
 | | | **Factor graph fusion** (GTSAM / Ceres Solver) | Batch optimization over sliding window. Publicly available: [borglab/gtsam](https://github.com/borglab/gtsam) |
-| Depth estimation | 🟡 Inverse-perspective heuristic ($d = 500 h_{cam} / c_y$) | **Stereo block matching** (SGM / Semi-Global Matching) | OpenCV `StereoSGBM` or from-scratch SAD/census-based matching |
+| Depth estimation | 🟢 **4-tier camera depth** (horizon-truncated, apparent-size, ground-plane, near-horizon) + **radar range** | **Stereo block matching** (SGM / Semi-Global Matching) | OpenCV `StereoSGBM` or from-scratch SAD/census-based matching |
 | | | **Monocular depth network** (MiDaS, Depth Anything) | Falls back to single camera. Publicly available: [isl-org/MiDaS](https://github.com/isl-org/MiDaS) |
 
 ### P3 — SLAM / VIO / Navigation
@@ -834,14 +882,15 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| Path planning | 🟢 **D\* Lite** — incremental 3D grid search | **RRT\*** (asymptotically optimal rapidly-exploring random tree) | Handles complex 3D obstacle fields. Write from scratch or use [OMPL](https://ompl.kavrakilab.org/) (BSD). |
+| Path planning | 🟢 **D\* Lite** — incremental 3D grid search + Z-band + km reinit + backward rejection + pure-pursuit carrot following | **RRT\*** (asymptotically optimal rapidly-exploring random tree) | Handles complex 3D obstacle fields. Write from scratch or use [OMPL](https://ompl.kavrakilab.org/) (BSD). |
 | | | **MPC** (Model Predictive Control) — receding horizon | Handles dynamics constraints (max velocity, acceleration). Write from scratch or use [acados](https://github.com/acados/acados). |
+| Occupancy grid | 🟢 **OccupancyGrid3D** — dual-layer (static + dynamic TTL), radar-confirmed promotion, 2D inflation, self-exclusion | Production-ready for current scale | Hash-map voxel grid with change tracking. Written from scratch. |
 | Velocity control | 🔴 **Direct velocity command** — no PID | **Cascaded PID** (position → velocity → acceleration) | Standard for MAVLink offboard control. Gains must be tuned per airframe. |
 | | | **PID with feedforward + anti-windup** | Production-grade controller. Write from scratch; well-documented in Åström & Murray. |
-| Obstacle avoidance | 🟢 **ObstacleAvoider3D** — 3D repulsive field + velocity prediction | **VFH+** (Vector Field Histogram) | Handles sensor noise better. Published: Ulrich & Borenstein 1998. |
+| Obstacle avoidance | 🟢 **ObstacleAvoider3D** — path-aware lateral repulsion + velocity prediction | **VFH+** (Vector Field Histogram) | Handles sensor noise better. Published: Ulrich & Borenstein 1998. |
 | | | **3DVFH+** — volumetric extension for 3D flight | Used in PX4 avoidance stack. |
 | Geofencing | 🔴 Not implemented | **Polygon + altitude geofence** with hard and soft boundaries | Hard fence = forced RTL; soft fence = warning. Standard for Part 107 / BVLOS. |
-| Contingency logic | 🟡 Basic RTL + LAND on low battery | **Fault tree** with priority-ranked contingencies | e.g., comm loss → loiter 30s → RTL; GPS loss → VIO-only mode; battery critical → emergency land nearest. |
+| Contingency logic | 🟢 **FaultManager** — 10 fault conditions, escalation-only ladder (NONE→WARN→LOITER→RTL→EMERGENCY_LAND), config-driven thresholds | ~~**Fault tree** with priority-ranked contingencies~~ | ✅ **DONE** — Issue #61. Includes comm loss → loiter → RTL, battery tiered response, thermal zones, geofence breach. |
 
 ### P5 — Comms
 
@@ -869,8 +918,7 @@ This section maps every algorithm/component currently in the stack to the produc
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
 | Health metrics | 🟢 CPU, memory, temp, disk, battery | Add **GPU usage** (Jetson: `/sys/devices/gpu.0/load`) | Also: network I/O, process RSS, SHM latency watchdog |
-| Watchdog | 🔴 Not implemented | **Process supervisor** — restart crashed processes | Heartbeat-based: each process writes timestamp to SHM, supervisor checks. |
-| | | **systemd watchdog** integration via `sd_notify()` | Standard on Linux; auto-restart with back-off. Publicly available. |
+| Watchdog | 🟢 **Three-layer watchdog** — ThreadHeartbeat + ThreadWatchdog + ProcessManager + systemd | ~~**Process supervisor** + **systemd watchdog**~~ | ✅ **DONE** — Epic #88. Thread-level (lock-free atomic, ~1 ns), process-level (fork+exec, exponential backoff), OS-level (systemd WatchdogSec + sd_notify). |
 | Telemetry logging | 🟡 spdlog text files | **Binary telemetry log** (flatbuffers / protobuf) for post-flight analysis | [google/flatbuffers](https://github.com/google/flatbuffers) — zero-copy deserialization. |
 | OTA updates | 🔴 Not implemented | **Mender** or **SWUpdate** | Standard embedded OTA. Publicly available: [mendersoftware/mender](https://github.com/mendersoftware/mender) |
 
@@ -878,9 +926,9 @@ This section maps every algorithm/component currently in the stack to the produc
 
 | Component | Current (Status) | Production Replacement | Notes |
 |---|---|---|---|
-| IPC | � **SeqLock** over POSIX SHM — lock-free, ~100 ns latency | **Eclipse Zenoh** — zero-copy SHM (loan-based) + network transport | [ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45). 6 phases: [#46](https://github.com/nmohamaya/companion_software_stack/issues/46)–[#51](https://github.com/nmohamaya/companion_software_stack/issues/51) |
-| IPC — network | 🔴 Local-only (no drone↔GCS transport) | **Zenoh network transport** — same pub/sub API over UDP/TCP/QUIC | [Phase E #50](https://github.com/nmohamaya/companion_software_stack/issues/50). Enables [#34](https://github.com/nmohamaya/companion_software_stack/issues/34) (GCS telemetry) + [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) (video streaming) |
-| Process health | 🔴 No crash detection | **Zenoh liveliness tokens** — automatic process death callbacks | [Phase F #51](https://github.com/nmohamaya/companion_software_stack/issues/51). Enables [#28](https://github.com/nmohamaya/companion_software_stack/issues/28) (heartbeat) + [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) (fault tree) |
+| IPC | 🟢 **Eclipse Zenoh** — zero-copy SHM + network transport (sole backend) | ~~SeqLock over POSIX SHM~~ Legacy, kept for reference | ✅ **DONE** — [ADR-001](docs/adr/ADR-001-ipc-framework-selection.md), [Epic #45](https://github.com/nmohamaya/companion_software_stack/issues/45). All 6 phases complete ([#46](https://github.com/nmohamaya/companion_software_stack/issues/46)–[#51](https://github.com/nmohamaya/companion_software_stack/issues/51)) |
+| IPC — network | 🟢 **Zenoh network transport** — same pub/sub API over UDP/TCP/QUIC | Production-ready | ✅ **DONE** — [Phase E #50](https://github.com/nmohamaya/companion_software_stack/issues/50). Enables drone↔GCS communication. |
+| Process health | 🟢 **Zenoh liveliness tokens** + **ThreadHeartbeat** + **ProcessManager** | Production-ready | ✅ **DONE** — [Phase F #51](https://github.com/nmohamaya/companion_software_stack/issues/51), [Epic #88](https://github.com/nmohamaya/companion_software_stack/issues/88). Three-layer watchdog. |
 | Serialization | 🟢 Trivially-copyable structs via `memcpy` | Production-ready for SHM; add wire format header for network path | If schema evolution needed: **FlatBuffers** (zero-copy) or **Cap'n Proto** |
 | Config | 🟢 nlohmann/json | Production-ready | Consider **TOML** for human-edited configs (less error-prone syntax) |
 | Build system | 🟢 CMake 3.16+ | Add **Conan** or **vcpkg** for dependency management | Simplifies cross-compilation for Jetson (aarch64) |
@@ -895,13 +943,14 @@ Based on the analysis above, here is the recommended implementation order:
 | **P0** | V4L2 / libargus camera backend | 1 week | Enables real sensor input | None |
 | **P1** | ~~YOLOv8-Nano via TensorRT detection~~ | 2 weeks | 🟡 **Partial** — `OpenCvYoloDetector` (CPU DNN) done; TensorRT GPU upgrade remaining | V4L2 camera |
 | **P1** | VIO (MSCKF or VINS-Mono integration) | 3 weeks | Replaces simulated trajectory | V4L2 camera, IMU driver |
-| **P1** | Process supervisor / watchdog | 1 week | Crash recovery in flight | None |
+| **P1** | ~~Process supervisor / watchdog~~ | ~~1 week~~ | ✅ **DONE** — Three-layer watchdog (Epic #88): ThreadHeartbeat + ThreadWatchdog + ProcessManager + systemd | None |
+| **P1** | ~~UKF sensor fusion + radar integration~~ | ~~2 weeks~~ | ✅ **DONE** — `UKFFusionEngine` with radar-primary architecture, 4-tier depth, dormant re-ID (Issue #210, #237) | None |
+| **P1** | ~~ByteTrack tracker~~ | ~~3 days~~ | ✅ **DONE** — Two-stage Hungarian association (Issue #237) | None |
+| **P1** | ~~D\* Lite path planner~~ | ~~2 weeks~~ | ✅ **DONE** — Z-band, km reinit, backward rejection, pure-pursuit carrot, OccupancyGrid3D (Issue #237) | None |
 | **P2** | Hungarian algorithm (optimal association) | 2 days | Better tracking accuracy | None |
-| **P2** | EKF/UKF tracker upgrade | 1 week | Manoeuvring target handling | None |
 | **P2** | Cascaded PID velocity controller | 1 week | Smooth flight dynamics | MAVLink FC link |
 | **P2** | Stereo depth (SGM block matching) | 2 weeks | Real 3D object positions | Stereo camera sync |
-| **P3** | RRT* or D* Lite path planner | 2 weeks | Complex obstacle avoidance | Occupancy map |
-| **P3** | DeepSORT / ByteTrack appearance model | 1 week | Reduced ID switches | TensorRT |
+| **P3** | DeepSORT appearance model | 1 week | Reduced ID switches (beyond ByteTrack) | TensorRT |
 | **P3** | H.265 video streaming | 1 week | GCS live view | V4L2 camera |
 | **P4** | Loop closure + graph optimization | 3 weeks | Drift-free long-duration | VIO |
 | **P4** | Geofencing + advanced contingencies | 1 week | Regulatory compliance | Mission planner |
@@ -909,7 +958,7 @@ Based on the analysis above, here is the recommended implementation order:
 
 ### Messaging Patterns Architecture
 
-The current IPC layer uses a **shared-register (SeqLock)** model — every reader sees only the latest value. This is optimal for real-time telemetry but insufficient for reliable command delivery and external integrations. A production stack needs three complementary messaging patterns:
+The IPC layer uses **Eclipse Zenoh** for all inter-process communication. Zenoh provides zero-copy SHM for local transport plus network transport (UDP/TCP/QUIC) for drone↔GCS communication. The architecture supports three complementary messaging patterns:
 
 #### Pattern Comparison
 
@@ -1336,13 +1385,13 @@ For full license details, see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## Development Workflow
 
-See [DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the full development workflow including:
+See [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) for the full development workflow including:
 
 - Branching & PR process (Steps 1–9)
 - Bug fix workflow
-- Documentation update requirements (`docs/PROGRESS.md` / `docs/ROADMAP.md`)
+- Documentation update requirements (`docs/tracking/PROGRESS.md` / `docs/tracking/ROADMAP.md`)
 - Multi-phase feature development
 - Pre-merge checklist
 - Quick reference commands
 
-**CI Pipeline:** 9-job GitHub Actions pipeline — format gate (clang-format-18) → 7-leg build matrix (shm/zenoh × ASan/TSan/UBSan) → coverage report (lcov). See [tests/TESTS.md](tests/TESTS.md) for current test counts and [docs/CI_SETUP.md](docs/CI_SETUP.md) for the full DevOps guide.
+**CI Pipeline:** 9-job GitHub Actions pipeline — format gate (clang-format-18) → 7-leg build matrix (shm/zenoh × ASan/TSan/UBSan) → coverage report (lcov). See [tests/TESTS.md](tests/TESTS.md) for current test counts and [docs/guides/CI_SETUP.md](docs/guides/CI_SETUP.md) for the full DevOps guide.
