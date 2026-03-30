@@ -227,8 +227,8 @@ TEST(UKFFusionEngineTest, HorizonTruncatedBboxUsesGroundPlaneDepth) {
     trk2.bbox_w       = 24.0f;
     trk2.bbox_h       = 80.0f;  // bbox_top = 260-40 = 220 < cy(240) → truncated
     trk2.timestamp_ns = 1000;
-    // Apparent-size would give: 5.0 * 500 / 80 = 31.25m
-    // Ground-plane from bottom: 5.0 * 500 / (300 - 240) = 41.7 → clamped 40m
+    // Apparent-size would give: 3.0 * 500 / 80 = 18.75m
+    // Ground-plane from bottom: camera_height_m=1.5 / ray_down → larger depth
     // bbox_bottom = 260 + 40 = 300, ray_down_base = (300-240)/500 = 0.12
 
     tracked.objects.clear();
@@ -405,8 +405,11 @@ static drone::ipc::RadarDetection make_radar_det(float range, float azimuth, flo
     return det;
 }
 
-// Helper: compute depth the same way UKFFusionEngine::estimate_depth does.
-// Mirrors the three-tier model: apparent-size → ground-plane → fallback.
+// Helper: compute depth similarly to UKFFusionEngine::estimate_depth.
+// Covers three tiers: apparent-size → ground-plane → fallback.
+// Note: the production engine also has horizon-truncation (bbox_top < cy);
+// this helper omits that tier for simplicity — tests using truncated bboxes
+// should account for the difference.
 // Uses calib.depth_scale for conservative depth scaling.
 static float test_estimate_depth(const CalibrationData& calib, const TrackedObject& trk) {
     const float     fy               = calib.camera_intrinsics(1, 1);

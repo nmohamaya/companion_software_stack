@@ -31,25 +31,26 @@ namespace drone::planner {
 // ─────────────────────────────────────────────────────────────
 
 struct GridPlannerConfig {
-    float resolution_m       = 0.5f;   // metres per grid cell
-    float grid_extent_m      = 50.0f;  // half-extent of grid in each axis
-    float inflation_radius_m = 1.5f;   // obstacle inflation radius
-    float replan_interval_s  = 1.0f;   // how often to re-run search
-    float path_speed_mps     = 2.0f;   // cruise speed along path
-    float smoothing_alpha    = 0.35f;  // EMA smoothing for velocity output
-    int   max_iterations     = 50000;  // search iteration limit
-    float max_search_time_ms = 0.0f;   // wall-clock timeout (0 = disabled)
-    float ramp_dist_m        = 3.0f;   // distance to begin speed ramp-down
-    float min_speed_mps      = 1.0f;   // minimum speed during ramp-down
-    int   snap_search_radius = 8;      // goal snap search radius (grid cells)
-    float cell_ttl_s         = 3.0f;   // dynamic obstacle TTL in occupancy grid
-    float min_confidence     = 0.3f;   // minimum object confidence for grid insertion
-    int   z_band_cells       = 0;      // Z-band limit: restrict search to ±N cells around
-                                       // start/goal Z range (0 = unlimited, full 3D search)
-    int promotion_hits = 0;            // Promote dynamic cell to static after N observations
-                                       // (0 = disabled, no promotion)
-    float look_ahead_m = 0.0f;         // Pure-pursuit look-ahead distance along path
-                                       // (0 = disabled, use cell-by-cell following)
+    float resolution_m       = 0.5f;       // metres per grid cell
+    float grid_extent_m      = 50.0f;      // half-extent of grid in each axis
+    float inflation_radius_m = 1.5f;       // obstacle inflation radius
+    float replan_interval_s  = 1.0f;       // how often to re-run search
+    float path_speed_mps     = 2.0f;       // cruise speed along path
+    float smoothing_alpha    = 0.35f;      // EMA smoothing for velocity output
+    int   max_iterations     = 50000;      // search iteration limit
+    float max_search_time_ms = 0.0f;       // wall-clock timeout (0 = disabled)
+    float ramp_dist_m        = 3.0f;       // distance to begin speed ramp-down
+    float min_speed_mps      = 1.0f;       // minimum speed during ramp-down
+    int   snap_search_radius = 8;          // goal snap search radius (grid cells)
+    float cell_ttl_s         = 3.0f;       // dynamic obstacle TTL in occupancy grid
+    float min_confidence     = 0.3f;       // minimum object confidence for grid insertion
+    int   z_band_cells       = 0;          // Z-band limit: restrict search to ±N cells around
+                                           // start/goal Z range (0 = unlimited, full 3D search)
+    int promotion_hits = 0;                // Promote dynamic cell to static after N observations
+                                           // (0 = disabled, no promotion)
+    uint32_t radar_promotion_hits = 3;     // Radar update count for immediate static promotion
+    float    look_ahead_m         = 0.0f;  // Pure-pursuit look-ahead distance along path
+                                           // (0 = disabled, use cell-by-cell following)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -81,7 +82,8 @@ public:
     explicit GridPlannerBase(const GridPlannerConfig& config = {})
         : config_(config)
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
-                config.cell_ttl_s, config.min_confidence, config.promotion_hits) {}
+                config.cell_ttl_s, config.min_confidence, config.promotion_hits,
+                config.radar_promotion_hits) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

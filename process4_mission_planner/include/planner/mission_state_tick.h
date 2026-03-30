@@ -196,6 +196,11 @@ private:
         // IFCLink::send_trajectory only accepts absolute yaw (no yaw_rate),
         // so we compute the target yaw from elapsed time × yaw rate.
         float target_yaw = survey_start_yaw_ + config_.survey_yaw_rate * elapsed_s;
+        // Wrap to [-π, π] to avoid sending unbounded angles to the FC.
+        constexpr float kPiF = 3.14159265358979323846f;
+        target_yaw           = std::fmod(target_yaw + kPiF, 2.0f * kPiF);
+        if (target_yaw < 0.0f) target_yaw += 2.0f * kPiF;
+        target_yaw -= kPiF;
 
         drone::ipc::TrajectoryCmd cmd{};
         cmd.timestamp_ns = static_cast<uint64_t>(

@@ -107,13 +107,14 @@ class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
-                             int promotion_hits = 0)
+                             int promotion_hits = 0, uint32_t radar_promotion_hits = 3)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
         , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f))
         , min_confidence_(min_confidence)
-        , promotion_hits_(promotion_hits) {}
+        , promotion_hits_(promotion_hits)
+        , radar_promotion_hits_(radar_promotion_hits) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -244,9 +245,8 @@ public:
                             // Skip promotion for detections near existing static
                             // cells — these are parallax echoes that would grow
                             // the promoted wall beyond the real obstacle footprint.
-                            constexpr uint32_t kRadarConfirmedThreshold = 3;
-                            const bool         radar_confirmed          = obj.radar_update_count >=
-                                                         kRadarConfirmedThreshold;
+                            const bool radar_confirmed = obj.radar_update_count >=
+                                                         radar_promotion_hits_;
 
                             if (radar_confirmed && !skip_promotion) {
                                 // Radar-confirmed → immediate static promotion
@@ -254,7 +254,11 @@ public:
                                     static_occupied_.insert(c);
                                     occupied_.erase(c);
                                     hit_count_.erase(c);
-                                    changed_cells_.push_back({c, true});
+                                    // Only emit a change if the cell wasn't just inserted
+                                    // above (was_absent already pushed {c, true}).
+                                    if (!was_absent) {
+                                        changed_cells_.push_back({c, true});
+                                    }
                                     ++promoted_count_;
                                 }
                             } else if (promotion_hits_ > 0 && !skip_promotion) {
@@ -348,10 +352,10 @@ public:
 
 private:
     /// Check whether a grid cell is at or adjacent (Chebyshev ≤ 1) to any
-    /// already-promoted static cell.  Used for known-obstacle suppression:
+    /// already-promoted static cell.  Used for promotion suppression:
     /// once an obstacle has been promoted, further detections at the same
-    /// grid location are redundant and would only create phantom dynamic
-    /// cells from parallax/multi-track artefacts.
+    /// grid location skip promotion to avoid growing the static footprint
+    /// beyond the real obstacle boundary (parallax/multi-track artefacts).
     [[nodiscard]] bool near_static_cell_(const GridCell& center) const {
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
@@ -369,8 +373,9 @@ private:
     uint64_t cell_ttl_ns_;
     float    min_confidence_;
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
-    int      promoted_count_{0};  // total cells promoted (diagnostic)
-    uint64_t diag_tick_{0};       // for periodic diagnostic logging
+    uint32_t radar_promotion_hits_{3};  // radar updates for immediate static promotion
+    int      promoted_count_{0};        // total cells promoted (diagnostic)
+    uint64_t diag_tick_{0};             // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;
