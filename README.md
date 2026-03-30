@@ -4,6 +4,56 @@ Multi-process C++17 software stack for an autonomous drone companion computer. 7
 
 **Target hardware:** NVIDIA Jetson Orin (Nano/NX/AGX, aarch64, JetPack 6.x, CUDA 12.x)
 
+---
+
+## ⚡ Quick Start (5 minutes)
+
+**New to this project?** Start here. For detailed setup, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+
+### 1️⃣ Clone & Setup
+
+```bash
+git clone https://github.com/nmohamaya/companion_software_stack.git
+cd companion_software_stack
+
+# Automated setup: install deps → build → test → launch
+bash deploy/setup.sh --auto
+```
+
+### 2️⃣ Or Manual Steps
+
+```bash
+# Install dependencies
+bash deploy/install_dependencies.sh --all
+
+# Build
+bash deploy/build.sh
+
+# Test (expects 927 tests to pass)
+bash tests/run_tests.sh
+
+# Launch standalone demo (7 processes, simulated sensors)
+bash deploy/launch_all.sh
+```
+
+### 3️⃣ With Gazebo SITL (Realistic Simulation)
+
+```bash
+# Clean build + Gazebo simulation with 3D visualizer
+bash deploy/clean_build_and_run.sh --gui
+```
+
+Expected: drone takes off, navigates 3 waypoints, returns home.
+
+### 📖 Next Steps
+
+- **Deep dive?** Read [Architecture](#architecture) section below
+- **First time contributing?** See [DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md)
+- **Need details?** Check [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- **Troubleshooting?** Jump to [Troubleshooting](#troubleshooting) section
+
+---
+
 ## Architecture
 
 ### System Overview
@@ -892,93 +942,113 @@ Services (external RPC):
 
 ## Prerequisites
 
+**System Requirements:**
+- **OS:** Ubuntu 22.04 LTS or 24.04 LTS
+- **Architecture:** x86-64 (development) or aarch64 (Jetson Orin)
+- **Resources:** 4 GB RAM (minimum), 8+ GB disk space
+- **User:** Any user; `sudo` for optional real-time scheduling
+
+**Quick install (recommended):**
 ```bash
-# Ubuntu 22.04 / 24.04 — core dependencies
-sudo apt-get install -y build-essential cmake libspdlog-dev libeigen3-dev \
-    nlohmann-json3-dev libgtest-dev
+bash deploy/setup.sh --auto        # One command: deps + build + test + launch
 ```
 
-### Optional: Gazebo + PX4 SITL (for simulation backends)
-
-The Gazebo/MAVSDK backends are **optional** — the stack always builds and runs with simulated backends. To enable simulation backends:
-
+**Manual install:**
 ```bash
-# See full guide: docs/gazebo_setup.md
-sudo apt-get install -y gz-harmonic       # Gazebo Harmonic
-# MAVSDK: build from source (see docs/gazebo_setup.md §4)
-# PX4 SITL: clone and build (see docs/gazebo_setup.md §2)
+# Step 1: Install dependencies
+bash deploy/install_dependencies.sh --all
+
+# Step 2: Build
+bash deploy/build.sh
+
+# Step 3: Test (expected: 927 tests pass)
+bash tests/run_tests.sh
+
+# Step 4: Launch
+bash deploy/launch_all.sh
 ```
 
-CMake auto-detects these and enables compile guards (`HAVE_MAVSDK`, `HAVE_GAZEBO`).
-
-## Build
-
-```bash
-# From the project root directory:
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DALLOW_INSECURE_ZENOH=ON ..
-make -j$(nproc)
-```
-
-Or use the build script:
-```bash
-./deploy/build.sh                 # Release build
-./deploy/build.sh Debug           # Debug build
-./deploy/build.sh --clean         # Delete build/ first, then build
-./deploy/build.sh --test          # Build + run all tests
-./deploy/build.sh --test-filter watchdog  # Build + run module tests
-```
-
-Binaries are placed in `build/bin/`.
+For detailed setup, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 ## Run
 
+### Quick Start Options
+
+| Command | What it does | Time |
+|---|---|---|
+| `bash deploy/launch_all.sh` | Run all 7 processes (simulated sensors, fastest) | <1 sec startup |
+| `bash deploy/launch_gazebo.sh --gui` | Run with Gazebo 3D simulator + PX4 SITL (realistic) | ~3-5 sec startup |
+| `bash deploy/clean_build_and_run.sh --gui` | Clean build + test + Gazebo (first run only) | ~5-10 min total |
+
+### Standalone Demo (Recommended First Run)
+
+Launches all 7 processes with **simulated sensors** (no external dependencies):
+
+```bash
+bash deploy/launch_all.sh
+```
+
+Expected output:
+```
+[2026-03-30 14:22:15] [video_capture] [info] Starting mission camera thread...
+[2026-03-30 14:22:15] [perception] [info] Detection thread initialized
+[2026-03-30 14:22:15] [slam_vio_nav] [info] Pose estimator ready
+...
+```
+
+Press `Ctrl+C` to stop gracefully. Logs saved to `drone_logs/`.
+
+### With Gazebo SITL (Realistic Simulation)
+
+Full physics simulation with flight controller and 3D visualizer:
+
+```bash
+bash deploy/clean_build_and_run.sh --gui    # First run (builds + tests + launches)
+# OR
+bash deploy/launch_gazebo.sh --gui          # Subsequent runs (if already built)
+```
+
+Expected: drone arms, takes off, navigates 3 waypoints, avoids obstacles, returns home.
+
 ### Deploy scripts reference
 
-| Script | Purpose | When to use |
-|---|---|---|
-| `deploy/clean_build_and_run.sh [--gui]` | Clean build + Gazebo SITL flight | First run, or after code changes |
-| `deploy/build.sh [--clean]` | Build only (no launch) | Quick incremental builds during development |
-| `deploy/launch_all.sh` | Launch 7 processes (no PX4/Gazebo) | Standalone launch with `default.json`, or when PX4 is already running |
-| `deploy/launch_gazebo.sh [--gui]` | PX4 SITL + Gazebo + 7 processes | Launch simulation without rebuilding |
-| `deploy/launch_hardware.sh [--config ...] [--dry-run]` | Real drone hardware launch | Production flight on real hardware |
-| `deploy/install_dependencies.sh [--all]` | Install all dependencies | Fresh machine setup |
+| Script | Purpose |
+|---|---|
+| `deploy/setup.sh --auto` | **One-line setup:** install deps → build → test → launch |
+| `deploy/clean_build_and_run.sh [--gui]` | Clean build + Gazebo SITL (first run) |
+| `deploy/build.sh [--clean]` | Build only (no launch) |
+| `deploy/launch_all.sh` | Run 7 processes (no Gazebo) |
+| `deploy/launch_gazebo.sh [--gui]` | Run with Gazebo SITL |
+| `deploy/install_dependencies.sh [--all]` | Install dependencies |
 
-### Clean build and run (recommended for first use)
+### Verify Your Build is Correct
 
-This script clean-builds the entire stack, runs all unit tests, then launches a full
-Gazebo SITL autonomous flight:
-
-```bash
-bash deploy/clean_build_and_run.sh          # headless
-bash deploy/clean_build_and_run.sh --gui    # with Gazebo 3-D GUI
-```
-
-Steps: kill stale processes → `rm -rf build/` → cmake + build → ctest → launch Gazebo SITL.
-
-### Launch Gazebo SITL (without rebuilding)
-
-If the stack is already built, launch simulation directly:
+After building, always verify:
 
 ```bash
-bash deploy/launch_gazebo.sh --gui
+# Check test count (should be 927)
+ctest -N --test-dir build | grep "Total Tests:"
+
+# Run all tests (should all pass)
+bash tests/run_tests.sh
+
+# Check for compiler warnings (should be zero)
+# The build uses -Werror -Wall -Wextra, so if it compiled without errors, there are no warnings.
 ```
 
-The `--gui` flag is optional — omit it for headless mode.
-
-### Launch all processes (standalone, no PX4/Gazebo)
-
-The launch script handles SHM cleanup, library path fixes, and starts all 7 processes in the correct dependency order:
-
+✅ **Does it all pass?** You're good to go. Launch:
 ```bash
-# As root (recommended — enables RT thread scheduling and CPU pinning):
-sudo ./deploy/launch_all.sh
-
-# As normal user (works fine, but thread affinity/RT scheduling will be skipped):
-./deploy/launch_all.sh
+bash deploy/launch_all.sh              # Standalone
+# OR
+bash deploy/launch_gazebo.sh --gui     # With Gazebo
 ```
 
-Press `Ctrl+C` to gracefully stop all processes.
+❌ **Test count wrong?** (e.g., 922 instead of 927)
+```bash
+# Clean rebuild — stale CMake cache from different build types
+bash deploy/build.sh --clean
+ctest -N --test-dir build | grep "Total Tests:"  # Check again
+```
 
 ### Launch on real hardware
 
