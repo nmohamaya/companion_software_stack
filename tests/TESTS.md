@@ -49,8 +49,8 @@
 |--------|-------------|---------------|
 | `ipc` | Zenoh IPC primitives, message bus, wire format | ~150 |
 | `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
-| `perception` | Kalman tracker, fusion engine (UKF+camera), color contour, YOLOv8 | ~113 |
-| `mission` | Mission FSM, FaultManager degradation | ~129 |
+| `perception` | Kalman tracker, fusion engine (UKF+camera+radar), color contour, YOLOv8 | ~149 |
+| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D | ~182 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
 | `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
 | `payload` | GimbalController servo simulation | ~9 |
@@ -100,8 +100,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 5 | 135 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 98 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P2 — Perception](#p2--perception) | 5 | 149 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID), color contour, YOLOv8 |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 182 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
@@ -118,7 +118,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 170+ | 18 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (15 Tier 1 + 3 Tier 2) |
-| **Total** | **50 C++ + 5 shell** | **1048 + 42 + 170+** | |
+| **Total** | **50 C++ + 5 shell** | **1108 + 42 + 170+** | |
 
 ---
 
@@ -300,7 +300,7 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ## HAL — Radar
 
-### test_radar_hal.cpp — 27 tests
+### test_radar_hal.cpp — 30 tests
 
 **What it tests:** `IRadar` interface, `SimulatedRadar` backend, HAL factory radar path, config-driven construction, and the `/radar_detections` IPC topic constant.
 
@@ -350,10 +350,12 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 35 tests
+### test_fusion_engine.cpp — 39 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
-IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237).
+IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237),
+radar-primary architecture (radar detection reservation, orphan output gating, radar-confirmed
+depth promotion — Issue #237 Phase D).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -376,6 +378,7 @@ IFusionEngine factory, altitude gate, ground filter, dormant re-identification (
 | `AltitudeGateAcceptsSimilar` | 1 | Radar-track association accepted when body-frame Z difference is within `altitude_gate_m` |
 | `AltitudeGateConfigurable` | 1 | `altitude_gate_m` can be configured to a custom value and correctly gates associations |
 | `DormantReIDTest` | 8 | Radar-confirmed track creates dormant entry, re-ID merges at similar world position, world-frame flag output, pool cap respected, reset clears state, no dormant without pose, camera-only excluded from pool, distant tracks get separate entries |
+| `RadarFusionTest` | 16 | Radar measurement model, covariance reduction, azimuth sign convention, radar-initialized depth override, camera+radar tighter than either, gate rejects outlier, noise config, disabled-by-default, set_radar_detections+fuse, has_radar flag, ground filter (reject/pass/disabled), altitude gate (reject/accept/configurable), radar detection reservation prevents double-init, orphan output gating by radar_orphan_min_hits |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
 
@@ -437,27 +440,27 @@ occlusion recovery, config/factory integration.
 
 ## P4 — Mission Planner
 
-### test_mission_fsm.cpp — 13 tests
+### test_mission_fsm.cpp — 15 tests
 
 **What it tests:** `MissionFSM` state machine — the core flight mission
 lifecycle.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionFSMTest` | 13 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor |
+| `MissionFSMTest` | 15 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → survey → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor, SURVEY state transition |
 
 **Key files under test:** `planner/mission_fsm.h`
 
 ---
 
-### test_fault_manager.cpp — 24 tests
+### test_fault_manager.cpp — 41 tests
 
 **What it tests:** `FaultManager` graceful degradation engine — config-driven
 fault evaluation with escalation-only policy.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `FaultManagerTest` | 24 | Nominal health → `NONE`, battery low → `WARN`, battery critical → `RTL`, thermal warning → `LOITER`, thermal critical → `EMERGENCY_LAND`, critical process death, pose staleness, FC link lost, escalation-only (never downgrade), loiter → RTL auto-escalation, high-water mark tracking, config overrides |
+| `FaultManagerTest` | 41 | Nominal health → `NONE`, battery low → `WARN`, battery critical → `RTL`, thermal warning → `LOITER`, thermal critical → `EMERGENCY_LAND`, critical process death, pose staleness, FC link lost, escalation-only (never downgrade), loiter → RTL auto-escalation, high-water mark tracking, config overrides, geofence polygon/altitude checks, VIO quality degradation |
 
 **Key files under test:** `planner/fault_manager.h`
 
@@ -477,14 +480,14 @@ unconfirmed approach warnings.
 
 ---
 
-### test_gcs_command_handler.cpp — 6 tests
+### test_gcs_command_handler.cpp — 25 tests
 
 **What it tests:** `GCSCommandHandler` — GCS command dispatch (RTL, LAND,
 MISSION_UPLOAD) with deduplication by timestamp and correlation ID propagation.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `GCSCommandHandlerTest` | 6 | RTL dispatch + FSM transition, LAND dispatch + land_sent flag, duplicate timestamp ignored, correlation ID persists, mission upload loads waypoints, disconnected subscriber ignored |
+| `GCSCommandHandlerTest` | 25 | RTL dispatch + FSM transition, LAND dispatch + land_sent flag, duplicate timestamp ignored, correlation ID persists, mission upload loads waypoints, disconnected subscriber ignored, PAUSE/RESUME commands, ABORT command, waypoint upload validation, geofence upload |
 
 **Key files under test:** `planner/gcs_command_handler.h`
 
@@ -503,20 +506,20 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 11 tests
+### test_mission_state_tick.cpp — 14 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
 states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionStateTickTest` | 11 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next |
+| `MissionStateTickTest` | 14 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π] |
 
 **Key files under test:** `planner/mission_state_tick.h`
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 18 tests
+### test_obstacle_avoider_3d.cpp — 21 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
@@ -535,7 +538,7 @@ path-aware mode.
 
 ---
 
-### test_dstar_lite_planner.cpp — 43 tests
+### test_dstar_lite_planner.cpp — 47 tests
 
 **What it tests:** D* Lite incremental path planner — occupancy grid basics, change tracking,
 D* Lite search algorithm, incremental replanning, wall-clock timeout, Z-band constraint,
@@ -544,7 +547,7 @@ factory registration.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `OccupancyGrid3DTest` | 8 | Empty grid, world↔grid round-trip, in-bounds check, obstacle inflation, low-confidence skip, clear resets, configurable min_confidence threshold, default min_confidence backward compat |
+| `OccupancyGrid3DTest` | 10 | Empty grid, world↔grid round-trip, in-bounds check, obstacle inflation, low-confidence skip, clear resets, configurable min_confidence threshold, default min_confidence backward compat, radar-confirmed promotion with configurable radar_promotion_hits, promotion suppression near static cells |
 | `GridCellHashTest` | 2 | Different cells → different hashes, same cell → same hash |
 | `ChangeTrackingTest` | 4 | New cell insertions recorded, expired cells recorded, drain clears buffer, static obstacle changes tracked |
 | `DStarLiteSearchTest` | 6 | Trivial start=goal, straight line path, 3D obstacle detour, unreachable goal → direct fallback, blocked start BFS escape, out-of-bounds goal |
@@ -1206,4 +1209,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1064 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Issue #234: D* Lite Z-band constraint + km reinit (4 new tests). All 1064 tests passing.*
+*Last updated: March 2026 — 1108 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Epic #237: radar-primary sensor fusion, dormant re-ID, SURVEY phase, configurable radar promotion/orphan thresholds, carrot smoothing assertion (+44 tests from 1064). All 1108 tests passing.*

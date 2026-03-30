@@ -179,7 +179,7 @@ graph LR
 
 Perception runs a three-stage pipeline across 3 worker threads + 1 main thread, connected by lock-free SPSC queues (depth 4 each).
 
-> **Terminology note:** The "fusion" stage is **not** multi-sensor fusion. It is **monocular depth estimation** — it takes 2D tracked bounding boxes from a single RGB camera, estimates depth using pinhole geometry (apparent-size formula), and applies a yaw-only rotation to world frame using the latest pose from P3. The stereo camera feeds P3 (VIO), not P2. See [perception_design.md](docs/perception_design.md) for details.
+> **Fusion backends:** Two fusion backends are available. The default `camera_only` backend performs **monocular depth estimation** using pinhole geometry. The `ukf` backend (Issue #210, #237) implements **camera + radar multi-sensor fusion** with per-object Unscented Kalman Filters, radar-primary track initialization, and a dormant re-identification pool for world-frame obstacle memory. The stereo camera feeds P3 (VIO), not P2. See [perception_design.md](docs/perception_design.md) for details.
 
 #### 2.1 Detection — `IDetector` Strategy Pattern
 
@@ -227,14 +227,18 @@ Three detector backends are available via the factory (`create_detector()`):
 | **Gate threshold** | `max_association_cost` = 100.0 pixels |
 | **Written from scratch** | Yes — `HungarianSolver::solve()` (class is named "Hungarian" but implementation is greedy) |
 
-#### 2.4 Sensor Fusion — Weighted Position Merge
+#### 2.4 Sensor Fusion — `IFusionEngine` Strategy Pattern
 
-| Aspect | Detail |
-|---|---|
-| **Algorithm** | Camera-only fusion (pinhole unproject + apparent-size depth) |
-| **Camera depth** | Inverse-perspective heuristic: $d = \frac{h_{cam} \times 500}{\max(10,\; c_y)}$ |
-| **Calibration** | Camera intrinsics: $f_x=500,\; f_y=500,\; c_x=960,\; c_y=540$; extrinsics: identity (sim) |
-| **Written from scratch** | Yes — `FusionEngine` class |
+| Backend | Algorithm | Sensors | Description |
+|---|---|---|---|
+| `camera_only` | Pinhole unproject + apparent-size depth | RGB camera | Monocular depth estimation: $d = h_{cam} \times f_y / \max(10, bbox\_h)$ |
+| `ukf` | Per-object 6D UKF (Unscented Kalman Filter) | RGB camera + radar | Camera provides bearing+depth, radar provides range/azimuth/elevation/Doppler. Radar-primary architecture: radar can independently init tracks, provide confirmed depth, and emit orphan detections. Dormant re-ID pool provides world-frame obstacle memory. |
+
+| Config key | Default | Description |
+|---|---|---|
+| `perception.fusion.backend` | `"camera_only"` | Fusion backend selection |
+| `perception.fusion.radar.enabled` | `false` | Enable radar updates in UKF |
+| **Written from scratch** | Yes | `CameraOnlyFusionEngine`, `UKFFusionEngine`, `ObjectUKF` |
 
 ---
 
@@ -1029,6 +1033,19 @@ sudo ./deploy/launch_all.sh --log-level debug
 ### Logs
 
 Logs are written to `drone_logs/` (inside the project root) with automatic rotation (5 MB per file, 3 rotated files). Console output uses colored spdlog formatting.
+
+### Scenario Run Reports
+
+Scenario integration tests (`run_scenario_gazebo.sh`) produce **persistent timestamped run directories** under `drone_logs/scenarios_gazebo/<scenario_name>/`. Each run creates a unique directory (e.g., `2026-03-30_102030_PASS/`) that is never automatically deleted. Each directory contains:
+
+- `mission_planner.log` / `perception.log` / `combined.log` — process logs
+- `merged_config.json` — the config used for the run
+- `run_metadata.json` — machine-readable metadata (git commit, result, duration)
+- `run_report.txt` — human-readable report with automated observations
+
+The run report extracts key metrics from logs: FSM transitions, survey quality, waypoint progress, obstacle proximity, occupancy grid peaks, perception radar statistics, fault events, avoider activity, and D* Lite planner stats. Each section includes threshold-based observations (e.g., "BLUE at 0.2m — COLLISION RISK (< 1.5m safety radius)").
+
+A `latest` symlink always points to the most recent run. An append-only `runs.jsonl` index tracks all runs for history queries. Manual cleanup is available via `tests/cleanup_old_runs.sh --days 30`.
 
 ## Troubleshooting
 
