@@ -245,3 +245,6 @@ add_drone_test(test_radar_hal          test_radar_hal.cpp)
 
 # ── Gazebo Radar Backend tests (Issue #212) ───────────────
 add_drone_test(test_gazebo_radar       test_gazebo_radar.cpp)
+
+# ── Rate Clamp tests (Issue #220) ─────────────────────────
+add_drone_test(test_rate_clamp         test_rate_clamp.cpp)

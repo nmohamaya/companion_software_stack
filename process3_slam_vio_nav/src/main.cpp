@@ -24,6 +24,7 @@
 #include "util/config.h"
 #include "util/diagnostic.h"
 #include "util/log_config.h"
+#include "util/rate_clamp.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
 #include "util/signal_handler.h"
@@ -358,8 +359,9 @@ int main(int argc, char* argv[]) {
     // Thread-safe IMU ring buffer (IMU reader → VIO pipeline)
     ImuRingBuffer imu_ring_buffer(2048);
 
-    const int imu_rate = cfg.get<int>("slam.imu_rate_hz", 400);
-    const int vio_rate = cfg.get<int>("slam.vio_rate_hz", 100);
+    // ── Rate clamping (safety: prevent runaway loops or undersampling) ──
+    const int imu_rate = drone::util::clamp_imu_rate(cfg.get<int>("slam.imu_rate_hz", 400));
+    const int vio_rate = drone::util::clamp_vio_rate(cfg.get<int>("slam.vio_rate_hz", 100));
 
     // Create IMU via HAL factory
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
