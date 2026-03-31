@@ -107,14 +107,17 @@ class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
-                             int promotion_hits = 0, uint32_t radar_promotion_hits = 3)
+                             int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
+                             bool prediction_enabled = true, float prediction_dt_s = 2.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
         , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f))
         , min_confidence_(min_confidence)
         , promotion_hits_(promotion_hits)
-        , radar_promotion_hits_(radar_promotion_hits) {}
+        , radar_promotion_hits_(radar_promotion_hits)
+        , prediction_enabled_(prediction_enabled)
+        , prediction_dt_s_(prediction_dt_s) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -275,6 +278,68 @@ public:
                     }
                 }
             }
+
+            // ── Velocity-based prediction inflation (Issue #256) ────
+            // For moving objects, inflate cells along the velocity vector
+            // from the current position to the predicted position at
+            // prediction_dt_s in the future.  This gives D* Lite early
+            // awareness of where dynamic obstacles WILL BE.
+            if (prediction_enabled_ && prediction_dt_s_ > 0.0f) {
+                const float vx       = obj.velocity_x;
+                const float vy       = obj.velocity_y;
+                const float speed_sq = vx * vx + vy * vy;
+                // Only predict for objects with meaningful velocity (>0.5 m/s)
+                constexpr float kMinPredictionSpeedSq = 0.25f;  // 0.5^2
+                if (speed_sq > kMinPredictionSpeedSq) {
+                    const float pred_x = obj.position_x + vx * prediction_dt_s_;
+                    const float pred_y = obj.position_y + vy * prediction_dt_s_;
+                    const float pred_z = obj.position_z + obj.velocity_z * prediction_dt_s_;
+
+                    // Walk from current to predicted position in grid-cell steps
+                    // using Bresenham-style interpolation, inflating a disk at each.
+                    const GridCell pred_cell = world_to_grid(pred_x, pred_y, pred_z);
+                    const int      steps     = std::max({std::abs(pred_cell.x - center.x),
+                                                         std::abs(pred_cell.y - center.y),
+                                                         std::abs(pred_cell.z - center.z), 1});
+                    for (int s = 1; s <= steps; ++s) {
+                        const float t  = static_cast<float>(s) / static_cast<float>(steps);
+                        const int   ix = center.x +
+                                       static_cast<int>(std::round(
+                                           t * static_cast<float>(pred_cell.x - center.x)));
+                        const int iy = center.y +
+                                       static_cast<int>(std::round(
+                                           t * static_cast<float>(pred_cell.y - center.y)));
+                        const int iz = center.z +
+                                       static_cast<int>(std::round(
+                                           t * static_cast<float>(pred_cell.z - center.z)));
+
+                        // Inflate a disk at this interpolated point
+                        for (int dy = -obj_inflation; dy <= obj_inflation; ++dy) {
+                            for (int dx = -obj_inflation; dx <= obj_inflation; ++dx) {
+                                if (dx * dx + dy * dy <= obj_inflation * obj_inflation) {
+                                    GridCell pc{ix + dx, iy + dy, iz};
+                                    // Self-exclusion
+                                    if (std::abs(pc.x - drone_cell.x) <= 1 &&
+                                        std::abs(pc.y - drone_cell.y) <= 1 &&
+                                        pc.z == drone_cell.z) {
+                                        continue;
+                                    }
+                                    if (in_bounds(pc) && static_occupied_.count(pc) == 0) {
+                                        bool was_absent = (occupied_.count(pc) == 0);
+                                        occupied_[pc]   = now_ns;
+                                        if (was_absent) {
+                                            changed_cells_.push_back({pc, true});
+                                        }
+                                        // No promotion for predicted cells — only
+                                        // current-position observations promote.
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ++prediction_count_;
+                }
+            }
         }
 
         // Expire stale cells (only when we actually have new data to avoid
@@ -337,6 +402,8 @@ public:
     [[nodiscard]] size_t occupied_count() const { return occupied_.size(); }
     [[nodiscard]] size_t static_count() const { return static_occupied_.size(); }
     [[nodiscard]] int    promoted_count() const { return promoted_count_; }
+    [[nodiscard]] int    prediction_count() const { return prediction_count_; }
+    [[nodiscard]] bool   prediction_enabled() const { return prediction_enabled_; }
 
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.
@@ -373,9 +440,12 @@ private:
     uint64_t cell_ttl_ns_;
     float    min_confidence_;
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
-    uint32_t radar_promotion_hits_{3};  // radar updates for immediate static promotion
-    int      promoted_count_{0};        // total cells promoted (diagnostic)
-    uint64_t diag_tick_{0};             // for periodic diagnostic logging
+    uint32_t radar_promotion_hits_{3};   // radar updates for immediate static promotion
+    int      promoted_count_{0};         // total cells promoted (diagnostic)
+    bool     prediction_enabled_{true};  // enable velocity-based prediction inflation
+    float    prediction_dt_s_{2.0f};     // prediction horizon in seconds
+    int      prediction_count_{0};       // total objects with prediction applied (diagnostic)
+    uint64_t diag_tick_{0};              // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;

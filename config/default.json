@@ -146,6 +146,10 @@
             "dynamic_obstacle_ttl_s": 3.0,
             "min_confidence": 0.3
         },
+        "obstacle_prediction": {
+            "enabled": true,
+            "dt_s": 2.0
+        },
         "obstacle_avoider": {
             "backend": "potential_field_3d"
         },
