@@ -78,10 +78,15 @@ of which backend is plugged in.
 |-----------|------|--------------------------|
 | `ICamera` | `common/hal/include/hal/icamera.h` | `SimulatedCamera`, `GazeboCameraBackend` |
 | `IFCLink` | `common/hal/include/hal/ifc_link.h` | `SimulatedFCLink`, `MavlinkFCLink` |
+| `IGCSLink` | `common/hal/include/hal/igcs_link.h` | `SimulatedGCSLink` |
+| `IGimbal` | `common/hal/include/hal/igimbal.h` | `SimulatedGimbal` |
+| `IIMUSource` | `common/hal/include/hal/iimu_source.h` | `SimulatedIMU`, `GazeboIMUBackend` |
 | `IDetector` | `process2_perception/include/perception/detector_interface.h` | `SimulatedDetector`, `OpenCvYoloDetector`, `ColorContourDetector` |
-| `IPublisher<T>` | `common/ipc/include/ipc/ipublisher.h` | `ShmPublisher<T>`, `ZenohPublisher<T>` |
-| `ISubscriber<T>` | `common/ipc/include/ipc/isubscriber.h` | `ShmSubscriber<T>`, `ZenohSubscriber<T>` |
+| `ITracker` | `process2_perception/include/perception/itracker.h` | `ByteTrackTracker` |
+| `IPublisher<T>` | `common/ipc/include/ipc/ipublisher.h` | `ZenohPublisher<T>` |
+| `ISubscriber<T>` | `common/ipc/include/ipc/isubscriber.h` | `ZenohSubscriber<T>` |
 | `IPathPlanner` | `process4_mission_planner/include/planner/ipath_planner.h` | `DStarLitePlanner` |
+| `IObstacleAvoider` | `process4_mission_planner/include/planner/iobstacle_avoider.h` | `ObstacleAvoider3D` |
 | `IVisualFrontend` | `process3_slam_vio_nav/include/slam/ivisual_frontend.h` | `SimulatedVisualFrontend`, `GazeboVisualFrontend` |
 | `IProcessMonitor` | `process7_system_monitor/include/monitor/iprocess_monitor.h` | `LinuxProcessMonitor` |
 
@@ -219,12 +224,13 @@ transitions.
 NAVIGATE → ... → LAND → IDLE.  An explicit FSM makes the legal transitions
 visible and prevents invalid state combinations.
 
-**Where:** `process4_mission_planner/include/planner/mission_fsm.h`
+**Where:** `common/ipc/include/ipc/ipc_types.h` (the enum), `process4_mission_planner/include/planner/mission_fsm.h` (the FSM class)
 
 ```cpp
 // States are a scoped enum — no implicit conversion to int
+// Defined in ipc_types.h so it can be shared across processes via IPC
 enum class MissionState : uint8_t {
-    IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, LOITER, RTL, LAND, EMERGENCY
+    IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, LOITER, RTL, LAND, EMERGENCY, SURVEY
 };
 
 class MissionFSM {
@@ -279,13 +285,13 @@ subscribers need to know about each other — total decoupling.
 
 ```
                 ┌──────────────┐
-                │  IPublisher  │ ◄── ShmPublisher or ZenohPublisher
+                │  IPublisher  │ ◄── ZenohPublisher<T>
                 └──────┬───────┘
                        │ publish(msg)
               ┌────────┴─────────┐
               ▼                  ▼
        ┌─────────────┐   ┌─────────────┐
-       │ ISubscriber  │   │ ISubscriber  │  ◄── ShmSubscriber or ZenohSubscriber
+       │ ISubscriber  │   │ ISubscriber  │  ◄── ZenohSubscriber<T>
        └─────────────┘   └─────────────┘
          Process 2           Process 3
 ```
@@ -318,8 +324,6 @@ acquires; the destructor releases.  No manual cleanup needed.
 
 | Class | Resource Managed | File |
 |-------|-----------------|------|
-| `ShmWriter<T>` | POSIX SHM segment (`shm_open` → `munmap` → `shm_unlink`) | `common/ipc/include/ipc/shm_writer.h` |
-| `ShmReader<T>` | POSIX SHM mapping (`mmap` → `munmap` → `close`) | `common/ipc/include/ipc/shm_reader.h` |
 | `LivelinessToken` | Zenoh liveliness key (declare → undeclare) | `common/ipc/include/ipc/zenoh_liveliness.h` |
 | `ScopedTimer` | Wall-clock measurement (start → log on destroy) | `common/util/include/util/scoped_timer.h` |
 | `std::lock_guard<std::mutex>` | Mutex lock (lock → unlock) | Used throughout |
@@ -353,7 +357,7 @@ private:
 }   // ~ScopedTimer() logs elapsed time here
 ```
 
-**Example — `ShmWriter<T>` destructor** (`common/ipc/include/ipc/shm_writer.h`):
+**Example — `ShmWriter<T>` destructor** (conceptual POSIX SHM design — not currently implemented; Zenoh is the active IPC backend):
 
 ```cpp
 ~ShmWriter() {
@@ -557,7 +561,7 @@ seq=0 (even → stable)
                                         reads seq=2 → matches → SUCCESS
 ```
 
-**Where:** `common/ipc/include/ipc/shm_writer.h` and `shm_reader.h`
+**Where:** Conceptual POSIX SHM design (not currently implemented — Zenoh is the active IPC backend). The pattern is shown below for educational purposes:
 
 ```cpp
 // Writer — never blocks, always succeeds
@@ -829,28 +833,37 @@ size_t register_thread(const char* name, bool critical) {
 several types at a time.  `std::visit` dispatches a callable to the currently
 held type.
 
-**Why:** The message bus can be either `ShmMessageBus` or `ZenohMessageBus`.
-We can't use inheritance (they're templated factories), so `std::variant`
-provides type-safe runtime dispatch.
+**Why:** The message bus backend is extensible — currently only `ZenohMessageBus`,
+but the architecture supports adding new backends (e.g. iceoryx, DDS) by adding
+one arm to the variant. `std::variant` provides type-safe runtime dispatch
+without inheritance (the backends are templated factories).
 
-**Where:** `common/ipc/include/ipc/message_bus_factory.h`
+**Where:** `common/ipc/include/ipc/message_bus.h`
 
 ```cpp
-// The variant — holds exactly one bus type
-using MessageBusVariant = std::variant<
-    std::unique_ptr<ShmMessageBus>,
-    std::unique_ptr<ZenohMessageBus>
->;
-
-// Create a publisher through whichever bus is active
-template <typename T>
-std::unique_ptr<IPublisher<T>> bus_advertise(
-    MessageBusVariant& bus, const std::string& topic)
-{
-    return std::visit([&](auto& b) -> std::unique_ptr<IPublisher<T>> {
-        return b->template advertise<T>(topic);
-    }, bus);
+// The variant — holds exactly one bus type (extensible for future backends)
+namespace detail {
+using BusVariant = std::variant<std::unique_ptr<ZenohMessageBus>
+                                // #ifdef HAVE_ICEORYX
+                                // , std::unique_ptr<IceoryxMessageBus>
+                                // #endif
+                                >;
 }
+
+// MessageBus wraps the variant and dispatches via std::visit
+class MessageBus {
+public:
+    template<typename T>
+    std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
+        return std::visit(
+            [&](auto& b) -> std::unique_ptr<IPublisher<T>> {
+                return b->template advertise<T>(topic);
+            },
+            impl_);
+    }
+private:
+    detail::BusVariant impl_;
+};
 ```
 
 **How `std::visit` works:** The lambda `[&](auto& b)` is a *generic lambda* —
@@ -928,21 +941,21 @@ if constexpr (std::is_same_v<BusType, ZenohMessageBus>) {
 
 **What:** Fails compilation with a custom error message if a condition is false.
 
-**Why:** The SHM IPC uses `memcpy` to transfer data between processes.  This
-only works for trivially copyable types (no virtual tables, no heap pointers,
-no non-trivial constructors).  `static_assert` catches violations at compile
-time:
+**Why:** The Zenoh IPC publisher uses zero-copy transfer for IPC messages.
+This only works for trivially copyable types (no virtual tables, no heap
+pointers, no non-trivial constructors).  `static_assert` catches violations
+at compile time:
 
 ```cpp
 template <typename T>
-class ShmWriter {
+class ZenohPublisher : public IPublisher<T> {
     static_assert(std::is_trivially_copyable_v<T>,
-                  "SHM payload must be trivially copyable");
+                  "IPC payload must be trivially copyable");
     // ...
 };
 ```
 
-If someone tries `ShmWriter<std::string>`, the compiler emits:
+If someone tries `ZenohPublisher<std::string>`, the compiler emits:
 ```
 error: static assertion failed: SHM payload must be trivially copyable
 ```
@@ -992,8 +1005,9 @@ you genuinely need multiple owners with independent lifetimes.
 memory, file descriptors, SHM mappings) from one object to another without
 copying.  The source is left in a valid but empty state.
 
-**Where:** `ShmWriter` and `ShmReader` — these manage raw OS handles (file
-descriptors, memory mappings) that must not be duplicated:
+**Where:** Conceptual `ShmWriter` / `ShmReader` RAII wrappers (not currently
+implemented — Zenoh is the active IPC backend). The pattern illustrates how
+move semantics transfer ownership of raw OS handles:
 
 ```cpp
 // ShmWriter move constructor — transfers ownership of fd and mmap
@@ -1117,7 +1131,7 @@ pollute the enclosing namespace.
 ```cpp
 // Mission states — can't accidentally compare with integers
 enum class MissionState : uint8_t {
-    IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, LOITER, RTL, LAND, EMERGENCY
+    IDLE, PREFLIGHT, TAKEOFF, NAVIGATE, LOITER, RTL, LAND, EMERGENCY, SURVEY
 };
 
 // Wire message types — stable numeric values for network protocol
@@ -1317,6 +1331,11 @@ camera->open("/dev/video0");  // return value ignored!
 
 ### 4.1 POSIX Shared Memory (`shm_open` / `mmap`)
 
+> **Note:** This section describes a conceptual POSIX SHM design that is not
+> currently implemented — Zenoh is the active IPC backend.  The concepts are
+> documented here for educational purposes, as the SeqLock and RAII patterns
+> shown in §2.5 and §1.6 build on this foundation.
+
 **What:** Inter-process communication by mapping a named memory region into
 multiple processes' address spaces.
 
@@ -1336,7 +1355,7 @@ mmap(PROT_READ|PROT_WRITE)      shm_open("/slam_pose", O_RDONLY)
    └──────────────────────────────────┘
 ```
 
-**From `ShmWriter<T>::create()`:**
+**Conceptual `ShmWriter<T>::create()`:**
 
 ```cpp
 bool create(const std::string& name) {
@@ -1430,12 +1449,12 @@ endif()
 #include "ipc/zenoh_message_bus.h"
 #endif
 
-using MessageBusVariant = std::variant<
-    std::unique_ptr<ShmMessageBus>
-#ifdef HAVE_ZENOH
-    , std::unique_ptr<ZenohMessageBus>
-#endif
->;
+// In common/ipc/include/ipc/message_bus.h:
+using BusVariant = std::variant<std::unique_ptr<ZenohMessageBus>
+                                // #ifdef HAVE_ICEORYX
+                                // , std::unique_ptr<IceoryxMessageBus>
+                                // #endif
+                                >;
 ```
 
 **Three guards used in this codebase:**
