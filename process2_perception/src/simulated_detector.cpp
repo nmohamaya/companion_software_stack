@@ -1,6 +1,6 @@
 // process2_perception/src/simulated_detector.cpp
 // Simulated object detector — generates fake detections for testing.
-#include "perception/detector_interface.h"
+#include "perception/simulated_detector.h"
 
 #include <chrono>
 #include <random>
