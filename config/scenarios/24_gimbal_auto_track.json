@@ -1,0 +1,87 @@
+{
+    "_comment": "Scenario 24: Gimbal Auto-Tracking — verifies payload manager auto-tracks highest-confidence object",
+    "scenario": {
+        "name": "gimbal_auto_track",
+        "description": "Smoke test for gimbal auto-tracking. Enables auto-track in payload manager, flies a mission with simulated detections, and verifies the gimbal tracks objects. Tier 1 — no Gazebo required.",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false, "_comment": "Straight leg — stable detections for tracking"},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false, "_comment": "Turn — gimbal should re-acquire"},
+                {"x": 0,  "y": 10, "z": 5, "yaw": 3.14,  "speed": 2.0, "payload_trigger": false, "_comment": "Return leg"},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57, "speed": 2.0, "payload_trigger": false, "_comment": "Final leg"}
+            ]
+        },
+        "perception": {
+            "detector": {
+                "backend": "simulated",
+                "confidence_threshold": 0.3
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "max_age": 10,
+                "min_hits": 3
+            }
+        },
+        "payload_manager": {
+            "gimbal": {
+                "auto_track": {
+                    "enabled": true,
+                    "min_confidence": 0.5
+                }
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "auto-tracking ENABLED",
+            "TAKEOFF",
+            "EXECUTING",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "FAULT_GEOFENCE_BREACH",
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable auto-tracking parameters",
+        "auto_track_enabled": true,
+        "min_confidence_range": {"min": 0.1, "max": 0.9, "default": 0.5},
+        "notes": "Auto-tracking points gimbal at highest-confidence detected object."
+    }
+}

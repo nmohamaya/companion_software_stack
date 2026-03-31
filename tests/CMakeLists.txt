@@ -257,3 +257,6 @@ add_drone_test(test_gazebo_radar       test_gazebo_radar.cpp)
 
 # ── Rate Clamp tests (Issue #220) ─────────────────────────
 add_drone_test(test_rate_clamp         test_rate_clamp.cpp)
+
+# ── Gimbal Auto-Tracker tests (Issue #257) ────────────────
+add_drone_test(test_gimbal_auto_tracker test_gimbal_auto_tracker.cpp)

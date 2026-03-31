@@ -2,11 +2,13 @@
 // Process 6 — Payload Manager: controls gimbal + camera.
 // Uses HAL IGimbal interface — backend selected via config.
 // Reads PayloadCommand from Mission Planner, publishes PayloadStatus.
+// Subscribes to /detected_objects and /slam_pose for gimbal auto-tracking.
 
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
 #include "ipc/message_bus_factory.h"
 #include "ipc/zenoh_liveliness.h"
+#include "payload/auto_tracker.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
 #include "util/diagnostic.h"
@@ -67,6 +69,30 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // ── Auto-tracking: subscribe to detections + pose ──────
+    drone::payload::AutoTrackConfig auto_track_cfg{};
+    auto_track_cfg.enabled = cfg.get<bool>("payload_manager.gimbal.auto_track.enabled", false);
+    auto_track_cfg.min_confidence =
+        cfg.get<float>("payload_manager.gimbal.auto_track.min_confidence", 0.5f);
+
+    auto detections_sub =
+        bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
+    auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+
+    if (auto_track_cfg.enabled) {
+        if (!detections_sub->is_connected()) {
+            spdlog::warn("Auto-track enabled but cannot open detections channel");
+        }
+        if (!pose_sub->is_connected()) {
+            spdlog::warn("Auto-track enabled but cannot open pose channel");
+        }
+        spdlog::info("Gimbal auto-tracking ENABLED (min_confidence={:.2f})",
+                     auto_track_cfg.min_confidence);
+    }
+
+    // Latest detection list (updated each cycle from IPC)
+    drone::ipc::DetectedObjectList latest_detections{};
+
     spdlog::info("Payload Manager READY");
     drone::systemd::notify_ready();
     uint64_t last_cmd_ts   = 0;
@@ -95,9 +121,11 @@ int main(int argc, char* argv[]) {
 
         // Read commands
         drone::ipc::PayloadCommand cmd{};
+        bool                       manual_cmd_received = false;
         if (cmd_sub->receive(cmd) && cmd.valid && cmd.timestamp_ns != last_cmd_ts) {
             last_cmd_ts = cmd.timestamp_ns;
             ++cmd_count;
+            manual_cmd_received = true;
 
             gimbal->set_target(cmd.gimbal_pitch, cmd.gimbal_yaw);
             diag.add_metric("Gimbal", "target_pitch", static_cast<double>(cmd.gimbal_pitch));
@@ -120,6 +148,32 @@ int main(int argc, char* argv[]) {
                     spdlog::info("[Payload] Stopped video recording");
                     break;
                 default: break;
+            }
+        }
+
+        // ── Auto-tracking: update detections + pose, compute gimbal angles ──
+        {
+            drone::ipc::DetectedObjectList det_msg{};
+            if (detections_sub->receive(det_msg) && det_msg.validate()) {
+                latest_detections = det_msg;
+            }
+            // Drain pose subscriber to keep buffer fresh (pose available for future use)
+            drone::ipc::Pose pose_msg{};
+            (void)pose_sub->receive(pose_msg);
+
+            // Only auto-track when no manual command arrived this cycle
+            if (auto_track_cfg.enabled && !manual_cmd_received) {
+                const auto track_result = drone::payload::compute_auto_track(latest_detections,
+                                                                             auto_track_cfg);
+                if (track_result.has_target) {
+                    gimbal->set_target(track_result.pitch_deg, track_result.yaw_deg);
+                    diag.add_metric("AutoTrack", "target_pitch",
+                                    static_cast<double>(track_result.pitch_deg));
+                    diag.add_metric("AutoTrack", "target_yaw",
+                                    static_cast<double>(track_result.yaw_deg));
+                    diag.add_metric("AutoTrack", "confidence",
+                                    static_cast<double>(track_result.target_confidence));
+                }
             }
         }
 
