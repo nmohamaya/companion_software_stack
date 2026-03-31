@@ -403,7 +403,7 @@ int main(int argc, char* argv[]) {
     spdlog::info("[Perception] Detector backend: {} ({})", detector_backend, detector->name());
 
     // ── Create tracker from config ────────────────────────────
-    std::string tracker_backend = cfg.get<std::string>("perception.tracker.backend", "sort");
+    std::string tracker_backend = cfg.get<std::string>("perception.tracker.backend", "bytetrack");
     auto        tracker         = create_tracker(tracker_backend, &cfg);
     spdlog::info("[Perception] Tracker  backend: {} ({})", tracker_backend, tracker->name());
 

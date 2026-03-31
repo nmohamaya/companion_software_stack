@@ -35,9 +35,9 @@ public:
 ///
 /// Instantiates the tracker type matching the given backend string.
 /// cfg is used to override tunable parameters only; the backend is selected
-/// explicitly by the caller (not read from config). Supported backends: "sort" (default), "bytetrack".
+/// explicitly by the caller (not read from config). Supported backends: "bytetrack" (default), "sort".
 /// Returns nullptr if backend name is not recognized.
-std::unique_ptr<ITracker> create_tracker(const std::string&   backend = "sort",
+std::unique_ptr<ITracker> create_tracker(const std::string&   backend = "bytetrack",
                                          const drone::Config* cfg     = nullptr);
 
 }  // namespace drone::perception
