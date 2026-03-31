@@ -33,6 +33,11 @@ struct StateTickConfig {
     int   rtl_min_dwell_s{5};
     float survey_duration_s{0.0f};  // Post-takeoff obstacle survey duration (0 = skip)
     float survey_yaw_rate{0.3f};    // Yaw rate during survey (rad/s, ~0.3 = full 360 in ~21s)
+
+    // Collision recovery (Issue #226)
+    bool  collision_recovery_enabled{true};
+    float collision_climb_delta_m{3.0f};     // altitude gain during recovery climb
+    float collision_hover_duration_s{2.0f};  // hover-in-place duration before climb
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -62,6 +67,9 @@ public:
             case MissionState::NAVIGATE:
                 tick_navigate(fsm, pose, fc_state, objects, planner, grid_planner, avoider,
                               obstacle_layer, traj_pub, payload_pub, send_fc, correlation_id, diag);
+                break;
+            case MissionState::COLLISION_RECOVERY:
+                tick_collision_recovery(fsm, pose, fc_state, traj_pub);
                 break;
             case MissionState::RTL: tick_rtl(fsm, pose, fc_state, send_fc); break;
             case MissionState::LAND: tick_land(fsm, fc_state); break;
@@ -104,6 +112,13 @@ private:
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
                                                            std::chrono::seconds(10);
+
+    // Collision recovery state (Issue #226)
+    enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
+    bool                                  recovery_started_ = false;
+    RecoveryPhase                         recovery_phase_   = RecoveryPhase::HOVER;
+    std::chrono::steady_clock::time_point recovery_start_time_{};
+    float                                 recovery_target_alt_ = 0.0f;
 
     // ── PREFLIGHT: retry ARM until FC confirms ────────────────
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
@@ -253,15 +268,31 @@ private:
         if (flight_state_.nav_was_armed && !fc_state.armed) {
             spdlog::warn("[Planner] OBSTACLE COLLISION detected — vehicle unexpectedly "
                          "disarmed during navigation");
+            if (config_.collision_recovery_enabled) {
+                spdlog::info("[Planner] Entering COLLISION_RECOVERY — "
+                             "hover {:.1f}s then climb {:.1f}m",
+                             config_.collision_hover_duration_s, config_.collision_climb_delta_m);
+                recovery_started_ = false;
+                fsm.on_collision_recovery();
+                flight_state_.nav_was_armed = fc_state.armed;
+                return;
+            }
         }
         flight_state_.nav_was_armed = fc_state.armed;
 
         // Proximity collision detection
         {
-            const float px = static_cast<float>(pose.translation[0]);
-            const float py = static_cast<float>(pose.translation[1]);
-            const float pz = static_cast<float>(pose.translation[2]);
-            obstacle_layer.check_collision(px, py, pz, std::chrono::steady_clock::now());
+            const float px        = static_cast<float>(pose.translation[0]);
+            const float py        = static_cast<float>(pose.translation[1]);
+            const float pz        = static_cast<float>(pose.translation[2]);
+            bool        collision = obstacle_layer.check_collision(px, py, pz,
+                                                                   std::chrono::steady_clock::now());
+            if (collision && config_.collision_recovery_enabled) {
+                spdlog::info("[Planner] Proximity collision — entering COLLISION_RECOVERY");
+                recovery_started_ = false;
+                fsm.on_collision_recovery();
+                return;
+            }
         }
 
         // Update planner obstacle grid
@@ -357,6 +388,84 @@ private:
                     flight_state_.nav_was_armed  = true;
                     fsm.on_rtl();
                 }
+            }
+        }
+    }
+
+    // ── COLLISION_RECOVERY: hover → climb → replan → NAVIGATE (Issue #226) ──
+    void tick_collision_recovery(MissionFSM& fsm, const drone::ipc::Pose& pose,
+                                 const drone::ipc::FCState& /*fc_state*/,
+                                 drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& traj_pub) {
+        auto now = std::chrono::steady_clock::now();
+        if (!recovery_started_) {
+            recovery_start_time_ = now;
+            recovery_phase_      = RecoveryPhase::HOVER;
+            recovery_target_alt_ = static_cast<float>(pose.translation[2]) +
+                                   config_.collision_climb_delta_m;
+            recovery_started_ = true;
+            spdlog::info("[Recovery] Phase HOVER — holding position for {:.1f}s, "
+                         "then climbing to {:.1f}m",
+                         config_.collision_hover_duration_s, recovery_target_alt_);
+        }
+
+        const float px        = static_cast<float>(pose.translation[0]);
+        const float py        = static_cast<float>(pose.translation[1]);
+        const float pz        = static_cast<float>(pose.translation[2]);
+        float       elapsed_s = std::chrono::duration<float>(now - recovery_start_time_).count();
+
+        switch (recovery_phase_) {
+            case RecoveryPhase::HOVER: {
+                // Publish hover-in-place command
+                drone::ipc::TrajectoryCmd cmd{};
+                cmd.timestamp_ns = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch())
+                        .count());
+                cmd.valid      = true;
+                cmd.target_x   = px;
+                cmd.target_y   = py;
+                cmd.target_z   = pz;
+                cmd.velocity_x = 0.0f;
+                cmd.velocity_y = 0.0f;
+                cmd.velocity_z = 0.0f;
+                traj_pub.publish(cmd);
+
+                if (elapsed_s >= config_.collision_hover_duration_s) {
+                    recovery_phase_ = RecoveryPhase::CLIMB;
+                    spdlog::info("[Recovery] Phase CLIMB — ascending {:.1f}m to {:.1f}m",
+                                 config_.collision_climb_delta_m, recovery_target_alt_);
+                }
+                break;
+            }
+            case RecoveryPhase::CLIMB: {
+                // Publish climb command — move to recovery_target_alt_
+                drone::ipc::TrajectoryCmd cmd{};
+                cmd.timestamp_ns = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch())
+                        .count());
+                cmd.valid      = true;
+                cmd.target_x   = px;
+                cmd.target_y   = py;
+                cmd.target_z   = recovery_target_alt_;
+                cmd.velocity_x = 0.0f;
+                cmd.velocity_y = 0.0f;
+                cmd.velocity_z = 1.0f;  // gentle climb rate
+                traj_pub.publish(cmd);
+
+                constexpr float kAltTolerance = 0.5f;
+                if (pz >= recovery_target_alt_ - kAltTolerance) {
+                    recovery_phase_ = RecoveryPhase::REPLAN;
+                    spdlog::info("[Recovery] Phase REPLAN — altitude {:.1f}m reached, "
+                                 "resuming navigation",
+                                 pz);
+                }
+                break;
+            }
+            case RecoveryPhase::REPLAN: {
+                // Recovery complete — resume NAVIGATE (planner will replan on next tick)
+                spdlog::info("[Recovery] Complete — transitioning to NAVIGATE");
+                recovery_started_ = false;
+                fsm.on_recovery_complete();
+                break;
             }
         }
     }

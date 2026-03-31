@@ -29,7 +29,8 @@ public:
                  SharedFlightState& flight_state, uint64_t now_ns) {
         if (fault.recommended_action <= last_fault_action_ ||
             fault.recommended_action <= FaultAction::NONE || fsm.state() == MissionState::IDLE ||
-            fsm.state() == MissionState::PREFLIGHT)
+            fsm.state() == MissionState::PREFLIGHT ||
+            fsm.state() == MissionState::COLLISION_RECOVERY)
             return;
 
         spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {}) active_faults=[{}]",

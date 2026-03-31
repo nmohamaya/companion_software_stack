@@ -257,3 +257,6 @@ add_drone_test(test_gazebo_radar       test_gazebo_radar.cpp)
 
 # ── Rate Clamp tests (Issue #220) ─────────────────────────
 add_drone_test(test_rate_clamp         test_rate_clamp.cpp)
+
+# ── Collision Recovery tests (Issue #226) ─────────────────
+add_drone_test(test_collision_recovery test_collision_recovery.cpp)
