@@ -177,6 +177,12 @@ if(ENABLE_SYSTEMD)
     target_link_libraries(test_sd_notify PRIVATE ${SYSTEMD_LIBRARIES})
 endif()
 
+# ── SimulatedDetector tests (Issue #253) ────────────────────
+add_drone_test(test_simulated_detector test_simulated_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/detector_factory.cpp
+)
+
 # ── ColorContourDetector tests ───────────────────────────────
 add_drone_test(test_color_contour_detector test_color_contour_detector.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
