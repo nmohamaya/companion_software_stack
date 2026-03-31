@@ -237,6 +237,9 @@ add_drone_test(test_bytetrack_tracker test_bytetrack_tracker.cpp
 # ── D* Lite Path Planner tests (Issue #158) ────────────────
 add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
 
+# ── Dynamic Obstacle Prediction tests (Issue #256) ───────
+add_drone_test(test_obstacle_prediction test_obstacle_prediction.cpp)
+
 # ── Mission State Tick tests (Issue #154) ──────────────────
 add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)
 

@@ -51,6 +51,8 @@ struct GridPlannerConfig {
     uint32_t radar_promotion_hits = 3;     // Radar update count for immediate static promotion
     float    look_ahead_m         = 0.0f;  // Pure-pursuit look-ahead distance along path
                                            // (0 = disabled, use cell-by-cell following)
+    bool  prediction_enabled = true;       // Enable velocity-based obstacle prediction
+    float prediction_dt_s    = 2.0f;       // Prediction horizon (seconds into the future)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -83,7 +85,7 @@ public:
         : config_(config)
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
-                config.radar_promotion_hits) {}
+                config.radar_promotion_hits, config.prediction_enabled, config.prediction_dt_s) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
