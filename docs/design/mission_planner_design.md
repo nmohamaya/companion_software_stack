@@ -668,7 +668,7 @@ Integration coverage via scenario tests in `config/scenarios/`:
 - `03_battery_degradation.json` — Battery fault escalation
 - `04_fc_link_loss.json` — FC link-loss contingency
 - `05_geofence_breach.json` — Geofence breach detection
-- `18_perception_avoidance.json` — Perception-driven obstacle avoidance with radar + camera UKF fusion, D* Lite dynamic replanning, SURVEY phase (Tier 2, Gazebo)
+- `18_perception_avoidance.json` — Sensor-driven obstacle avoidance with no HD-map (static_obstacles empty). Camera+radar UKF fusion detects all obstacles at runtime, D* Lite replans dynamically, SURVEY phase for pre-detection. Compare with 02 which pre-loads HD-map. (Tier 2, Gazebo)
 
 ---
 

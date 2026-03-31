@@ -198,7 +198,7 @@ bash tests/run_scenario_gazebo.sh config/scenarios/18_perception_avoidance.json 
 - Generates a timestamped run report in `drone_logs/scenarios_gazebo/`
 
 **Available scenarios** (see `config/scenarios/` folder):
-- `18_perception_avoidance.json` — Object detection + obstacle avoidance
+- `18_perception_avoidance.json` — Sensor-driven obstacle avoidance (no HD-map; camera+radar detect obstacles at runtime)
 - Other scenarios for waypoint following, GPS loss, battery warnings, etc.
 
 **Scenario options:**

@@ -1,5 +1,5 @@
 {
-    "_comment": "Scenario 18: Perception-Driven Obstacle Avoidance — no HD-map, D* Lite dynamic layer only",
+    "_comment": "Scenario 18: Sensor-Driven Obstacle Avoidance (no HD-map). All obstacle knowledge comes from live camera+radar perception at runtime — static_obstacles is intentionally empty. Compare with scenario 02 which pre-loads HD-map obstacles.",
     "scenario": {
         "name": "perception_avoidance",
         "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity (with altitude gate), and D* Lite replans dynamically via update_from_objects(). Path-aware ObstacleAvoider3D provides lateral nudge without fighting the planner. Validates the full multi-sensor perception→planning loop for unknown environments.",
