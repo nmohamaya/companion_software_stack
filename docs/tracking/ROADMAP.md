@@ -69,10 +69,10 @@
 | Thread watchdog | **ThreadHeartbeat + ThreadWatchdog** — per-thread stuck detection via atomics |
 | Process watchdog | **ProcessManager** — fork+exec, dependency graph, exponential backoff |
 | Observability | JSON logging + IPC latency histograms + cross-process correlation IDs |
-| Planning | **D* Lite incremental planner** + A* 3D grid planner + 3D obstacle avoidance + potential field fallback |
+| Planning | **D* Lite incremental planner** (8-connected 2D; 26-connected 3D planned — #250, requires #252) + A* 3D grid planner + 3D obstacle avoidance + potential field fallback |
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
-| VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration |
+| VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration (quality is hardcoded heuristic — [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) tracks covariance-derived quality) |
 | Integration testing | **9 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **48** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
@@ -392,6 +392,8 @@
 | [#34](https://github.com/nmohamaya/companion_software_stack/issues/34) | UDPGCSLink — ground station telemetry | P1 | `IGCSLink` implementation with UDP socket; telemetry out + command in; protobuf framing |
 | [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) | Video streaming (H.265 → RTP/RTSP) | P2 | Hardware H.265 encode on Jetson; GStreamer RTP/RTSP pipeline; bitrate adaptation |
 | [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | P1 | Native aarch64 build on **NVIDIA Jetson Orin** (JetPack 6.x); CMake cross-compile toolchain |
+| [#252](https://github.com/nmohamaya/companion_software_stack/issues/252) | 3D depth pipeline (stereo/depth sensor) | P1 | True 3D obstacle geometry via stereo disparity or depth camera. Prerequisite for #250 (3D planner) — without measured depth, vertical planning decisions rely on geometric guesses. Required when the drone must fly over or under obstacles. |
+| [#253](https://github.com/nmohamaya/companion_software_stack/issues/253) | YOLOv8 in Gazebo scenarios + detector cleanup | P2 | Enable and validate the existing OpenCvYoloDetector in Gazebo SITL. Extract SimulatedDetector from detector_interface.h. New scenario config for YOLOv8 + camera + radar pipeline. |
 
 **Target Hardware:** NVIDIA Jetson Orin (Nano 8 GB / NX 16 GB / AGX 32–64 GB), JetPack 6.x, CUDA 12.x
 
@@ -408,6 +410,7 @@
 | [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | P0 | Integrate ORB-SLAM3 or VINS-Fusion as `IVisualFrontend` backend; stereo or mono+IMU |
 | [#38](https://github.com/nmohamaya/companion_software_stack/issues/38) | Stereo camera calibration pipeline | P1 | Checkerboard calibration tool; output intrinsics + extrinsics to config JSON |
 | [#39](https://github.com/nmohamaya/companion_software_stack/issues/39) | VIO/GPS fusion via PX4 external vision | P1 | Publish VIO pose to PX4 via MAVLink `VISION_POSITION_ESTIMATE`; EKF2 fusion |
+| [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) | Covariance-derived VIO quality | P1 | Derive `Pose.quality` from covariance matrix trace instead of hardcoded feature-count heuristic; propagate pre-integrator covariance to Pose; configurable thresholds |
 
 **Exit Criteria:** Indoor GPS-denied flight using VIO pose estimation.
 
@@ -423,6 +426,8 @@
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | 🟡 **Partial** — FaultManager ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61), PR #63) handles 8 fault conditions with graduated response. Remaining: geofencing, motor failure, SLAM divergence detection |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
 | — | Predictive thermal trend monitoring | P1 | Replace threshold-only thermal zone computation with sliding-window linear regression (dT/dt) to predict time-to-thermal-runaway. Issue early warnings before critical temperature is reached, allowing the drone to RTL while still safe. Thresholds must be calibrated per-platform based on host SBC thermal characteristics (e.g., Jetson Orin throttle at 97°C, heatsink/fan curves). See `config/hardware.json` for deployment thresholds. |
+| [#250](https://github.com/nmohamaya/companion_software_stack/issues/250) | D* Lite 3D grid (26-connected) | P2 | Current planner is 8-connected 2D (goal Z snapped to start Z). Upgrade to 26-connected 3D search for non-flat terrain on real hardware. Add config toggle for 2D/3D mode. |
+| [#251](https://github.com/nmohamaya/companion_software_stack/issues/251) | Production deployment: Jetson Orin Nano | P1 | Native build pipeline, dependency install, systemd deployment, thermal/memory/serial caveats, TLS security, checklist for first hardware build |
 | ~~[#45](https://github.com/nmohamaya/companion_software_stack/issues/45)~~ | ~~**[Epic] Zenoh IPC Migration**~~ | ~~P1~~ | ✅ **Complete** — All 6 phases done (PRs #52–#57), Epic closed |
 | ~~[#46](https://github.com/nmohamaya/companion_software_stack/issues/46)~~ | ~~Zenoh Phase A — Foundation~~ | ~~P0~~ | ✅ Done (PR #52) — CMake, ZenohMessageBus, security options, 33 tests, CI dual-build |
 | ~~[#47](https://github.com/nmohamaya/companion_software_stack/issues/47)~~ | ~~Zenoh Phase B — Low-bandwidth channels~~ | ~~P1~~ | ✅ Done (PR #53) — 10 control/status channels migrated, all 7 processes on factory |
@@ -499,6 +504,7 @@
 | [#34](https://github.com/nmohamaya/companion_software_stack/issues/34) | UDPGCSLink — ground station telemetry | Open |
 | [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) | Video streaming (H.265 → RTP/RTSP) | Open |
 | [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | Open |
+| [#252](https://github.com/nmohamaya/companion_software_stack/issues/252) | 3D depth pipeline (stereo/depth sensor) | Open |
 
 ### Phase 11 — Autonomous Navigation
 
@@ -507,15 +513,17 @@
 | [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | Open |
 | [#38](https://github.com/nmohamaya/companion_software_stack/issues/38) | Stereo camera calibration pipeline | Open |
 | [#39](https://github.com/nmohamaya/companion_software_stack/issues/39) | VIO/GPS fusion via PX4 external vision | Open |
+| [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) | Covariance-derived VIO quality | Open |
 
 ### Phase 12 — Production Hardening
 
 | # | Title | State |
 |---|-------|-------|
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | Open |
-| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Mostly complete** — FaultManager (#61 PR #63) + geofence/battery/FC-link (Epic #110 PR #119). Remaining: motor failure, SLAM divergence |
+| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Mostly complete** — FaultManager (#61 PR #63) + geofence/battery/FC-link (Epic #110 PR #119). Remaining: motor failure, SLAM divergence ([#254](https://github.com/nmohamaya/companion_software_stack/issues/254) enables covariance-based divergence detection) |
 | [#61](https://github.com/nmohamaya/companion_software_stack/issues/61) | FaultManager — graceful degradation | **Closed** (PR #63) |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
+| [#250](https://github.com/nmohamaya/companion_software_stack/issues/250) | D* Lite 3D grid (26-connected) | Open |
 
 ### Zenoh IPC Migration (Phase 12) — ✅ COMPLETE
 
