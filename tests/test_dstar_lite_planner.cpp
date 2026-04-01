@@ -1453,74 +1453,87 @@ TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
 
 // Helper: check that no consecutive waypoints in the world-coordinate path
 // represent a diagonal grid move through a blocked cardinal intermediary.
-// With resolution_m = 1.0, world coords ≈ grid coords (rounded).
-static bool path_has_corner_cut(const std::vector<std::array<float, 3>>& path, float resolution,
-                                const OccupancyGrid3D& grid) {
+// Uses the grid's own world_to_grid() to avoid duplicating the conversion logic.
+static bool path_has_corner_cut(const std::vector<std::array<float, 3>>& path,
+                                const OccupancyGrid3D&                   grid) {
     for (size_t i = 0; i + 1 < path.size(); ++i) {
-        int gx0 = static_cast<int>(std::round(path[i][0] / resolution));
-        int gy0 = static_cast<int>(std::round(path[i][1] / resolution));
-        int gz0 = static_cast<int>(std::round(path[i][2] / resolution));
-        int gx1 = static_cast<int>(std::round(path[i + 1][0] / resolution));
-        int gy1 = static_cast<int>(std::round(path[i + 1][1] / resolution));
-        int gz1 = static_cast<int>(std::round(path[i + 1][2] / resolution));
+        GridCell g0 = grid.world_to_grid(path[i][0], path[i][1], path[i][2]);
+        GridCell g1 = grid.world_to_grid(path[i + 1][0], path[i + 1][1], path[i + 1][2]);
 
-        int dx = gx1 - gx0;
-        int dy = gy1 - gy0;
-        int dz = gz1 - gz0;
+        int dx = g1.x - g0.x;
+        int dy = g1.y - g0.y;
+        int dz = g1.z - g0.z;
 
         // Only check diagonal moves (Manhattan distance > 1)
         if (std::abs(dx) + std::abs(dy) + std::abs(dz) <= 1) continue;
 
         // Check XY intermediaries
         if (dx != 0 && dy != 0) {
-            GridCell cx{gx0 + dx, gy0, gz0};
-            GridCell cy{gx0, gy0 + dy, gz0};
+            GridCell cx{g0.x + dx, g0.y, g0.z};
+            GridCell cy{g0.x, g0.y + dy, g0.z};
             if (grid.is_occupied(cx) || grid.is_occupied(cy)) return true;
         }
         // Check XZ intermediaries
         if (dx != 0 && dz != 0) {
-            GridCell cx{gx0 + dx, gy0, gz0};
-            GridCell cz{gx0, gy0, gz0 + dz};
+            GridCell cx{g0.x + dx, g0.y, g0.z};
+            GridCell cz{g0.x, g0.y, g0.z + dz};
             if (grid.is_occupied(cx) || grid.is_occupied(cz)) return true;
         }
         // Check YZ intermediaries
         if (dy != 0 && dz != 0) {
-            GridCell cy{gx0, gy0 + dy, gz0};
-            GridCell cz{gx0, gy0, gz0 + dz};
+            GridCell cy{g0.x, g0.y + dy, g0.z};
+            GridCell cz{g0.x, g0.y, g0.z + dz};
             if (grid.is_occupied(cy) || grid.is_occupied(cz)) return true;
         }
     }
     return false;
 }
 
-TEST(DStarLiteCornerCutTest, LShapeBlocksDiagonal) {
-    // L-shaped obstacle: two cells that share a diagonal gap.
+TEST(DStarLiteCornerCutTest, LShapeInflatedBlocksDiagonal) {
+    // Two point obstacles placed so their 1-cell inflation (the OccupancyGrid3D
+    // minimum) forms an L-shaped barrier with a diagonal gap.
     //
-    //   y=3: . . . . . G
-    //   y=2: . . . O . .    O at (3,2)
-    //   y=1: . . . . O .    O at (4,1)
-    //   y=0: S . . . . .
+    // Obstacle centres at (5,4) and (7,2).  With 1-cell cross inflation each
+    // centre expands into a plus/cross of 5 cells:
+    //   (5,4) -> {(5,4),(4,4),(6,4),(5,3),(5,5)}
+    //   (7,2) -> {(7,2),(6,2),(8,2),(7,1),(7,3)}
     //
-    // The diagonal from (3,1) to (4,2) would cut through the gap between
-    // (3,2) and (4,1).  With the corner-cutting guard this is blocked.
+    // The diagonal from (6,3) to (7,4) has cardinal intermediates:
+    //   (7,3) — occupied (inflation of (7,2))
+    //   (6,4) — occupied (inflation of (5,4))
+    // But (6,3) and (7,4) themselves are FREE — the corner-cutting guard must
+    // prevent a diagonal move through that gap.
+    //
+    //   y=5: . . . . . X . . . .     X = inflated from (5,4)
+    //   y=4: . . . . X O X . . G     O = obstacle centre
+    //   y=3: . . . . . X . x . .     x = inflated from (7,2)
+    //   y=2: . . . . . . x O x .
+    //   y=1: . . . . . . . x . .
+    //   y=0: S . . . . . . . . .
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;  // precise cell control
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
 
-    // Place two obstacles forming the L-shape corner
-    planner.add_static_obstacle(3.0f, 2.0f, 0.0f, 0.0f);
-    planner.add_static_obstacle(4.0f, 1.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(5.0f, 4.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(7.0f, 2.0f, 0.0f, 0.0f);
+
+    // Assert key cells: diagonal endpoints free, cardinal intermediates occupied
+    const auto& grid = planner.grid();
+    EXPECT_FALSE(grid.is_occupied({6, 3, 0})) << "Diagonal endpoint (6,3) must be free";
+    EXPECT_FALSE(grid.is_occupied({7, 4, 0})) << "Diagonal endpoint (7,4) must be free";
+    EXPECT_TRUE(grid.is_occupied({7, 3, 0})) << "Cardinal intermediate (7,3) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({6, 4, 0})) << "Cardinal intermediate (6,4) must be occupied";
 
     drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 0.0;
 
-    Waypoint target{5.0f, 3.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    Waypoint target{9.0f, 4.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
     EXPECT_TRUE(cmd.valid);
@@ -1528,57 +1541,71 @@ TEST(DStarLiteCornerCutTest, LShapeBlocksDiagonal) {
     EXPECT_FALSE(planner.cached_path().empty());
 
     // The path must NOT cut through the diagonal gap
-    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), config.resolution_m, planner.grid()))
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
         << "Path should not cut diagonally through L-shaped obstacle gap";
 }
 
-TEST(DStarLiteCornerCutTest, LShapeBlocksDiagonalReversed) {
-    // Mirror of the above: obstacles at (3,1) and (4,2), blocking
-    // the diagonal from (3,2) to (4,1).
+TEST(DStarLiteCornerCutTest, LShapeInflatedBlocksDiagonalReversed) {
+    // Mirror of the first test with a different axis orientation.
+    // Obstacles at (4,7) and (2,5) with 1-cell cross inflation:
+    //   (4,7) -> {(4,7),(3,7),(5,7),(4,6),(4,8)}
+    //   (2,5) -> {(2,5),(1,5),(3,5),(2,4),(2,6)}
     //
-    //   y=3: . . . . . G
-    //   y=2: . . . . O .    O at (4,2)
-    //   y=1: . . . O . .    O at (3,1)
-    //   y=0: S . . . . .
+    // Diagonal from (3,6) to (4,5) has cardinal intermediates:
+    //   (4,6) — occupied (inflation of (4,7))
+    //   (3,5) — occupied (inflation of (2,5))
+    // Endpoints (3,6) and (4,5) are both free.
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
 
-    planner.add_static_obstacle(4.0f, 2.0f, 0.0f, 0.0f);
-    planner.add_static_obstacle(3.0f, 1.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(4.0f, 7.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(2.0f, 5.0f, 0.0f, 0.0f);
+
+    // Assert key cells: diagonal endpoints free, cardinal intermediates occupied
+    const auto& grid = planner.grid();
+    EXPECT_FALSE(grid.is_occupied({3, 6, 0})) << "Diagonal endpoint (3,6) must be free";
+    EXPECT_FALSE(grid.is_occupied({4, 5, 0})) << "Diagonal endpoint (4,5) must be free";
+    EXPECT_TRUE(grid.is_occupied({4, 6, 0})) << "Cardinal intermediate (4,6) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({3, 5, 0})) << "Cardinal intermediate (3,5) must be occupied";
 
     drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 0.0;
 
-    Waypoint target{5.0f, 3.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    Waypoint target{5.0f, 8.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
     EXPECT_TRUE(cmd.valid);
     EXPECT_FALSE(planner.using_direct_fallback());
     EXPECT_FALSE(planner.cached_path().empty());
 
-    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), config.resolution_m, planner.grid()))
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
         << "Path should not cut diagonally through reversed L-shaped obstacle gap";
 }
 
-TEST(DStarLiteCornerCutTest, WallCornerNoCut) {
-    // Wall with a 90-degree corner — the path must not cut the inside corner.
+TEST(DStarLiteCornerCutTest, WallCornerInflatedNoCut) {
+    // Wall with a 90-degree corner.  Each obstacle centre gets 1-cell cross
+    // inflation (OccupancyGrid3D minimum), so the wall is wider than the raw
+    // centres.  The path must not cut the inside corner of the inflated wall.
     //
-    //   y=4: . . . . . G
-    //   y=3: . . O O O .    wall at y=3, x=2..4
-    //   y=2: . . O . . .    wall at x=2, y=1..2
-    //   y=1: . . O . . .
-    //   y=0: S . . . . .
+    // Obstacle centres (O) and their inflation zones (x) overlap to form a
+    // solid L-shaped barrier:
+    //   y=4: . x x x x x .
+    //   y=3: . x O O O x .    wall at y=3, x=2..4
+    //   y=2: x x O x x x .    wall at x=2, y=1..2 + inflation overlap
+    //   y=1: . x O x . . .
+    //   y=0: . x x x . . .
+    //   S at (0,0), G at (6,5)
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
@@ -1591,64 +1618,72 @@ TEST(DStarLiteCornerCutTest, WallCornerNoCut) {
     planner.add_static_obstacle(3.0f, 3.0f, 0.0f, 0.0f);
     planner.add_static_obstacle(4.0f, 3.0f, 0.0f, 0.0f);
 
+    // Verify the inside-corner inflation — the cell just inside the corner
+    // and the two adjacent cardinal cells must be occupied.
+    const auto& grid = planner.grid();
+    EXPECT_TRUE(grid.is_occupied({3, 2, 0})) << "Inside corner cell (3,2) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({3, 3, 0})) << "Wall centre (3,3) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({2, 2, 0})) << "Wall centre (2,2) must be occupied";
+
     drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 0.0;
 
-    Waypoint target{5.0f, 4.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    Waypoint target{6.0f, 5.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
     EXPECT_TRUE(cmd.valid);
     EXPECT_FALSE(planner.using_direct_fallback());
     EXPECT_FALSE(planner.cached_path().empty());
 
-    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), config.resolution_m, planner.grid()))
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
         << "Path should not cut through the inside corner of an L-shaped wall";
 }
 
 TEST(DStarLiteCornerCutTest, ValidDiagonalStillAllowed) {
     // When both cardinal intermediaries are free, diagonal moves must still work.
-    // Place a single obstacle that does NOT block any diagonal.
+    // Place a single obstacle far from the path so its 1-cell inflation does
+    // not block any diagonal along the route from (0,0) to (4,4).
     //
-    //   y=2: . . G
-    //   y=1: . . .
-    //   y=0: S . O    O at (2,0) — does not block diagonal (0,0)->(1,1)
+    //   y=4: . . . . G
+    //   y=0: S . . . . . . O    O at (7,0) — well away from the path
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
 
-    planner.add_static_obstacle(2.0f, 0.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(7.0f, 0.0f, 0.0f, 0.0f);
 
     drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 0.0;
 
-    Waypoint target{2.0f, 2.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    Waypoint target{4.0f, 4.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
     EXPECT_TRUE(cmd.valid);
     EXPECT_FALSE(planner.using_direct_fallback());
     EXPECT_FALSE(planner.cached_path().empty());
 
-    // Path should use diagonal moves (should be short — ~2-3 waypoints, not 4+)
-    // A path without diagonals from (0,0) to (2,2) would need at least 4 cardinal steps.
-    // With diagonals available it can be as short as 3 waypoints (start + 2 diagonal steps).
-    EXPECT_LE(planner.cached_path().size(), 4u)
+    // Path should use diagonal moves (should be short — ~5 waypoints, not 8+).
+    // A path without diagonals from (0,0) to (4,4) would need at least 8 cardinal steps.
+    // With diagonals available it can be as short as 5 waypoints (start + 4 diagonal steps).
+    EXPECT_LE(planner.cached_path().size(), 6u)
         << "Valid diagonals should still be used, keeping the path short";
 }
 
 TEST(DStarLiteCornerCutTest, OpenFieldDiagonalsWork) {
     // In an empty grid, diagonal paths should still be generated normally.
+    // No obstacles, so inflation does not matter.
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
@@ -1672,56 +1707,73 @@ TEST(DStarLiteCornerCutTest, OpenFieldDiagonalsWork) {
 }
 
 TEST(DStarLiteCornerCutTest, BothCardinalsBlockedForcesDetour) {
-    // Both cardinal intermediaries of a diagonal are blocked.
-    // The planner must find a longer route around.
+    // Both cardinal intermediaries of a diagonal are blocked, forcing a detour.
     //
-    //   y=2: . G .
-    //   y=1: O . O    O at (-1,1) and (1,1) — blocks diags from (0,0)
-    //   y=0: . S .
+    // Obstacles at (3,4) and (5,2) with 1-cell cross inflation:
+    //   (3,4) -> {(3,4),(2,4),(4,4),(3,3),(3,5)}
+    //   (5,2) -> {(5,2),(4,2),(6,2),(5,1),(5,3)}
     //
-    // From (0,0), the diagonals to (-1,1) and (1,1) are to occupied cells.
-    // The diagonal to (0,0)->(1,1) is impossible because (1,0) not blocked but
-    // we want both blocked.  Let me use a different config:
-    //
-    //   y=2: . . G
-    //   y=1: . O .    O at (1,1) blocks cardinal-y from (1,0)
-    //   y=0: S . O    O at (2,0) blocks cardinal-x from (1,0)
-    //
-    // Diagonal from (1,0) to (2,1): cardinal (2,0)=blocked, (1,1)=blocked → blocked
+    // Diagonal from (4,3) to (5,4): cardinal intermediates
+    //   (5,3) — occupied (inflation of (5,2))
+    //   (4,4) — occupied (inflation of (3,4))
+    // Both blocked, so the planner must route around.
+    // Endpoints (4,3) and (5,4) are both free.
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
 
-    planner.add_static_obstacle(1.0f, 1.0f, 0.0f, 0.0f);
-    planner.add_static_obstacle(2.0f, 0.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(3.0f, 4.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(5.0f, 2.0f, 0.0f, 0.0f);
+
+    // Assert the diagonal's cardinal intermediates are blocked and endpoints free
+    const auto& grid = planner.grid();
+    EXPECT_FALSE(grid.is_occupied({4, 3, 0})) << "Diagonal endpoint (4,3) must be free";
+    EXPECT_FALSE(grid.is_occupied({5, 4, 0})) << "Diagonal endpoint (5,4) must be free";
+    EXPECT_TRUE(grid.is_occupied({5, 3, 0})) << "Cardinal intermediate (5,3) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({4, 4, 0})) << "Cardinal intermediate (4,4) must be occupied";
 
     drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[1] = 0.0;
     pose.translation[2] = 0.0;
 
-    Waypoint target{2.0f, 2.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    Waypoint target{7.0f, 6.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
     EXPECT_TRUE(cmd.valid);
     EXPECT_FALSE(planner.using_direct_fallback());
     EXPECT_FALSE(planner.cached_path().empty());
 
-    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), config.resolution_m, planner.grid()))
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
         << "Path must not cut through when both cardinal intermediaries are blocked";
+
+    // Verify the specific guarded diagonal edge (4,3)->(5,4) is not taken
+    for (size_t i = 0; i + 1 < planner.cached_path().size(); ++i) {
+        GridCell a = grid.world_to_grid(planner.cached_path()[i][0], planner.cached_path()[i][1],
+                                        planner.cached_path()[i][2]);
+        GridCell b = grid.world_to_grid(planner.cached_path()[i + 1][0],
+                                        planner.cached_path()[i + 1][1],
+                                        planner.cached_path()[i + 1][2]);
+        bool     is_guarded_edge = (a.x == 4 && a.y == 3 && b.x == 5 && b.y == 4) ||
+                               (a.x == 5 && a.y == 4 && b.x == 4 && b.y == 3);
+        EXPECT_FALSE(is_guarded_edge)
+            << "Path must not use the guarded diagonal edge (4,3)<->(5,4)";
+    }
 }
 
-TEST(DStarLiteCornerCutTest, IncrementalUpdateRespectGuard) {
+TEST(DStarLiteCornerCutTest, IncrementalUpdateRespectsCornerGuard) {
     // After an incremental obstacle update creates an L-shape, the replanned
     // path must still respect the corner-cutting guard.
+    // Obstacles are spaced 2 cells apart diagonally so that 1-cell inflation
+    // creates cardinal intermediates without occupying the diagonal endpoints.
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
     config.replan_interval_s  = 0.0f;
     config.smoothing_alpha    = 1.0f;
     DStarLitePlanner planner(config);
@@ -1731,31 +1783,29 @@ TEST(DStarLiteCornerCutTest, IncrementalUpdateRespectGuard) {
     pose.translation[1] = 0.0;
     pose.translation[2] = 0.0;
 
-    Waypoint target{5.0f, 3.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    Waypoint target{9.0f, 6.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
 
     // First plan: no obstacles, path uses diagonals freely
     auto cmd1 = planner.plan(pose, target);
     EXPECT_TRUE(cmd1.valid);
     EXPECT_FALSE(planner.using_direct_fallback());
 
-    // Now add L-shaped obstacles via dynamic update (simulates runtime detection)
+    // Add L-shaped obstacles via dynamic update (simulates runtime detection).
+    // Objects at (5,4) and (7,2) — same geometry as LShapeInflatedBlocksDiagonal.
+    // update_from_objects() uses steady_clock internally; timestamp_ns is unused.
     drone::ipc::DetectedObjectList objects{};
-    objects.timestamp_ns =
-        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now().time_since_epoch())
-                                  .count());
     objects.num_objects = 2;
-    // Object 1 at (3,2)
+    // Object 1 at (5,4)
     objects.objects[0]            = {};
     objects.objects[0].confidence = 0.9f;
-    objects.objects[0].position_x = 3.0f;
-    objects.objects[0].position_y = 2.0f;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 4.0f;
     objects.objects[0].position_z = 0.0f;
-    // Object 2 at (4,1)
+    // Object 2 at (7,2)
     objects.objects[1]            = {};
     objects.objects[1].confidence = 0.9f;
-    objects.objects[1].position_x = 4.0f;
-    objects.objects[1].position_y = 1.0f;
+    objects.objects[1].position_x = 7.0f;
+    objects.objects[1].position_y = 2.0f;
     objects.objects[1].position_z = 0.0f;
 
     planner.update_obstacles(objects, pose);
@@ -1766,6 +1816,6 @@ TEST(DStarLiteCornerCutTest, IncrementalUpdateRespectGuard) {
     EXPECT_FALSE(planner.using_direct_fallback());
     EXPECT_FALSE(planner.cached_path().empty());
 
-    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), config.resolution_m, planner.grid()))
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
         << "Incremental replan must respect corner-cutting guard";
 }
