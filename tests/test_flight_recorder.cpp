@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 using namespace drone::recorder;
 using namespace drone::ipc;

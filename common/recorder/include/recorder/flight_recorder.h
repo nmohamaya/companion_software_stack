@@ -16,6 +16,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -63,6 +65,7 @@ struct RecordEntry {
 
 /// Ring buffer that holds recorded entries up to a configurable byte limit.
 /// When full, oldest entries are discarded to make room.
+/// Uses std::deque for O(1) front eviction.
 class RecordRingBuffer {
 public:
     explicit RecordRingBuffer(std::size_t max_bytes) : max_bytes_(max_bytes) {}
@@ -74,7 +77,7 @@ public:
 
         while (current_bytes_ + entry_size > max_bytes_ && !entries_.empty()) {
             current_bytes_ -= entries_.front().serialized_size();
-            entries_.erase(entries_.begin());
+            entries_.pop_front();
         }
 
         current_bytes_ += entry_size;
@@ -82,7 +85,7 @@ public:
     }
 
     /// Access all entries (oldest first).
-    [[nodiscard]] const std::vector<RecordEntry>& entries() const { return entries_; }
+    [[nodiscard]] const std::deque<RecordEntry>& entries() const { return entries_; }
 
     /// Current total serialized size in bytes.
     [[nodiscard]] std::size_t current_bytes() const { return current_bytes_; }
@@ -100,16 +103,17 @@ public:
     }
 
 private:
-    std::size_t              max_bytes_     = 0;
-    std::size_t              current_bytes_ = 0;
-    std::vector<RecordEntry> entries_;
+    std::size_t             max_bytes_     = 0;
+    std::size_t             current_bytes_ = 0;
+    std::deque<RecordEntry> entries_;
 };
 
 /// Write a complete log file from a set of record entries.
+/// Accepts any container of RecordEntry (vector, deque, etc.).
 /// Returns true on success.
-[[nodiscard]] inline bool write_log_file(const std::string&              path,
-                                         const std::vector<RecordEntry>& entries,
-                                         uint64_t                        start_time_ns = 0) {
+template<typename Container>
+[[nodiscard]] inline bool write_log_file(const std::string& path, const Container& entries,
+                                         uint64_t start_time_ns = 0) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) return false;
 
@@ -119,7 +123,10 @@ private:
     out.write(fh_bytes, sizeof(file_header));
 
     for (const auto& entry : entries) {
-        const auto* rh_bytes = reinterpret_cast<const char*>(&entry.header);
+        // Ensure topic_name_len matches actual topic_name size for consistency
+        RecordHeader hdr_copy   = entry.header;
+        hdr_copy.topic_name_len = static_cast<uint16_t>(entry.topic_name.size());
+        const auto* rh_bytes    = reinterpret_cast<const char*>(&hdr_copy);
         out.write(rh_bytes, sizeof(RecordHeader));
         out.write(entry.topic_name.data(), static_cast<std::streamsize>(entry.topic_name.size()));
         out.write(reinterpret_cast<const char*>(entry.payload.data()),
@@ -135,6 +142,7 @@ struct ReadLogResult {
     FlightLogFileHeader      file_header{};
     std::vector<RecordEntry> entries;
     bool                     success = false;
+    bool truncated = false;  ///< True if file ended mid-record or failed validation
 };
 
 [[nodiscard]] inline ReadLogResult read_log_file(const std::string& path) {
@@ -147,48 +155,76 @@ struct ReadLogResult {
     in.read(fh_dst, sizeof(FlightLogFileHeader));
     if (!in.good() || result.file_header.magic != kFlightLogMagic) return result;
 
-    // Read entries
+    // Read entries — track whether loop ends on clean EOF or corruption/truncation
+    bool corrupt = false;
     while (in.good() && in.peek() != std::char_traits<char>::eof()) {
         RecordEntry entry;
         auto*       rh_dst = reinterpret_cast<char*>(&entry.header);
         in.read(rh_dst, sizeof(RecordHeader));
-        if (!in.good()) break;
+        if (!in.good()) {
+            corrupt = true;
+            break;
+        }
 
         // Validate wire header
-        if (entry.header.wire_header.magic != drone::ipc::kWireMagic) break;
+        if (entry.header.wire_header.magic != drone::ipc::kWireMagic) {
+            corrupt = true;
+            break;
+        }
 
         // Read topic name
         const auto topic_len = entry.header.topic_name_len;
-        if (topic_len > 256) break;  // sanity limit
+        if (topic_len > 256) {
+            corrupt = true;
+            break;
+        }
         entry.topic_name.resize(topic_len);
         in.read(entry.topic_name.data(), topic_len);
-        if (!in.good()) break;
+        if (!in.good()) {
+            corrupt = true;
+            break;
+        }
 
         // Read payload
         const auto payload_size = entry.header.wire_header.payload_size;
-        if (payload_size > 64u * 1024u * 1024u) break;  // 64 MB sanity limit
+        if (payload_size > 64u * 1024u * 1024u) {
+            corrupt = true;
+            break;
+        }
         entry.payload.resize(payload_size);
         in.read(reinterpret_cast<char*>(entry.payload.data()),
                 static_cast<std::streamsize>(payload_size));
-        if (!in.good() && !in.eof()) break;
+        if (!in.good() && !in.eof()) {
+            corrupt = true;
+            break;
+        }
         // Trim to actual bytes read on partial read (truncated file)
         const auto actual = static_cast<std::size_t>(in.gcount());
         if (actual < payload_size) {
             entry.payload.resize(actual);
             entry.header.wire_header.payload_size = static_cast<uint32_t>(actual);
+            corrupt                               = true;  // partial read means truncation
         }
 
         result.entries.push_back(std::move(entry));
+
+        if (corrupt) break;
     }
 
-    result.success = true;
+    result.truncated = corrupt;
+    result.success   = !corrupt;
     return result;
 }
 
 /// Flight data recorder — subscribes to IPC topics and records traffic
 /// to an in-memory ring buffer, then flushes to disk.
 ///
-/// Thread-safe: all public methods are protected by a mutex.
+/// Thread safety:
+///   - start()/stop()/is_recording() use an atomic flag (lock-free).
+///   - record() prepares the entry then acquires the mutex to push into the ring buffer.
+///     Timestamp is captured inside the critical section to guarantee monotonic ordering.
+///   - flush() copies entries under the mutex, releases it, then writes to disk.
+///   - entry_count()/buffered_bytes() acquire the mutex for consistent reads.
 ///
 /// Usage:
 ///   FlightRecorder recorder(cfg);
@@ -203,11 +239,11 @@ public:
         : ring_buffer_(max_size_bytes), output_dir_(output_dir) {}
 
     /// Construct from config object.
-    /// Reads: recorder.max_size_mb, recorder.output_dir
+    /// Reads: recorder.max_size_mb (clamped to [1, 4096], default 64),
+    ///        recorder.output_dir (default /tmp/flight_logs)
     template<typename ConfigT>
     explicit FlightRecorder(const ConfigT& cfg)
-        : ring_buffer_(static_cast<std::size_t>(cfg.template get<int>("recorder.max_size_mb", 64)) *
-                       1024 * 1024)
+        : ring_buffer_(validated_max_bytes(cfg.template get<int>("recorder.max_size_mb", 64)))
         , output_dir_(cfg.template get<std::string>("recorder.output_dir", "/tmp/flight_logs")) {}
 
     /// Record a message from a given topic.
@@ -218,14 +254,13 @@ public:
         static_assert(std::is_trivially_copyable_v<T>, "record() requires trivially copyable T");
         if (!recording_.load(std::memory_order_acquire)) return;
 
+        // Prepare entry fields that don't need synchronization
         RecordEntry entry;
         entry.header.wire_header.magic        = drone::ipc::kWireMagic;
         entry.header.wire_header.version      = drone::ipc::kWireVersion;
         entry.header.wire_header.msg_type     = msg_type;
         entry.header.wire_header.payload_size = static_cast<uint32_t>(sizeof(T));
         entry.header.wire_header.sequence     = seq;
-        entry.header.wire_header.timestamp_ns =
-            static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
         entry.header.topic_name_len =
             static_cast<uint16_t>(std::min(topic.size(), std::size_t{256}));
 
@@ -234,7 +269,15 @@ public:
         const auto* src = reinterpret_cast<const uint8_t*>(&msg);
         std::copy(src, src + sizeof(T), entry.payload.data());
 
+        // Capture timestamp and push under the lock for monotonic ordering
         std::lock_guard<std::mutex> lock(mutex_);
+        const auto                  now_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+        // Enforce monotonic: never go backwards
+        last_timestamp_ns_                    = std::max(last_timestamp_ns_ + 1, now_ns);
+        entry.header.wire_header.timestamp_ns = last_timestamp_ns_;
         ring_buffer_.push(std::move(entry));
     }
 
@@ -248,26 +291,46 @@ public:
     [[nodiscard]] bool is_recording() const { return recording_.load(std::memory_order_acquire); }
 
     /// Flush the ring buffer to a timestamped log file.
+    /// Copies entries under the lock, releases it, then writes to disk so
+    /// record() is not blocked during file I/O.
     /// Returns the path of the written file, or empty string on failure.
     [[nodiscard]] std::string flush() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (ring_buffer_.size() == 0) return "";
+        // Move entries out under the lock
+        std::vector<RecordEntry> snapshot;
+        uint64_t                 start_ns = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (ring_buffer_.size() == 0) return "";
+
+            // Copy entries from deque into vector for writing
+            snapshot.reserve(ring_buffer_.size());
+            for (auto& e : ring_buffer_.entries()) {
+                snapshot.push_back(e);
+            }
+            start_ns = snapshot.front().header.wire_header.timestamp_ns;
+            ring_buffer_.clear();
+        }
+        // Lock released — write to disk without blocking record()
+
+        // Create output directory if it doesn't exist
+        std::error_code ec;
+        std::filesystem::create_directories(output_dir_, ec);
+        if (ec) {
+            // Log warning but continue — the write below will fail if dir is missing
+        }
 
         const auto now   = std::chrono::system_clock::now();
         const auto epoch = now.time_since_epoch();
         const auto secs  = std::chrono::duration_cast<std::chrono::seconds>(epoch).count();
+        const auto seq   = s_flush_seq_.fetch_add(1, std::memory_order_relaxed);
 
-        const std::string filename = output_dir_ + "/flight_" + std::to_string(secs) + ".flog";
+        const std::string filename = output_dir_ + "/flight_" + std::to_string(secs) + "_" +
+                                     std::to_string(seq) + ".flog";
 
-        const auto start_ns = ring_buffer_.entries().empty()
-                                  ? 0ULL
-                                  : ring_buffer_.entries().front().header.wire_header.timestamp_ns;
-
-        if (!write_log_file(filename, ring_buffer_.entries(), start_ns)) {
+        if (!write_log_file(filename, snapshot, start_ns)) {
             return "";
         }
 
-        ring_buffer_.clear();
         return filename;
     }
 
@@ -284,10 +347,24 @@ public:
     }
 
 private:
-    mutable std::mutex mutex_;
-    std::atomic<bool>  recording_{false};
-    RecordRingBuffer   ring_buffer_;
-    std::string        output_dir_;
+    /// Validate and clamp max_size_mb to a sane range.
+    static std::size_t validated_max_bytes(int max_size_mb) {
+        constexpr int kDefaultMb = 64;
+        constexpr int kMaxMb     = 4096;
+        if (max_size_mb <= 0) {
+            max_size_mb = kDefaultMb;
+        } else if (max_size_mb > kMaxMb) {
+            max_size_mb = kMaxMb;
+        }
+        return static_cast<std::size_t>(max_size_mb) * 1024 * 1024;
+    }
+
+    mutable std::mutex                  mutex_;
+    std::atomic<bool>                   recording_{false};
+    RecordRingBuffer                    ring_buffer_;
+    std::string                         output_dir_;
+    uint64_t                            last_timestamp_ns_ = 0;
+    static inline std::atomic<uint64_t> s_flush_seq_{0};
 };
 
 }  // namespace drone::recorder

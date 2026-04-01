@@ -64,6 +64,6 @@
     "manual_controls": {
         "_comment": "Adjustable parameters for manual testing",
         "recorder_max_size_mb": {"min": 1, "max": 256, "default": 16, "unit": "MB"},
-        "speed_range": {"min": 0.5, "max": 5.0, "default": 2.0, "unit": "m/s"}
+        "speed_range": {"min": 0.5, "max": 5.0, "default": 2.0, "unit": "x (playback speed multiplier)"}
     }
 }

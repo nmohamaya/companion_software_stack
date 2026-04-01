@@ -100,23 +100,11 @@ int main(int argc, char* argv[]) {
     }
     auto bus = drone::ipc::create_message_bus(cfg);
 
-    // ── Build per-topic raw publishers ───────────────────────
-    // We use raw byte publishing: advertise with a dummy type and publish
-    // the payload bytes directly. Since we are replaying, the subscriber
-    // will receive the bytes and deserialize per its expected type.
-    //
-    // For simplicity, we publish each topic's raw payload as-is.
-    // The IPC layer uses trivially-copyable types with matching sizes.
-    struct TopicPub {
-        std::unique_ptr<drone::ipc::IPublisher<uint8_t>> publisher;
-    };
-
-    // We'll publish raw bytes using the advertise_raw / publish_raw pattern.
-    // Since the codebase uses typed pub/sub, we advertise with a matching
-    // type for each known topic.
-
-    // Map: topic name -> publisher that can publish raw bytes
-    // We use a simple approach: create typed publishers for known topics.
+    // ── Build per-topic typed publishers ────────────────────
+    // We create typed publishers for each known IPC message type.
+    // Routing is by WireMessageType (not topic name) because each message
+    // type maps to exactly one canonical topic — the type is sufficient
+    // to determine the correct publisher and ensures type-safe deserialization.
 
     using namespace drone::ipc;
 
@@ -144,11 +132,13 @@ int main(int argc, char* argv[]) {
 
         // ── Timing: wait until replay time ───────────────────
         if (speed > 0.0f && i > 0) {
-            const auto record_delta_ns = record_ts - first_ts;
-            const auto scaled_delta    = std::chrono::nanoseconds(static_cast<int64_t>(
+            // Use signed arithmetic to handle out-of-order timestamps safely
+            const auto record_delta_ns = std::max(
+                static_cast<int64_t>(record_ts) - static_cast<int64_t>(first_ts), int64_t{0});
+            const auto scaled_delta = std::chrono::nanoseconds(static_cast<int64_t>(
                 static_cast<double>(record_delta_ns) / static_cast<double>(speed)));
-            const auto target_time     = wall_base + scaled_delta;
-            const auto now             = std::chrono::steady_clock::now();
+            const auto target_time  = wall_base + scaled_delta;
+            const auto now          = std::chrono::steady_clock::now();
             if (target_time > now) {
                 std::this_thread::sleep_until(target_time);
             }
