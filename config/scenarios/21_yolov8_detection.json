@@ -2,7 +2,7 @@
     "_comment": "Scenario 21: YOLOv8 Detection in Gazebo — validates OpenCvYoloDetector with full perception pipeline",
     "scenario": {
         "name": "yolov8_detection",
-        "description": "Fly a short mission with YOLOv8-nano (OpenCV DNN) as the detection backend. Full pipeline: YOLOv8 detector -> ByteTrack tracker -> UKF fusion (camera+radar) -> D* Lite planner. Validates that the OpenCvYoloDetector loads the ONNX model, produces Detection2D outputs, and integrates with downstream tracking/fusion/planning. Falls back to color_contour if OpenCV not available.",
+        "description": "Fly a short mission with YOLOv8-nano (OpenCV DNN) as the detection backend. Full pipeline: YOLOv8 detector -> ByteTrack tracker -> UKF fusion (camera+radar) -> D* Lite planner. Validates that the OpenCvYoloDetector loads the ONNX model, produces Detection2D outputs, and integrates with downstream tracking/fusion/planning. If OpenCV is not compiled in (HAS_OPENCV not defined), the factory falls back to color_contour. If OpenCV is present but the ONNX model fails to load, detect() returns empty results (no automatic fallback).",
         "tier": 2,
         "timeout_s": 120,
         "requires_gazebo": true
@@ -49,7 +49,7 @@
                 "nms_threshold": 0.45,
                 "input_size": 640,
                 "max_detections": 64,
-                "_comment": "YOLOv8-nano via OpenCV DNN — falls back to color_contour if OpenCV not available"
+                "_comment": "YOLOv8-nano via OpenCV DNN. max_detections is only consumed by ColorContourDetector; OpenCvYoloDetector uses its own NMS output count."
             },
             "tracker": {
                 "backend": "bytetrack",
@@ -87,14 +87,16 @@
         "log_contains": [
             "Path planner: DStarLitePlanner",
             "Obstacle avoider: ObstacleAvoider3D",
-            "backend: bytetrack",
+            "Detector backend: yolov8",
+            "Tracker  backend: bytetrack",
             "TAKEOFF",
             "EXECUTING",
             "Mission complete"
         ],
         "log_must_not_contain": [
             "EMERGENCY_LAND",
-            "OBSTACLE COLLISION"
+            "OBSTACLE COLLISION",
+            "falling back to 'color_contour'"
         ],
         "processes_alive": [
             "video_capture", "perception", "slam_vio_nav",

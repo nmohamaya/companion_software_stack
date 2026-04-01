@@ -6,7 +6,9 @@
 #include "perception/simulated_detector.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -114,6 +116,8 @@ TEST(SimulatedDetectorTest, DetectionsHaveValidFields) {
     constexpr uint32_t   C = 3;
     std::vector<uint8_t> frame(W * H * C, 0);
 
+    auto before_ns =
+        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
     auto dets = det.detect(frame.data(), W, H, C);
     ASSERT_EQ(static_cast<int>(dets.size()), 3);
 
@@ -128,8 +132,10 @@ TEST(SimulatedDetectorTest, DetectionsHaveValidFields) {
         EXPECT_GE(d.confidence, cfg.confidence_min);
         EXPECT_LE(d.confidence, cfg.confidence_max);
 
-        // Timestamp non-zero
-        EXPECT_GT(d.timestamp_ns, static_cast<uint64_t>(0));
+        // Timestamp deterministic: must be >= time captured before detect()
+        EXPECT_GE(d.timestamp_ns, before_ns);
+        // All detections from one detect() call share the same timestamp
+        EXPECT_EQ(d.timestamp_ns, dets[0].timestamp_ns);
 
         // Class ID within range
         EXPECT_LE(static_cast<int>(d.class_id), cfg.num_classes - 1);
@@ -188,6 +194,40 @@ TEST(SimulatedDetectorTest, FactoryEmptyStringFallsBackToSimulated) {
     auto det = create_detector("");
     ASSERT_NE(det, nullptr);
     EXPECT_EQ(det->name(), "SimulatedDetector");
+}
+
+TEST(SimulatedDetectorTest, SmallFrameReturnsEmpty) {
+    SimulatedDetectorConfig cfg;
+    cfg.min_detections = 3;
+    cfg.max_detections = 5;
+    cfg.margin_px      = 50.0f;
+    cfg.size_max_px    = 200.0f;
+    SimulatedDetector det(cfg);
+
+    // 64x64 is too small for 2*margin_px(100) + size_max_px(200) = 300
+    constexpr uint32_t   W = 64;
+    constexpr uint32_t   H = 64;
+    constexpr uint32_t   C = 3;
+    std::vector<uint8_t> frame(W * H * C, 128);
+
+    auto dets = det.detect(frame.data(), W, H, C);
+    EXPECT_EQ(static_cast<int>(dets.size()), 0);
+}
+
+TEST(SimulatedDetectorTest, SmallFrameWidthOnlyReturnsEmpty) {
+    SimulatedDetectorConfig cfg;
+    cfg.margin_px   = 50.0f;
+    cfg.size_max_px = 200.0f;
+    SimulatedDetector det(cfg);
+
+    // Width too small, height adequate
+    constexpr uint32_t   W = 64;
+    constexpr uint32_t   H = 1080;
+    constexpr uint32_t   C = 3;
+    std::vector<uint8_t> frame(W * H * C, 128);
+
+    auto dets = det.detect(frame.data(), W, H, C);
+    EXPECT_EQ(static_cast<int>(dets.size()), 0);
 }
 
 TEST(SimulatedDetectorTest, ZeroDetections) {
