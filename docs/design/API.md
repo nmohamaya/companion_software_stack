@@ -22,7 +22,7 @@
 ┌────────────────────────────▼────────────────────────────────────┐
 │                   Process Internals                              │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
-│  │IVisualFrontend│ │ IPathPlanner │ │ IObstacleAvoider         │ │
+│  │ IVIOBackend  │ │ IPathPlanner │ │ IObstacleAvoider         │ │
 │  │ (P3: SLAM)   │ │ (P4: Mission)│ │ (P4: Mission)            │ │
 │  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────┐   │
@@ -717,25 +717,29 @@ struct ServiceResponse {
 
 ## 3. Process Strategy Interfaces
 
-### `IVisualFrontend` — `drone::slam`
+### `IVIOBackend` — `drone::slam`
 
-**Header:** `process3_slam_vio_nav/include/slam/ivisual_frontend.h`  
+**Header:** `process3_slam_vio_nav/include/slam/ivio_backend.h`  
 **Used by:** Process 3 (SLAM/VIO/Nav)
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `process_frame` | `drone::slam::Pose process_frame(const drone::ipc::StereoFrame& frame)` | Process stereo frame, return 6-DOF pose |
+| `process_frame` | `VIOResult<VIOOutput> process_frame(const StereoFrame&, const std::vector<ImuSample>&)` | Process stereo frame + IMU, return pose + diagnostics |
+| `health` | `VIOHealth health() const` | Current pipeline health |
 | `name` | `std::string name() const` | Implementation name for logging |
+| `set_trajectory_target` | `void set_trajectory_target(float x, float y, float z, float yaw)` | Set target for simulated navigation (no-op on real/Gazebo) |
 
 | Implementation | Description |
 |----------------|-------------|
-| `SimulatedVisualFrontend` | Circular trajectory (r=5m, h=2m, 30Hz) + Gaussian noise (σ=0.01) |
+| `SimulatedVIOBackend` | Target-following dynamics + feature extraction + stereo matching + IMU pre-integration |
+| `GazeboVIOBackend` | Ground-truth odometry via gz-transport (HAVE_GAZEBO) |
+| `GazeboFullVIOBackend` | Full VIO pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO) |
 
-**Factory:** `create_visual_frontend(backend)` — backends: `"simulated"`
+**Factory:** `create_vio_backend(backend)` — backends: `"simulated"`, `"gazebo"`, `"gazebo_full_vio"`
 
 ```cpp
-auto fe = create_visual_frontend("simulated");
-Pose p = fe->process_frame(stereo_frame);
+auto vio = create_vio_backend("simulated");
+auto result = vio->process_frame(stereo_frame, imu_samples);
 ```
 
 ---
@@ -1210,7 +1214,7 @@ auto avoider = create_obstacle_avoider(
 
 ## 6. Adding a New Implementation
 
-1. Create a class inheriting the abstract interface (e.g., `class OrbSlam3Frontend : public IVisualFrontend`)
+1. Create a class inheriting the abstract interface (e.g., `class OrbSlam3Backend : public IVIOBackend`)
 2. Implement all pure virtual methods
 3. Add a new branch in the factory function
 4. Set the backend name in config

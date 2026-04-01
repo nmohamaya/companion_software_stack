@@ -407,7 +407,7 @@
 
 | Issue | Task | Priority | Description |
 |-------|------|----------|-------------|
-| [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | P0 | Integrate ORB-SLAM3 or VINS-Fusion as `IVisualFrontend` backend; stereo or mono+IMU |
+| [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | P0 | Integrate ORB-SLAM3 or VINS-Fusion as `IVIOBackend` backend; stereo or mono+IMU |
 | [#38](https://github.com/nmohamaya/companion_software_stack/issues/38) | Stereo camera calibration pipeline | P1 | Checkerboard calibration tool; output intrinsics + extrinsics to config JSON |
 | [#39](https://github.com/nmohamaya/companion_software_stack/issues/39) | VIO/GPS fusion via PX4 external vision | P1 | Publish VIO pose to PX4 via MAVLink `VISION_POSITION_ESTIMATE`; EKF2 fusion |
 | [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) | Covariance-derived VIO quality | P1 | Derive `Pose.quality` from covariance matrix trace instead of hardcoded feature-count heuristic; propagate pre-integrator covariance to Pose; configurable thresholds |

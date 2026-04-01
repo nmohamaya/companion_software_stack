@@ -56,7 +56,7 @@
 | `payload` | GimbalController servo simulation | ~9 |
 | `monitor` | P7 system monitor (CPU/memory/thermal) | ~28 |
 | `util` | Config, Result, latency tracker, JSON log, correlation | ~136 |
-| `interfaces` | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor | ~21 |
+| `interfaces` | IProcessMonitor interface tests | ~5 |
 | `zenoh` | All Zenoh-specific tests | ~121 |
 | `network` | Network transport, wire format, liveliness | ~50 |
 | `quick` | All fast unit tests (excludes slow/resource-heavy) | ~600 |
@@ -112,7 +112,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 41 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend |
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
-| [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 10 | IVisualFrontend, IProcessMonitor |
+| [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 5 | IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
@@ -967,10 +967,9 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `VisualFrontendTest` | 5 | `IVisualFrontend` — simulated visual odometry init, pose estimation, feature count |
 | `ProcessMonitorTest` | 5 | `IProcessMonitor` — Linux process monitoring interface, CPU/memory query |
 
-**Key files under test:** `slam/ivisual_frontend.h`, `monitor/iprocess_monitor.h`
+**Key files under test:** `monitor/iprocess_monitor.h`
 
 ---
 

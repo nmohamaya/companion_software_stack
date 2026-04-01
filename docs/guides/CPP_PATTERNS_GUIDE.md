@@ -87,7 +87,7 @@ of which backend is plugged in.
 | `ISubscriber<T>` | `common/ipc/include/ipc/isubscriber.h` | `ZenohSubscriber<T>` |
 | `IPathPlanner` | `process4_mission_planner/include/planner/ipath_planner.h` | `DStarLitePlanner` |
 | `IObstacleAvoider` | `process4_mission_planner/include/planner/iobstacle_avoider.h` | `ObstacleAvoider3D` |
-| `IVisualFrontend` | `process3_slam_vio_nav/include/slam/ivisual_frontend.h` | `SimulatedVisualFrontend`, `GazeboVisualFrontend` |
+| `IVIOBackend` | `process3_slam_vio_nav/include/slam/ivio_backend.h` | `SimulatedVIOBackend`, `GazeboVIOBackend`, `GazeboFullVIOBackend` |
 | `IProcessMonitor` | `process7_system_monitor/include/monitor/iprocess_monitor.h` | `LinuxProcessMonitor` |
 
 **Example — `ICamera` interface** (`common/hal/include/hal/icamera.h`):

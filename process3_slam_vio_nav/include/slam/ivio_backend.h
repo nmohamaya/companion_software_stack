@@ -338,7 +338,7 @@ private:
 // To switch back to simulated (or a real VIO algorithm), change
 // slam.vio.backend in the config.  No code changes are required.
 //
-// Frame convention (matches GazeboVisualFrontend in ivisual_frontend.h):
+// Frame convention:
 //   Gazebo world: X=East, Y=North, Z=Up
 //   Our internal:  X=North, Y=East, Z=Up
 //   (vx→north, vy→east matches MavlinkFCLink's NED conversion)

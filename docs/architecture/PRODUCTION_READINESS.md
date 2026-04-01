@@ -32,7 +32,7 @@ Production requires implementing the real backend behind each interface.
 | 1.6 | GCS link | `SimulatedGCSLink` — fake RTL after 120 s | UDP MAVLink GCS protocol | P1 | 🔴 | |
 | 1.7 | Gimbal | `SimulatedGimbal` — rate-limited slew model | UART / PWM / SBUS gimbal protocol | P1 | 🔴 | `IGimbal` interface exists |
 | 1.8 | IMU | `SimulatedIMU` — noisy synthetic data | SPI/I2C driver (BMI088, ICM-42688-P, etc.) | P0 | 🔴 | `IIMUSource` interface exists; Gazebo backend works |
-| 1.9 | Visual frontend | `SimulatedVisualFrontend` — circular trajectory | ORB-SLAM3 / VINS-Fusion integration | P1 | 🔴 | `IVisualFrontend` interface exists |
+| 1.9 | VIO backend | `SimulatedVIOBackend` — target-following + full VIO pipeline | ORB-SLAM3 / VINS-Fusion integration | P1 | 🟡 | `IVIOBackend` interface with 3 backends; covariance-based quality |
 | 1.10 | Path planner | `DStarLitePlanner` — 3D grid, incremental D* Lite search, obstacle inflation, two-layer occupancy (HD-map static + camera TTL 3 s), BFS start-escape | RRT* | P2 | 🟢 | D* Lite + HD-map verified in Gazebo SITL scenario 02 (7/7 WP, 0 collisions); incremental replanning handles dynamic environments |
 | 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) + scenario 02 with HD-map (Fix #35). PotentialFieldAvoider (2D) removed in Issue #207 |
 | 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; all simulated code and data type fields removed |
