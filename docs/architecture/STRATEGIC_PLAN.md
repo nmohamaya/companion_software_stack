@@ -42,9 +42,8 @@
 | P2 | `ITracker` | 1 | — | KalmanBoxTracker | — |
 | P2 | `IFusionEngine` | 2 | — | CameraOnly, UKF | — |
 | P3 | `IFeatureExtractor` | 1 | SimulatedFeatureExtractor | ORB/SIFT (TODO) | — |
-| P3 | `IVisualFrontend` | 2 | SimulatedVisualFrontend | ORB-SLAM3 (TODO) | GazeboVisualFrontend |
 | P3 | `IStereoMatcher` | 1 | SimulatedStereoMatcher | Real (TODO) | — |
-| P3 | `IVIOBackend` | 2 | SimulatedVIOBackend | MSCKF (TODO) | GazeboVIOBackend |
+| P3 | `IVIOBackend` | 3 | SimulatedVIOBackend | MSCKF (TODO) | GazeboVIOBackend, GazeboFullVIOBackend |
 | P4 | `IPathPlanner` | 1 | — | DStarLitePlanner | — |
 | P4 | `IObstacleAvoider` | 1 | — | ObstacleAvoider3D | — |
 | P7 | `IProcessMonitor` | 1 | — | LinuxProcessMonitor | — |
