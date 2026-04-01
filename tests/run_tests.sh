@@ -65,7 +65,7 @@ declare -A MODULE_FILTERS=(
     [payload]="GimbalController"
     [monitor]="SysInfo|ProcessHealthEntry"
     [util]="ConfigTest|ConfigValidatorTest|ArgParserJsonTest|ResultTest|VoidResultTest|ErrorTest|ErrorCodeTest|LatencyTrackerTest|JsonSinkTest|JsonSinkMtTest|JsonEscapeTest|LevelToStrTest|FormatTimestampTest|LogConfigJsonTest|CorrelationContext|ScopedCorrelation|JsonCorrelation|ShmCorrelation"
-    [interfaces]="PathPlannerTest|ObstacleAvoiderTest|ProcessMonitorTest"
+    [interfaces]="ProcessMonitorTest"
     [zenoh]="ZenohMessageBus|ZenohPublisher|ZenohSubscriber|ZenohPubSub|ZenohSession|ZenohShmProvider|ZenohShmPublish|ZenohServiceChannel|ZenohMigration|ZenohTopicMapping|ZenohNetworkConfig|LivelinessConstants|LivelinessExtract|LivelinessMonitor|LivelinessToken"
     [network]="ZenohNetworkConfig|LivelinessConstants|LivelinessExtract|LivelinessMonitor|LivelinessToken|WireFormat|WireHeaderBackcompat|WireHeaderV2"
 )
@@ -138,7 +138,7 @@ while [[ $# -gt 0 ]]; do
             printf "  %-14s %s\n" "payload" "GimbalController servo simulation"
             printf "  %-14s %s\n" "monitor" "P7 system monitor (CPU/memory/thermal, process health)"
             printf "  %-14s %s\n" "util" "Config, Result<T,E>, latency tracker, JSON log sink, correlation"
-            printf "  %-14s %s\n" "interfaces" "IPathPlanner, IObstacleAvoider, IProcessMonitor"
+            printf "  %-14s %s\n" "interfaces" "IProcessMonitor interface"
             printf "  %-14s %s\n" "zenoh" "All Zenoh-specific tests (pub/sub, SHM, services, liveliness)"
             printf "  %-14s %s\n" "network" "Network transport, wire format, liveliness"
             printf "  %-14s %s\n" "quick" "All fast unit tests (excludes fork/exec, Zenoh session, E2E)"

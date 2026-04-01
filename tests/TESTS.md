@@ -56,7 +56,7 @@
 | `payload` | GimbalController servo simulation | ~9 |
 | `monitor` | P7 system monitor (CPU/memory/thermal) | ~28 |
 | `util` | Config, Result, latency tracker, JSON log, correlation | ~136 |
-| `interfaces` | IPathPlanner, IObstacleAvoider, IProcessMonitor | ~16 |
+| `interfaces` | IProcessMonitor interface tests | ~5 |
 | `zenoh` | All Zenoh-specific tests | ~121 |
 | `network` | Network transport, wire format, liveliness | ~50 |
 | `quick` | All fast unit tests (excludes slow/resource-heavy) | ~600 |
