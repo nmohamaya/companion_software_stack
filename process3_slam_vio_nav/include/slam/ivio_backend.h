@@ -419,6 +419,230 @@ private:
     std::atomic<uint64_t>  odom_count_{0};
 };
 
+// ─────────────────────────────────────────────────────────────
+// Gazebo full-pipeline VIO backend
+//
+// Combines the best of both backends:
+//   - Runs the full VIO pipeline (feature extraction, stereo matching,
+//     IMU pre-integration) on Gazebo-rendered frames, giving code path
+//     coverage of the entire VIO stack in Tier 2 simulation.
+//   - Uses Gazebo ground-truth odometry for the final pose, since real
+//     VIO fusion does not exist yet (Phase 2B).
+//
+// This backend is registered as "gazebo_full_vio" in the factory.
+// Use it when you want to exercise the pipeline code on Gazebo frames
+// while still getting a reliable pose for downstream consumers.
+// ─────────────────────────────────────────────────────────────
+
+class GazeboFullVIOBackend final : public IVIOBackend {
+public:
+    explicit GazeboFullVIOBackend(StereoCalibration calib, ImuNoiseParams imu_params,
+                                  std::string gz_topic, uint64_t min_init_frames = 5)
+        : calib_(std::move(calib))
+        , preintegrator_(imu_params)
+        , extractor_(std::make_unique<SimulatedFeatureExtractor>())
+        , matcher_(std::make_unique<SimulatedStereoMatcher>(calib_))
+        , gz_topic_(std::move(gz_topic))
+        , min_init_frames_(min_init_frames) {
+        bool ok = node_.Subscribe(gz_topic_, &GazeboFullVIOBackend::on_odom, this);
+        if (!ok) {
+            spdlog::error("[GazeboFullVIOBackend] Failed to subscribe to '{}'", gz_topic_);
+        } else {
+            spdlog::info("[GazeboFullVIOBackend] Subscribed to ground-truth odometry: '{}'",
+                         gz_topic_);
+        }
+    }
+
+    ~GazeboFullVIOBackend() override { node_.Unsubscribe(gz_topic_); }
+
+    // Non-copyable, non-movable (owns gz::transport::Node)
+    GazeboFullVIOBackend(const GazeboFullVIOBackend&)            = delete;
+    GazeboFullVIOBackend& operator=(const GazeboFullVIOBackend&) = delete;
+
+    VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
+                                       const std::vector<ImuSample>&  imu_samples) override {
+        auto                          pipeline_start = std::chrono::steady_clock::now();
+        const uint64_t                seq            = frame.sequence_number;
+        drone::util::FrameDiagnostics diag(seq);
+
+        VIOOutput output;
+        output.frame_id = seq;
+
+        // ── 1. Feature extraction ───────────────────────────
+        auto feat_result = extractor_->extract(frame, diag);
+        if (feat_result.is_err()) {
+            transition_health(VIOHealth::LOST,
+                              "Feature extraction failed: " + feat_result.error().message);
+            output.health = health_.load(std::memory_order_acquire);
+            diag.log_summary("VIO");
+            return VIOResult<VIOOutput>::err(std::move(feat_result.error()));
+        }
+
+        auto& feat          = feat_result.value();
+        output.num_features = static_cast<int>(feat.features.size());
+
+        // ── 2. Stereo matching ──────────────────────────────
+        auto match_result = matcher_->match(frame, feat.features, diag);
+        if (match_result.is_err()) {
+            transition_health(VIOHealth::DEGRADED,
+                              "Stereo matching failed: " + match_result.error().message);
+            output.num_stereo_matches = 0;
+            diag.add_warning("VIOBackend", "Proceeding without stereo matches");
+        } else {
+            output.num_stereo_matches = static_cast<int>(match_result.value().matches.size());
+        }
+
+        // ── 3. IMU pre-integration ──────────────────────────
+        preintegrator_.reset();
+        for (const auto& s : imu_samples) {
+            preintegrator_.add_sample(s);
+        }
+        output.imu_samples_used = static_cast<int>(imu_samples.size());
+
+        if (preintegrator_.has_samples()) {
+            auto preint_result = preintegrator_.integrate(diag);
+            if (preint_result.is_err()) {
+                diag.add_warning("VIOBackend",
+                                 "IMU pre-integration failed: " + preint_result.error().message);
+            } else {
+                auto& pm = preint_result.value();
+                diag.add_metric("VIOBackend", "preint_dt", pm.dt);
+                diag.add_metric("VIOBackend", "preint_delta_pos", pm.delta_position.norm());
+            }
+        } else {
+            diag.add_metric("VIOBackend", "imu_samples", 0);
+        }
+
+        // ── 4. Get pose from Gazebo ground truth ────────────
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (!pose_valid_) {
+                output.health = VIOHealth::INITIALIZING;
+                ++frame_count_;
+                auto pipeline_end = std::chrono::steady_clock::now();
+                output.total_ms =
+                    std::chrono::duration<double, std::milli>(pipeline_end - pipeline_start).count();
+                return VIOResult<VIOOutput>::ok(std::move(output));
+            }
+            output.pose = cached_pose_;
+        }
+
+        // ── 5. Health state machine ─────────────────────────
+        ++frame_count_;
+        update_health(output, diag);
+        output.health = health_.load(std::memory_order_acquire);
+
+        // ── 6. Pipeline timing ──────────────────────────────
+        auto pipeline_end = std::chrono::steady_clock::now();
+        output.total_ms =
+            std::chrono::duration<double, std::milli>(pipeline_end - pipeline_start).count();
+        diag.add_timing("VIOBackend", output.total_ms);
+
+        // ── 7. Log diagnostics periodically ─────────────────
+        if (diag.has_errors() || diag.has_warnings() || frame_count_ % 300 == 0) {
+            diag.log_summary("VIO");
+        }
+
+        return VIOResult<VIOOutput>::ok(std::move(output));
+    }
+
+    [[nodiscard]] VIOHealth health() const override {
+        return health_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::string name() const override {
+        return "GazeboFullVIOBackend(" + gz_topic_ + ")";
+    }
+
+private:
+    void on_odom(const gz::msgs::Odometry& msg) {
+        Pose p;
+        p.timestamp =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+
+        if (msg.has_pose()) {
+            const auto& pose = msg.pose();
+            if (pose.has_position()) {
+                // Remap Gazebo world frame → our internal frame:
+                //   our X (North) = Gazebo Y
+                //   our Y (East)  = Gazebo X
+                //   our Z (Up)    = Gazebo Z
+                p.position = Eigen::Vector3d(pose.position().y(),   // North
+                                             pose.position().x(),   // East
+                                             pose.position().z());  // Up
+            }
+            if (pose.has_orientation()) {
+                Eigen::Quaterniond              gz_q(pose.orientation().w(), pose.orientation().x(),
+                                                     pose.orientation().y(), pose.orientation().z());
+                static const Eigen::Quaterniond k_enu_to_our(
+                    Eigen::AngleAxisd(M_PI_2, Eigen::Vector3d::UnitZ()));
+                p.orientation = k_enu_to_our * gz_q.conjugate();
+            }
+        }
+        p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.001;
+        p.quality    = 3;  // excellent — ground truth
+
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            cached_pose_ = p;
+            pose_valid_  = true;
+        }
+        // Health is driven by the pipeline state machine in update_health(),
+        // not by odometry arrival. Don't set health_ here to avoid racing
+        // with process_frame() and overwriting pipeline-driven transitions.
+    }
+
+    void update_health(const VIOOutput& output, drone::util::FrameDiagnostics& diag) {
+        VIOHealth new_health = health_.load(std::memory_order_acquire);
+
+        if (frame_count_ < min_init_frames_) {
+            new_health = VIOHealth::INITIALIZING;
+        } else if (output.num_features < kMinFeaturesNominal) {
+            new_health = VIOHealth::DEGRADED;
+            diag.add_warning("VIOBackend", "Degraded: only " + std::to_string(output.num_features) +
+                                               " features (need " +
+                                               std::to_string(kMinFeaturesNominal) + ")");
+        } else if (output.num_stereo_matches < kMinMatchesNominal && output.num_features > 0) {
+            new_health = VIOHealth::DEGRADED;
+        } else {
+            new_health = VIOHealth::NOMINAL;
+        }
+
+        transition_health(new_health, "");
+    }
+
+    void transition_health(VIOHealth new_health, const std::string& reason) {
+        VIOHealth current = health_.load(std::memory_order_acquire);
+        if (new_health != current) {
+            spdlog::info("[VIO] Health: {} → {}{}", vio_health_name(current),
+                         vio_health_name(new_health), reason.empty() ? "" : " (" + reason + ")");
+            health_.store(new_health, std::memory_order_release);
+        }
+    }
+
+    // ── Pipeline components ─────────────────────────────────
+    StereoCalibration                  calib_;
+    ImuPreintegrator                   preintegrator_;
+    std::unique_ptr<IFeatureExtractor> extractor_;
+    std::unique_ptr<IStereoMatcher>    matcher_;
+
+    // ── Gazebo ground-truth state ───────────────────────────
+    std::string         gz_topic_;
+    gz::transport::Node node_;
+    mutable std::mutex  mtx_;
+    Pose                cached_pose_;
+    bool                pose_valid_{false};
+
+    // ── Health state machine ────────────────────────────────
+    std::atomic<VIOHealth> health_{VIOHealth::INITIALIZING};
+    uint64_t               frame_count_ = 0;
+    uint64_t               min_init_frames_;
+
+    static constexpr int kMinFeaturesNominal = 30;
+    static constexpr int kMinMatchesNominal  = 15;
+};
+
 #endif  // HAVE_GAZEBO
 
 // ── Factory ────────────────────────────────────────────────
@@ -426,8 +650,9 @@ private:
 /// Create a VIO backend by name.
 ///
 /// Supported backends:
-///   "simulated" — target-following dynamics (default; works without hardware)
-///   "gazebo"    — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO builds only)
+///   "simulated"      — target-following dynamics (default; works without hardware)
+///   "gazebo"         — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO only)
+///   "gazebo_full_vio" — full pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO only)
 ///
 /// To add a real VIO algorithm (e.g. MSCKF), add a new class implementing
 /// IVIOBackend and register it here.  The rest of the stack is unchanged.
@@ -449,11 +674,14 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
         (void)imu_params;  // ground truth — IMU params not used
         return std::make_unique<GazeboVIOBackend>(gz_topic);
     }
+    if (backend == "gazebo_full_vio") {
+        return std::make_unique<GazeboFullVIOBackend>(calib, imu_params, gz_topic);
+    }
 #endif
     throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
                              "' (available: simulated"
 #ifdef HAVE_GAZEBO
-                             ", gazebo"
+                             ", gazebo, gazebo_full_vio"
 #endif
                              ")");
 }

@@ -303,3 +303,64 @@ TEST(VIOErrorTest, ToStringFormat) {
     EXPECT_NE(s.find("InsufficientFeatures"), std::string::npos);
     EXPECT_NE(s.find("42"), std::string::npos);
 }
+
+// ═══════════════════════════════════════════════════════════
+// GazeboFullVIOBackend tests
+// ═══════════════════════════════════════════════════════════
+
+#ifdef HAVE_GAZEBO
+
+TEST(GazeboFullVIOTest, FactoryCreatesBackend) {
+    auto backend = create_vio_backend("gazebo_full_vio");
+    ASSERT_NE(backend, nullptr);
+    EXPECT_NE(backend->name().find("GazeboFullVIOBackend"), std::string::npos);
+}
+
+TEST(GazeboFullVIOTest, ProcessFrameRunsPipeline) {
+    auto backend = create_vio_backend("gazebo_full_vio");
+    auto frame   = make_frame(1);
+    auto imu     = make_imu_samples(13);
+
+    auto result = backend->process_frame(frame, imu);
+    ASSERT_TRUE(result.is_ok()) << result.error().to_string();
+
+    // Pipeline ran — should have real feature/match counts (not -1 like ground-truth backend)
+    EXPECT_GT(result.value().num_features, 0);
+    EXPECT_GT(result.value().num_stereo_matches, 0);
+}
+
+TEST(GazeboFullVIOTest, ImuSamplesConsumed) {
+    auto backend = create_vio_backend("gazebo_full_vio");
+    auto frame   = make_frame(1);
+    auto imu     = make_imu_samples(26);
+
+    auto result = backend->process_frame(frame, imu);
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value().imu_samples_used, 26);
+}
+
+TEST(GazeboFullVIOTest, HealthStartsInitializing) {
+    auto backend = create_vio_backend("gazebo_full_vio");
+    EXPECT_EQ(backend->health(), VIOHealth::INITIALIZING);
+}
+
+TEST(GazeboFullVIOTest, NoOdometryKeepsInitializing) {
+    // Use a bogus topic so no real Gazebo odom can arrive — ensures
+    // health stays INITIALIZING regardless of frame count.
+    auto backend = create_vio_backend("gazebo_full_vio", {}, {}, "/test/no_odom");
+
+    for (int i = 0; i < 10; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend->process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+        EXPECT_EQ(r.value().health, VIOHealth::INITIALIZING);
+    }
+}
+
+TEST(GazeboFullVIOTest, NameContainsTopic) {
+    auto backend = create_vio_backend("gazebo_full_vio", {}, {}, "/test/odom");
+    EXPECT_NE(backend->name().find("/test/odom"), std::string::npos);
+}
+
+#endif  // HAVE_GAZEBO

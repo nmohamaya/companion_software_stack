@@ -116,6 +116,10 @@
         "vio_rate_hz": 100,
         "visual_frontend_rate_hz": 30,
         "imu_rate_hz": 400,
+        "vio": {
+            "backend": "simulated",
+            "gz_topic": "/model/x500_companion_0/odometry"
+        },
         "imu": {
             "backend": "simulated"
         },
