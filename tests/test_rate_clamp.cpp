@@ -2,6 +2,8 @@
 // Unit tests for config-driven loop rate clamping (Issue #220).
 #include "util/rate_clamp.h"
 
+#include <limits>
+
 #include <gtest/gtest.h>
 
 using namespace drone::util;
@@ -105,11 +107,11 @@ TEST(RateClampTest, GenericClampAboveMax) {
 }
 
 TEST(RateClampTest, ExtremeNegativeValue) {
-    EXPECT_EQ(clamp_imu_rate(-2147483648), kImuRateMinHz);
+    EXPECT_EQ(clamp_imu_rate(std::numeric_limits<int>::min()), kImuRateMinHz);
 }
 
 TEST(RateClampTest, ExtremePositiveValue) {
-    EXPECT_EQ(clamp_vio_rate(2147483647), kVioRateMaxHz);
+    EXPECT_EQ(clamp_vio_rate(std::numeric_limits<int>::max()), kVioRateMaxHz);
 }
 
 // ── Verify constexpr bounds are sane ───────────────────────
