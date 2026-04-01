@@ -172,6 +172,11 @@
             "warning_margin_m": 5.0,
             "altitude_tolerance_m": 0.5
         },
+        "collision_recovery": {
+            "enabled": true,
+            "climb_delta_m": 3.0,
+            "hover_duration_s": 2.0
+        },
         "waypoints": [
             {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
             {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": true},

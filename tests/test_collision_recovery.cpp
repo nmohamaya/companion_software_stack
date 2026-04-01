@@ -33,20 +33,25 @@ struct FCCallRecord {
     float         param;
 };
 
-Pose make_pose(float x, float y, float z) {
+Pose make_pose(float x, float y, float z, float yaw = 0.0f) {
     Pose p{};
     p.translation[0] = x;
     p.translation[1] = y;
     p.translation[2] = z;
-    p.quality        = 2;
-    p.timestamp_ns   = 1000;
+    // Set quaternion from yaw (w, x, y, z) — roll=0, pitch=0
+    p.quaternion[0] = std::cos(yaw / 2.0f);
+    p.quaternion[1] = 0.0f;
+    p.quaternion[2] = 0.0f;
+    p.quaternion[3] = std::sin(yaw / 2.0f);
+    p.quality       = 2;
+    p.timestamp_ns  = 1000;
     return p;
 }
 
-FCState make_fc(bool armed, float rel_alt) {
+FCState make_fc(bool armed, float rel_alt, bool connected = true) {
     FCState fc{};
     fc.armed             = armed;
-    fc.connected         = true;
+    fc.connected         = connected;
     fc.rel_alt           = rel_alt;
     fc.battery_remaining = 80.0f;
     fc.timestamp_ns      = 1000;
@@ -120,10 +125,11 @@ TEST(CollisionRecoveryFSMTest, WaypointPreservedAcrossRecovery) {
 
 class CollisionRecoveryTickTest : public ::testing::Test {
 protected:
+    // hover_duration_s = 0.0 so FSM transitions instantly without wall-clock sleep
     StateTickConfig               config{10.0f, 1.5f, 0.5f, 5, 0.0f, 0.3f,
-                           true,   // collision_recovery_enabled
-                           3.0f,   // collision_climb_delta_m
-                           0.5f};  // collision_hover_duration_s (short for tests)
+                           true,  // collision_recovery_enabled
+                           3.0f,  // collision_climb_delta_m
+                           0.0f};  // collision_hover_duration_s = 0 for instant transition
     MissionStateTick              state_tick{config};
     MockPublisher<TrajectoryCmd>  traj_pub;
     MockPublisher<PayloadCommand> payload_pub;
@@ -159,7 +165,7 @@ TEST_F(CollisionRecoveryTickTest, DisarmDuringNavigateTriggersRecovery) {
     state_tick.flight_state().nav_was_armed = true;
 
     auto pose = make_pose(5.0f, 0.0f, 5.0f);
-    auto fc   = make_fc(false, 5.0f);  // disarmed!
+    auto fc   = make_fc(false, 5.0f);
 
     do_tick(pose, fc);
 
@@ -170,7 +176,7 @@ TEST_F(CollisionRecoveryTickTest, RecoveryDisabledKeepsNavigate) {
     // Re-create with recovery disabled
     StateTickConfig  disabled_config{10.0f, 1.5f, 0.5f, 5, 0.0f, 0.3f,
                                     false,  // collision_recovery_enabled = false
-                                    3.0f,  0.5f};
+                                    3.0f,  0.0f};
     MissionStateTick disabled_tick{disabled_config};
 
     fsm.on_takeoff();
@@ -190,6 +196,10 @@ TEST_F(CollisionRecoveryTickTest, RecoveryDisabledKeepsNavigate) {
 }
 
 TEST_F(CollisionRecoveryTickTest, HoverPhasePublishesZeroVelocity) {
+    // Use a non-zero hover duration so we stay in HOVER phase
+    StateTickConfig  hover_config{10.0f, 1.5f, 0.5f, 5, 0.0f, 0.3f, true, 3.0f, 10.0f};
+    MissionStateTick hover_tick{hover_config};
+
     fsm.on_takeoff();
     fsm.on_navigate();
 
@@ -197,19 +207,24 @@ TEST_F(CollisionRecoveryTickTest, HoverPhasePublishesZeroVelocity) {
     fsm.on_collision_recovery();
     ASSERT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
 
-    auto pose = make_pose(5.0f, 0.0f, 5.0f);
+    auto pose = make_pose(5.0f, 0.0f, 5.0f, 1.0f);
     auto fc   = make_fc(true, 5.0f);
-    traj_pub.clear();
 
-    do_tick(pose, fc);
+    MockPublisher<TrajectoryCmd>  local_traj;
+    MockPublisher<PayloadCommand> local_pay;
+    DetectedObjectList            objects{};
+    drone::util::FrameDiagnostics diag(0);
+    hover_tick.tick(fsm, pose, fc, objects, *planner_, nullptr, *avoider_, obstacle_layer,
+                    local_traj, local_pay, send_fc, 0, diag);
 
-    // Should publish a trajectory with zero velocity (hover)
-    ASSERT_GE(traj_pub.messages().size(), 1u);
-    const auto& cmd = traj_pub.messages().back();
+    // Should publish a trajectory with zero velocity (hover) and correct yaw
+    ASSERT_GE(local_traj.messages().size(), 1u);
+    const auto& cmd = local_traj.messages().back();
     EXPECT_TRUE(cmd.valid);
     EXPECT_FLOAT_EQ(cmd.velocity_x, 0.0f);
     EXPECT_FLOAT_EQ(cmd.velocity_y, 0.0f);
     EXPECT_FLOAT_EQ(cmd.velocity_z, 0.0f);
+    EXPECT_NEAR(cmd.target_yaw, 1.0f, 0.01f);  // yaw preserved from pose
 }
 
 TEST_F(CollisionRecoveryTickTest, ClimbPhaseTargetsHigherAltitude) {
@@ -217,25 +232,13 @@ TEST_F(CollisionRecoveryTickTest, ClimbPhaseTargetsHigherAltitude) {
     fsm.on_navigate();
     fsm.on_collision_recovery();
 
-    auto pose = make_pose(5.0f, 0.0f, 5.0f);
+    auto pose = make_pose(5.0f, 0.0f, 5.0f, 0.5f);
     auto fc   = make_fc(true, 5.0f);
 
-    // Tick several times to get past hover phase (0.5s config, 10Hz ticks ~5 ticks)
-    // With short hover_duration_s=0.5, one tick at time=0 starts hover,
-    // we need to wait for real time. Instead, just tick enough times.
-    // Actually the hover phase uses real clock, so we need to wait.
-    // For this test, let's manually verify the climb target by ticking once
-    // (HOVER phase), then sleeping past the hover duration.
-
-    // First tick enters hover
+    // With hover_duration_s=0.0, first tick enters HOVER then immediately transitions to CLIMB
     do_tick(pose, fc);
-    EXPECT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
 
-    // Sleep past hover duration
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
-    do_tick(pose, fc);  // This tick transitions HOVER→CLIMB
-
-    // Now tick again in CLIMB phase to get the climb trajectory cmd
+    // Second tick is in CLIMB phase
     traj_pub.clear();
     do_tick(pose, fc);
 
@@ -244,7 +247,8 @@ TEST_F(CollisionRecoveryTickTest, ClimbPhaseTargetsHigherAltitude) {
     const auto& cmd = traj_pub.messages().back();
     EXPECT_TRUE(cmd.valid);
     EXPECT_FLOAT_EQ(cmd.target_z, 8.0f);
-    EXPECT_GT(cmd.velocity_z, 0.0f);  // climbing
+    EXPECT_GT(cmd.velocity_z, 0.0f);           // climbing
+    EXPECT_NEAR(cmd.target_yaw, 0.5f, 0.01f);  // yaw preserved
 }
 
 TEST_F(CollisionRecoveryTickTest, ReplanPhaseTransitionsToNavigate) {
@@ -255,16 +259,10 @@ TEST_F(CollisionRecoveryTickTest, ReplanPhaseTransitionsToNavigate) {
     auto pose = make_pose(5.0f, 0.0f, 5.0f);
     auto fc   = make_fc(true, 5.0f);
 
-    // Tick to enter hover phase
+    // Tick 1: HOVER → CLIMB (hover_duration_s=0.0)
     do_tick(pose, fc);
 
-    // Sleep past hover duration
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
-
-    // Tick to enter climb phase
-    do_tick(pose, fc);
-
-    // Tick again to be in CLIMB phase
+    // Tick 2: in CLIMB phase
     do_tick(pose, fc);
 
     // Now pose at target altitude (5 + 3 = 8, minus 0.5 tolerance)
@@ -274,6 +272,30 @@ TEST_F(CollisionRecoveryTickTest, ReplanPhaseTransitionsToNavigate) {
     // Tick once more — REPLAN phase transitions to NAVIGATE
     do_tick(high_pose, fc);
     EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}
+
+TEST_F(CollisionRecoveryTickTest, DisarmDuringRecoveryAbortsToIdle) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_collision_recovery();
+
+    auto pose = make_pose(5.0f, 0.0f, 5.0f);
+    auto fc   = make_fc(false, 5.0f);  // disarmed during recovery
+
+    do_tick(pose, fc);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
+}
+
+TEST_F(CollisionRecoveryTickTest, DisconnectDuringRecoveryAbortsToIdle) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_collision_recovery();
+
+    auto pose = make_pose(5.0f, 0.0f, 5.0f);
+    auto fc   = make_fc(true, 5.0f, false);  // armed but disconnected
+
+    do_tick(pose, fc);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
 }
 
 TEST_F(CollisionRecoveryTickTest, FullRecoveryCyclePreservesWaypoint) {
@@ -292,17 +314,13 @@ TEST_F(CollisionRecoveryTickTest, FullRecoveryCyclePreservesWaypoint) {
     EXPECT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
     EXPECT_EQ(fsm.current_wp_index(), wp_before);
 
-    // Run through recovery phases
+    // Run through recovery phases with armed FC
     auto armed_fc = make_fc(true, 5.0f);
 
-    // Hover
-    do_tick(pose, armed_fc);
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
-
-    // Transition HOVER→CLIMB
+    // Tick 1: HOVER → CLIMB (hover_duration_s=0.0)
     do_tick(pose, armed_fc);
 
-    // Tick in CLIMB phase
+    // Tick 2: in CLIMB phase
     do_tick(pose, armed_fc);
 
     // Reach altitude — CLIMB→REPLAN transition
@@ -315,4 +333,21 @@ TEST_F(CollisionRecoveryTickTest, FullRecoveryCyclePreservesWaypoint) {
     // Should be back in NAVIGATE with same waypoint
     EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
     EXPECT_EQ(fsm.current_wp_index(), wp_before);
+}
+
+TEST_F(CollisionRecoveryTickTest, EntryPublishesStopTrajectory) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    state_tick.flight_state().nav_was_armed = true;
+
+    traj_pub.clear();
+    auto pose = make_pose(5.0f, 0.0f, 5.0f);
+    auto fc   = make_fc(false, 5.0f);  // disarmed — triggers recovery
+
+    do_tick(pose, fc);
+
+    EXPECT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
+    // First message should be an immediate stop trajectory (valid=false)
+    ASSERT_GE(traj_pub.messages().size(), 1u);
+    EXPECT_FALSE(traj_pub.messages().front().valid);
 }

@@ -69,7 +69,7 @@ public:
                               obstacle_layer, traj_pub, payload_pub, send_fc, correlation_id, diag);
                 break;
             case MissionState::COLLISION_RECOVERY:
-                tick_collision_recovery(fsm, pose, fc_state, traj_pub);
+                tick_collision_recovery(fsm, pose, fc_state, grid_planner, traj_pub);
                 break;
             case MissionState::RTL: tick_rtl(fsm, pose, fc_state, send_fc); break;
             case MissionState::LAND: tick_land(fsm, fc_state); break;
@@ -272,6 +272,8 @@ private:
                 spdlog::info("[Planner] Entering COLLISION_RECOVERY — "
                              "hover {:.1f}s then climb {:.1f}m",
                              config_.collision_hover_duration_s, config_.collision_climb_delta_m);
+                // Publish immediate stop to cancel any in-flight NAVIGATE trajectory
+                publish_stop_trajectory(traj_pub);
                 recovery_started_ = false;
                 fsm.on_collision_recovery();
                 flight_state_.nav_was_armed = fc_state.armed;
@@ -289,6 +291,7 @@ private:
                                                                    std::chrono::steady_clock::now());
             if (collision && config_.collision_recovery_enabled) {
                 spdlog::info("[Planner] Proximity collision — entering COLLISION_RECOVERY");
+                publish_stop_trajectory(traj_pub);
                 recovery_started_ = false;
                 fsm.on_collision_recovery();
                 return;
@@ -394,8 +397,17 @@ private:
 
     // ── COLLISION_RECOVERY: hover → climb → replan → NAVIGATE (Issue #226) ──
     void tick_collision_recovery(MissionFSM& fsm, const drone::ipc::Pose& pose,
-                                 const drone::ipc::FCState& /*fc_state*/,
+                                 const drone::ipc::FCState& fc_state, IGridPlanner* grid_planner,
                                  drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& traj_pub) {
+        // Safety: abort recovery if disarmed or FC disconnected
+        if (!fc_state.armed || !fc_state.connected) {
+            spdlog::warn("[Recovery] FC {} during recovery — aborting to IDLE",
+                         !fc_state.armed ? "disarmed" : "disconnected");
+            recovery_started_ = false;
+            fsm.on_landed();
+            return;
+        }
+
         auto now = std::chrono::steady_clock::now();
         if (!recovery_started_) {
             recovery_start_time_ = now;
@@ -413,6 +425,12 @@ private:
         const float pz        = static_cast<float>(pose.translation[2]);
         float       elapsed_s = std::chrono::duration<float>(now - recovery_start_time_).count();
 
+        // Extract current yaw from pose quaternion [w, x, y, z] to avoid yaw snap
+        double qw = pose.quaternion[0], qx = pose.quaternion[1];
+        double qy = pose.quaternion[2], qz = pose.quaternion[3];
+        float  current_yaw = static_cast<float>(
+            std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+
         switch (recovery_phase_) {
             case RecoveryPhase::HOVER: {
                 // Publish hover-in-place command
@@ -424,6 +442,7 @@ private:
                 cmd.target_x   = px;
                 cmd.target_y   = py;
                 cmd.target_z   = pz;
+                cmd.target_yaw = current_yaw;
                 cmd.velocity_x = 0.0f;
                 cmd.velocity_y = 0.0f;
                 cmd.velocity_z = 0.0f;
@@ -446,6 +465,7 @@ private:
                 cmd.target_x   = px;
                 cmd.target_y   = py;
                 cmd.target_z   = recovery_target_alt_;
+                cmd.target_yaw = current_yaw;
                 cmd.velocity_x = 0.0f;
                 cmd.velocity_y = 0.0f;
                 cmd.velocity_z = 1.0f;  // gentle climb rate
@@ -461,7 +481,10 @@ private:
                 break;
             }
             case RecoveryPhase::REPLAN: {
-                // Recovery complete — resume NAVIGATE (planner will replan on next tick)
+                // Invalidate cached path to force a full replan after collision
+                if (grid_planner) {
+                    grid_planner->invalidate_path();
+                }
                 spdlog::info("[Recovery] Complete — transitioning to NAVIGATE");
                 recovery_started_ = false;
                 fsm.on_recovery_complete();
@@ -504,6 +527,17 @@ private:
             fsm.on_landed();
             fault_exec_reset_ = true;
         }
+    }
+
+    // ── Utility: publish an immediate zero-velocity stop trajectory ──
+    static void publish_stop_trajectory(drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& pub) {
+        drone::ipc::TrajectoryCmd stop{};
+        stop.valid = false;
+        stop.timestamp_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+        pub.publish(stop);
     }
 };
 
