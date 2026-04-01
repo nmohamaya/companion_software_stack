@@ -11,7 +11,10 @@
         "perception": {
             "detector": {
                 "backend": "simulated",
-                "enabled": false
+                "sim": {
+                    "min_detections": 0,
+                    "max_detections": 0
+                }
             },
             "tracker": {
                 "backend": "bytetrack"
@@ -32,7 +35,6 @@
                     "orphan_proximity_m": 3.0,
                     "default_radius_m": 1.5,
                     "max_orphan_range_m": 40.0,
-                    "orphan_min_hits": 1,
                     "promotion_hits": 3
                 }
             },
@@ -45,8 +47,12 @@
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 2.0,
             "cruise_speed_mps": 2.0,
-            "planner_backend": "astar",
-            "obstacle_avoider_backend": "3d",
+            "path_planner": {
+                "backend": "dstar_lite"
+            },
+            "obstacle_avoider": {
+                "backend": "potential_field_3d"
+            },
             "waypoints": [
                 {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
                 {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false},

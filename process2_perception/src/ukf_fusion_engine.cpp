@@ -321,11 +321,10 @@ ObjectUKF::RadarMeasVec ObjectUKF::predicted_radar_measurement() const {
     return radar_measurement_model(x_);
 }
 
-ObjectUKF::RadarMeasMat ObjectUKF::predicted_radar_innovation_cov() const {
+ObjectUKF::RadarPrediction ObjectUKF::compute_radar_prediction(
+    const std::vector<StateVec>& sigma) const {
     constexpr int   n      = STATE_DIM;
     constexpr float lambda = kAlpha * kAlpha * (n + kKappa) - n;
-
-    auto sigma = generate_sigma_points();
 
     // Propagate sigma points through radar measurement model
     std::vector<RadarMeasVec> z_sigma(2 * n + 1);
@@ -334,9 +333,9 @@ ObjectUKF::RadarMeasMat ObjectUKF::predicted_radar_innovation_cov() const {
     }
 
     // Weights
-    float w0_mean = lambda / (n + lambda);
-    float w0_cov  = w0_mean + (1.0f - kAlpha * kAlpha + kBeta);
-    float wi      = 1.0f / (2.0f * (n + lambda));
+    const float w0_mean = lambda / (n + lambda);
+    const float w0_cov  = w0_mean + (1.0f - kAlpha * kAlpha + kBeta);
+    const float wi      = 1.0f / (2.0f * (n + lambda));
 
     // Mean predicted measurement (circular mean for angles)
     float        sin_az_sum = 0.0f, cos_az_sum = 0.0f;
@@ -373,7 +372,12 @@ ObjectUKF::RadarMeasMat ObjectUKF::predicted_radar_innovation_cov() const {
         S += wi * (dzi * dzi.transpose());
     }
     S += R_radar_;
-    return S;
+    return {z_mean, S};
+}
+
+ObjectUKF::RadarPrediction ObjectUKF::predicted_radar_innovation_cov() const {
+    auto sigma = generate_sigma_points();
+    return compute_radar_prediction(sigma);
 }
 
 void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
@@ -382,57 +386,24 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
 
     auto sigma = generate_sigma_points();
 
-    // Propagate sigma points through radar measurement model
+    // Compute sigma-point radar prediction via shared helper (z_mean and S).
+    auto [z_mean, S] = compute_radar_prediction(sigma);
+
+    // Propagate sigma points through radar measurement model for cross-covariance.
     std::vector<RadarMeasVec> z_sigma(2 * n + 1);
     for (int i = 0; i < 2 * n + 1; ++i) {
         z_sigma[i] = radar_measurement_model(sigma[i]);
     }
 
     // Weights
-    float w0_mean = lambda / (n + lambda);
-    float w0_cov  = w0_mean + (1.0f - kAlpha * kAlpha + kBeta);
-    float wi      = 1.0f / (2.0f * (n + lambda));
-
-    // Mean predicted measurement — use circular mean for angular components
-    // (azimuth at index 1, elevation at index 2) to handle ±π wrapping.
-    float        sin_az_sum = 0.0f, cos_az_sum = 0.0f;
-    float        sin_el_sum = 0.0f, cos_el_sum = 0.0f;
-    RadarMeasVec z_mean = RadarMeasVec::Zero();
-
-    // First sigma point (weight w0_mean)
-    z_mean(0) += w0_mean * z_sigma[0](0);  // range
-    z_mean(3) += w0_mean * z_sigma[0](3);  // radial velocity
-    sin_az_sum += w0_mean * std::sin(z_sigma[0](1));
-    cos_az_sum += w0_mean * std::cos(z_sigma[0](1));
-    sin_el_sum += w0_mean * std::sin(z_sigma[0](2));
-    cos_el_sum += w0_mean * std::cos(z_sigma[0](2));
-
-    for (int i = 1; i < 2 * n + 1; ++i) {
-        z_mean(0) += wi * z_sigma[i](0);
-        z_mean(3) += wi * z_sigma[i](3);
-        sin_az_sum += wi * std::sin(z_sigma[i](1));
-        cos_az_sum += wi * std::cos(z_sigma[i](1));
-        sin_el_sum += wi * std::sin(z_sigma[i](2));
-        cos_el_sum += wi * std::cos(z_sigma[i](2));
-    }
-    z_mean(1) = std::atan2(sin_az_sum, cos_az_sum);
-    z_mean(2) = std::atan2(sin_el_sum, cos_el_sum);
-
-    // Innovation covariance S = Pzz + R_radar (with angle-wrapped residuals)
-    RadarMeasVec dz0 = z_sigma[0] - z_mean;
-    dz0(1)           = wrap_angle(dz0(1));
-    dz0(2)           = wrap_angle(dz0(2));
-    RadarMeasMat S   = w0_cov * (dz0 * dz0.transpose());
-    for (int i = 1; i < 2 * n + 1; ++i) {
-        RadarMeasVec dzi = z_sigma[i] - z_mean;
-        dzi(1)           = wrap_angle(dzi(1));
-        dzi(2)           = wrap_angle(dzi(2));
-        S += wi * (dzi * dzi.transpose());
-    }
-    S += R_radar_;
+    const float w0_cov = lambda / (n + lambda) + (1.0f - kAlpha * kAlpha + kBeta);
+    const float wi     = 1.0f / (2.0f * (n + lambda));
 
     // Cross-covariance Pxz (with angle-wrapped residuals)
     using RadarCrossMat = Eigen::Matrix<float, STATE_DIM, RADAR_MEAS_DIM>;
+    RadarMeasVec dz0    = z_sigma[0] - z_mean;
+    dz0(1)              = wrap_angle(dz0(1));
+    dz0(2)              = wrap_angle(dz0(2));
     StateVec      dx0   = sigma[0] - x_;
     RadarCrossMat Pxz   = w0_cov * (dx0 * dz0.transpose());
     for (int i = 1; i < 2 * n + 1; ++i) {
@@ -634,22 +605,37 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
     const bool use_full_S = ukf.radar_only;
 
     Eigen::LLT<ObjectUKF::RadarMeasMat> track_llt;
-    ObjectUKF::RadarMeasVec             track_S_diag_inv   = ObjectUKF::RadarMeasVec::Zero();
     bool                                track_llt_ok       = false;
     float                               track_range_3sigma = range_3sigma;
 
+    ObjectUKF::RadarMeasVec track_z_mean = ObjectUKF::RadarMeasVec::Zero();
+
     if (use_full_S) {
-        ObjectUKF::RadarMeasMat S = ukf.predicted_radar_innovation_cov();
+        auto [z_mean_sp, S] = ukf.predicted_radar_innovation_cov();
+        track_z_mean        = z_mean_sp;
         track_llt.compute(S);
         track_llt_ok = (track_llt.info() == Eigen::Success);
         if (!track_llt_ok) {
-            const auto& diag = S.diagonal();
-            for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
-                if (diag(d) > 0.0f) track_S_diag_inv(d) = 1.0f / diag(d);
-            }
+            // Regularize S by adding small epsilon to diagonal and retry LLT.
+            constexpr float kEpsilon = 1e-6f;
+            S.diagonal().array() += kEpsilon;
+            track_llt.compute(S);
+            track_llt_ok = (track_llt.info() == Eigen::Success);
         }
-        // Widen coarse range gate to 3σ of S(0,0) (range innovation variance)
-        track_range_3sigma = std::max(range_3sigma, 3.0f * std::sqrt(S(0, 0)));
+        if (!track_llt_ok) {
+            // S is not positive-definite even after regularization — treat as
+            // association failure (return no-match) rather than using a permissive
+            // diagonal approximation that could underestimate Mahalanobis distance.
+            spdlog::warn("[UKF] S-matrix LLT failed for radar-only track {:#x}, skipping "
+                         "association",
+                         ukf.track_id);
+            return false;
+        }
+        // Widen coarse range gate to 3σ of S(0,0) (range innovation variance).
+        // Guard against non-positive diagonal (numerical edge case).
+        if (S(0, 0) > 0.0f) {
+            track_range_3sigma = std::max(range_3sigma, 3.0f * std::sqrt(S(0, 0)));
+        }
     }
 
     for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
@@ -677,22 +663,21 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
         z_actual(2) = rdet.elevation_rad;
         z_actual(3) = rdet.radial_velocity_mps;
 
-        ObjectUKF::RadarMeasVec innovation = z_actual - z_pred;
+        // For radar-only tracks (use_full_S), compute innovation relative to
+        // the sigma-point mean z_mean — consistent with the S matrix built from
+        // z_mean residuals.  Camera-originated tracks use z_pred (h(x_)) which
+        // is consistent with R-only gating.
+        ObjectUKF::RadarMeasVec innovation = use_full_S ? (z_actual - track_z_mean)
+                                                        : (z_actual - z_pred);
         innovation(1)                      = wrap_angle(innovation(1));
         innovation(2)                      = wrap_angle(innovation(2));
 
         float mahal_sq = std::numeric_limits<float>::max();
         if (use_full_S) {
-            // Use proper innovation covariance S for radar-only tracks
-            if (track_llt_ok) {
-                ObjectUKF::RadarMeasVec y = track_llt.solve(innovation);
-                mahal_sq                  = innovation.dot(y);
-            } else {
-                mahal_sq = 0.0f;
-                for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
-                    mahal_sq += innovation(d) * innovation(d) * track_S_diag_inv(d);
-                }
-            }
+            // Use proper innovation covariance S for radar-only tracks.
+            // LLT is guaranteed valid here (early return above on failure).
+            ObjectUKF::RadarMeasVec y = track_llt.solve(innovation);
+            mahal_sq                  = innovation.dot(y);
         } else {
             // R-only gating for camera-originated tracks (backward compatible)
             if (radar_llt_ok) {
@@ -1331,8 +1316,6 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                 "perception.fusion.radar.default_radius_m", radar_cfg.radar_only_default_radius_m);
             radar_cfg.radar_max_orphan_range_m = cfg->get<float>(
                 "perception.fusion.radar.max_orphan_range_m", radar_cfg.radar_max_orphan_range_m);
-            radar_cfg.radar_orphan_min_hits = cfg->get<int>(
-                "perception.fusion.radar.orphan_min_hits", radar_cfg.radar_orphan_min_hits);
             radar_cfg.radar_only_promotion_hits = static_cast<uint32_t>(
                 cfg->get<int>("perception.fusion.radar.promotion_hits",
                               static_cast<int>(radar_cfg.radar_only_promotion_hits)));
@@ -1343,6 +1326,22 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
             radar_cfg.radar_only_promotion_hits = static_cast<uint32_t>(
                 cfg->get<int>("perception.fusion.radar_orphan_promote_frames",
                               static_cast<int>(radar_cfg.radar_only_promotion_hits)));
+
+            // Validate promotion_hits: negative config values would underflow
+            // uint32_t; zero means no gating which defeats the purpose.  Clamp
+            // to >= 1 with a warning.
+            {
+                const int raw_promotion = cfg->get<int>(
+                    "perception.fusion.radar_orphan_promote_frames",
+                    cfg->get<int>("perception.fusion.radar.promotion_hits",
+                                  static_cast<int>(radar_cfg.radar_only_promotion_hits)));
+                if (raw_promotion < 1) {
+                    spdlog::warn("[UKF] radar promotion_hits={} invalid (must be >= 1), clamping "
+                                 "to 1",
+                                 raw_promotion);
+                    radar_cfg.radar_only_promotion_hits = 1;
+                }
+            }
         }
         float dormant_merge_radius =
             cfg ? cfg->get<float>("perception.fusion.dormant_merge_radius_m", 5.0f) : 5.0f;

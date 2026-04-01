@@ -49,7 +49,6 @@ struct RadarNoiseConfig {
     float    radar_adopt_gate_m          = 5.0f;   // max range error for camera adoption
     float    radar_only_default_radius_m = 1.5f;   // conservative default inflation (no bbox)
     float    radar_max_orphan_range_m    = 40.0f;  // max range for orphan creation (77GHz ≈ 50m)
-    int      radar_orphan_min_hits       = 1;      // min radar observations before output
     uint32_t radar_only_promotion_hits   = 3;      // radar hits for static promotion (tunable)
     bool     radar_only_enabled          = true;  // enable radar-only track initiation (Issue #231)
 };
@@ -91,9 +90,15 @@ public:
     /// Convert current state to radar measurement space for association.
     [[nodiscard]] RadarMeasVec predicted_radar_measurement() const;
 
-    /// Compute radar innovation covariance S = Pzz + R_radar via sigma points.
+    /// Compute radar prediction via sigma points: returns {z_mean, S} where
+    /// z_mean is the sigma-point mean (with circular averaging for angles) and
+    /// S = Pzz + R_radar is the innovation covariance.
     /// Used for proper Mahalanobis gating that accounts for state uncertainty.
-    [[nodiscard]] RadarMeasMat predicted_radar_innovation_cov() const;
+    struct RadarPrediction {
+        RadarMeasVec z_mean;
+        RadarMeasMat S;
+    };
+    [[nodiscard]] RadarPrediction predicted_radar_innovation_cov() const;
 
     /// Get current 3D position estimate.
     [[nodiscard]] Eigen::Vector3f position() const;
@@ -128,6 +133,10 @@ private:
 
     /// Radar measurement model: state → [range, azimuth, elevation, radial_velocity].
     static RadarMeasVec radar_measurement_model(const StateVec& s);
+
+    /// Shared helper: compute sigma-point radar prediction {z_mean, S}.
+    /// Used by both predicted_radar_innovation_cov() and update_radar().
+    RadarPrediction compute_radar_prediction(const std::vector<StateVec>& sigma) const;
 
     /// UKF tuning parameters
     static constexpr float kAlpha = 1e-3f;
