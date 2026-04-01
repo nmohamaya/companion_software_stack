@@ -473,7 +473,7 @@ public:
         if (feat_result.is_err()) {
             transition_health(VIOHealth::LOST,
                               "Feature extraction failed: " + feat_result.error().message);
-            output.health = health_;
+            output.health = health_.load(std::memory_order_acquire);
             diag.log_summary("VIO");
             return VIOResult<VIOOutput>::err(std::move(feat_result.error()));
         }
@@ -530,7 +530,7 @@ public:
         // ── 5. Health state machine ─────────────────────────
         ++frame_count_;
         update_health(output, diag);
-        output.health = health_;
+        output.health = health_.load(std::memory_order_acquire);
 
         // ── 6. Pipeline timing ──────────────────────────────
         auto pipeline_end = std::chrono::steady_clock::now();
@@ -546,7 +546,9 @@ public:
         return VIOResult<VIOOutput>::ok(std::move(output));
     }
 
-    [[nodiscard]] VIOHealth health() const override { return health_; }
+    [[nodiscard]] VIOHealth health() const override {
+        return health_.load(std::memory_order_acquire);
+    }
 
     [[nodiscard]] std::string name() const override {
         return "GazeboFullVIOBackend(" + gz_topic_ + ")";
@@ -586,11 +588,13 @@ private:
             cached_pose_ = p;
             pose_valid_  = true;
         }
-        health_ = VIOHealth::NOMINAL;
+        // Health is driven by the pipeline state machine in update_health(),
+        // not by odometry arrival. Don't set health_ here to avoid racing
+        // with process_frame() and overwriting pipeline-driven transitions.
     }
 
     void update_health(const VIOOutput& output, drone::util::FrameDiagnostics& diag) {
-        VIOHealth new_health = health_;
+        VIOHealth new_health = health_.load(std::memory_order_acquire);
 
         if (frame_count_ < min_init_frames_) {
             new_health = VIOHealth::INITIALIZING;
@@ -609,10 +613,11 @@ private:
     }
 
     void transition_health(VIOHealth new_health, const std::string& reason) {
-        if (new_health != health_) {
-            spdlog::info("[VIO] Health: {} → {}{}", vio_health_name(health_),
+        VIOHealth current = health_.load(std::memory_order_acquire);
+        if (new_health != current) {
+            spdlog::info("[VIO] Health: {} → {}{}", vio_health_name(current),
                          vio_health_name(new_health), reason.empty() ? "" : " (" + reason + ")");
-            health_ = new_health;
+            health_.store(new_health, std::memory_order_release);
         }
     }
 
@@ -630,9 +635,9 @@ private:
     bool                pose_valid_{false};
 
     // ── Health state machine ────────────────────────────────
-    VIOHealth health_      = VIOHealth::INITIALIZING;
-    uint64_t  frame_count_ = 0;
-    uint64_t  min_init_frames_;
+    std::atomic<VIOHealth> health_{VIOHealth::INITIALIZING};
+    uint64_t               frame_count_ = 0;
+    uint64_t               min_init_frames_;
 
     static constexpr int kMinFeaturesNominal = 30;
     static constexpr int kMinMatchesNominal  = 15;

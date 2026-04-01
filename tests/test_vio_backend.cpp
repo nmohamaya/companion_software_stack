@@ -345,9 +345,9 @@ TEST(GazeboFullVIOTest, HealthStartsInitializing) {
 }
 
 TEST(GazeboFullVIOTest, NoOdometryKeepsInitializing) {
-    // Without a running Gazebo, no odometry callback fires,
-    // so health should stay INITIALIZING regardless of frame count
-    auto backend = create_vio_backend("gazebo_full_vio");
+    // Use a bogus topic so no real Gazebo odom can arrive — ensures
+    // health stays INITIALIZING regardless of frame count.
+    auto backend = create_vio_backend("gazebo_full_vio", {}, {}, "/test/no_odom");
 
     for (int i = 0; i < 10; ++i) {
         auto frame = make_frame(static_cast<uint64_t>(i));
