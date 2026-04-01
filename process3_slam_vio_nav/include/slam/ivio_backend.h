@@ -97,13 +97,16 @@ public:
 class SimulatedVIOBackend final : public IVIOBackend {
 public:
     explicit SimulatedVIOBackend(StereoCalibration calib = {}, ImuNoiseParams imu_params = {},
-                                 uint64_t min_init_frames = 5, float sim_speed_mps = 3.0f)
+                                 uint64_t min_init_frames = 5, float sim_speed_mps = 3.0f,
+                                 double good_trace_max = 0.1, double degraded_trace_max = 1.0)
         : calib_(calib)
         , preintegrator_(imu_params)
         , extractor_(std::make_unique<SimulatedFeatureExtractor>())
         , matcher_(std::make_unique<SimulatedStereoMatcher>(calib))
         , min_init_frames_(min_init_frames)
-        , sim_speed_mps_(sim_speed_mps) {}
+        , sim_speed_mps_(sim_speed_mps)
+        , good_trace_max_(good_trace_max)
+        , degraded_trace_max_(degraded_trace_max) {}
 
     VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
                                        const std::vector<ImuSample>&  imu_samples) override {
@@ -157,6 +160,9 @@ public:
                 auto& pm = preint_result.value();
                 diag.add_metric("VIOBackend", "preint_dt", pm.dt);
                 diag.add_metric("VIOBackend", "preint_delta_pos", pm.delta_position.norm());
+                // Extract position covariance trace for quality assessment
+                output.position_trace = pm.covariance.block<3, 3>(0, 0).trace();
+                diag.add_metric("VIOBackend", "position_trace", output.position_trace);
             }
         } else {
             diag.add_metric("VIOBackend", "imu_samples", 0);
@@ -245,15 +251,35 @@ private:
 
         if (frame_count_ < min_init_frames_) {
             new_health = VIOHealth::INITIALIZING;
-        } else if (output.num_features < kMinFeaturesNominal) {
-            new_health = VIOHealth::DEGRADED;
-            diag.add_warning("VIOBackend", "Degraded: only " + std::to_string(output.num_features) +
-                                               " features (need " +
-                                               std::to_string(kMinFeaturesNominal) + ")");
-        } else if (output.num_stereo_matches < kMinMatchesNominal && output.num_features > 0) {
-            new_health = VIOHealth::DEGRADED;
+        } else if (output.position_trace >= 0.0) {
+            // Covariance-based quality (preferred when IMU data available)
+            if (output.position_trace <= good_trace_max_) {
+                new_health = VIOHealth::NOMINAL;
+            } else if (output.position_trace <= degraded_trace_max_) {
+                new_health = VIOHealth::DEGRADED;
+                diag.add_warning("VIOBackend", "Degraded: position trace " +
+                                                   std::to_string(output.position_trace) +
+                                                   " > good_max " +
+                                                   std::to_string(good_trace_max_));
+            } else {
+                new_health = VIOHealth::LOST;
+                diag.add_warning("VIOBackend",
+                                 "Lost: position trace " + std::to_string(output.position_trace) +
+                                     " > degraded_max " + std::to_string(degraded_trace_max_));
+            }
         } else {
-            new_health = VIOHealth::NOMINAL;
+            // Fallback: feature/match-based heuristic (no IMU data)
+            if (output.num_features < kMinFeaturesNominal) {
+                new_health = VIOHealth::DEGRADED;
+                diag.add_warning("VIOBackend", "Degraded: only " +
+                                                   std::to_string(output.num_features) +
+                                                   " features (need " +
+                                                   std::to_string(kMinFeaturesNominal) + ")");
+            } else if (output.num_stereo_matches < kMinMatchesNominal && output.num_features > 0) {
+                new_health = VIOHealth::DEGRADED;
+            } else {
+                new_health = VIOHealth::NOMINAL;
+            }
         }
 
         transition_health(new_health, "");
@@ -281,6 +307,10 @@ private:
     std::normal_distribution<double> noise_{0.0, 0.01};
     float                            sim_speed_mps_;
 
+    // ── Covariance quality thresholds ───────────────────────
+    double good_trace_max_     = 0.1;  // trace(P_pos) <= this → NOMINAL
+    double degraded_trace_max_ = 1.0;  // trace(P_pos) <= this → DEGRADED, else LOST
+
     // ── Target-following state (set from trajectory commands) ──
     std::atomic<float> target_x_{0.0f};
     std::atomic<float> target_y_{0.0f};
@@ -290,7 +320,7 @@ private:
     Eigen::Vector3d    current_pos_ = Eigen::Vector3d::Zero();
     double             current_yaw_ = 0.0;
 
-    // ── Thresholds ──────────────────────────────────────────
+    // ── Fallback thresholds (used when no IMU data) ─────────
     static constexpr int kMinFeaturesNominal = 30;
     static constexpr int kMinMatchesNominal  = 15;
 };
@@ -437,13 +467,16 @@ private:
 class GazeboFullVIOBackend final : public IVIOBackend {
 public:
     explicit GazeboFullVIOBackend(StereoCalibration calib, ImuNoiseParams imu_params,
-                                  std::string gz_topic, uint64_t min_init_frames = 5)
+                                  std::string gz_topic, uint64_t min_init_frames = 5,
+                                  double good_trace_max = 0.1, double degraded_trace_max = 1.0)
         : calib_(std::move(calib))
         , preintegrator_(imu_params)
         , extractor_(std::make_unique<SimulatedFeatureExtractor>())
         , matcher_(std::make_unique<SimulatedStereoMatcher>(calib_))
         , gz_topic_(std::move(gz_topic))
-        , min_init_frames_(min_init_frames) {
+        , min_init_frames_(min_init_frames)
+        , good_trace_max_(good_trace_max)
+        , degraded_trace_max_(degraded_trace_max) {
         bool ok = node_.Subscribe(gz_topic_, &GazeboFullVIOBackend::on_odom, this);
         if (!ok) {
             spdlog::error("[GazeboFullVIOBackend] Failed to subscribe to '{}'", gz_topic_);
@@ -508,6 +541,9 @@ public:
                 auto& pm = preint_result.value();
                 diag.add_metric("VIOBackend", "preint_dt", pm.dt);
                 diag.add_metric("VIOBackend", "preint_delta_pos", pm.delta_position.norm());
+                // Extract position covariance trace for quality assessment
+                output.position_trace = pm.covariance.block<3, 3>(0, 0).trace();
+                diag.add_metric("VIOBackend", "position_trace", output.position_trace);
             }
         } else {
             diag.add_metric("VIOBackend", "imu_samples", 0);
@@ -598,15 +634,35 @@ private:
 
         if (frame_count_ < min_init_frames_) {
             new_health = VIOHealth::INITIALIZING;
-        } else if (output.num_features < kMinFeaturesNominal) {
-            new_health = VIOHealth::DEGRADED;
-            diag.add_warning("VIOBackend", "Degraded: only " + std::to_string(output.num_features) +
-                                               " features (need " +
-                                               std::to_string(kMinFeaturesNominal) + ")");
-        } else if (output.num_stereo_matches < kMinMatchesNominal && output.num_features > 0) {
-            new_health = VIOHealth::DEGRADED;
+        } else if (output.position_trace >= 0.0) {
+            // Covariance-based quality (preferred when IMU data available)
+            if (output.position_trace <= good_trace_max_) {
+                new_health = VIOHealth::NOMINAL;
+            } else if (output.position_trace <= degraded_trace_max_) {
+                new_health = VIOHealth::DEGRADED;
+                diag.add_warning("VIOBackend", "Degraded: position trace " +
+                                                   std::to_string(output.position_trace) +
+                                                   " > good_max " +
+                                                   std::to_string(good_trace_max_));
+            } else {
+                new_health = VIOHealth::LOST;
+                diag.add_warning("VIOBackend",
+                                 "Lost: position trace " + std::to_string(output.position_trace) +
+                                     " > degraded_max " + std::to_string(degraded_trace_max_));
+            }
         } else {
-            new_health = VIOHealth::NOMINAL;
+            // Fallback: feature/match-based heuristic (no IMU data)
+            if (output.num_features < kMinFeaturesNominal) {
+                new_health = VIOHealth::DEGRADED;
+                diag.add_warning("VIOBackend", "Degraded: only " +
+                                                   std::to_string(output.num_features) +
+                                                   " features (need " +
+                                                   std::to_string(kMinFeaturesNominal) + ")");
+            } else if (output.num_stereo_matches < kMinMatchesNominal && output.num_features > 0) {
+                new_health = VIOHealth::DEGRADED;
+            } else {
+                new_health = VIOHealth::NOMINAL;
+            }
         }
 
         transition_health(new_health, "");
@@ -639,6 +695,11 @@ private:
     uint64_t               frame_count_ = 0;
     uint64_t               min_init_frames_;
 
+    // ── Covariance quality thresholds ───────────────────────
+    double good_trace_max_     = 0.1;
+    double degraded_trace_max_ = 1.0;
+
+    // ── Fallback thresholds (used when no IMU data) ─────────
     static constexpr int kMinFeaturesNominal = 30;
     static constexpr int kMinMatchesNominal  = 15;
 };
@@ -659,14 +720,31 @@ private:
 inline std::unique_ptr<IVIOBackend> create_vio_backend(
     const std::string& backend = "simulated", const StereoCalibration& calib = {},
     const ImuNoiseParams& imu_params = {},
-    const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f) {
+    const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f,
+    double good_trace_max = 0.1, double degraded_trace_max = 1.0) {
+
+    // Validate quality thresholds — good must be <= degraded for the
+    // health state machine to make sense (NOMINAL < DEGRADED < LOST).
+    if (good_trace_max < 0.0 || degraded_trace_max < 0.0) {
+        spdlog::warn("[VIOBackend] Negative quality thresholds (good={}, degraded={}) — "
+                     "clamping to defaults (0.1, 1.0)",
+                     good_trace_max, degraded_trace_max);
+        good_trace_max     = 0.1;
+        degraded_trace_max = 1.0;
+    } else if (good_trace_max > degraded_trace_max) {
+        spdlog::warn("[VIOBackend] good_trace_max ({}) > degraded_trace_max ({}) — "
+                     "swapping to preserve NOMINAL < DEGRADED ordering",
+                     good_trace_max, degraded_trace_max);
+        std::swap(good_trace_max, degraded_trace_max);
+    }
 
 #ifndef HAVE_GAZEBO
     (void)gz_topic;  // only used by Gazebo backend
 #endif
 
     if (backend == "simulated") {
-        return std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps);
+        return std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps,
+                                                     good_trace_max, degraded_trace_max);
     }
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
@@ -675,7 +753,8 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
         return std::make_unique<GazeboVIOBackend>(gz_topic);
     }
     if (backend == "gazebo_full_vio") {
-        return std::make_unique<GazeboFullVIOBackend>(calib, imu_params, gz_topic);
+        return std::make_unique<GazeboFullVIOBackend>(calib, imu_params, gz_topic, 5,
+                                                      good_trace_max, degraded_trace_max);
     }
 #endif
     throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
