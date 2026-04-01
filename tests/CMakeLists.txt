@@ -257,3 +257,10 @@ add_drone_test(test_gazebo_radar       test_gazebo_radar.cpp)
 
 # ── Rate Clamp tests (Issue #220) ─────────────────────────
 add_drone_test(test_rate_clamp         test_rate_clamp.cpp)
+
+# ── Flight Recorder tests (Issue #40) ─────────────────────
+add_drone_test(test_flight_recorder    test_flight_recorder.cpp)
+target_link_libraries(test_flight_recorder PRIVATE drone_recorder)
+target_include_directories(test_flight_recorder PRIVATE
+    ${PROJECT_SOURCE_DIR}/common/recorder/include
+)
