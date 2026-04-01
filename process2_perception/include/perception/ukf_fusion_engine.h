@@ -51,6 +51,7 @@ struct RadarNoiseConfig {
     float    radar_max_orphan_range_m    = 40.0f;  // max range for orphan creation (77GHz ≈ 50m)
     int      radar_orphan_min_hits       = 1;      // min radar observations before output
     uint32_t radar_only_promotion_hits   = 3;      // radar hits for static promotion (tunable)
+    bool     radar_only_enabled          = true;  // enable radar-only track initiation (Issue #231)
 };
 
 /// Per-object UKF state for 3D tracking.
@@ -89,6 +90,10 @@ public:
 
     /// Convert current state to radar measurement space for association.
     [[nodiscard]] RadarMeasVec predicted_radar_measurement() const;
+
+    /// Compute radar innovation covariance S = Pzz + R_radar via sigma points.
+    /// Used for proper Mahalanobis gating that accounts for state uncertainty.
+    [[nodiscard]] RadarMeasMat predicted_radar_innovation_cov() const;
 
     /// Get current 3D position estimate.
     [[nodiscard]] Eigen::Vector3f position() const;
