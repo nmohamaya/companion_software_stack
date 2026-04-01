@@ -257,8 +257,17 @@ int main(int argc, char* argv[]) {
     const float survey_duration  = cfg.get<float>("mission_planner.survey_duration_s", 0.0f);
     const float survey_yaw_rate  = cfg.get<float>("mission_planner.survey_yaw_rate", 0.3f);
 
+    // Collision recovery config (Issue #226)
+    const bool collision_recovery_enabled =
+        cfg.get<bool>("mission_planner.collision_recovery.enabled", true);
+    const float collision_climb_delta =
+        cfg.get<float>("mission_planner.collision_recovery.climb_delta_m", 3.0f);
+    const float collision_hover_duration =
+        cfg.get<float>("mission_planner.collision_recovery.hover_duration_s", 2.0f);
+
     MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s,
-                                      survey_duration, survey_yaw_rate});
+                                      survey_duration, survey_yaw_rate, collision_recovery_enabled,
+                                      collision_climb_delta, collision_hover_duration});
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
     auto                  send_fc = [&](drone::ipc::FCCommandType cmd, float p) {

@@ -73,6 +73,10 @@ public:
     /// True if the last planning cycle could not find a search path
     /// and fell back to a direct line toward the target.
     [[nodiscard]] virtual bool using_direct_fallback() const = 0;
+
+    /// Invalidate the cached path, forcing a full replan on the next tick.
+    /// Called after collision recovery to avoid re-using a path that led into an obstacle.
+    virtual void invalidate_path() = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -98,6 +102,13 @@ public:
     }
 
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
+
+    void invalidate_path() override {
+        cached_path_.clear();
+        path_index_ = 0;
+        snap_valid_ = false;
+        spdlog::info("[Planner] Path cache invalidated — forcing full replan");
+    }
 
     /// Get the current obstacle grid (for diagnostics/testing).
     [[nodiscard]] const OccupancyGrid3D& grid() const { return grid_; }

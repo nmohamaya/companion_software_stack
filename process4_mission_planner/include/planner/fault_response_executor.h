@@ -32,6 +32,12 @@ public:
             fsm.state() == MissionState::PREFLIGHT)
             return;
 
+        // During COLLISION_RECOVERY, only allow high-severity escalation (RTL, EMERGENCY_LAND).
+        // Lower-severity actions (WARN, LOITER) are skipped to avoid disrupting the recovery.
+        if (fsm.state() == MissionState::COLLISION_RECOVERY &&
+            fault.recommended_action < FaultAction::RTL)
+            return;
+
         spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {}) active_faults=[{}]",
                      fault_action_name(last_fault_action_),
                      fault_action_name(fault.recommended_action), fault.reason,

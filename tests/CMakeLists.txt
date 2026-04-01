@@ -264,5 +264,7 @@ target_link_libraries(test_flight_recorder PRIVATE drone_recorder)
 target_include_directories(test_flight_recorder PRIVATE
     ${PROJECT_SOURCE_DIR}/common/recorder/include
 )
+# ── Collision Recovery tests (Issue #226) ─────────────────
+add_drone_test(test_collision_recovery test_collision_recovery.cpp)
 # ── Gimbal Auto-Tracker tests (Issue #257) ────────────────
 add_drone_test(test_gimbal_auto_tracker test_gimbal_auto_tracker.cpp)
