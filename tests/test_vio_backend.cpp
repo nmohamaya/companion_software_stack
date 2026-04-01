@@ -305,6 +305,105 @@ TEST(VIOErrorTest, ToStringFormat) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Covariance-derived VIO quality tests
+// ═══════════════════════════════════════════════════════════
+
+TEST(VIOCovarianceTest, PositionTraceIsPopulatedWithIMU) {
+    SimulatedVIOBackend backend;
+    auto                frame = make_frame(1);
+    auto                imu   = make_imu_samples(13);
+
+    auto result = backend.process_frame(frame, imu);
+    ASSERT_TRUE(result.is_ok()) << result.error().to_string();
+    EXPECT_GE(result.value().position_trace, 0.0) << "Trace should be non-negative with IMU data";
+}
+
+TEST(VIOCovarianceTest, PositionTraceUnavailableWithoutIMU) {
+    SimulatedVIOBackend    backend;
+    auto                   frame = make_frame(1);
+    std::vector<ImuSample> empty_imu;
+
+    auto result = backend.process_frame(frame, empty_imu);
+    ASSERT_TRUE(result.is_ok()) << result.error().to_string();
+    EXPECT_LT(result.value().position_trace, 0.0) << "Trace should be -1 without IMU data";
+}
+
+TEST(VIOCovarianceTest, NominalHealthWithLowTrace) {
+    // Default thresholds: good_trace_max=0.1, degraded_trace_max=1.0
+    // The simulated pre-integrator produces small covariance → should be NOMINAL
+    SimulatedVIOBackend backend({}, {}, 1);  // 1 init frame
+
+    // Process enough frames to exit initialization
+    for (int i = 0; i < 3; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+    }
+
+    // After init, with small trace from default IMU params → NOMINAL
+    EXPECT_EQ(backend.health(), VIOHealth::NOMINAL);
+}
+
+TEST(VIOCovarianceTest, DegradedHealthWithHighTrace) {
+    // Set very tight good_trace_max so the default IMU covariance exceeds it
+    SimulatedVIOBackend backend({}, {}, 1, 3.0f, 1e-20, 1e10);
+
+    // Process frames to exit init
+    for (int i = 0; i < 3; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+    }
+
+    // Trace > good_trace_max (1e-20) but < degraded_trace_max (1e10) → DEGRADED
+    EXPECT_EQ(backend.health(), VIOHealth::DEGRADED);
+}
+
+TEST(VIOCovarianceTest, LostHealthWithVeryHighTrace) {
+    // Set both thresholds very tight
+    SimulatedVIOBackend backend({}, {}, 1, 3.0f, 1e-20, 1e-19);
+
+    for (int i = 0; i < 3; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto imu   = make_imu_samples(13, static_cast<double>(i) * 0.033);
+        auto r     = backend.process_frame(frame, imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+    }
+
+    // Trace > degraded_trace_max (1e-19) → LOST
+    EXPECT_EQ(backend.health(), VIOHealth::LOST);
+}
+
+TEST(VIOCovarianceTest, FallbackToFeatureHeuristicWithoutIMU) {
+    // With no IMU, trace stays -1 → fallback to feature/match heuristic
+    SimulatedVIOBackend    backend({}, {}, 1);
+    std::vector<ImuSample> empty_imu;
+
+    for (int i = 0; i < 3; ++i) {
+        auto frame = make_frame(static_cast<uint64_t>(i));
+        auto r     = backend.process_frame(frame, empty_imu);
+        ASSERT_TRUE(r.is_ok()) << r.error().to_string();
+    }
+
+    // Simulated extractor produces enough features → NOMINAL via fallback
+    EXPECT_EQ(backend.health(), VIOHealth::NOMINAL);
+}
+
+TEST(VIOCovarianceTest, PositionTraceField) {
+    // Verify the VIOOutput field default
+    VIOOutput output;
+    EXPECT_LT(output.position_trace, 0.0) << "Default position_trace should be -1";
+}
+
+TEST(VIOCovarianceTest, FactoryAcceptsQualityThresholds) {
+    auto backend = create_vio_backend("simulated", {}, {}, "/unused", 3.0f, 0.5, 2.0);
+    ASSERT_NE(backend, nullptr);
+    EXPECT_EQ(backend->name(), "SimulatedVIOBackend");
+}
+
+// ═══════════════════════════════════════════════════════════
 // GazeboFullVIOBackend tests
 // ═══════════════════════════════════════════════════════════
 

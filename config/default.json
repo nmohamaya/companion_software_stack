@@ -118,7 +118,11 @@
         "imu_rate_hz": 400,
         "vio": {
             "backend": "simulated",
-            "gz_topic": "/model/x500_companion_0/odometry"
+            "gz_topic": "/model/x500_companion_0/odometry",
+            "quality": {
+                "good_trace_max": 0.1,
+                "degraded_trace_max": 1.0
+            }
         },
         "imu": {
             "backend": "simulated"
