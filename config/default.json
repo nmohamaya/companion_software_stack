@@ -209,7 +209,11 @@
             "pitch_min_deg": -90.0,
             "pitch_max_deg": 30.0,
             "yaw_min_deg": -180.0,
-            "yaw_max_deg": 180.0
+            "yaw_max_deg": 180.0,
+            "auto_track": {
+                "enabled": false,
+                "min_confidence": 0.5
+            }
         }
     },
 
