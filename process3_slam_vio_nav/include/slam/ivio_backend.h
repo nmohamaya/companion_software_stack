@@ -723,6 +723,21 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f,
     double good_trace_max = 0.1, double degraded_trace_max = 1.0) {
 
+    // Validate quality thresholds — good must be <= degraded for the
+    // health state machine to make sense (NOMINAL < DEGRADED < LOST).
+    if (good_trace_max < 0.0 || degraded_trace_max < 0.0) {
+        spdlog::warn("[VIOBackend] Negative quality thresholds (good={}, degraded={}) — "
+                     "clamping to defaults (0.1, 1.0)",
+                     good_trace_max, degraded_trace_max);
+        good_trace_max     = 0.1;
+        degraded_trace_max = 1.0;
+    } else if (good_trace_max > degraded_trace_max) {
+        spdlog::warn("[VIOBackend] good_trace_max ({}) > degraded_trace_max ({}) — "
+                     "swapping to preserve NOMINAL < DEGRADED ordering",
+                     good_trace_max, degraded_trace_max);
+        std::swap(good_trace_max, degraded_trace_max);
+    }
+
 #ifndef HAVE_GAZEBO
     (void)gz_topic;  // only used by Gazebo backend
 #endif

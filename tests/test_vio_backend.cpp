@@ -325,7 +325,7 @@ TEST(VIOCovarianceTest, PositionTraceUnavailableWithoutIMU) {
 
     auto result = backend.process_frame(frame, empty_imu);
     ASSERT_TRUE(result.is_ok()) << result.error().to_string();
-    EXPECT_LT(result.value().position_trace, 0.0) << "Trace should be -1 without IMU data";
+    EXPECT_DOUBLE_EQ(result.value().position_trace, -1.0) << "Trace should be -1 without IMU data";
 }
 
 TEST(VIOCovarianceTest, NominalHealthWithLowTrace) {
@@ -394,7 +394,7 @@ TEST(VIOCovarianceTest, FallbackToFeatureHeuristicWithoutIMU) {
 TEST(VIOCovarianceTest, PositionTraceField) {
     // Verify the VIOOutput field default
     VIOOutput output;
-    EXPECT_LT(output.position_trace, 0.0) << "Default position_trace should be -1";
+    EXPECT_DOUBLE_EQ(output.position_trace, -1.0) << "Default position_trace should be -1";
 }
 
 TEST(VIOCovarianceTest, FactoryAcceptsQualityThresholds) {
