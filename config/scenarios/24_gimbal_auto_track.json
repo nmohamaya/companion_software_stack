@@ -1,8 +1,8 @@
 {
-    "_comment": "Scenario 24: Gimbal Auto-Tracking — verifies payload manager auto-tracks highest-confidence object",
+    "_comment": "Scenario 24: Gimbal Auto-Tracking — verifies mission completes without faults when auto-track is enabled",
     "scenario": {
         "name": "gimbal_auto_track",
-        "description": "Smoke test for gimbal auto-tracking. Enables auto-track in payload manager, flies a mission with simulated detections, and verifies the gimbal tracks objects. Tier 1 — no Gazebo required.",
+        "description": "Smoke test for gimbal auto-tracking. Enables auto-track in payload manager, flies a mission with simulated detections, and verifies mission completes without faults. Does not assert gimbal tracking behavior directly. Tier 1 — no Gazebo required.",
         "tier": 1,
         "timeout_s": 90,
         "requires_gazebo": false

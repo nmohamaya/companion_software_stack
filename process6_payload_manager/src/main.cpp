@@ -90,8 +90,16 @@ int main(int argc, char* argv[]) {
                      auto_track_cfg.min_confidence);
     }
 
-    // Latest detection list (updated each cycle from IPC)
+    // Latest detection list and pose (updated each cycle from IPC)
     drone::ipc::DetectedObjectList latest_detections{};
+    drone::ipc::Pose               latest_pose{};
+    bool                           has_pose = false;
+
+    // Manual command holdoff — suppress auto-tracking for a configurable duration
+    // after the last manual command to avoid fighting the operator.
+    const float manual_holdoff_s =
+        cfg.get<float>("payload_manager.gimbal.auto_track.manual_holdoff_s", 2.0f);
+    auto last_manual_cmd_time = std::chrono::steady_clock::time_point{};
 
     spdlog::info("Payload Manager READY");
     drone::systemd::notify_ready();
@@ -119,13 +127,14 @@ int main(int argc, char* argv[]) {
         drone::systemd::notify_watchdog();
         drone::util::FrameDiagnostics diag(cycle_count);
 
+        const auto now = std::chrono::steady_clock::now();
+
         // Read commands
         drone::ipc::PayloadCommand cmd{};
-        bool                       manual_cmd_received = false;
         if (cmd_sub->receive(cmd) && cmd.valid && cmd.timestamp_ns != last_cmd_ts) {
-            last_cmd_ts = cmd.timestamp_ns;
+            last_cmd_ts          = cmd.timestamp_ns;
+            last_manual_cmd_time = now;
             ++cmd_count;
-            manual_cmd_received = true;
 
             gimbal->set_target(cmd.gimbal_pitch, cmd.gimbal_yaw);
             diag.add_metric("Gimbal", "target_pitch", static_cast<double>(cmd.gimbal_pitch));
@@ -152,19 +161,28 @@ int main(int argc, char* argv[]) {
         }
 
         // ── Auto-tracking: update detections + pose, compute gimbal angles ──
-        {
+        if (auto_track_cfg.enabled) {
             drone::ipc::DetectedObjectList det_msg{};
             if (detections_sub->receive(det_msg) && det_msg.validate()) {
                 latest_detections = det_msg;
             }
-            // Drain pose subscriber to keep buffer fresh (pose available for future use)
-            drone::ipc::Pose pose_msg{};
-            (void)pose_sub->receive(pose_msg);
 
-            // Only auto-track when no manual command arrived this cycle
-            if (auto_track_cfg.enabled && !manual_cmd_received) {
-                const auto track_result = drone::payload::compute_auto_track(latest_detections,
-                                                                             auto_track_cfg);
+            drone::ipc::Pose pose_msg{};
+            if (pose_sub->receive(pose_msg) && pose_msg.validate()) {
+                latest_pose = pose_msg;
+                has_pose    = true;
+            }
+
+            // Only auto-track when manual holdoff has expired and we have a valid pose
+            const float elapsed_since_manual =
+                std::chrono::duration<float>(now - last_manual_cmd_time).count();
+            const bool holdoff_active =
+                (last_manual_cmd_time != std::chrono::steady_clock::time_point{}) &&
+                (elapsed_since_manual < manual_holdoff_s);
+
+            if (!holdoff_active && has_pose) {
+                const auto track_result = drone::payload::compute_auto_track(
+                    latest_detections, latest_pose, auto_track_cfg);
                 if (track_result.has_target) {
                     gimbal->set_target(track_result.pitch_deg, track_result.yaw_deg);
                     diag.add_metric("AutoTrack", "target_pitch",
