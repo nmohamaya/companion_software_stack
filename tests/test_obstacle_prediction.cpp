@@ -54,7 +54,7 @@ TEST(ObstaclePredictionTest, StaticObjectNoPredictionCells) {
     grid.update_from_objects(objects, pose);
 
     // No prediction should have been applied
-    EXPECT_EQ(grid.prediction_count(), 0);
+    EXPECT_EQ(grid.total_predictions_applied(), 0);
 
     // Cells near position should be occupied (current-position inflation)
     EXPECT_TRUE(grid.is_occupied({5, 5, 5}));
@@ -78,7 +78,7 @@ TEST(ObstaclePredictionTest, ZeroVelocityNoPrediction) {
     drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
-    EXPECT_EQ(grid.prediction_count(), 0);
+    EXPECT_EQ(grid.total_predictions_applied(), 0);
     EXPECT_TRUE(grid.prediction_enabled());
 }
 
@@ -96,7 +96,7 @@ TEST(ObstaclePredictionTest, SlowVelocityBelowThresholdNoPrediction) {
     drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
-    EXPECT_EQ(grid.prediction_count(), 0);
+    EXPECT_EQ(grid.total_predictions_applied(), 0);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -116,7 +116,7 @@ TEST(ObstaclePredictionTest, MovingObjectInflatesPredictionCells) {
     grid.update_from_objects(objects, pose);
 
     // Prediction should have been applied
-    EXPECT_EQ(grid.prediction_count(), 1);
+    EXPECT_EQ(grid.total_predictions_applied(), 1);
 
     // Current position occupied
     EXPECT_TRUE(grid.is_occupied({5, 5, 5}));
@@ -145,7 +145,7 @@ TEST(ObstaclePredictionTest, DiagonalVelocityInflatesDiagonalCells) {
     drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
-    EXPECT_EQ(grid.prediction_count(), 1);
+    EXPECT_EQ(grid.total_predictions_applied(), 1);
 
     // Cells along diagonal should be occupied
     EXPECT_TRUE(grid.is_occupied({6, 6, 5}));
@@ -168,7 +168,7 @@ TEST(ObstaclePredictionTest, PredictionDisabledNoCells) {
     grid.update_from_objects(objects, pose);
 
     EXPECT_FALSE(grid.prediction_enabled());
-    EXPECT_EQ(grid.prediction_count(), 0);
+    EXPECT_EQ(grid.total_predictions_applied(), 0);
 
     // Current position occupied (regular inflation still works)
     EXPECT_TRUE(grid.is_occupied({5, 5, 5}));
@@ -192,7 +192,7 @@ TEST(ObstaclePredictionTest, ZeroDtNoPrediction) {
     drone::ipc::Pose pose{};
     grid.update_from_objects(objects, pose);
 
-    EXPECT_EQ(grid.prediction_count(), 0);
+    EXPECT_EQ(grid.total_predictions_applied(), 0);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -214,7 +214,7 @@ TEST(ObstaclePredictionTest, PredictionRespectsGridBounds) {
     grid.update_from_objects(objects, pose);
 
     // Should still have prediction count (object had velocity)
-    EXPECT_EQ(grid.prediction_count(), 1);
+    EXPECT_EQ(grid.total_predictions_applied(), 1);
 
     // Cells at grid boundary should be occupied
     EXPECT_TRUE(grid.is_occupied({4, 0, 0}));
@@ -305,7 +305,7 @@ TEST(ObstaclePredictionTest, MultipleObjectsOnlyMovingGetPrediction) {
     grid.update_from_objects(objects, pose);
 
     // Only one object should trigger prediction
-    EXPECT_EQ(grid.prediction_count(), 1);
+    EXPECT_EQ(grid.total_predictions_applied(), 1);
 
     // Object 1 predicted position: (-5, -5 + 2*2, 5) = (-5, -1, 5)
     EXPECT_TRUE(grid.is_occupied({-5, -1, 5}));

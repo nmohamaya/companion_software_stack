@@ -200,14 +200,15 @@ int main(int argc, char* argv[]) {
     planner_cfg.radar_promotion_hits =
         static_cast<uint32_t>(cfg.get<int>("mission_planner.occupancy_grid.radar_promotion_hits",
                                            static_cast<int>(planner_cfg.radar_promotion_hits)));
-    planner_cfg.prediction_enabled = cfg.get<bool>("mission_planner.obstacle_prediction.enabled",
-                                                   planner_cfg.prediction_enabled);
-    planner_cfg.prediction_dt_s    = cfg.get<float>("mission_planner.obstacle_prediction.dt_s",
-                                                    planner_cfg.prediction_dt_s);
-    planner_cfg.z_band_cells       = cfg.get<int>("mission_planner.path_planner.z_band_cells",
-                                                  planner_cfg.z_band_cells);
-    planner_cfg.look_ahead_m       = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
-                                                    planner_cfg.look_ahead_m);
+    // Prediction config — under occupancy_grid.* for consistency with other grid params
+    planner_cfg.prediction_enabled = cfg.get<bool>(
+        "mission_planner.occupancy_grid.prediction_enabled", planner_cfg.prediction_enabled);
+    planner_cfg.prediction_dt_s = cfg.get<float>("mission_planner.occupancy_grid.prediction_dt_s",
+                                                 planner_cfg.prediction_dt_s);
+    planner_cfg.z_band_cells    = cfg.get<int>("mission_planner.path_planner.z_band_cells",
+                                               planner_cfg.z_band_cells);
+    planner_cfg.look_ahead_m    = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
+                                                 planner_cfg.look_ahead_m);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
