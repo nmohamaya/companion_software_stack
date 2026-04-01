@@ -110,6 +110,7 @@ TEST(MissionFSMTest, StateNames) {
     EXPECT_STREQ(state_name(MissionState::EMERGENCY), "EMERGENCY");
     EXPECT_STREQ(state_name(MissionState::RTL), "RTL");
     EXPECT_STREQ(state_name(MissionState::LAND), "LAND");
+    EXPECT_STREQ(state_name(MissionState::COLLISION_RECOVERY), "COLLISION_RECOVERY");
 }
 
 // ═══════════════════════════════════════════════════════════
