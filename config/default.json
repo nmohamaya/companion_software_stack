@@ -144,7 +144,8 @@
             "resolution_m": 0.5,
             "inflation_radius_m": 1.5,
             "dynamic_obstacle_ttl_s": 3.0,
-            "min_confidence": 0.3
+            "min_confidence": 0.3,
+            "min_promotion_depth_confidence": 0.5
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"

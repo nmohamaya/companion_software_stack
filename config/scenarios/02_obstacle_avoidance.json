@@ -20,6 +20,11 @@
                 "influence_radius_m": 4.0,
                 "repulsive_gain": 3.0
             },
+            "occupancy_grid": {
+                "promotion_hits": 8,
+                "min_promotion_depth_confidence": 0.5,
+                "_comment": "Enable promotion with depth confidence gate — validates that false ground detections are filtered"
+            },
             "static_obstacles": [
                 {"x": 1,  "y": 7,  "radius_m": 0.75, "height_m": 5.0, "_color": "RED"},
                 {"x": 2,  "y": 13, "radius_m": 0.75, "height_m": 4.0, "_color": "BLUE"},

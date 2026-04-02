@@ -107,14 +107,16 @@ class OccupancyGrid3D {
 public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
-                             int promotion_hits = 0, uint32_t radar_promotion_hits = 3)
+                             int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
+                             float min_promotion_depth_confidence = 0.5f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
         , cell_ttl_ns_(static_cast<uint64_t>(cell_ttl_s * 1e9f))
         , min_confidence_(min_confidence)
         , promotion_hits_(promotion_hits)
-        , radar_promotion_hits_(radar_promotion_hits) {}
+        , radar_promotion_hits_(radar_promotion_hits)
+        , min_promotion_depth_confidence_(min_promotion_depth_confidence) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -247,8 +249,10 @@ public:
                             // the promoted wall beyond the real obstacle footprint.
                             const bool radar_confirmed = obj.radar_update_count >=
                                                          radar_promotion_hits_;
+                            const bool depth_ok = obj.depth_confidence >=
+                                                  min_promotion_depth_confidence_;
 
-                            if (radar_confirmed && !skip_promotion) {
+                            if (radar_confirmed && !skip_promotion && depth_ok) {
                                 // Radar-confirmed → immediate static promotion
                                 if (static_occupied_.count(c) == 0) {
                                     static_occupied_.insert(c);
@@ -261,7 +265,7 @@ public:
                                     }
                                     ++promoted_count_;
                                 }
-                            } else if (promotion_hits_ > 0 && !skip_promotion) {
+                            } else if (promotion_hits_ > 0 && !skip_promotion && depth_ok) {
                                 int& hits = hit_count_[c];
                                 ++hits;
                                 if (hits >= promotion_hits_) {
@@ -373,9 +377,10 @@ private:
     uint64_t cell_ttl_ns_;
     float    min_confidence_;
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
-    uint32_t radar_promotion_hits_{3};  // radar updates for immediate static promotion
-    int      promoted_count_{0};        // total cells promoted (diagnostic)
-    uint64_t diag_tick_{0};             // for periodic diagnostic logging
+    uint32_t radar_promotion_hits_{3};               // radar updates for immediate static promotion
+    float    min_promotion_depth_confidence_{0.5f};  // min depth confidence for promotion
+    int      promoted_count_{0};                     // total cells promoted (diagnostic)
+    uint64_t diag_tick_{0};                          // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;

@@ -292,6 +292,7 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                 dst.estimated_radius_m = src.estimated_radius_m;
                 dst.estimated_height_m = src.estimated_height_m;
                 dst.radar_update_count = src.radar_update_count;
+                dst.depth_confidence   = src.depth_confidence;
             }
             det_pub.publish(shm_list);
             ++fusion_count;

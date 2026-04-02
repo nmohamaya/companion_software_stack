@@ -98,6 +98,7 @@ struct FusedObject {
     float           estimated_radius_m = 0.0f;   // back-projected obstacle radius from bbox+range
     float           estimated_height_m = 0.0f;   // back-projected obstacle height from bbox+range
     uint32_t        radar_update_count = 0;      // number of radar updates (for trust weighting)
+    float           depth_confidence   = 0.0f;   // depth estimation quality [0.0=guess, 1.0=radar]
 };
 
 struct FusedObjectList {
