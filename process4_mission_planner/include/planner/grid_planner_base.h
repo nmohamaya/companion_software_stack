@@ -51,6 +51,10 @@ struct GridPlannerConfig {
     uint32_t radar_promotion_hits = 3;     // Radar update count for immediate static promotion
     float    look_ahead_m         = 0.0f;  // Pure-pursuit look-ahead distance along path
                                            // (0 = disabled, use cell-by-cell following)
+    int   max_static_cells   = 0;          // Cap on promoted static cells (0 = unlimited)
+    bool  yaw_towards_travel = true;       // Face sensors toward next waypoint during NAVIGATE
+    float yaw_smoothing_rate = 0.3f;       // EMA alpha for yaw transitions (0=frozen, 1=instant)
+    float snap_approach_bias = 0.5f;       // Approach-direction penalty for snap fallback
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -83,7 +87,7 @@ public:
         : config_(config)
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
-                config.radar_promotion_hits) {}
+                config.radar_promotion_hits, config.max_static_cells) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
@@ -301,6 +305,32 @@ public:
         cmd.target_z   = target.z;
         cmd.target_yaw = target.yaw;
 
+        // Yaw-towards-travel: face sensors toward the next waypoint.
+        // Uses waypoint direction (not path step) to avoid feedback loop
+        // where camera view → grid → planner → yaw → camera causes circling.
+        if (config_.yaw_towards_travel) {
+            const float ytt_dx   = target.x - px;
+            const float ytt_dy   = target.y - py;
+            const float ytt_dist = std::sqrt(ytt_dx * ytt_dx + ytt_dy * ytt_dy);
+            if (ytt_dist > 0.5f) {
+                constexpr float kPi     = 3.14159265358979323846f;
+                const float     desired = std::atan2(ytt_dy, ytt_dx);
+                if (!smooth_yaw_init_) {
+                    smooth_yaw_      = desired;
+                    smooth_yaw_init_ = true;
+                }
+                // Shortest angular difference with wraparound
+                float diff = desired - smooth_yaw_;
+                if (diff > kPi) diff -= 2.0f * kPi;
+                if (diff < -kPi) diff += 2.0f * kPi;
+                smooth_yaw_ += config_.yaw_smoothing_rate * diff;
+                // Re-normalise to [-pi, pi]
+                if (smooth_yaw_ > kPi) smooth_yaw_ -= 2.0f * kPi;
+                if (smooth_yaw_ < -kPi) smooth_yaw_ += 2.0f * kPi;
+                cmd.target_yaw = smooth_yaw_;
+            }
+        }
+
         // Periodic diagnostic: velocity, path state, position
         if (diag_tick_++ % 50 == 0) {
             spdlog::info("[PlanBase] pos=({:.1f},{:.1f},{:.1f}) vel=({:.2f},{:.2f},{:.2f}) "
@@ -337,6 +367,16 @@ private:
             last_target_x_ = target.x;
             last_target_y_ = target.y;
             last_target_z_ = target.z;
+        }
+
+        // Invalidate snap cache if static cell count changed significantly (>10%)
+        const size_t current_static = grid_.static_count();
+        if (snap_valid_ && last_snap_static_count_ > 0) {
+            const float change = std::abs(static_cast<float>(current_static) -
+                                          static_cast<float>(last_snap_static_count_));
+            if (change / static_cast<float>(std::max(last_snap_static_count_, size_t{1})) > 0.1f) {
+                snap_valid_ = false;
+            }
         }
 
         GridCell goal = raw_goal;
@@ -390,30 +430,49 @@ private:
                 }
             }
 
-            // Fallback: nearest horizontal free cell
+            // Fallback: nearest free cell with approach-direction bias.
+            // Penalises cells on the far side of the goal (away from drone)
+            // so the snapped position is navigable, not just geometrically close.
             if (!snapped) {
-                float     best_dist_sq = 1e9f;
-                const int radius       = std::clamp(config_.snap_search_radius, 0, 100);
+                float     best_score = 1e9f;
+                const int radius     = std::clamp(config_.snap_search_radius, 0, 100);
+                // Approach vector: drone (start) → goal, normalised
+                const float anx = (amag > 0.5f) ? adx / amag : 0.0f;
+                const float any = (amag > 0.5f) ? ady / amag : 0.0f;
+
                 for (int dy = -radius; dy <= radius; ++dy) {
                     for (int dx = -radius; dx <= radius; ++dx) {
                         const float dist_sq = static_cast<float>(dx * dx + dy * dy);
-                        if (dist_sq == 0.0f || dist_sq >= best_dist_sq) continue;
+                        if (dist_sq == 0.0f) continue;
                         GridCell c{orig_goal.x + dx, orig_goal.y + dy, orig_goal.z};
-                        if (grid_.in_bounds(c) && !grid_.is_occupied(c)) {
-                            best_dist_sq = dist_sq;
-                            goal         = c;
-                            snapped      = true;
+                        if (!grid_.in_bounds(c) || grid_.is_occupied(c)) continue;
+
+                        const float dist = std::sqrt(dist_sq);
+                        // Dot of (candidate offset from goal) with approach direction.
+                        // Positive = candidate is past the goal (away from drone) — penalise.
+                        // Negative = candidate is between drone and goal — preferred.
+                        const float dot = static_cast<float>(dx) * anx +
+                                          static_cast<float>(dy) * any;
+                        const float penalty = (dot > 0.0f) ? dot * config_.snap_approach_bias
+                                                           : 0.0f;
+                        const float score   = dist + penalty;
+
+                        if (score < best_score) {
+                            best_score = score;
+                            goal       = c;
+                            snapped    = true;
                         }
                     }
                 }
             }
 
             if (snapped) {
-                auto wc          = grid_.grid_to_world(goal);
-                snapped_world_x_ = wc[0];
-                snapped_world_y_ = wc[1];
-                snapped_world_z_ = wc[2];
-                snap_valid_      = true;
+                auto wc                 = grid_.grid_to_world(goal);
+                snapped_world_x_        = wc[0];
+                snapped_world_y_        = wc[1];
+                snapped_world_z_        = wc[2];
+                snap_valid_             = true;
+                last_snap_static_count_ = current_static;
                 const float snap_dist =
                     std::sqrt(static_cast<float>((goal.x - orig_goal.x) * (goal.x - orig_goal.x) +
                                                  (goal.y - orig_goal.y) * (goal.y - orig_goal.y))) *
@@ -480,14 +539,19 @@ private:
     std::chrono::steady_clock::time_point last_plan_time_{};
 
     // Cached snapped goal
-    float last_target_x_ = 1e9f, last_target_y_ = 1e9f, last_target_z_ = 1e9f;
-    float snapped_world_x_ = 0.0f, snapped_world_y_ = 0.0f, snapped_world_z_ = 0.0f;
-    bool  snap_valid_ = false;
+    float  last_target_x_ = 1e9f, last_target_y_ = 1e9f, last_target_z_ = 1e9f;
+    float  snapped_world_x_ = 0.0f, snapped_world_y_ = 0.0f, snapped_world_z_ = 0.0f;
+    bool   snap_valid_             = false;
+    size_t last_snap_static_count_ = 0;  // for snap cache invalidation on grid changes
 
     // Velocity smoothing state
     float smooth_vx_ = 0.0f;
     float smooth_vy_ = 0.0f;
     float smooth_vz_ = 0.0f;
+
+    // Yaw-towards-travel state
+    float smooth_yaw_      = 0.0f;
+    bool  smooth_yaw_init_ = false;
 
     // Diagnostic tick counter
     uint64_t diag_tick_ = 0;
