@@ -2827,4 +2827,40 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #65 (PR #241 review fixes). See [tests/TESTS.md](../tests/TESTS.md) for current test counts. 1108 tests, 18 scenarios._
+### Improvement #66 — Epic #263: Autonomous Intelligence & Sim Fidelity (11 Issues, 10 PRs)
+
+**Date:** 2026-04-02
+**Category:** Feature / Safety / Refactor / Infrastructure
+**Epic:** [#263](https://github.com/nmohamaya/companion_software_stack/issues/263)
+**PRs:** #264, #265, #266, #267, #268, #270, #271, #272, #275, #276, #277
+
+**Sub-Epics & Issues:**
+
+**A — Foundation Fixes:**
+- **#220** (PR #266) — P3 rate clamping: config-driven loop rates replace unclamped busy-loops
+- **#258** (PR #267) — D* Lite corner-cutting guard: prevent diagonal moves through blocked corners
+
+**B — Perception & Radar:**
+- **#253** (PR #264) — YOLOv8 Gazebo scenario + SimulatedDetector extracted from detector_interface.h
+- **#231** (PR #271) — Radar-only track initiation with proper innovation gating
+
+**C — VIO Fidelity:**
+- **#191** (PR #275) — GazeboFullVIOBackend: feature extraction + stereo matching + IMU pre-integration in Gazebo
+- **#254** (PR #276) — Covariance-derived VIO quality: `trace(P_position)` replaces hardcoded heuristic, configurable thresholds
+- **#255** (PR #277) — Remove legacy IVisualFrontend interface (170 lines deleted, 10 doc files updated)
+
+**D — Advanced Autonomy:**
+- **#256** (PR #270) — Dynamic obstacle prediction via UKF velocity vectors
+- **#257** (PR #265) — Gimbal auto-tracking of highest-priority tracked object
+- **#226** (PR #268) — Post-collision recovery FSM state with waypoint skip logic
+- **#40** (PR #272) — Flight data recorder with ring-buffer logging and IPC replay tool
+
+**What:** 11-issue epic delivered in 3 waves via an integration branch pattern. Added 7 new scenarios (19–26), 130+ unit tests, 3 new HAL/perception features, and cleaned up legacy interfaces. All work merged to `integration/epic-256-autonomous-intelligence` then to `main` in a single final PR.
+
+**Why:** Bridge the gap between simulated and real-world autonomy. Covariance-based VIO quality enables real SLAM divergence detection. Radar-only initiation and dynamic prediction improve perception without camera. Flight recorder enables post-incident analysis. Collision recovery and gimbal tracking are safety-critical autonomous capabilities.
+
+**Test count:** 1108 → 1238 (+130 tests). 25 scenarios (20 Tier 1 + 5 Tier 2).
+
+---
+
+_Last updated after Improvement #66 (Epic #263). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts. 1238 tests, 25 scenarios._
