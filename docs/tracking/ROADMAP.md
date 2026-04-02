@@ -524,6 +524,8 @@
 | [#61](https://github.com/nmohamaya/companion_software_stack/issues/61) | FaultManager — graceful degradation | **Closed** (PR #63) |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
 | [#250](https://github.com/nmohamaya/companion_software_stack/issues/250) | D* Lite 3D grid (26-connected) | Open |
+| [#273](https://github.com/nmohamaya/companion_software_stack/issues/273) | Full S-matrix gating for all radar association | Open |
+| [#274](https://github.com/nmohamaya/companion_software_stack/issues/274) | Safety-critical C++ audit — scan codebase against full rule set | Open |
 
 ### Zenoh IPC Migration (Phase 12) — ✅ COMPLETE
 

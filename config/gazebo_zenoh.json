@@ -53,13 +53,41 @@
             "min_hits": 3,
             "max_association_cost": 100.0
         },
+        "radar": {
+            "backend": "gazebo",
+            "enabled": true,
+            "gz_scan_topic": "/radar_lidar/scan",
+            "gz_odom_topic": "/model/x500_companion_0/odometry",
+            "max_range_m": 100.0,
+            "fov_azimuth_rad": 1.047,
+            "fov_elevation_rad": 0.262,
+            "ground_filter_alt_m": 0.5,
+            "noise": {
+                "range_std_m": 0.3,
+                "azimuth_std_rad": 0.026,
+                "elevation_std_rad": 0.026,
+                "velocity_std_mps": 0.1
+            },
+            "false_alarm_rate": 0.02
+        },
         "fusion": {
             "camera_weight": 1.0,
             "camera_height_m": 1.5,
             "fx": 277.0,
             "fy": 277.0,
             "cx": 320.0,
-            "cy": 240.0
+            "cy": 240.0,
+            "radar": {
+                "enabled": true,
+                "range_std_m": 0.3,
+                "azimuth_std_rad": 0.026,
+                "elevation_std_rad": 0.026,
+                "velocity_std_mps": 0.1,
+                "gate_threshold": 9.21,
+                "ground_filter_enabled": true,
+                "min_object_altitude_m": 0.3,
+                "altitude_gate_m": 2.0
+            }
         }
     },
 
