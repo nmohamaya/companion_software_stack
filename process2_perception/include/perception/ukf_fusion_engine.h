@@ -95,8 +95,9 @@ public:
     /// S = Pzz + R_radar is the innovation covariance.
     /// Used for proper Mahalanobis gating that accounts for state uncertainty.
     struct RadarPrediction {
-        RadarMeasVec z_mean;
-        RadarMeasMat S;
+        RadarMeasVec              z_mean;
+        RadarMeasMat              S;
+        std::vector<RadarMeasVec> z_sigma;  ///< Propagated sigma points (reused by update)
     };
     [[nodiscard]] RadarPrediction predicted_radar_innovation_cov() const;
 

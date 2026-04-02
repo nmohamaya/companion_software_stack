@@ -372,7 +372,7 @@ ObjectUKF::RadarPrediction ObjectUKF::compute_radar_prediction(
         S += wi * (dzi * dzi.transpose());
     }
     S += R_radar_;
-    return {z_mean, S};
+    return {z_mean, S, std::move(z_sigma)};
 }
 
 ObjectUKF::RadarPrediction ObjectUKF::predicted_radar_innovation_cov() const {
@@ -386,14 +386,9 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
 
     auto sigma = generate_sigma_points();
 
-    // Compute sigma-point radar prediction via shared helper (z_mean and S).
-    auto [z_mean, S] = compute_radar_prediction(sigma);
-
-    // Propagate sigma points through radar measurement model for cross-covariance.
-    std::vector<RadarMeasVec> z_sigma(2 * n + 1);
-    for (int i = 0; i < 2 * n + 1; ++i) {
-        z_sigma[i] = radar_measurement_model(sigma[i]);
-    }
+    // Compute sigma-point radar prediction via shared helper (z_mean, S, and z_sigma).
+    // z_sigma is reused below for cross-covariance — avoids redundant propagation.
+    auto [z_mean, S, z_sigma] = compute_radar_prediction(sigma);
 
     // Weights
     const float w0_cov = lambda / (n + lambda) + (1.0f - kAlpha * kAlpha + kBeta);
@@ -611,8 +606,10 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
     ObjectUKF::RadarMeasVec track_z_mean = ObjectUKF::RadarMeasVec::Zero();
 
     if (use_full_S) {
-        auto [z_mean_sp, S] = ukf.predicted_radar_innovation_cov();
-        track_z_mean        = z_mean_sp;
+        auto  pred      = ukf.predicted_radar_innovation_cov();
+        auto& S         = pred.S;
+        auto  z_mean_sp = pred.z_mean;
+        track_z_mean    = z_mean_sp;
         track_llt.compute(S);
         track_llt_ok = (track_llt.info() == Eigen::Success);
         if (!track_llt_ok) {
@@ -642,8 +639,10 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
         if (radar_matched[ri]) continue;
         const auto& rdet = radar_dets_.detections[ri];
 
-        // Coarse range gate
-        if (std::abs(rdet.range_m - z_pred(0)) > track_range_3sigma) continue;
+        // Coarse range gate — use z_mean for radar-only tracks (consistent with S-matrix),
+        // z_pred for camera-originated tracks (consistent with R-only gating).
+        const float predicted_range = use_full_S ? track_z_mean(0) : z_pred(0);
+        if (std::abs(rdet.range_m - predicted_range) > track_range_3sigma) continue;
 
         // Altitude gate (wider for radar-only tracks with uncertain z)
         {

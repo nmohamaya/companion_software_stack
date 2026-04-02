@@ -22,6 +22,8 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace drone::recorder {
@@ -122,13 +124,17 @@ template<typename Container>
     const auto* fh_bytes      = reinterpret_cast<const char*>(&file_header);
     out.write(fh_bytes, sizeof(file_header));
 
+    // Maximum topic name length the reader accepts.
+    constexpr std::size_t kMaxTopicNameLen = 256;
+
     for (const auto& entry : entries) {
-        // Ensure topic_name_len matches actual topic_name size for consistency
-        RecordHeader hdr_copy   = entry.header;
-        hdr_copy.topic_name_len = static_cast<uint16_t>(entry.topic_name.size());
-        const auto* rh_bytes    = reinterpret_cast<const char*>(&hdr_copy);
+        // Clamp topic name length to what the reader expects (max 256).
+        const std::size_t clamped_len = std::min(entry.topic_name.size(), kMaxTopicNameLen);
+        RecordHeader      hdr_copy    = entry.header;
+        hdr_copy.topic_name_len       = static_cast<uint16_t>(clamped_len);
+        const auto* rh_bytes          = reinterpret_cast<const char*>(&hdr_copy);
         out.write(rh_bytes, sizeof(RecordHeader));
-        out.write(entry.topic_name.data(), static_cast<std::streamsize>(entry.topic_name.size()));
+        out.write(entry.topic_name.data(), static_cast<std::streamsize>(clamped_len));
         out.write(reinterpret_cast<const char*>(entry.payload.data()),
                   static_cast<std::streamsize>(entry.payload.size()));
     }
@@ -137,7 +143,8 @@ template<typename Container>
 }
 
 /// Read all record entries from a log file.
-/// Returns empty vector on failure.
+/// Returns a ReadLogResult with success=true on complete read, or
+/// truncated=true if the file ended mid-record.
 struct ReadLogResult {
     FlightLogFileHeader      file_header{};
     std::vector<RecordEntry> entries;
@@ -295,17 +302,17 @@ public:
     /// record() is not blocked during file I/O.
     /// Returns the path of the written file, or empty string on failure.
     [[nodiscard]] std::string flush() {
-        // Move entries out under the lock
+        // Move entries out under the lock — O(1) swap avoids duplicating payload memory.
         std::vector<RecordEntry> snapshot;
         uint64_t                 start_ns = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (ring_buffer_.size() == 0) return "";
 
-            // Copy entries from deque into vector for writing
+            // Move entries from deque into vector for writing
             snapshot.reserve(ring_buffer_.size());
             for (auto& e : ring_buffer_.entries()) {
-                snapshot.push_back(e);
+                snapshot.push_back(std::move(e));
             }
             start_ns = snapshot.front().header.wire_header.timestamp_ns;
             ring_buffer_.clear();

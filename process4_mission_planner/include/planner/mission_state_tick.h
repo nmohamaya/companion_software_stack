@@ -264,21 +264,17 @@ private:
                        drone::ipc::IPublisher<drone::ipc::PayloadCommand>& payload_pub,
                        const FCSendFn& send_fc, uint64_t correlation_id,
                        drone::util::FrameDiagnostics& diag) {
-        // Detect unexpected disarm mid-navigation
+        // Detect unexpected disarm mid-navigation.
+        // A disarmed vehicle cannot execute recovery commands (hover/climb), so
+        // transition to IDLE rather than COLLISION_RECOVERY. Recovery is only
+        // useful when triggered by proximity detection while still armed.
         if (flight_state_.nav_was_armed && !fc_state.armed) {
-            spdlog::warn("[Planner] OBSTACLE COLLISION detected — vehicle unexpectedly "
-                         "disarmed during navigation");
-            if (config_.collision_recovery_enabled) {
-                spdlog::info("[Planner] Entering COLLISION_RECOVERY — "
-                             "hover {:.1f}s then climb {:.1f}m",
-                             config_.collision_hover_duration_s, config_.collision_climb_delta_m);
-                // Publish immediate stop to cancel any in-flight NAVIGATE trajectory
-                publish_stop_trajectory(traj_pub);
-                recovery_started_ = false;
-                fsm.on_collision_recovery();
-                flight_state_.nav_was_armed = fc_state.armed;
-                return;
-            }
+            spdlog::warn("[Planner] Vehicle unexpectedly disarmed during navigation — "
+                         "cannot recover without motors, transitioning to IDLE");
+            publish_stop_trajectory(traj_pub, correlation_id);
+            flight_state_.nav_was_armed = fc_state.armed;
+            fsm.on_landed();
+            return;
         }
         flight_state_.nav_was_armed = fc_state.armed;
 
@@ -291,7 +287,7 @@ private:
                                                                    std::chrono::steady_clock::now());
             if (collision && config_.collision_recovery_enabled) {
                 spdlog::info("[Planner] Proximity collision — entering COLLISION_RECOVERY");
-                publish_stop_trajectory(traj_pub);
+                publish_stop_trajectory(traj_pub, correlation_id);
                 recovery_started_ = false;
                 fsm.on_collision_recovery();
                 return;
@@ -530,9 +526,16 @@ private:
     }
 
     // ── Utility: publish an immediate zero-velocity stop trajectory ──
-    static void publish_stop_trajectory(drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& pub) {
+    // Sends a valid command with zero velocities so P5 forwards it to the FC.
+    // (P5 skips commands with valid=false, so we must send valid=true to stop.)
+    static void publish_stop_trajectory(drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& pub,
+                                        uint64_t correlation_id = 0) {
         drone::ipc::TrajectoryCmd stop{};
-        stop.valid = false;
+        stop.valid          = true;
+        stop.velocity_x     = 0.0f;
+        stop.velocity_y     = 0.0f;
+        stop.velocity_z     = 0.0f;
+        stop.correlation_id = correlation_id;
         stop.timestamp_ns =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                       std::chrono::steady_clock::now().time_since_epoch())

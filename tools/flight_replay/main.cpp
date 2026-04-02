@@ -11,15 +11,16 @@
 #include "recorder/flight_recorder.h"
 #include "util/config.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
 #include <thread>
-#include <unordered_map>
 
 #include <spdlog/spdlog.h>
 
@@ -70,6 +71,11 @@ int main(int argc, char* argv[]) {
     if (logfile.empty()) {
         std::cerr << "Error: no log file specified\n";
         print_usage(argv[0]);
+        return 1;
+    }
+
+    if (speed < 0.0f || std::isnan(speed)) {
+        std::cerr << "Error: --speed must be >= 0 (got " << speed << ")\n";
         return 1;
     }
 

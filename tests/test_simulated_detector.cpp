@@ -116,9 +116,10 @@ TEST(SimulatedDetectorTest, DetectionsHaveValidFields) {
     constexpr uint32_t   C = 3;
     std::vector<uint8_t> frame(W * H * C, 0);
 
-    auto before_ns =
-        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-    auto dets = det.detect(frame.data(), W, H, C);
+    auto before_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now().time_since_epoch())
+                                               .count());
+    auto dets      = det.detect(frame.data(), W, H, C);
     ASSERT_EQ(static_cast<int>(dets.size()), 3);
 
     for (const auto& d : dets) {

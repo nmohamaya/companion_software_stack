@@ -81,10 +81,10 @@ int main(int argc, char* argv[]) {
 
     if (auto_track_cfg.enabled) {
         if (!detections_sub->is_connected()) {
-            spdlog::warn("Auto-track enabled but cannot open detections channel");
+            spdlog::info("Auto-track: detections channel not yet connected (normal at startup)");
         }
         if (!pose_sub->is_connected()) {
-            spdlog::warn("Auto-track enabled but cannot open pose channel");
+            spdlog::info("Auto-track: pose channel not yet connected (normal at startup)");
         }
         spdlog::info("Gimbal auto-tracking ENABLED (min_confidence={:.2f})",
                      auto_track_cfg.min_confidence);

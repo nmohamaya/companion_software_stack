@@ -5,6 +5,7 @@
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
 
+#include <cmath>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -159,7 +160,9 @@ protected:
     }
 };
 
-TEST_F(CollisionRecoveryTickTest, DisarmDuringNavigateTriggersRecovery) {
+TEST_F(CollisionRecoveryTickTest, DisarmDuringNavigateTransitionsToIdle) {
+    // A disarmed vehicle cannot execute recovery (hover/climb) commands,
+    // so unexpected disarm transitions to IDLE, not COLLISION_RECOVERY.
     fsm.on_takeoff();
     fsm.on_navigate();
     state_tick.flight_state().nav_was_armed = true;
@@ -169,11 +172,12 @@ TEST_F(CollisionRecoveryTickTest, DisarmDuringNavigateTriggersRecovery) {
 
     do_tick(pose, fc);
 
-    EXPECT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
 }
 
-TEST_F(CollisionRecoveryTickTest, RecoveryDisabledKeepsNavigate) {
-    // Re-create with recovery disabled
+TEST_F(CollisionRecoveryTickTest, RecoveryDisabledDisarmStillGoesIdle) {
+    // Even with recovery disabled, unexpected disarm → IDLE (not NAVIGATE).
+    // A disarmed vehicle cannot continue navigating.
     StateTickConfig  disabled_config{10.0f, 1.5f, 0.5f, 5, 0.0f, 0.3f,
                                     false,  // collision_recovery_enabled = false
                                     3.0f,  0.0f};
@@ -191,8 +195,7 @@ TEST_F(CollisionRecoveryTickTest, RecoveryDisabledKeepsNavigate) {
     disabled_tick.tick(fsm, pose, fc, objects, *planner_, nullptr, *avoider_, obstacle_layer,
                        traj_pub, payload_pub, send_fc, 0, diag);
 
-    // Should stay in NAVIGATE (old behavior)
-    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
 }
 
 TEST_F(CollisionRecoveryTickTest, HoverPhasePublishesZeroVelocity) {
@@ -304,17 +307,15 @@ TEST_F(CollisionRecoveryTickTest, FullRecoveryCyclePreservesWaypoint) {
     fsm.on_takeoff();
     fsm.on_navigate();
     (void)fsm.advance_waypoint();  // WP1
-    size_t wp_before                        = fsm.current_wp_index();
-    state_tick.flight_state().nav_was_armed = true;
+    size_t wp_before = fsm.current_wp_index();
 
-    // Trigger collision via disarm
-    auto pose = make_pose(15.0f, 0.0f, 5.0f);
-    auto fc   = make_fc(false, 5.0f);
-    do_tick(pose, fc);
+    // Trigger collision recovery via FSM (as proximity detection would)
+    fsm.on_collision_recovery();
     EXPECT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
     EXPECT_EQ(fsm.current_wp_index(), wp_before);
 
     // Run through recovery phases with armed FC
+    auto pose     = make_pose(15.0f, 0.0f, 5.0f);
     auto armed_fc = make_fc(true, 5.0f);
 
     // Tick 1: HOVER → CLIMB (hover_duration_s=0.0)
@@ -335,19 +336,23 @@ TEST_F(CollisionRecoveryTickTest, FullRecoveryCyclePreservesWaypoint) {
     EXPECT_EQ(fsm.current_wp_index(), wp_before);
 }
 
-TEST_F(CollisionRecoveryTickTest, EntryPublishesStopTrajectory) {
+TEST_F(CollisionRecoveryTickTest, DisarmPublishesStopTrajectory) {
+    // Disarm during navigate publishes a zero-velocity stop and transitions to IDLE
     fsm.on_takeoff();
     fsm.on_navigate();
     state_tick.flight_state().nav_was_armed = true;
 
     traj_pub.clear();
     auto pose = make_pose(5.0f, 0.0f, 5.0f);
-    auto fc   = make_fc(false, 5.0f);  // disarmed — triggers recovery
+    auto fc   = make_fc(false, 5.0f);  // disarmed
 
     do_tick(pose, fc);
 
-    EXPECT_EQ(fsm.state(), MissionState::COLLISION_RECOVERY);
-    // First message should be an immediate stop trajectory (valid=false)
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
+    // Stop trajectory should be valid (zero velocity) so P5 forwards it to FC
     ASSERT_GE(traj_pub.messages().size(), 1u);
-    EXPECT_FALSE(traj_pub.messages().front().valid);
+    EXPECT_TRUE(traj_pub.messages().front().valid);
+    EXPECT_FLOAT_EQ(traj_pub.messages().front().velocity_x, 0.0f);
+    EXPECT_FLOAT_EQ(traj_pub.messages().front().velocity_y, 0.0f);
+    EXPECT_FLOAT_EQ(traj_pub.messages().front().velocity_z, 0.0f);
 }

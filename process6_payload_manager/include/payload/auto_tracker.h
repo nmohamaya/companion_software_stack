@@ -39,12 +39,12 @@ struct AutoTrackResult {
 };
 
 /// Compute pitch and yaw angles (degrees) from a relative position vector.
-/// dx/dy/dz are in the vehicle body frame (x=forward, y=left, z=up).
+/// dx/dy/dz are in the vehicle body frame (x=forward, y=left, z=up — FLU).
 /// Returns {pitch_deg, yaw_deg}.
 [[nodiscard]] inline std::pair<float, float> compute_bearing(float dx, float dy, float dz) {
     const float horizontal_dist = std::sqrt(dx * dx + dy * dy);
 
-    // Pitch: angle below horizontal (negative = look down)
+    // Pitch: angle above/below horizontal (negative = look down)
     float pitch_deg = 0.0f;
     if (horizontal_dist > 1e-6f || std::fabs(dz) > 1e-6f) {
         pitch_deg = std::atan2(dz, horizontal_dist) * (180.0f / kPi);
@@ -117,10 +117,13 @@ struct AutoTrackResult {
     const float dy_world = target.position_y - static_cast<float>(pose.translation[1]);
     const float dz_world = target.position_z - static_cast<float>(pose.translation[2]);
 
-    // 2. Rotate world→body using negative yaw.
-    //    World frame: [0]=North, [1]=East, [2]=Up
-    //    Body frame:  x=forward, y=left, z=up
-    //    Inverse of the body→world rotation (which is R_z(yaw)).
+    // 2. Rotate world→body using negative yaw (R_z(-yaw)).
+    //    World frame: [0]=North, [1]=East, [2]=Up (NEU)
+    //    Body frame:  x=forward, y=left, z=up (FLU)
+    //    Yaw-only rotation (roll/pitch assumed ~0 for gimbal bearing).
+    //    Note: this is FLU, not FRD — consistent with gimbal pitch convention
+    //    where negative pitch = look down, and with UKF body frame conventions
+    //    in the perception pipeline (which separately negates azimuth for FRD).
     const float yaw   = yaw_from_quaternion(pose.quaternion);
     const float cos_y = std::cos(yaw);
     const float sin_y = std::sin(yaw);
