@@ -16,7 +16,7 @@
                 "gz_odom_topic": "/model/x500_companion_0/odometry",
                 "max_range_m": 100.0,
                 "fov_azimuth_rad": 1.047,
-                "fov_elevation_rad": 0.262,
+                "fov_elevation_rad": 0.698,
                 "noise": {
                     "range_std_m": 0.3,
                     "azimuth_std_rad": 0.026,
