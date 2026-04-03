@@ -49,9 +49,9 @@ struct GridPlannerConfig {
     int promotion_hits = 0;             // Promote dynamic cell to static after N observations
                                         // (0 = disabled, no promotion)
     uint32_t radar_promotion_hits = 3;  // Radar update count for immediate static promotion
-    float    min_promotion_depth_confidence = 0.8f;  // Min depth confidence for promotion [0-1]
-                                                     // 0.8 = blocks camera-only (0.01-0.7), allows
-        // radar-confirmed (1.0) and high-alt radar (0.85)
+    float    min_promotion_depth_confidence = 0.3f;  // Min depth confidence for promotion [0-1]
+                                                     // Scenario configs override to 0.8 to block
+    // camera-only (0.01-0.7), allowing radar-confirmed (1.0)
     float look_ahead_m = 0.0f;        // Pure-pursuit look-ahead distance along path
                                       // (0 = disabled, use cell-by-cell following)
     int   max_static_cells   = 0;     // Cap on promoted static cells (0 = unlimited)

@@ -35,7 +35,7 @@
                 "min_promotion_depth_confidence": 0.8,
                 "max_static_cells": 800,
                 "prediction_enabled": false,
-                "_comment": "2m grid, 2m inflation, 1s TTL. min_promotion_depth_confidence=0.8: blocks camera-only Tier 1-4 (0.01-0.7) while allowing radar-confirmed (1.0) and high-altitude radar-only (0.85) to promote. prediction_enabled=false: camera-only depth/velocity too noisy (Issue #340). max_static_cells=800 safety cap."
+                "_comment": "2m grid, 2m inflation, 1s TTL. min_promotion_depth_confidence=0.8: blocks camera-only Tier 1-4 (0.01-0.7) while allowing radar-confirmed (1.0) to promote. prediction_enabled=false: camera-only depth/velocity too noisy (Issue #340). max_static_cells=800 safety cap."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",

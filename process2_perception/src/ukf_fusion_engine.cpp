@@ -487,9 +487,10 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
     // confidence >= min_promotion_depth_confidence become permanent static
     // cells.  Low-confidence detections still create temporary dynamic cells.
     //
-    // Clamp penalty: if any tier's depth clamps to kDepthMaxM (40m), the
-    // model has saturated (common for ground features at shallow angles).
-    // Confidence drops to 0.2 to block promotion.  Issue #340.
+    // Tier 1/2 clamp penalty: if a Tier 1 or Tier 2 raw depth exceeds
+    // kDepthMaxM (40m), the model has saturated (common for ground features
+    // at shallow angles). Confidence drops to 0.2 to block promotion.
+    // Issue #340.
     constexpr float kBboxHThreshold  = 10.0f;
     constexpr float kDepthMinM       = 1.0f;
     constexpr float kDepthMaxM       = 40.0f;
@@ -511,29 +512,29 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         const float bbox_bottom   = trk.position_2d.y() + trk.bbox_h * 0.5f;
         const float ray_down_base = (bbox_bottom - cy) / std::max(1.0f, fy);
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
-            const float d = std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
-                                       kDepthMaxM);
-            // Clamped to max → depth model saturated (common for ground
+            const float d_raw = drone_altitude_m_ * fy / (bbox_bottom - cy) * ds;
+            const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+            // Raw depth exceeded max → model saturated (common for ground
             // features at shallow angles).  Reduce confidence to block
             // promotion while still creating a dynamic cell.
-            const float c = (d >= kDepthMaxM - 0.1f) ? 0.2f : 0.6f;
+            const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.6f;
             return {d, c};
         }
         if (ray_down_base > kRayDownMinThres) {
-            const float d = std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM,
-                                       kDepthMaxM);
-            const float c = (d >= kDepthMaxM - 0.1f) ? 0.2f : 0.6f;
+            const float d_raw = calib_.camera_height_m / ray_down_base * ds;
+            const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+            const float c     = (d_raw > kDepthMaxM) ? 0.2f : 0.6f;
             return {d, c};
         }
     }
 
     // Tier 2: Full-height apparent-size depth (bbox fully visible)
     if (trk.bbox_h > kBboxHThreshold) {
-        const float d = std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds,
-                                   kDepthMinM, kDepthMaxM);
-        // Clamped to max → the apparent-size model broke down (ground
+        const float d_raw = calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds;
+        const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+        // Raw depth exceeded max → the apparent-size model broke down (ground
         // features with small bbox_h produce huge raw depths that clamp).
-        const float c = (d >= kDepthMaxM - 0.1f) ? 0.2f : 0.7f;
+        const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.7f;
         return {d, c};
     }
 
@@ -1190,7 +1191,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
             // Quality gates for orphan track creation:
             // 1. Range sanity — ignore detections beyond reliable radar range.
-            //    Typical 77GHz drone radar: ≤50m. Default 40m is conservative.
+            //    Typical 77GHz drone radar: ≤50m. Default 25m rejects distant clutter.
             if (rdet.range_m > radar_cfg_.radar_max_orphan_range_m) continue;
 
             // 2. Ground-plane filter (redundant safety net) — applied even when
@@ -1253,7 +1254,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             // Gate output: only emit radar-only tracks after promotion threshold.
             // The filter still exists (accumulates future radar hits), but the grid
             // won't see it until it has enough observations to be trustworthy.
-            // Uses radar_only_promotion_hits (default 3) for degraded-visibility
+            // Uses radar_only_promotion_hits (default 6) for degraded-visibility
             // promotion (Issue #231).
             if (ukf.radar_update_count < radar_cfg_.radar_only_promotion_hits) continue;
 

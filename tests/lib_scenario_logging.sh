@@ -639,11 +639,7 @@ _report_detector_stats() {
         # Parse OpenCvYoloDetector log lines
         local total_frames frames_with_dets total_dets avg_time_ms
         total_frames=$(grep -ac "OpenCvYoloDetector.*detections in" "$log" 2>/dev/null || echo "0")
-        frames_with_dets=$(grep -ac "OpenCvYoloDetector" "$log" 2>/dev/null | grep -v "0 detections\|Model loaded" | wc -l 2>/dev/null || echo "0")
-        # More reliable: count non-zero detection lines
         frames_with_dets=$(grep -a "OpenCvYoloDetector.*detections in" "$log" 2>/dev/null | grep -vc "0 detections" || echo "0")
-        total_dets=$(grep -aoP 'OpenCvYoloDetector.*?(\d+) detections' "$log" 2>/dev/null | grep -oP '^\d+' | awk '{s+=$1}END{print s+0}' || echo "0")
-        # Simpler: extract detection counts and sum
         total_dets=$(grep -a "OpenCvYoloDetector" "$log" 2>/dev/null | grep -oP '\] (\d+) detections' | grep -oP '\d+' | awk '{s+=$1}END{print s+0}')
         avg_time_ms=$(grep -a "OpenCvYoloDetector" "$log" 2>/dev/null | grep -oP 'in (\d+)ms' | grep -oP '\d+' | awk '{s+=$1;n++}END{if(n>0)printf "%.0f",s/n; else print "0"}')
 
@@ -686,15 +682,15 @@ _report_vio_stats() {
     echo "VIO Pipeline"
 
     local total_frames feature_frames stereo_frames imu_frames
-    total_frames=$(strings "$log" 2>/dev/null | grep -c "VIO.*Frame.*diagnostics" || echo "0")
-    feature_frames=$(strings "$log" 2>/dev/null | grep -c "FeatureExtractor: num_features" || echo "0")
-    stereo_frames=$(strings "$log" 2>/dev/null | grep -c "StereoMatcher: num_matches" || echo "0")
-    imu_frames=$(strings "$log" 2>/dev/null | grep -c "ImuPreintegrator: total_dt" || echo "0")
+    total_frames=$(grep -ac "VIO.*Frame.*diagnostics" "$log" 2>/dev/null | tail -1)
+    feature_frames=$(grep -ac "FeatureExtractor: num_features" "$log" 2>/dev/null | tail -1)
+    stereo_frames=$(grep -ac "StereoMatcher: num_matches" "$log" 2>/dev/null | tail -1)
+    imu_frames=$(grep -ac "ImuPreintegrator: total_dt" "$log" 2>/dev/null | tail -1)
 
     local imu_warnings
-    imu_warnings=$(strings "$log" 2>/dev/null | grep -c "ImuPreintegrator.*WARN" || echo "0")
+    imu_warnings=$(grep -ac "ImuPreintegrator.*WARN" "$log" 2>/dev/null | tail -1)
     local imu_gaps
-    imu_gaps=$(strings "$log" 2>/dev/null | grep -c "IMU data gap" || echo "0")
+    imu_gaps=$(grep -ac "IMU data gap" "$log" 2>/dev/null | tail -1)
 
     echo "  Backend             : ${vio_backend}"
     echo "  VIO frames          : ${total_frames}"

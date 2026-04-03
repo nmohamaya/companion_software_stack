@@ -48,6 +48,8 @@
             "confidence_max": 0.95,
             "confidence_base": 0.5,
             "confidence_area_scale": 50.0,
+            "min_bbox_height_px": 15,
+            "max_aspect_ratio": 3.0,
             "sim": {
                 "min_detections": 1,
                 "max_detections": 5,
@@ -106,7 +108,7 @@
                 "velocity_std_mps": 0.1,
                 "gate_threshold": 9.21,
                 "ground_filter_enabled": true,
-                "min_object_altitude_m": 1.5,
+                "min_object_altitude_m": 0.3,
                 "altitude_gate_m": 2.0,
                 "orphan_proximity_m": 5.0,
                 "max_orphan_range_m": 25.0,
@@ -159,7 +161,7 @@
             "inflation_radius_m": 1.5,
             "dynamic_obstacle_ttl_s": 3.0,
             "min_confidence": 0.3,
-            "min_promotion_depth_confidence": 0.8,
+            "min_promotion_depth_confidence": 0.5,
             "max_static_cells": 0,
             "prediction_enabled": true,
             "prediction_dt_s": 2.0

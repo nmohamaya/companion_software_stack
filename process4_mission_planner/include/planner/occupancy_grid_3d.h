@@ -108,7 +108,7 @@ public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
-                             float min_promotion_depth_confidence = 0.8f, int max_static_cells = 0,
+                             float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
@@ -478,7 +478,7 @@ private:
     float    min_confidence_;
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
     uint32_t radar_promotion_hits_{3};               // radar updates for immediate static promotion
-    float    min_promotion_depth_confidence_{0.5f};  // min depth confidence for promotion
+    float    min_promotion_depth_confidence_{0.3f};  // min depth confidence for promotion
     int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
     size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
