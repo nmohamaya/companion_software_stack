@@ -180,6 +180,44 @@ private:
         return (it != rhs_.end()) ? it->second : kInf;
     }
 
+    // ── Corner-cutting guard (Issue #258) ─────────────────────
+    // For a diagonal move from `a` to `b`, verify that all cardinal-step
+    // intermediaries are passable.  For a 2D diagonal (dx,dy != 0) the
+    // two intermediaries are (a.x+sdx, a.y, a.z) and (a.x, a.y+sdy, a.z).
+    // For a 3D corner move all three face-adjacent cells must be free.
+    // This prevents the planner from routing the drone through L-shaped
+    // obstacle gaps where it would physically clip the obstacle.
+    [[nodiscard]] bool diagonal_passable(const GridCell& a, const GridCell& b) const {
+        int sdx = b.x - a.x;  // -1, 0, or +1
+        int sdy = b.y - a.y;
+        int sdz = b.z - a.z;
+
+        // Check each axis pair that forms a diagonal component.
+        // For each non-zero axis, the face-adjacent cell along that axis
+        // must be unoccupied (unless it is start/goal, which are always passable).
+        auto cell_blocked = [&](const GridCell& c) -> bool {
+            if (c == last_start_ || c == last_goal_) return false;
+            return grid_.is_occupied(c);
+        };
+
+        if (sdx != 0 && sdy != 0) {
+            // XY diagonal component: check both cardinal steps
+            if (cell_blocked({a.x + sdx, a.y, a.z}) || cell_blocked({a.x, a.y + sdy, a.z}))
+                return false;
+        }
+        if (sdx != 0 && sdz != 0) {
+            // XZ diagonal component
+            if (cell_blocked({a.x + sdx, a.y, a.z}) || cell_blocked({a.x, a.y, a.z + sdz}))
+                return false;
+        }
+        if (sdy != 0 && sdz != 0) {
+            // YZ diagonal component
+            if (cell_blocked({a.x, a.y + sdy, a.z}) || cell_blocked({a.x, a.y, a.z + sdz}))
+                return false;
+        }
+        return true;
+    }
+
     // ── Edge cost ────────────────────────────────────────────
     float cost(const GridCell& a, const GridCell& b) const {
         // Start and goal cells are always passable:
@@ -202,8 +240,18 @@ private:
         if (dx > 1 || dy > 1 || dz > 1) return kInf;
         int diag = dx + dy + dz;
         if (diag == 1) return 1.0f;
-        if (diag == 2) return 1.414f;
-        if (diag == 3) return 1.732f;
+        if (diag == 2) {
+            // Corner-cutting guard (Issue #258): a diagonal move must not
+            // squeeze between two occupied cardinal neighbours.  Check that
+            // BOTH intermediate cells along the two non-zero axes are free.
+            if (!diagonal_passable(a, b)) return kInf;
+            return 1.414f;
+        }
+        if (diag == 3) {
+            // 3D corner move: all three face-adjacent intermediaries must be free.
+            if (!diagonal_passable(a, b)) return kInf;
+            return 1.732f;
+        }
         return kInf;  // same cell or non-adjacent
     }
 

@@ -1,0 +1,69 @@
+{
+    "_comment": "Scenario 25: Flight Recorder — record IPC traffic during a nominal mission, then verify log file integrity",
+    "scenario": {
+        "name": "flight_recorder_replay",
+        "description": "Fly a 2-waypoint mission with the flight recorder enabled. Validates that IPC messages are captured to disk and the log file can be read back with correct record count and message types.",
+        "tier": 1,
+        "timeout_s": 60,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "recorder": {
+            "enabled": true,
+            "max_size_mb": 16,
+            "output_dir": "/tmp/flight_logs"
+        },
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 1.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false}
+            ]
+        },
+        "fault_manager": {
+            "battery_warn_percent": 30.0,
+            "battery_rtl_percent": 20.0,
+            "battery_crit_percent": 10.0
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "IDLE",
+            "PREFLIGHT",
+            "TAKEOFF"
+        ],
+        "log_must_not_contain": [
+            "FAULT_BATTERY_RTL",
+            "FAULT_FC_LINK_LOST",
+            "EMERGENCY_LAND"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    },
+    "manual_controls": {
+        "_comment": "Adjustable parameters for manual testing",
+        "recorder_max_size_mb": {"min": 1, "max": 256, "default": 16, "unit": "MB"},
+        "speed_range": {"min": 0.5, "max": 5.0, "default": 2.0, "unit": "x (playback speed multiplier)"}
+    }
+}

@@ -1299,8 +1299,10 @@ TEST(RadarPrimaryTest, RadarOnlyConstructorWithAzimuth) {
 }
 
 TEST(RadarPrimaryTest, RadarOrphanCreatesTrack) {
-    auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output for this test
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
     engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
 
@@ -1328,6 +1330,7 @@ TEST(RadarPrimaryTest, RadarOrphanDefaultRadius) {
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
     rcfg.radar_only_default_radius_m = 1.5f;
+    rcfg.radar_only_promotion_hits   = 1;  // immediate output for this test
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
 
@@ -1370,8 +1373,10 @@ TEST(RadarPrimaryTest, RadarOrphanProximityPreventsDuplicate) {
 }
 
 TEST(RadarPrimaryTest, RadarOrphanTrackPersistsAcrossFrames) {
-    auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output for persistence test
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
 
     // Frame 1: radar only
@@ -1402,8 +1407,10 @@ TEST(RadarPrimaryTest, RadarOrphanTrackPersistsAcrossFrames) {
 }
 
 TEST(RadarPrimaryTest, RadarOnlyTrackIDHighBit) {
-    auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output for ID test
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
 
     drone::ipc::RadarDetectionList radar{};
@@ -1424,8 +1431,10 @@ TEST(RadarPrimaryTest, RadarOnlyTrackIDHighBit) {
 }
 
 TEST(RadarPrimaryTest, RadarOnlyDormantEntry) {
-    auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output for dormant test
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
     engine.set_drone_pose(0.0f, 0.0f, 4.0f, 0.0f);
 
@@ -1473,8 +1482,10 @@ TEST(RadarPrimaryTest, GroundFilterAppliesToOrphans) {
 }
 
 TEST(RadarPrimaryTest, EmptyCameraListRadarOutput) {
-    auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output for this test
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
 
     // Three radar detections, no camera
@@ -1500,8 +1511,10 @@ TEST(RadarPrimaryTest, EmptyCameraListRadarOutput) {
 }
 
 TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
-    auto            calib = make_test_calib();
-    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true, 5.0f, 32);
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output for adoption test
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
 
     // Frame 1: Radar-only detection at ~15m forward, ~0 lateral
@@ -1635,4 +1648,223 @@ TEST(DepthConfidenceTest, RadarConfirmed_OverridesConfidence) {
     ASSERT_EQ(result2.objects.size(), 1u);
     EXPECT_TRUE(result2.objects[0].has_radar);
     EXPECT_FLOAT_EQ(result2.objects[0].depth_confidence, 1.0f);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Radar-Only Track Initiation Tests (Issue #231)
+// ═══════════════════════════════════════════════════════════
+
+TEST(RadarOnlyTrackTest, OrphanPromotionAfterNFrames) {
+    // Radar orphan should NOT be output until radar_only_promotion_hits (3)
+    // consecutive radar observations are received.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 3;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    TrackedObjectList empty;
+    empty.frame_sequence = 0;
+
+    // Radar detection at 12m, azimuth 0.5
+    drone::ipc::RadarDetectionList radar{};
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+
+    // Frame 1: 1st radar hit — should NOT produce output (1 < 3)
+    radar.timestamp_ns = 1000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result1         = engine.fuse(empty);
+    EXPECT_EQ(result1.objects.size(), 0u) << "Orphan should not be output before promotion";
+
+    // Frame 2: 2nd radar hit — still not promoted (2 < 3)
+    radar.timestamp_ns = 2000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 2000;
+    empty.frame_sequence = 2;
+    auto result2         = engine.fuse(empty);
+    EXPECT_EQ(result2.objects.size(), 0u) << "Orphan should not be output before promotion";
+
+    // Frame 3: 3rd radar hit — NOW promoted (3 >= 3)
+    radar.timestamp_ns = 3000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 3000;
+    empty.frame_sequence = 3;
+    auto result3         = engine.fuse(empty);
+    ASSERT_EQ(result3.objects.size(), 1u) << "Orphan should be promoted after N frames";
+    EXPECT_GE(result3.objects[0].track_id, 0x80000000u);
+    EXPECT_TRUE(result3.objects[0].has_radar);
+    EXPECT_FALSE(result3.objects[0].has_camera);
+    EXPECT_EQ(result3.objects[0].radar_update_count, 3u);
+}
+
+TEST(RadarOnlyTrackTest, TrackMaintainsIDAfterPromotion) {
+    // After promotion, the track ID should remain stable across frames.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 2;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    TrackedObjectList empty;
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(15.0f, 0.3f, 0.0f, 0.0f);
+
+    // Frame 1: not yet promoted
+    radar.timestamp_ns = 1000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    engine.fuse(empty);
+
+    // Frame 2: promoted
+    radar.timestamp_ns = 2000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 2000;
+    empty.frame_sequence = 2;
+    auto result2         = engine.fuse(empty);
+    ASSERT_EQ(result2.objects.size(), 1u);
+    uint32_t promoted_id = result2.objects[0].track_id;
+    EXPECT_GE(promoted_id, 0x80000000u);
+
+    // Frame 3: same track should persist with same ID
+    radar.timestamp_ns = 3000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 3000;
+    empty.frame_sequence = 3;
+    auto result3         = engine.fuse(empty);
+    ASSERT_EQ(result3.objects.size(), 1u);
+    EXPECT_EQ(result3.objects[0].track_id, promoted_id) << "Track ID must be stable";
+    EXPECT_EQ(result3.objects[0].radar_update_count, 3u);
+}
+
+TEST(RadarOnlyTrackTest, ConfigToggleDisablesRadarOnlyTracks) {
+    // When radar_only_enabled is false, radar orphans should NOT be created.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_enabled        = false;
+    rcfg.radar_only_promotion_hits = 1;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(12.0f, 0.5f, 0.1f, 0.0f);
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    // No radar-only tracks should be created when toggle is off
+    EXPECT_EQ(result.objects.size(), 0u)
+        << "radar_only_enabled=false should prevent orphan track creation";
+}
+
+TEST(RadarOnlyTrackTest, MixedCameraRadarStillWorks) {
+    // Camera+radar fused tracks should still work normally with radar_only_enabled=true
+    // and a promotion threshold > 1.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.ground_filter_enabled     = false;
+    rcfg.radar_only_promotion_hits = 3;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked(1));
+    float depth = 10.5f;  // approx monocular depth for default test track
+
+    // Build matching radar detection
+    CameraIntrinsics ci{500.0f, 500.0f, 320.0f, 240.0f};
+    ObjectUKF        temp_ukf(tracked.objects[0], depth, rcfg, ci);
+    auto             z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+    engine.set_radar_detections(radar);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_TRUE(result.objects[0].has_camera);
+    EXPECT_TRUE(result.objects[0].has_radar);
+    EXPECT_EQ(result.objects[0].track_id, 1u);
+}
+
+TEST(RadarOnlyTrackTest, PromotionHitsConfigurable) {
+    // Verify different promotion_hits values work: set to 5.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_promotion_hits = 5;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    TrackedObjectList empty;
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(10.0f, 0.2f, 0.0f, 0.0f);
+
+    // Frames 1-4: not yet promoted
+    for (uint32_t f = 1; f <= 4; ++f) {
+        radar.timestamp_ns = f * 1000;
+        engine.set_radar_detections(radar);
+        empty.timestamp_ns   = f * 1000;
+        empty.frame_sequence = f;
+        auto result          = engine.fuse(empty);
+        EXPECT_EQ(result.objects.size(), 0u) << "Frame " << f << " should not emit (< 5 hits)";
+    }
+
+    // Frame 5: promoted
+    radar.timestamp_ns = 5000;
+    engine.set_radar_detections(radar);
+    empty.timestamp_ns   = 5000;
+    empty.frame_sequence = 5;
+    auto result5         = engine.fuse(empty);
+    ASSERT_EQ(result5.objects.size(), 1u);
+    EXPECT_EQ(result5.objects[0].radar_update_count, 5u);
+}
+
+TEST(RadarOnlyTrackTest, DisabledToggleStillAllowsCameraRadarFusion) {
+    // radar_only_enabled=false should NOT affect camera+radar fusion.
+    // Only orphan track creation is disabled.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_only_enabled        = false;
+    rcfg.ground_filter_enabled     = false;
+    rcfg.radar_only_promotion_hits = 1;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked(1));
+    float depth = 10.5f;
+
+    CameraIntrinsics ci{500.0f, 500.0f, 320.0f, 240.0f};
+    ObjectUKF        temp_ukf(tracked.objects[0], depth, rcfg, ci);
+    auto             z_pred = temp_ukf.predicted_radar_measurement();
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 1;
+    radar.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+    engine.set_radar_detections(radar);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_TRUE(result.objects[0].has_camera);
+    // Camera+radar association should still work
+    EXPECT_TRUE(result.objects[0].has_radar);
 }

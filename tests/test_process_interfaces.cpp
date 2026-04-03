@@ -1,69 +1,18 @@
 // tests/test_process_interfaces.cpp
 // Tests for internal process strategy interfaces:
-//   IVisualFrontend, IProcessMonitor
+//   IProcessMonitor
 //
+// IVisualFrontend removed in Issue #255 (superseded by IVIOBackend).
 // Path planner tests moved to test_dstar_lite_planner.cpp (Issue #207).
 // Obstacle avoider tests moved to test_obstacle_avoider_3d.cpp (Issue #207).
 #include "monitor/iprocess_monitor.h"
-#include "slam/ivisual_frontend.h"
 
 #include <memory>
 #include <vector>
 
 #include <gtest/gtest.h>
 
-using namespace drone::ipc;
-using namespace drone::slam;
 using namespace drone::monitor;
-
-// ═══════════════════════════════════════════════════════════
-// IVisualFrontend / SimulatedVisualFrontend
-// ═══════════════════════════════════════════════════════════
-
-TEST(VisualFrontendTest, FactoryCreatesSimulated) {
-    auto fe = create_visual_frontend("simulated");
-    EXPECT_NE(fe, nullptr);
-}
-
-TEST(VisualFrontendTest, FactoryThrowsOnUnknown) {
-    EXPECT_THROW(create_visual_frontend("nonexistent"), std::runtime_error);
-}
-
-TEST(VisualFrontendTest, ProcessFrameReturnsPose) {
-    auto fe = create_visual_frontend("simulated");
-
-    StereoFrame frame{};
-    frame.timestamp_ns = 1000;
-
-    // Run 10 frames — should produce a pose with some nonzero position
-    drone::slam::Pose pose;
-    for (int i = 0; i < 10; ++i) {
-        frame.timestamp_ns += 100000000;  // 100ms increments
-        pose = fe->process_frame(frame);
-    }
-
-    EXPECT_GT(pose.timestamp, 0.0);
-    EXPECT_EQ(pose.quality, 2u);  // simulated always returns quality=2
-    // At least one translation component should be nonzero (circular path)
-    double dist = pose.position.norm();
-    EXPECT_GT(dist, 0.0);
-}
-
-TEST(VisualFrontendTest, NameReturnsString) {
-    auto fe = create_visual_frontend("simulated");
-    EXPECT_FALSE(fe->name().empty());
-}
-
-TEST(VisualFrontendTest, ImplementsInterface) {
-    auto             fe    = create_visual_frontend("simulated");
-    IVisualFrontend* iface = fe.get();
-    EXPECT_NE(iface, nullptr);
-
-    StereoFrame frame{};
-    frame.timestamp_ns = 500;
-    auto pose          = iface->process_frame(frame);
-    EXPECT_GT(pose.timestamp, 0.0);
-}
 
 // ═══════════════════════════════════════════════════════════
 // IProcessMonitor / LinuxProcessMonitor

@@ -72,9 +72,9 @@
 | Planning | **D* Lite incremental planner** (8-connected 2D; 26-connected 3D planned — #250, requires #252) + A* 3D grid planner + 3D obstacle avoidance + potential field fallback |
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
-| VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration (quality is hardcoded heuristic — [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) tracks covariance-derived quality) |
-| Integration testing | **9 Tier 1 scenarios passing** on Zenoh; sideband fault injector CLI |
-| Test scenarios | 9 parameterized JSON configs with fault sequences + pass criteria |
+| VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration + **covariance-derived quality** (`trace(P_position)` from IMU pre-integrator, configurable thresholds) |
+| Integration testing | **20 Tier 1 + 5 Tier 2 scenarios** on Zenoh; sideband fault injector CLI |
+| Test scenarios | 25 parameterized JSON configs with fault sequences + pass criteria |
 | Bug fixes | **48** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
 
 ---
@@ -393,7 +393,7 @@
 | [#35](https://github.com/nmohamaya/companion_software_stack/issues/35) | Video streaming (H.265 → RTP/RTSP) | P2 | Hardware H.265 encode on Jetson; GStreamer RTP/RTSP pipeline; bitrate adaptation |
 | [#36](https://github.com/nmohamaya/companion_software_stack/issues/36) | Cross-compilation / Jetson native build | P1 | Native aarch64 build on **NVIDIA Jetson Orin** (JetPack 6.x); CMake cross-compile toolchain |
 | [#252](https://github.com/nmohamaya/companion_software_stack/issues/252) | 3D depth pipeline (stereo/depth sensor) | P1 | True 3D obstacle geometry via stereo disparity or depth camera. Prerequisite for #250 (3D planner) — without measured depth, vertical planning decisions rely on geometric guesses. Required when the drone must fly over or under obstacles. |
-| [#253](https://github.com/nmohamaya/companion_software_stack/issues/253) | YOLOv8 in Gazebo scenarios + detector cleanup | P2 | Enable and validate the existing OpenCvYoloDetector in Gazebo SITL. Extract SimulatedDetector from detector_interface.h. New scenario config for YOLOv8 + camera + radar pipeline. |
+| ~~[#253](https://github.com/nmohamaya/companion_software_stack/issues/253)~~ | ~~YOLOv8 in Gazebo scenarios + detector cleanup~~ | ~~P2~~ | ✅ Done (Epic #263, PR #264) — SimulatedDetector extracted, YOLOv8 Gazebo scenario |
 
 **Target Hardware:** NVIDIA Jetson Orin (Nano 8 GB / NX 16 GB / AGX 32–64 GB), JetPack 6.x, CUDA 12.x
 
@@ -407,10 +407,10 @@
 
 | Issue | Task | Priority | Description |
 |-------|------|----------|-------------|
-| [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | P0 | Integrate ORB-SLAM3 or VINS-Fusion as `IVisualFrontend` backend; stereo or mono+IMU |
+| [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | P0 | Integrate ORB-SLAM3 or VINS-Fusion as `IVIOBackend` backend; stereo or mono+IMU |
 | [#38](https://github.com/nmohamaya/companion_software_stack/issues/38) | Stereo camera calibration pipeline | P1 | Checkerboard calibration tool; output intrinsics + extrinsics to config JSON |
 | [#39](https://github.com/nmohamaya/companion_software_stack/issues/39) | VIO/GPS fusion via PX4 external vision | P1 | Publish VIO pose to PX4 via MAVLink `VISION_POSITION_ESTIMATE`; EKF2 fusion |
-| [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) | Covariance-derived VIO quality | P1 | Derive `Pose.quality` from covariance matrix trace instead of hardcoded feature-count heuristic; propagate pre-integrator covariance to Pose; configurable thresholds |
+| ~~[#254](https://github.com/nmohamaya/companion_software_stack/issues/254)~~ | ~~Covariance-derived VIO quality~~ | ~~P1~~ | ✅ Done (Epic #263, PR #276) — `trace(P_position)` from IMU pre-integrator, configurable thresholds, feature/match fallback |
 
 **Exit Criteria:** Indoor GPS-denied flight using VIO pose estimation.
 
@@ -422,7 +422,7 @@
 
 | Issue | Task | Priority | Description |
 |-------|------|----------|-------------|
-| [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | P1 | Binary ring-buffer logger; all SHM channels + telemetry; offline replay tool |
+| ~~[#40](https://github.com/nmohamaya/companion_software_stack/issues/40)~~ | ~~Flight data recorder + replay~~ | ~~P1~~ | ✅ Done (Epic #263, PR #272) — Ring-buffer flight recorder with IPC replay tool |
 | [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | P0 | 🟡 **Partial** — FaultManager ([#61](https://github.com/nmohamaya/companion_software_stack/issues/61), PR #63) handles 8 fault conditions with graduated response. Remaining: geofencing, motor failure, SLAM divergence detection |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | P2 | `IGimbal` backend for SIYI A8 mini (UART) or PWM servo; stabilisation loop |
 | — | Predictive thermal trend monitoring | P1 | Replace threshold-only thermal zone computation with sliding-window linear regression (dT/dt) to predict time-to-thermal-runaway. Issue early warnings before critical temperature is reached, allowing the drone to RTL while still safe. Thresholds must be calibrated per-platform based on host SBC thermal characteristics (e.g., Jetson Orin throttle at 97°C, heatsink/fan curves). See `config/hardware.json` for deployment thresholds. |
@@ -454,6 +454,7 @@
 | [#88](https://github.com/nmohamaya/companion_software_stack/issues/88) | [Epic] Process & Thread Watchdog — Crash Recovery & Stuck-Thread Detection | **Closed** ✅ |
 | [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Core Autonomy & Safety — IPC, Perception, VIO, Planning | **Closed** ✅ |
 | ~~[#126](https://github.com/nmohamaya/companion_software_stack/issues/126)~~ | ~~[Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable~~ | **Closed** ✅ (PR #151) |
+| ~~[#263](https://github.com/nmohamaya/companion_software_stack/issues/263)~~ | ~~[Epic] Autonomous Intelligence & Sim Fidelity~~ | **Closed** ✅ (integration branch, 10 PRs) |
 
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
@@ -513,17 +514,19 @@
 | [#37](https://github.com/nmohamaya/companion_software_stack/issues/37) | Real VIO backend (ORB-SLAM3 / VINS-Fusion) | Open |
 | [#38](https://github.com/nmohamaya/companion_software_stack/issues/38) | Stereo camera calibration pipeline | Open |
 | [#39](https://github.com/nmohamaya/companion_software_stack/issues/39) | VIO/GPS fusion via PX4 external vision | Open |
-| [#254](https://github.com/nmohamaya/companion_software_stack/issues/254) | Covariance-derived VIO quality | Open |
+| ~~[#254](https://github.com/nmohamaya/companion_software_stack/issues/254)~~ | ~~Covariance-derived VIO quality~~ | **Closed** (Epic #263, PR #276) |
 
 ### Phase 12 — Production Hardening
 
 | # | Title | State |
 |---|-------|-------|
 | [#40](https://github.com/nmohamaya/companion_software_stack/issues/40) | Flight data recorder + replay | Open |
-| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Mostly complete** — FaultManager (#61 PR #63) + geofence/battery/FC-link (Epic #110 PR #119). Remaining: motor failure, SLAM divergence ([#254](https://github.com/nmohamaya/companion_software_stack/issues/254) enables covariance-based divergence detection) |
+| [#41](https://github.com/nmohamaya/companion_software_stack/issues/41) | Contingency fault tree | **Mostly complete** — FaultManager (#61 PR #63) + geofence/battery/FC-link (Epic #110 PR #119) + collision recovery (Epic #263 PR #268) + covariance-based VIO divergence (PR #276). Remaining: motor failure |
 | [#61](https://github.com/nmohamaya/companion_software_stack/issues/61) | FaultManager — graceful degradation | **Closed** (PR #63) |
 | [#42](https://github.com/nmohamaya/companion_software_stack/issues/42) | Gimbal driver (SIYI / PWM) | Open |
 | [#250](https://github.com/nmohamaya/companion_software_stack/issues/250) | D* Lite 3D grid (26-connected) | Open |
+| [#273](https://github.com/nmohamaya/companion_software_stack/issues/273) | Full S-matrix gating for all radar association | Open |
+| [#274](https://github.com/nmohamaya/companion_software_stack/issues/274) | Safety-critical C++ audit — scan codebase against full rule set | Open |
 
 ### Zenoh IPC Migration (Phase 12) — ✅ COMPLETE
 
@@ -569,7 +572,7 @@
 | ~~[#211](https://github.com/nmohamaya/companion_software_stack/issues/211)~~ | ~~Remove Thermal Camera — replaced by radar sensor~~ ✅ | Refactor | **Closed** (PR #214) |
 | ~~[#212](https://github.com/nmohamaya/companion_software_stack/issues/212)~~ | ~~Gazebo Radar Backend — gpu_lidar HAL + radar HAL thread~~ ✅ | Feature | **Closed** (PRs #218, #219, #221) |
 | [#217](https://github.com/nmohamaya/companion_software_stack/issues/217) | NVIDIA EGL broader scope — hardware deployment | Reliability | **Open** (deferred to hardware phase) |
-| [#220](https://github.com/nmohamaya/companion_software_stack/issues/220) | P3 slam_vio_nav unclamped loop rates | Bug | **Open** |
+| ~~[#220](https://github.com/nmohamaya/companion_software_stack/issues/220)~~ | ~~P3 slam_vio_nav unclamped loop rates~~ ✅ | Bug | **Closed** (Epic #263, PR #266) |
 | ~~[#222](https://github.com/nmohamaya/companion_software_stack/issues/222)~~ | ~~Perception-driven obstacle avoidance scenario (no HD-map)~~ ✅ | Testing | **Closed** (Improvement #54) |
 | ~~[#224](https://github.com/nmohamaya/companion_software_stack/issues/224)~~ | ~~Fix Perception Fusion Pipeline — SPSC Overflow + Radar Fusion Bottleneck~~ ✅ | Bug Fix / Perf | **Closed** (Improvement #55, Fix #42) |
 | ~~[#225](https://github.com/nmohamaya/companion_software_stack/issues/225)~~ | ~~Radar ground-plane filter + avoider dead zone fix~~ ✅ | Feature / Bug Fix | **Closed** (Improvement #56, Fix #41) |
@@ -581,39 +584,57 @@
 
 ---
 
+### Autonomous Intelligence & Sim Fidelity (Epic #263) — ✅ COMPLETE
+
+| # | Title | Sub-Epic | State |
+|---|-------|----------|-------|
+| ~~[#220](https://github.com/nmohamaya/companion_software_stack/issues/220)~~ | ~~P3 rate clamping~~ | A: Foundation | **Closed** (PR #266) |
+| ~~[#258](https://github.com/nmohamaya/companion_software_stack/issues/258)~~ | ~~D* Lite corner-cutting guard~~ | A: Foundation | **Closed** (PR #267) |
+| ~~[#226](https://github.com/nmohamaya/companion_software_stack/issues/226)~~ | ~~Post-collision recovery~~ | A: Safety | **Closed** (PR #268) |
+| ~~[#231](https://github.com/nmohamaya/companion_software_stack/issues/231)~~ | ~~Radar-only track initiation~~ | B: Perception | **Closed** (PR #271) |
+| ~~[#253](https://github.com/nmohamaya/companion_software_stack/issues/253)~~ | ~~YOLOv8 Gazebo + detector cleanup~~ | B: Perception | **Closed** (PR #264) |
+| ~~[#256](https://github.com/nmohamaya/companion_software_stack/issues/256)~~ | ~~Dynamic obstacle prediction via UKF~~ | D: Advanced | **Closed** (PR #270) |
+| ~~[#257](https://github.com/nmohamaya/companion_software_stack/issues/257)~~ | ~~Gimbal auto-tracking~~ | D: Advanced | **Closed** (PR #265) |
+| ~~[#40](https://github.com/nmohamaya/companion_software_stack/issues/40)~~ | ~~Flight data recorder + replay~~ | D: Advanced | **Closed** (PR #272) |
+| ~~[#191](https://github.com/nmohamaya/companion_software_stack/issues/191)~~ | ~~Gazebo Full VIO backend~~ | C: VIO | **Closed** (PR #275) |
+| ~~[#254](https://github.com/nmohamaya/companion_software_stack/issues/254)~~ | ~~Covariance-derived VIO quality~~ | C: VIO | **Closed** (PR #276) |
+| ~~[#255](https://github.com/nmohamaya/companion_software_stack/issues/255)~~ | ~~Remove legacy IVisualFrontend~~ | C: VIO | **Closed** (PR #277) |
+
+---
+
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | **Epic #110 (Current)** |
-|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|
-| Unit tests (SHM) | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | **1108** |
-| Unit tests (SHM+Zenoh) | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **1108** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | **42** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | **34** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | **110+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | **9** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | **Zenoh (sole)** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | **7** |
-| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
-| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | **9** |
-| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | **10** |
-| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
-| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | **26** |
-| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | **7** |
-| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | **Result<T,E>** |
-| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | **75.1%** |
-| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | **enforced** |
-| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | **ThreadHeartbeat + ThreadWatchdog** |
-| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | **systemd + ProcessManager** |
-| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **D* Lite + A* 3D + potential field** |
-| Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **Geofence + battery RTL + FC contingency** |
-| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **UKF radar-primary (camera + radar independent tracks, dormant re-ID)** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **15 scenarios (14 Tier 1 + 1 Tier 2), 14/14 Tier 1 pass on Zenoh** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | Epic #110 | **Epic #263 (Current)** |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|-------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | 1108 | **1238** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | 42 | **47** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | 34 | **48** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | 110+ | **120+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 9 | **9** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | Zenoh (sole) | **Zenoh (sole)** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | 9 | **9** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | 10 | **12** |
+| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | 26 | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | Result<T,E> | **Result<T,E>** |
+| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | 75.1% | **75.1%** |
+| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | enforced | **enforced** |
+| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | systemd + ProcessManager | **systemd + ProcessManager** |
+| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | D* Lite + A* 3D + potential field | **D* Lite + A* 3D + potential field** |
+| Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | Geofence + battery RTL + FC contingency | **+ collision recovery** |
+| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | UKF radar-primary | **+ radar-only init + dynamic prediction + gimbal tracking** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 15 (14 T1 + 1 T2) | **25 (20 T1 + 5 T2), 20/20 T1 pass** |
+| VIO backends | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 2 (Simulated + Gazebo) | **3 (+ GazeboFull) + covariance quality** |
 
 ### Process Activity During Simulation
 

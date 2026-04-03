@@ -62,19 +62,19 @@ static void mission_cam_thread(drone::hal::ICamera&                            c
             continue;
         }
 
-        drone::ipc::VideoFrame shm_frame{};
-        shm_frame.timestamp_ns    = frame.timestamp_ns;
-        shm_frame.sequence_number = frame.sequence;
-        shm_frame.width           = frame.width;
-        shm_frame.height          = frame.height;
-        shm_frame.channels        = frame.channels;
-        shm_frame.stride          = frame.stride;
+        drone::ipc::VideoFrame ipc_frame{};
+        ipc_frame.timestamp_ns    = frame.timestamp_ns;
+        ipc_frame.sequence_number = frame.sequence;
+        ipc_frame.width           = frame.width;
+        ipc_frame.height          = frame.height;
+        ipc_frame.channels        = frame.channels;
+        ipc_frame.stride          = frame.stride;
 
-        // Copy pixel data into SHM frame
+        // Copy pixel data into IPC frame
         size_t copy_size = std::min(static_cast<size_t>(frame.height) * frame.stride,
-                                    sizeof(shm_frame.pixel_data));
+                                    sizeof(ipc_frame.pixel_data));
         if (frame.data) {
-            std::copy(frame.data, frame.data + copy_size, shm_frame.pixel_data);
+            std::copy(frame.data, frame.data + copy_size, ipc_frame.pixel_data);
         } else {
             ++null_data_count;
             ++drop_count;
@@ -88,7 +88,7 @@ static void mission_cam_thread(drone::hal::ICamera&                            c
         }
 
         diag.add_metric("Camera", "copy_bytes", static_cast<double>(copy_size));
-        publisher.publish(shm_frame);
+        publisher.publish(ipc_frame);
 
         ++seq;
         if (diag.has_errors() || diag.has_warnings()) {
@@ -159,18 +159,18 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
                                  "ms)");
         }
 
-        drone::ipc::StereoFrame shm_frame{};
-        shm_frame.timestamp_ns    = left_frame.timestamp_ns;
-        shm_frame.sequence_number = left_frame.sequence;
-        shm_frame.width           = left_frame.width;
-        shm_frame.height          = left_frame.height;
+        drone::ipc::StereoFrame ipc_frame{};
+        ipc_frame.timestamp_ns    = left_frame.timestamp_ns;
+        ipc_frame.sequence_number = left_frame.sequence;
+        ipc_frame.width           = left_frame.width;
+        ipc_frame.height          = left_frame.height;
 
         // Copy left and right data using height * stride for correct padding
         size_t copy_size_left = std::min(static_cast<size_t>(left_frame.height) * left_frame.stride,
-                                         sizeof(shm_frame.left_data));
+                                         sizeof(ipc_frame.left_data));
         size_t copy_size_right =
             std::min(static_cast<size_t>(right_frame.height) * right_frame.stride,
-                     sizeof(shm_frame.right_data));
+                     sizeof(ipc_frame.right_data));
 
         // Treat null data pointers as a dropped pair — don't publish corrupted
         // frames into SLAM.
@@ -188,10 +188,10 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
             continue;
         }
 
-        std::copy(left_frame.data, left_frame.data + copy_size_left, shm_frame.left_data);
-        std::copy(right_frame.data, right_frame.data + copy_size_right, shm_frame.right_data);
+        std::copy(left_frame.data, left_frame.data + copy_size_left, ipc_frame.left_data);
+        std::copy(right_frame.data, right_frame.data + copy_size_right, ipc_frame.right_data);
 
-        publisher.publish(shm_frame);
+        publisher.publish(ipc_frame);
 
         ++seq;
         if (diag.has_errors() || diag.has_warnings()) {

@@ -116,6 +116,14 @@
         "vio_rate_hz": 100,
         "visual_frontend_rate_hz": 30,
         "imu_rate_hz": 400,
+        "vio": {
+            "backend": "simulated",
+            "gz_topic": "/model/x500_companion_0/odometry",
+            "quality": {
+                "good_trace_max": 0.1,
+                "degraded_trace_max": 1.0
+            }
+        },
         "imu": {
             "backend": "simulated"
         },
@@ -149,7 +157,9 @@
             "dynamic_obstacle_ttl_s": 3.0,
             "min_confidence": 0.3,
             "min_promotion_depth_confidence": 0.5,
-            "max_static_cells": 0
+            "max_static_cells": 0,
+            "prediction_enabled": true,
+            "prediction_dt_s": 2.0
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"
@@ -174,6 +184,11 @@
             "altitude_ceiling_m": 120.0,
             "warning_margin_m": 5.0,
             "altitude_tolerance_m": 0.5
+        },
+        "collision_recovery": {
+            "enabled": true,
+            "climb_delta_m": 3.0,
+            "hover_duration_s": 2.0
         },
         "waypoints": [
             {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
@@ -207,7 +222,11 @@
             "pitch_min_deg": -90.0,
             "pitch_max_deg": 30.0,
             "yaw_min_deg": -180.0,
-            "yaw_max_deg": 180.0
+            "yaw_max_deg": 180.0,
+            "auto_track": {
+                "enabled": false,
+                "min_confidence": 0.5
+            }
         }
     },
 

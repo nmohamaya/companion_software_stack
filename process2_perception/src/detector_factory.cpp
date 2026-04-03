@@ -3,6 +3,7 @@
 
 #include "perception/color_contour_detector.h"
 #include "perception/detector_interface.h"
+#include "perception/simulated_detector.h"
 
 #ifdef HAS_OPENCV
 #include "perception/opencv_yolo_detector.h"

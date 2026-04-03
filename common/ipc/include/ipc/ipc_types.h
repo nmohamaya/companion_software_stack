@@ -129,15 +129,16 @@ struct alignas(64) Pose {
 // Mission Status (Process 4 → Process 5, Process 7)
 // ═══════════════════════════════════════════════════════════
 enum class MissionState : uint8_t {
-    IDLE      = 0,
-    PREFLIGHT = 1,
-    TAKEOFF   = 2,
-    NAVIGATE  = 3,
-    LOITER    = 4,
-    RTL       = 5,
-    LAND      = 6,
-    EMERGENCY = 7,
-    SURVEY    = 8  // Post-takeoff obstacle survey before navigation
+    IDLE               = 0,
+    PREFLIGHT          = 1,
+    TAKEOFF            = 2,
+    NAVIGATE           = 3,
+    LOITER             = 4,
+    RTL                = 5,
+    LAND               = 6,
+    EMERGENCY          = 7,
+    SURVEY             = 8,  // Post-takeoff obstacle survey before navigation
+    COLLISION_RECOVERY = 9   // Post-collision recovery: hover → climb → replan
 };
 
 // ═══════════════════════════════════════════════════════════

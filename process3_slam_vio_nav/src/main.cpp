@@ -24,6 +24,7 @@
 #include "util/config.h"
 #include "util/diagnostic.h"
 #include "util/log_config.h"
+#include "util/rate_clamp.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
 #include "util/signal_handler.h"
@@ -358,8 +359,9 @@ int main(int argc, char* argv[]) {
     // Thread-safe IMU ring buffer (IMU reader → VIO pipeline)
     ImuRingBuffer imu_ring_buffer(2048);
 
-    const int imu_rate = cfg.get<int>("slam.imu_rate_hz", 400);
-    const int vio_rate = cfg.get<int>("slam.vio_rate_hz", 100);
+    // ── Rate clamping (safety: prevent runaway loops or undersampling) ──
+    const int imu_rate = drone::util::clamp_imu_rate(cfg.get<int>("slam.imu_rate_hz", 400));
+    const int vio_rate = drone::util::clamp_vio_rate(cfg.get<int>("slam.vio_rate_hz", 100));
 
     // Create IMU via HAL factory
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
@@ -386,10 +388,13 @@ int main(int argc, char* argv[]) {
     imu_params.accel_noise_density = cfg.get<double>("slam.imu.accel_noise_density", 0.012);
     imu_params.accel_random_walk   = cfg.get<double>("slam.imu.accel_random_walk", 8.0e-5);
 
-    const float sim_speed_mps = cfg.get<float>("slam.vio.sim_speed_mps", 3.0f);
+    const float  sim_speed_mps      = cfg.get<float>("slam.vio.sim_speed_mps", 3.0f);
+    const double good_trace_max     = cfg.get<double>("slam.vio.quality.good_trace_max", 0.1);
+    const double degraded_trace_max = cfg.get<double>("slam.vio.quality.degraded_trace_max", 1.0);
     auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic,
-                                               sim_speed_mps);
-    spdlog::info("VIO backend: {} (sim_speed={:.1f} m/s)", vio->name(), sim_speed_mps);
+                                               sim_speed_mps, good_trace_max, degraded_trace_max);
+    spdlog::info("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",
+                 vio->name(), sim_speed_mps, good_trace_max, degraded_trace_max);
     spdlog::info("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m", calib.fx,
                  calib.fy, calib.cx, calib.cy, calib.baseline);
 

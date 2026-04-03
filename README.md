@@ -212,7 +212,7 @@ All hardware access goes through abstract C++ interfaces. A factory reads the `"
 | `IGCSLink` | Ground station comms | `SimulatedGCSLink` — simulated RTL after 120 s | — | UDP / MAVLink GCS protocol |
 | `IGimbal` | Gimbal control | `SimulatedGimbal` — rate-limited slew model | — | UART / PWM gimbal protocol |
 | `IIMUSource` | Inertial measurement | `SimulatedIMU` — noisy synthetic accel + gyro | `GazeboIMU` (gz-transport) | SPI / I2C IMU driver |
-| `IVisualFrontend` | Pose estimation | `SimulatedVisualFrontend` — circular trajectory + noise | `GazeboVisualFrontend` (gz-transport odometry) | ORB-SLAM3 / VINS-Fusion |
+| `IVIOBackend` | Pose estimation | `SimulatedVIOBackend` — target-following + full VIO pipeline | `GazeboVIOBackend` / `GazeboFullVIOBackend` | ORB-SLAM3 / VINS-Fusion |
 | `IPathPlanner` | Path planning | `DStarLitePlanner` — 3D incremental search + obstacle awareness | — | RRT* |
 | `IObstacleAvoider` | Obstacle avoidance | `ObstacleAvoider3D` — 3D repulsive field + velocity prediction | — | VFH+ / 3D-VFH |
 | `IRadar` | Radar detections | `SimulatedRadar` — config-driven synthetic targets | `GazeboRadarBackend` (gpu_lidar + odometry) | SPI/UART radar driver |
@@ -240,7 +240,7 @@ A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrac
 
 ### Process 3 — SLAM/VIO/Nav (4 threads)
 
-Three worker threads plus a main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data, and generates a 6-DOF pose published at 100 Hz. The `Pose.quality` field (0=lost to 3=excellent) reflects VIO health state, consumed by P4's FaultManager for safety response. Backends: `SimulatedVisualFrontend` (circular trajectory with noise) and `GazeboVisualFrontend` (ground-truth odometry).
+Three worker threads plus a main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data, and generates a 6-DOF pose published at 100 Hz. The `Pose.quality` field (0=lost to 3=excellent) reflects VIO health state, consumed by P4's FaultManager for safety response. Backends: `SimulatedVIOBackend` (target-following dynamics with full pipeline), `GazeboVIOBackend` (ground-truth odometry), and `GazeboFullVIOBackend` (full pipeline on Gazebo frames).
 
 > For VIO pipeline details, pose quality states, and IMU integration, see [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md).
 
@@ -275,7 +275,7 @@ Collects CPU usage (/proc/stat), memory (/proc/meminfo), CPU temperature (/sys/c
 All common libraries live in `common/` and are written from scratch.
 
 - **IPC (`common/ipc/`)** — Zenoh-backed `IPublisher<T>` / `ISubscriber<T>` with zero-copy SHM for local transport and network transport (UDP/TCP/QUIC) for drone-to-GCS communication. Singleton `ZenohSession`, liveliness tokens for crash detection, and `ZenohServiceClient`/`ZenohServiceServer` for request-response patterns. All IPC structs must be trivially copyable.
-- **HAL (`common/hal/`)** — Abstract interfaces (ICamera, IDetector, IFCLink, IGCSLink, IGimbal, IIMUSource, IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor) with config-driven factory. Simulated, Gazebo, and real backends.
+- **HAL (`common/hal/`)** — Abstract interfaces (ICamera, IDetector, IFCLink, IGCSLink, IGimbal, IIMUSource, IVIOBackend, IPathPlanner, IObstacleAvoider, IProcessMonitor) with config-driven factory. Simulated, Gazebo, and real backends.
 - **Utilities (`common/util/`)** — `Result<T,E>` monadic error type, `Config` (nlohmann/json, dot-path access), `ThreadHeartbeat`/`ThreadWatchdog`, `SignalHandler`, `ScopedTimer`, `SPSCRing<T,N>` (lock-free ring buffer), `LogConfig` (spdlog), `parse_args()` CLI parsing.
 
 > For IPC class hierarchy, interface signatures, and message type reference, see [API.md](docs/design/API.md).
@@ -586,7 +586,7 @@ These warnings are **harmless** — the stack runs correctly without RT scheduli
 │       └── fusion_engine.cpp         # Camera-only fusion
 ├── process3_slam_vio_nav/            # VIO/pose estimation (4 threads)
 │   └── include/slam/
-│       ├── ivisual_frontend.h        # IVisualFrontend strategy interface
+│       ├── ivio_backend.h             # IVIOBackend strategy interface
 │       └── types.h                   # Pose, ImuSample, KeyframePolicy
 ├── process4_mission_planner/         # FSM + fault manager + D* Lite planner (1 thread)
 │   └── include/planner/

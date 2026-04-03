@@ -164,6 +164,7 @@ endif()
 add_subdirectory(common/ipc)
 add_subdirectory(common/util)
 add_subdirectory(common/hal)
+add_subdirectory(common/recorder)
 
 # ── Process executables ──────────────────────────────────────
 add_subdirectory(process1_video_capture)
@@ -176,6 +177,7 @@ add_subdirectory(process7_system_monitor)
 
 # ── Tools ────────────────────────────────────────────────────
 add_subdirectory(tools/fault_injector)
+add_subdirectory(tools/flight_replay)
 
 # ── Tests ────────────────────────────────────────────────────
 enable_testing()

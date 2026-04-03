@@ -7,7 +7,7 @@ Step-by-step instructions for setting up the Drone Companion Software Stack on a
 | **Core (required)** | spdlog, Eigen3, nlohmann-json, GTest | Full stack with simulated backends; all tests pass |
 | **Optional: OpenCV** | OpenCV 4.x with DNN module | `OpenCvYoloDetector` — YOLOv8-nano object detection via ONNX |
 | **Optional: MAVSDK** | MAVSDK 2.x | `MavlinkFCLink` — real MAVLink communication with PX4 flight controller |
-| **Optional: Gazebo** | Gazebo Harmonic (gz-sim 8), gz-transport 13, gz-msgs 10 | `GazeboCamera`, `GazeboIMU`, `GazeboVisualFrontend` — SITL simulation with PX4 |
+| **Optional: Gazebo** | Gazebo Harmonic (gz-sim 8), gz-transport 13, gz-msgs 10 | `GazeboCamera`, `GazeboIMU`, `GazeboVIOBackend` — SITL simulation with PX4 |
 
 ---
 
@@ -241,7 +241,7 @@ Gazebo Harmonic (gz-sim 8) provides a physics-based 3D simulation environment. C
 **What it enables:**
 - `GazeboCamera` — subscribes to gz-transport image topics for real rendered frames
 - `GazeboIMU` — subscribes to gz-transport IMU data (accelerometer + gyroscope)
-- `GazeboVisualFrontend` — subscribes to gz-transport odometry for ground-truth pose
+- `GazeboVIOBackend` — subscribes to gz-transport odometry for ground-truth pose
 - Full SITL loop: PX4 flight controller + physics + companion stack in one machine
 
 **Without Gazebo:** The stack uses simulated backends (synthetic gradient images, circular trajectory pose, random IMU noise). Everything works, just not with physics or rendered visuals.
@@ -402,7 +402,7 @@ After running `cmake`, look at the summary printed at the end:
 |---|---|---|
 | `HAS_OPENCV` | `find_package(OpenCV)` succeeds | Enables `OpenCvYoloDetector` class and YOLOv8 test suite |
 | `HAVE_MAVSDK` | `find_package(MAVSDK)` succeeds | Enables `MavlinkFCLink` backend in HAL |
-| `HAVE_GAZEBO` | `find_package(gz-transport13)` + `find_package(gz-msgs10)` both succeed | Enables `GazeboCamera`, `GazeboIMU`, `GazeboVisualFrontend` backends |
+| `HAVE_GAZEBO` | `find_package(gz-transport13)` + `find_package(gz-msgs10)` both succeed | Enables `GazeboCamera`, `GazeboIMU`, `GazeboVIOBackend` backends |
 
 ### Graceful Degradation
 
@@ -410,7 +410,7 @@ The build system is designed so that missing optional dependencies never break t
 
 - If OpenCV is missing: `OpenCvYoloDetector` is compiled as a stub that logs a warning. The detector factory falls back to `ColorContourDetector` if `"yolov8"` is requested without OpenCV.
 - If MAVSDK is missing: `MavlinkFCLink` is not compiled. The comms process uses `SimulatedFCLink`.
-- If Gazebo is missing: `GazeboCamera`, `GazeboIMU`, and `GazeboVisualFrontend` are not compiled. Simulated backends are used instead.
+- If Gazebo is missing: `GazeboCamera`, `GazeboIMU`, and `GazeboVIOBackend` are not compiled. Simulated backends are used instead.
 
 ---
 

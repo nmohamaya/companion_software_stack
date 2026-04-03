@@ -56,6 +56,8 @@ struct GridPlannerConfig {
     bool  yaw_towards_travel = true;  // Face sensors toward next waypoint during NAVIGATE
     float yaw_smoothing_rate = 0.3f;  // EMA alpha for yaw transitions (0=frozen, 1=instant)
     float snap_approach_bias = 0.5f;  // Approach-direction penalty for snap fallback
+    bool  prediction_enabled = true;  // Enable velocity-based obstacle prediction
+    float prediction_dt_s    = 2.0f;  // Prediction horizon (seconds into the future)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -76,6 +78,10 @@ public:
     /// True if the last planning cycle could not find a search path
     /// and fell back to a direct line toward the target.
     [[nodiscard]] virtual bool using_direct_fallback() const = 0;
+
+    /// Invalidate the cached path, forcing a full replan on the next tick.
+    /// Called after collision recovery to avoid re-using a path that led into an obstacle.
+    virtual void invalidate_path() = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -89,7 +95,7 @@ public:
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
-                config.max_static_cells) {}
+                config.max_static_cells, config.prediction_enabled, config.prediction_dt_s) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
@@ -102,6 +108,13 @@ public:
     }
 
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
+
+    void invalidate_path() override {
+        cached_path_.clear();
+        path_index_ = 0;
+        snap_valid_ = false;
+        spdlog::info("[Planner] Path cache invalidated — forcing full replan");
+    }
 
     /// Get the current obstacle grid (for diagnostics/testing).
     [[nodiscard]] const OccupancyGrid3D& grid() const { return grid_; }

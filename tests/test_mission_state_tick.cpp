@@ -227,7 +227,7 @@ TEST_F(MissionStateTickTest, MissionCompleteTriggersRTL) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// NAVIGATE: disarm detection (collision)
+// NAVIGATE: disarm detection → IDLE (cannot recover without motors)
 // ═══════════════════════════════════════════════════════════
 TEST_F(MissionStateTickTest, DisarmDuringNavigateDetected) {
     fsm.on_takeoff();
@@ -237,9 +237,9 @@ TEST_F(MissionStateTickTest, DisarmDuringNavigateDetected) {
     auto pose = make_pose(5.0f, 0.0f, 5.0f);
     auto fc   = make_fc(false, 5.0f);  // disarmed!
 
-    // This should log warning but not crash — state stays NAVIGATE
+    // Disarm during NAVIGATE transitions to IDLE — FC can't execute recovery commands
     do_tick(pose, fc);
-    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
 }
 
 // ═══════════════════════════════════════════════════════════
