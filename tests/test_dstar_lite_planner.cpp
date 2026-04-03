@@ -112,11 +112,12 @@ TEST(OccupancyGrid3DTest, PromotedCellStillAcceptsDynamicDetections) {
                          /*min_conf=*/0.3f, /*promotion_hits=*/2);
 
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 5.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    objects.num_objects                 = 1;
+    objects.objects[0].position_x       = 5.0f;
+    objects.objects[0].position_y       = 5.0f;
+    objects.objects[0].position_z       = 5.0f;
+    objects.objects[0].confidence       = 0.9f;
+    objects.objects[0].depth_confidence = 1.0f;
     drone::ipc::Pose pose{};
 
     // Two observations → cell promoted to static
@@ -150,11 +151,12 @@ TEST(OccupancyGrid3DTest, AdjacentDetectionStillInserted) {
                          /*min_conf=*/0.3f, /*promotion_hits=*/2);
 
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 5.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    objects.num_objects                 = 1;
+    objects.objects[0].position_x       = 5.0f;
+    objects.objects[0].position_y       = 5.0f;
+    objects.objects[0].position_z       = 5.0f;
+    objects.objects[0].confidence       = 0.9f;
+    objects.objects[0].depth_confidence = 1.0f;
     drone::ipc::Pose pose{};
 
     // Promote the cell at (5,5,5)
@@ -176,11 +178,12 @@ TEST(OccupancyGrid3DTest, FarDetectionNotSuppressed) {
                          /*min_conf=*/0.3f, /*promotion_hits=*/2);
 
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 5.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    objects.num_objects                 = 1;
+    objects.objects[0].position_x       = 5.0f;
+    objects.objects[0].position_y       = 5.0f;
+    objects.objects[0].position_z       = 5.0f;
+    objects.objects[0].confidence       = 0.9f;
+    objects.objects[0].depth_confidence = 1.0f;
     drone::ipc::Pose pose{};
 
     // Promote the cell at (5,5,5)
@@ -1447,6 +1450,111 @@ TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
     EXPECT_GT(cmd2.velocity_x, 0.0f);  // moving toward goal again
 }
 
+// ═══════════════════════════════════════════════════════════
+// Depth Confidence Gating Tests (#340)
+// ═══════════════════════════════════════════════════════════
+
+TEST(DepthConfidenceTest, PromotionBlockedByLowDepthConfidence) {
+    // Object with low depth_confidence (ground feature) should NOT be promoted
+    // even after many observations.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.1f;  // low — ground feature
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    // Many observations — none should promote due to low depth confidence
+    for (int i = 0; i < 10; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u);
+    EXPECT_GT(grid.occupied_count(), 0u);  // still exists as dynamic cell
+}
+
+TEST(DepthConfidenceTest, PromotionAllowedByHighDepthConfidence) {
+    // Object with high depth_confidence should promote normally.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.8f;  // high — real obstacle
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    // Two observations → should promote
+    grid.update_from_objects(objects, pose);
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u);
+}
+
+TEST(DepthConfidenceTest, RadarConfirmedBlockedByLowDepthConfidence) {
+    // Even radar-confirmed objects should not promote if depth_confidence is low.
+    // This catches the case where radar ground returns associate with ghost
+    // camera detections via UKF fusion.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.0f;  // tier 4 fallback
+    objects.objects[0].radar_update_count = 5;     // radar-confirmed
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_EQ(grid.static_count(), 0u);    // blocked by low depth confidence
+    EXPECT_GT(grid.occupied_count(), 0u);  // still a dynamic cell
+}
+
+TEST(DepthConfidenceTest, LowConfidenceStillCreatesDynamicCell) {
+    // Low depth_confidence detections should still create temporary dynamic
+    // cells for reactive avoidance — they just can't promote.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 8.0f;
+    objects.objects[0].position_y         = 8.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.0f;  // near-horizon fallback
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    // Dynamic cell exists for reactive avoidance
+    EXPECT_GT(grid.occupied_count(), 0u);
+    // But no promotion
+    EXPECT_EQ(grid.static_count(), 0u);
+    // Cell is occupied at the expected position
+    auto gc = grid.world_to_grid(8.0f, 8.0f, 5.0f);
+    EXPECT_TRUE(grid.is_occupied(gc));
+}
+
 // ═════════════════════════════════════════════════════════════
 // Issue #339: Static cell cap tests
 // ═════════════════════════════════════════════════════════════
@@ -1454,7 +1562,8 @@ TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
 TEST(OccupancyGrid3DTest, StaticCellCapEnforced) {
     // max_static_cells=10: promotion should stop after 10 promoted cells
     OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
-                         /*radar_promotion_hits=*/3, /*max_static_cells=*/10);
+                         /*radar_promotion_hits=*/3, /*min_promo_depth_conf=*/0.5f,
+                         /*max_static_cells=*/10);
 
     drone::ipc::Pose pose{};
     pose.translation[2] = 10.0;  // keep drone away from detections
@@ -1462,11 +1571,12 @@ TEST(OccupancyGrid3DTest, StaticCellCapEnforced) {
     // Insert many objects at different positions — each should promote after 1 hit
     for (int i = 0; i < 30; ++i) {
         drone::ipc::DetectedObjectList objects{};
-        objects.num_objects           = 1;
-        objects.objects[0].position_x = static_cast<float>(i);
-        objects.objects[0].position_y = 0.0f;
-        objects.objects[0].position_z = 0.0f;
-        objects.objects[0].confidence = 0.9f;
+        objects.num_objects                 = 1;
+        objects.objects[0].position_x       = static_cast<float>(i);
+        objects.objects[0].position_y       = 0.0f;
+        objects.objects[0].position_z       = 0.0f;
+        objects.objects[0].confidence       = 0.9f;
+        objects.objects[0].depth_confidence = 1.0f;
         grid.update_from_objects(objects, pose);
     }
 
@@ -1477,18 +1587,20 @@ TEST(OccupancyGrid3DTest, StaticCellCapEnforced) {
 TEST(OccupancyGrid3DTest, StaticCellCapZeroMeansUnlimited) {
     // max_static_cells=0 (default): no cap
     OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
-                         /*radar_promotion_hits=*/3, /*max_static_cells=*/0);
+                         /*radar_promotion_hits=*/3, /*min_promo_depth_conf=*/0.5f,
+                         /*max_static_cells=*/0);
 
     drone::ipc::Pose pose{};
     pose.translation[2] = 10.0;
 
     for (int i = 0; i < 20; ++i) {
         drone::ipc::DetectedObjectList objects{};
-        objects.num_objects           = 1;
-        objects.objects[0].position_x = static_cast<float>(i);
-        objects.objects[0].position_y = 0.0f;
-        objects.objects[0].position_z = 0.0f;
-        objects.objects[0].confidence = 0.9f;
+        objects.num_objects                 = 1;
+        objects.objects[0].position_x       = static_cast<float>(i);
+        objects.objects[0].position_y       = 0.0f;
+        objects.objects[0].position_z       = 0.0f;
+        objects.objects[0].confidence       = 0.9f;
+        objects.objects[0].depth_confidence = 1.0f;
         grid.update_from_objects(objects, pose);
     }
 
@@ -1499,7 +1611,8 @@ TEST(OccupancyGrid3DTest, StaticCellCapZeroMeansUnlimited) {
 TEST(OccupancyGrid3DTest, HDMapCellsExcludedFromCap) {
     // max_static_cells=5, but HD-map cells should not count toward cap
     OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
-                         /*radar_promotion_hits=*/3, /*max_static_cells=*/5);
+                         /*radar_promotion_hits=*/3, /*min_promo_depth_conf=*/0.5f,
+                         /*max_static_cells=*/5);
 
     // Add HD-map obstacle — creates many static cells
     grid.add_static_obstacle(5.0f, 5.0f, 1.0f, 2.0f);
@@ -1512,11 +1625,12 @@ TEST(OccupancyGrid3DTest, HDMapCellsExcludedFromCap) {
 
     for (int i = 0; i < 10; ++i) {
         drone::ipc::DetectedObjectList objects{};
-        objects.num_objects           = 1;
-        objects.objects[0].position_x = static_cast<float>(-5 - i);  // away from HD-map
-        objects.objects[0].position_y = 0.0f;
-        objects.objects[0].position_z = 0.0f;
-        objects.objects[0].confidence = 0.9f;
+        objects.num_objects                 = 1;
+        objects.objects[0].position_x       = static_cast<float>(-5 - i);  // away from HD-map
+        objects.objects[0].position_y       = 0.0f;
+        objects.objects[0].position_z       = 0.0f;
+        objects.objects[0].confidence       = 0.9f;
+        objects.objects[0].depth_confidence = 1.0f;
         grid.update_from_objects(objects, pose);
     }
 

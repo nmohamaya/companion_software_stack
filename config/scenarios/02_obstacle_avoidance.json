@@ -34,6 +34,11 @@
                 "max_static_cells": 0,
                 "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=0: HD-map has all 4 obstacles, no need for runtime promotion. Dynamic detections still affect the grid temporarily (TTL=1s) for real-time avoidance."
             },
+            "occupancy_grid": {
+                "promotion_hits": 8,
+                "min_promotion_depth_confidence": 0.5,
+                "_comment": "Enable promotion with depth confidence gate — validates that false ground detections are filtered"
+            },
             "static_obstacles": [
                 {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 5.0, "_color": "RED"},
                 {"x": 10, "y": 10, "radius_m": 1.0, "height_m": 5.0, "_color": "GREEN"},

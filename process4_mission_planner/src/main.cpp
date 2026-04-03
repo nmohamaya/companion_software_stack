@@ -200,6 +200,9 @@ int main(int argc, char* argv[]) {
     planner_cfg.radar_promotion_hits =
         static_cast<uint32_t>(cfg.get<int>("mission_planner.occupancy_grid.radar_promotion_hits",
                                            static_cast<int>(planner_cfg.radar_promotion_hits)));
+    planner_cfg.min_promotion_depth_confidence =
+        cfg.get<float>("mission_planner.occupancy_grid.min_promotion_depth_confidence",
+                       planner_cfg.min_promotion_depth_confidence);
     planner_cfg.z_band_cells       = cfg.get<int>("mission_planner.path_planner.z_band_cells",
                                                   planner_cfg.z_band_cells);
     planner_cfg.look_ahead_m       = cfg.get<float>("mission_planner.path_planner.look_ahead_m",

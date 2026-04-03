@@ -104,8 +104,9 @@ public:
 
     uint32_t track_id{0};
     uint32_t age{0};
-    uint32_t radar_update_count{0};  ///< Number of radar updates received (for B1 trust)
-    bool     radar_only{false};      ///< True if created from radar without camera (Phase D)
+    uint32_t radar_update_count{0};   ///< Number of radar updates received (for B1 trust)
+    float    depth_confidence{0.0f};  ///< Depth estimation quality [0.0=guess, 1.0=radar-confirmed]
+    bool     radar_only{false};       ///< True if created from radar without camera (Phase D)
 
     /// Tighten depth covariance after radar provides accurate range.
     void set_radar_confirmed_depth(float radar_range);
@@ -204,7 +205,11 @@ private:
     // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
     uint32_t next_radar_track_id_{0x80000000u};
 
-    float           estimate_depth(const TrackedObject& trk) const;
+    struct DepthEstimate {
+        float depth      = 8.0f;
+        float confidence = 0.0f;
+    };
+    DepthEstimate   estimate_depth(const TrackedObject& trk) const;
     Eigen::Vector3f body_to_world(const Eigen::Vector3f& body) const;
     int             find_nearest_dormant(const Eigen::Vector3f& world_pos,
                                          const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *

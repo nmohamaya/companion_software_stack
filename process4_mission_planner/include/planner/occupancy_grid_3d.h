@@ -108,7 +108,7 @@ public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
-                             int max_static_cells = 0)
+                             float min_promotion_depth_confidence = 0.5f, int max_static_cells = 0)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -116,6 +116,7 @@ public:
         , min_confidence_(min_confidence)
         , promotion_hits_(promotion_hits)
         , radar_promotion_hits_(radar_promotion_hits)
+        , min_promotion_depth_confidence_(min_promotion_depth_confidence)
         , max_static_cells_(max_static_cells) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
@@ -214,6 +215,11 @@ public:
                                       (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)))
                     : inflation_cells_;
 
+            // Per-object promotion eligibility (invariant across inflated cells).
+            const bool radar_confirmed = obj.radar_update_count >= radar_promotion_hits_;
+            const bool depth_ok        = obj.depth_confidence >= min_promotion_depth_confidence_;
+            const bool can_promote     = !skip_promotion && depth_ok;
+
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
             // inflation wastes memory and floods the grid. A single-layer
@@ -242,18 +248,6 @@ public:
                                 changed_cells_.push_back({c, true});
                             }
 
-                            // Promotion to static layer.  Two paths:
-                            // 1. Radar-confirmed (≥3 radar updates): immediate
-                            //    promotion — radar range is accurate, no need to
-                            //    wait for hit-count accumulation.
-                            // 2. Camera-only: promote after promotion_hits
-                            //    observations to build confidence.
-                            // Skip promotion for detections near existing static
-                            // cells — these are parallax echoes that would grow
-                            // the promoted wall beyond the real obstacle footprint.
-                            const bool radar_confirmed = obj.radar_update_count >=
-                                                         radar_promotion_hits_;
-
                             // Check if promotion cap is reached (HD-map cells excluded).
                             // Guarded subtraction prevents underflow if counts drift.
                             const std::size_t promoted_static_count =
@@ -265,7 +259,7 @@ public:
                                 promoted_static_count >=
                                     static_cast<std::size_t>(max_static_cells_);
 
-                            if (radar_confirmed && !skip_promotion && !cap_reached) {
+                            if (radar_confirmed && can_promote && !cap_reached) {
                                 // Radar-confirmed → immediate static promotion
                                 if (static_occupied_.count(c) == 0) {
                                     static_occupied_.insert(c);
@@ -278,7 +272,7 @@ public:
                                     }
                                     ++promoted_count_;
                                 }
-                            } else if (promotion_hits_ > 0 && !skip_promotion && !cap_reached) {
+                            } else if (promotion_hits_ > 0 && can_promote && !cap_reached) {
                                 int& hits = hit_count_[c];
                                 ++hits;
                                 if (hits >= promotion_hits_) {
@@ -394,11 +388,12 @@ private:
     uint64_t cell_ttl_ns_;
     float    min_confidence_;
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
-    uint32_t radar_promotion_hits_{3};  // radar updates for immediate static promotion
-    int      max_static_cells_{0};      // cap on promoted static cells (0 = unlimited)
-    int      promoted_count_{0};        // total cells promoted (diagnostic)
-    size_t   hd_map_static_count_{0};   // HD-map cells (excluded from cap)
-    uint64_t diag_tick_{0};             // for periodic diagnostic logging
+    uint32_t radar_promotion_hits_{3};               // radar updates for immediate static promotion
+    float    min_promotion_depth_confidence_{0.5f};  // min depth confidence for promotion
+    int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
+    int      promoted_count_{0};                     // total cells promoted (diagnostic)
+    size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
+    uint64_t diag_tick_{0};                          // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;
