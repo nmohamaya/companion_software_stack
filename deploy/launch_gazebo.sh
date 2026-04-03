@@ -141,8 +141,11 @@ cleanup() {
         kill -SIGKILL "$PX4_PID" 2>/dev/null || true
         pkill -SIGKILL -P "$PX4_PID" 2>/dev/null || true
     fi
-    # 3. Clean SHM segments
-    clean_shm
+    # 3. Clean SHM segments created by this launcher's Zenoh sessions.
+    # NOTE: This removes all zenoh_shm_* pools, which can affect other
+    # Zenoh processes on the same host. In multi-user environments,
+    # consider scoping cleanup to a per-run prefix/namespace.
+    rm -f /dev/shm/zenoh_shm_* 2>/dev/null || true
     echo "All processes stopped."
 }
 trap cleanup EXIT INT TERM
@@ -301,15 +304,27 @@ echo "Press Ctrl+C to stop everything."
 echo ""
 
 # ── Step 4: Monitor ──────────────────────────────────────────
-# Wait for any process to exit, then trigger shutdown with its exit code.
-# FIXME(BUG-29): PX4_PID is included in ALL_PIDS, so a normal PX4 exit
-# (mission complete, landing, SIGINT from a previous scenario runner) tears
-# down the entire companion stack and kills the Gazebo GUI immediately.
-# Fix: monitor companion processes only; handle PX4 exit separately.
-# GitHub: https://github.com/nmohamaya/companion_software_stack/issues/129
-# See docs/BUG_FIXES.md — Bug #29 (OPEN).
-ALL_PIDS=("$PX4_PID" "${COMPANION_PIDS[@]}")
-wait -n "${ALL_PIDS[@]}" 2>/dev/null && EXIT_CODE=0 || EXIT_CODE=$?
+# Monitor companion processes only.  PX4 has an independent lifecycle —
+# it exits when the simulation ends, which is normal and should not tear
+# down the companion stack (BUG-29).
+#
+# Strategy:
+#   1. Background watcher: if PX4 exits, log it and leave companions
+#      running; PX4 exit alone is not a shutdown signal.
+#   2. Foreground: wait for any companion process to exit — that is the
+#      real signal to shut down the stack.
 
-echo "A process exited (code=${EXIT_CODE}) — shutting down stack."
+# Background PX4 watcher — logs when PX4 exits and leaves companions running.
+(
+    wait "$PX4_PID" 2>/dev/null
+    PX4_EXIT=$?
+    echo "[PX4-watch] PX4 exited (code=${PX4_EXIT}) — companions continue running."
+) &
+PX4_WATCHER_PID=$!
+
+# Wait for the first companion process to exit.
+wait -n "${COMPANION_PIDS[@]}" 2>/dev/null && EXIT_CODE=0 || EXIT_CODE=$?
+
+echo "Companion process exited (code=${EXIT_CODE}) — shutting down stack."
+kill "$PX4_WATCHER_PID" 2>/dev/null || true
 exit "$EXIT_CODE"

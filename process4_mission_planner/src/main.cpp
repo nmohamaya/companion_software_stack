@@ -200,10 +200,18 @@ int main(int argc, char* argv[]) {
     planner_cfg.radar_promotion_hits =
         static_cast<uint32_t>(cfg.get<int>("mission_planner.occupancy_grid.radar_promotion_hits",
                                            static_cast<int>(planner_cfg.radar_promotion_hits)));
-    planner_cfg.z_band_cells = cfg.get<int>("mission_planner.path_planner.z_band_cells",
-                                            planner_cfg.z_band_cells);
-    planner_cfg.look_ahead_m = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
-                                              planner_cfg.look_ahead_m);
+    planner_cfg.z_band_cells       = cfg.get<int>("mission_planner.path_planner.z_band_cells",
+                                                  planner_cfg.z_band_cells);
+    planner_cfg.look_ahead_m       = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
+                                                    planner_cfg.look_ahead_m);
+    planner_cfg.max_static_cells   = cfg.get<int>("mission_planner.occupancy_grid.max_static_cells",
+                                                  planner_cfg.max_static_cells);
+    planner_cfg.yaw_towards_travel = cfg.get<bool>(
+        "mission_planner.path_planner.yaw_towards_travel", planner_cfg.yaw_towards_travel);
+    planner_cfg.yaw_smoothing_rate = cfg.get<float>(
+        "mission_planner.path_planner.yaw_smoothing_rate", planner_cfg.yaw_smoothing_rate);
+    planner_cfg.snap_approach_bias = cfg.get<float>(
+        "mission_planner.path_planner.snap_approach_bias", planner_cfg.snap_approach_bias);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());

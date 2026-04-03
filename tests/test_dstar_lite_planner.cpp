@@ -1446,3 +1446,228 @@ TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
     EXPECT_FALSE(planner2.cached_path().empty());
     EXPECT_GT(cmd2.velocity_x, 0.0f);  // moving toward goal again
 }
+
+// ═════════════════════════════════════════════════════════════
+// Issue #339: Static cell cap tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, StaticCellCapEnforced) {
+    // max_static_cells=10: promotion should stop after 10 promoted cells
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3, /*max_static_cells=*/10);
+
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 10.0;  // keep drone away from detections
+
+    // Insert many objects at different positions — each should promote after 1 hit
+    for (int i = 0; i < 30; ++i) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.num_objects           = 1;
+        objects.objects[0].position_x = static_cast<float>(i);
+        objects.objects[0].position_y = 0.0f;
+        objects.objects[0].position_z = 0.0f;
+        objects.objects[0].confidence = 0.9f;
+        grid.update_from_objects(objects, pose);
+    }
+
+    // Promoted cells (excluding HD-map) should not exceed 10
+    EXPECT_LE(static_cast<int>(grid.static_count() - grid.hd_map_static_count()), 10);
+}
+
+TEST(OccupancyGrid3DTest, StaticCellCapZeroMeansUnlimited) {
+    // max_static_cells=0 (default): no cap
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3, /*max_static_cells=*/0);
+
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 10.0;
+
+    for (int i = 0; i < 20; ++i) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.num_objects           = 1;
+        objects.objects[0].position_x = static_cast<float>(i);
+        objects.objects[0].position_y = 0.0f;
+        objects.objects[0].position_z = 0.0f;
+        objects.objects[0].confidence = 0.9f;
+        grid.update_from_objects(objects, pose);
+    }
+
+    // All should have promoted (each is far enough apart)
+    EXPECT_GT(grid.static_count(), 10u);
+}
+
+TEST(OccupancyGrid3DTest, HDMapCellsExcludedFromCap) {
+    // max_static_cells=5, but HD-map cells should not count toward cap
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3, /*max_static_cells=*/5);
+
+    // Add HD-map obstacle — creates many static cells
+    grid.add_static_obstacle(5.0f, 5.0f, 1.0f, 2.0f);
+    const size_t hd_count = grid.hd_map_static_count();
+    EXPECT_GT(hd_count, 0u);
+
+    // Now promote perception cells — should still allow up to 5 on top of HD-map
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 10.0;
+
+    for (int i = 0; i < 10; ++i) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.num_objects           = 1;
+        objects.objects[0].position_x = static_cast<float>(-5 - i);  // away from HD-map
+        objects.objects[0].position_y = 0.0f;
+        objects.objects[0].position_z = 0.0f;
+        objects.objects[0].confidence = 0.9f;
+        grid.update_from_objects(objects, pose);
+    }
+
+    const int promoted = static_cast<int>(grid.static_count() - grid.hd_map_static_count());
+    EXPECT_LE(promoted, 5);
+    EXPECT_GT(promoted, 0);  // some did promote
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #338: Snap goal approach bias tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteIntegrationTest, SnapGoalFallbackPrefersApproachSide) {
+    // Block a wide area around the goal to force the BFS fallback (not lateral snap).
+    // With strong approach bias, the BFS should prefer cells between the drone and
+    // the goal (approach side) over equidistant cells on the far side.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.5f;
+    config.snap_approach_bias = 10.0f;  // strong bias toward approach side
+    DStarLitePlanner planner(config);
+
+    // Wall of obstacles at x=5, from y=-4 to y=4, at z=5.
+    // Blocks goal (5,0,5) AND all lateral snap candidates (perpendicular = Y axis).
+    // Free cells: (4,0,5) on approach side, (6,0,5) on far side.
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int dy = -10; dy <= 10; ++dy) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = 5.0f;
+        objects.objects[idx].position_y = static_cast<float>(dy);
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objects.num_objects = idx;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(objects, pose);
+
+    Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    // The path should head toward the goal (positive X from origin).
+    // Snap should have picked approach side (x < 5), so the path endpoint
+    // should be before the wall, not past it.
+    const auto& path = planner.cached_path();
+    ASSERT_FALSE(path.empty());
+    // Last cell in path is the snapped goal — should be on approach side
+    EXPECT_LT(path.back()[0], 5);
+}
+
+TEST(DStarLiteIntegrationTest, SnapGoalPureNearestWhenBiasZero) {
+    // Compare bias=0 vs bias>0 on the same obstacle layout.
+    // With bias=0, both approach and far-side cells are scored equally (pure distance).
+    // With strong bias, the approach-side cell should be preferred.
+    GridPlannerConfig zero_bias_config;
+    zero_bias_config.resolution_m       = 1.0f;
+    zero_bias_config.grid_extent_m      = 20.0f;
+    zero_bias_config.inflation_radius_m = 0.5f;
+    zero_bias_config.snap_approach_bias = 0.0f;  // disable bias — pure nearest
+    DStarLitePlanner zero_bias_planner(zero_bias_config);
+
+    GridPlannerConfig biased_config  = zero_bias_config;
+    biased_config.snap_approach_bias = 10.0f;  // strong preference for approach side
+    DStarLitePlanner biased_planner(biased_config);
+
+    // Wall of obstacles at x=5, from y=-10 to y=10.
+    // Forces BFS fallback. Free cells at (4,0,5) and (6,0,5) are equidistant.
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int dy = -10; dy <= 10; ++dy) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = 5.0f;
+        objects.objects[idx].position_y = static_cast<float>(dy);
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objects.num_objects = idx;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[2] = 5.0;
+    zero_bias_planner.update_obstacles(objects, pose);
+    biased_planner.update_obstacles(objects, pose);
+
+    Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     zero_bias_cmd = zero_bias_planner.plan(pose, target);
+    auto     biased_cmd    = biased_planner.plan(pose, target);
+
+    EXPECT_TRUE(zero_bias_cmd.valid);
+    EXPECT_FALSE(zero_bias_planner.using_direct_fallback());
+    EXPECT_TRUE(biased_cmd.valid);
+    EXPECT_FALSE(biased_planner.using_direct_fallback());
+
+    // With strong bias, the snapped goal path endpoint must be on approach side (x < 5)
+    const auto& biased_path = biased_planner.cached_path();
+    ASSERT_FALSE(biased_path.empty());
+    EXPECT_LT(biased_path.back()[0], 5);
+
+    // With zero bias, (4,0) and (6,0) are equidistant — pure nearest may pick
+    // either. The key assertion is that the biased planner picks approach-side.
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #337: Yaw-towards-travel tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteIntegrationTest, YawTowardsTravelOverridesWaypointYaw) {
+    GridPlannerConfig config;
+    config.yaw_towards_travel = true;
+    config.yaw_smoothing_rate = 1.0f;  // instant — no smoothing lag in test
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    // Waypoint is due east (x=10), but waypoint yaw is set to PI (facing west)
+    constexpr float kPi = 3.14159265358979323846f;
+    Waypoint        target{10.0f, 0.0f, 5.0f, kPi, 2.0f, 3.0f, false};
+    auto            cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    // Yaw should face east (~0 rad), not the waypoint's PI (west)
+    EXPECT_NEAR(cmd.target_yaw, 0.0f, 0.5f);
+}
+
+TEST(DStarLiteIntegrationTest, YawTowardsTravelDisabledWhenConfigFalse) {
+    GridPlannerConfig config;
+    config.yaw_towards_travel = false;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    constexpr float kPi = 3.14159265358979323846f;
+    Waypoint        target{10.0f, 0.0f, 5.0f, kPi, 2.0f, 3.0f, false};
+    auto            cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    // Yaw should be the waypoint yaw (PI), not overridden
+    EXPECT_NEAR(cmd.target_yaw, kPi, 0.01f);
+}
