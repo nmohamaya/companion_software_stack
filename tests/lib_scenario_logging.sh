@@ -220,6 +220,9 @@ generate_run_report() {
         # ── Perception ──
         _report_perception "$perc_log"
 
+        # ── Detector Stats ──
+        _report_detector_stats "$perc_log"
+
         # ── Fault Events ──
         _report_fault_events "$mp_log"
 
@@ -611,6 +614,56 @@ _report_perception() {
         echo "  - ${adoption_count} camera adoption(s) — camera refined radar-only tracks with bearing/class"
     else
         echo "  - No camera adoptions — radar tracks are in regions camera doesn't cover, or timing mismatch"
+    fi
+    echo ""
+}
+
+_report_detector_stats() {
+    local log="$1"
+
+    # Detect which backend is in use
+    local backend
+    backend=$(grep -aoP 'Detector backend: \K\S+' "$log" 2>/dev/null | head -1)
+    [[ -z "$backend" ]] && return  # no detector info — skip section
+
+    echo "Detector ($backend)"
+
+    if [[ "$backend" == "yolov8" ]]; then
+        # Parse OpenCvYoloDetector log lines
+        local total_frames frames_with_dets total_dets avg_time_ms
+        total_frames=$(grep -ac "OpenCvYoloDetector.*detections in" "$log" 2>/dev/null || echo "0")
+        frames_with_dets=$(grep -ac "OpenCvYoloDetector" "$log" 2>/dev/null | grep -v "0 detections\|Model loaded" | wc -l 2>/dev/null || echo "0")
+        # More reliable: count non-zero detection lines
+        frames_with_dets=$(grep -a "OpenCvYoloDetector.*detections in" "$log" 2>/dev/null | grep -vc "0 detections" || echo "0")
+        total_dets=$(grep -aoP 'OpenCvYoloDetector.*?(\d+) detections' "$log" 2>/dev/null | grep -oP '^\d+' | awk '{s+=$1}END{print s+0}' || echo "0")
+        # Simpler: extract detection counts and sum
+        total_dets=$(grep -a "OpenCvYoloDetector" "$log" 2>/dev/null | grep -oP '\] (\d+) detections' | grep -oP '\d+' | awk '{s+=$1}END{print s+0}')
+        avg_time_ms=$(grep -a "OpenCvYoloDetector" "$log" 2>/dev/null | grep -oP 'in (\d+)ms' | grep -oP '\d+' | awk '{s+=$1;n++}END{if(n>0)printf "%.0f",s/n; else print "0"}')
+
+        echo "  Backend           : OpenCvYoloDetector (YOLOv8-nano)"
+        echo "  Inference frames  : ${total_frames}"
+        echo "  Frames with dets  : ${frames_with_dets}"
+        echo "  Total detections  : ${total_dets}"
+        echo "  Avg inference     : ${avg_time_ms}ms"
+        echo ""
+        echo "  Observations:"
+        if (( total_frames > 0 )); then
+            local det_rate
+            det_rate=$(awk "BEGIN{printf \"%.0f\", 100*${frames_with_dets}/${total_frames}}")
+            echo "  - Detection rate: ${frames_with_dets}/${total_frames} frames (${det_rate}%)"
+            if (( frames_with_dets == 0 )); then
+                echo "  - YOLOv8 detected NOTHING — model may not recognise Gazebo objects (trained on COCO)"
+            elif (( det_rate < 20 )); then
+                echo "  - LOW detection rate — YOLOv8-nano struggles with Gazebo obstacles (not COCO classes)"
+            fi
+        fi
+    elif [[ "$backend" == "color_contour" ]]; then
+        echo "  Backend           : ColorContourDetector (HSV segmentation)"
+        local inference_count
+        inference_count=$(grep -ac "Processed.*frames" "$log" 2>/dev/null || echo "0")
+        echo "  Inference cycles  : ${inference_count}"
+    else
+        echo "  Backend           : ${backend}"
     fi
     echo ""
 }

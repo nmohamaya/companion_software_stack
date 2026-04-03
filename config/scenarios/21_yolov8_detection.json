@@ -4,7 +4,7 @@
         "name": "yolov8_detection",
         "description": "Fly a short mission with YOLOv8-nano (OpenCV DNN) as the detection backend. Full pipeline: YOLOv8 detector -> ByteTrack tracker -> UKF fusion (camera+radar) -> D* Lite planner. Validates that the OpenCvYoloDetector loads the ONNX model, produces Detection2D outputs, and integrates with downstream tracking/fusion/planning. If OpenCV is not compiled in (HAS_OPENCV not defined), the factory falls back to color_contour. If OpenCV is present but the ONNX model fails to load, detect() returns empty results (no automatic fallback).",
         "tier": 2,
-        "timeout_s": 120,
+        "timeout_s": 160,
         "requires_gazebo": true
     },
     "config_overrides": {
@@ -13,7 +13,9 @@
             "acceptance_radius_m": 3.0,
             "overshoot_proximity_factor": 5.0,
             "cruise_speed_mps": 1.5,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5},
+            "survey_duration_s": 26.0,
+            "survey_yaw_rate": 0.5,
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 1.0},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
@@ -27,8 +29,12 @@
                 "resolution_m": 2.0,
                 "inflation_radius_m": 2.0,
                 "dynamic_obstacle_ttl_s": 1.0,
-                "min_confidence": 0.3,
-                "promotion_hits": 8
+                "min_confidence": 0.4,
+                "promotion_hits": 8,
+                "min_promotion_depth_confidence": 0.8,
+                "max_static_cells": 800,
+                "prediction_enabled": false,
+                "_comment": "Same depth confidence gate + static cap as scenario 18 (Issue #345)"
             },
             "static_obstacles": [],
             "geofence": {
@@ -62,8 +68,8 @@
                 "backend": "gazebo",
                 "enabled": true,
                 "update_rate_hz": 20,
-                "ground_filter_alt_m": 0.5,
-                "_comment": "Radar enabled for multi-sensor fusion with YOLOv8 camera detections"
+                "ground_filter_alt_m": 2.0,
+                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL (same as scenario 18)"
             },
             "fusion": {
                 "backend": "ukf",
@@ -73,9 +79,12 @@
                 "radar": {
                     "enabled": true,
                     "ground_filter_enabled": true,
-                    "min_object_altitude_m": 0.3,
+                    "min_object_altitude_m": 1.5,
                     "altitude_gate_m": 2.0,
-                    "_comment": "Camera+radar UKF fusion — YOLOv8 provides bearing, radar provides range"
+                    "orphan_proximity_m": 5.0,
+                    "max_orphan_range_m": 25.0,
+                    "promotion_hits": 8,
+                    "_comment": "Camera+radar UKF fusion — YOLOv8 provides bearing, radar provides range. Tightened orphan params (Issue #345)."
                 }
             }
         }
@@ -90,6 +99,7 @@
             "Detector backend: yolov8",
             "Tracker  backend: bytetrack",
             "TAKEOFF",
+            "Survey complete",
             "EXECUTING",
             "Mission complete"
         ],
