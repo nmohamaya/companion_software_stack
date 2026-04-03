@@ -394,15 +394,7 @@ private:
                 if (!fsm.advance_waypoint()) {
                     spdlog::info("[Planner] Mission complete — RTL");
                     send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
-                    {
-                        drone::ipc::TrajectoryCmd stop{};
-                        stop.valid        = false;
-                        stop.timestamp_ns = static_cast<uint64_t>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                std::chrono::steady_clock::now().time_since_epoch())
-                                .count());
-                        traj_pub.publish(stop);
-                    }
+                    publish_stop_trajectory(traj_pub, correlation_id);
                     flight_state_.rtl_start_time = std::chrono::steady_clock::now();
                     flight_state_.nav_was_armed  = true;
                     fsm.on_rtl();

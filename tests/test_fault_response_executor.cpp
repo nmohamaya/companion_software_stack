@@ -82,7 +82,8 @@ TEST_F(FaultResponseExecutorTest, LoiterStopsTrajAndTransitions) {
     EXPECT_EQ(fsm.state(), MissionState::LOITER);
     EXPECT_TRUE(fsm.fault_triggered());
     EXPECT_GE(traj_pub.messages().size(), 1u);
-    EXPECT_FALSE(traj_pub.messages().back().valid);
+    EXPECT_TRUE(
+        traj_pub.messages().back().valid);  // stop = zero-velocity valid cmd (P5 skips valid=false)
 }
 
 // ═══════════════════════════════════════════════════════════

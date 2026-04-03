@@ -238,7 +238,7 @@ private:
     static void publish_stop_trajectory(drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& pub,
                                         uint64_t correlation_id) {
         drone::ipc::TrajectoryCmd stop{};
-        stop.valid          = false;
+        stop.valid          = true;  // P5 skips valid=false — send zero-velocity to stop
         stop.correlation_id = correlation_id;
         stop.timestamp_ns =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(

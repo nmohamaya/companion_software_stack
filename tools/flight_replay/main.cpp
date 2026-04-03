@@ -150,6 +150,13 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // ── Validate wire version ────────────────────────────
+        if (entry.header.wire_header.version != kWireVersion) {
+            spdlog::warn("Skipping record {} — wire version {} != current {}", i,
+                         entry.header.wire_header.version, kWireVersion);
+            continue;
+        }
+
         // ── Publish based on message type ────────────────────
         bool published = false;
         if (msg_type == WireMessageType::SLAM_POSE && entry.payload.size() == sizeof(Pose)) {

@@ -101,7 +101,7 @@ private:
     static void publish_stop_trajectory(drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& pub,
                                         uint64_t                                           now_ns) {
         drone::ipc::TrajectoryCmd stop{};
-        stop.valid        = false;
+        stop.valid        = true;  // P5 skips valid=false — send zero-velocity to stop
         stop.timestamp_ns = now_ns;
         pub.publish(stop);
     }

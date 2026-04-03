@@ -105,7 +105,8 @@ TEST_F(GCSCommandHandlerTest, RTLCommandSendsFCAndTransitions) {
     EXPECT_TRUE(flight_state.nav_was_armed);
     EXPECT_EQ(handler.active_correlation_id(), 0xABCDu);
     EXPECT_GE(traj_pub.messages().size(), 1u);
-    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+    EXPECT_TRUE(
+        traj_pub.messages().back().valid);  // stop = zero-velocity valid cmd (P5 skips valid=false)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -216,7 +217,8 @@ TEST_F(GCSCommandHandlerTest, PauseCommandTransitionsToLoiter) {
     EXPECT_EQ(fsm.state(), MissionState::LOITER);
     EXPECT_TRUE(fc_calls.empty());  // no FC command for pause
     EXPECT_GE(traj_pub.messages().size(), 1u);
-    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+    EXPECT_TRUE(
+        traj_pub.messages().back().valid);  // stop = zero-velocity valid cmd (P5 skips valid=false)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -281,7 +283,8 @@ TEST_F(GCSCommandHandlerTest, AbortCommandSendsRTL) {
     EXPECT_EQ(fsm.state(), MissionState::RTL);
     EXPECT_TRUE(flight_state.nav_was_armed);
     EXPECT_GE(traj_pub.messages().size(), 1u);
-    EXPECT_FALSE(traj_pub.messages().back().valid);  // stop trajectory
+    EXPECT_TRUE(
+        traj_pub.messages().back().valid);  // stop = zero-velocity valid cmd (P5 skips valid=false)
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -39,7 +39,7 @@ struct AutoTrackResult {
 };
 
 /// Compute pitch and yaw angles (degrees) from a relative position vector.
-/// dx/dy/dz are in the vehicle body frame (x=forward, y=left, z=up — FLU).
+/// dx/dy/dz are in the gimbal body frame (x=forward, y=right, z=up).
 /// Returns {pitch_deg, yaw_deg}.
 [[nodiscard]] inline std::pair<float, float> compute_bearing(float dx, float dy, float dz) {
     const float horizontal_dist = std::sqrt(dx * dx + dy * dy);
@@ -50,8 +50,8 @@ struct AutoTrackResult {
         pitch_deg = std::atan2(dz, horizontal_dist) * (180.0f / kPi);
     }
 
-    // Yaw: atan2(dy, dx) where dx=forward, dy=left in body frame
-    // Positive yaw = left of forward, negative = right
+    // Yaw: atan2(dy, dx) where dx=forward, dy=right in body frame
+    // Positive yaw = right of forward, negative = left
     float yaw_deg = 0.0f;
     if (std::fabs(dx) > 1e-6f || std::fabs(dy) > 1e-6f) {
         yaw_deg = std::atan2(dy, dx) * (180.0f / kPi);
@@ -119,17 +119,17 @@ struct AutoTrackResult {
 
     // 2. Rotate world→body using negative yaw (R_z(-yaw)).
     //    World frame: [0]=North, [1]=East, [2]=Up (NEU)
-    //    Body frame:  x=forward, y=left, z=up (FLU)
+    //    Gimbal body: x=forward, y=right, z=up
     //    Yaw-only rotation (roll/pitch assumed ~0 for gimbal bearing).
-    //    Note: this is FLU, not FRD — consistent with gimbal pitch convention
-    //    where negative pitch = look down, and with UKF body frame conventions
-    //    in the perception pipeline (which separately negates azimuth for FRD).
+    //    Note: this differs from the perception pipeline's FRD convention
+    //    (which has z=down). Here z=up is consistent with gimbal pitch
+    //    convention where negative pitch = look down.
     const float yaw   = yaw_from_quaternion(pose.quaternion);
     const float cos_y = std::cos(yaw);
     const float sin_y = std::sin(yaw);
 
     const float body_x = dx_world * cos_y + dy_world * sin_y;   // forward
-    const float body_y = -dx_world * sin_y + dy_world * cos_y;  // left
+    const float body_y = -dx_world * sin_y + dy_world * cos_y;  // right
     const float body_z = dz_world;                              // up
 
     auto [pitch_deg, yaw_deg] = compute_bearing(body_x, body_y, body_z);
