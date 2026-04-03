@@ -1,24 +1,38 @@
 {
-    "_comment": "Scenario 2: Obstacle Avoidance — D* Lite planner through obstacle field with ByteTrack tracking",
+    "_comment": "Scenario 2: HD-Map Obstacle Avoidance — D* Lite planner through pre-mapped obstacle field with full perception+radar stack. Compare with scenario 18 which has no HD-map and relies entirely on runtime perception.",
     "scenario": {
         "name": "obstacle_avoidance",
-        "description": "Navigate through an obstacle field using the D* Lite incremental path planner and 3D potential-field obstacle avoider. Requires Gazebo SITL for camera-based obstacle detection — the runtime obstacle avoider responds to perception-detected objects, not HD-map entries.",
+        "description": "Navigate through a 4-obstacle field using D* Lite planner with HD-map static obstacles. Full perception stack (color_contour + ByteTrack + UKF radar fusion) runs in parallel to confirm/refresh HD-map entries and detect unexpected obstacles. Path-aware ObstacleAvoider3D provides lateral nudge. Validates HD-map + perception cooperation.",
         "tier": 2,
         "timeout_s": 150,
-        "_comment_timeout": "Raised from 100s: D* Lite + 7 WPs through 6 obstacles needs ~120s in SITL",
         "requires_gazebo": true
     },
     "config_overrides": {
         "mission_planner": {
             "takeoff_altitude_m": 5.0,
-            "acceptance_radius_m": 5.0,
-            "cruise_speed_mps": 3.0,
-            "path_planner": {"backend": "dstar_lite"},
+            "acceptance_radius_m": 3.0,
+            "overshoot_proximity_factor": 5.0,
+            "cruise_speed_mps": 1.5,
+            "survey_duration_s": 0,
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 0.5},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
-                "influence_radius_m": 4.0,
-                "repulsive_gain": 3.0
+                "influence_radius_m": 8.0,
+                "repulsive_gain": 3.0,
+                "max_correction_mps": 1.5,
+                "vertical_gain": 0.0,
+                "path_aware": true,
+                "_comment": "D* Lite is primary avoidance. Avoider is safety net: 8m influence, 1.5 max correction (100% of cruise), gain=3.0."
+            },
+            "occupancy_grid": {
+                "resolution_m": 2.0,
+                "inflation_radius_m": 2.0,
+                "dynamic_obstacle_ttl_s": 1.0,
+                "min_confidence": 0.4,
+                "promotion_hits": 0,
+                "max_static_cells": 0,
+                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=0: HD-map has all 4 obstacles, no need for runtime promotion. Dynamic detections still affect the grid temporarily (TTL=1s) for real-time avoidance."
             },
             "occupancy_grid": {
                 "promotion_hits": 8,
@@ -26,37 +40,24 @@
                 "_comment": "Enable promotion with depth confidence gate — validates that false ground detections are filtered"
             },
             "static_obstacles": [
-                {"x": 1,  "y": 7,  "radius_m": 0.75, "height_m": 5.0, "_color": "RED"},
-                {"x": 2,  "y": 13, "radius_m": 0.75, "height_m": 4.0, "_color": "BLUE"},
-                {"x": 7,  "y": 15, "radius_m": 0.75, "height_m": 4.0, "_color": "YELLOW"},
-                {"x": 13, "y": 14, "radius_m": 0.75, "height_m": 6.0, "_color": "MAGENTA"},
-                {"x": 8,  "y": 8,  "radius_m": 0.75, "height_m": 5.0, "_color": "GREEN"},
-                {"x": 4,  "y": 4,  "radius_m": 0.75, "height_m": 3.0, "_color": "ORANGE"}
+                {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 5.0, "_color": "RED"},
+                {"x": 10, "y": 10, "radius_m": 1.0, "height_m": 5.0, "_color": "GREEN"},
+                {"x": 18, "y": 5,  "radius_m": 0.8, "height_m": 5.0, "_color": "BLUE"},
+                {"x": 5,  "y": 3,  "radius_m": 0.75, "height_m": 4.0, "_color": "ORANGE"}
             ],
-            "_comment_static_obstacles": "HD-map: pre-loaded obstacle geometry. Camera detections confirm/refresh these and can detect unexpected obstacles.",
+            "_comment_static_obstacles": "HD-map matching the 4 physical obstacles in test_world.sdf. Camera+radar detections confirm these at runtime.",
             "geofence": {
                 "enabled": false,
-                "_comment": "Geofence disabled for obstacle avoidance scenario — polygon RTL would fire when planner no-path pushes drone toward boundary",
-                "polygon": [
-                    {"x": -20, "y": -20},
-                    {"x":  30, "y": -20},
-                    {"x":  30, "y":  30},
-                    {"x": -20, "y":  30}
-                ],
-                "altitude_floor_m": -50.0,
-                "_comment_floor": "Floor disabled for avoidance debugging — re-enable to 0.0 when avoidance is working",
-                "altitude_ceiling_m": 50.0,
-                "warning_margin_m": 3.0
+                "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding obstacles"
             },
             "waypoints": [
-                {"x": 1,  "y": 7,  "z": 3, "yaw": 1.43,  "speed": 3.0, "payload_trigger": false, "_comment": "Straight at RED box Gz(7,1)=our(1,7) h=5m — must avoid. yaw=atan2(7,1)=1.43 faces obstacle."},
-                {"x": 2,  "y": 13, "z": 3, "yaw": 1.41,  "speed": 3.0, "payload_trigger": false, "_comment": "Straight at BLUE cylinder Gz(13,2)=our(2,13) h=4m — must avoid. yaw=atan2(6,1)=1.41 faces obstacle."},
-                {"x": 7,  "y": 15, "z": 3, "yaw": 0.38,  "speed": 3.0, "payload_trigger": false, "_comment": "Straight at YELLOW box Gz(15,7)=our(7,15) h=4m — must avoid. yaw=atan2(2,5)=0.38 faces obstacle."},
-                {"x": 13, "y": 14, "z": 4, "yaw": -0.17, "speed": 3.0, "payload_trigger": true,  "_comment": "Straight at MAGENTA cyl Gz(14,13)=our(13,14) h=6m — must avoid. yaw=atan2(-1,6)=-0.17 faces obstacle."},
-                {"x": 8,  "y": 8,  "z": 3, "yaw": -2.27, "speed": 3.0, "payload_trigger": false, "_comment": "Straight at GREEN cyl Gz(8,8)=our(8,8) h=5m — must avoid. yaw=atan2(-6,-5)=-2.27 faces obstacle."},
-                {"x": 4,  "y": 4,  "z": 2, "yaw": -2.36, "speed": 3.0, "payload_trigger": false, "_comment": "Straight at ORANGE box Gz(4,4)=our(4,4) h=3m — must avoid. yaw=atan2(-4,-4)=-2.36 faces obstacle."},
-                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36, "speed": 3.0, "payload_trigger": false, "_comment": "Return home above obstacles"}
-            ]
+                {"x": 0,  "y": 18, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) ~3m east. Clear of inflation."},
+                {"x": 14, "y": 18, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": true,  "_comment": "Fly east — clear corridor. Payload trigger."},
+                {"x": 20, "y": 8,  "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) and BLUE(18,5) nearby."},
+                {"x": 8,  "y": 0,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly west — passes ORANGE(5,3), waypoint 5m clear."},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home."}
+            ],
+            "_comment_waypoints": "5 waypoints routing near all 4 obstacles. All WPs ≥5m from obstacle centres to avoid inflation-zone blockage."
         },
         "perception": {
             "detector": {
@@ -69,7 +70,27 @@
                 "high_conf_threshold": 0.5,
                 "low_conf_threshold": 0.1,
                 "max_iou_cost": 0.7,
-                "_comment": "ByteTrack two-stage association: obstacles partially occlude each other, low-conf Stage 2 recovers tracks"
+                "_comment": "ByteTrack two-stage association for robust obstacle tracking"
+            },
+            "radar": {
+                "backend": "gazebo",
+                "enabled": true,
+                "update_rate_hz": 20,
+                "ground_filter_alt_m": 0.5,
+                "_comment": "Radar enabled — HAL ground filter rejects returns below 0.5m AGL"
+            },
+            "fusion": {
+                "backend": "ukf",
+                "rate_hz": 30,
+                "depth_scale": 1.0,
+                "assumed_obstacle_height_m": 5.0,
+                "radar": {
+                    "enabled": true,
+                    "ground_filter_enabled": true,
+                    "min_object_altitude_m": 0.3,
+                    "altitude_gate_m": 2.0,
+                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate"
+                }
             }
         }
     },
@@ -81,7 +102,9 @@
             "Path planner: DStarLitePlanner",
             "Obstacle avoider: ObstacleAvoider3D",
             "backend: bytetrack",
+            "ground_filter_alt_m",
             "TAKEOFF",
+            "NAVIGATE",
             "EXECUTING",
             "Mission complete"
         ],
@@ -93,13 +116,5 @@
             "video_capture", "perception", "slam_vio_nav",
             "mission_planner", "comms", "payload_manager", "system_monitor"
         ]
-    },
-    "manual_controls": {
-        "_comment": "Adjustable obstacle avoidance parameters",
-        "influence_radius_range": {"min": 1.0, "max": 30.0, "default": 20.0, "unit": "m"},
-        "repulsive_gain_range": {"min": 0.5, "max": 30.0, "default": 20.0},
-        "cruise_speed_range": {"min": 0.5, "max": 3.0, "default": 1.0, "unit": "m/s"},
-        "waypoints_editable": true,
-        "planner_backend_options": ["dstar_lite"]
     }
 }

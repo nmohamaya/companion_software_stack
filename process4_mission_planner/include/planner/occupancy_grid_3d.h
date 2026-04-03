@@ -108,7 +108,7 @@ public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
-                             float min_promotion_depth_confidence = 0.5f)
+                             float min_promotion_depth_confidence = 0.5f, int max_static_cells = 0)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -116,7 +116,8 @@ public:
         , min_confidence_(min_confidence)
         , promotion_hits_(promotion_hits)
         , radar_promotion_hits_(radar_promotion_hits)
-        , min_promotion_depth_confidence_(min_promotion_depth_confidence) {}
+        , min_promotion_depth_confidence_(min_promotion_depth_confidence)
+        , max_static_cells_(max_static_cells) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -129,7 +130,10 @@ public:
     }
 
     /// Clear only the static HD-map obstacle layer.
-    void clear_static() { static_occupied_.clear(); }
+    void clear_static() {
+        static_occupied_.clear();
+        hd_map_static_count_ = 0;
+    }
 
     /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
     /// These cells are permanent — no TTL — and represent the pre-loaded world map.
@@ -156,10 +160,11 @@ public:
                         }
                     }
                 }
+        const size_t added = static_occupied_.size() - before;
+        hd_map_static_count_ += added;
         spdlog::info("[HD-map] Static obstacle at ({:.1f},{:.1f}) r={:.1f}m h={:.1f}m "
                      "-> {} new cells (total static: {})",
-                     wx, wy, radius_m, height_m, static_occupied_.size() - before,
-                     static_occupied_.size());
+                     wx, wy, radius_m, height_m, added, static_occupied_.size());
     }
 
     /// Insert obstacles from a detected object list.
@@ -243,7 +248,18 @@ public:
                                 changed_cells_.push_back({c, true});
                             }
 
-                            if (radar_confirmed && can_promote) {
+                            // Check if promotion cap is reached (HD-map cells excluded).
+                            // Guarded subtraction prevents underflow if counts drift.
+                            const std::size_t promoted_static_count =
+                                static_occupied_.size() > hd_map_static_count_
+                                    ? static_occupied_.size() - hd_map_static_count_
+                                    : 0;
+                            const bool cap_reached =
+                                max_static_cells_ > 0 &&
+                                promoted_static_count >=
+                                    static_cast<std::size_t>(max_static_cells_);
+
+                            if (radar_confirmed && can_promote && !cap_reached) {
                                 // Radar-confirmed → immediate static promotion
                                 if (static_occupied_.count(c) == 0) {
                                     static_occupied_.insert(c);
@@ -256,7 +272,7 @@ public:
                                     }
                                     ++promoted_count_;
                                 }
-                            } else if (promotion_hits_ > 0 && can_promote) {
+                            } else if (promotion_hits_ > 0 && can_promote && !cap_reached) {
                                 int& hits = hit_count_[c];
                                 ++hits;
                                 if (hits >= promotion_hits_) {
@@ -289,10 +305,12 @@ public:
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             spdlog::info("[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
-                         "{} dynamic, {} static (promoted={}), drone=({},{},{})",
+                         "{} dynamic, {} static (promoted={}, hd_map={}, max={}), "
+                         "drone=({},{},{})",
                          objects.num_objects, accepted, suppressed, excluded_cells,
-                         occupied_.size(), static_occupied_.size(), promoted_count_, drone_cell.x,
-                         drone_cell.y, drone_cell.z);
+                         occupied_.size(), static_occupied_.size(), promoted_count_,
+                         hd_map_static_count_, max_static_cells_, drone_cell.x, drone_cell.y,
+                         drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -332,6 +350,8 @@ public:
     [[nodiscard]] size_t occupied_count() const { return occupied_.size(); }
     [[nodiscard]] size_t static_count() const { return static_occupied_.size(); }
     [[nodiscard]] int    promoted_count() const { return promoted_count_; }
+    [[nodiscard]] int    max_static_cells() const { return max_static_cells_; }
+    [[nodiscard]] size_t hd_map_static_count() const { return hd_map_static_count_; }
 
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.
@@ -370,7 +390,9 @@ private:
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
     uint32_t radar_promotion_hits_{3};               // radar updates for immediate static promotion
     float    min_promotion_depth_confidence_{0.5f};  // min depth confidence for promotion
+    int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
+    size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
     uint64_t diag_tick_{0};                          // for periodic diagnostic logging
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
