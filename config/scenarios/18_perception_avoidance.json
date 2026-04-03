@@ -4,7 +4,7 @@
         "name": "perception_avoidance",
         "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity (with altitude gate), and D* Lite replans dynamically via update_from_objects(). Path-aware ObstacleAvoider3D provides lateral nudge without fighting the planner. Validates the full multi-sensor perception→planning loop for unknown environments.",
         "tier": 2,
-        "timeout_s": 180,
+        "timeout_s": 160,
         "requires_gazebo": true
     },
     "config_overrides": {
@@ -13,8 +13,8 @@
             "acceptance_radius_m": 3.0,
             "overshoot_proximity_factor": 5.0,
             "cruise_speed_mps": 1.5,
-            "survey_duration_s": 25.0,
-            "survey_yaw_rate": 0.3,
+            "survey_duration_s": 26.0,
+            "survey_yaw_rate": 0.5,
             "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 1.0},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
