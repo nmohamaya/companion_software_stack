@@ -171,6 +171,10 @@ generate_run_report() {
     if [[ ! -f "$perc_log" ]]; then
         perc_log="${run_dir}/launcher.log"
     fi
+    local slam_log="${run_dir}/slam_vio_nav.log"
+    if [[ ! -f "$slam_log" ]]; then
+        slam_log="${run_dir}/launcher.log"
+    fi
     if [[ ! -f "$combined_log" ]]; then
         combined_log="${run_dir}/launcher.log"
     fi
@@ -222,6 +226,9 @@ generate_run_report() {
 
         # ── Detector Stats ──
         _report_detector_stats "$perc_log"
+
+        # ── VIO Pipeline ──
+        _report_vio_stats "$slam_log"
 
         # ── Fault Events ──
         _report_fault_events "$mp_log"
@@ -664,6 +671,62 @@ _report_detector_stats() {
         echo "  Inference cycles  : ${inference_count}"
     else
         echo "  Backend           : ${backend}"
+    fi
+    echo ""
+}
+
+_report_vio_stats() {
+    local log="$1"
+
+    # Only report if VIO pipeline logs are present
+    local vio_backend
+    vio_backend=$(grep -aoP 'GazeboFullVIOBackend|VIOBackend' "$log" 2>/dev/null | head -1)
+    [[ -z "$vio_backend" ]] && return  # no VIO data — skip section
+
+    echo "VIO Pipeline"
+
+    local total_frames feature_frames stereo_frames imu_frames
+    total_frames=$(strings "$log" 2>/dev/null | grep -c "VIO.*Frame.*diagnostics" || echo "0")
+    feature_frames=$(strings "$log" 2>/dev/null | grep -c "FeatureExtractor: num_features" || echo "0")
+    stereo_frames=$(strings "$log" 2>/dev/null | grep -c "StereoMatcher: num_matches" || echo "0")
+    imu_frames=$(strings "$log" 2>/dev/null | grep -c "ImuPreintegrator: total_dt" || echo "0")
+
+    local imu_warnings
+    imu_warnings=$(strings "$log" 2>/dev/null | grep -c "ImuPreintegrator.*WARN" || echo "0")
+    local imu_gaps
+    imu_gaps=$(strings "$log" 2>/dev/null | grep -c "IMU data gap" || echo "0")
+
+    echo "  Backend             : ${vio_backend}"
+    echo "  VIO frames          : ${total_frames}"
+    echo "  Feature extraction  : ${feature_frames} frames"
+    echo "  Stereo matching     : ${stereo_frames} frames"
+    echo "  IMU pre-integration : ${imu_frames} frames"
+    echo "  IMU warnings        : ${imu_warnings}"
+    echo "  IMU data gaps       : ${imu_gaps}"
+    echo ""
+    echo "  Observations:"
+
+    if (( total_frames == 0 )); then
+        echo "  - No VIO frames processed — pipeline may not be running"
+    else
+        if (( feature_frames > 0 )); then
+            echo "  - Feature extraction active (${feature_frames} frames)"
+        else
+            echo "  - NO feature extraction — FeatureExtractor may have failed"
+        fi
+        if (( stereo_frames > 0 )); then
+            echo "  - Stereo matching active (${stereo_frames} frames)"
+        else
+            echo "  - NO stereo matching — StereoMatcher may have failed"
+        fi
+        if (( imu_frames > 0 )); then
+            echo "  - IMU pre-integration active (${imu_frames} frames)"
+        else
+            echo "  - NO IMU pre-integration — ImuPreintegrator may have failed"
+        fi
+        if (( imu_gaps > 0 )); then
+            echo "  - ${imu_gaps} IMU data gap(s) — Gazebo timing artifact (non-critical)"
+        fi
     fi
     echo ""
 }
