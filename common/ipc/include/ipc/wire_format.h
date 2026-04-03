@@ -32,7 +32,7 @@ namespace drone::ipc {
 static constexpr uint32_t kWireMagic = 0x4E4F5244;  // "DRON" LE
 
 /// Wire format version.  Increment on breaking layout changes.
-static constexpr uint8_t kWireVersion = 3;
+static constexpr uint8_t kWireVersion = 4;  // bumped: added depth_confidence to DetectedObject
 
 /// Message type identifiers for wire format routing.
 /// Values are stable — never renumber existing entries.

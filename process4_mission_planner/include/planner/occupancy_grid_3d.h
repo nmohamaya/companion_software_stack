@@ -210,6 +210,11 @@ public:
                                       (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)))
                     : inflation_cells_;
 
+            // Per-object promotion eligibility (invariant across inflated cells).
+            const bool radar_confirmed = obj.radar_update_count >= radar_promotion_hits_;
+            const bool depth_ok        = obj.depth_confidence >= min_promotion_depth_confidence_;
+            const bool can_promote     = !skip_promotion && depth_ok;
+
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
             // inflation wastes memory and floods the grid. A single-layer
@@ -238,21 +243,7 @@ public:
                                 changed_cells_.push_back({c, true});
                             }
 
-                            // Promotion to static layer.  Two paths:
-                            // 1. Radar-confirmed (≥3 radar updates): immediate
-                            //    promotion — radar range is accurate, no need to
-                            //    wait for hit-count accumulation.
-                            // 2. Camera-only: promote after promotion_hits
-                            //    observations to build confidence.
-                            // Skip promotion for detections near existing static
-                            // cells — these are parallax echoes that would grow
-                            // the promoted wall beyond the real obstacle footprint.
-                            const bool radar_confirmed = obj.radar_update_count >=
-                                                         radar_promotion_hits_;
-                            const bool depth_ok = obj.depth_confidence >=
-                                                  min_promotion_depth_confidence_;
-
-                            if (radar_confirmed && !skip_promotion && depth_ok) {
+                            if (radar_confirmed && can_promote) {
                                 // Radar-confirmed → immediate static promotion
                                 if (static_occupied_.count(c) == 0) {
                                     static_occupied_.insert(c);
@@ -265,7 +256,7 @@ public:
                                     }
                                     ++promoted_count_;
                                 }
-                            } else if (promotion_hits_ > 0 && !skip_promotion && depth_ok) {
+                            } else if (promotion_hits_ > 0 && can_promote) {
                                 int& hits = hit_count_[c];
                                 ++hits;
                                 if (hits >= promotion_hits_) {

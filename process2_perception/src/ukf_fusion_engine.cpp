@@ -870,11 +870,20 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
         auto& ukf = it->second;
         ukf.predict();
-        ukf.update_camera(trk, depth, cam_intr);
 
-        // Update depth confidence — take max of camera estimate and existing
-        // (don't downgrade radar-confirmed tracks back to camera confidence).
-        ukf.depth_confidence = std::max(ukf.depth_confidence, depth_conf);
+        // Keep radar-confirmed range authoritative: once radar has confirmed a
+        // track, feed the current filter depth back instead of a fresh monocular
+        // estimate, which can pull the filter away from the radar range.
+        const float camera_update_depth = (ukf.radar_update_count > 0) ? ukf.position()(0) : depth;
+        ukf.update_camera(trk, camera_update_depth, cam_intr);
+
+        // Update depth confidence.  For camera-only tracks, use the current
+        // estimate directly so that a brief high-confidence observation cannot
+        // permanently "unlock" promotion.  For radar-confirmed tracks, preserve
+        // the radar confidence (1.0) until another radar update refreshes it.
+        if (ukf.radar_update_count == 0) {
+            ukf.depth_confidence = depth_conf;
+        }
 
         // Radar association: find best matching radar detection within gate
         bool matched_radar = false;

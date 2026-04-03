@@ -292,7 +292,14 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                 dst.estimated_radius_m = src.estimated_radius_m;
                 dst.estimated_height_m = src.estimated_height_m;
                 dst.radar_update_count = src.radar_update_count;
-                dst.depth_confidence   = src.depth_confidence;
+                // Some fusion backends (notably camera_only) do not populate
+                // depth_confidence.  Fall back to object confidence so
+                // downstream promotion logic receives a meaningful signal.
+                float dc = src.depth_confidence;
+                if (dc <= 0.0f && src.has_camera) {
+                    dc = src.confidence;
+                }
+                dst.depth_confidence = std::clamp(dc, 0.0f, 1.0f);
             }
             det_pub.publish(shm_list);
             ++fusion_count;
