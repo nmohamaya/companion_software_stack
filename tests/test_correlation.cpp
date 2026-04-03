@@ -236,10 +236,9 @@ TEST(WireHeaderV2, SizeIs32Bytes) {
     EXPECT_EQ(sizeof(WireHeader), 32U);
 }
 
-TEST(WireHeaderV2, VersionIs3) {
+TEST(WireHeaderV2, VersionMatchesConstant) {
     WireHeader hdr;
-    EXPECT_EQ(hdr.version, 3);
-    EXPECT_EQ(kWireVersion, 3);
+    EXPECT_EQ(hdr.version, kWireVersion);
 }
 
 TEST(WireHeaderV2, CorrelationIdDefaultZero) {
@@ -360,7 +359,7 @@ TEST(WireHeaderBackcompat, FutureVersionRejected) {
     uint8_t  buf[32] = {};
     uint32_t magic   = kWireMagic;
     std::memcpy(buf, &magic, 4);
-    buf[4] = 4;  // version 4 (future, > kWireVersion)
+    buf[4] = kWireVersion + 1;  // future version (> kWireVersion)
     EXPECT_FALSE(wire_validate(buf, 32));
 }
 

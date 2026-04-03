@@ -46,6 +46,7 @@ TEST(ObstaclePredictionTest, StaticObjectNoPredictionCells) {
     // Grid: 1m resolution, 20m extent, 1-cell inflation, prediction enabled
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     // Static object at (5,5,5) with zero velocity
@@ -71,6 +72,7 @@ TEST(ObstaclePredictionTest, StaticObjectNoPredictionCells) {
 TEST(ObstaclePredictionTest, ZeroVelocityNoPrediction) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     // Exactly zero velocity
@@ -89,6 +91,7 @@ TEST(ObstaclePredictionTest, ZeroVelocityNoPrediction) {
 TEST(ObstaclePredictionTest, SlowVelocityBelowThresholdNoPrediction) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     // 0.3 m/s — below 0.5 m/s threshold
@@ -107,6 +110,7 @@ TEST(ObstaclePredictionTest, MovingObjectInflatesPredictionCells) {
     // 1m resolution, prediction dt=2s
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     // Object at (5,5,5) moving at 2 m/s in +X direction
@@ -137,6 +141,7 @@ TEST(ObstaclePredictionTest, MovingObjectInflatesPredictionCells) {
 TEST(ObstaclePredictionTest, DiagonalVelocityInflatesDiagonalCells) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     // Object at (5,5,5) moving at (1,1,0) m/s
@@ -160,6 +165,7 @@ TEST(ObstaclePredictionTest, PredictionDisabledNoCells) {
     // Prediction explicitly disabled
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/false, /*prediction_dt_s=*/2.0f);
 
     // Fast-moving object
@@ -186,6 +192,7 @@ TEST(ObstaclePredictionTest, PredictionDisabledNoCells) {
 TEST(ObstaclePredictionTest, ZeroDtNoPrediction) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/0.0f);
 
     auto             objects = make_single_object(5.0f, 5.0f, 5.0f, 3.0f, 0.0f, 0.0f);
@@ -203,6 +210,7 @@ TEST(ObstaclePredictionTest, PredictionRespectsGridBounds) {
     // Small grid: 5m extent, 1m resolution → half_extent = 5 cells
     OccupancyGrid3D grid(1.0f, 5.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/5.0f);
 
     // Object at (3,0,0) moving fast in +X → predicted at (28,0,0) which is out of bounds
@@ -231,6 +239,7 @@ TEST(ObstaclePredictionTest, PredictionInflationRadiusMatchesCurrent) {
     // 2-cell inflation radius
     OccupancyGrid3D grid(1.0f, 20.0f, 2.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     // Object at (5,5,5) moving at 3 m/s in +X
@@ -254,6 +263,7 @@ TEST(ObstaclePredictionTest, PredictionInflationRadiusMatchesCurrent) {
 TEST(ObstaclePredictionTest, MultipleObjectsOnlyMovingGetPrediction) {
     OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f, /*min_conf=*/0.3f,
                          /*promotion_hits=*/0, /*radar_promo=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
                          /*prediction_enabled=*/true, /*prediction_dt_s=*/2.0f);
 
     drone::ipc::DetectedObjectList objects{};

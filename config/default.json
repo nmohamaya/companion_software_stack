@@ -146,13 +146,18 @@
             "backend": "dstar_lite",
             "ramp_dist_m": 3.0,
             "min_speed_mps": 1.0,
-            "snap_search_radius": 8
+            "snap_search_radius": 8,
+            "yaw_towards_travel": true,
+            "yaw_smoothing_rate": 0.3,
+            "snap_approach_bias": 0.5
         },
         "occupancy_grid": {
             "resolution_m": 0.5,
             "inflation_radius_m": 1.5,
             "dynamic_obstacle_ttl_s": 3.0,
             "min_confidence": 0.3,
+            "min_promotion_depth_confidence": 0.5,
+            "max_static_cells": 0,
             "prediction_enabled": true,
             "prediction_dt_s": 2.0
         },

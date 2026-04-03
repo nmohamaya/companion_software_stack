@@ -108,6 +108,7 @@ public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
+                             float min_promotion_depth_confidence = 0.5f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
@@ -116,6 +117,8 @@ public:
         , min_confidence_(min_confidence)
         , promotion_hits_(promotion_hits)
         , radar_promotion_hits_(radar_promotion_hits)
+        , min_promotion_depth_confidence_(min_promotion_depth_confidence)
+        , max_static_cells_(max_static_cells)
         , prediction_enabled_(prediction_enabled)
         , prediction_dt_s_(prediction_dt_s) {}
 
@@ -130,7 +133,10 @@ public:
     }
 
     /// Clear only the static HD-map obstacle layer.
-    void clear_static() { static_occupied_.clear(); }
+    void clear_static() {
+        static_occupied_.clear();
+        hd_map_static_count_ = 0;
+    }
 
     /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
     /// These cells are permanent — no TTL — and represent the pre-loaded world map.
@@ -157,10 +163,11 @@ public:
                         }
                     }
                 }
+        const size_t added = static_occupied_.size() - before;
+        hd_map_static_count_ += added;
         spdlog::info("[HD-map] Static obstacle at ({:.1f},{:.1f}) r={:.1f}m h={:.1f}m "
                      "-> {} new cells (total static: {})",
-                     wx, wy, radius_m, height_m, static_occupied_.size() - before,
-                     static_occupied_.size());
+                     wx, wy, radius_m, height_m, added, static_occupied_.size());
     }
 
     /// Insert obstacles from a detected object list.
@@ -211,6 +218,10 @@ public:
                                       (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)))
                     : inflation_cells_;
 
+            // Per-object promotion eligibility (invariant across inflated cells).
+            const bool depth_ok    = obj.depth_confidence >= min_promotion_depth_confidence_;
+            const bool can_promote = !skip_promotion && depth_ok;
+
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
             // inflation wastes memory and floods the grid. A single-layer
@@ -220,7 +231,7 @@ public:
             // Uses shared inflate_disk_at_cell_() helper (same logic as
             // prediction inflation) to prevent the two paths from diverging.
             inflate_disk_at_cell_(center, obj_inflation, drone_cell, now_ns, &excluded_cells, &obj,
-                                  skip_promotion);
+                                  !can_promote);
 
             // ── Velocity-based prediction inflation (Issue #256) ────
             // For moving objects, inflate cells along the velocity vector
@@ -292,10 +303,12 @@ public:
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             spdlog::info("[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
-                         "{} dynamic, {} static (promoted={}, predictions={}), drone=({},{},{})",
+                         "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
+                         "drone=({},{},{})",
                          objects.num_objects, accepted, suppressed, excluded_cells,
                          occupied_.size(), static_occupied_.size(), promoted_count_,
-                         total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z);
+                         hd_map_static_count_, max_static_cells_, total_predictions_applied_,
+                         drone_cell.x, drone_cell.y, drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -335,6 +348,8 @@ public:
     [[nodiscard]] size_t occupied_count() const { return occupied_.size(); }
     [[nodiscard]] size_t static_count() const { return static_occupied_.size(); }
     [[nodiscard]] int    promoted_count() const { return promoted_count_; }
+    [[nodiscard]] int    max_static_cells() const { return max_static_cells_; }
+    [[nodiscard]] size_t hd_map_static_count() const { return hd_map_static_count_; }
     /// Cumulative count of objects that had velocity-based prediction applied
     /// across all calls to update_from_objects() (lifetime counter, never reset).
     [[nodiscard]] int  total_predictions_applied() const { return total_predictions_applied_; }
@@ -379,12 +394,12 @@ private:
     /// @param now_ns           Current timestamp for TTL.
     /// @param excluded_out     If non-null, incremented for each self-excluded cell.
     /// @param obj              If non-null, promotion logic is applied (current-position path).
-    /// @param skip_promotion   Whether to skip promotion for this object.
+    /// @param skip_promotion   Whether to skip promotion for this object (includes depth_ok gate).
     void inflate_disk_at_cell_(const GridCell& center, int inflation_cells,
                                const GridCell& drone_cell, uint64_t now_ns,
                                int*                              excluded_out   = nullptr,
                                const drone::ipc::DetectedObject* obj            = nullptr,
-                               bool                              skip_promotion = false) {
+                               bool                              skip_promotion = true) {
         for (int dy = -inflation_cells; dy <= inflation_cells; ++dy) {
             for (int dx = -inflation_cells; dx <= inflation_cells; ++dx) {
                 if (dx * dx + dy * dy <= inflation_cells * inflation_cells) {
@@ -410,11 +425,20 @@ private:
 
                     // Promotion logic only for current-position observations,
                     // not for predicted cells.
-                    if (obj != nullptr) {
+                    if (obj != nullptr && !skip_promotion) {
                         const bool radar_confirmed = obj->radar_update_count >=
                                                      radar_promotion_hits_;
 
-                        if (radar_confirmed && !skip_promotion) {
+                        // Check if promotion cap is reached (HD-map cells excluded).
+                        const std::size_t promoted_static_count =
+                            static_occupied_.size() > hd_map_static_count_
+                                ? static_occupied_.size() - hd_map_static_count_
+                                : 0;
+                        const bool cap_reached = max_static_cells_ > 0 &&
+                                                 promoted_static_count >=
+                                                     static_cast<std::size_t>(max_static_cells_);
+
+                        if (radar_confirmed && !cap_reached) {
                             if (static_occupied_.count(c) == 0) {
                                 static_occupied_.insert(c);
                                 occupied_.erase(c);
@@ -424,7 +448,7 @@ private:
                                 }
                                 ++promoted_count_;
                             }
-                        } else if (promotion_hits_ > 0 && !skip_promotion) {
+                        } else if (promotion_hits_ > 0 && !cap_reached) {
                             int& hits = hit_count_[c];
                             ++hits;
                             if (hits >= promotion_hits_) {
@@ -446,10 +470,13 @@ private:
     uint64_t cell_ttl_ns_;
     float    min_confidence_;
     int      promotion_hits_{0};  // promote to static after this many observations (0 = disabled)
-    uint32_t radar_promotion_hits_{3};   // radar updates for immediate static promotion
-    int      promoted_count_{0};         // total cells promoted (diagnostic)
-    bool     prediction_enabled_{true};  // enable velocity-based prediction inflation
-    float    prediction_dt_s_{2.0f};     // prediction horizon in seconds
+    uint32_t radar_promotion_hits_{3};               // radar updates for immediate static promotion
+    float    min_promotion_depth_confidence_{0.5f};  // min depth confidence for promotion
+    int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
+    int      promoted_count_{0};                     // total cells promoted (diagnostic)
+    size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
+    bool     prediction_enabled_{true};              // enable velocity-based prediction inflation
+    float    prediction_dt_s_{2.0f};                 // prediction horizon in seconds
     // Cumulative count of objects with velocity-based prediction applied (never reset).
     int      total_predictions_applied_{0};
     uint64_t diag_tick_{0};  // for periodic diagnostic logging

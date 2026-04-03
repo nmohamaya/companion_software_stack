@@ -464,24 +464,28 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
                  max_dormant_);
 }
 
-float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
+UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
     const float fy = calib_.camera_intrinsics(1, 1);
     const float cy = calib_.camera_intrinsics(1, 2);
 
-    // Four-tier depth estimation:
+    // Four-tier depth estimation with confidence:
     //
-    // 1. Horizon-truncated bbox: when the bbox top is at or above the horizon
-    //    (pixel row ≤ cy), the obstacle extends above the visible frame.
-    //    The apparent-size formula would undercount bbox_h and overestimate
-    //    depth.  Fall back to ground-plane depth from the bbox bottom.
+    // 1. Horizon-truncated bbox (conf=0.6): bbox top at/above horizon,
+    //    use ground-plane geometry from bbox bottom.  Geometric but
+    //    extrapolating — moderate confidence.
     //
-    // 2. Apparent-size (primary): depth = assumed_height * fy / bbox_h
-    //    Most reliable when the full obstacle height is visible.
+    // 2. Apparent-size (conf=0.7): depth = assumed_height * fy / bbox_h
+    //    Most reliable camera-only method when full height visible.
     //
-    // 3. Ground-plane (fallback): depth = camera_height / ray_down
-    //    For objects below the horizon with unreliable bbox height.
+    // 3. Ground-plane fallback (conf=0.3): depth = camera_height / ray_down
+    //    Weak signal from small detections — often ground features.
     //
-    // 4. Near-horizon fallback: conservative 8m estimate.
+    // 4. Near-horizon fallback (conf=0.0): conservative 8m estimate.
+    //    Pure guess with no geometric basis.
+    //
+    // Confidence values gate downstream promotion: only detections with
+    // confidence >= min_promotion_depth_confidence become permanent static
+    // cells.  Low-confidence detections still create temporary dynamic cells.
     constexpr float kBboxHThreshold  = 10.0f;
     constexpr float kDepthMinM       = 1.0f;
     constexpr float kDepthMaxM       = 40.0f;
@@ -503,29 +507,31 @@ float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
         const float bbox_bottom   = trk.position_2d.y() + trk.bbox_h * 0.5f;
         const float ray_down_base = (bbox_bottom - cy) / std::max(1.0f, fy);
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
-            // Use actual drone altitude for ground-plane depth when available
-            return std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
-                              kDepthMaxM);
+            return {std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
+                               kDepthMaxM),
+                    0.6f};
         }
         if (ray_down_base > kRayDownMinThres) {
-            return std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM, kDepthMaxM);
+            return {std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM, kDepthMaxM),
+                    0.6f};
         }
     }
 
     // Tier 2: Full-height apparent-size depth (bbox fully visible)
     if (trk.bbox_h > kBboxHThreshold) {
-        return std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds, kDepthMinM,
-                          kDepthMaxM);
+        return {std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds, kDepthMinM,
+                           kDepthMaxM),
+                0.7f};
     }
 
     // Tier 3: Ground-plane fallback for small detections
     const float ray_down = (trk.position_2d.y() - cy) / std::max(1.0f, fy);
     if (ray_down > kRayDownMinThres) {
-        return std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM);
+        return {std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM), 0.3f};
     }
 
-    // Tier 4: Near-horizon conservative estimate
-    return kFallbackDepthM * ds;
+    // Tier 4: Near-horizon conservative estimate — no geometric basis
+    return {kFallbackDepthM * ds, 0.0f};
 }
 
 void UKFFusionEngine::reset() {
@@ -772,8 +778,8 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                                     calib_.camera_intrinsics(0, 2), calib_.camera_intrinsics(1, 2)};
 
     for (const auto& trk : tracked.objects) {
-        float depth           = estimate_depth(trk);
-        bool  radar_init_used = false;
+        auto [depth, depth_conf] = estimate_depth(trk);
+        bool radar_init_used     = false;
 
         auto it      = filters_.find(trk.track_id);
         bool adopted = false;
@@ -885,8 +891,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 // Monocular depth → high uncertainty, especially at long range.
                 if (radar_init_used) {
                     it->second.set_radar_confirmed_depth(depth);
+                    it->second.depth_confidence = 1.0f;
                 } else {
                     it->second.set_depth_covariance(100.0f);
+                    it->second.depth_confidence = depth_conf;
                 }
 
                 // Dormant re-identification: only radar-confirmed tracks enter the
@@ -943,7 +951,20 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
         auto& ukf = it->second;
         ukf.predict();
-        ukf.update_camera(trk, depth, cam_intr);
+
+        // Keep radar-confirmed range authoritative: once radar has confirmed a
+        // track, feed the current filter depth back instead of a fresh monocular
+        // estimate, which can pull the filter away from the radar range.
+        const float camera_update_depth = (ukf.radar_update_count > 0) ? ukf.position()(0) : depth;
+        ukf.update_camera(trk, camera_update_depth, cam_intr);
+
+        // Update depth confidence.  For camera-only tracks, use the current
+        // estimate directly so that a brief high-confidence observation cannot
+        // permanently "unlock" promotion.  For radar-confirmed tracks, preserve
+        // the radar confidence (1.0) until another radar update refreshes it.
+        if (ukf.radar_update_count == 0) {
+            ukf.depth_confidence = depth_conf;
+        }
 
         // Radar association: find best matching radar detection within gate
         bool matched_radar = false;
@@ -1007,6 +1028,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 ukf.update_radar(radar_dets_.detections[best_idx]);
                 radar_matched[best_idx] = true;
                 matched_radar           = true;
+                ukf.depth_confidence    = 1.0f;
             }
         }
 
@@ -1053,6 +1075,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
         fused.radar_update_count  = ukf.radar_update_count;
+        fused.depth_confidence    = ukf.depth_confidence;
 
         // Size estimation (A2): back-project camera bbox using UKF range.
         // Only meaningful when range is reliable (radar-confirmed or close range).
@@ -1122,6 +1145,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 fused.position_covariance = ukf.position_covariance();
                 fused.timestamp_ns        = output.timestamp_ns;
                 fused.radar_update_count  = ukf.radar_update_count;
+                fused.depth_confidence    = 1.0f;  // radar-only → authoritative range
                 fused.estimated_radius_m  = radar_cfg_.radar_only_default_radius_m;
                 fused.estimated_height_m  = 0.0f;
 
@@ -1230,6 +1254,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             fused.position_covariance = ukf.position_covariance();
             fused.timestamp_ns        = output.timestamp_ns;
             fused.radar_update_count  = ukf.radar_update_count;
+            fused.depth_confidence    = 1.0f;  // radar-only → authoritative range
             fused.estimated_radius_m  = radar_cfg_.radar_only_default_radius_m;
             fused.estimated_height_m  = 0.0f;
 

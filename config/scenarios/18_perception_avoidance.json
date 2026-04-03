@@ -15,7 +15,7 @@
             "cruise_speed_mps": 1.5,
             "survey_duration_s": 25.0,
             "survey_yaw_rate": 0.3,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5},
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 1.0},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
@@ -32,7 +32,8 @@
                 "dynamic_obstacle_ttl_s": 1.0,
                 "min_confidence": 0.4,
                 "promotion_hits": 8,
-                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell) — keeps corridors between obstacles open for D* Lite. ObstacleAvoider3D (8m influence) handles close-range safety. 1.0s TTL. min_confidence=0.4 lets enough detections through for reliable promotion. promotion_hits=8: low enough for parallax-diluted cells to promote within 25s survey."
+                "max_static_cells": 800,
+                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell) — keeps corridors between obstacles open for D* Lite. ObstacleAvoider3D (8m influence) handles close-range safety. 1.0s TTL. min_confidence=0.4 lets enough detections through for reliable promotion. promotion_hits=8: low enough for parallax-diluted cells to promote within 25s survey. max_static_cells=800 caps grid bloat (healthy ~400, observed peak 2716)."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",

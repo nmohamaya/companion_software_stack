@@ -1551,6 +1551,106 @@ TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Depth Confidence Tests (#340)
+// ═══════════════════════════════════════════════════════════
+
+TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
+    // Full-height visible bbox → Tier 2 (apparent-size) → confidence ≥ 0.5
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 340.0f};  // well below horizon
+    trk.bbox_w       = 20.0f;
+    trk.bbox_h       = 30.0f;  // > 10px threshold → Tier 2
+    trk.velocity_2d  = Eigen::Vector2f::Zero();
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_GE(result.objects[0].depth_confidence, 0.5f);
+}
+
+TEST(DepthConfidenceTest, Tier4_NearHorizon_ZeroConfidence) {
+    // Near-horizon small bbox → Tier 4 → confidence = 0.0
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 240.0f};  // exactly at horizon (cy=240)
+    trk.bbox_w       = 5.0f;
+    trk.bbox_h       = 5.0f;  // < 10px → not Tier 1/2, and at horizon → not Tier 3
+    trk.velocity_2d  = Eigen::Vector2f::Zero();
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FLOAT_EQ(result.objects[0].depth_confidence, 0.0f);
+}
+
+TEST(DepthConfidenceTest, RadarConfirmed_OverridesConfidence) {
+    // Radar-confirmed track should have depth_confidence = 1.0
+    auto  calib = make_test_calib();
+    auto  trk   = make_test_tracked();
+    float depth = test_estimate_depth(calib, trk);
+
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true);
+
+    // First fuse camera-only to establish the track
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result1 = engine.fuse(tracked);
+    ASSERT_EQ(result1.objects.size(), 1u);
+    // Camera-only → confidence < 1.0
+    EXPECT_LT(result1.objects[0].depth_confidence, 1.0f);
+
+    // Get predicted radar measurement to ensure association succeeds
+    auto      ci = cam_intr_from(calib);
+    ObjectUKF temp_ukf(trk, depth, RadarNoiseConfig{}, ci);
+    temp_ukf.set_depth_covariance(100.0f);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth, ci);
+    temp_ukf.predict();
+    temp_ukf.update_camera(trk, depth, ci);
+    auto z_pred = temp_ukf.predicted_radar_measurement();
+
+    // Second fuse with matching radar detection
+    tracked.timestamp_ns            = 2000;
+    tracked.frame_sequence          = 2;
+    tracked.objects[0].timestamp_ns = 2000;
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 2000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(z_pred(0), z_pred(1), z_pred(2), z_pred(3));
+
+    engine.set_radar_detections(radar_list);
+    auto result2 = engine.fuse(tracked);
+    ASSERT_EQ(result2.objects.size(), 1u);
+    EXPECT_TRUE(result2.objects[0].has_radar);
+    EXPECT_FLOAT_EQ(result2.objects[0].depth_confidence, 1.0f);
+}
+
+// ═══════════════════════════════════════════════════════════
 // Radar-Only Track Initiation Tests (Issue #231)
 // ═══════════════════════════════════════════════════════════
 
