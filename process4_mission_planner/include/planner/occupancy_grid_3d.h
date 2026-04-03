@@ -108,7 +108,7 @@ public:
     explicit OccupancyGrid3D(float resolution = 0.5f, float extent = 50.0f, float inflation = 1.5f,
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
-                             float min_promotion_depth_confidence = 0.5f, int max_static_cells = 0,
+                             float min_promotion_depth_confidence = 0.8f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
@@ -220,7 +220,7 @@ public:
 
             // Per-object promotion eligibility (invariant across inflated cells).
             const bool depth_ok    = obj.depth_confidence >= min_promotion_depth_confidence_;
-            const bool can_promote = !skip_promotion && depth_ok;
+            const bool can_promote = !skip_promotion && depth_ok && !promotion_paused_;
 
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
@@ -355,6 +355,13 @@ public:
     [[nodiscard]] int  total_predictions_applied() const { return total_predictions_applied_; }
     [[nodiscard]] bool prediction_enabled() const { return prediction_enabled_; }
 
+    /// Pause/resume promotion to static layer.  When paused, dynamic cells
+    /// are still created (reactive avoidance works) but nothing new promotes.
+    /// Intended for RTL/LAND phases where the drone descends toward a known-safe
+    /// location and ground-feature detections would pollute the static layer.
+    void               set_promotion_paused(bool paused) { promotion_paused_ = paused; }
+    [[nodiscard]] bool promotion_paused() const { return promotion_paused_; }
+
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.
     /// D* Lite uses this to know which edges changed.
@@ -475,6 +482,7 @@ private:
     int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
     size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
+    bool     promotion_paused_{false};               // pause promotion during RTL/LAND
     bool     prediction_enabled_{true};              // enable velocity-based prediction inflation
     float    prediction_dt_s_{2.0f};                 // prediction horizon in seconds
     // Cumulative count of objects with velocity-based prediction applied (never reset).

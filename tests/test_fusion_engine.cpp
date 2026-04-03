@@ -1555,7 +1555,8 @@ TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
-    // Full-height visible bbox → Tier 2 (apparent-size) → confidence ≥ 0.5
+    // Full-height visible bbox → Tier 2 (apparent-size) → confidence ≥ 0.5.
+    // bbox_h=30 → depth = 3.0*500/30*0.7 = 35m (not clamped) → 0.7 confidence.
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
 
@@ -1577,6 +1578,34 @@ TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
     auto result = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_GE(result.objects[0].depth_confidence, 0.5f);
+}
+
+TEST(DepthConfidenceTest, Tier2_ClampedDepth_LowConfidence) {
+    // Small bbox just above threshold → Tier 2 raw depth exceeds 40m clamp
+    // → confidence drops to 0.2 (Issue #340: ground features at shallow angles
+    // produce huge apparent-size depths that clamp to max).
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 340.0f};  // well below horizon
+    trk.bbox_w       = 15.0f;
+    trk.bbox_h       = 11.0f;  // > 10px → Tier 2, but depth = 3.0*500/11*0.7 = 95.5m → clamped
+    trk.velocity_2d  = Eigen::Vector2f::Zero();
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    // Clamped to 40m → confidence reduced to 0.2 (below default 0.5 gate)
+    EXPECT_LE(result.objects[0].depth_confidence, 0.3f);
 }
 
 TEST(DepthConfidenceTest, Tier4_NearHorizon_LowConfidence) {

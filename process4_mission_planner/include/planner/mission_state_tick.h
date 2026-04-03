@@ -58,6 +58,15 @@ public:
         // Record home position from the first real pose, regardless of state.
         try_record_home(pose);
 
+        // Pause promotion during RTL/LAND — the drone is descending to a
+        // known-safe location and ground-feature detections would pollute the
+        // static layer, blocking the landing approach (Issue #340).
+        if (grid_planner != nullptr) {
+            const bool landing = (fsm.state() == MissionState::RTL ||
+                                  fsm.state() == MissionState::LAND);
+            grid_planner->set_promotion_paused(landing);
+        }
+
         switch (fsm.state()) {
             case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
             case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;

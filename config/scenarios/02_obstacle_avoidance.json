@@ -36,8 +36,8 @@
             },
             "occupancy_grid": {
                 "promotion_hits": 8,
-                "min_promotion_depth_confidence": 0.5,
-                "_comment": "Enable promotion with depth confidence gate — validates that false ground detections are filtered"
+                "min_promotion_depth_confidence": 0.8,
+                "_comment": "Threshold 0.8: blocks camera-only ground features (Tier 1-4: 0.01-0.7) while allowing radar-confirmed (1.0) and high-altitude radar-only (0.85) to promote (Issue #340)"
             },
             "static_obstacles": [
                 {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 5.0, "_color": "RED"},
@@ -76,8 +76,8 @@
                 "backend": "gazebo",
                 "enabled": true,
                 "update_rate_hz": 20,
-                "ground_filter_alt_m": 0.5,
-                "_comment": "Radar enabled — HAL ground filter rejects returns below 0.5m AGL"
+                "ground_filter_alt_m": 2.0,
+                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL rejects noise-elevated ground returns (Issue #340)"
             },
             "fusion": {
                 "backend": "ukf",
@@ -87,7 +87,7 @@
                 "radar": {
                     "enabled": true,
                     "ground_filter_enabled": true,
-                    "min_object_altitude_m": 0.3,
+                    "min_object_altitude_m": 1.5,
                     "altitude_gate_m": 2.0,
                     "_comment": "Camera+radar UKF fusion with ground filter + altitude gate"
                 }

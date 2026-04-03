@@ -480,12 +480,16 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
     // 3. Ground-plane fallback (conf=0.3): depth = camera_height / ray_down
     //    Weak signal from small detections — often ground features.
     //
-    // 4. Near-horizon fallback (conf=0.0): conservative 8m estimate.
+    // 4. Near-horizon fallback (conf=0.01): conservative 8m estimate.
     //    Pure guess with no geometric basis.
     //
     // Confidence values gate downstream promotion: only detections with
     // confidence >= min_promotion_depth_confidence become permanent static
     // cells.  Low-confidence detections still create temporary dynamic cells.
+    //
+    // Clamp penalty: if any tier's depth clamps to kDepthMaxM (40m), the
+    // model has saturated (common for ground features at shallow angles).
+    // Confidence drops to 0.2 to block promotion.  Issue #340.
     constexpr float kBboxHThreshold  = 10.0f;
     constexpr float kDepthMinM       = 1.0f;
     constexpr float kDepthMaxM       = 40.0f;
@@ -507,21 +511,30 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         const float bbox_bottom   = trk.position_2d.y() + trk.bbox_h * 0.5f;
         const float ray_down_base = (bbox_bottom - cy) / std::max(1.0f, fy);
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
-            return {std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
-                               kDepthMaxM),
-                    0.6f};
+            const float d = std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
+                                       kDepthMaxM);
+            // Clamped to max → depth model saturated (common for ground
+            // features at shallow angles).  Reduce confidence to block
+            // promotion while still creating a dynamic cell.
+            const float c = (d >= kDepthMaxM - 0.1f) ? 0.2f : 0.6f;
+            return {d, c};
         }
         if (ray_down_base > kRayDownMinThres) {
-            return {std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM, kDepthMaxM),
-                    0.6f};
+            const float d = std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM,
+                                       kDepthMaxM);
+            const float c = (d >= kDepthMaxM - 0.1f) ? 0.2f : 0.6f;
+            return {d, c};
         }
     }
 
     // Tier 2: Full-height apparent-size depth (bbox fully visible)
     if (trk.bbox_h > kBboxHThreshold) {
-        return {std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds, kDepthMinM,
-                           kDepthMaxM),
-                0.7f};
+        const float d = std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds,
+                                   kDepthMinM, kDepthMaxM);
+        // Clamped to max → the apparent-size model broke down (ground
+        // features with small bbox_h produce huge raw depths that clamp).
+        const float c = (d >= kDepthMaxM - 0.1f) ? 0.2f : 0.7f;
+        return {d, c};
     }
 
     // Tier 3: Ground-plane fallback for small detections
@@ -716,6 +729,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     FusedObjectList output;
     output.timestamp_ns   = tracked.timestamp_ns;
     output.frame_sequence = tracked.frame_sequence;
+
 
     // Track which UKF filters are still active this frame
     std::unordered_map<uint32_t, bool> seen;
@@ -1147,7 +1161,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 fused.position_covariance = ukf.position_covariance();
                 fused.timestamp_ns        = output.timestamp_ns;
                 fused.radar_update_count  = ukf.radar_update_count;
-                fused.depth_confidence    = 1.0f;  // radar-only → authoritative range
+                fused.depth_confidence    = 1.0f;  // radar range is authoritative
                 fused.estimated_radius_m  = radar_cfg_.radar_only_default_radius_m;
                 fused.estimated_height_m  = 0.0f;
 
@@ -1256,7 +1270,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             fused.position_covariance = ukf.position_covariance();
             fused.timestamp_ns        = output.timestamp_ns;
             fused.radar_update_count  = ukf.radar_update_count;
-            fused.depth_confidence    = 1.0f;  // radar-only → authoritative range
+            fused.depth_confidence    = 1.0f;  // radar range is authoritative
             fused.estimated_radius_m  = radar_cfg_.radar_only_default_radius_m;
             fused.estimated_height_m  = 0.0f;
 

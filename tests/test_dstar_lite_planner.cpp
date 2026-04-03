@@ -1640,6 +1640,42 @@ TEST(OccupancyGrid3DTest, HDMapCellsExcludedFromCap) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// Issue #340: Promotion pausing (RTL/LAND)
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, PromotionPausedBlocksPromotion) {
+    // When promotion is paused, objects should create dynamic cells but NOT promote.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    grid.set_promotion_paused(true);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;  // would normally promote
+    objects.objects[0].radar_update_count = 5;     // radar-confirmed too
+    drone::ipc::Pose pose{};
+
+    // Many observations — none should promote while paused
+    for (int i = 0; i < 5; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u);    // no promotion
+    EXPECT_GT(grid.occupied_count(), 0u);  // dynamic cells exist
+
+    // Unpause — next observation should promote
+    grid.set_promotion_paused(false);
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u);
+}
+
+// ═════════════════════════════════════════════════════════════
 // Issue #338: Snap goal approach bias tests
 // ═════════════════════════════════════════════════════════════
 

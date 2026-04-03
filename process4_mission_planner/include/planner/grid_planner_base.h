@@ -49,10 +49,12 @@ struct GridPlannerConfig {
     int promotion_hits = 0;             // Promote dynamic cell to static after N observations
                                         // (0 = disabled, no promotion)
     uint32_t radar_promotion_hits = 3;  // Radar update count for immediate static promotion
-    float    min_promotion_depth_confidence = 0.5f;  // Min depth confidence for promotion [0-1]
-    float    look_ahead_m                   = 0.0f;  // Pure-pursuit look-ahead distance along path
-                                                     // (0 = disabled, use cell-by-cell following)
-    int   max_static_cells   = 0;                    // Cap on promoted static cells (0 = unlimited)
+    float    min_promotion_depth_confidence = 0.8f;  // Min depth confidence for promotion [0-1]
+                                                     // 0.8 = blocks camera-only (0.01-0.7), allows
+        // radar-confirmed (1.0) and high-alt radar (0.85)
+    float look_ahead_m = 0.0f;        // Pure-pursuit look-ahead distance along path
+                                      // (0 = disabled, use cell-by-cell following)
+    int   max_static_cells   = 0;     // Cap on promoted static cells (0 = unlimited)
     bool  yaw_towards_travel = true;  // Face sensors toward next waypoint during NAVIGATE
     float yaw_smoothing_rate = 0.3f;  // EMA alpha for yaw transitions (0=frozen, 1=instant)
     float snap_approach_bias = 0.5f;  // Approach-direction penalty for snap fallback
@@ -82,6 +84,9 @@ public:
     /// Invalidate the cached path, forcing a full replan on the next tick.
     /// Called after collision recovery to avoid re-using a path that led into an obstacle.
     virtual void invalidate_path() = 0;
+
+    /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
+    virtual void set_promotion_paused(bool paused) = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -108,6 +113,8 @@ public:
     }
 
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
+
+    void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
 
     void invalidate_path() override {
         cached_path_.clear();
