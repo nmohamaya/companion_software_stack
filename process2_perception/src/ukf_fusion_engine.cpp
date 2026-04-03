@@ -530,8 +530,10 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         return {std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM), 0.3f};
     }
 
-    // Tier 4: Near-horizon conservative estimate — no geometric basis
-    return {kFallbackDepthM * ds, 0.0f};
+    // Tier 4: Near-horizon conservative estimate — no geometric basis.
+    // Use 0.01 (not 0.0) so the P2 camera-only fallback doesn't override
+    // this with detection confidence (which would defeat the promotion gate).
+    return {kFallbackDepthM * ds, 0.01f};
 }
 
 void UKFFusionEngine::reset() {

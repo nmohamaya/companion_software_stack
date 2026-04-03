@@ -1579,8 +1579,9 @@ TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
     EXPECT_GE(result.objects[0].depth_confidence, 0.5f);
 }
 
-TEST(DepthConfidenceTest, Tier4_NearHorizon_ZeroConfidence) {
-    // Near-horizon small bbox → Tier 4 → confidence = 0.0
+TEST(DepthConfidenceTest, Tier4_NearHorizon_LowConfidence) {
+    // Near-horizon small bbox → Tier 4 → confidence = 0.01 (not 0.0, so the
+    // P2 camera-only fallback doesn't override it with detection confidence).
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
 
@@ -1601,7 +1602,7 @@ TEST(DepthConfidenceTest, Tier4_NearHorizon_ZeroConfidence) {
 
     auto result = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
-    EXPECT_FLOAT_EQ(result.objects[0].depth_confidence, 0.0f);
+    EXPECT_FLOAT_EQ(result.objects[0].depth_confidence, 0.01f);
 }
 
 TEST(DepthConfidenceTest, RadarConfirmed_OverridesConfidence) {
