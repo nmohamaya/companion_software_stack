@@ -32,7 +32,7 @@
                 "dynamic_obstacle_ttl_s": 1.0,
                 "min_confidence": 0.4,
                 "promotion_hits": 8,
-                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell) — keeps corridors between obstacles open for D* Lite (8.6m gap between RED/GREEN minus 2m radii minus 4m total inflation = 2.6m free). ObstacleAvoider3D (8m influence) handles close-range safety. 1.0s TTL. min_confidence=0.4 lets enough detections through for reliable promotion. promotion_hits=8: low enough for parallax-diluted cells to promote within 25s survey."
+                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell) — keeps corridors between obstacles open for D* Lite. ObstacleAvoider3D (8m influence) handles close-range safety. 1.0s TTL. min_confidence=0.4 lets enough detections through for reliable promotion. promotion_hits=8: low enough for parallax-diluted cells to promote within 25s survey."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
