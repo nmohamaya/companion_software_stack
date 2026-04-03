@@ -1,50 +1,90 @@
 {
-    "_comment": "Scenario 17: Radar Gazebo SITL — verify GazeboRadarBackend produces detections",
+    "_comment": "Scenario 17: Radar Gazebo SITL — verify GazeboRadarBackend produces detections and fuses with camera perception during a full mission.",
     "scenario": {
         "name": "radar_gazebo",
-        "description": "Fly a short mission with Gazebo radar backend enabled. Validates that GazeboRadarBackend subscribes to gz-transport topics, receives gpu_lidar scans, converts them to RadarDetectionList, and the UKF fusion engine consumes them. Requires Gazebo with x500_companion model and working GPU (NVIDIA EGL).",
+        "description": "Fly a 5-waypoint mission with Gazebo radar backend enabled. Validates that GazeboRadarBackend subscribes to gz-transport topics, receives gpu_lidar scans, converts them to RadarDetectionList, and the UKF fusion engine consumes them. Full perception stack (color_contour + ByteTrack + UKF) runs in parallel. No HD-map — obstacles discovered at runtime via radar+camera. Requires Gazebo with x500_companion model and working GPU (NVIDIA EGL).",
         "tier": 2,
-        "timeout_s": 60,
+        "timeout_s": 150,
         "requires_gazebo": true
     },
     "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 3.0,
+            "overshoot_proximity_factor": 5.0,
+            "cruise_speed_mps": 1.5,
+            "survey_duration_s": 0,
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 0.5},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 2.0,
+                "influence_radius_m": 8.0,
+                "repulsive_gain": 3.0,
+                "max_correction_mps": 1.5,
+                "vertical_gain": 0.0,
+                "path_aware": true,
+                "_comment": "D* Lite is primary avoidance. Avoider is safety net: 8m influence, 1.5 max correction (100% of cruise), gain=3.0."
+            },
+            "occupancy_grid": {
+                "resolution_m": 2.0,
+                "inflation_radius_m": 2.0,
+                "dynamic_obstacle_ttl_s": 1.0,
+                "min_confidence": 0.4,
+                "promotion_hits": 8,
+                "max_static_cells": 800,
+                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=8. max_static_cells=800 caps grid bloat."
+            },
+            "static_obstacles": [],
+            "_comment_static_obstacles": "Empty — no HD-map. Radar+camera discover obstacles at runtime.",
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding obstacles"
+            },
+            "waypoints": [
+                {"x": 0,  "y": 18, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) nearby."},
+                {"x": 12, "y": 18, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": false, "_comment": "Fly east — clear corridor north of field."},
+                {"x": 20, "y": 8,  "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) and BLUE(18,5) nearby."},
+                {"x": 5,  "y": 2,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly west — ORANGE(5,3) on path."},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home."}
+            ],
+            "_comment_waypoints": "5 waypoints routing through obstacle field. Radar+camera detect obstacles for D* Lite replanning."
+        },
         "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "confidence_threshold": 0.3,
+                "max_detections": 64
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "_comment": "ByteTrack two-stage association for robust obstacle tracking"
+            },
             "radar": {
                 "backend": "gazebo",
                 "enabled": true,
-                "gz_scan_topic": "/radar_lidar/scan",
-                "gz_odom_topic": "/model/x500_companion_0/odometry",
-                "max_range_m": 100.0,
-                "fov_azimuth_rad": 1.047,
-                "fov_elevation_rad": 0.262,
-                "noise": {
-                    "range_std_m": 0.3,
-                    "azimuth_std_rad": 0.026,
-                    "elevation_std_rad": 0.026,
-                    "velocity_std_mps": 0.1
-                },
-                "false_alarm_rate": 0.02
+                "update_rate_hz": 20,
+                "ground_filter_alt_m": 2.0,
+                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL rejects noise-elevated ground returns (Issue #340)"
             },
             "fusion": {
+                "backend": "ukf",
+                "rate_hz": 30,
+                "depth_scale": 1.0,
+                "assumed_obstacle_height_m": 5.0,
                 "radar": {
                     "enabled": true,
-                    "range_std_m": 0.3,
-                    "azimuth_std_rad": 0.026,
-                    "elevation_std_rad": 0.026,
-                    "velocity_std_mps": 0.1,
-                    "gate_threshold": 9.21
+                    "ground_filter_enabled": true,
+                    "min_object_altitude_m": 1.5,
+                    "altitude_gate_m": 2.0,
+                    "orphan_proximity_m": 5.0,
+                    "max_orphan_range_m": 25.0,
+                    "promotion_hits": 8,
+                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate. Tightened orphan params to reduce multipath ghost tracks (Issue #345)."
                 }
             }
-        },
-        "mission_planner": {
-            "takeoff_altitude_m": 5.0,
-            "acceptance_radius_m": 2.0,
-            "cruise_speed_mps": 2.0,
-            "waypoints": [
-                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
-                {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false},
-                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57, "speed": 2.0, "payload_trigger": false}
-            ]
         }
     },
     "fault_sequence": {
@@ -52,18 +92,24 @@
     },
     "pass_criteria": {
         "log_contains": [
+            "Path planner: DStarLitePlanner",
+            "Obstacle avoider: ObstacleAvoider3D",
+            "backend: bytetrack",
+            "ground_filter_alt_m",
             "TAKEOFF",
-            "EXECUTING",
             "GazeboRadar.*Subscribed to scan",
-            "GazeboRadar.*First scan"
+            "GazeboRadar.*First scan",
+            "EXECUTING",
+            "Mission complete"
         ],
         "log_must_not_contain": [
             "EMERGENCY_LAND",
+            "OBSTACLE COLLISION",
             "GazeboRadar.*Failed to subscribe"
         ],
         "processes_alive": [
             "video_capture", "perception", "slam_vio_nav",
-            "mission_planner", "comms", "payload_manager"
+            "mission_planner", "comms", "payload_manager", "system_monitor"
         ]
     }
 }

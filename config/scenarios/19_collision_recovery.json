@@ -1,0 +1,64 @@
+{
+    "_comment": "Scenario 19: Collision Recovery — tests NAVIGATE → COLLISION_RECOVERY → NAVIGATE FSM transition after proximity collision. Uses D* Lite + 3D obstacle avoider + static HD-map obstacle placed directly on the flight path to trigger recovery.",
+    "scenario": {
+        "name": "collision_recovery",
+        "description": "Verify post-collision recovery: drone navigates into a known obstacle, detects proximity collision, enters COLLISION_RECOVERY (hover → climb → replan), then resumes NAVIGATE and completes the mission.",
+        "tier": 1,
+        "timeout_s": 120,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 3.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite"},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 1.0,
+                "influence_radius_m": 4.0,
+                "repulsive_gain": 2.0
+            },
+            "collision_recovery": {
+                "enabled": true,
+                "climb_delta_m": 3.0,
+                "hover_duration_s": 2.0
+            },
+            "static_obstacles": [
+                {"x": 5, "y": 0, "radius_m": 1.5, "height_m": 8.0, "_comment": "Directly on WP1 path to trigger collision"}
+            ],
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — collision recovery may push drone outside boundary during climb"
+            },
+            "waypoints": [
+                {"x": 10, "y": 0, "z": 5, "yaw": 0, "speed": 2.0, "payload_trigger": false, "_comment": "Path passes through obstacle at (5,0)"},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57, "speed": 2.0, "payload_trigger": false},
+                {"x": 0, "y": 10, "z": 5, "yaw": 3.14, "speed": 2.0, "payload_trigger": false},
+                {"x": 0, "y": 0, "z": 5, "yaw": -1.57, "speed": 2.0, "payload_trigger": false, "_comment": "Return home"}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "Path planner: DStarLitePlanner",
+            "Obstacle avoider: ObstacleAvoider3D",
+            "TAKEOFF",
+            "COLLISION_RECOVERY",
+            "Phase HOVER",
+            "Phase CLIMB",
+            "Phase REPLAN",
+            "NAVIGATE"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    }
+}

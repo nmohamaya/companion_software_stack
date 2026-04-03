@@ -164,7 +164,7 @@ jobs:
     - name: Capture coverage
       run: |
         lcov --capture --directory build --output-file coverage-raw.info \
-          --ignore-errors mismatch \
+          --ignore-errors mismatch,negative \
           --rc lcov_branch_coverage=1
         lcov --remove coverage-raw.info \
           '/usr/*' \

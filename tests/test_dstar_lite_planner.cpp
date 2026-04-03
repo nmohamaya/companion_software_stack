@@ -112,11 +112,12 @@ TEST(OccupancyGrid3DTest, PromotedCellStillAcceptsDynamicDetections) {
                          /*min_conf=*/0.3f, /*promotion_hits=*/2);
 
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 5.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    objects.num_objects                 = 1;
+    objects.objects[0].position_x       = 5.0f;
+    objects.objects[0].position_y       = 5.0f;
+    objects.objects[0].position_z       = 5.0f;
+    objects.objects[0].confidence       = 0.9f;
+    objects.objects[0].depth_confidence = 1.0f;
     drone::ipc::Pose pose{};
 
     // Two observations → cell promoted to static
@@ -150,11 +151,12 @@ TEST(OccupancyGrid3DTest, AdjacentDetectionStillInserted) {
                          /*min_conf=*/0.3f, /*promotion_hits=*/2);
 
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 5.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    objects.num_objects                 = 1;
+    objects.objects[0].position_x       = 5.0f;
+    objects.objects[0].position_y       = 5.0f;
+    objects.objects[0].position_z       = 5.0f;
+    objects.objects[0].confidence       = 0.9f;
+    objects.objects[0].depth_confidence = 1.0f;
     drone::ipc::Pose pose{};
 
     // Promote the cell at (5,5,5)
@@ -176,11 +178,12 @@ TEST(OccupancyGrid3DTest, FarDetectionNotSuppressed) {
                          /*min_conf=*/0.3f, /*promotion_hits=*/2);
 
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 5.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    objects.num_objects                 = 1;
+    objects.objects[0].position_x       = 5.0f;
+    objects.objects[0].position_y       = 5.0f;
+    objects.objects[0].position_z       = 5.0f;
+    objects.objects[0].confidence       = 0.9f;
+    objects.objects[0].depth_confidence = 1.0f;
     drone::ipc::Pose pose{};
 
     // Promote the cell at (5,5,5)
@@ -1445,4 +1448,749 @@ TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
     EXPECT_FALSE(planner2.using_direct_fallback());
     EXPECT_FALSE(planner2.cached_path().empty());
     EXPECT_GT(cmd2.velocity_x, 0.0f);  // moving toward goal again
+}
+
+// ═══════════════════════════════════════════════════════════
+// Depth Confidence Gating Tests (#340)
+// ═══════════════════════════════════════════════════════════
+
+TEST(DepthConfidenceTest, PromotionBlockedByLowDepthConfidence) {
+    // Object with low depth_confidence (ground feature) should NOT be promoted
+    // even after many observations.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.1f;  // low — ground feature
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    // Many observations — none should promote due to low depth confidence
+    for (int i = 0; i < 10; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u);
+    EXPECT_GT(grid.occupied_count(), 0u);  // still exists as dynamic cell
+}
+
+TEST(DepthConfidenceTest, PromotionAllowedByHighDepthConfidence) {
+    // Object with high depth_confidence should promote normally.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.8f;  // high — real obstacle
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    // Two observations → should promote
+    grid.update_from_objects(objects, pose);
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u);
+}
+
+TEST(DepthConfidenceTest, RadarConfirmedBlockedByLowDepthConfidence) {
+    // Even radar-confirmed objects should not promote if depth_confidence is low.
+    // This catches the case where radar ground returns associate with ghost
+    // camera detections via UKF fusion.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.0f;  // tier 4 fallback
+    objects.objects[0].radar_update_count = 5;     // radar-confirmed
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_EQ(grid.static_count(), 0u);    // blocked by low depth confidence
+    EXPECT_GT(grid.occupied_count(), 0u);  // still a dynamic cell
+}
+
+TEST(DepthConfidenceTest, LowConfidenceStillCreatesDynamicCell) {
+    // Low depth_confidence detections should still create temporary dynamic
+    // cells for reactive avoidance — they just can't promote.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.5f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 8.0f;
+    objects.objects[0].position_y         = 8.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.0f;  // near-horizon fallback
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    // Dynamic cell exists for reactive avoidance
+    EXPECT_GT(grid.occupied_count(), 0u);
+    // But no promotion
+    EXPECT_EQ(grid.static_count(), 0u);
+    // Cell is occupied at the expected position
+    auto gc = grid.world_to_grid(8.0f, 8.0f, 5.0f);
+    EXPECT_TRUE(grid.is_occupied(gc));
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #339: Static cell cap tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, StaticCellCapEnforced) {
+    // max_static_cells=10: promotion should stop after 10 promoted cells
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3, /*min_promo_depth_conf=*/0.5f,
+                         /*max_static_cells=*/10);
+
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 10.0;  // keep drone away from detections
+
+    // Insert many objects at different positions — each should promote after 1 hit
+    for (int i = 0; i < 30; ++i) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.num_objects                 = 1;
+        objects.objects[0].position_x       = static_cast<float>(i);
+        objects.objects[0].position_y       = 0.0f;
+        objects.objects[0].position_z       = 0.0f;
+        objects.objects[0].confidence       = 0.9f;
+        objects.objects[0].depth_confidence = 1.0f;
+        grid.update_from_objects(objects, pose);
+    }
+
+    // Promoted cells (excluding HD-map) should not exceed 10
+    EXPECT_LE(static_cast<int>(grid.static_count() - grid.hd_map_static_count()), 10);
+}
+
+TEST(OccupancyGrid3DTest, StaticCellCapZeroMeansUnlimited) {
+    // max_static_cells=0 (default): no cap
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3, /*min_promo_depth_conf=*/0.5f,
+                         /*max_static_cells=*/0);
+
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 10.0;
+
+    for (int i = 0; i < 20; ++i) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.num_objects                 = 1;
+        objects.objects[0].position_x       = static_cast<float>(i);
+        objects.objects[0].position_y       = 0.0f;
+        objects.objects[0].position_z       = 0.0f;
+        objects.objects[0].confidence       = 0.9f;
+        objects.objects[0].depth_confidence = 1.0f;
+        grid.update_from_objects(objects, pose);
+    }
+
+    // All should have promoted (each is far enough apart)
+    EXPECT_GT(grid.static_count(), 10u);
+}
+
+TEST(OccupancyGrid3DTest, HDMapCellsExcludedFromCap) {
+    // max_static_cells=5, but HD-map cells should not count toward cap
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, 3.0f, 0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3, /*min_promo_depth_conf=*/0.5f,
+                         /*max_static_cells=*/5);
+
+    // Add HD-map obstacle — creates many static cells
+    grid.add_static_obstacle(5.0f, 5.0f, 1.0f, 2.0f);
+    const size_t hd_count = grid.hd_map_static_count();
+    EXPECT_GT(hd_count, 0u);
+
+    // Now promote perception cells — should still allow up to 5 on top of HD-map
+    drone::ipc::Pose pose{};
+    pose.translation[2] = 10.0;
+
+    for (int i = 0; i < 10; ++i) {
+        drone::ipc::DetectedObjectList objects{};
+        objects.num_objects                 = 1;
+        objects.objects[0].position_x       = static_cast<float>(-5 - i);  // away from HD-map
+        objects.objects[0].position_y       = 0.0f;
+        objects.objects[0].position_z       = 0.0f;
+        objects.objects[0].confidence       = 0.9f;
+        objects.objects[0].depth_confidence = 1.0f;
+        grid.update_from_objects(objects, pose);
+    }
+
+    const int promoted = static_cast<int>(grid.static_count() - grid.hd_map_static_count());
+    EXPECT_LE(promoted, 5);
+    EXPECT_GT(promoted, 0);  // some did promote
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #340: Promotion pausing (RTL/LAND)
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, PromotionPausedBlocksPromotion) {
+    // When promotion is paused, objects should create dynamic cells but NOT promote.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    grid.set_promotion_paused(true);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;  // would normally promote
+    objects.objects[0].radar_update_count = 5;     // radar-confirmed too
+    drone::ipc::Pose pose{};
+
+    // Many observations — none should promote while paused
+    for (int i = 0; i < 5; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u);    // no promotion
+    EXPECT_GT(grid.occupied_count(), 0u);  // dynamic cells exist
+
+    // Unpause — next observation should promote
+    grid.set_promotion_paused(false);
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #338: Snap goal approach bias tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteIntegrationTest, SnapGoalFallbackPrefersApproachSide) {
+    // Block a wide area around the goal to force the BFS fallback (not lateral snap).
+    // With strong approach bias, the BFS should prefer cells between the drone and
+    // the goal (approach side) over equidistant cells on the far side.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.5f;
+    config.snap_approach_bias = 10.0f;  // strong bias toward approach side
+    DStarLitePlanner planner(config);
+
+    // Wall of obstacles at x=5, from y=-4 to y=4, at z=5.
+    // Blocks goal (5,0,5) AND all lateral snap candidates (perpendicular = Y axis).
+    // Free cells: (4,0,5) on approach side, (6,0,5) on far side.
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int dy = -10; dy <= 10; ++dy) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = 5.0f;
+        objects.objects[idx].position_y = static_cast<float>(dy);
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objects.num_objects = idx;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(objects, pose);
+
+    Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    // The path should head toward the goal (positive X from origin).
+    // Snap should have picked approach side (x < 5), so the path endpoint
+    // should be before the wall, not past it.
+    const auto& path = planner.cached_path();
+    ASSERT_FALSE(path.empty());
+    // Last cell in path is the snapped goal — should be on approach side
+    EXPECT_LT(path.back()[0], 5);
+}
+
+TEST(DStarLiteIntegrationTest, SnapGoalPureNearestWhenBiasZero) {
+    // Compare bias=0 vs bias>0 on the same obstacle layout.
+    // With bias=0, both approach and far-side cells are scored equally (pure distance).
+    // With strong bias, the approach-side cell should be preferred.
+    GridPlannerConfig zero_bias_config;
+    zero_bias_config.resolution_m       = 1.0f;
+    zero_bias_config.grid_extent_m      = 20.0f;
+    zero_bias_config.inflation_radius_m = 0.5f;
+    zero_bias_config.snap_approach_bias = 0.0f;  // disable bias — pure nearest
+    DStarLitePlanner zero_bias_planner(zero_bias_config);
+
+    GridPlannerConfig biased_config  = zero_bias_config;
+    biased_config.snap_approach_bias = 10.0f;  // strong preference for approach side
+    DStarLitePlanner biased_planner(biased_config);
+
+    // Wall of obstacles at x=5, from y=-10 to y=10.
+    // Forces BFS fallback. Free cells at (4,0,5) and (6,0,5) are equidistant.
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int dy = -10; dy <= 10; ++dy) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = 5.0f;
+        objects.objects[idx].position_y = static_cast<float>(dy);
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objects.num_objects = idx;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[2] = 5.0;
+    zero_bias_planner.update_obstacles(objects, pose);
+    biased_planner.update_obstacles(objects, pose);
+
+    Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     zero_bias_cmd = zero_bias_planner.plan(pose, target);
+    auto     biased_cmd    = biased_planner.plan(pose, target);
+
+    EXPECT_TRUE(zero_bias_cmd.valid);
+    EXPECT_FALSE(zero_bias_planner.using_direct_fallback());
+    EXPECT_TRUE(biased_cmd.valid);
+    EXPECT_FALSE(biased_planner.using_direct_fallback());
+
+    // With strong bias, the snapped goal path endpoint must be on approach side (x < 5)
+    const auto& biased_path = biased_planner.cached_path();
+    ASSERT_FALSE(biased_path.empty());
+    EXPECT_LT(biased_path.back()[0], 5);
+
+    // With zero bias, (4,0) and (6,0) are equidistant — pure nearest may pick
+    // either. The key assertion is that the biased planner picks approach-side.
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #337: Yaw-towards-travel tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteIntegrationTest, YawTowardsTravelOverridesWaypointYaw) {
+    GridPlannerConfig config;
+    config.yaw_towards_travel = true;
+    config.yaw_smoothing_rate = 1.0f;  // instant — no smoothing lag in test
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    // Waypoint is due east (x=10), but waypoint yaw is set to PI (facing west)
+    constexpr float kPi = 3.14159265358979323846f;
+    Waypoint        target{10.0f, 0.0f, 5.0f, kPi, 2.0f, 3.0f, false};
+    auto            cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    // Yaw should face east (~0 rad), not the waypoint's PI (west)
+    EXPECT_NEAR(cmd.target_yaw, 0.0f, 0.5f);
+}
+
+TEST(DStarLiteIntegrationTest, YawTowardsTravelDisabledWhenConfigFalse) {
+    GridPlannerConfig config;
+    config.yaw_towards_travel = false;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+
+    constexpr float kPi = 3.14159265358979323846f;
+    Waypoint        target{10.0f, 0.0f, 5.0f, kPi, 2.0f, 3.0f, false};
+    auto            cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    // Yaw should be the waypoint yaw (PI), not overridden
+    EXPECT_NEAR(cmd.target_yaw, kPi, 0.01f);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Corner-cutting guard tests (Issue #258)
+// ═════════════════════════════════════════════════════════════
+
+// Helper: check that no consecutive waypoints in the world-coordinate path
+// represent a diagonal grid move through a blocked cardinal intermediary.
+// Uses the grid's own world_to_grid() to avoid duplicating the conversion logic.
+static bool path_has_corner_cut(const std::vector<std::array<float, 3>>& path,
+                                const OccupancyGrid3D&                   grid) {
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        GridCell g0 = grid.world_to_grid(path[i][0], path[i][1], path[i][2]);
+        GridCell g1 = grid.world_to_grid(path[i + 1][0], path[i + 1][1], path[i + 1][2]);
+
+        int dx = g1.x - g0.x;
+        int dy = g1.y - g0.y;
+        int dz = g1.z - g0.z;
+
+        // Only check diagonal moves (Manhattan distance > 1)
+        if (std::abs(dx) + std::abs(dy) + std::abs(dz) <= 1) continue;
+
+        // Check XY intermediaries
+        if (dx != 0 && dy != 0) {
+            GridCell cx{g0.x + dx, g0.y, g0.z};
+            GridCell cy{g0.x, g0.y + dy, g0.z};
+            if (grid.is_occupied(cx) || grid.is_occupied(cy)) return true;
+        }
+        // Check XZ intermediaries
+        if (dx != 0 && dz != 0) {
+            GridCell cx{g0.x + dx, g0.y, g0.z};
+            GridCell cz{g0.x, g0.y, g0.z + dz};
+            if (grid.is_occupied(cx) || grid.is_occupied(cz)) return true;
+        }
+        // Check YZ intermediaries
+        if (dy != 0 && dz != 0) {
+            GridCell cy{g0.x, g0.y + dy, g0.z};
+            GridCell cz{g0.x, g0.y, g0.z + dz};
+            if (grid.is_occupied(cy) || grid.is_occupied(cz)) return true;
+        }
+    }
+    return false;
+}
+
+TEST(DStarLiteCornerCutTest, LShapeInflatedBlocksDiagonal) {
+    // Two point obstacles placed so their 1-cell inflation (the OccupancyGrid3D
+    // minimum) forms an L-shaped barrier with a diagonal gap.
+    //
+    // Obstacle centres at (5,4) and (7,2).  With 1-cell cross inflation each
+    // centre expands into a plus/cross of 5 cells:
+    //   (5,4) -> {(5,4),(4,4),(6,4),(5,3),(5,5)}
+    //   (7,2) -> {(7,2),(6,2),(8,2),(7,1),(7,3)}
+    //
+    // The diagonal from (6,3) to (7,4) has cardinal intermediates:
+    //   (7,3) — occupied (inflation of (7,2))
+    //   (6,4) — occupied (inflation of (5,4))
+    // But (6,3) and (7,4) themselves are FREE — the corner-cutting guard must
+    // prevent a diagonal move through that gap.
+    //
+    //   y=5: . . . . . X . . . .     X = inflated from (5,4)
+    //   y=4: . . . . X O X . . G     O = obstacle centre
+    //   y=3: . . . . . X . x . .     x = inflated from (7,2)
+    //   y=2: . . . . . . x O x .
+    //   y=1: . . . . . . . x . .
+    //   y=0: S . . . . . . . . .
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    planner.add_static_obstacle(5.0f, 4.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(7.0f, 2.0f, 0.0f, 0.0f);
+
+    // Assert key cells: diagonal endpoints free, cardinal intermediates occupied
+    const auto& grid = planner.grid();
+    EXPECT_FALSE(grid.is_occupied({6, 3, 0})) << "Diagonal endpoint (6,3) must be free";
+    EXPECT_FALSE(grid.is_occupied({7, 4, 0})) << "Diagonal endpoint (7,4) must be free";
+    EXPECT_TRUE(grid.is_occupied({7, 3, 0})) << "Cardinal intermediate (7,3) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({6, 4, 0})) << "Cardinal intermediate (6,4) must be occupied";
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{9.0f, 4.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    // The path must NOT cut through the diagonal gap
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
+        << "Path should not cut diagonally through L-shaped obstacle gap";
+}
+
+TEST(DStarLiteCornerCutTest, LShapeInflatedBlocksDiagonalReversed) {
+    // Mirror of the first test with a different axis orientation.
+    // Obstacles at (4,7) and (2,5) with 1-cell cross inflation:
+    //   (4,7) -> {(4,7),(3,7),(5,7),(4,6),(4,8)}
+    //   (2,5) -> {(2,5),(1,5),(3,5),(2,4),(2,6)}
+    //
+    // Diagonal from (3,6) to (4,5) has cardinal intermediates:
+    //   (4,6) — occupied (inflation of (4,7))
+    //   (3,5) — occupied (inflation of (2,5))
+    // Endpoints (3,6) and (4,5) are both free.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    planner.add_static_obstacle(4.0f, 7.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(2.0f, 5.0f, 0.0f, 0.0f);
+
+    // Assert key cells: diagonal endpoints free, cardinal intermediates occupied
+    const auto& grid = planner.grid();
+    EXPECT_FALSE(grid.is_occupied({3, 6, 0})) << "Diagonal endpoint (3,6) must be free";
+    EXPECT_FALSE(grid.is_occupied({4, 5, 0})) << "Diagonal endpoint (4,5) must be free";
+    EXPECT_TRUE(grid.is_occupied({4, 6, 0})) << "Cardinal intermediate (4,6) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({3, 5, 0})) << "Cardinal intermediate (3,5) must be occupied";
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{5.0f, 8.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
+        << "Path should not cut diagonally through reversed L-shaped obstacle gap";
+}
+
+TEST(DStarLiteCornerCutTest, WallCornerInflatedNoCut) {
+    // Wall with a 90-degree corner.  Each obstacle centre gets 1-cell cross
+    // inflation (OccupancyGrid3D minimum), so the wall is wider than the raw
+    // centres.  The path must not cut the inside corner of the inflated wall.
+    //
+    // Obstacle centres (O) and their inflation zones (x) overlap to form a
+    // solid L-shaped barrier:
+    //   y=4: . x x x x x .
+    //   y=3: . x O O O x .    wall at y=3, x=2..4
+    //   y=2: x x O x x x .    wall at x=2, y=1..2 + inflation overlap
+    //   y=1: . x O x . . .
+    //   y=0: . x x x . . .
+    //   S at (0,0), G at (6,5)
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    // Vertical wall segment x=2, y=1..2
+    planner.add_static_obstacle(2.0f, 1.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(2.0f, 2.0f, 0.0f, 0.0f);
+    // Horizontal wall segment y=3, x=2..4
+    planner.add_static_obstacle(2.0f, 3.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(3.0f, 3.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(4.0f, 3.0f, 0.0f, 0.0f);
+
+    // Verify the inside-corner inflation — the cell just inside the corner
+    // and the two adjacent cardinal cells must be occupied.
+    const auto& grid = planner.grid();
+    EXPECT_TRUE(grid.is_occupied({3, 2, 0})) << "Inside corner cell (3,2) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({3, 3, 0})) << "Wall centre (3,3) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({2, 2, 0})) << "Wall centre (2,2) must be occupied";
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{6.0f, 5.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
+        << "Path should not cut through the inside corner of an L-shaped wall";
+}
+
+TEST(DStarLiteCornerCutTest, ValidDiagonalStillAllowed) {
+    // When both cardinal intermediaries are free, diagonal moves must still work.
+    // Place a single obstacle far from the path so its 1-cell inflation does
+    // not block any diagonal along the route from (0,0) to (4,4).
+    //
+    //   y=4: . . . . G
+    //   y=0: S . . . . . . O    O at (7,0) — well away from the path
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    planner.add_static_obstacle(7.0f, 0.0f, 0.0f, 0.0f);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{4.0f, 4.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    // Path should use diagonal moves (should be short — ~5 waypoints, not 8+).
+    // A path without diagonals from (0,0) to (4,4) would need at least 8 cardinal steps.
+    // With diagonals available it can be as short as 5 waypoints (start + 4 diagonal steps).
+    EXPECT_LE(planner.cached_path().size(), 6u)
+        << "Valid diagonals should still be used, keeping the path short";
+}
+
+TEST(DStarLiteCornerCutTest, OpenFieldDiagonalsWork) {
+    // In an empty grid, diagonal paths should still be generated normally.
+    // No obstacles, so inflation does not matter.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{5.0f, 5.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    // Diagonal path from (0,0) to (5,5): optimal is 5 diagonal steps = 6 waypoints
+    // (start + 5 steps). Allow some tolerance.
+    EXPECT_LE(planner.cached_path().size(), 7u)
+        << "Open field should use diagonal moves for an efficient path";
+}
+
+TEST(DStarLiteCornerCutTest, BothCardinalsBlockedForcesDetour) {
+    // Both cardinal intermediaries of a diagonal are blocked, forcing a detour.
+    //
+    // Obstacles at (3,4) and (5,2) with 1-cell cross inflation:
+    //   (3,4) -> {(3,4),(2,4),(4,4),(3,3),(3,5)}
+    //   (5,2) -> {(5,2),(4,2),(6,2),(5,1),(5,3)}
+    //
+    // Diagonal from (4,3) to (5,4): cardinal intermediates
+    //   (5,3) — occupied (inflation of (5,2))
+    //   (4,4) — occupied (inflation of (3,4))
+    // Both blocked, so the planner must route around.
+    // Endpoints (4,3) and (5,4) are both free.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    planner.add_static_obstacle(3.0f, 4.0f, 0.0f, 0.0f);
+    planner.add_static_obstacle(5.0f, 2.0f, 0.0f, 0.0f);
+
+    // Assert the diagonal's cardinal intermediates are blocked and endpoints free
+    const auto& grid = planner.grid();
+    EXPECT_FALSE(grid.is_occupied({4, 3, 0})) << "Diagonal endpoint (4,3) must be free";
+    EXPECT_FALSE(grid.is_occupied({5, 4, 0})) << "Diagonal endpoint (5,4) must be free";
+    EXPECT_TRUE(grid.is_occupied({5, 3, 0})) << "Cardinal intermediate (5,3) must be occupied";
+    EXPECT_TRUE(grid.is_occupied({4, 4, 0})) << "Cardinal intermediate (4,4) must be occupied";
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{7.0f, 6.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
+        << "Path must not cut through when both cardinal intermediaries are blocked";
+
+    // Verify the specific guarded diagonal edge (4,3)->(5,4) is not taken
+    for (size_t i = 0; i + 1 < planner.cached_path().size(); ++i) {
+        GridCell a = grid.world_to_grid(planner.cached_path()[i][0], planner.cached_path()[i][1],
+                                        planner.cached_path()[i][2]);
+        GridCell b = grid.world_to_grid(planner.cached_path()[i + 1][0],
+                                        planner.cached_path()[i + 1][1],
+                                        planner.cached_path()[i + 1][2]);
+        bool     is_guarded_edge = (a.x == 4 && a.y == 3 && b.x == 5 && b.y == 4) ||
+                               (a.x == 5 && a.y == 4 && b.x == 4 && b.y == 3);
+        EXPECT_FALSE(is_guarded_edge)
+            << "Path must not use the guarded diagonal edge (4,3)<->(5,4)";
+    }
+}
+
+TEST(DStarLiteCornerCutTest, IncrementalUpdateRespectsCornerGuard) {
+    // After an incremental obstacle update creates an L-shape, the replanned
+    // path must still respect the corner-cutting guard.
+    // Obstacles are spaced 2 cells apart diagonally so that 1-cell inflation
+    // creates cardinal intermediates without occupying the diagonal endpoints.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 20.0f;
+    config.inflation_radius_m = 0.0f;  // OccupancyGrid3D clamps to at least 1 cell
+    config.replan_interval_s  = 0.0f;
+    config.smoothing_alpha    = 1.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 0.0;
+
+    Waypoint target{9.0f, 6.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+
+    // First plan: no obstacles, path uses diagonals freely
+    auto cmd1 = planner.plan(pose, target);
+    EXPECT_TRUE(cmd1.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+
+    // Add L-shaped obstacles via dynamic update (simulates runtime detection).
+    // Objects at (5,4) and (7,2) — same geometry as LShapeInflatedBlocksDiagonal.
+    // update_from_objects() uses steady_clock internally; timestamp_ns is unused.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects = 2;
+    // Object 1 at (5,4)
+    objects.objects[0]            = {};
+    objects.objects[0].confidence = 0.9f;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 4.0f;
+    objects.objects[0].position_z = 0.0f;
+    // Object 2 at (7,2)
+    objects.objects[1]            = {};
+    objects.objects[1].confidence = 0.9f;
+    objects.objects[1].position_x = 7.0f;
+    objects.objects[1].position_y = 2.0f;
+    objects.objects[1].position_z = 0.0f;
+
+    planner.update_obstacles(objects, pose);
+
+    // Replan with new obstacles
+    auto cmd2 = planner.plan(pose, target);
+    EXPECT_TRUE(cmd2.valid);
+    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_FALSE(planner.cached_path().empty());
+
+    EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
+        << "Incremental replan must respect corner-cutting guard";
 }

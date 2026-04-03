@@ -321,11 +321,10 @@ ObjectUKF::RadarMeasVec ObjectUKF::predicted_radar_measurement() const {
     return radar_measurement_model(x_);
 }
 
-void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
+ObjectUKF::RadarPrediction ObjectUKF::compute_radar_prediction(
+    const std::vector<StateVec>& sigma) const {
     constexpr int   n      = STATE_DIM;
     constexpr float lambda = kAlpha * kAlpha * (n + kKappa) - n;
-
-    auto sigma = generate_sigma_points();
 
     // Propagate sigma points through radar measurement model
     std::vector<RadarMeasVec> z_sigma(2 * n + 1);
@@ -334,19 +333,17 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
     }
 
     // Weights
-    float w0_mean = lambda / (n + lambda);
-    float w0_cov  = w0_mean + (1.0f - kAlpha * kAlpha + kBeta);
-    float wi      = 1.0f / (2.0f * (n + lambda));
+    const float w0_mean = lambda / (n + lambda);
+    const float w0_cov  = w0_mean + (1.0f - kAlpha * kAlpha + kBeta);
+    const float wi      = 1.0f / (2.0f * (n + lambda));
 
-    // Mean predicted measurement — use circular mean for angular components
-    // (azimuth at index 1, elevation at index 2) to handle ±π wrapping.
+    // Mean predicted measurement (circular mean for angles)
     float        sin_az_sum = 0.0f, cos_az_sum = 0.0f;
     float        sin_el_sum = 0.0f, cos_el_sum = 0.0f;
     RadarMeasVec z_mean = RadarMeasVec::Zero();
 
-    // First sigma point (weight w0_mean)
-    z_mean(0) += w0_mean * z_sigma[0](0);  // range
-    z_mean(3) += w0_mean * z_sigma[0](3);  // radial velocity
+    z_mean(0) += w0_mean * z_sigma[0](0);
+    z_mean(3) += w0_mean * z_sigma[0](3);
     sin_az_sum += w0_mean * std::sin(z_sigma[0](1));
     cos_az_sum += w0_mean * std::cos(z_sigma[0](1));
     sin_el_sum += w0_mean * std::sin(z_sigma[0](2));
@@ -363,7 +360,7 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
     z_mean(1) = std::atan2(sin_az_sum, cos_az_sum);
     z_mean(2) = std::atan2(sin_el_sum, cos_el_sum);
 
-    // Innovation covariance S = Pzz + R_radar (with angle-wrapped residuals)
+    // Innovation covariance S = Pzz + R_radar
     RadarMeasVec dz0 = z_sigma[0] - z_mean;
     dz0(1)           = wrap_angle(dz0(1));
     dz0(2)           = wrap_angle(dz0(2));
@@ -375,9 +372,33 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
         S += wi * (dzi * dzi.transpose());
     }
     S += R_radar_;
+    return {z_mean, S, std::move(z_sigma)};
+}
+
+ObjectUKF::RadarPrediction ObjectUKF::predicted_radar_innovation_cov() const {
+    auto sigma = generate_sigma_points();
+    return compute_radar_prediction(sigma);
+}
+
+void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
+    constexpr int   n      = STATE_DIM;
+    constexpr float lambda = kAlpha * kAlpha * (n + kKappa) - n;
+
+    auto sigma = generate_sigma_points();
+
+    // Compute sigma-point radar prediction via shared helper (z_mean, S, and z_sigma).
+    // z_sigma is reused below for cross-covariance — avoids redundant propagation.
+    auto [z_mean, S, z_sigma] = compute_radar_prediction(sigma);
+
+    // Weights
+    const float w0_cov = lambda / (n + lambda) + (1.0f - kAlpha * kAlpha + kBeta);
+    const float wi     = 1.0f / (2.0f * (n + lambda));
 
     // Cross-covariance Pxz (with angle-wrapped residuals)
     using RadarCrossMat = Eigen::Matrix<float, STATE_DIM, RADAR_MEAS_DIM>;
+    RadarMeasVec dz0    = z_sigma[0] - z_mean;
+    dz0(1)              = wrap_angle(dz0(1));
+    dz0(2)              = wrap_angle(dz0(2));
     StateVec      dx0   = sigma[0] - x_;
     RadarCrossMat Pxz   = w0_cov * (dx0 * dz0.transpose());
     for (int i = 1; i < 2 * n + 1; ++i) {
@@ -443,24 +464,33 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
                  max_dormant_);
 }
 
-float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
+UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
     const float fy = calib_.camera_intrinsics(1, 1);
     const float cy = calib_.camera_intrinsics(1, 2);
 
-    // Four-tier depth estimation:
+    // Four-tier depth estimation with confidence:
     //
-    // 1. Horizon-truncated bbox: when the bbox top is at or above the horizon
-    //    (pixel row ≤ cy), the obstacle extends above the visible frame.
-    //    The apparent-size formula would undercount bbox_h and overestimate
-    //    depth.  Fall back to ground-plane depth from the bbox bottom.
+    // 1. Horizon-truncated bbox (conf=0.6): bbox top at/above horizon,
+    //    use ground-plane geometry from bbox bottom.  Geometric but
+    //    extrapolating — moderate confidence.
     //
-    // 2. Apparent-size (primary): depth = assumed_height * fy / bbox_h
-    //    Most reliable when the full obstacle height is visible.
+    // 2. Apparent-size (conf=0.7): depth = assumed_height * fy / bbox_h
+    //    Most reliable camera-only method when full height visible.
     //
-    // 3. Ground-plane (fallback): depth = camera_height / ray_down
-    //    For objects below the horizon with unreliable bbox height.
+    // 3. Ground-plane fallback (conf=0.3): depth = camera_height / ray_down
+    //    Weak signal from small detections — often ground features.
     //
-    // 4. Near-horizon fallback: conservative 8m estimate.
+    // 4. Near-horizon fallback (conf=0.01): conservative 8m estimate.
+    //    Pure guess with no geometric basis.
+    //
+    // Confidence values gate downstream promotion: only detections with
+    // confidence >= min_promotion_depth_confidence become permanent static
+    // cells.  Low-confidence detections still create temporary dynamic cells.
+    //
+    // Tier 1/2 clamp penalty: if a Tier 1 or Tier 2 raw depth exceeds
+    // kDepthMaxM (40m), the model has saturated (common for ground features
+    // at shallow angles). Confidence drops to 0.2 to block promotion.
+    // Issue #340.
     constexpr float kBboxHThreshold  = 10.0f;
     constexpr float kDepthMinM       = 1.0f;
     constexpr float kDepthMaxM       = 40.0f;
@@ -482,29 +512,42 @@ float UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
         const float bbox_bottom   = trk.position_2d.y() + trk.bbox_h * 0.5f;
         const float ray_down_base = (bbox_bottom - cy) / std::max(1.0f, fy);
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
-            // Use actual drone altitude for ground-plane depth when available
-            return std::clamp(drone_altitude_m_ * fy / (bbox_bottom - cy) * ds, kDepthMinM,
-                              kDepthMaxM);
+            const float d_raw = drone_altitude_m_ * fy / (bbox_bottom - cy) * ds;
+            const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+            // Raw depth exceeded max → model saturated (common for ground
+            // features at shallow angles).  Reduce confidence to block
+            // promotion while still creating a dynamic cell.
+            const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.6f;
+            return {d, c};
         }
         if (ray_down_base > kRayDownMinThres) {
-            return std::clamp(calib_.camera_height_m / ray_down_base * ds, kDepthMinM, kDepthMaxM);
+            const float d_raw = calib_.camera_height_m / ray_down_base * ds;
+            const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+            const float c     = (d_raw > kDepthMaxM) ? 0.2f : 0.6f;
+            return {d, c};
         }
     }
 
     // Tier 2: Full-height apparent-size depth (bbox fully visible)
     if (trk.bbox_h > kBboxHThreshold) {
-        return std::clamp(calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds, kDepthMinM,
-                          kDepthMaxM);
+        const float d_raw = calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds;
+        const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+        // Raw depth exceeded max → the apparent-size model broke down (ground
+        // features with small bbox_h produce huge raw depths that clamp).
+        const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.7f;
+        return {d, c};
     }
 
     // Tier 3: Ground-plane fallback for small detections
     const float ray_down = (trk.position_2d.y() - cy) / std::max(1.0f, fy);
     if (ray_down > kRayDownMinThres) {
-        return std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM);
+        return {std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM), 0.3f};
     }
 
-    // Tier 4: Near-horizon conservative estimate
-    return kFallbackDepthM * ds;
+    // Tier 4: Near-horizon conservative estimate — no geometric basis.
+    // Use 0.01 (not 0.0) so the P2 camera-only fallback doesn't override
+    // this with detection confidence (which would defeat the promotion gate).
+    return {kFallbackDepthM * ds, 0.01f};
 }
 
 void UKFFusionEngine::reset() {
@@ -573,18 +616,65 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
     float    best_dist = std::numeric_limits<float>::max();
     uint32_t best_idx  = 0;
 
+    // For radar-only tracks, use proper innovation covariance S = Pzz + R
+    // that accounts for state uncertainty after predict(). Camera-originated
+    // tracks have tight covariance, so R-only gating is sufficient.
+    const bool use_full_S = ukf.radar_only;
+
+    Eigen::LLT<ObjectUKF::RadarMeasMat> track_llt;
+    bool                                track_llt_ok       = false;
+    float                               track_range_3sigma = range_3sigma;
+
+    ObjectUKF::RadarMeasVec track_z_mean = ObjectUKF::RadarMeasVec::Zero();
+
+    if (use_full_S) {
+        auto  pred      = ukf.predicted_radar_innovation_cov();
+        auto& S         = pred.S;
+        auto  z_mean_sp = pred.z_mean;
+        track_z_mean    = z_mean_sp;
+        track_llt.compute(S);
+        track_llt_ok = (track_llt.info() == Eigen::Success);
+        if (!track_llt_ok) {
+            // Regularize S by adding small epsilon to diagonal and retry LLT.
+            constexpr float kEpsilon = 1e-6f;
+            S.diagonal().array() += kEpsilon;
+            track_llt.compute(S);
+            track_llt_ok = (track_llt.info() == Eigen::Success);
+        }
+        if (!track_llt_ok) {
+            // S is not positive-definite even after regularization — treat as
+            // association failure (return no-match) rather than using a permissive
+            // diagonal approximation that could underestimate Mahalanobis distance.
+            spdlog::warn("[UKF] S-matrix LLT failed for radar-only track {:#x}, skipping "
+                         "association",
+                         ukf.track_id);
+            return false;
+        }
+        // Widen coarse range gate to 3σ of S(0,0) (range innovation variance).
+        // Guard against non-positive diagonal (numerical edge case).
+        if (S(0, 0) > 0.0f) {
+            track_range_3sigma = std::max(range_3sigma, 3.0f * std::sqrt(S(0, 0)));
+        }
+    }
+
     for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
         if (radar_matched[ri]) continue;
         const auto& rdet = radar_dets_.detections[ri];
 
-        // Coarse range gate
-        if (std::abs(rdet.range_m - z_pred(0)) > range_3sigma) continue;
+        // Coarse range gate — use z_mean for radar-only tracks (consistent with S-matrix),
+        // z_pred for camera-originated tracks (consistent with R-only gating).
+        const float predicted_range = use_full_S ? track_z_mean(0) : z_pred(0);
+        if (std::abs(rdet.range_m - predicted_range) > track_range_3sigma) continue;
 
-        // Altitude gate
+        // Altitude gate (wider for radar-only tracks with uncertain z)
         {
-            const float radar_z = rdet.range_m * std::sin(rdet.elevation_rad);
-            const float track_z = ukf.position()(2);
-            if (std::abs(radar_z - track_z) > radar_cfg_.altitude_gate_m) continue;
+            const float radar_z  = rdet.range_m * std::sin(rdet.elevation_rad);
+            const float track_z  = ukf.position()(2);
+            const float alt_gate = use_full_S
+                                       ? std::max(radar_cfg_.altitude_gate_m,
+                                                  3.0f * std::sqrt(ukf.position_covariance()(2, 2)))
+                                       : radar_cfg_.altitude_gate_m;
+            if (std::abs(radar_z - track_z) > alt_gate) continue;
         }
 
         // Negate azimuth: Gazebo FLU → UKF FRD
@@ -594,18 +684,31 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
         z_actual(2) = rdet.elevation_rad;
         z_actual(3) = rdet.radial_velocity_mps;
 
-        ObjectUKF::RadarMeasVec innovation = z_actual - z_pred;
+        // For radar-only tracks (use_full_S), compute innovation relative to
+        // the sigma-point mean z_mean — consistent with the S matrix built from
+        // z_mean residuals.  Camera-originated tracks use z_pred (h(x_)) which
+        // is consistent with R-only gating.
+        ObjectUKF::RadarMeasVec innovation = use_full_S ? (z_actual - track_z_mean)
+                                                        : (z_actual - z_pred);
         innovation(1)                      = wrap_angle(innovation(1));
         innovation(2)                      = wrap_angle(innovation(2));
 
         float mahal_sq = std::numeric_limits<float>::max();
-        if (radar_llt_ok) {
-            ObjectUKF::RadarMeasVec y = radar_llt.solve(innovation);
+        if (use_full_S) {
+            // Use proper innovation covariance S for radar-only tracks.
+            // LLT is guaranteed valid here (early return above on failure).
+            ObjectUKF::RadarMeasVec y = track_llt.solve(innovation);
             mahal_sq                  = innovation.dot(y);
         } else {
-            mahal_sq = 0.0f;
-            for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
-                mahal_sq += innovation(d) * innovation(d) * R_diag_inv(d);
+            // R-only gating for camera-originated tracks (backward compatible)
+            if (radar_llt_ok) {
+                ObjectUKF::RadarMeasVec y = radar_llt.solve(innovation);
+                mahal_sq                  = innovation.dot(y);
+            } else {
+                mahal_sq = 0.0f;
+                for (int d = 0; d < ObjectUKF::RADAR_MEAS_DIM; ++d) {
+                    mahal_sq += innovation(d) * innovation(d) * R_diag_inv(d);
+                }
             }
         }
 
@@ -627,6 +730,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     FusedObjectList output;
     output.timestamp_ns   = tracked.timestamp_ns;
     output.frame_sequence = tracked.frame_sequence;
+
 
     // Track which UKF filters are still active this frame
     std::unordered_map<uint32_t, bool> seen;
@@ -691,8 +795,8 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                                     calib_.camera_intrinsics(0, 2), calib_.camera_intrinsics(1, 2)};
 
     for (const auto& trk : tracked.objects) {
-        float depth           = estimate_depth(trk);
-        bool  radar_init_used = false;
+        auto [depth, depth_conf] = estimate_depth(trk);
+        bool radar_init_used     = false;
 
         auto it      = filters_.find(trk.track_id);
         bool adopted = false;
@@ -804,8 +908,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 // Monocular depth → high uncertainty, especially at long range.
                 if (radar_init_used) {
                     it->second.set_radar_confirmed_depth(depth);
+                    it->second.depth_confidence = 1.0f;
                 } else {
                     it->second.set_depth_covariance(100.0f);
+                    it->second.depth_confidence = depth_conf;
                 }
 
                 // Dormant re-identification: only radar-confirmed tracks enter the
@@ -862,7 +968,20 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
         auto& ukf = it->second;
         ukf.predict();
-        ukf.update_camera(trk, depth, cam_intr);
+
+        // Keep radar-confirmed range authoritative: once radar has confirmed a
+        // track, feed the current filter depth back instead of a fresh monocular
+        // estimate, which can pull the filter away from the radar range.
+        const float camera_update_depth = (ukf.radar_update_count > 0) ? ukf.position()(0) : depth;
+        ukf.update_camera(trk, camera_update_depth, cam_intr);
+
+        // Update depth confidence.  For camera-only tracks, use the current
+        // estimate directly so that a brief high-confidence observation cannot
+        // permanently "unlock" promotion.  For radar-confirmed tracks, preserve
+        // the radar confidence (1.0) until another radar update refreshes it.
+        if (ukf.radar_update_count == 0) {
+            ukf.depth_confidence = depth_conf;
+        }
 
         // Radar association: find best matching radar detection within gate
         bool matched_radar = false;
@@ -926,6 +1045,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 ukf.update_radar(radar_dets_.detections[best_idx]);
                 radar_matched[best_idx] = true;
                 matched_radar           = true;
+                ukf.depth_confidence    = 1.0f;
             }
         }
 
@@ -972,6 +1092,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
         fused.position_covariance = ukf.position_covariance();
         fused.timestamp_ns        = trk.timestamp_ns;
         fused.radar_update_count  = ukf.radar_update_count;
+        fused.depth_confidence    = ukf.depth_confidence;
 
         // Size estimation (A2): back-project camera bbox using UKF range.
         // Only meaningful when range is reliable (radar-confirmed or close range).
@@ -998,7 +1119,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     // ── Phase D4: Radar-only track re-association ──────────────
     // Existing radar-only filters from previous frames need radar updates.
     // They were not iterated in the camera-track loop above.
-    if (has_radar_data_ && radar_enabled_) {
+    if (has_radar_data_ && radar_enabled_ && radar_cfg_.radar_only_enabled) {
         for (auto& [tid, ukf] : filters_) {
             if (tid < 0x80000000u) continue;     // skip camera-originated tracks
             if (seen.count(tid) != 0) continue;  // already processed (adopted or new orphan)
@@ -1023,10 +1144,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     }
                 }
 
-                // Gate output: only emit after min_hits observations
-                if (ukf.radar_update_count <
-                    static_cast<uint32_t>(radar_cfg_.radar_orphan_min_hits))
-                    continue;
+                // Gate output: only emit after promotion threshold (consecutive
+                // radar observations). This delays output until the track is
+                // confirmed by N frames of radar data (Issue #231).
+                if (ukf.radar_update_count < radar_cfg_.radar_only_promotion_hits) continue;
 
                 // Build output for re-associated radar-only track
                 FusedObject fused;
@@ -1041,6 +1162,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 fused.position_covariance = ukf.position_covariance();
                 fused.timestamp_ns        = output.timestamp_ns;
                 fused.radar_update_count  = ukf.radar_update_count;
+                fused.depth_confidence    = 1.0f;  // radar range is authoritative
                 fused.estimated_radius_m  = radar_cfg_.radar_only_default_radius_m;
                 fused.estimated_height_m  = 0.0f;
 
@@ -1061,15 +1183,15 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
     // ── Phase D3: Radar-orphan processing ─────────────────────
     // Create new tracks from unmatched radar detections that are far from
     // any existing filter (camera or radar-only).  This enables detection
-    // of obstacles outside camera FOV.
-    if (has_radar_data_ && radar_enabled_) {
+    // of obstacles outside camera FOV (Issue #231: gated by radar_only_enabled).
+    if (has_radar_data_ && radar_enabled_ && radar_cfg_.radar_only_enabled) {
         for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
             if (radar_matched[ri]) continue;
             const auto& rdet = radar_dets_.detections[ri];
 
             // Quality gates for orphan track creation:
             // 1. Range sanity — ignore detections beyond reliable radar range.
-            //    Typical 77GHz drone radar: ≤50m. Default 40m is conservative.
+            //    Typical 77GHz drone radar: ≤50m. Default 25m rejects distant clutter.
             if (rdet.range_m > radar_cfg_.radar_max_orphan_range_m) continue;
 
             // 2. Ground-plane filter (redundant safety net) — applied even when
@@ -1129,11 +1251,12 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
 
             seen[rid] = true;
 
-            // Gate output: only emit radar-only tracks after min_hits observations.
+            // Gate output: only emit radar-only tracks after promotion threshold.
             // The filter still exists (accumulates future radar hits), but the grid
             // won't see it until it has enough observations to be trustworthy.
-            if (ukf.radar_update_count < static_cast<uint32_t>(radar_cfg_.radar_orphan_min_hits))
-                continue;
+            // Uses radar_only_promotion_hits (default 6) for degraded-visibility
+            // promotion (Issue #231).
+            if (ukf.radar_update_count < radar_cfg_.radar_only_promotion_hits) continue;
 
             // Build FusedObject output
             FusedObject fused;
@@ -1148,6 +1271,7 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             fused.position_covariance = ukf.position_covariance();
             fused.timestamp_ns        = output.timestamp_ns;
             fused.radar_update_count  = ukf.radar_update_count;
+            fused.depth_confidence    = 1.0f;  // radar range is authoritative
             fused.estimated_radius_m  = radar_cfg_.radar_only_default_radius_m;
             fused.estimated_height_m  = 0.0f;
 
@@ -1233,11 +1357,32 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                 "perception.fusion.radar.default_radius_m", radar_cfg.radar_only_default_radius_m);
             radar_cfg.radar_max_orphan_range_m = cfg->get<float>(
                 "perception.fusion.radar.max_orphan_range_m", radar_cfg.radar_max_orphan_range_m);
-            radar_cfg.radar_orphan_min_hits = cfg->get<int>(
-                "perception.fusion.radar.orphan_min_hits", radar_cfg.radar_orphan_min_hits);
             radar_cfg.radar_only_promotion_hits = static_cast<uint32_t>(
                 cfg->get<int>("perception.fusion.radar.promotion_hits",
                               static_cast<int>(radar_cfg.radar_only_promotion_hits)));
+            // Issue #231: configurable radar-only track toggle and promotion frames.
+            // radar_orphan_promote_frames overrides promotion_hits when present.
+            radar_cfg.radar_only_enabled = cfg->get<bool>("perception.fusion.radar_only_enabled",
+                                                          radar_cfg.radar_only_enabled);
+            radar_cfg.radar_only_promotion_hits = static_cast<uint32_t>(
+                cfg->get<int>("perception.fusion.radar_orphan_promote_frames",
+                              static_cast<int>(radar_cfg.radar_only_promotion_hits)));
+
+            // Validate promotion_hits: negative config values would underflow
+            // uint32_t; zero means no gating which defeats the purpose.  Clamp
+            // to >= 1 with a warning.
+            {
+                const int raw_promotion = cfg->get<int>(
+                    "perception.fusion.radar_orphan_promote_frames",
+                    cfg->get<int>("perception.fusion.radar.promotion_hits",
+                                  static_cast<int>(radar_cfg.radar_only_promotion_hits)));
+                if (raw_promotion < 1) {
+                    spdlog::warn("[UKF] radar promotion_hits={} invalid (must be >= 1), clamping "
+                                 "to 1",
+                                 raw_promotion);
+                    radar_cfg.radar_only_promotion_hits = 1;
+                }
+            }
         }
         float dormant_merge_radius =
             cfg ? cfg->get<float>("perception.fusion.dormant_merge_radius_m", 5.0f) : 5.0f;

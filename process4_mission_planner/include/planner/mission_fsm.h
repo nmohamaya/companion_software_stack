@@ -22,6 +22,7 @@ inline const char* state_name(MissionState s) {
         case MissionState::LAND: return "LAND";
         case MissionState::EMERGENCY: return "EMERGENCY";
         case MissionState::SURVEY: return "SURVEY";
+        case MissionState::COLLISION_RECOVERY: return "COLLISION_RECOVERY";
         default: return "UNKNOWN";
     }
 }
@@ -56,6 +57,8 @@ public:
         fault_triggered_ = false;
     }
     void on_emergency() { transition(MissionState::EMERGENCY); }
+    void on_collision_recovery() { transition(MissionState::COLLISION_RECOVERY); }
+    void on_recovery_complete() { transition(MissionState::NAVIGATE); }
 
     /// Check if waypoint is reached (within acceptance radius).
     [[nodiscard]] bool waypoint_reached(float px, float py, float pz, const Waypoint& wp) const {
@@ -125,7 +128,8 @@ public:
     [[nodiscard]] bool is_in_fault_state() const {
         return fault_triggered_ &&
                (state_ == MissionState::LOITER || state_ == MissionState::RTL ||
-                state_ == MissionState::LAND || state_ == MissionState::EMERGENCY);
+                state_ == MissionState::LAND || state_ == MissionState::EMERGENCY ||
+                state_ == MissionState::COLLISION_RECOVERY);
     }
 
     /// Mark that the current state was caused by a fault (not a GCS

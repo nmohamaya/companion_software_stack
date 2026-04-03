@@ -1,0 +1,57 @@
+{
+    "_comment": "Scenario 26: Gazebo Full VIO Pipeline — exercises feature extraction, stereo matching, and IMU pre-integration on Gazebo-rendered frames",
+    "scenario": {
+        "name": "gazebo_full_vio",
+        "description": "Fly a short mission with the full VIO pipeline running on Gazebo-rendered stereo frames. Validates that GazeboFullVIOBackend processes frames through feature extraction, stereo matching, and IMU pre-integration (code path coverage). Pose still comes from Gazebo ground truth. Tier 2 — requires Gazebo SITL.",
+        "tier": 2,
+        "timeout_s": 50,
+        "requires_gazebo": true
+    },
+    "config_overrides": {
+        "slam": {
+            "vio": {
+                "backend": "gazebo_full_vio",
+                "gz_topic": "/model/x500_companion_0/odometry"
+            },
+            "imu": {
+                "backend": "gazebo"
+            }
+        },
+        "video_capture": {
+            "stereo_cam": {
+                "backend": "gazebo"
+            }
+        },
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 2.0,
+            "cruise_speed_mps": 2.0,
+            "waypoints": [
+                {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
+                {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false}
+            ]
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "GazeboFullVIOBackend",
+            "FeatureExtractor: num_features",
+            "StereoMatcher: num_matches",
+            "ImuPreintegrator: total_dt",
+            "TAKEOFF",
+            "EXECUTING",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND",
+            "GazeboFullVIOBackend.*Failed to subscribe"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    }
+}

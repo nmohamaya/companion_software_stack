@@ -31,7 +31,7 @@
 # Gazebo SITL integration (requires PX4 + Gazebo Harmonic)
 ./tests/run_tests.sh gazebo-e2e
 
-# Gazebo SITL scenario runner (all 18 scenarios with PX4 + Gazebo + Zenoh)
+# Gazebo SITL scenario runner (all 25 scenarios with PX4 + Gazebo + Zenoh)
 ./tests/run_scenario_gazebo.sh --all
 ./tests/run_scenario_gazebo.sh --all --gui   # with 3D window
 ./tests/run_scenario_gazebo.sh config/scenarios/02_obstacle_avoidance.json
@@ -56,7 +56,7 @@
 | `payload` | GimbalController servo simulation | ~9 |
 | `monitor` | P7 system monitor (CPU/memory/thermal) | ~28 |
 | `util` | Config, Result, latency tracker, JSON log, correlation | ~136 |
-| `interfaces` | IVisualFrontend, IPathPlanner, IObstacleAvoider, IProcessMonitor | ~21 |
+| `interfaces` | IProcessMonitor interface tests | ~5 |
 | `zenoh` | All Zenoh-specific tests | ~121 |
 | `network` | Network transport, wire format, liveliness | ~50 |
 | `quick` | All fast unit tests (excludes slow/resource-heavy) | ~600 |
@@ -110,15 +110,21 @@ bash deploy/build.sh --test-filter watchdog
 | [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
 | [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
 | [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
-| [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 41 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend |
+| [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 49 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend (covariance quality) |
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
-| [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 10 | IVisualFrontend, IProcessMonitor |
+| [P4 — Collision Recovery](#p4--collision-recovery) | 1 | 14 | Post-collision FSM state, waypoint skip, recovery logic |
+| [P4 — Obstacle Prediction](#p4--obstacle-prediction) | 1 | 10 | Dynamic obstacle prediction via UKF velocity vectors |
+| [P6 — Gimbal Auto-Tracker](#p6--gimbal-auto-tracker) | 1 | 25 | Gimbal auto-tracking of highest-priority tracked object |
+| [P3 — Rate Clamping](#p3--rate-clamping) | 1 | 27 | Config-driven loop rate clamping for P3 threads |
+| [P2 — Simulated Detector](#p2--simulated-detector) | 1 | 13 | SimulatedDetector extraction, detection generation |
+| [Flight Data Recorder](#flight-data-recorder) | 1 | 19 | Ring-buffer flight recorder, IPC replay |
+| [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 5 | IProcessMonitor |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
-| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 170+ | 18 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (15 Tier 1 + 3 Tier 2) |
-| **Total** | **50 C++ + 5 shell** | **1108 + 42 + 170+** | |
+| [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
+| **Total** | **56 C++ + 5 shell** | **1238 + 42 + 250+** | |
 
 ---
 
@@ -967,10 +973,9 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `VisualFrontendTest` | 5 | `IVisualFrontend` — simulated visual odometry init, pose estimation, feature count |
 | `ProcessMonitorTest` | 5 | `IProcessMonitor` — Linux process monitoring interface, CPU/memory query |
 
-**Key files under test:** `slam/ivisual_frontend.h`, `monitor/iprocess_monitor.h`
+**Key files under test:** `monitor/iprocess_monitor.h`
 
 ---
 
@@ -1152,7 +1157,7 @@ Harmonic with real MAVLink telemetry, Gazebo camera/IMU sensors, and Zenoh IPC.
 Launches PX4 + Gazebo + the full companion stack per scenario, injects timed faults
 via `fault_injector`, and verifies pass criteria against actual process logs.
 
-**Pass criteria per scenario (170+ total checks across 18 scenarios):**
+**Pass criteria per scenario (250+ total checks across 25 scenarios):**
 - `log_contains` — required log patterns (FSM states, fault flags)
 - `log_must_not_contain` — forbidden patterns (collision, unexpected faults)
 - `processes_alive` — processes that must survive to end of scenario
@@ -1209,4 +1214,4 @@ is not available.
 
 ---
 
-*Last updated: March 2026 — 1108 unit tests across 50 C++ files + 42 E2E checks (5 shell scripts) + 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2). All Tier 1 and Tier 2 scenarios passing. Epic #237: radar-primary sensor fusion, dormant re-ID, SURVEY phase, configurable radar promotion/orphan thresholds, carrot smoothing assertion (+44 tests from 1064). All 1108 tests passing.*
+*Last updated: April 2026 — 1238 unit tests across 56 C++ files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. Epic #263: autonomous intelligence & sim fidelity — collision recovery, dynamic obstacle prediction, gimbal auto-tracking, flight data recorder, covariance VIO quality, GazeboFullVIO backend, radar-only track initiation, rate clamping, D* Lite corner-cutting guard, YOLOv8 Gazebo scenario, IVisualFrontend removal (+130 tests from 1108). All 1238 tests passing.*

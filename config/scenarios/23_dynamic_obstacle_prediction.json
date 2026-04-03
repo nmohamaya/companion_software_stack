@@ -1,0 +1,90 @@
+{
+    "_comment": "Scenario 23: Dynamic Obstacle Prediction — validate velocity-based occupancy grid inflation (Issue #256). Moving objects inflate cells along their velocity vectors so D* Lite routes around where obstacles WILL BE, not just where they are now.",
+    "scenario": {
+        "name": "dynamic_obstacle_prediction",
+        "description": "Verify that the occupancy grid inflates cells along detected objects' velocity vectors using UKF-estimated velocities. The prediction horizon (dt_s=2.0) projects obstacle positions 2 seconds into the future. Tier 1 — no Gazebo required (simulated perception provides velocity estimates).",
+        "tier": 1,
+        "timeout_s": 90,
+        "requires_gazebo": false
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 2.0,
+            "cruise_speed_mps": 2.0,
+            "path_planner": {"backend": "dstar_lite", "replan_interval_s": 0.5},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 2.0,
+                "influence_radius_m": 5.0,
+                "repulsive_gain": 2.0,
+                "max_correction_mps": 3.0
+            },
+            "occupancy_grid": {
+                "resolution_m": 1.0,
+                "inflation_radius_m": 1.5,
+                "dynamic_obstacle_ttl_s": 2.0,
+                "min_confidence": 0.3,
+                "prediction_enabled": true,
+                "prediction_dt_s": 2.0
+            },
+            "static_obstacles": [],
+            "geofence": {
+                "polygon": [
+                    {"x": -50, "y": -50},
+                    {"x":  50, "y": -50},
+                    {"x":  50, "y":  50},
+                    {"x": -50, "y":  50}
+                ],
+                "altitude_floor_m": 0.0,
+                "altitude_ceiling_m": 120.0,
+                "warning_margin_m": 5.0
+            },
+            "waypoints": [
+                {"x": 15, "y": 0,  "z": 5, "yaw": 0,     "speed": 2.0, "payload_trigger": false, "_comment": "Straight leg east — moving obstacles detected ahead"},
+                {"x": 15, "y": 15, "z": 5, "yaw": 1.57,   "speed": 2.0, "payload_trigger": false, "_comment": "North — dynamic prediction should route around crossing obstacle"},
+                {"x": 0,  "y": 15, "z": 5, "yaw": 3.14,   "speed": 2.0, "payload_trigger": false, "_comment": "Return west"},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -1.57,  "speed": 2.0, "payload_trigger": false, "_comment": "Return home"}
+            ]
+        },
+        "perception": {
+            "detector": {
+                "backend": "simulated",
+                "confidence_threshold": 0.3,
+                "max_detections": 64,
+                "sim": {
+                    "min_detections": 3,
+                    "max_detections": 3
+                }
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7,
+                "_comment": "ByteTrack provides velocity estimates via UKF fusion"
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "Path planner: DStarLitePlanner",
+            "Obstacle avoider: ObstacleAvoider3D",
+            "TAKEOFF",
+            "EXECUTING",
+            "Mission complete",
+            "predictions="
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    }
+}

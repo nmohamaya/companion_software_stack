@@ -45,12 +45,13 @@ struct RadarNoiseConfig {
     float altitude_gate_m       = 2.0f;    // reject radar-track pairs with |body_z diff| > this
 
     // Radar-primary architecture (Phase D) — independent radar track creation
-    float    radar_orphan_proximity_m    = 3.0f;   // min dist to existing track for orphan creation
-    float    radar_adopt_gate_m          = 5.0f;   // max range error for camera adoption
-    float    radar_only_default_radius_m = 1.5f;   // conservative default inflation (no bbox)
-    float    radar_max_orphan_range_m    = 40.0f;  // max range for orphan creation (77GHz ≈ 50m)
-    int      radar_orphan_min_hits       = 1;      // min radar observations before output
-    uint32_t radar_only_promotion_hits   = 3;      // radar hits for static promotion (tunable)
+    float radar_orphan_proximity_m    = 5.0f;  // min dist to existing track for orphan creation
+    float radar_adopt_gate_m          = 5.0f;  // max range error for camera adoption
+    float radar_only_default_radius_m = 1.5f;  // conservative default inflation (no bbox)
+    float radar_max_orphan_range_m =
+        25.0f;  // max range for orphan creation (reject distant clutter)
+    uint32_t radar_only_promotion_hits = 6;     // radar hits for static promotion (0.3s at 20Hz)
+    bool     radar_only_enabled        = true;  // enable radar-only track initiation (Issue #231)
 };
 
 /// Per-object UKF state for 3D tracking.
@@ -90,6 +91,17 @@ public:
     /// Convert current state to radar measurement space for association.
     [[nodiscard]] RadarMeasVec predicted_radar_measurement() const;
 
+    /// Compute radar prediction via sigma points: returns {z_mean, S} where
+    /// z_mean is the sigma-point mean (with circular averaging for angles) and
+    /// S = Pzz + R_radar is the innovation covariance.
+    /// Used for proper Mahalanobis gating that accounts for state uncertainty.
+    struct RadarPrediction {
+        RadarMeasVec              z_mean;
+        RadarMeasMat              S;
+        std::vector<RadarMeasVec> z_sigma;  ///< Propagated sigma points (reused by update)
+    };
+    [[nodiscard]] RadarPrediction predicted_radar_innovation_cov() const;
+
     /// Get current 3D position estimate.
     [[nodiscard]] Eigen::Vector3f position() const;
 
@@ -104,8 +116,9 @@ public:
 
     uint32_t track_id{0};
     uint32_t age{0};
-    uint32_t radar_update_count{0};  ///< Number of radar updates received (for B1 trust)
-    bool     radar_only{false};      ///< True if created from radar without camera (Phase D)
+    uint32_t radar_update_count{0};   ///< Number of radar updates received (for B1 trust)
+    float    depth_confidence{0.0f};  ///< Depth estimation quality [0.0=guess, 1.0=radar-confirmed]
+    bool     radar_only{false};       ///< True if created from radar without camera (Phase D)
 
     /// Tighten depth covariance after radar provides accurate range.
     void set_radar_confirmed_depth(float radar_range);
@@ -123,6 +136,10 @@ private:
 
     /// Radar measurement model: state → [range, azimuth, elevation, radial_velocity].
     static RadarMeasVec radar_measurement_model(const StateVec& s);
+
+    /// Shared helper: compute sigma-point radar prediction {z_mean, S}.
+    /// Used by both predicted_radar_innovation_cov() and update_radar().
+    RadarPrediction compute_radar_prediction(const std::vector<StateVec>& sigma) const;
 
     /// UKF tuning parameters
     static constexpr float kAlpha = 1e-3f;
@@ -204,7 +221,11 @@ private:
     // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
     uint32_t next_radar_track_id_{0x80000000u};
 
-    float           estimate_depth(const TrackedObject& trk) const;
+    struct DepthEstimate {
+        float depth      = 8.0f;
+        float confidence = 0.0f;
+    };
+    DepthEstimate   estimate_depth(const TrackedObject& trk) const;
     Eigen::Vector3f body_to_world(const Eigen::Vector3f& body) const;
     int             find_nearest_dormant(const Eigen::Vector3f& world_pos,
                                          const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *

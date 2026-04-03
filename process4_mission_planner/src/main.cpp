@@ -200,10 +200,26 @@ int main(int argc, char* argv[]) {
     planner_cfg.radar_promotion_hits =
         static_cast<uint32_t>(cfg.get<int>("mission_planner.occupancy_grid.radar_promotion_hits",
                                            static_cast<int>(planner_cfg.radar_promotion_hits)));
-    planner_cfg.z_band_cells = cfg.get<int>("mission_planner.path_planner.z_band_cells",
-                                            planner_cfg.z_band_cells);
-    planner_cfg.look_ahead_m = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
-                                              planner_cfg.look_ahead_m);
+    planner_cfg.min_promotion_depth_confidence =
+        cfg.get<float>("mission_planner.occupancy_grid.min_promotion_depth_confidence",
+                       planner_cfg.min_promotion_depth_confidence);
+    planner_cfg.max_static_cells = cfg.get<int>("mission_planner.occupancy_grid.max_static_cells",
+                                                planner_cfg.max_static_cells);
+    // Prediction config — under occupancy_grid.* for consistency with other grid params
+    planner_cfg.prediction_enabled = cfg.get<bool>(
+        "mission_planner.occupancy_grid.prediction_enabled", planner_cfg.prediction_enabled);
+    planner_cfg.prediction_dt_s = cfg.get<float>("mission_planner.occupancy_grid.prediction_dt_s",
+                                                 planner_cfg.prediction_dt_s);
+    planner_cfg.z_band_cells    = cfg.get<int>("mission_planner.path_planner.z_band_cells",
+                                               planner_cfg.z_band_cells);
+    planner_cfg.look_ahead_m    = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
+                                                 planner_cfg.look_ahead_m);
+    planner_cfg.yaw_towards_travel = cfg.get<bool>(
+        "mission_planner.path_planner.yaw_towards_travel", planner_cfg.yaw_towards_travel);
+    planner_cfg.yaw_smoothing_rate = cfg.get<float>(
+        "mission_planner.path_planner.yaw_smoothing_rate", planner_cfg.yaw_smoothing_rate);
+    planner_cfg.snap_approach_bias = cfg.get<float>(
+        "mission_planner.path_planner.snap_approach_bias", planner_cfg.snap_approach_bias);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     spdlog::info("Path planner: {}", path_planner->name());
@@ -252,8 +268,17 @@ int main(int argc, char* argv[]) {
     const float survey_duration  = cfg.get<float>("mission_planner.survey_duration_s", 0.0f);
     const float survey_yaw_rate  = cfg.get<float>("mission_planner.survey_yaw_rate", 0.3f);
 
+    // Collision recovery config (Issue #226)
+    const bool collision_recovery_enabled =
+        cfg.get<bool>("mission_planner.collision_recovery.enabled", true);
+    const float collision_climb_delta =
+        cfg.get<float>("mission_planner.collision_recovery.climb_delta_m", 3.0f);
+    const float collision_hover_duration =
+        cfg.get<float>("mission_planner.collision_recovery.hover_duration_s", 2.0f);
+
     MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s,
-                                      survey_duration, survey_yaw_rate});
+                                      survey_duration, survey_yaw_rate, collision_recovery_enabled,
+                                      collision_climb_delta, collision_hover_duration});
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
     auto                  send_fc = [&](drone::ipc::FCCommandType cmd, float p) {

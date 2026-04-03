@@ -197,6 +197,7 @@ struct VIOOutput {
     double   preint_ms          = 0;  // pre-integration time
     double   total_ms           = 0;  // full pipeline time
     uint64_t frame_id           = 0;
+    double   position_trace = -1;  // trace(P_position) from IMU pre-integrator; -1 = unavailable
 };
 
 // ═══════════════════════════════════════════════════════════

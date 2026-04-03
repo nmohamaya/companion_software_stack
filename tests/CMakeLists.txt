@@ -177,6 +177,12 @@ if(ENABLE_SYSTEMD)
     target_link_libraries(test_sd_notify PRIVATE ${SYSTEMD_LIBRARIES})
 endif()
 
+# ── SimulatedDetector tests (Issue #253) ────────────────────
+add_drone_test(test_simulated_detector test_simulated_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/detector_factory.cpp
+)
+
 # ── ColorContourDetector tests ───────────────────────────────
 add_drone_test(test_color_contour_detector test_color_contour_detector.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
@@ -237,6 +243,9 @@ add_drone_test(test_bytetrack_tracker test_bytetrack_tracker.cpp
 # ── D* Lite Path Planner tests (Issue #158) ────────────────
 add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
 
+# ── Dynamic Obstacle Prediction tests (Issue #256) ───────
+add_drone_test(test_obstacle_prediction test_obstacle_prediction.cpp)
+
 # ── Mission State Tick tests (Issue #154) ──────────────────
 add_drone_test(test_mission_state_tick test_mission_state_tick.cpp)
 
@@ -245,3 +254,17 @@ add_drone_test(test_radar_hal          test_radar_hal.cpp)
 
 # ── Gazebo Radar Backend tests (Issue #212) ───────────────
 add_drone_test(test_gazebo_radar       test_gazebo_radar.cpp)
+
+# ── Rate Clamp tests (Issue #220) ─────────────────────────
+add_drone_test(test_rate_clamp         test_rate_clamp.cpp)
+
+# ── Flight Recorder tests (Issue #40) ─────────────────────
+add_drone_test(test_flight_recorder    test_flight_recorder.cpp)
+target_link_libraries(test_flight_recorder PRIVATE drone_recorder)
+target_include_directories(test_flight_recorder PRIVATE
+    ${PROJECT_SOURCE_DIR}/common/recorder/include
+)
+# ── Collision Recovery tests (Issue #226) ─────────────────
+add_drone_test(test_collision_recovery test_collision_recovery.cpp)
+# ── Gimbal Auto-Tracker tests (Issue #257) ────────────────
+add_drone_test(test_gimbal_auto_tracker test_gimbal_auto_tracker.cpp)

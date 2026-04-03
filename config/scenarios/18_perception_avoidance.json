@@ -4,7 +4,7 @@
         "name": "perception_avoidance",
         "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity (with altitude gate), and D* Lite replans dynamically via update_from_objects(). Path-aware ObstacleAvoider3D provides lateral nudge without fighting the planner. Validates the full multi-sensor perception→planning loop for unknown environments.",
         "tier": 2,
-        "timeout_s": 180,
+        "timeout_s": 160,
         "requires_gazebo": true
     },
     "config_overrides": {
@@ -13,9 +13,9 @@
             "acceptance_radius_m": 3.0,
             "overshoot_proximity_factor": 5.0,
             "cruise_speed_mps": 1.5,
-            "survey_duration_s": 25.0,
-            "survey_yaw_rate": 0.3,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5},
+            "survey_duration_s": 26.0,
+            "survey_yaw_rate": 0.5,
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 1.0},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
@@ -32,7 +32,10 @@
                 "dynamic_obstacle_ttl_s": 1.0,
                 "min_confidence": 0.4,
                 "promotion_hits": 8,
-                "_comment": "2m grid — search completes in <10ms with 8-connected. 2m inflation (1 cell) — keeps corridors between obstacles open for D* Lite (8.6m gap between RED/GREEN minus 2m radii minus 4m total inflation = 2.6m free). ObstacleAvoider3D (8m influence) handles close-range safety. 1.0s TTL. min_confidence=0.4 lets enough detections through for reliable promotion. promotion_hits=8: low enough for parallax-diluted cells to promote within 25s survey."
+                "min_promotion_depth_confidence": 0.8,
+                "max_static_cells": 800,
+                "prediction_enabled": false,
+                "_comment": "2m grid, 2m inflation, 1s TTL. min_promotion_depth_confidence=0.8: blocks camera-only Tier 1-4 (0.01-0.7) while allowing radar-confirmed (1.0) to promote. prediction_enabled=false: camera-only depth/velocity too noisy (Issue #340). max_static_cells=800 safety cap."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
@@ -66,8 +69,8 @@
                 "backend": "gazebo",
                 "enabled": true,
                 "update_rate_hz": 20,
-                "ground_filter_alt_m": 0.5,
-                "_comment": "Radar enabled — HAL ground filter rejects returns below 0.5m AGL using drone altitude from odometry (Issue #229)"
+                "ground_filter_alt_m": 2.0,
+                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL rejects noise-elevated ground returns (Issue #340). Obstacles are 5m tall → returns at 3-5m altitude pass. Elevation noise (~3°) can push ground returns to ~1.5m, so 2.0m threshold provides margin."
             },
             "fusion": {
                 "backend": "ukf",
@@ -77,9 +80,12 @@
                 "radar": {
                     "enabled": true,
                     "ground_filter_enabled": true,
-                    "min_object_altitude_m": 0.3,
+                    "min_object_altitude_m": 1.5,
                     "altitude_gate_m": 2.0,
-                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate (Issue #229) — rejects ground returns and altitude-mismatched associations"
+                    "orphan_proximity_m": 5.0,
+                    "max_orphan_range_m": 25.0,
+                    "promotion_hits": 8,
+                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate (Issue #229). Orphan proximity 5m reduces multipath duplicates. Max range 25m rejects distant clutter. Promotion 8 hits (0.4s at 20Hz) filters transient returns."
                 }
             }
         }

@@ -150,7 +150,8 @@ private:
         // FSM state check — reject during safety-critical phases (#182)
         auto state = fsm.state();
         if (state == MissionState::RTL || state == MissionState::LAND ||
-            state == MissionState::EMERGENCY || state == MissionState::TAKEOFF) {
+            state == MissionState::EMERGENCY || state == MissionState::TAKEOFF ||
+            state == MissionState::COLLISION_RECOVERY) {
             spdlog::warn("[Planner] MISSION_UPLOAD rejected — unsafe FSM state '{}' corr={:#x}",
                          static_cast<int>(state), correlation_id);
             ++state_rejected_count_;
@@ -237,7 +238,7 @@ private:
     static void publish_stop_trajectory(drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& pub,
                                         uint64_t correlation_id) {
         drone::ipc::TrajectoryCmd stop{};
-        stop.valid          = false;
+        stop.valid          = true;  // P5 skips valid=false — send zero-velocity to stop
         stop.correlation_id = correlation_id;
         stop.timestamp_ns =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(

@@ -430,6 +430,82 @@ if (pose_sub.receive(p)) { latest_pose = p; has_pose = true; }
 
 ---
 
+### Fix #345a — Ground Textures Promoted as Permanent Static Obstacles (Issue #345)
+
+**Date:** 2026-04-03
+**Severity:** High
+**File:** `process2_perception/include/perception/color_contour_detector.h`, `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `process2_perception/src/ukf_fusion_engine.cpp`
+
+**Bug:** The `color_contour` detector triggered on ground textures (landing pads, grass patterns, shadows) when flying at 4m altitude. These detections received `depth_confidence` between 0.01–0.7 from the UKF depth estimator but were still promoted to permanent static cells in the occupancy grid. The grid peaked at 2357 dynamic cells and 800 static cells (hitting the cap) for only 4 real obstacles.
+
+**Root Cause:** Three compounding issues:
+1. No depth confidence gate on promotion — camera-only detections with unreliable depth (0.01–0.7) were promoted alongside radar-confirmed detections (1.0).
+2. No ground-feature filtering at the detector level — `ColorContourDetector` purely matches HSV colors with no awareness of object geometry.
+3. Prediction amplified ground-feature noise — camera-only velocity estimates on stationary ground textures created 5750-cell prediction trails.
+
+**Fix (multi-layer):**
+1. **Depth confidence gate** (`occupancy_grid_3d.h`): `min_promotion_depth_confidence = 0.8` — blocks all camera-only detections (Tier 1-4: 0.01–0.7) while allowing radar-confirmed (1.0). Also added `promotion_paused_` flag during RTL/LAND.
+2. **Bbox ground-feature filters** (`color_contour_detector.h`): `min_bbox_height_px = 15` rejects short detections, `max_aspect_ratio = 3.0` rejects flat/wide ground textures. Reduced dynamic cells by 65%.
+3. **Prediction disabled** in perception-heavy scenarios until camera velocity estimation improves.
+
+**Impact:** Max dynamic cells 2357 → 553-751 (-68%), max static cells 800 → 142-194 (-78%). Scenario 18 stabilised from flaky FAIL/PASS to consistent PASS 19/19.
+
+**Found by:** Gazebo scenario 18 (perception_avoidance) testing — drone collided with obstacles due to grid bloat redirecting D* Lite paths.
+
+**Regression tests:** `MinBboxHeightRejectsShortDetections`, `MaxAspectRatioRejectsFlatDetections`, `TallNarrowDetectionPassesBothFilters` in `test_color_contour_detector.cpp`; `PromotionPausedBlocksPromotion` in `test_dstar_lite_planner.cpp`
+
+---
+
+### Fix #345b — Radar Multipath Creates 31 Ghost Tracks for 4 Real Obstacles (Issue #345)
+
+**Date:** 2026-04-03
+**Severity:** High
+**File:** `process2_perception/include/perception/ukf_fusion_engine.h`, `config/default.json`, `config/gazebo_zenoh.json`, `config/scenarios/17_radar_gazebo.json`, `config/scenarios/18_perception_avoidance.json`
+
+**Bug:** Gazebo radar multipath/clutter created ~7-8 radar-only tracks per real obstacle (31 total for 4 obstacles). Each track was promoted after only 3 radar hits (0.1s at 30Hz) and inflated to ~25 static cells, filling the 800-cell static cap with ghost obstacles. The ghost walls redirected D* Lite paths, causing the drone to take suboptimal or dangerous routes.
+
+**Root Cause:** Three overly permissive default parameters:
+1. `radar_orphan_proximity_m = 3.0m` — too close, allowing duplicate tracks for the same obstacle from multipath reflections at slightly different angles.
+2. `radar_max_orphan_range_m = 40.0m` — accepting distant clutter returns beyond useful avoidance range.
+3. `radar_only_promotion_hits = 3` — only 0.1s of consistency required, insufficient to filter transient clutter.
+
+**Fix:** Tightened defaults:
+1. `radar_orphan_proximity_m`: 3.0 → 5.0m (merges multipath duplicates)
+2. `radar_max_orphan_range_m`: 40 → 25m (rejects distant clutter)
+3. `radar_only_promotion_hits`: 3 → 6 (default) / 8 (Gazebo scenarios)
+
+**Impact:** Radar tracks 31 → 8-18, max static cells 800 → 124-194. Ghost cell problem eliminated.
+
+**Found by:** Gazebo scenario 18 run report analysis — 31 radar-only tracks for 4 real obstacles, non-deterministic static cap hits.
+
+**Regression tests:** `ProximityGateRejectsDuplicateOrphans`, `MaxOrphanRangeRejectsDistantDetections` in `test_fusion_engine.cpp`
+
+---
+
+### Fix #345c — Single-Pass Survey Produces Sparse Radar Coverage (Issue #345)
+
+**Date:** 2026-04-03
+**Severity:** Medium
+**File:** `process4_mission_planner/include/planner/mission_state_tick.h`, `config/scenarios/18_perception_avoidance.json`, `config/scenarios/21_yolov8_detection.json`
+
+**Bug:** The survey phase rotated once at 0.3 rad/s for 25s (~1.2 rotations), giving each obstacle only one brief radar observation window. With `promotion_hits = 8` requiring 0.4s of consistent returns, many obstacles didn't accumulate enough hits during survey. Survey consistently produced only 62-91 static cells for 4 obstacles — insufficient for reliable avoidance.
+
+**Root Cause:** Single-direction rotation meant radar multipath from one angle only. A slower single circle (0.18 rad/s, 35s) was tested but performed worse — only 5 radar re-IDs and ORANGE at 1.0m collision risk — because each obstacle was seen only once.
+
+**Fix:** Two-phase CW/CCW survey: first half clockwise, second half counter-clockwise. Each obstacle is seen from opposite directions. Combined with faster yaw rate (0.5 rad/s, 26s = 2 full rotations):
+```cpp
+if (elapsed_s <= half_dur)
+    target_yaw = start + rate * elapsed_s;       // Phase 1: CW
+else
+    target_yaw = phase1_end - rate * (elapsed_s - half_dur);  // Phase 2: CCW
+```
+
+**Impact:** Radar tracks reduced further (best: 8 for 4 obstacles). Avoider max correction dropped from 1.51 → 0.33 m/s (planner handles avoidance). No collision risks across all test runs.
+
+**Found by:** Gazebo scenario testing — comparing single-circle vs double-circle survey coverage and obstacle proximity metrics.
+
+---
+
 ## SLAM / VIO (Process 3)
 
 ---
@@ -1364,6 +1440,152 @@ This exclusion is safe — the TSan leg still runs all 277 core tests (SHM IPC, 
 **Fix:** When `vertical_gain=0`, strip Z from the repulsive force after path-aware projection, ensuring only lateral (XY) corrections remain.
 
 **Found by:** Gazebo Scenario 18 testing — drone altitude dropped from 4.0m to 0.1m near obstacles.
+
+---
+
+### Bug #46 — P3 Config-Driven Loop Rates Unclamped (#220)
+
+**Date discovered:** 2026-03-31
+**Severity:** Medium
+**Status:** FIXED (PR #266)
+**Files:** `process3_slam_vio_nav/src/main.cpp`
+
+**Bug:** P3 `slam_vio_nav` read `vio_rate_hz`, `visual_frontend_rate_hz`, and `imu_rate_hz` from config without bounds checking. A config value of 0 caused a divide-by-zero in sleep duration calculation; extremely high values caused tight-loop CPU burn.
+
+**Root Cause:** `cfg.get<int>()` returns the raw config value with no clamping. The sleep interval `1000/rate_hz` was computed directly, so `rate_hz=0` → division by zero, `rate_hz=999999` → sub-microsecond sleep (busy loop).
+
+**Fix:** Added `rate_clamp.h` utility that clamps rates to `[1, max]` with a warning log when clamped. Applied to all three rate config reads in P3. Added unit tests for the clamp utility.
+
+**Found by:** Issue #220 code review — identified during config audit.
+
+**Regression tests:** `RateClamp_ZeroClampsToOne`, `RateClamp_NegativeClampsToOne`, `RateClamp_ExcessiveClampsToMax` in `test_rate_clamp.cpp`.
+
+---
+
+### Bug #47 — D* Lite Corner-Cutting Through Diagonal Obstacle Gaps (#258)
+
+**Date discovered:** 2026-03-31
+**Severity:** High (safety — path clips obstacle corners)
+**Status:** FIXED (PR #267)
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`
+
+**Bug:** D* Lite allowed diagonal moves between two cells even when both cardinal intermediaries (the two cells sharing a face with the diagonal endpoints) were occupied. This let the planner route through the diagonal gap of an L-shaped obstacle formed by inflation, clipping the physical obstacle corner.
+
+**Root Cause:** The 26-connected neighbour expansion did not check whether cardinal intermediaries were passable before allowing a diagonal transition. Standard grid pathfinding requires that at least one cardinal intermediary be free for a diagonal move to be valid.
+
+**Fix:** Added a corner-cutting guard in the neighbour expansion. For any diagonal move (Manhattan distance > 1), the planner now checks that at least one cardinal intermediary cell is free. If both are blocked, the diagonal is rejected and the planner must route around.
+
+**Found by:** Code review of D* Lite planner during Epic #256 work.
+
+**Regression tests:** `LShapeInflatedBlocksDiagonal`, `LShapeInflatedBlocksDiagonalReversed`, `WallCornerInflatedNoCut`, `ValidDiagonalStillAllowed`, `OpenFieldDiagonalsWork`, `BothCardinalsBlockedForcesDetour`, `IncrementalUpdateRespectsCornerGuard` in `test_dstar_lite_planner.cpp`.
+
+---
+
+### Bug #48 — GazeboFullVIOBackend `health_` Member Not Atomic (#191)
+
+**Date discovered:** 2026-04-01
+**Severity:** Medium (race condition — data race on health flag)
+**Status:** FIXED (PR #275)
+**Files:** `process3_slam_vio_nav/include/slam/ivio_backend.h`
+
+**Bug:** `GazeboFullVIOBackend::health_` was a plain `VioHealth` enum accessed from both the gz-transport callback thread and the main VIO loop thread without synchronization. ThreadSanitizer flagged this as a data race.
+
+**Root Cause:** The `health_` member was declared as `VioHealth health_` instead of `std::atomic<VioHealth> health_`. The gz-transport callback writes health status while the main loop reads it concurrently.
+
+**Fix:** Changed `health_` to `std::atomic<VioHealth>` with explicit `memory_order_acquire/release` on load/store. Also fixed a flaky test that depended on timing by adding a deterministic health state check.
+
+**Found by:** ThreadSanitizer CI run after adding GazeboFullVIOBackend.
+
+---
+
+### Bug #49 — No Cap on Promoted Static Cells Causes Grid Bloat (#339)
+
+**Date discovered:** 2026-04-02
+**Severity:** High (mission failure — grid bloat blocks RTL)
+**Status:** FIXED (PR #341)
+**Files:** `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `process4_mission_planner/include/planner/grid_planner_base.h`, `process4_mission_planner/src/main.cpp`, `config/default.json`
+
+**Bug:** The occupancy grid had no limit on how many cells could be promoted from dynamic to static. In perception-only scenarios (no HD-map), false detections of ground features accumulated hundreds of permanent static cells that eventually blocked all paths, trapping the drone.
+
+**Root Cause:** `update_from_objects()` promoted cells after `promotion_hits` observations without any cap. Ground feature detections (landing pad textures, shadows) accumulated enough hits to promote, creating permanent ghost obstacles. In scenario 02, 616 cells were promoted with only 4 real obstacles.
+
+**Fix:** Added `max_static_cells` config parameter (default: 0 = unlimited). Promotion is blocked when promoted count (excluding HD-map cells) reaches the cap. HD-map cells loaded via `add_static_obstacle()` are tracked separately via `hd_map_static_count_` and excluded from the cap. Added `hd_map_static_count()` and `max_static_cells()` accessors.
+
+**Found by:** Gazebo scenario 02 testing — drone trapped at (-7.9, -10.1) unable to RTL through wall of ghost cells.
+
+**Regression tests:** `StaticCellCapEnforced`, `StaticCellCapZeroMeansUnlimited`, `HDMapCellsExcludedFromCap` in `test_dstar_lite_planner.cpp`.
+
+---
+
+### Bug #50 — Snap Goal Fallback Has No Approach-Side Bias (#338)
+
+**Date discovered:** 2026-04-02
+**Severity:** Medium (suboptimal paths — drone routes past obstacles unnecessarily)
+**Status:** FIXED (PR #341)
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`, `process4_mission_planner/include/planner/grid_planner_base.h`, `config/default.json`
+
+**Bug:** When D* Lite's goal cell was occupied and the BFS snap fallback searched for a free cell, it scored candidates purely by distance. Cells on the far side of an obstacle (past the goal from the drone's perspective) had the same score as cells between the drone and the goal. This caused the drone to route around and past obstacles unnecessarily.
+
+**Root Cause:** The BFS snap scoring function used `Chebyshev distance to goal` as the only criterion. With no directional bias, far-side cells could be chosen, requiring the drone to navigate around the entire obstacle.
+
+**Fix:** Added `snap_approach_bias` config parameter (default: 0.5). The BFS scoring now penalizes cells that are farther from the drone than the goal by `bias * extra_distance`. This preferentially selects cells between the drone and the goal (approach side), resulting in shorter paths.
+
+**Found by:** Gazebo scenario testing — drone taking unnecessarily long routes around obstacles to reach far-side snap targets.
+
+**Regression tests:** `SnapGoalFallbackPrefersApproachSide`, `SnapGoalPureNearestWhenBiasZero` in `test_dstar_lite_planner.cpp`.
+
+---
+
+### Bug #51 — Yaw Not Facing Travel Direction During D* Lite Navigation (#337)
+
+**Date discovered:** 2026-04-02
+**Severity:** Low (operational — camera faces wrong direction during transit)
+**Status:** FIXED (PR #341)
+**Files:** `process4_mission_planner/include/planner/dstar_lite_planner.h`, `process4_mission_planner/include/planner/grid_planner_base.h`, `config/default.json`
+
+**Bug:** During waypoint-to-waypoint navigation, the drone's yaw was always set to the target waypoint's configured yaw. This meant the camera could face backwards or sideways relative to the direction of travel, reducing perception coverage of obstacles ahead.
+
+**Root Cause:** The `plan()` method used `target.yaw` directly in the trajectory command without considering the actual travel direction. The waypoint yaw is intended for the arrival orientation, not the transit orientation.
+
+**Fix:** Added `yaw_towards_travel` config flag (default: true) and `yaw_smoothing_rate` parameter. When enabled, the planner computes yaw from `atan2(dy, dx)` of the velocity vector and smoothly interpolates toward it. Waypoint yaw is still used when the drone is within acceptance radius (arrival). Added smoothing to prevent yaw oscillation on noisy velocity signals.
+
+**Found by:** Gazebo scenario observation — drone flying sideways through obstacle field with camera pointing perpendicular to travel.
+
+**Regression tests:** `YawTowardsTravelOverridesWaypointYaw`, `YawTowardsTravelDisabledWhenConfigFalse` in `test_dstar_lite_planner.cpp`.
+
+---
+
+### Bug #52 — Wire Format Tests Hardcoded Version Numbers
+
+**Date discovered:** 2026-04-02
+**Severity:** Low (test fragility)
+**Status:** FIXED (PR #342)
+**Files:** `tests/test_correlation.cpp`
+
+**Bug:** `WireHeaderV2.VersionIs3` hardcoded `EXPECT_EQ(hdr.version, 3)` and `FutureVersionRejected` hardcoded `buf[4] = 4`. When `kWireVersion` was bumped from 3 to 4 (adding `depth_confidence`), these tests failed with misleading errors.
+
+**Root Cause:** Tests used magic numbers instead of the `kWireVersion` constant. Any wire format change required manual test updates.
+
+**Fix:** Changed `VersionIs3` to use `EXPECT_EQ(hdr.version, kWireVersion)` (renamed test to `VersionMatchesConstant`). Changed `FutureVersionRejected` to use `kWireVersion + 1`. Tests are now version-agnostic.
+
+**Found by:** Build failure after bumping `kWireVersion` for depth_confidence field.
+
+---
+
+### Bug #53 — lcov Negative Count Error and fov_elevation_rad Config Mismatches
+
+**Date discovered:** 2026-04-02
+**Severity:** Low (CI tooling)
+**Status:** FIXED
+**Files:** `deploy/build.sh`, config files
+
+**Bug:** Coverage builds failed with `lcov: ERROR: negative count` when merging counters from different compilation units. Separately, several config files had inconsistent `fov_elevation_rad` values that didn't match the radar HAL defaults.
+
+**Root Cause:** lcov 2.x changed counter merging behavior, causing negative counts from branch coverage. Config files were copy-pasted with stale radar FOV values.
+
+**Fix:** Added `--ignore-errors negative` flag to lcov invocations. Fixed all `fov_elevation_rad` values to consistent 0.698 across config files.
+
+**Found by:** CI coverage pipeline failures.
 
 ---
 

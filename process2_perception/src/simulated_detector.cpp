@@ -1,6 +1,6 @@
 // process2_perception/src/simulated_detector.cpp
 // Simulated object detector — generates fake detections for testing.
-#include "perception/detector_interface.h"
+#include "perception/simulated_detector.h"
 
 #include <chrono>
 #include <random>
@@ -9,6 +9,13 @@ namespace drone::perception {
 
 std::vector<Detection2D> SimulatedDetector::detect(const uint8_t* /*frame_data*/, uint32_t width,
                                                    uint32_t height, uint32_t /*channels*/) {
+    // Guard: frame too small for configured margins + max bbox size — would cause
+    // std::uniform_real_distribution UB when lo > hi.
+    const float min_dim = 2.0f * cfg_.margin_px + cfg_.size_max_px;
+    if (static_cast<float>(width) < min_dim || static_cast<float>(height) < min_dim) {
+        return {};
+    }
+
     thread_local std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
     std::uniform_int_distribution<int>    num_dist(cfg_.min_detections, cfg_.max_detections);
     std::uniform_real_distribution<float> x_dist(

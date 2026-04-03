@@ -74,6 +74,7 @@ struct DetectedObject {
     float       estimated_radius_m;  // back-projected obstacle radius (0 = unknown)
     float       estimated_height_m;  // back-projected obstacle height (0 = unknown)
     uint32_t    radar_update_count;  // number of radar updates received
+    float       depth_confidence;    // depth estimation quality [0.0=guess, 1.0=radar]
 
     [[nodiscard]] bool validate() const {
         return std::isfinite(confidence) && confidence >= 0.0f && confidence <= 1.0f &&
@@ -81,7 +82,9 @@ struct DetectedObject {
                std::isfinite(position_z) && std::isfinite(velocity_x) &&
                std::isfinite(velocity_y) && std::isfinite(velocity_z) &&
                std::isfinite(estimated_radius_m) && estimated_radius_m >= 0.0f &&
-               std::isfinite(estimated_height_m) && estimated_height_m >= 0.0f;
+               std::isfinite(estimated_height_m) && estimated_height_m >= 0.0f &&
+               std::isfinite(depth_confidence) && depth_confidence >= 0.0f &&
+               depth_confidence <= 1.0f;
     }
 };
 
@@ -126,15 +129,16 @@ struct alignas(64) Pose {
 // Mission Status (Process 4 → Process 5, Process 7)
 // ═══════════════════════════════════════════════════════════
 enum class MissionState : uint8_t {
-    IDLE      = 0,
-    PREFLIGHT = 1,
-    TAKEOFF   = 2,
-    NAVIGATE  = 3,
-    LOITER    = 4,
-    RTL       = 5,
-    LAND      = 6,
-    EMERGENCY = 7,
-    SURVEY    = 8  // Post-takeoff obstacle survey before navigation
+    IDLE               = 0,
+    PREFLIGHT          = 1,
+    TAKEOFF            = 2,
+    NAVIGATE           = 3,
+    LOITER             = 4,
+    RTL                = 5,
+    LAND               = 6,
+    EMERGENCY          = 7,
+    SURVEY             = 8,  // Post-takeoff obstacle survey before navigation
+    COLLISION_RECOVERY = 9   // Post-collision recovery: hover → climb → replan
 };
 
 // ═══════════════════════════════════════════════════════════
