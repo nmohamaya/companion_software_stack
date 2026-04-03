@@ -45,12 +45,13 @@ struct RadarNoiseConfig {
     float altitude_gate_m       = 2.0f;    // reject radar-track pairs with |body_z diff| > this
 
     // Radar-primary architecture (Phase D) — independent radar track creation
-    float    radar_orphan_proximity_m    = 3.0f;   // min dist to existing track for orphan creation
-    float    radar_adopt_gate_m          = 5.0f;   // max range error for camera adoption
-    float    radar_only_default_radius_m = 1.5f;   // conservative default inflation (no bbox)
-    float    radar_max_orphan_range_m    = 40.0f;  // max range for orphan creation (77GHz ≈ 50m)
-    uint32_t radar_only_promotion_hits   = 3;      // radar hits for static promotion (tunable)
-    bool     radar_only_enabled          = true;  // enable radar-only track initiation (Issue #231)
+    float radar_orphan_proximity_m    = 5.0f;  // min dist to existing track for orphan creation
+    float radar_adopt_gate_m          = 5.0f;  // max range error for camera adoption
+    float radar_only_default_radius_m = 1.5f;  // conservative default inflation (no bbox)
+    float radar_max_orphan_range_m =
+        25.0f;  // max range for orphan creation (reject distant clutter)
+    uint32_t radar_only_promotion_hits = 6;     // radar hits for static promotion (0.3s at 20Hz)
+    bool     radar_only_enabled        = true;  // enable radar-only track initiation (Issue #231)
 };
 
 /// Per-object UKF state for 3D tracking.

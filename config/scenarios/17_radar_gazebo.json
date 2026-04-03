@@ -79,7 +79,10 @@
                     "ground_filter_enabled": true,
                     "min_object_altitude_m": 1.5,
                     "altitude_gate_m": 2.0,
-                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate"
+                    "orphan_proximity_m": 5.0,
+                    "max_orphan_range_m": 25.0,
+                    "promotion_hits": 8,
+                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate. Tightened orphan params to reduce multipath ghost tracks (Issue #345)."
                 }
             }
         }

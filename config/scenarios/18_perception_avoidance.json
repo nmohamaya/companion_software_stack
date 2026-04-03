@@ -82,7 +82,10 @@
                     "ground_filter_enabled": true,
                     "min_object_altitude_m": 1.5,
                     "altitude_gate_m": 2.0,
-                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate (Issue #229) — rejects ground returns and altitude-mismatched associations"
+                    "orphan_proximity_m": 5.0,
+                    "max_orphan_range_m": 25.0,
+                    "promotion_hits": 8,
+                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate (Issue #229). Orphan proximity 5m reduces multipath duplicates. Max range 25m rejects distant clutter. Promotion 8 hits (0.4s at 20Hz) filters transient returns."
                 }
             }
         }

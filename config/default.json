@@ -107,7 +107,10 @@
                 "gate_threshold": 9.21,
                 "ground_filter_enabled": true,
                 "min_object_altitude_m": 1.5,
-                "altitude_gate_m": 2.0
+                "altitude_gate_m": 2.0,
+                "orphan_proximity_m": 5.0,
+                "max_orphan_range_m": 25.0,
+                "promotion_hits": 6
             }
         }
     },
