@@ -2863,4 +2863,30 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #66 (Epic #263). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts. 1238 tests, 25 scenarios._
+### Improvement #67 — Bbox Ground-Feature Filters, Depth Confidence Gating, Scenario Hardening (Issue #345, PR #346)
+
+**Date:** 2026-04-03
+**Category:** Bug Fix / Feature / Scenario Hardening
+**Issue:** [#345](https://github.com/nmohamaya/companion_software_stack/issues/345)
+**PR:** [#346](https://github.com/nmohamaya/companion_software_stack/pull/346)
+
+**What:**
+- **Bbox ground-feature filters** — height filter (`min_bbox_height_px`) and aspect-ratio filter (`max_aspect_ratio`) in ColorContourDetector to reject flat ground features (road markings, shadows)
+- **Depth confidence gating** — `min_promotion_depth_confidence` prevents camera-only detections (Tier 1-4: 0.01-0.7) from promoting to permanent static cells; only radar-confirmed (1.0) can promote
+- **Clamp penalty fix** — depth confidence penalty now correctly compares pre-clamp raw depth to `kDepthMaxM`, not already-clamped value
+- **Radar orphan tuning** — tighter parameters to reduce ghost tracks
+- **CW/CCW survey rotation** — scenario 21 yaw-rate tuning for two full survey rotations
+- **Scenario 26 VIO validation** — VIO report section with covariance health checks
+- **Stop trajectory fix** — all `publish_stop_trajectory` helpers changed from `valid=false` to `valid=true` (P5 ignores `valid=false`)
+- **Wire version validation** — flight replay tool skips records with mismatched `kWireVersion`
+- **Auto-tracker body frame comments** — corrected FLU→FRU (y=right, not y=left) to match actual math
+
+**Files modified:** `color_contour_detector.h`, `ukf_fusion_engine.cpp`, `occupancy_grid_3d.h`, `grid_planner_base.h`, `fault_response_executor.h`, `gcs_command_handler.h`, `mission_state_tick.h`, `auto_tracker.h`, `flight_replay/main.cpp`, 6 scenario configs, 3 test files
+
+**Why:** Post-epic cleanup: false cell promotion from ground features was the root cause of phantom obstacles in Gazebo. Bbox filters + depth confidence gating solve this at both the detection and grid layers.
+
+**Test count:** 1238 → 1259 (+21 tests). See [tests/TESTS.md](../../tests/TESTS.md) for current counts.
+
+---
+
+_Last updated after Improvement #67 (PR #346). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

@@ -124,7 +124,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
-| **Total** | **56 C++ + 5 shell** | **1238 + 42 + 250+** | |
+| **Total** | **56 C++ + 5 shell** | **1259 + 42 + 250+** | |
 
 ---
 
@@ -1214,4 +1214,4 @@ is not available.
 
 ---
 
-*Last updated: April 2026 — 1238 unit tests across 56 C++ files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. Epic #263: autonomous intelligence & sim fidelity — collision recovery, dynamic obstacle prediction, gimbal auto-tracking, flight data recorder, covariance VIO quality, GazeboFullVIO backend, radar-only track initiation, rate clamping, D* Lite corner-cutting guard, YOLOv8 Gazebo scenario, IVisualFrontend removal (+130 tests from 1108). All 1238 tests passing.*
+*Last updated: April 2026 — 1259 unit tests across 56 C++ files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #346 (Issue #345): bbox ground-feature filters, depth confidence gating, radar orphan tuning, CW/CCW survey rotation, scenario 26 VIO validation, clamp penalty fix, stop trajectory fix, wire version validation (+21 tests from 1238). All 1259 tests passing.*

@@ -28,7 +28,7 @@
 | **spdlog** | 1.12.0 | MIT | Structured logging (all 7 processes) |
 | **Eigen3** | 3.4.0 | MPL 2.0 | Linear algebra — Kalman filters, pose math, planning |
 | **nlohmann-json** | 3.11.3 | MIT | JSON config parsing (`drone::Config`) |
-| **GTest** | 1.14.0 | BSD 3-Clause | Unit testing (927+ tests) |
+| **GTest** | 1.14.0 | BSD 3-Clause | Unit testing (see [tests/TESTS.md](../../tests/TESTS.md) for count) |
 | **Threads** | System | N/A | POSIX threading |
 | **zenohc** | 1.7.2 | EPL 2.0 | IPC transport (sole backend) |
 
