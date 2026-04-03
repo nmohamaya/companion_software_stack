@@ -150,6 +150,10 @@ public:
                                        0.0f, 1.0f);
         confidence_area_scale_ =
             std::max(0.0f, cfg.get<float>("perception.detector.confidence_area_scale", 50.0f));
+        min_bbox_height_px_ = std::max(
+            0, cfg.get<int>("perception.detector.min_bbox_height_px", min_bbox_height_px_));
+        max_aspect_ratio_ = std::max(
+            0.0f, cfg.get<float>("perception.detector.max_aspect_ratio", max_aspect_ratio_));
 
         // Try to read custom color ranges from config
         if (cfg.has("perception.detector.colors")) {
@@ -219,6 +223,18 @@ public:
                 const int x_max_c = std::min(bbox.x_max, w - 1);
                 const int y_max_c = std::min(bbox.y_max, h - 1);
 
+                const int bbox_w = x_max_c - x_min_c + 1;
+                const int bbox_h = y_max_c - y_min_c + 1;
+
+                // Ground-feature rejection (Issue #345):
+                // Reject detections that are too short — unreliable at distance.
+                if (min_bbox_height_px_ > 0 && bbox_h < min_bbox_height_px_) continue;
+                // Reject flat/wide detections — ground textures seen from above.
+                if (max_aspect_ratio_ > 0.0f && bbox_h > 0 &&
+                    static_cast<float>(bbox_w) / static_cast<float>(bbox_h) > max_aspect_ratio_) {
+                    continue;
+                }
+
                 Detection2D det;
                 det.x              = static_cast<float>(x_min_c);
                 det.y              = static_cast<float>(y_min_c);
@@ -281,6 +297,8 @@ private:
     float                 confidence_max_        = 0.95f;  // ceiling for confidence score
     float                 confidence_base_       = 0.5f;   // base confidence before area scaling
     float                 confidence_area_scale_ = 50.0f;  // area_ratio multiplier for confidence
+    int                   min_bbox_height_px_    = 15;  // reject detections shorter than this (px)
+    float                 max_aspect_ratio_      = 3.0f;  // reject if w/h > this (ground features)
 
     // Reusable per-frame buffers (avoid heap churn on every detect() call).
     // color_map_: subsampled grid; each cell holds a color index or kNoColor.
