@@ -1555,7 +1555,8 @@ TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
-    // Full-height visible bbox → Tier 2 (apparent-size) → confidence ≥ 0.5
+    // Full-height visible bbox → Tier 2 (apparent-size) → confidence ≥ 0.5.
+    // bbox_h=30 → depth = 3.0*500/30*0.7 = 35m (not clamped) → 0.7 confidence.
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
 
@@ -1577,6 +1578,34 @@ TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
     auto result = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_GE(result.objects[0].depth_confidence, 0.5f);
+}
+
+TEST(DepthConfidenceTest, Tier2_ClampedDepth_LowConfidence) {
+    // Small bbox just above threshold → Tier 2 raw depth exceeds 40m clamp
+    // → confidence drops to 0.2 (Issue #340: ground features at shallow angles
+    // produce huge apparent-size depths that clamp to max).
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 340.0f};  // well below horizon
+    trk.bbox_w       = 15.0f;
+    trk.bbox_h       = 11.0f;  // > 10px → Tier 2, but depth = 3.0*500/11*0.7 = 95.5m → clamped
+    trk.velocity_2d  = Eigen::Vector2f::Zero();
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    // Clamped to 40m → confidence reduced to 0.2 (below default 0.5 gate)
+    EXPECT_LE(result.objects[0].depth_confidence, 0.3f);
 }
 
 TEST(DepthConfidenceTest, Tier4_NearHorizon_LowConfidence) {
@@ -1868,4 +1897,60 @@ TEST(RadarOnlyTrackTest, DisabledToggleStillAllowsCameraRadarFusion) {
     EXPECT_TRUE(result.objects[0].has_camera);
     // Camera+radar association should still work
     EXPECT_TRUE(result.objects[0].has_radar);
+}
+
+TEST(RadarOnlyTrackTest, ProximityGateRejectsDuplicateOrphans) {
+    // Two radar detections within orphan_proximity_m of each other should
+    // create only ONE orphan track (the first one).  The second is suppressed
+    // by the proximity check.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_orphan_proximity_m  = 5.0f;
+    rcfg.radar_only_promotion_hits = 1;  // immediate output
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    // Two detections at similar positions (~2m apart in body frame)
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 2;
+    radar.detections[0]  = make_radar_det(10.0f, 0.3f, 0.0f, 0.0f);  // ~10m forward-right
+    radar.detections[1]  = make_radar_det(11.0f, 0.3f, 0.0f, 0.0f);  // ~11m same direction
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    // Only 1 orphan track — the second detection is within 5m of the first
+    EXPECT_EQ(result.objects.size(), 1u)
+        << "Proximity gate should merge nearby radar detections into one orphan";
+}
+
+TEST(RadarOnlyTrackTest, MaxOrphanRangeRejectsDistantDetections) {
+    // Radar detections beyond max_orphan_range_m should be ignored.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    rcfg.radar_max_orphan_range_m  = 25.0f;
+    rcfg.radar_only_promotion_hits = 1;
+    UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
+    engine.set_drone_altitude(4.0f);
+
+    drone::ipc::RadarDetectionList radar{};
+    radar.timestamp_ns   = 1000;
+    radar.num_detections = 2;
+    radar.detections[0]  = make_radar_det(20.0f, 0.3f, 0.0f, 0.0f);  // 20m — within range
+    radar.detections[1]  = make_radar_det(30.0f, 0.5f, 0.0f, 0.0f);  // 30m — beyond 25m cutoff
+    engine.set_radar_detections(radar);
+
+    TrackedObjectList empty;
+    empty.timestamp_ns   = 1000;
+    empty.frame_sequence = 1;
+    auto result          = engine.fuse(empty);
+
+    // Only the 20m detection should create a track
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_NEAR(result.objects[0].position_3d.norm(), 20.0f, 1.0f)
+        << "Only the near detection should create a track";
 }

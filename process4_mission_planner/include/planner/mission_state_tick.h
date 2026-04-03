@@ -58,6 +58,15 @@ public:
         // Record home position from the first real pose, regardless of state.
         try_record_home(pose);
 
+        // Pause promotion during RTL/LAND — the drone is descending to a
+        // known-safe location and ground-feature detections would pollute the
+        // static layer, blocking the landing approach (Issue #340).
+        if (grid_planner != nullptr) {
+            const bool landing = (fsm.state() == MissionState::RTL ||
+                                  fsm.state() == MissionState::LAND);
+            grid_planner->set_promotion_paused(landing);
+        }
+
         switch (fsm.state()) {
             case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
             case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;
@@ -210,7 +219,18 @@ private:
         // Publish hover command with incrementing yaw for slow rotation.
         // IFCLink::send_trajectory only accepts absolute yaw (no yaw_rate),
         // so we compute the target yaw from elapsed time × yaw rate.
-        float target_yaw = survey_start_yaw_ + config_.survey_yaw_rate * elapsed_s;
+        // Two-phase survey: first half CW, second half CCW — sees each obstacle
+        // from opposite directions, improving radar angular coverage.
+        const float half_dur = config_.survey_duration_s * 0.5f;
+        float       target_yaw;
+        if (elapsed_s <= half_dur) {
+            // Phase 1: clockwise
+            target_yaw = survey_start_yaw_ + config_.survey_yaw_rate * elapsed_s;
+        } else {
+            // Phase 2: counter-clockwise from where phase 1 ended
+            const float phase1_end = survey_start_yaw_ + config_.survey_yaw_rate * half_dur;
+            target_yaw             = phase1_end - config_.survey_yaw_rate * (elapsed_s - half_dur);
+        }
         // Wrap to [-π, π] to avoid sending unbounded angles to the FC.
         constexpr float kPiF = 3.14159265358979323846f;
         target_yaw           = std::fmod(target_yaw + kPiF, 2.0f * kPiF);

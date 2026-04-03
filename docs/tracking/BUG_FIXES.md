@@ -430,6 +430,82 @@ if (pose_sub.receive(p)) { latest_pose = p; has_pose = true; }
 
 ---
 
+### Fix #345a — Ground Textures Promoted as Permanent Static Obstacles (Issue #345)
+
+**Date:** 2026-04-03
+**Severity:** High
+**File:** `process2_perception/include/perception/color_contour_detector.h`, `process4_mission_planner/include/planner/occupancy_grid_3d.h`, `process2_perception/src/ukf_fusion_engine.cpp`
+
+**Bug:** The `color_contour` detector triggered on ground textures (landing pads, grass patterns, shadows) when flying at 4m altitude. These detections received `depth_confidence` between 0.01–0.7 from the UKF depth estimator but were still promoted to permanent static cells in the occupancy grid. The grid peaked at 2357 dynamic cells and 800 static cells (hitting the cap) for only 4 real obstacles.
+
+**Root Cause:** Three compounding issues:
+1. No depth confidence gate on promotion — camera-only detections with unreliable depth (0.01–0.7) were promoted alongside radar-confirmed detections (1.0).
+2. No ground-feature filtering at the detector level — `ColorContourDetector` purely matches HSV colors with no awareness of object geometry.
+3. Prediction amplified ground-feature noise — camera-only velocity estimates on stationary ground textures created 5750-cell prediction trails.
+
+**Fix (multi-layer):**
+1. **Depth confidence gate** (`occupancy_grid_3d.h`): `min_promotion_depth_confidence = 0.8` — blocks all camera-only detections (Tier 1-4: 0.01–0.7) while allowing radar-confirmed (1.0). Also added `promotion_paused_` flag during RTL/LAND.
+2. **Bbox ground-feature filters** (`color_contour_detector.h`): `min_bbox_height_px = 15` rejects short detections, `max_aspect_ratio = 3.0` rejects flat/wide ground textures. Reduced dynamic cells by 65%.
+3. **Prediction disabled** in perception-heavy scenarios until camera velocity estimation improves.
+
+**Impact:** Max dynamic cells 2357 → 553-751 (-68%), max static cells 800 → 142-194 (-78%). Scenario 18 stabilised from flaky FAIL/PASS to consistent PASS 19/19.
+
+**Found by:** Gazebo scenario 18 (perception_avoidance) testing — drone collided with obstacles due to grid bloat redirecting D* Lite paths.
+
+**Regression tests:** `MinBboxHeightRejectsShortDetections`, `MaxAspectRatioRejectsFlatDetections`, `TallNarrowDetectionPassesBothFilters` in `test_color_contour_detector.cpp`; `PromotionPausedBlocksPromotion` in `test_dstar_lite_planner.cpp`
+
+---
+
+### Fix #345b — Radar Multipath Creates 31 Ghost Tracks for 4 Real Obstacles (Issue #345)
+
+**Date:** 2026-04-03
+**Severity:** High
+**File:** `process2_perception/include/perception/ukf_fusion_engine.h`, `config/default.json`, `config/gazebo_zenoh.json`, `config/scenarios/17_radar_gazebo.json`, `config/scenarios/18_perception_avoidance.json`
+
+**Bug:** Gazebo radar multipath/clutter created ~7-8 radar-only tracks per real obstacle (31 total for 4 obstacles). Each track was promoted after only 3 radar hits (0.1s at 30Hz) and inflated to ~25 static cells, filling the 800-cell static cap with ghost obstacles. The ghost walls redirected D* Lite paths, causing the drone to take suboptimal or dangerous routes.
+
+**Root Cause:** Three overly permissive default parameters:
+1. `radar_orphan_proximity_m = 3.0m` — too close, allowing duplicate tracks for the same obstacle from multipath reflections at slightly different angles.
+2. `radar_max_orphan_range_m = 40.0m` — accepting distant clutter returns beyond useful avoidance range.
+3. `radar_only_promotion_hits = 3` — only 0.1s of consistency required, insufficient to filter transient clutter.
+
+**Fix:** Tightened defaults:
+1. `radar_orphan_proximity_m`: 3.0 → 5.0m (merges multipath duplicates)
+2. `radar_max_orphan_range_m`: 40 → 25m (rejects distant clutter)
+3. `radar_only_promotion_hits`: 3 → 6 (default) / 8 (Gazebo scenarios)
+
+**Impact:** Radar tracks 31 → 8-18, max static cells 800 → 124-194. Ghost cell problem eliminated.
+
+**Found by:** Gazebo scenario 18 run report analysis — 31 radar-only tracks for 4 real obstacles, non-deterministic static cap hits.
+
+**Regression tests:** `ProximityGateRejectsDuplicateOrphans`, `MaxOrphanRangeRejectsDistantDetections` in `test_fusion_engine.cpp`
+
+---
+
+### Fix #345c — Single-Pass Survey Produces Sparse Radar Coverage (Issue #345)
+
+**Date:** 2026-04-03
+**Severity:** Medium
+**File:** `process4_mission_planner/include/planner/mission_state_tick.h`, `config/scenarios/18_perception_avoidance.json`, `config/scenarios/21_yolov8_detection.json`
+
+**Bug:** The survey phase rotated once at 0.3 rad/s for 25s (~1.2 rotations), giving each obstacle only one brief radar observation window. With `promotion_hits = 8` requiring 0.4s of consistent returns, many obstacles didn't accumulate enough hits during survey. Survey consistently produced only 62-91 static cells for 4 obstacles — insufficient for reliable avoidance.
+
+**Root Cause:** Single-direction rotation meant radar multipath from one angle only. A slower single circle (0.18 rad/s, 35s) was tested but performed worse — only 5 radar re-IDs and ORANGE at 1.0m collision risk — because each obstacle was seen only once.
+
+**Fix:** Two-phase CW/CCW survey: first half clockwise, second half counter-clockwise. Each obstacle is seen from opposite directions. Combined with faster yaw rate (0.5 rad/s, 26s = 2 full rotations):
+```cpp
+if (elapsed_s <= half_dur)
+    target_yaw = start + rate * elapsed_s;       // Phase 1: CW
+else
+    target_yaw = phase1_end - rate * (elapsed_s - half_dur);  // Phase 2: CCW
+```
+
+**Impact:** Radar tracks reduced further (best: 8 for 4 obstacles). Avoider max correction dropped from 1.51 → 0.33 m/s (planner handles avoidance). No collision risks across all test runs.
+
+**Found by:** Gazebo scenario testing — comparing single-circle vs double-circle survey coverage and obstacle proximity metrics.
+
+---
+
 ## SLAM / VIO (Process 3)
 
 ---

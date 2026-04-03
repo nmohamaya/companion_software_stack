@@ -655,7 +655,9 @@ TEST(ColorContourDetectorTest, Subsample1FullResDetectsSmallRect) {
             "detector": {
                 "backend": "color_contour",
                 "subsample": 1,
-                "min_contour_area": 80
+                "min_contour_area": 80,
+                "min_bbox_height_px": 0,
+                "max_aspect_ratio": 0
             }
         }
     })");
@@ -793,4 +795,56 @@ TEST(ColorContourDetectorTest, Subsample2OddDimsBboxWithinBounds) {
     // Right / bottom edge of bbox must not exceed the image dimensions.
     EXPECT_LE(found->x + found->w, static_cast<float>(W) + 1.0f);
     EXPECT_LE(found->y + found->h, static_cast<float>(H) + 1.0f);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Bbox ground-feature filters (Issue #345)
+// ═══════════════════════════════════════════════════════════
+
+TEST(ColorContourDetectorTest, MinBboxHeightRejectsShortDetections) {
+    // Default detector has min_bbox_height_px=15, max_aspect_ratio=3.0.
+    // A short red rectangle (20×8 px, aspect 2.5) should be rejected by
+    // the height filter alone (aspect ratio is within threshold).
+    // A tall rectangle (20×40 px) should pass both filters.
+    constexpr uint32_t   W = 640, H = 480;
+    std::vector<uint8_t> img(W * H * 3, 128);
+    fill_rect(img, W, 10, 10, 20, 8, 255, 0,
+              0);  // short (h=8 < 15), aspect 2.5 → rejected by height only
+    fill_rect(img, W, 300, 100, 20, 40, 255, 0, 0);  // narrow & tall → accepted
+
+    ColorContourDetector det;
+    auto                 dets = det.detect(img.data(), W, H, 3);
+    // Only the tall rectangle should survive; the short one is rejected by
+    // the minimum-height filter, not by aspect ratio.
+    ASSERT_EQ(dets.size(), 1u);
+    EXPECT_GE(dets[0].h, 15.0f);
+}
+
+TEST(ColorContourDetectorTest, MaxAspectRatioRejectsFlatDetections) {
+    // Default detector has max_aspect_ratio=3.0.
+    // A flat red rectangle (120×20 px, aspect 6:1) should be rejected.
+    // A square (30×30 px) should pass.
+    constexpr uint32_t   W = 640, H = 480;
+    std::vector<uint8_t> img(W * H * 3, 128);
+    fill_rect(img, W, 10, 10, 120, 20, 255, 0, 0);   // flat → rejected (6:1 > 3.0)
+    fill_rect(img, W, 300, 100, 30, 30, 255, 0, 0);  // square → accepted (1:1)
+
+    ColorContourDetector det;
+    auto                 dets = det.detect(img.data(), W, H, 3);
+    ASSERT_EQ(dets.size(), 1u);
+    // The surviving detection should be roughly square
+    EXPECT_LE(dets[0].w / dets[0].h, 3.0f);
+}
+
+TEST(ColorContourDetectorTest, TallNarrowDetectionPassesBothFilters) {
+    // A tall, narrow detection (15×60 px) should pass both filters:
+    // height=60 ≥ 15, aspect=15/60=0.25 ≤ 3.0.
+    constexpr uint32_t   W = 640, H = 480;
+    std::vector<uint8_t> img(W * H * 3, 128);
+    fill_rect(img, W, 100, 50, 15, 60, 255, 0, 0);  // tall & narrow
+
+    ColorContourDetector det;
+    auto                 dets = det.detect(img.data(), W, H, 3);
+    ASSERT_EQ(dets.size(), 1u);
+    EXPECT_GE(dets[0].h, 15.0f);
 }
