@@ -37,6 +37,7 @@ Production requires implementing the real backend behind each interface.
 | 1.11 | Obstacle avoider | `ObstacleAvoider3D` — XYZ repulsive field, velocity prediction (`potential_field_3d`) | VFH+ / 3D-VFH | P2 | 🟡 | 3D variant verified in stress scenario (PR #123) + scenario 02 with HD-map (Fix #35). PotentialFieldAvoider (2D) removed in Issue #207 |
 | 1.12 | LiDAR | Removed (Phase 1A, PR #117) | Point cloud driver (Livox, Ouster, etc.) | P2 | 🔴 | Need HAL `ILiDAR` interface; all simulated code and data type fields removed |
 | 1.13 | Radar | `SimulatedRadar` + `GazeboRadarBackend` (gpu_lidar → radar detections) | mmWave radar driver (TI AWR1843, etc.) | P2 | 🟡 | `IRadar` interface exists (Issue #209); SimulatedRadar + GazeboRadarBackend + UKF fusion implemented (Issues #210, #212). Real hardware driver TBD |
+| 1.14 | Gimbal auto-tracking | `compute_auto_track()` — world→body yaw-only transform, pitch/yaw from bearing | Full 3-axis world→body transform (roll/pitch/yaw) | P2 | 🟡 | `AutoTrackConfig` / `AutoTrackResult` implemented; yaw-only rotation assumes near-level flight |
 
 ---
 
@@ -62,6 +63,8 @@ Production requires implementing the real backend behind each interface.
 | 3.3 | Appearance features | None — position-only matching | DeepSORT / ByteTrack Re-ID vectors | P2 | 🔴 | Reduces ID switches by ~45% |
 | 3.4 | Sensor fusion | Weighted average merge | EKF/UKF fusion with per-sensor measurement models | P2 | � | `UKFFusionEngine` with per-object UKF (PR #117); radar measurement model added (Issues #210, #212) — camera + radar fusion operational |
 | 3.5 | ISP pipeline | Raw RGB24 passthrough | Bayer demosaic → white balance → gamma → NV12 | P1 | 🔴 | Use NVIDIA ISP on Jetson |
+| 3.6 | Radar-primary perception | Camera bearing + radar range UKF fusion (`UKFFusionEngine`); radar-only orphan tracks; size estimation from bbox + range | Production-tuned association gates, multi-radar support | P2 | 🟡 | Epic #237; camera=bearing, radar=range, covariance-driven trust. Verified in Gazebo SITL |
+| 3.7 | Covariance-based VIO health | `trace(P_position)` from IMU pre-integrator thresholded into NOMINAL/DEGRADED/LOST | Adaptive thresholds per flight phase; multi-sensor fusion quality | P2 | 🟢 | Defaults: good ≤ 0.1, degraded ≤ 1.0. Drives `FAULT_VIO_DEGRADED` / `FAULT_VIO_LOST` in FaultManager |
 
 ---
 
@@ -90,6 +93,7 @@ Production requires implementing the real backend behind each interface.
 | 5.4 | Error recovery | Most errors → `spdlog::error()` + exit | Graceful degradation: retry, fallback, safe-state transition | P1 | 🟡 | `Result<T,E>` (PR #75), `FaultManager` (PR #63, #119, #123) provide structured error handling; full recovery chains TBD |
 | 5.5 | Process heartbeats | Zenoh liveliness tokens (Phase F, #51) | Zenoh liveliness tokens (Phase F, #51) | P2 | 🟢 | PR #57 — 7 tokens active, P7 monitors |
 | 5.6 | Redundancy | Single IMU, single GPS | Dual IMU + dual GPS with voting / consistency checks | P2 | 🔴 | |
+| 5.7 | Collision recovery | `COLLISION_RECOVERY` FSM state — hover, climb, skip waypoint, resume navigation | Configurable recovery strategy per mission type; multi-obstacle re-route | P2 | 🟢 | MissionState 9; waypoint skip on collision detection |
 
 ---
 
@@ -97,7 +101,7 @@ Production requires implementing the real backend behind each interface.
 
 | # | Item | Current (Prototype) | Production Target | Priority | Status | Notes |
 |---|------|--------------------|--------------------|----------|--------|-------|
-| 6.1 | Flight logging | Custom spdlog files | MAVLink-compatible `.ulg` / `.tlog` format for post-flight analysis | P1 | 🔴 | Required for flight review tools |
+| 6.1 | Flight logging | `FlightRecorder` — ring-buffer IPC capture to `.flog` binary files + `flight_replay` tool for offline replay with wire version validation | MAVLink-compatible `.ulg` / `.tlog` format for flight review tools; `.flog` covers internal IPC replay | P1 | 🟡 | Issue #40; ring buffer (default 64 MB), RAII file management, `kWireVersion` check on replay. `.ulg` export TBD |
 | 6.2 | Parameter system | JSON config, cold-reboot only | Runtime parameter tuning (MAVLink param protocol) | P2 | 🔴 | |
 | 6.3 | Regulatory docs | None | Risk assessment, CONOPS, if targeting Part 107 waiver / BVLOS | P2 | 🔴 | Depends on operational scope |
 

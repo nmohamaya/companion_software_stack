@@ -51,6 +51,9 @@
    - [4.3 Conditional Compilation (`#ifdef`)](#43-conditional-compilation-ifdef)
    - [4.4 `fork` + `exec` — Process Management](#44-fork--exec--process-management)
    - [4.5 Exponential Backoff](#45-exponential-backoff)
+   - [4.6 FlightRecorder Ring Buffer](#46-flightrecorder-ring-buffer)
+   - [4.7 Rate Clamping](#47-rate-clamping)
+   - [4.8 Covariance Health Pattern](#48-covariance-health-pattern)
 5. [Safety-Critical C++ Standards](#5-safety-critical-c-standards)
    - [5.1 Mandatory Constructs](#51-mandatory-constructs)
    - [5.2 Forbidden Patterns](#52-forbidden-patterns)
@@ -1572,6 +1575,116 @@ This prevents one early crash from permanently consuming the retry budget.
 - Process restart loops (the primary use case here)
 - Reconnection attempts to external services
 - Any scenario where repeated rapid retries would worsen the failure
+
+---
+
+### 4.6 FlightRecorder Ring Buffer
+
+**What:** A fixed-capacity ring buffer that captures IPC messages in binary
+form and flushes them to a `.flog` file for post-flight replay and debugging.
+
+**Why:** Flight-critical systems must record in-flight data without unbounded
+memory growth.  A ring buffer caps memory usage at a configurable limit
+(default 64 MB) and discards the oldest records when full — the most recent
+data is always preserved.
+
+**Where:** `common/recorder/include/recorder/flight_recorder.h`
+
+**Key patterns used:**
+
+- **RAII file management** — `std::ofstream` with binary mode, automatic close on scope exit.
+- **Binary serialization** — `RecordHeader` (containing `WireHeader` + topic name length) written as raw bytes via `reinterpret_cast<const char*>`, guarded by `static_assert(std::is_trivially_copyable_v<T>)`.
+- **Ring buffer** — `std::deque<RecordEntry>` for O(1) front eviction; byte-budget tracking ensures the buffer never exceeds `max_bytes`.
+- **Lock-free recording flag** — `std::atomic<bool>` with `acquire`/`release` ordering for `start()`/`stop()`, so the hot-path `record()` check is lock-free.
+- **Monotonic timestamps** — timestamp captured under the mutex to guarantee ordering; enforced with `std::max(last + 1, now)`.
+
+```cpp
+// Ring buffer evicts oldest entries to stay within byte budget
+void push(RecordEntry entry) {
+    const auto entry_size = entry.serialized_size();
+    while (current_bytes_ + entry_size > max_bytes_ && !entries_.empty()) {
+        current_bytes_ -= entries_.front().serialized_size();
+        entries_.pop_front();   // O(1) deque pop
+    }
+    current_bytes_ += entry_size;
+    entries_.push_back(std::move(entry));
+}
+```
+
+**Flush strategy:** `flush()` moves all entries out of the deque under the
+mutex (O(1) swap), then releases the lock and writes to disk — so `record()`
+is not blocked during file I/O.
+
+---
+
+### 4.7 Rate Clamping
+
+**What:** Clamp a config-driven loop rate to a safe range and log a warning
+if the raw value was out of bounds.
+
+**Why:** A misconfigured JSON rate (e.g. IMU at 10,000 Hz or VIO at 1 Hz)
+can cause busy-loops (wasting CPU) or undersampling (missing data).  Clamping
+at startup with a logged warning catches config errors early without crashing.
+
+**Where:** `common/util/include/util/rate_clamp.h`
+
+```cpp
+inline int clamp_rate(int raw_hz, int min_hz, int max_hz, std::string_view label) {
+    int clamped = std::clamp(raw_hz, min_hz, max_hz);
+    if (clamped != raw_hz) {
+        spdlog::warn("{} rate {} Hz out of range [{}, {}] — clamped to {} Hz",
+                     label, raw_hz, min_hz, max_hz, clamped);
+    }
+    return clamped;
+}
+```
+
+**Built-in bounds:**
+- IMU rate: [100, 1000] Hz (via `clamp_imu_rate()`)
+- VIO rate: [10, 1000] Hz (via `clamp_vio_rate()`)
+
+The clamped rate is then used to compute the `sleep_until` tick period:
+`auto period = std::chrono::microseconds(1'000'000 / clamped_hz)`.
+
+---
+
+### 4.8 Covariance Health Pattern
+
+**What:** Using `trace(P_position)` — the sum of diagonal elements of the
+3x3 position covariance block from the IMU pre-integrator — as a continuous
+quality signal, thresholded into discrete health states.
+
+**Why:** Feature count and stereo match quality are noisy proxies for VIO
+health.  Covariance trace directly measures the estimator's own uncertainty
+about position — it is the most principled single-number quality metric
+available from the pre-integration output.
+
+**Where:** `process3_slam_vio_nav/include/slam/ivio_backend.h`
+
+```cpp
+// Extract position covariance trace from IMU pre-integrator output
+output.position_trace = pm.covariance.block<3, 3>(0, 0).trace();
+
+// Threshold into discrete health states
+if (output.position_trace <= good_trace_max_) {          // default 0.1
+    new_health = VIOHealth::NOMINAL;
+} else if (output.position_trace <= degraded_trace_max_) { // default 1.0
+    new_health = VIOHealth::DEGRADED;
+} else {
+    new_health = VIOHealth::LOST;
+}
+```
+
+**Threshold defaults:**
+- `good_trace_max = 0.1` — trace(P_pos) <= 0.1 means NOMINAL
+- `degraded_trace_max = 1.0` — trace(P_pos) <= 1.0 means DEGRADED, above means LOST
+
+**Fallback:** When no IMU data is available (`position_trace < 0`), health
+falls back to feature-count heuristics (feature count and stereo match ratio).
+
+**Downstream effect:** `VIOHealth` maps to `Pose.quality` (0-3), which
+`FaultManager` uses to trigger `FAULT_VIO_DEGRADED` (LOITER) or
+`FAULT_VIO_LOST` (RTL) fault responses.
 
 ---
 

@@ -17,7 +17,8 @@
 7. [Main Loop Detail](#main-loop-detail)
 8. [Configuration Reference](#configuration-reference)
 9. [Testing](#testing)
-10. [Known Limitations](#known-limitations)
+10. [Gimbal Auto-Tracking](#gimbal-auto-tracking)
+11. [Known Limitations](#known-limitations)
 
 ---
 
@@ -311,6 +312,52 @@ Latency is tracked automatically on each `receive()` call. Call
 periodically emit a p50/p90/p99 histogram (µs) to the log.
 
 See [observability.md](observability.md) for histogram interpretation.
+
+---
+
+## Gimbal Auto-Tracking
+
+**Header:** [`auto_tracker.h`](../../process6_payload_manager/include/payload/auto_tracker.h)
+
+The auto-tracking module allows the gimbal to automatically follow the highest-confidence
+detected object. When enabled, it subscribes to `/detected_objects` (from P2) and
+`/slam_pose` (from P3) and computes gimbal pitch/yaw commands each control loop tick.
+
+### AutoTrackConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable auto-tracking mode |
+| `min_confidence` | float | `0.5` | Minimum detection confidence to track |
+
+**Config section:** `payload_manager.auto_track`
+
+### Coordinate Frame Transform
+
+Objects arrive in **world frame** (from P2 sensor fusion). The SLAM pose from P3
+provides the world-to-body transform. The body frame convention is **FRU**
+(x=forward, y=right, z=up).
+
+The transform uses a **yaw-only rotation** (roll and pitch are assumed approximately
+zero), extracted from the pose quaternion via `yaw_from_quaternion()`.
+
+### Bearing Computation
+
+`compute_bearing()` transforms the target position from world frame to body frame
+and returns pitch/yaw angles in degrees:
+
+1. Subtract drone position from target position (world-frame offset)
+2. Rotate offset into body frame using yaw-only rotation from `yaw_from_quaternion()`
+3. Compute `yaw = atan2(body_y, body_x)` and `pitch = atan2(body_z, horizontal_distance)`
+4. Return angles in degrees, suitable for `gimbal->set_target(pitch, yaw)`
+
+### Testing
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| [`test_gimbal_auto_tracker.cpp`](../../tests/test_gimbal_auto_tracker.cpp) | 25 | Bearing math, frame transforms, confidence filtering, edge cases |
+
+**Scenario test:** [`24_gimbal_auto_track.json`](../../config/scenarios/24_gimbal_auto_track.json) — end-to-end auto-tracking with simulated detections and SLAM pose.
 
 ---
 
