@@ -369,9 +369,11 @@ private:
             last_target_z_ = target.z;
         }
 
-        // Invalidate snap cache if static cell count changed significantly (>10%)
+        // Invalidate snap cache if static cell count changed significantly (>10%).
+        // No guard on last_snap_static_count_ > 0: snaps made on an empty grid
+        // must also invalidate when the grid later grows.
         const size_t current_static = grid_.static_count();
-        if (snap_valid_ && last_snap_static_count_ > 0) {
+        if (snap_valid_) {
             const float change = std::abs(static_cast<float>(current_static) -
                                           static_cast<float>(last_snap_static_count_));
             if (change / static_cast<float>(std::max(last_snap_static_count_, size_t{1})) > 0.1f) {

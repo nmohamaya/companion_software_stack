@@ -141,7 +141,10 @@ cleanup() {
         kill -SIGKILL "$PX4_PID" 2>/dev/null || true
         pkill -SIGKILL -P "$PX4_PID" 2>/dev/null || true
     fi
-    # 3. Clean SHM segments (Zenoh shared-memory pools)
+    # 3. Clean SHM segments created by this launcher's Zenoh sessions.
+    # NOTE: This removes all zenoh_shm_* pools, which can affect other
+    # Zenoh processes on the same host. In multi-user environments,
+    # consider scoping cleanup to a per-run prefix/namespace.
     rm -f /dev/shm/zenoh_shm_* 2>/dev/null || true
     echo "All processes stopped."
 }
@@ -306,12 +309,12 @@ echo ""
 # down the companion stack (BUG-29).
 #
 # Strategy:
-#   1. Background watcher: if PX4 exits, log it but keep companions alive
-#      for a grace period so the mission can complete.
+#   1. Background watcher: if PX4 exits, log it and leave companions
+#      running; PX4 exit alone is not a shutdown signal.
 #   2. Foreground: wait for any companion process to exit — that is the
-#      real signal to shut down.
+#      real signal to shut down the stack.
 
-# Background PX4 watcher — logs when PX4 exits but does not kill companions.
+# Background PX4 watcher — logs when PX4 exits and leaves companions running.
 (
     wait "$PX4_PID" 2>/dev/null
     PX4_EXIT=$?

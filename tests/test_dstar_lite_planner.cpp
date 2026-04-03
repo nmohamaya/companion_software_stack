@@ -1530,26 +1530,28 @@ TEST(OccupancyGrid3DTest, HDMapCellsExcludedFromCap) {
 // ═════════════════════════════════════════════════════════════
 
 TEST(DStarLiteIntegrationTest, SnapGoalFallbackPrefersApproachSide) {
+    // Block a wide area around the goal to force the BFS fallback (not lateral snap).
+    // With strong approach bias, the BFS should prefer cells between the drone and
+    // the goal (approach side) over equidistant cells on the far side.
     GridPlannerConfig config;
     config.resolution_m       = 1.0f;
     config.grid_extent_m      = 20.0f;
     config.inflation_radius_m = 0.5f;
-    config.snap_approach_bias = 1.0f;
+    config.snap_approach_bias = 10.0f;  // strong bias toward approach side
     DStarLitePlanner planner(config);
 
-    // Block a large area around goal (5,0) so lateral snap fails
-    // and fallback is triggered
+    // Wall of obstacles at x=5, from y=-4 to y=4, at z=5.
+    // Blocks goal (5,0,5) AND all lateral snap candidates (perpendicular = Y axis).
+    // Free cells: (4,0,5) on approach side, (6,0,5) on far side.
     drone::ipc::DetectedObjectList objects{};
     uint32_t                       idx = 0;
-    for (int dy = -3; dy <= 3; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
-            objects.objects[idx].position_x = 5.0f + static_cast<float>(dx);
-            objects.objects[idx].position_y = static_cast<float>(dy);
-            objects.objects[idx].position_z = 5.0f;
-            objects.objects[idx].confidence = 0.9f;
-            ++idx;
-        }
+    for (int dy = -10; dy <= 10; ++dy) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = 5.0f;
+        objects.objects[idx].position_y = static_cast<float>(dy);
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
     }
     objects.num_objects = idx;
 
@@ -1559,42 +1561,71 @@ TEST(DStarLiteIntegrationTest, SnapGoalFallbackPrefersApproachSide) {
     pose.translation[2] = 5.0;
     planner.update_obstacles(objects, pose);
 
-    // Plan toward the blocked goal
     Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
     auto     cmd = planner.plan(pose, target);
 
     EXPECT_TRUE(cmd.valid);
-    // The planner should find a path (not fall back to hover)
     EXPECT_FALSE(planner.using_direct_fallback());
+    // The path should head toward the goal (positive X from origin).
+    // Snap should have picked approach side (x < 5), so the path endpoint
+    // should be before the wall, not past it.
+    const auto& path = planner.cached_path();
+    ASSERT_FALSE(path.empty());
+    // Last cell in path is the snapped goal — should be on approach side
+    EXPECT_LT(path.back()[0], 5);
 }
 
 TEST(DStarLiteIntegrationTest, SnapGoalPureNearestWhenBiasZero) {
-    GridPlannerConfig config;
-    config.resolution_m       = 1.0f;
-    config.grid_extent_m      = 20.0f;
-    config.inflation_radius_m = 0.5f;
-    config.snap_approach_bias = 0.0f;  // disable bias — pure nearest
-    DStarLitePlanner planner(config);
+    // Compare bias=0 vs bias>0 on the same obstacle layout.
+    // With bias=0, both approach and far-side cells are scored equally (pure distance).
+    // With strong bias, the approach-side cell should be preferred.
+    GridPlannerConfig zero_bias_config;
+    zero_bias_config.resolution_m       = 1.0f;
+    zero_bias_config.grid_extent_m      = 20.0f;
+    zero_bias_config.inflation_radius_m = 0.5f;
+    zero_bias_config.snap_approach_bias = 0.0f;  // disable bias — pure nearest
+    DStarLitePlanner zero_bias_planner(zero_bias_config);
 
-    // Block goal area
+    GridPlannerConfig biased_config  = zero_bias_config;
+    biased_config.snap_approach_bias = 10.0f;  // strong preference for approach side
+    DStarLitePlanner biased_planner(biased_config);
+
+    // Wall of obstacles at x=5, from y=-10 to y=10.
+    // Forces BFS fallback. Free cells at (4,0,5) and (6,0,5) are equidistant.
     drone::ipc::DetectedObjectList objects{};
-    objects.num_objects           = 1;
-    objects.objects[0].position_x = 5.0f;
-    objects.objects[0].position_y = 0.0f;
-    objects.objects[0].position_z = 5.0f;
-    objects.objects[0].confidence = 0.9f;
+    uint32_t                       idx = 0;
+    for (int dy = -10; dy <= 10; ++dy) {
+        if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+        objects.objects[idx].position_x = 5.0f;
+        objects.objects[idx].position_y = static_cast<float>(dy);
+        objects.objects[idx].position_z = 5.0f;
+        objects.objects[idx].confidence = 0.9f;
+        ++idx;
+    }
+    objects.num_objects = idx;
 
     drone::ipc::Pose pose{};
     pose.translation[0] = 0.0;
     pose.translation[2] = 5.0;
-    planner.update_obstacles(objects, pose);
+    zero_bias_planner.update_obstacles(objects, pose);
+    biased_planner.update_obstacles(objects, pose);
 
     Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
-    auto     cmd = planner.plan(pose, target);
+    auto     zero_bias_cmd = zero_bias_planner.plan(pose, target);
+    auto     biased_cmd    = biased_planner.plan(pose, target);
 
-    // With zero bias, should still find a valid path via nearest-free
-    EXPECT_TRUE(cmd.valid);
-    EXPECT_FALSE(planner.using_direct_fallback());
+    EXPECT_TRUE(zero_bias_cmd.valid);
+    EXPECT_FALSE(zero_bias_planner.using_direct_fallback());
+    EXPECT_TRUE(biased_cmd.valid);
+    EXPECT_FALSE(biased_planner.using_direct_fallback());
+
+    // With strong bias, the snapped goal path endpoint must be on approach side (x < 5)
+    const auto& biased_path = biased_planner.cached_path();
+    ASSERT_FALSE(biased_path.empty());
+    EXPECT_LT(biased_path.back()[0], 5);
+
+    // With zero bias, (4,0) and (6,0) are equidistant — pure nearest may pick
+    // either. The key assertion is that the biased planner picks approach-side.
 }
 
 // ═════════════════════════════════════════════════════════════

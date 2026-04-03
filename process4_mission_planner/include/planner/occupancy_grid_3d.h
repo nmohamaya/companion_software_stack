@@ -129,7 +129,10 @@ public:
     }
 
     /// Clear only the static HD-map obstacle layer.
-    void clear_static() { static_occupied_.clear(); }
+    void clear_static() {
+        static_occupied_.clear();
+        hd_map_static_count_ = 0;
+    }
 
     /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
     /// These cells are permanent — no TTL — and represent the pre-loaded world map.
@@ -251,11 +254,16 @@ public:
                             const bool radar_confirmed = obj.radar_update_count >=
                                                          radar_promotion_hits_;
 
-                            // Check if promotion cap is reached (HD-map cells excluded)
+                            // Check if promotion cap is reached (HD-map cells excluded).
+                            // Guarded subtraction prevents underflow if counts drift.
+                            const std::size_t promoted_static_count =
+                                static_occupied_.size() > hd_map_static_count_
+                                    ? static_occupied_.size() - hd_map_static_count_
+                                    : 0;
                             const bool cap_reached =
                                 max_static_cells_ > 0 &&
-                                static_cast<int>(static_occupied_.size() - hd_map_static_count_) >=
-                                    max_static_cells_;
+                                promoted_static_count >=
+                                    static_cast<std::size_t>(max_static_cells_);
 
                             if (radar_confirmed && !skip_promotion && !cap_reached) {
                                 // Radar-confirmed → immediate static promotion
