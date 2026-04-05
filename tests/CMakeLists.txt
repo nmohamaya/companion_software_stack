@@ -264,6 +264,12 @@ target_link_libraries(test_flight_recorder PRIVATE drone_recorder)
 target_include_directories(test_flight_recorder PRIVATE
     ${PROJECT_SOURCE_DIR}/common/recorder/include
 )
+# ── Replay Dispatch tests (Issue #352) ───────────────────
+add_drone_test(test_replay_dispatch    test_replay_dispatch.cpp)
+target_link_libraries(test_replay_dispatch PRIVATE drone_recorder)
+target_include_directories(test_replay_dispatch PRIVATE
+    ${PROJECT_SOURCE_DIR}/common/recorder/include
+)
 # ── Collision Recovery tests (Issue #226) ─────────────────
 add_drone_test(test_collision_recovery test_collision_recovery.cpp)
 # ── Gimbal Auto-Tracker tests (Issue #257) ────────────────

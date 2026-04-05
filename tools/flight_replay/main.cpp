@@ -9,6 +9,7 @@
 #include "ipc/message_bus_factory.h"
 #include "ipc/wire_format.h"
 #include "recorder/flight_recorder.h"
+#include "recorder/replay_dispatch.h"
 #include "util/config.h"
 
 #include <algorithm>
@@ -124,6 +125,26 @@ int main(int argc, char* argv[]) {
     // Allow subscribers to connect
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+    // ── Dispatch callbacks — forward to typed publishers ────
+    struct ReplayCallbacks {
+        IPublisher<Pose>*               slam;
+        IPublisher<DetectedObjectList>* objects;
+        IPublisher<FCState>*            fc_state;
+        IPublisher<TrajectoryCmd>*      traj;
+        IPublisher<SystemHealth>*       health;
+        IPublisher<PayloadStatus>*      payload;
+
+        void on_pose(const Pose& msg) { slam->publish(msg); }
+        void on_detections(const DetectedObjectList& msg) { objects->publish(msg); }
+        void on_fc_state(const FCState& msg) { fc_state->publish(msg); }
+        void on_trajectory(const TrajectoryCmd& msg) { traj->publish(msg); }
+        void on_health(const SystemHealth& msg) { health->publish(msg); }
+        void on_payload(const PayloadStatus& msg) { payload->publish(msg); }
+    };
+
+    ReplayCallbacks callbacks{pub_slam.get(), pub_objects.get(), pub_fc_state.get(),
+                              pub_traj.get(), pub_health.get(),  pub_payload.get()};
+
     // ── Replay loop ──────────────────────────────────────────
     const auto& entries   = log_result.entries;
     uint64_t    first_ts  = entries.front().header.wire_header.timestamp_ns;
@@ -134,17 +155,12 @@ int main(int argc, char* argv[]) {
         const auto& entry     = entries[i];
         const auto  record_ts = entry.header.wire_header.timestamp_ns;
         const auto  topic     = entry.topic_name;
-        const auto  msg_type  = entry.header.wire_header.msg_type;
 
         // ── Timing: wait until replay time ───────────────────
         if (speed > 0.0f && i > 0) {
-            // Use signed arithmetic to handle out-of-order timestamps safely
-            const auto record_delta_ns = std::max(
-                static_cast<int64_t>(record_ts) - static_cast<int64_t>(first_ts), int64_t{0});
-            const auto scaled_delta = std::chrono::nanoseconds(static_cast<int64_t>(
-                static_cast<double>(record_delta_ns) / static_cast<double>(speed)));
-            const auto target_time  = wall_base + scaled_delta;
-            const auto now          = std::chrono::steady_clock::now();
+            const auto delay = drone::recorder::calculate_replay_delay(record_ts, first_ts, speed);
+            const auto target_time = wall_base + delay;
+            const auto now         = std::chrono::steady_clock::now();
             if (target_time > now) {
                 std::this_thread::sleep_until(target_time);
             }
@@ -157,50 +173,14 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // ── Publish based on message type ────────────────────
-        bool published = false;
-        if (msg_type == WireMessageType::SLAM_POSE && entry.payload.size() == sizeof(Pose)) {
-            Pose msg{};
-            std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(&msg));
-            pub_slam->publish(msg);
-            published = true;
-        } else if (msg_type == WireMessageType::DETECTIONS &&
-                   entry.payload.size() == sizeof(DetectedObjectList)) {
-            DetectedObjectList msg{};
-            std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(&msg));
-            pub_objects->publish(msg);
-            published = true;
-        } else if (msg_type == WireMessageType::FC_STATE &&
-                   entry.payload.size() == sizeof(FCState)) {
-            FCState msg{};
-            std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(&msg));
-            pub_fc_state->publish(msg);
-            published = true;
-        } else if (msg_type == WireMessageType::TRAJECTORY_CMD &&
-                   entry.payload.size() == sizeof(TrajectoryCmd)) {
-            TrajectoryCmd msg{};
-            std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(&msg));
-            pub_traj->publish(msg);
-            published = true;
-        } else if (msg_type == WireMessageType::SYSTEM_HEALTH &&
-                   entry.payload.size() == sizeof(SystemHealth)) {
-            SystemHealth msg{};
-            std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(&msg));
-            pub_health->publish(msg);
-            published = true;
-        } else if (msg_type == WireMessageType::PAYLOAD_STATUS &&
-                   entry.payload.size() == sizeof(PayloadStatus)) {
-            PayloadStatus msg{};
-            std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(&msg));
-            pub_payload->publish(msg);
-            published = true;
-        }
+        // ── Dispatch record to typed publisher ───────────────
+        auto result = drone::recorder::dispatch_record(entry, callbacks);
 
-        if (published) {
+        if (result.dispatched) {
             ++replayed;
         } else {
             spdlog::debug("Skipped record: topic='{}' type={} size={}", topic,
-                          static_cast<uint16_t>(msg_type), entry.payload.size());
+                          static_cast<uint16_t>(result.msg_type), entry.payload.size());
         }
     }
 
