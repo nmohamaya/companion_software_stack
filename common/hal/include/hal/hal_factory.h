@@ -52,8 +52,8 @@ namespace drone::hal {
 /// Create a camera backend from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
-inline std::unique_ptr<ICamera> create_camera(const drone::Config& cfg,
-                                              const std::string&   section) {
+[[nodiscard]] inline std::unique_ptr<ICamera> create_camera(const drone::Config& cfg,
+                                                            const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating camera '{}' backend='{}'", section, backend);
 
@@ -74,8 +74,8 @@ inline std::unique_ptr<ICamera> create_camera(const drone::Config& cfg,
 /// Create a flight controller link from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "comms.mavlink")
-inline std::unique_ptr<IFCLink> create_fc_link(const drone::Config& cfg,
-                                               const std::string&   section) {
+[[nodiscard]] inline std::unique_ptr<IFCLink> create_fc_link(const drone::Config& cfg,
+                                                             const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating FC link '{}' backend='{}'", section, backend);
 
@@ -93,8 +93,8 @@ inline std::unique_ptr<IFCLink> create_fc_link(const drone::Config& cfg,
 /// Create a GCS link from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "comms.gcs")
-inline std::unique_ptr<IGCSLink> create_gcs_link(const drone::Config& cfg,
-                                                 const std::string&   section) {
+[[nodiscard]] inline std::unique_ptr<IGCSLink> create_gcs_link(const drone::Config& cfg,
+                                                               const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating GCS link '{}' backend='{}'", section, backend);
 
@@ -109,8 +109,8 @@ inline std::unique_ptr<IGCSLink> create_gcs_link(const drone::Config& cfg,
 /// Create a gimbal backend from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "payload_manager.gimbal")
-inline std::unique_ptr<IGimbal> create_gimbal(const drone::Config& cfg,
-                                              const std::string&   section) {
+[[nodiscard]] inline std::unique_ptr<IGimbal> create_gimbal(const drone::Config& cfg,
+                                                            const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating gimbal '{}' backend='{}'", section, backend);
 
@@ -125,8 +125,8 @@ inline std::unique_ptr<IGimbal> create_gimbal(const drone::Config& cfg,
 /// Create an IMU source from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "slam.imu")
-inline std::unique_ptr<IIMUSource> create_imu_source(const drone::Config& cfg,
-                                                     const std::string&   section) {
+[[nodiscard]] inline std::unique_ptr<IIMUSource> create_imu_source(const drone::Config& cfg,
+                                                                   const std::string&   section) {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating IMU source '{}' backend='{}'", section, backend);
 
@@ -148,8 +148,8 @@ inline std::unique_ptr<IIMUSource> create_imu_source(const drone::Config& cfg,
 /// Create a radar backend from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "perception.radar")
-inline std::unique_ptr<IRadar> create_radar(const drone::Config& cfg,
-                                            const std::string&   section = "perception.radar") {
+[[nodiscard]] inline std::unique_ptr<IRadar> create_radar(
+    const drone::Config& cfg, const std::string& section = "perception.radar") {
     auto backend = cfg.get<std::string>(section + ".backend", "simulated");
     spdlog::info("[HAL] Creating radar '{}' backend='{}'", section, backend);
 
