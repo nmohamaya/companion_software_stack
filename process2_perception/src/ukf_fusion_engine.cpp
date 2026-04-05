@@ -21,7 +21,7 @@ namespace drone::perception {
 // ═══════════════════════════════════════════════════════════
 ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth,
                      const RadarNoiseConfig& radar_cfg, const CameraIntrinsics& intrinsics)
-    : track_id(trk.track_id), age(0) {
+    : track_id(trk.track_id), age(0), negate_azimuth_(radar_cfg.negate_azimuth) {
     // Initialize state: [x=depth, y=bearing_x*depth, z=bearing_y*depth, vx, vy, vz]
     // Bearing computed via pinhole camera model: (pixel - principal_point) / focal_length
     const float bearing_x = (trk.position_2d.x() - intrinsics.cx) / std::max(1.0f, intrinsics.fx);
@@ -63,21 +63,25 @@ ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth,
 // ── Radar-only constructor (Phase D) ──────────────────────
 ObjectUKF::ObjectUKF(const drone::ipc::RadarDetection& det, uint32_t id,
                      const RadarNoiseConfig& radar_cfg)
-    : track_id(id), age(0), radar_update_count(1), radar_only(true) {
+    : track_id(id)
+    , age(0)
+    , radar_update_count(1)
+    , radar_only(true)
+    , negate_azimuth_(radar_cfg.negate_azimuth) {
     // Convert spherical radar (range, azimuth, elevation) to body-frame FRD.
-    // Negate azimuth: Gazebo FLU → UKF FRD convention.
-    const float neg_az = -det.azimuth_rad;
+    // Sign convention configurable per backend (Issue #348).
+    const float az     = radar_cfg.az_sign(det.azimuth_rad);
     const float cos_el = std::cos(det.elevation_rad);
     const float sin_el = std::sin(det.elevation_rad);
 
     x_    = StateVec::Zero();
-    x_(0) = det.range_m * cos_el * std::cos(neg_az);  // x (forward / depth)
-    x_(1) = det.range_m * cos_el * std::sin(neg_az);  // y (right / lateral)
-    x_(2) = det.range_m * sin_el;                     // z (down / vertical)
+    x_(0) = det.range_m * cos_el * std::cos(az);  // x (forward / depth)
+    x_(1) = det.range_m * cos_el * std::sin(az);  // y (right / lateral)
+    x_(2) = det.range_m * sin_el;                 // z (down / vertical)
     // Project radial velocity along look direction (only component observable)
-    x_(3) = det.radial_velocity_mps * cos_el * std::cos(neg_az);  // vx
-    x_(4) = 0.0f;                                                 // vy
-    x_(5) = 0.0f;                                                 // vz
+    x_(3) = det.radial_velocity_mps * cos_el * std::cos(az);  // vx
+    x_(4) = 0.0f;                                             // vy
+    x_(5) = 0.0f;                                             // vz
 
     // Covariance: range is accurate, lateral/vertical scale with range.
     P_       = StateMat::Zero();
@@ -413,11 +417,10 @@ void ObjectUKF::update_radar(const drone::ipc::RadarDetection& det) {
     RadarCrossMat K = (S.ldlt().solve(Pxz.transpose())).transpose();
 
     // Actual radar measurement.
-    // Negate azimuth: Gazebo radar uses FLU convention (positive = left),
-    // but the UKF body frame is FRD (positive azimuth = right).
+    // Azimuth sign convention configurable per backend (Issue #348).
     RadarMeasVec z_actual;
     z_actual(0) = det.range_m;
-    z_actual(1) = -det.azimuth_rad;
+    z_actual(1) = negate_azimuth_ ? -det.azimuth_rad : det.azimuth_rad;
     z_actual(2) = det.elevation_rad;
     z_actual(3) = det.radial_velocity_mps;
 
@@ -456,12 +459,12 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
     , radar_enabled_(radar_enabled)
     , dormant_merge_radius_m_(dormant_merge_radius_m)
     , max_dormant_(max_dormant) {
-    spdlog::info("[UKF] radar_enabled={}, ground_filter_enabled={}, ground_filter_alt_m={:.2f}, "
-                 "altitude_gate_m={:.1f}, gate_threshold={:.1f}, dormant_merge_radius={:.1f}m, "
-                 "max_dormant={}",
-                 radar_enabled_, radar_cfg_.ground_filter_enabled, radar_cfg_.min_object_altitude_m,
-                 radar_cfg_.altitude_gate_m, radar_cfg_.gate_threshold, dormant_merge_radius_m_,
-                 max_dormant_);
+    spdlog::info("[UKF] radar_enabled={}, negate_azimuth={}, ground_filter_enabled={}, "
+                 "ground_filter_alt_m={:.2f}, altitude_gate_m={:.1f}, gate_threshold={:.1f}, "
+                 "dormant_merge_radius={:.1f}m, max_dormant={}",
+                 radar_enabled_, radar_cfg_.negate_azimuth, radar_cfg_.ground_filter_enabled,
+                 radar_cfg_.min_object_altitude_m, radar_cfg_.altitude_gate_m,
+                 radar_cfg_.gate_threshold, dormant_merge_radius_m_, max_dormant_);
 }
 
 UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
@@ -677,10 +680,10 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
             if (std::abs(radar_z - track_z) > alt_gate) continue;
         }
 
-        // Negate azimuth: Gazebo FLU → UKF FRD
+        // Azimuth sign convention configurable per backend (Issue #348).
         ObjectUKF::RadarMeasVec z_actual;
         z_actual(0) = rdet.range_m;
-        z_actual(1) = -rdet.azimuth_rad;
+        z_actual(1) = radar_cfg_.az_sign(rdet.azimuth_rad);
         z_actual(2) = rdet.elevation_rad;
         z_actual(3) = rdet.radial_velocity_mps;
 
@@ -878,8 +881,9 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
                         if (radar_matched[ri]) continue;
                         const auto& rdet = radar_dets_.detections[ri];
-                        // Negate azimuth: Gazebo FLU → UKF FRD
-                        const float az_err    = std::abs(wrap_angle(-rdet.azimuth_rad - cam_az));
+                        // Azimuth sign convention configurable per backend (Issue #348).
+                        const float az_err =
+                            std::abs(wrap_angle(radar_cfg_.az_sign(rdet.azimuth_rad) - cam_az));
                         const float el_err    = std::abs(wrap_angle(rdet.elevation_rad - cam_el));
                         const float total_err = az_err + el_err;
                         if (az_err < kBearingGateRad && el_err < kBearingGateRad &&
@@ -1009,10 +1013,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     if (std::abs(radar_z - track_z) > radar_cfg_.altitude_gate_m) continue;
                 }
 
-                // Negate azimuth: Gazebo FLU → UKF FRD convention
+                // Azimuth sign convention configurable per backend (Issue #348).
                 ObjectUKF::RadarMeasVec z_actual;
                 z_actual(0) = rdet.range_m;
-                z_actual(1) = -rdet.azimuth_rad;
+                z_actual(1) = radar_cfg_.az_sign(rdet.azimuth_rad);
                 z_actual(2) = rdet.elevation_rad;
                 z_actual(3) = rdet.radial_velocity_mps;
 
@@ -1203,11 +1207,11 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 if (object_alt < radar_cfg_.min_object_altitude_m) continue;
             }
 
-            // Convert to body-frame for proximity check
-            const float           neg_az = -rdet.azimuth_rad;
+            // Convert to body-frame for proximity check (Issue #348).
+            const float           az     = radar_cfg_.az_sign(rdet.azimuth_rad);
             const float           cos_el = std::cos(rdet.elevation_rad);
-            const float           body_x = rdet.range_m * cos_el * std::cos(neg_az);
-            const float           body_y = rdet.range_m * cos_el * std::sin(neg_az);
+            const float           body_x = rdet.range_m * cos_el * std::cos(az);
+            const float           body_y = rdet.range_m * cos_el * std::sin(az);
             const float           body_z = rdet.range_m * std::sin(rdet.elevation_rad);
             const Eigen::Vector3f body_pos(body_x, body_y, body_z);
 
@@ -1364,6 +1368,10 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
             // radar_orphan_promote_frames overrides promotion_hits when present.
             radar_cfg.radar_only_enabled = cfg->get<bool>("perception.fusion.radar_only_enabled",
                                                           radar_cfg.radar_only_enabled);
+            // Issue #348: azimuth sign convention — true for Gazebo/Simulated (FLU→FRD),
+            // false for real hardware that provides native FRD azimuth.
+            radar_cfg.negate_azimuth            = cfg->get<bool>("perception.radar.negate_azimuth",
+                                                                 radar_cfg.negate_azimuth);
             radar_cfg.radar_only_promotion_hits = static_cast<uint32_t>(
                 cfg->get<int>("perception.fusion.radar_orphan_promote_frames",
                               static_cast<int>(radar_cfg.radar_only_promotion_hits)));

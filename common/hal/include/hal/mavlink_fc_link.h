@@ -137,7 +137,7 @@ public:
             std::lock_guard<std::mutex> st_lock(state_mtx_);
             cached_state_ = FCState{};
         }
-        offboard_active_.store(false, std::memory_order_relaxed);
+        offboard_active_.store(false, std::memory_order_release);
 
         spdlog::info("[MavlinkFCLink] Closed");
     }
@@ -172,14 +172,14 @@ public:
         }
 
         // Start offboard mode if not already active
-        if (!offboard_active_.load(std::memory_order_relaxed)) {
+        if (!offboard_active_.load(std::memory_order_acquire)) {
             auto start_result = offboard_->start();
             if (start_result != mavsdk::Offboard::Result::Success) {
                 spdlog::warn("[MavlinkFCLink] Offboard start failed: {}",
                              offboard_result_str(start_result));
                 return false;
             }
-            offboard_active_.store(true, std::memory_order_relaxed);
+            offboard_active_.store(true, std::memory_order_release);
             spdlog::info("[MavlinkFCLink] Offboard mode started");
         }
 
@@ -219,9 +219,9 @@ public:
             return false;
         }
         // Stop offboard if it was active — takeoff uses Auto mode
-        if (offboard_active_.load(std::memory_order_relaxed)) {
+        if (offboard_active_.load(std::memory_order_acquire)) {
             offboard_->stop();
-            offboard_active_.store(false, std::memory_order_relaxed);
+            offboard_active_.store(false, std::memory_order_release);
         }
         spdlog::info("[MavlinkFCLink] Takeoff to {:.1f}m initiated", altitude_m);
         return true;
@@ -240,13 +240,13 @@ public:
         switch (mode) {
             case 0:  // STAB → Hold (safe stabilised hover)
                 result = action_->hold();
-                if (offboard_active_.load(std::memory_order_relaxed)) {
+                if (offboard_active_.load(std::memory_order_acquire)) {
                     offboard_->stop();
-                    offboard_active_.store(false, std::memory_order_relaxed);
+                    offboard_active_.store(false, std::memory_order_release);
                 }
                 break;
             case 1:  // GUIDED → Offboard
-                if (!offboard_ || offboard_active_.load(std::memory_order_relaxed)) {
+                if (!offboard_ || offboard_active_.load(std::memory_order_acquire)) {
                     return true;  // already in offboard
                 }
                 // Set a zero-velocity setpoint so offboard start doesn't reject
@@ -259,20 +259,20 @@ public:
                         return false;
                     }
                 }
-                offboard_active_.store(true, std::memory_order_relaxed);
+                offboard_active_.store(true, std::memory_order_release);
                 spdlog::info("[MavlinkFCLink] Mode → Offboard (GUIDED)");
                 return true;
             case 2:  // AUTO → Land
-                if (offboard_active_.load(std::memory_order_relaxed)) {
+                if (offboard_active_.load(std::memory_order_acquire)) {
                     offboard_->stop();
-                    offboard_active_.store(false, std::memory_order_relaxed);
+                    offboard_active_.store(false, std::memory_order_release);
                 }
                 result = action_->land();
                 break;
             case 3:  // RTL
-                if (offboard_active_.load(std::memory_order_relaxed)) {
+                if (offboard_active_.load(std::memory_order_acquire)) {
                     offboard_->stop();
-                    offboard_active_.store(false, std::memory_order_relaxed);
+                    offboard_active_.store(false, std::memory_order_release);
                 }
                 result = action_->return_to_launch();
                 break;

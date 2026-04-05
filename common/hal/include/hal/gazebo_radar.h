@@ -78,7 +78,7 @@ public:
     GazeboRadarBackend& operator=(GazeboRadarBackend&&)      = delete;
 
     bool init() override {
-        if (active_.load(std::memory_order_relaxed)) {
+        if (active_.load(std::memory_order_acquire)) {
             spdlog::warn("[GazeboRadar] Already initialised");
             return false;
         }
@@ -104,7 +104,7 @@ public:
     void shutdown() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!active_.load(std::memory_order_relaxed)) return;
+            if (!active_.load(std::memory_order_acquire)) return;
             active_.store(false, std::memory_order_release);
         }
         node_.Unsubscribe(scan_topic_);
@@ -285,7 +285,7 @@ private:
         // Store under lock
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!active_.load(std::memory_order_relaxed)) return;
+            if (!active_.load(std::memory_order_acquire)) return;
             cached_detections_ = list;
         }
 
