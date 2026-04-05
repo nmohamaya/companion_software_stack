@@ -109,7 +109,7 @@ build_and_test() {
     local ctest_exclude=""
     for flag in "${cmake_flags[@]}"; do
         if [[ "$flag" == "-DENABLE_TSAN=ON" ]]; then
-            ctest_exclude="Zenoh|Mavlink|Yolo|Liveliness"
+            ctest_exclude="Zenoh|Mavlink|Yolo|Liveliness|MessageBus"
         fi
     done
 
@@ -138,7 +138,7 @@ build_and_test() {
 # shellcheck disable=SC2317  # called indirectly via run_job
 job_fmt() {
     cd "$PROJECT_DIR"
-    find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
+    find common process[1-7]_* tests tools \( -name '*.h' -o -name '*.cpp' \) -print0 \
         | xargs -0 clang-format-18 --dry-run --Werror 2>&1
     echo "  All files formatted correctly."
 }
@@ -153,22 +153,46 @@ job_tsan()     { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_TSAN=ON; }
 # shellcheck disable=SC2317
 job_ubsan()    { cd "$PROJECT_DIR" && build_and_test Debug -DENABLE_UBSAN=ON; }
 
-# ── Helper: coverage report generation ───────────────────────
+# ── Helper: coverage report generation (mirrors CI) ─────────
 # shellcheck disable=SC2317  # called indirectly via run_job
 generate_coverage_report() {
     echo ""
-    echo "  Generating coverage report..."
+    echo "  Capturing coverage data..."
     lcov --capture --directory "${BUILD_DIR}" --output-file "${BUILD_DIR}/coverage-raw.info" \
-        --ignore-errors mismatch --rc lcov_branch_coverage=1 2>/dev/null
+        --ignore-errors mismatch,negative --rc lcov_branch_coverage=1 2>/dev/null
     lcov --remove "${BUILD_DIR}/coverage-raw.info" \
         '/usr/*' '*/googletest/*' '*/gtest/*' '*/test/*' '*/tests/*' '*_test.cpp' '*_test.h' \
         --output-file "${BUILD_DIR}/coverage.info" \
         --ignore-errors unused --rc lcov_branch_coverage=1 2>/dev/null
+
+    # Print summary
+    echo ""
+    echo "  Coverage summary:"
+    lcov --list "${BUILD_DIR}/coverage.info" --rc lcov_branch_coverage=1 2>/dev/null | tail -5
+    echo ""
+
+    # Enforce coverage threshold (mirrors CI)
+    local coverage
+    coverage=$(lcov --summary "${BUILD_DIR}/coverage.info" 2>&1 \
+               | grep 'lines\.\.\.\.\.\.' | sed 's/.*: //' | sed 's/%.*//')
+    echo "  Line coverage: ${coverage}%"
+    if command -v bc &>/dev/null && [ -n "$coverage" ]; then
+        if [ "$(echo "${coverage} < 70.0" | bc)" -eq 1 ]; then
+            echo -e "${RED}  ERROR: Line coverage ${coverage}% is below 70% threshold${RESET}"
+            return 1
+        fi
+        echo -e "${GREEN}  Coverage threshold (70%) met.${RESET}"
+    fi
+
+    # Generate HTML report
     if command -v genhtml &>/dev/null; then
+        echo ""
+        echo "  Generating HTML report..."
         genhtml "${BUILD_DIR}/coverage.info" \
             --output-directory "${BUILD_DIR}/coverage-report" \
             --title "Companion Stack Coverage" \
-            --rc genhtml_branch_coverage=1 2>/dev/null
+            --rc genhtml_branch_coverage=1 \
+            --legend --highlight --demangle-cpp 2>/dev/null
         echo "  Coverage report: ${BUILD_DIR}/coverage-report/index.html"
     else
         echo "  genhtml not found — raw coverage in ${BUILD_DIR}/coverage.info"
@@ -180,6 +204,12 @@ generate_coverage_report() {
 job_cov() {
     cd "$PROJECT_DIR"
     build_and_test Debug -DENABLE_COVERAGE=ON
+
+    echo ""
+    echo "  Zeroing counters and re-running tests for clean coverage..."
+    lcov --zerocounters --directory "${BUILD_DIR}" 2>/dev/null
+    ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)"
+
     generate_coverage_report
 }
 

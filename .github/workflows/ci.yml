@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'integration/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'integration/**']
 
 env:
   BUILD_TYPE: Release
@@ -26,7 +26,7 @@ jobs:
 
     - name: Check clang-format
       run: |
-        find common process[1-7]_* tests \( -name '*.h' -o -name '*.cpp' \) -print0 \
+        find common process[1-7]_* tests tools \( -name '*.h' -o -name '*.cpp' \) -print0 \
           | xargs -0 clang-format-18 --dry-run --Werror 2>&1
 
   # ── Build + test matrix ──────────────────────────────────────────
@@ -178,6 +178,15 @@ jobs:
           --ignore-errors unused \
           --rc lcov_branch_coverage=1
         lcov --list coverage.info --rc lcov_branch_coverage=1
+
+    - name: Enforce coverage threshold
+      run: |
+        COVERAGE=$(lcov --summary coverage.info 2>&1 | grep 'lines\.\.\.\.\.\.' | sed 's/.*: //' | sed 's/%.*//')
+        echo "Line coverage: ${COVERAGE}%"
+        if [ "$(echo "${COVERAGE} < 70.0" | bc)" -eq 1 ]; then
+          echo "::error::Line coverage ${COVERAGE}% is below 70% threshold"
+          exit 1
+        fi
 
     - name: Generate HTML report
       run: genhtml coverage.info --output-directory coverage-report --title "Companion Stack Coverage" --rc genhtml_branch_coverage=1
