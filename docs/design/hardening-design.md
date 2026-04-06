@@ -35,10 +35,11 @@
   - [7. Utilities](#7-utilities)
     - [7.1 safe\_name\_copy](#71-safe_name_copy)
     - [7.2 CorrelationContext](#72-correlationcontext)
-  - [8. Configuration Reference](#8-configuration-reference)
-  - [9. Thread Criticality Inventory](#9-thread-criticality-inventory)
-  - [10. Deployment Modes](#10-deployment-modes)
-  - [11. Related Documents](#11-related-documents)
+  - [8. Fault Management Extensions](#8-fault-management-extensions)
+  - [9. Configuration Reference](#9-configuration-reference)
+  - [10. Thread Criticality Inventory](#10-thread-criticality-inventory)
+  - [11. Deployment Modes](#11-deployment-modes)
+  - [12. Related Documents](#12-related-documents)
 
 ---
 
@@ -670,7 +671,43 @@ Generates unique 64-bit correlation IDs for structured log events, enabling post
 
 ---
 
-## 8. Configuration Reference
+## 8. Fault Management Extensions
+
+The FaultManager in P4 (see [mission_planner_design.md](mission_planner_design.md))
+evaluates fault conditions each planning tick and recommends a response action.
+The following extensions bring the total to **12 fault conditions**.
+
+### 8.1 Collision Recovery FSM (Issue #226)
+
+The `COLLISION_RECOVERY` state is an emergency evasive manoeuvre entered when a
+dynamic obstacle is predicted to collide within `collision_time_threshold_s`.
+During recovery, the FaultManager **suppresses WARN and LOITER fault actions** to
+prevent the fault system from interfering with the evasive trajectory. Only
+**RTL** and **EMERGENCY_LAND** can override `COLLISION_RECOVERY` — these represent
+higher-severity situations that take absolute priority.
+
+Once the collision threat clears, the FSM returns to normal planning and the
+FaultManager resumes full evaluation.
+
+### 8.2 Covariance-Based VIO Health Escalation (Issue #169)
+
+VIO quality is derived from the position covariance trace (`trace(P_position)`)
+published by P3. The VIO backend reports a quality level that feeds directly
+into the FaultManager:
+
+| Fault | Trigger | Action |
+|-------|---------|--------|
+| `FAULT_VIO_DEGRADED` | VIO quality DEGRADED (high covariance trace) | LOITER |
+| `FAULT_VIO_LOST` | VIO quality LOST (covariance diverged) | RTL |
+
+These faults follow the same escalation-only semantics as other fault conditions:
+once raised, they can only be superseded by a higher-severity action. The
+`loiter_escalation_timeout` (default 30 s) applies — if VIO remains DEGRADED and
+the drone is in LOITER for 30 s, the action escalates to RTL.
+
+---
+
+## 9. Configuration Reference
 
 Watchdog configuration in `config/default.json`:
 
@@ -710,7 +747,7 @@ Watchdog configuration in `config/default.json`:
 
 ---
 
-## 9. Thread Criticality Inventory
+## 10. Thread Criticality Inventory
 
 | Process | Thread | Critical | Rationale |
 |---------|--------|:--------:|-----------|
@@ -735,7 +772,7 @@ Watchdog configuration in `config/default.json`:
 
 ---
 
-## 10. Deployment Modes
+## 11. Deployment Modes
 
 | Mode | How P7 Runs | Who Manages P1–P6 | Use Case |
 |------|-------------|-------------------|----------|
@@ -745,7 +782,7 @@ Watchdog configuration in `config/default.json`:
 
 ---
 
-## 11. Related Documents
+## 12. Related Documents
 
 | Document | What It Covers |
 |----------|---------------|

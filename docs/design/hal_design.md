@@ -14,6 +14,10 @@ the concrete backend (simulated, Gazebo, real hardware) is selected at
 runtime via the `"backend"` key in `config/default.json` and wired up
 through a factory function.
 
+**Current totals:** 6 HAL interfaces (ICamera, IFCLink, IGCSLink, IGimbal,
+IIMUSource, IRadar) with 10 concrete backends (6 simulated + 3 Gazebo +
+MavlinkFCLink).
+
 ```
 ┌──────────────────────────────────────┐
 │          Process code                │
@@ -386,6 +390,23 @@ class IProcessMonitor {
 Default thresholds: `cpu_warn=90`, `mem_warn=90`, `temp_warn=80°C`,
 `temp_crit=95°C`, `disk_crit=98%`, `batt_warn=20%`, `batt_crit=10%`,
 `disk_interval=10 s`.
+
+### 4.4 IDetector (Perception)
+
+**Header:** `process2_perception/include/perception/detector_interface.h`
+**Consumer:** P2 (perception)
+
+Strategy interface for object detection.  `SimulatedDetector` was originally
+defined inline in `detector_interface.h` and has been extracted into its own
+file for clarity.
+
+| Key | Class | Notes |
+|-----|-------|-------|
+| `"simulated"` | `SimulatedDetector` | Config-driven synthetic detections (extracted from `detector_interface.h`). |
+| `"color_contour"` | `ColorContourDetector` | HSV colour-space contour detector. |
+| `"opencv_yolo"` | `OpenCvYoloDetector` | YOLOv8-nano via OpenCV DNN (optional, requires `HAS_OPENCV`). |
+
+**Config:** `perception.detector.backend`
 
 ---
 

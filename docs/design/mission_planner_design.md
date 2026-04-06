@@ -135,6 +135,12 @@ concurrency bugs at the cost of requiring each step to complete within the 100 m
                                   on_navigate()│◄────────────┘
                                                ▼
    EMERGENCY ◄──on_emergency()── NAVIGATE ──on_loiter()──► LOITER
+                                    │    │                   │
+                                    │    │ collision         │
+                                    │    ▼ predicted         │
+                                    │  COLLISION_RECOVERY    │
+                                    │    │ (reverse + skip)  │
+                                    │    └──► NAVIGATE       │
                                     │                        │
                                     │ on_rtl()       on_rtl()│
                                     ▼                        ▼
@@ -159,6 +165,23 @@ Post-takeoff obstacle survey: the drone hovers at takeoff position while perform
 |-----|------|---------|-------------|
 | `mission_planner.survey_duration_s` | float | 0.0 | Survey hover duration (0 = skip) |
 | `mission_planner.survey_yaw_rate` | float | 0.3 | Yaw rate during survey (rad/s) |
+
+### COLLISION_RECOVERY State (Issue #226)
+
+Emergency evasive state entered when a dynamic obstacle is predicted to collide within
+`collision_time_threshold_s`. Implemented in [`collision_recovery.h`](../process4_mission_planner/include/planner/collision_recovery.h) (PR #270).
+
+**Behaviour:**
+1. **Entry:** Triggered from NAVIGATE when dynamic obstacle prediction (see [Dynamic Obstacle Prediction](#dynamic-obstacle-prediction)) detects imminent collision
+2. **Reverse:** Vehicle reverses along the last trajectory segment for `recovery_reverse_duration_s`
+3. **Resume:** After reversal completes, the current waypoint is skipped and the mission resumes to the next waypoint
+4. **Fault suppression:** During recovery, lower-severity fault actions (WARN, LOITER) are suppressed to avoid conflicting commands. Only RTL and EMERGENCY_LAND can override the recovery sequence.
+
+**Config:**
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mission_planner.collision_time_threshold_s` | float | — | Predicted collision time to trigger recovery |
+| `mission_planner.recovery_reverse_duration_s` | float | — | Duration of reverse manoeuvre |
 
 ### Waypoint Struct
 
@@ -240,6 +263,8 @@ Two promotion paths convert dynamic cells to permanent static cells:
 2. **Radar-confirmed promotion:** When `FusedObject::radar_update_count >= radar_promotion_hits` (default 3), the cell is immediately promoted to static — radar provides high-confidence range data.
 
 **Promotion suppression:** Cells within Chebyshev distance ≤ 1 of an existing static cell (`near_static_cell_()`) are not promoted. This prevents parallax-induced wall growth from multi-track artefacts.
+
+**Depth confidence gating:** The `min_promotion_depth_confidence` parameter (in [`occupancy_grid_3d.h`](../process4_mission_planner/include/planner/occupancy_grid_3d.h)) controls which detections can promote temporary grid cells to permanent static cells. Default is 0.3; scenario configs override to 0.8 to block camera-only detections (depth confidence 0.01--0.7) while allowing radar-confirmed detections (confidence 1.0) through. This prevents false cell promotion from camera-only monocular depth estimates.
 
 **2D disk inflation:** Obstacles are inflated only in XY at their Z level (not vertically). Per-object inflation uses `estimated_radius_m` when available (from radar-confirmed detections), otherwise the default `inflation_radius_m`.
 
@@ -378,6 +403,22 @@ When `path_aware = true` (default), the avoider prevents reactive repulsion from
 | `max_age_ms` | `500` | Maximum object age before filtering |
 | `max_correction_mps` | `3.0` | Per-axis correction clamp |
 
+### Dynamic Obstacle Prediction (Issue #226)
+
+UKF velocity vectors from tracked objects are used to predict future positions and
+proactively detect collisions. Implemented in [`mission_state_tick.h`](../process4_mission_planner/include/planner/mission_state_tick.h).
+
+**Algorithm:**
+1. For each tracked object with a UKF velocity estimate, predict its position over `prediction_horizon_s` (default 3.0 s)
+2. Predicted positions are injected into the occupancy grid as temporary cells, giving the D* Lite planner advance warning of obstacle movement
+3. If a predicted position intersects the drone's planned trajectory within `collision_time_threshold_s`, the FSM transitions to COLLISION_RECOVERY
+
+**Config:**
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mission_planner.prediction_horizon_s` | float | 3.0 | How far ahead to predict object positions |
+| `mission_planner.collision_time_threshold_s` | float | — | Predicted collision time threshold to trigger recovery |
+
 ---
 
 ## Component: Geofence
@@ -492,6 +533,9 @@ PR #157 refactored the monolithic `main.cpp` (809 → 366 lines) by extracting f
 logically cohesive sub-systems into header-only classes under `process4_mission_planner/include/planner/`.
 Each class is independently unit-tested with injected mocks — no Zenoh or real hardware required.
 
+PR #270 added `collision_recovery.h` for the collision recovery FSM state.
+PR #346 added review fixes to `gcs_command_handler.h`, `fault_response_executor.h`, and `mission_state_tick.h`.
+
 ### `FaultResponseExecutor`
 
 **Header:** [`planner/fault_response_executor.h`](../process4_mission_planner/include/planner/fault_response_executor.h)
@@ -515,6 +559,8 @@ Deduplicates by command timestamp to prevent double-execution on resubscription.
 | Method | Description |
 |--------|-------------|
 | `handle(cmd, state, waypoints)` | Process one GCS command; returns updated state |
+
+**Stop trajectory convention:** All `publish_stop_trajectory` helpers send `valid=true` with zero velocities. P5 ignores `TrajectoryCmd` with `valid=false`, so the previous approach of sending `valid=false` to stop the vehicle was a no-op bug — the drone would continue on its last trajectory.
 
 ### `MissionStateTick`
 
@@ -601,6 +647,9 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | `survey_duration_s` | float | 0.0 | Post-takeoff obstacle survey hover duration (0 = skip) |
 | `survey_yaw_rate` | float | 0.3 | Yaw rate during SURVEY (rad/s) |
 | `overshoot_proximity_factor` | float | 3.0 | Waypoint overshoot proximity zone multiplier |
+| `collision_time_threshold_s` | float | — | Predicted collision time to trigger COLLISION_RECOVERY |
+| `recovery_reverse_duration_s` | float | — | Duration of reverse manoeuvre during collision recovery |
+| `prediction_horizon_s` | float | 3.0 | Dynamic obstacle prediction look-ahead (seconds) |
 | `path_planner.backend` | string | `"dstar_lite"` | Only `"dstar_lite"` is supported (A* removed in Issue #203) |
 | `path_planner.max_iterations` | int | 50000 | D* Lite search iteration limit |
 | `path_planner.replan_interval_s` | float | 0.5 | Replan interval (seconds between replans) |
@@ -613,6 +662,7 @@ Commands carry the thread-local `CorrelationContext` for end-to-end tracing.
 | `occupancy_grid.inflation_radius_m` | float | 1.5 | Obstacle inflation radius |
 | `occupancy_grid.dynamic_obstacle_ttl_s` | float | 3.0 | Dynamic obstacle time-to-live |
 | `occupancy_grid.min_confidence` | float | 0.3 | Minimum detection confidence for grid update |
+| `occupancy_grid.min_promotion_depth_confidence` | float | 0.3 | Depth confidence threshold for static cell promotion |
 | `occupancy_grid.promotion_hits` | int | 0 | Camera-only hit count for static promotion (0 = disabled) |
 | `occupancy_grid.radar_promotion_hits` | int | 3 | Radar update count for immediate static promotion |
 | `obstacle_avoider.backend` | string | `"potential_field_3d"` | Only ObstacleAvoider3D is supported (2D removed in Issue #207) |

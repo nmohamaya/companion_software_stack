@@ -15,7 +15,7 @@
 
 ## Current State Assessment
 
-**What we have**: A ~3500 LOC C++17 autonomous drone stack with 7 processes, 21 virtual interface classes, 2 IPC backends (SHM + Zenoh), 844 unit tests, 80 scenario checks, 75% coverage, full Gazebo SITL closed-loop flight, and a 3-layer watchdog. The architecture uses strategy pattern everywhere, config-driven backend selection, zero recompilation to swap implementations.
+**What we have**: A ~3500 LOC C++17 autonomous drone stack with 7 processes, 21 virtual interface classes, Zenoh IPC (sole backend), 1259 unit tests (see [tests/TESTS.md](../../tests/TESTS.md)), 25 scenarios (20 Tier 1 + 5 Tier 2), 75% coverage, full Gazebo SITL closed-loop flight, and a 3-layer watchdog. The architecture uses strategy pattern everywhere, config-driven backend selection, zero recompilation to swap implementations.
 
 ### Simulation vs. Real Hardware Maturity
 
@@ -161,7 +161,7 @@ All backends selected at runtime via JSON config + factory functions:
                     │  (42 checks) ✅      │     All 7 processes, no physics
                     ├──────────────────────┤
                     │  Unit Tests          │  ← x86 or Jetson (cross-compiled)
-                    │  (844 tests) ✅      │     Isolated, <2 min
+                    │  (1259 tests) ✅     │     Isolated, <2 min
                     └──────────────────────┘
 ```
 

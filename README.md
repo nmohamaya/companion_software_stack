@@ -29,7 +29,7 @@ bash deploy/install_dependencies.sh --all
 # Build
 bash deploy/build.sh
 
-# Test (expects 927 tests to pass)
+# Test (see tests/TESTS.md for expected count)
 bash tests/run_tests.sh
 
 # Launch standalone demo (7 processes, simulated sensors)
@@ -305,7 +305,7 @@ bash deploy/install_dependencies.sh --all
 # Step 2: Build
 bash deploy/build.sh
 
-# Step 3: Test (expected: 927 tests pass)
+# Step 3: Test (see tests/TESTS.md for expected count)
 bash tests/run_tests.sh
 
 # Step 4: Launch
@@ -370,7 +370,7 @@ Expected: drone arms, takes off, navigates 3 waypoints, avoids obstacles, return
 After building, always verify:
 
 ```bash
-# Check test count (should be 927)
+# Check test count (see tests/TESTS.md for current baseline)
 ctest -N --test-dir build | grep "Total Tests:"
 
 # Run all tests (should all pass)
@@ -387,7 +387,7 @@ bash deploy/launch_all.sh              # Standalone
 bash deploy/launch_gazebo.sh --gui     # With Gazebo
 ```
 
-**Test count wrong?** (e.g., 922 instead of 927)
+**Test count wrong?** (doesn't match [tests/TESTS.md](tests/TESTS.md) baseline?)
 ```bash
 # Clean rebuild -- stale CMake cache from different build types
 bash deploy/build.sh --clean

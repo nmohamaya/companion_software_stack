@@ -99,6 +99,21 @@ graph TD
     style Pipeline fill:#1a1a2e,stroke:#9b59b6,color:#e0e0e0
 ```
 
+### Rate Clamping
+
+All P3 thread loop rates are config-driven and clamped to safe bounds to prevent
+unclamped busy-loops that consumed 100% CPU (Issue #220, PR #266):
+
+| Config Key | Default | Bounds | Thread |
+|------------|---------|--------|--------|
+| `slam.imu_rate_hz` | 400 | [100, 1000] Hz | IMU Reader |
+| `slam.vio_rate_hz` | 100 | [10, 1000] Hz | Pose Publisher |
+
+Clamping is implemented via `drone::util::clamp_imu_rate()` / `clamp_vio_rate()` in
+`common/util/include/util/rate_clamp.h`. If a config value falls outside the bounds,
+it is clamped to the nearest limit and a warning is logged. Thread loops use
+`std::this_thread::sleep_for` based on the clamped period to enforce the rate ceiling.
+
 ---
 
 ## IPC Channels
@@ -142,6 +157,7 @@ class IVIOBackend {
 |---------|-------------|-------------|
 | `SimulatedVIOBackend` | `"simulated"` | Circular trajectory with noise. Runs full pipeline (extract → match → preintegrate) but generates pose independently. |
 | `GazeboVIOBackend` | `"gazebo"` | Reads ground-truth odometry from gz-transport topic. Ignores stereo/IMU data. Requires `HAVE_GAZEBO` build flag. |
+| `GazeboFullVIOBackend` | `"gazebo_full_vio"` | Runs the **full VIO pipeline** (feature extraction → stereo matching → IMU pre-integration) on each frame, but obtains the final pose from Gazebo ground truth. Unlike `GazeboVIOBackend` (which skips the pipeline entirely), this exercises all estimation code paths while still producing a reliable pose for downstream consumers. Uses covariance-based health assessment (see below). Requires `HAVE_GAZEBO`. Used in scenario 26 for VIO validation. Source: `ivio_backend.h`. |
 
 ### SimulatedVIOBackend Pipeline
 
@@ -174,6 +190,27 @@ ShmStereoFrame + IMU samples
 | NOMINAL → DEGRADED | Features < 30 or stereo matches < 15 |
 | DEGRADED → NOMINAL | Features ≥ 30 and matches ≥ 15 |
 | Any → LOST | Feature extraction hard failure |
+
+#### Covariance-Based VIO Health (GazeboFullVIOBackend)
+
+The `GazeboFullVIOBackend` and `SimulatedVIOBackend` use `trace(P_position)` from the
+IMU pre-integrator's 9x9 covariance matrix as the primary quality signal, replacing the
+hardcoded feature/match-count heuristic when IMU data is available:
+
+| `trace(P_position)` | VIO Health State |
+|----------------------|------------------|
+| ≤ `good_trace_max` (default 0.1) | NOMINAL |
+| ≤ `degraded_trace_max` (default 1.0) | DEGRADED |
+| > `degraded_trace_max` | LOST |
+
+These thresholds are passed as constructor arguments (`good_trace_max`, `degraded_trace_max`).
+When no IMU data is available (`position_trace < 0`), the backend falls back to feature
+count and stereo match count heuristics (features < 30 → DEGRADED, matches < 15 → DEGRADED).
+
+The resulting `VIOHealth` maps to `Pose.quality` which feeds into P4's `FaultManager` for
+fault escalation (see [VIO Health → FaultManager Integration](#vio-health--faultmanager-integration)).
+
+Source: `ivio_backend.h`, `imu_preintegrator.h`.
 
 ### VIOOutput
 
@@ -281,9 +318,14 @@ struct ImuNoiseParams {
 
 ### Error Detection
 
-- **Gap detection:** Flags `ImuDataGap` if sample interval > 2× expected period
-- **Saturation detection:** Flags `ImuSaturation` if accel > 160 m/s² or gyro > 35 rad/s
+- **Gap detection:** Flags `ImuDataGap` if sample interval > 2.5× expected period (`kMaxDtGap_ratio`).
+  Gaps are logged as warnings via `FrameDiagnostics` but integration continues through them
+  (the gap sample is still integrated, not skipped). The pre-integrator is reset at the start
+  of each frame's batch (`preintegrator_.reset()`) so stale data from prior frames never
+  accumulates.
+- **Saturation detection:** Flags `ImuSaturation` if accel > 156.96 m/s² (16g) or gyro > 34.9 rad/s (~2000 deg/s)
 - **Minimum samples:** Returns error if fewer than 2 samples provided
+- **Non-positive dt:** Samples with `dt <= 0` are skipped with a warning (out-of-order timestamps)
 
 ---
 
@@ -346,7 +388,7 @@ struct VIOError {
 | `visual_frontend_rate_hz` | int | 30 | (Legacy) visual frontend rate |
 | `imu_rate_hz` | int | 400 | IMU sampling rate |
 | `imu.backend` | string | `"simulated"` | IMU HAL backend |
-| `vio.backend` | string | `"simulated"` | VIO backend (`"simulated"` or `"gazebo"`) |
+| `vio.backend` | string | `"simulated"` | VIO backend (`"simulated"`, `"gazebo"`, or `"gazebo_full_vio"`) |
 | `vio.gz_topic` | string | `"/model/x500_companion_0/odometry"` | Gazebo odometry topic |
 | `stereo.fx` | double | 350.0 | Focal length X (pixels) |
 | `stereo.fy` | double | 350.0 | Focal length Y (pixels) |

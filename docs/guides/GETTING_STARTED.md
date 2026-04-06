@@ -129,16 +129,16 @@ bash deploy/build.sh --asan
 After building, verify that your build is correct:
 
 ```bash
-# Expected: should print "Total Tests: 927"
+# Expected: should print test count matching tests/TESTS.md baseline
 ctest -N --test-dir build | grep "Total Tests:"
 
 # Run all tests (takes ~1–2 minutes)
 bash tests/run_tests.sh
 
-# Expected: all 927 tests PASS, 0 failures
+# Expected: all tests PASS, 0 failures (see tests/TESTS.md for count)
 ```
 
-If you see fewer than 927 tests, clean and rebuild:
+If you see fewer tests than expected, clean and rebuild:
 ```bash
 bash deploy/build.sh --clean
 ```
@@ -306,7 +306,7 @@ bash deploy/launch_gazebo.sh              # omit --gui
 # See docs/DEBUG.md for details
 ```
 
-### Test Count Mismatch (expected 927, got XX)
+### Test Count Mismatch (doesn't match tests/TESTS.md baseline?)
 
 **Cause:** Stale CMake cache from different build types (Release vs Debug)
 
@@ -340,7 +340,7 @@ companion_software_stack/
   │   ├── launch_gazebo.sh         ← Run with Gazebo SITL
   │   └── install_dependencies.sh  ← Install deps
   ├── tests/
-  │   ├── run_tests.sh             ← Run all 927 tests
+  │   ├── run_tests.sh             ← Run all tests (see TESTS.md for count)
   │   └── TESTS.md                 ← Test inventory
   └── src/
       ├── process1_video_capture/
@@ -382,7 +382,7 @@ bash deploy/launch_gazebo.sh --gui
 
 - **How do I contribute?** → [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) (Steps 1–9)
 - **What's the architecture?** → [README.md](../../README.md#architecture)
-- **How do I debug a crash?** → [Debugging workflow](../debug/sim_debugging_workflow.md)
+- **How do I debug a crash?** → [Debugging workflow](../architecture/SIMULATION_ARCHITECTURE.md#debugging-workflow)
 - **Real hardware setup?** → [README.md](../../README.md#launch-on-real-hardware)
 - **IPC message types?** → [docs/API.md](../design/API.md)
 

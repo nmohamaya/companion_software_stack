@@ -246,8 +246,9 @@ The `has_radar` flag was added in Issue #210. Size estimation fields (`estimated
 | `estimated_radius_m` | `float` | Back-projected obstacle radius from camera bbox + radar range; 0 = unknown (Issue #237) |
 | `estimated_height_m` | `float` | Back-projected obstacle height from camera bbox + radar range; 0 = unknown (Issue #237) |
 | `radar_update_count` | `uint32_t` | Number of radar `update_radar()` calls on this track — used for grid promotion threshold (Issue #237) |
+| `depth_confidence` | `float` | Depth estimation quality [0.0=guess, 1.0=radar]. Validated in [0,1] range. |
 
-**Validation:** `validate()` checks all floats are `isfinite()`, confidence in [0,1], and `estimated_radius_m` / `estimated_height_m` >= 0.
+**Validation:** `validate()` checks all floats are `isfinite()`, confidence in [0,1], `estimated_radius_m` / `estimated_height_m` >= 0, and `depth_confidence` in [0,1].
 
 ### `VideoFrame`
 
@@ -339,6 +340,7 @@ FSM state for the mission planner (published as part of `MissionStatus`).
 | 6 | `LAND` | Landing |
 | 7 | `EMERGENCY` | Emergency state |
 | 8 | `SURVEY` | Post-takeoff obstacle survey before navigation |
+| 9 | `COLLISION_RECOVERY` | Post-collision recovery: hover, climb, replan |
 
 ### `FaultAction` (enum)
 
@@ -1160,6 +1162,111 @@ Template replacing raw `strncpy` for fixed-size name buffers. Deduces buffer siz
 char buf[32];
 safe_name_copy(buf, "inference_thread");
 ```
+
+---
+
+## 4.5 Flight Data Recorder — `drone::recorder`
+
+**Header:** `common/recorder/include/recorder/flight_recorder.h`  
+**Issue:** [#40](https://github.com/nmohamaya/companion_software_stack/issues/40)
+
+Ring-buffer based IPC traffic recorder for post-flight analysis and replay. Records messages to an in-memory ring buffer (configurable capacity), then flushes to a timestamped `.flog` binary file.
+
+### Binary Format (`.flog`)
+
+Each log file starts with a `FlightLogFileHeader` (24 bytes), followed by a sequence of records:
+
+```
+[FlightLogFileHeader (24 B)]
+[RecordHeader (34 B)] [topic_name (variable)] [payload (variable)]
+[RecordHeader (34 B)] [topic_name (variable)] [payload (variable)]
+...
+```
+
+**`FlightLogFileHeader`** (written once at file start):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `magic` | `uint32_t` | `0x474F4C46` ("FLOG" in little-endian) |
+| `version` | `uint32_t` | File format version (currently 1) |
+| `start_time_ns` | `uint64_t` | Monotonic timestamp of first record |
+| `reserved` | `uint64_t` | Reserved for future use |
+
+**`RecordHeader`** (per record, 34 bytes):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `wire_header` | `WireHeader` (32 B) | Standard IPC wire header (magic, version, msg_type, payload_size, sequence, timestamp_ns) |
+| `topic_name_len` | `uint16_t` | Length of topic name string following this header |
+
+After each `RecordHeader`, `topic_name_len` bytes of topic name string, then `wire_header.payload_size` bytes of payload.
+
+### `RecordRingBuffer`
+
+Fixed-capacity ring buffer using `std::deque` for O(1) front eviction. Discards oldest entries when `max_bytes` is reached.
+
+### `FlightRecorder`
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `record` | `void record<T>(topic, msg_type, msg, seq)` | Record a trivially-copyable message (no-op if not recording) |
+| `start` / `stop` | `void start()` / `void stop()` | Atomic recording flag (lock-free) |
+| `is_recording` | `bool is_recording() const` | Check recording state |
+| `flush` | `std::string flush()` | Flush ring buffer to timestamped `.flog` file; returns path or `""` on failure |
+| `entry_count` | `std::size_t entry_count() const` | Buffered entry count |
+| `buffered_bytes` | `std::size_t buffered_bytes() const` | Buffered byte count |
+
+**Config keys** (under `recorder`):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `max_size_mb` | 64 | Ring buffer capacity in MB (clamped to [1, 4096]) |
+| `output_dir` | `/tmp/flight_logs` | Directory for `.flog` output files |
+
+**Wire version validation:** The `flight_replay` tool validates `kWireVersion` on each record during replay, skipping records with mismatched versions to handle format evolution.
+
+### Read/Write Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `write_log_file` | `bool write_log_file(path, entries, start_time_ns)` | Serialize entries to `.flog` binary file |
+| `read_log_file` | `ReadLogResult read_log_file(path)` | Deserialize `.flog` file; detects truncation and corruption |
+
+---
+
+## 4.6 Gimbal Auto-Tracking — `drone::payload`
+
+**Header:** `process6_payload_manager/include/payload/auto_tracker.h`  
+**Used by:** Process 6 (Payload Manager)
+
+Transforms world-frame object positions into body-frame bearing using the SLAM pose, then computes gimbal pitch/yaw angles to point at the highest-confidence tracked object.
+
+### `AutoTrackConfig`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | Master enable for auto-tracking |
+| `min_confidence` | `float` | `0.5` | Ignore objects below this confidence |
+
+### `AutoTrackResult`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `has_target` | `bool` | `false` | True if a valid target was found |
+| `pitch_deg` | `float` | `0.0` | Gimbal pitch command (degrees) |
+| `yaw_deg` | `float` | `0.0` | Gimbal yaw command (degrees) |
+| `target_confidence` | `float` | `0.0` | Confidence of the selected target |
+| `target_track_id` | `uint32_t` | `0` | Track ID of the selected target |
+
+### Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `compute_auto_track` | `AutoTrackResult compute_auto_track(objects, pose, config)` | Select highest-confidence object, transform world to body frame via pose yaw, compute pitch/yaw |
+| `compute_bearing` | `pair<float,float> compute_bearing(dx, dy, dz)` | Pitch/yaw angles from body-frame relative position |
+| `yaw_from_quaternion` | `float yaw_from_quaternion(const double quat[4])` | Extract yaw (rad) from quaternion (w, x, y, z) |
+
+**Coordinate transform:** World→body rotation uses yaw-only (`R_z(-yaw)`) from the SLAM pose quaternion. Roll/pitch are assumed near-zero for gimbal bearing computation. Body frame: x=forward, y=right, z=up.
 
 ---
 

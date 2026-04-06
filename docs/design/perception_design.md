@@ -113,6 +113,7 @@ The detector receives raw pixel data from a `ShmVideoFrame` and returns a list o
 - Generates 1–5 random detections per frame using `std::mt19937`
 - Bounding boxes are uniformly distributed across the frame with random sizes (40–200 px), confidence (0.40–0.99), and class IDs (0–4)
 - Used only for integration/unit testing without real video
+- **File location:** Extracted from `detector_interface.h` into its own file (`simulated_detector.h`) in PR #264 for cleaner separation of test/simulation code from production interfaces
 
 #### `color_contour` (default in `gazebo_sitl.json`, `hardware.json`)
 
@@ -122,7 +123,11 @@ The detector receives raw pixel data from a `ShmVideoFrame` and returns a list o
 - **Single-pass classification:** `build_color_map()` converts each subsampled pixel to HSV exactly once and stores the winning color index (or `kNoColor = 0xFF`) — O(W·H) total regardless of the number of color classes
 - **Spatial subsampling:** configurable `subsample` stride (default 2) halves both dimensions before classification, reducing pixel work by up to 4×; bounding boxes are scaled back to full resolution on output
 - **Frame-rate cap:** optional `max_fps` sleep throttle (default 0 = unlimited) to free CPU headroom on embedded hardware
-- Config keys: `confidence_threshold`, `min_contour_area`, `subsample`, `max_fps`
+- **Ground-feature rejection filters (Issue #237):**
+  - `min_bbox_height_px` (default 15): rejects detections shorter than this threshold, filtering out ground markings, shadows, and other low-profile false positives
+  - `max_aspect_ratio` (default 3.0): rejects detections wider than tall beyond this ratio, filtering out horizontal ground features (e.g. road lines, terrain edges)
+  - Both are configurable via `perception.detector.min_bbox_height_px` and `perception.detector.max_aspect_ratio`
+- Config keys: `confidence_threshold`, `min_contour_area`, `subsample`, `max_fps`, `min_bbox_height_px`, `max_aspect_ratio`
 
 #### `yolov8` (production)
 
@@ -240,6 +245,19 @@ Stateless per-frame depth estimation using a four-tier monocular model:
 Depth is clamped to **[1.0, 40.0] m** for tiers 1–3. All tiers are scaled by `depth_scale` (default 0.7). The 8 m near-horizon fallback was chosen so that the mission planner's 5 m influence radius triggers before close approach.
 
 The horizon-truncated tier (Issue #237) was added because close obstacles often extend above the camera frame, making the apparent-size formula undercount `bbox_h` and overestimate depth. The 5 px margin (`kHorizonMarginPx`) around the optical center `cy` triggers the fallback before the bbox literally hits the frame edge.
+
+#### Depth Confidence Tiers
+
+Each depth estimate carries a `depth_confidence` value (0.0–1.0) that propagates through the `DetectedObject` IPC message to downstream consumers (Process 4 mission planner). Confidence reflects how trustworthy the depth measurement is:
+
+| Tier | Source | Confidence Range | Description |
+|------|--------|-----------------|-------------|
+| 1 | Camera-only monocular | 0.01–0.6 | Near objects with full bbox visibility get up to 0.6; far/clamped objects get 0.2 |
+| 2 | Radar-confirmed depth | 1.0 | Radar range measurement directly sets depth — highest confidence |
+
+**Clamp penalty:** When the raw (pre-clamp) monocular depth exceeds `kDepthMaxM` (40 m), the depth is clamped to 40 m and confidence is reduced to 0.2. This comparison uses the pre-clamp value so that the penalty triggers even though the output depth is within bounds. Near-horizon fallback (tier 4, 8 m default) also receives low confidence.
+
+The `depth_confidence` field in `DetectedObject` carries this value through IPC, allowing the mission planner's occupancy grid to weight cell promotions by measurement quality — radar-confirmed obstacles are promoted to static cells faster than uncertain monocular estimates.
 
 #### Camera-Frame Position
 
@@ -371,6 +389,8 @@ Sigma points are propagated through `h(x)` to capture the nonlinearity (no linea
 Detections that do not match any existing camera-initiated track are handled by the **radar-primary initialization** path (see below).
 
 #### Radar-Primary Architecture (Issue #237 Phase D)
+
+The core sensor fusion principle is **camera provides bearing, radar provides range**. The camera observation model extracts azimuth and elevation from the bounding box center (bearing-only), while the radar observation model provides range, azimuth, elevation, and radial velocity. The UKF fuses both: camera observations are `[azimuth, elevation]` (bearing), radar observations are `[range, azimuth, elevation, radial_velocity]` (full spherical). This complementary architecture means camera gives angular precision while radar gives depth precision — together they produce tighter position covariance than either sensor alone.
 
 The radar-primary architecture allows radar to independently create and maintain obstacle tracks, even when no camera detection exists. This is critical for obstacles that are outside the camera FOV, too small for visual detection, or in low-visibility conditions.
 
@@ -521,6 +541,8 @@ All keys are under `perception.*` in the active JSON config.
 | `perception.detector.min_contour_area` | int | `100` | Minimum contour area in px² (color_contour only) |
 | `perception.detector.subsample` | int | `2` | Spatial subsampling stride; `1` = full resolution, `2` = half resolution in each axis (color_contour only) |
 | `perception.detector.max_fps` | int | `0` | Maximum detection rate in Hz; `0` = unlimited; sleep-throttles the detect loop (color_contour only) |
+| `perception.detector.min_bbox_height_px` | int | `15` | Minimum bounding box height in pixels; shorter detections are rejected as ground features (color_contour only, Issue #237) |
+| `perception.detector.max_aspect_ratio` | float | `3.0` | Maximum width/height ratio; wider detections are rejected as horizontal ground features (color_contour only, Issue #237) |
 | `perception.detector.max_detections` | int | `64` | Hard cap on detections per frame |
 
 ### Tracker
@@ -605,6 +627,7 @@ All keys are under `perception.*` in the active JSON config.
 | `estimated_radius_m` | float | Estimated obstacle radius from bbox geometry (Issue #237) |
 | `estimated_height_m` | float | Estimated obstacle height from bbox geometry (Issue #237) |
 | `radar_update_count` | uint32 | Number of actual `update_radar()` calls on this track (Issue #237) |
+| `depth_confidence` | float | Depth measurement confidence: 0.01–0.6 for monocular, 0.2 for clamped/far, 1.0 for radar-confirmed (Issue #237) |
 
 ### `ShmDetectedObjectList` (IPC output, world frame)
 

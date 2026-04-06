@@ -48,8 +48,8 @@
 |--------|-------|
 | Unit tests | See [tests/TESTS.md](../../tests/TESTS.md) for current counts |
 | Compiler warnings | **0** (`-Werror -Wall -Wextra`, `[[nodiscard]]` enforced) |
-| HAL interfaces | 5 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource) |
-| HAL backends | 8 (5 simulated + GazeboCam + GazeboIMU + MavlinkFCLink) |
+| HAL interfaces | 6 (ICamera, IFCLink, IGCSLink, IGimbal, IIMUSource, IRadar) |
+| HAL backends | 10 (6 simulated + GazeboCam + GazeboIMU + GazeboRadar + MavlinkFCLink) |
 | Perception backends | 3 (simulated, color_contour, YOLOv8-nano via OpenCV DNN) |
 | Simulation | Full closed-loop Gazebo Harmonic + PX4 SITL (D* Lite planner + 3D avoidance + HD-map) |
 | Autonomous flight | ARM → Takeoff → Navigate 7 WPs (D* Lite + 3D avoidance) → RTL → Land → Disarm |
@@ -456,6 +456,13 @@
 | ~~[#126](https://github.com/nmohamaya/companion_software_stack/issues/126)~~ | ~~[Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable~~ | **Closed** ✅ (PR #151) |
 | ~~[#263](https://github.com/nmohamaya/companion_software_stack/issues/263)~~ | ~~[Epic] Autonomous Intelligence & Sim Fidelity~~ | **Closed** ✅ (integration branch, 10 PRs) |
 
+### Standalone Issues (Post-Epic)
+
+| # | Title | State |
+|---|-------|-------|
+| ~~[#345](https://github.com/nmohamaya/companion_software_stack/issues/345)~~ | ~~Bbox ground-feature filters, depth confidence gating, radar orphan tuning~~ | **Closed** ✅ (PR #346) |
+| ~~[#279](https://github.com/nmohamaya/companion_software_stack/issues/279)~~ | ~~Comprehensive documentation update~~ | **Closed** ✅ |
+
 ### Foundation Hardening (Epic #64) — ✅ COMPLETE
 
 | # | Title | Tier | State |
@@ -604,29 +611,29 @@
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | Epic #110 | **Epic #263 (Current)** |
-|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|-------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | 1108 | **1238** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | 42 | **47** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | 34 | **48** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | 110+ | **120+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 9 | **9** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | Zenoh (sole) | **Zenoh (sole)** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | 7 | **7** |
-| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
-| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | 9 | **9** |
-| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | 10 | **12** |
-| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
-| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | 26 | **26** |
-| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | **7** |
-| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | Result<T,E> | **Result<T,E>** |
-| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | 75.1% | **75.1%** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | Epic #110 | Epic #263 | **PR #346 (Current)** |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|-------|-------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | 1108 | 1238 | **1259** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | 42 | 47 | **47** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | 34 | 48 | **48** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | 110+ | 120+ | **120+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 9 | 9 | **9** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | Zenoh (sole) | Zenoh (sole) | **Zenoh (sole)** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | 9 | 9 | **9** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | 10 | 12 | **12** |
+| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | 26 | 26 | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | Result<T,E> | Result<T,E> | **Result<T,E>** |
+| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | 75.1% | 75.1% | **75.1%** |
 | Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | enforced | **enforced** |
 | Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
 | Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | systemd + ProcessManager | **systemd + ProcessManager** |
