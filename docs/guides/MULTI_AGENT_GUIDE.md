@@ -465,6 +465,159 @@ bash scripts/cleanup-branches.sh
 git worktree list
 ```
 
+## Pipeline Mode (`--pipeline`)
+
+The pipeline mode chains all scripts into a single guided flow with **5 human checkpoints**. Everything between checkpoints is automated.
+
+```bash
+bash scripts/deploy-issue.sh 123 --pipeline
+bash scripts/deploy-issue.sh 123 --pipeline --base integration/epic-300
+```
+
+### Flow
+
+```
+Issue fetch + label routing (automated)
+  → Worktree + branch creation (automated)
+  → Agent works autonomously (automated)
+  → AGENT_REPORT.md written
+  │
+  ▼
+┌─────────────────────────────────────────────────────┐
+│ CP1: Changes Review                                  │
+│   You see: AGENT_REPORT.md + git diff --stat         │
+│   Options: [a]ccept / [c]hanges / [r]eject           │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  validate-session.sh runs (automated: build, tests, hallucination detection)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP2: Hallucination Report                            │
+│   You see: PASS/WARN/FAIL for build, test count,     │
+│            test execution, #include paths, PR sanity  │
+│   Options: [c]ommit / [b]ack to CP1 / [a]bort       │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  git push + PR title/body generated (automated)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP3: PR Preview                                      │
+│   You see: PR title + body                           │
+│   Options: [c]reate / [e]dit / [b]ack / [a]bort     │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  deploy-review.sh runs (automated: 2-4 review agents + 1-2 test agents in parallel)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP4: Review & Test Findings                          │
+│   You see: P1-P4 findings from review agents         │
+│            (memory-safety, security, +conditional     │
+│            concurrency, fault-recovery)               │
+│            + test agent results (build, test pass/    │
+│            fail, test count vs baseline, coverage)    │
+│   Options: [a]ccept / [f]ix / [b]ack / [r]eject     │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  Feature agent fixes P1/P2 findings (automated, if [f]ix chosen)
+  Re-runs review + test agents to verify fixes (automated)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP5: Final Summary                                   │
+│   You see: commit log + validation status            │
+│   Options: [d]one / [r]e-review / [b]ack / [a]bort  │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  Cleanup offered (automated)
+  → Merge in GitHub UI (manual)
+```
+
+### Back-Navigation
+
+Every checkpoint supports going **back** to the previous checkpoint. The pipeline is a state machine, not a linear sequence:
+
+- **CP2 → CP1**: Re-review changes, request more modifications
+- **CP3 → CP2**: Re-commit with different content
+- **CP4 → CP3**: Edit PR before re-reviewing
+- **CP5 → CP4**: Fix more items or re-review
+
+### Example Walkthrough
+
+```bash
+$ bash scripts/deploy-issue.sh 315 --pipeline --base integration/epic-300
+
+═══════════════════════════════════════════════════════
+  Phase 1/5 — Agent Working (feature-infra-core)
+═══════════════════════════════════════════════════════
+  ... agent works for ~5 minutes ...
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 1/5 — Changes Review
+═══════════════════════════════════════════════════════
+  # Change Report — Issue #315
+  ## Summary
+  Added version fields to all 21 IPC structs...
+  ...
+  [a] accept  [c] changes  [r] reject
+  Your choice: a
+
+  Running Validation (validate-session.sh)...
+  [1/5] Build verification       PASS
+  [2/5] Test count verification   PASS  (1309 tests)
+  [3/5] Test execution            PASS
+  [4/5] Include verification      PASS
+  [5/5] PR sanity                 PASS
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 2/5 — Commit Approval
+═══════════════════════════════════════════════════════
+  Validation passed.
+  [c] commit  [b] back  [a] abort
+  Your choice: c
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 3/5 — PR Preview
+═══════════════════════════════════════════════════════
+  Title: feat(#315): Add version fields to all IPC structs
+  Body: ...
+  [c] create  [e] edit  [b] back  [a] abort
+  Your choice: c
+  PR created: https://github.com/.../pull/361
+
+  Deploying review agents... (4 agents in parallel)
+  DONE  review-memory-safety
+  DONE  review-security
+  DONE  review-concurrency
+  DONE  review-fault-recovery
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 4/5 — Safety Review Findings
+═══════════════════════════════════════════════════════
+  P1: validate() never checks version field (2 findings)
+  P2: Missing default member initializers (1 finding)
+  P3: Positional aggregate init fragile (1 finding)
+  [a] accept  [f] fix  [b] back  [r] reject
+  Your choice: f
+
+  Launching feature agent to fix findings...
+  ... agent fixes P1/P2 ...
+  Re-validating... PASS
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 5/5 — Final Summary
+═══════════════════════════════════════════════════════
+  c885d53 feat(#315): Add version fields to all IPC structs
+  a1b2c3d fix(#315): address review findings
+  Validation passed.
+  [d] done  [r] re-review  [b] back  [a] abort
+  Your choice: d
+
+  Pipeline Complete
+  PR: https://github.com/.../pull/361
+  Next step: Review and merge the PR in GitHub UI.
+```
+
+---
+
 ## Label Routing Reference
 
 Issues are routed to agents based on GitHub labels. When multiple domain labels exist, **priority wins** (not label order):
@@ -483,27 +636,85 @@ Issues are routed to agents based on GitHub labels. When multiple domain labels 
 | Direct | `test-coverage` | test-unit |
 | Direct | `cross-domain` | tech-lead |
 
-## Review Routing Reference
+## Review & Test Routing Reference
 
-Reviews are routed based on **diff content**, not labels:
+`deploy-review.sh` launches **review agents** and **test agents** in parallel, routed by diff content:
 
-| Trigger in diff | Reviewers |
-|-----------------|-----------|
-| Any file | memory-safety + security + unit-test |
-| `std::atomic`, `mutex`, `thread`, `lock_guard` | + concurrency |
-| P4/P5/P7 paths, watchdog, fault handling | + fault-recovery |
-| IPC, HAL, Gazebo configs | + scenario-test |
+### Review Agents (safety review — read-only, Opus)
 
-## Shared State
+| Trigger in diff | Agents launched |
+|-----------------|----------------|
+| Any file | review-memory-safety + review-security |
+| `std::atomic`, `mutex`, `thread`, `lock_guard` | + review-concurrency |
+| P4/P5/P7 paths, watchdog, fault handling | + review-fault-recovery |
 
-Agents coordinate through these files:
+### Test Agents (build + test verification — Sonnet)
 
-| File | Purpose | Who writes |
-|------|---------|-----------|
-| `tasks/active-work.md` | Live work tracker | deploy-issue.sh, agents |
-| `tasks/agent-changelog.md` | Completed work log | run-session.sh |
-| `.claude/shared-context/domain-knowledge.md` | Cross-agent pitfalls | Any agent (tech-lead reviews) |
-| `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead |
+| Trigger in diff | Agents launched |
+|-----------------|----------------|
+| Any file | test-unit (build, run all tests, verify count vs baseline) |
+| IPC, HAL, Gazebo configs | + test-scenario (scenario integration tests) |
+
+Review agents analyze the diff for safety issues (P1-P4 severity). Test agents check out the PR branch, build, run tests, and verify test count against the baseline in `tests/TESTS.md`. All agents run in parallel and their output is consolidated into a single PR comment.
+
+After fixes (`[f]ix` at CP4), **both review and test agents re-run automatically** to verify the fixes didn't introduce new issues or break tests.
+
+## Shared State & Cross-Agent Context
+
+Agents coordinate through these shared files:
+
+| File | Purpose | Who writes | Who reads |
+|------|---------|-----------|-----------|
+| `tasks/active-work.md` | Live work tracker — what's in-progress | deploy-issue.sh (start + cleanup) | All agents at session start |
+| `tasks/agent-changelog.md` | Completed work log — what was recently done | Pipeline CLEANUP, run-session.sh | All agents at session start |
+| `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls discovered during work | Any agent (tech-lead reviews) | All agents at session start |
+| `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead | Agents during handoff |
+| `tests/TESTS.md` | Test inventory and baseline count | Feature agents | All agents (verify test count) |
+| `docs/tracking/PROGRESS.md` | Improvement history | Feature agents | Agents needing project context |
+| `docs/tracking/ROADMAP.md` | Planned work and completion status | Feature agents | Agents checking what's done |
+| `docs/tracking/BUG_FIXES.md` | Bug fix log with root causes | Feature agents | Agents investigating regressions |
+
+### How Cross-Agent Context Works
+
+Every agent session automatically receives context about other agents' work. Both `deploy-issue.sh` and `start-agent.sh` inject this context into the agent's prompt at startup:
+
+1. **Active work awareness** — The agent sees entries from `tasks/active-work.md` showing which issues are in-progress, on which branches, by which agents. This prevents two agents from unknowingly modifying the same files.
+
+2. **Recent completion log** — The agent sees the last ~5 entries from `tasks/agent-changelog.md` showing what was recently completed. This prevents duplicate work and gives awareness of recent codebase changes.
+
+3. **Domain knowledge pitfalls** — The agent receives the full contents of `.claude/shared-context/domain-knowledge.md`, which contains non-obvious pitfalls discovered during previous sessions (e.g., "Zenoh sessions leak if not closed in test teardown", "radar returns NaN at ranges < 0.5m").
+
+### Lifecycle of Shared State
+
+```
+Session Start                    Session End (Pipeline CLEANUP)
+─────────────                    ─────────────────────────────
+                                 
+deploy-issue.sh                  CLEANUP state:
+  │                                │
+  ├─ Write active-work.md         ├─ Mark active-work.md → completed
+  │  (status: in-progress)        │
+  │                                ├─ Append to agent-changelog.md
+  ├─ Read active-work.md          │  (issue, branch, role, findings)
+  │  (inject into prompt)          │
+  │                                ├─ Check AGENT_REPORT.md for pitfalls
+  ├─ Read agent-changelog.md      │  → remind about domain-knowledge.md
+  │  (inject into prompt)          │
+  │                                └─ Verify issue↔PR linking
+  └─ Read domain-knowledge.md
+     (inject into prompt)
+```
+
+### Required Documentation Updates
+
+Every agent (in both `--auto` and `--pipeline` mode) is instructed to update these docs before completing work:
+
+- **`tests/TESTS.md`** — If tests were added/modified, update the count and add entries
+- **`docs/tracking/PROGRESS.md`** — Add an improvement entry (number, title, date, files, rationale)
+- **`docs/tracking/ROADMAP.md`** — Mark the issue as done if it appears in the roadmap
+- **`docs/tracking/BUG_FIXES.md`** — Add an entry if the work is a bug fix
+
+These updates ensure that the next agent session starts with accurate project state, not stale data.
 
 ## Workflow Examples
 
@@ -785,7 +996,7 @@ Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 6. **Claude CLI dependency.** Agents require the Claude Code CLI installed and authenticated. Each agent invocation consumes API tokens — there's no built-in cost cap or rate limiting.
 
-7. **No persistent agent memory across sessions.** Each agent invocation starts fresh. Context is provided through the agent definition file and the task prompt. Agents don't remember previous sessions (though `domain-knowledge.md` provides some continuity).
+7. **Limited persistent agent memory across sessions.** Each agent invocation starts fresh. Cross-agent context (active work, recent changelog, domain knowledge) is injected into every prompt automatically, but agents cannot recall the full history of previous sessions or decisions. The shared-state files provide continuity but not deep context.
 
 8. **CI integration is advisory.** The `agent-checks.yml` workflow warns about boundary violations and PR size — it doesn't block merges. The `auto-review.yml` workflow is disabled by default.
 
