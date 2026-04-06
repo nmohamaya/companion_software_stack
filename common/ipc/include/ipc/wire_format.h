@@ -203,6 +203,10 @@ template<typename T>
     const std::size_t hdr_size = (hdr.version >= 2) ? sizeof(WireHeader) : 24;
     auto*             out_dst  = reinterpret_cast<uint8_t*>(&out);
     std::copy(data + hdr_size, data + hdr_size + sizeof(T), out_dst);
+
+    // Reject payloads whose embedded struct version doesn't match CURRENT_VERSION.
+    if (out.version != T::CURRENT_VERSION) return false;
+
     return true;
 }
 

@@ -105,6 +105,7 @@ static void publish_via_bus(const std::string& topic, const T& msg) {
 /// Process-local mirror of the current override state.
 static drone::ipc::FaultOverrides g_overrides = {
     /*.version=*/drone::ipc::FaultOverrides::CURRENT_VERSION,
+    /*._pad0=*/0,
     /*.battery_percent=*/-1.0f,
     /*.battery_voltage=*/-1.0f,
     /*.fc_connected=*/-1,

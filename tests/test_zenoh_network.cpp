@@ -193,6 +193,39 @@ TEST(WireFormat, DeserializeSizeMismatch) {
     EXPECT_FALSE(wire_deserialize(buf.data(), buf.size(), out));
 }
 
+TEST(WireFormat, DeserializeRejectsStructVersionMismatch) {
+    // Serialize a valid Pose, then corrupt its embedded version field
+    Pose pose{};
+    pose.translation[0] = 1.0;
+    pose.quaternion[0]  = 1.0;
+    pose.quality        = 2;
+    auto buf            = wire_serialize(pose, WireMessageType::SLAM_POSE, 1);
+    ASSERT_TRUE(wire_validate(buf.data(), buf.size()));
+
+    // Corrupt the struct's version field (first 4 bytes of payload, after WireHeader)
+    uint32_t bad_version = 99;
+    auto*    ver_dst     = reinterpret_cast<uint8_t*>(&bad_version);
+    std::copy(ver_dst, ver_dst + sizeof(bad_version), buf.data() + sizeof(WireHeader));
+
+    Pose out{};
+    EXPECT_FALSE(wire_deserialize(buf.data(), buf.size(), out));
+}
+
+TEST(WireFormat, DeserializeRejectsZeroStructVersion) {
+    FCState fc{};
+    fc.battery_voltage   = 16.8f;
+    fc.battery_remaining = 85.0f;
+    auto buf             = wire_serialize(fc, WireMessageType::FC_STATE, 1);
+
+    // Set struct version to 0
+    uint32_t bad_version = 0;
+    auto*    ver_dst     = reinterpret_cast<uint8_t*>(&bad_version);
+    std::copy(ver_dst, ver_dst + sizeof(bad_version), buf.data() + sizeof(WireHeader));
+
+    FCState out{};
+    EXPECT_FALSE(wire_deserialize(buf.data(), buf.size(), out));
+}
+
 // ── Key expression mapping ───────────────────────────────
 
 TEST(WireFormat, KeyToWireTypeMapping) {

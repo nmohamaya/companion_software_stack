@@ -15,36 +15,38 @@ namespace drone::ipc {
 // Video Frame (Process 1 → Process 2, Process 3)
 // ═══════════════════════════════════════════════════════════
 struct VideoFrame {
-    static constexpr uint32_t CURRENT_VERSION = 1;
-    uint32_t                  version         = CURRENT_VERSION;
-    uint32_t                  _pad0           = 0;  // align to 8 bytes for timestamp_ns
-    uint64_t                  timestamp_ns;
-    uint64_t                  sequence_number;
-    uint32_t                  width;
-    uint32_t                  height;
-    uint32_t                  channels;
-    uint32_t                  stride;
-    uint8_t                   pixel_data[1920 * 1080 * 3];  // RGB24 max
+    static constexpr uint32_t CURRENT_VERSION             = 1;
+    uint32_t                  version                     = CURRENT_VERSION;
+    uint32_t                  _pad0                       = 0;  // align to 8 bytes for timestamp_ns
+    uint64_t                  timestamp_ns                = 0;
+    uint64_t                  sequence_number             = 0;
+    uint32_t                  width                       = 0;
+    uint32_t                  height                      = 0;
+    uint32_t                  channels                    = 0;
+    uint32_t                  stride                      = 0;
+    uint8_t                   pixel_data[1920 * 1080 * 3] = {};  // RGB24 max
 
     /// Validate frame dimensions fit within the fixed pixel_data buffer.
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         if (width == 0 || height == 0 || channels == 0) return false;
         return static_cast<uint64_t>(width) * height * channels <= sizeof(pixel_data);
     }
 };
 
 struct StereoFrame {
-    static constexpr uint32_t CURRENT_VERSION = 1;
-    uint32_t                  version         = CURRENT_VERSION;
-    uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint64_t                  sequence_number;
-    uint32_t                  width;
-    uint32_t                  height;
-    uint8_t                   left_data[640 * 480];   // GRAY8
-    uint8_t                   right_data[640 * 480];  // GRAY8
+    static constexpr uint32_t CURRENT_VERSION       = 1;
+    uint32_t                  version               = CURRENT_VERSION;
+    uint32_t                  _pad0                 = 0;
+    uint64_t                  timestamp_ns          = 0;
+    uint64_t                  sequence_number       = 0;
+    uint32_t                  width                 = 0;
+    uint32_t                  height                = 0;
+    uint8_t                   left_data[640 * 480]  = {};  // GRAY8
+    uint8_t                   right_data[640 * 480] = {};  // GRAY8
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         if (width == 0 || height == 0) return false;
         uint64_t size = static_cast<uint64_t>(width) * height;
         return size <= sizeof(left_data) && size <= sizeof(right_data);
@@ -70,21 +72,22 @@ enum class ObjectClass : uint8_t {
 struct DetectedObject {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
-    uint32_t                  track_id;
-    ObjectClass               class_id;
-    float                     confidence;
-    float                     position_x, position_y, position_z;  // vehicle frame (m)
-    float                     velocity_x, velocity_y, velocity_z;  // m/s
-    float                     heading;                             // radians
-    float                     bbox_x, bbox_y, bbox_w, bbox_h;      // image-space
-    bool                      has_camera;
-    bool                      has_radar;
-    float                     estimated_radius_m;  // back-projected obstacle radius (0 = unknown)
-    float                     estimated_height_m;  // back-projected obstacle height (0 = unknown)
-    uint32_t                  radar_update_count;  // number of radar updates received
-    float                     depth_confidence;  // depth estimation quality [0.0=guess, 1.0=radar]
+    uint32_t                  track_id        = 0;
+    ObjectClass               class_id        = ObjectClass::UNKNOWN;
+    float                     confidence      = 0.0f;
+    float    position_x = 0.0f, position_y = 0.0f, position_z = 0.0f;     // vehicle frame (m)
+    float    velocity_x = 0.0f, velocity_y = 0.0f, velocity_z = 0.0f;     // m/s
+    float    heading = 0.0f;                                              // radians
+    float    bbox_x = 0.0f, bbox_y = 0.0f, bbox_w = 0.0f, bbox_h = 0.0f;  // image-space
+    bool     has_camera         = false;
+    bool     has_radar          = false;
+    float    estimated_radius_m = 0.0f;  // back-projected obstacle radius (0 = unknown)
+    float    estimated_height_m = 0.0f;  // back-projected obstacle height (0 = unknown)
+    uint32_t radar_update_count = 0;     // number of radar updates received
+    float    depth_confidence   = 0.0f;  // depth estimation quality [0.0=guess, 1.0=radar]
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(confidence) && confidence >= 0.0f && confidence <= 1.0f &&
                std::isfinite(position_x) && std::isfinite(position_y) &&
                std::isfinite(position_z) && std::isfinite(velocity_x) &&
@@ -97,15 +100,16 @@ struct DetectedObject {
 };
 
 struct DetectedObjectList {
-    static constexpr uint32_t CURRENT_VERSION = 1;
-    uint32_t                  version         = CURRENT_VERSION;
-    uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint32_t                  frame_sequence;
-    uint32_t                  num_objects;
-    DetectedObject            objects[MAX_DETECTED_OBJECTS];
+    static constexpr uint32_t CURRENT_VERSION               = 1;
+    uint32_t                  version                       = CURRENT_VERSION;
+    uint32_t                  _pad0                         = 0;
+    uint64_t                  timestamp_ns                  = 0;
+    uint32_t                  frame_sequence                = 0;
+    uint32_t                  num_objects                   = 0;
+    DetectedObject            objects[MAX_DETECTED_OBJECTS] = {};
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         if (num_objects > MAX_DETECTED_OBJECTS) return false;
         for (uint32_t i = 0; i < num_objects; ++i) {
             if (!objects[i].validate()) return false;
@@ -121,14 +125,15 @@ struct alignas(64) Pose {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    double                    translation[3];  // x, y, z in world frame
-    double                    quaternion[4];   // w, x, y, z
-    double                    velocity[3];     // vx, vy, vz
-    double                    covariance[36];  // 6x6 pose covariance
-    uint32_t                  quality;  // 0=lost, 1=degraded, 2=good, 3=excellent (ground truth)
+    uint64_t                  timestamp_ns    = 0;
+    double                    translation[3]  = {};  // x, y, z in world frame
+    double                    quaternion[4]   = {};  // w, x, y, z
+    double                    velocity[3]     = {};  // vx, vy, vz
+    double                    covariance[36]  = {};  // 6x6 pose covariance
+    uint32_t quality = 0;  // 0=lost, 1=degraded, 2=good, 3=excellent (ground truth)
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         for (int i = 0; i < 3; ++i) {
             if (!std::isfinite(translation[i]) || !std::isfinite(velocity[i])) return false;
         }
@@ -257,22 +262,23 @@ inline std::string fault_flags_string(uint32_t flags) {
 }
 
 struct MissionStatus {
-    static constexpr uint32_t CURRENT_VERSION = 1;
-    uint32_t                  version         = CURRENT_VERSION;
-    uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint64_t                  correlation_id;  // cross-process trace ID (0 = none)
-    MissionState              state;
-    uint32_t                  current_waypoint;
-    uint32_t                  total_waypoints;
-    float                     progress_percent;
-    float                     target_x, target_y, target_z;
-    float                     battery_percent;
-    bool                      mission_active;
-    uint32_t                  active_faults;  // bitmask of FaultType (0 = nominal)
-    uint8_t                   fault_action;   // current FaultAction severity (0 = NONE)
+    static constexpr uint32_t CURRENT_VERSION  = 1;
+    uint32_t                  version          = CURRENT_VERSION;
+    uint32_t                  _pad0            = 0;
+    uint64_t                  timestamp_ns     = 0;
+    uint64_t                  correlation_id   = 0;  // cross-process trace ID (0 = none)
+    MissionState              state            = MissionState::IDLE;
+    uint32_t                  current_waypoint = 0;
+    uint32_t                  total_waypoints  = 0;
+    float                     progress_percent = 0.0f;
+    float                     target_x = 0.0f, target_y = 0.0f, target_z = 0.0f;
+    float                     battery_percent = 0.0f;
+    bool                      mission_active  = false;
+    uint32_t                  active_faults   = 0;  // bitmask of FaultType (0 = nominal)
+    uint8_t                   fault_action    = 0;  // current FaultAction severity (0 = NONE)
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(progress_percent) && std::isfinite(target_x) &&
                std::isfinite(target_y) && std::isfinite(target_z) && std::isfinite(battery_percent);
     }
@@ -285,16 +291,17 @@ struct TrajectoryCmd {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint64_t                  correlation_id;                // cross-process trace ID (0 = none)
-    float                     target_x, target_y, target_z;  // world frame (m)
-    float                     target_yaw;                    // radians
-    float                     velocity_x, velocity_y, velocity_z;
-    float                     yaw_rate;
-    uint8_t                   coordinate_frame;  // MAVLink frame enum
-    bool                      valid;
+    uint64_t                  timestamp_ns    = 0;
+    uint64_t                  correlation_id  = 0;  // cross-process trace ID (0 = none)
+    float                     target_x = 0.0f, target_y = 0.0f, target_z = 0.0f;  // world frame (m)
+    float                     target_yaw = 0.0f;                                  // radians
+    float                     velocity_x = 0.0f, velocity_y = 0.0f, velocity_z = 0.0f;
+    float                     yaw_rate         = 0.0f;
+    uint8_t                   coordinate_frame = 0;  // MAVLink frame enum
+    bool                      valid            = false;
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         if (!valid) return true;  // stop commands (valid=false) are always OK
         return std::isfinite(target_x) && std::isfinite(target_y) && std::isfinite(target_z) &&
                std::isfinite(target_yaw) && std::isfinite(velocity_x) &&
@@ -317,14 +324,15 @@ struct PayloadCommand {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint64_t                  correlation_id;  // cross-process trace ID (0 = none)
-    PayloadAction             action;
-    float                     gimbal_pitch, gimbal_yaw;  // degrees
-    uint64_t                  sequence_id;
-    bool                      valid;
+    uint64_t                  timestamp_ns    = 0;
+    uint64_t                  correlation_id  = 0;  // cross-process trace ID (0 = none)
+    PayloadAction             action          = PayloadAction::NONE;
+    float                     gimbal_pitch = 0.0f, gimbal_yaw = 0.0f;  // degrees
+    uint64_t                  sequence_id = 0;
+    bool                      valid       = false;
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(gimbal_pitch) && std::isfinite(gimbal_yaw);
     }
 };
@@ -346,14 +354,15 @@ struct FCCommand {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint64_t                  correlation_id;  // cross-process trace ID (0 = none)
-    FCCommandType             command;
-    float                     param1;       // TAKEOFF: altitude_m; SET_MODE: mode_id
-    uint64_t                  sequence_id;  // monotonic, for dedup
-    bool                      valid;
+    uint64_t                  timestamp_ns    = 0;
+    uint64_t                  correlation_id  = 0;  // cross-process trace ID (0 = none)
+    FCCommandType             command         = FCCommandType::NONE;
+    float                     param1          = 0.0f;  // TAKEOFF: altitude_m; SET_MODE: mode_id
+    uint64_t                  sequence_id     = 0;     // monotonic, for dedup
+    bool                      valid           = false;
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return static_cast<uint8_t>(command) <= static_cast<uint8_t>(FCCommandType::LAND) &&
                std::isfinite(param1);
     }
@@ -366,20 +375,21 @@ struct FCState {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    float                     gps_lat, gps_lon, gps_alt;
-    float                     rel_alt;
-    float                     roll, pitch, yaw;
-    float                     vx, vy, vz;
-    float                     battery_voltage;
-    float                     battery_remaining;
-    uint8_t                   flight_mode;
-    bool                      armed;
-    bool                      connected;
-    uint8_t                   gps_fix_type;
-    uint8_t                   satellites_visible;
+    uint64_t                  timestamp_ns    = 0;
+    float                     gps_lat = 0.0f, gps_lon = 0.0f, gps_alt = 0.0f;
+    float                     rel_alt = 0.0f;
+    float                     roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+    float                     vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    float                     battery_voltage    = 0.0f;
+    float                     battery_remaining  = 0.0f;
+    uint8_t                   flight_mode        = 0;
+    bool                      armed              = false;
+    bool                      connected          = false;
+    uint8_t                   gps_fix_type       = 0;
+    uint8_t                   satellites_visible = 0;
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(battery_voltage) && battery_voltage >= 0.0f &&
                battery_voltage <= 60.0f && std::isfinite(battery_remaining) &&
                battery_remaining >= 0.0f && battery_remaining <= 100.0f && std::isfinite(roll) &&
@@ -408,16 +418,18 @@ struct GCSCommand {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    uint64_t                  correlation_id;  // cross-process trace ID (0 = none)
-    GCSCommandType            command;
-    float                     param1, param2, param3;
-    uint64_t                  sequence_id;
-    bool                      valid;
+    uint64_t                  timestamp_ns    = 0;
+    uint64_t                  correlation_id  = 0;  // cross-process trace ID (0 = none)
+    GCSCommandType            command         = GCSCommandType::NONE;
+    float                     param1 = 0.0f, param2 = 0.0f, param3 = 0.0f;
+    uint64_t                  sequence_id = 0;
+    bool                      valid       = false;
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return static_cast<uint8_t>(command) <=
-               static_cast<uint8_t>(GCSCommandType::MISSION_UPLOAD);
+                   static_cast<uint8_t>(GCSCommandType::MISSION_UPLOAD) &&
+               std::isfinite(param1) && std::isfinite(param2) && std::isfinite(param3);
     }
 };
 
@@ -438,6 +450,7 @@ struct IpcWaypoint {
     bool                      trigger_payload{false};  // capture at this waypoint
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && std::isfinite(yaw) &&
                std::isfinite(radius) && radius > 0.0f && std::isfinite(speed) && speed > 0.0f;
     }
@@ -456,6 +469,7 @@ struct MissionUpload {
     bool                      valid{false};
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         if (num_waypoints > kMaxUploadWaypoints) return false;
         for (uint8_t i = 0; i < num_waypoints; ++i) {
             if (!waypoints[i].validate()) return false;
@@ -473,14 +487,15 @@ struct PayloadStatus {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
     uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    float                     gimbal_pitch, gimbal_yaw;
-    uint32_t                  images_captured;
-    bool                      recording_video;
-    bool                      gimbal_stabilized;
-    uint8_t                   num_plugins_active;
+    uint64_t                  timestamp_ns    = 0;
+    float                     gimbal_pitch = 0.0f, gimbal_yaw = 0.0f;
+    uint32_t                  images_captured    = 0;
+    bool                      recording_video    = false;
+    bool                      gimbal_stabilized  = false;
+    uint8_t                   num_plugins_active = 0;
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(gimbal_pitch) && std::isfinite(gimbal_yaw);
     }
 };
@@ -502,21 +517,21 @@ struct ProcessHealthEntry {
 // System Health (Process 7 → all)
 // ═══════════════════════════════════════════════════════════
 struct SystemHealth {
-    static constexpr uint32_t CURRENT_VERSION = 1;
-    uint32_t                  version         = CURRENT_VERSION;
-    uint32_t                  _pad0           = 0;
-    uint64_t                  timestamp_ns;
-    float                     cpu_usage_percent;
-    float                     memory_usage_percent;
-    float                     disk_usage_percent;
-    float                     max_temp_c;
-    float                     gpu_temp_c;
-    float                     cpu_temp_c;
-    uint32_t                  total_healthy;
-    uint32_t                  total_degraded;
-    uint32_t                  total_dead;
-    float                     power_watts;
-    uint8_t                   thermal_zone;  // 0=normal, 1=warm, 2=hot, 3=critical
+    static constexpr uint32_t CURRENT_VERSION      = 1;
+    uint32_t                  version              = CURRENT_VERSION;
+    uint32_t                  _pad0                = 0;
+    uint64_t                  timestamp_ns         = 0;
+    float                     cpu_usage_percent    = 0.0f;
+    float                     memory_usage_percent = 0.0f;
+    float                     disk_usage_percent   = 0.0f;
+    float                     max_temp_c           = 0.0f;
+    float                     gpu_temp_c           = 0.0f;
+    float                     cpu_temp_c           = 0.0f;
+    uint32_t                  total_healthy        = 0;
+    uint32_t                  total_degraded       = 0;
+    uint32_t                  total_dead           = 0;
+    float                     power_watts          = 0.0f;
+    uint8_t                   thermal_zone         = 0;  // 0=normal, 1=warm, 2=hot, 3=critical
 
     // ── Stack-level status (Phase 4) ────────────────────────
     uint8_t  stack_status   = 0;  // StackStatus enum (0=NOMINAL, 1=DEGRADED, 2=CRITICAL)
@@ -528,6 +543,7 @@ struct SystemHealth {
     bool               critical_failure                = false;  // True if a critical process died
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(cpu_usage_percent) && std::isfinite(memory_usage_percent) &&
                std::isfinite(max_temp_c) && std::isfinite(power_watts) && thermal_zone <= 3 &&
                num_processes <= kMaxTrackedProcesses;
@@ -571,6 +587,7 @@ static_assert(std::is_trivially_copyable_v<ThreadHealth>,
 struct alignas(64) FaultOverrides {
     static constexpr uint32_t CURRENT_VERSION = 1;
     uint32_t                  version         = CURRENT_VERSION;
+    uint32_t                  _pad0           = 0;  // align to 8 bytes for sequence
     // FC state overrides (consumed by Process 5 comms)
     float   battery_percent = -1.0f;  // <0 = no override
     float   battery_voltage = -1.0f;  // <0 = no override
@@ -583,6 +600,21 @@ struct alignas(64) FaultOverrides {
     // Sequence counter – incremented by the injector so consumers can
     // detect new writes vs stale values.
     uint64_t sequence = 0;
+
+    [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
+        // Sentinel-range validity: overrides must be sentinel (<0) or within valid range
+        if (battery_percent >= 0.0f &&
+            (battery_percent > 100.0f || !std::isfinite(battery_percent)))
+            return false;
+        if (battery_voltage >= 0.0f && (battery_voltage > 60.0f || !std::isfinite(battery_voltage)))
+            return false;
+        if (fc_connected >= 0 && fc_connected > 1) return false;
+        if (thermal_zone >= 0 && thermal_zone > 3) return false;
+        if (cpu_temp_override >= 0.0f && !std::isfinite(cpu_temp_override)) return false;
+        if (vio_quality >= 0 && vio_quality > 3) return false;
+        return true;
+    }
 };
 
 static_assert(std::is_trivially_copyable_v<FaultOverrides>,
@@ -608,6 +640,7 @@ struct RadarDetection {
     uint32_t                  track_id{0};
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         return std::isfinite(range_m) && std::isfinite(azimuth_rad) &&
                std::isfinite(elevation_rad) && std::isfinite(radial_velocity_mps) &&
                std::isfinite(rcs_dbsm) && std::isfinite(snr_db) && std::isfinite(confidence) &&
@@ -626,6 +659,7 @@ struct RadarDetectionList {
     RadarDetection            detections[MAX_RADAR_DETECTIONS];
 
     [[nodiscard]] bool validate() const {
+        if (version != CURRENT_VERSION) return false;
         if (num_detections > MAX_RADAR_DETECTIONS) return false;
         for (uint32_t i = 0; i < num_detections; ++i) {
             if (!detections[i].validate()) return false;

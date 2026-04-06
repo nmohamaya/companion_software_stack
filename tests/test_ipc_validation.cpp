@@ -679,3 +679,244 @@ TEST(IpcVersion, AllVersionsAreOne) {
     EXPECT_EQ(RadarDetection::CURRENT_VERSION, 1u);
     EXPECT_EQ(RadarDetectionList::CURRENT_VERSION, 1u);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Version mismatch rejection — validate() must reject
+// structs with a wrong version field (P2, Issue #315)
+// ═══════════════════════════════════════════════════════════
+TEST(IpcVersionMismatch, VideoFrameRejectsWrongVersion) {
+    auto f      = std::make_unique<VideoFrame>();
+    f->width    = 640;
+    f->height   = 480;
+    f->channels = 3;
+    ASSERT_TRUE(f->validate());
+    f->version = 99;
+    EXPECT_FALSE(f->validate());
+}
+
+TEST(IpcVersionMismatch, StereoFrameRejectsWrongVersion) {
+    StereoFrame f{};
+    f.width  = 640;
+    f.height = 480;
+    ASSERT_TRUE(f.validate());
+    f.version = 0;
+    EXPECT_FALSE(f.validate());
+}
+
+TEST(IpcVersionMismatch, DetectedObjectRejectsWrongVersion) {
+    DetectedObject o{};
+    o.confidence = 0.5f;
+    o.position_x = 1.0f;
+    o.position_y = 2.0f;
+    o.position_z = 3.0f;
+    ASSERT_TRUE(o.validate());
+    o.version = 99;
+    EXPECT_FALSE(o.validate());
+}
+
+TEST(IpcVersionMismatch, DetectedObjectListRejectsWrongVersion) {
+    DetectedObjectList l{};
+    l.num_objects = 0;
+    ASSERT_TRUE(l.validate());
+    l.version = 99;
+    EXPECT_FALSE(l.validate());
+}
+
+TEST(IpcVersionMismatch, PoseRejectsWrongVersion) {
+    Pose p{};
+    p.quaternion[0] = 1.0;
+    p.quality       = 2;
+    ASSERT_TRUE(p.validate());
+    p.version = 0;
+    EXPECT_FALSE(p.validate());
+}
+
+TEST(IpcVersionMismatch, MissionStatusRejectsWrongVersion) {
+    MissionStatus m{};
+    m.progress_percent = 50.0f;
+    m.target_x         = 10.0f;
+    m.target_y         = 20.0f;
+    m.target_z         = 5.0f;
+    m.battery_percent  = 80.0f;
+    ASSERT_TRUE(m.validate());
+    m.version = 99;
+    EXPECT_FALSE(m.validate());
+}
+
+TEST(IpcVersionMismatch, TrajectoryCmdRejectsWrongVersion) {
+    TrajectoryCmd t{};
+    t.valid    = true;
+    t.target_x = 10.0f;
+    t.target_y = 20.0f;
+    t.target_z = 5.0f;
+    ASSERT_TRUE(t.validate());
+    t.version = 99;
+    EXPECT_FALSE(t.validate());
+}
+
+TEST(IpcVersionMismatch, PayloadCommandRejectsWrongVersion) {
+    PayloadCommand p{};
+    p.gimbal_pitch = 0.0f;
+    p.gimbal_yaw   = 0.0f;
+    ASSERT_TRUE(p.validate());
+    p.version = 0;
+    EXPECT_FALSE(p.validate());
+}
+
+TEST(IpcVersionMismatch, FCCommandRejectsWrongVersion) {
+    FCCommand c{};
+    c.command = FCCommandType::TAKEOFF;
+    c.param1  = 10.0f;
+    ASSERT_TRUE(c.validate());
+    c.version = 99;
+    EXPECT_FALSE(c.validate());
+}
+
+TEST(IpcVersionMismatch, FCStateRejectsWrongVersion) {
+    FCState s{};
+    s.battery_voltage   = 16.8f;
+    s.battery_remaining = 85.0f;
+    ASSERT_TRUE(s.validate());
+    s.version = 99;
+    EXPECT_FALSE(s.validate());
+}
+
+TEST(IpcVersionMismatch, GCSCommandRejectsWrongVersion) {
+    GCSCommand c{};
+    c.command = GCSCommandType::RTL;
+    ASSERT_TRUE(c.validate());
+    c.version = 0;
+    EXPECT_FALSE(c.validate());
+}
+
+TEST(IpcVersionMismatch, IpcWaypointRejectsWrongVersion) {
+    IpcWaypoint w{};
+    w.x      = 10.0f;
+    w.y      = 20.0f;
+    w.z      = 5.0f;
+    w.radius = 2.0f;
+    w.speed  = 3.0f;
+    ASSERT_TRUE(w.validate());
+    w.version = 99;
+    EXPECT_FALSE(w.validate());
+}
+
+TEST(IpcVersionMismatch, MissionUploadRejectsWrongVersion) {
+    MissionUpload u{};
+    u.num_waypoints = 0;
+    ASSERT_TRUE(u.validate());
+    u.version = 99;
+    EXPECT_FALSE(u.validate());
+}
+
+TEST(IpcVersionMismatch, PayloadStatusRejectsWrongVersion) {
+    PayloadStatus s{};
+    s.gimbal_pitch = 0.0f;
+    s.gimbal_yaw   = 0.0f;
+    ASSERT_TRUE(s.validate());
+    s.version = 0;
+    EXPECT_FALSE(s.validate());
+}
+
+TEST(IpcVersionMismatch, SystemHealthRejectsWrongVersion) {
+    SystemHealth h{};
+    h.cpu_usage_percent    = 45.0f;
+    h.memory_usage_percent = 60.0f;
+    h.max_temp_c           = 55.0f;
+    h.power_watts          = 15.0f;
+    h.thermal_zone         = 1;
+    h.num_processes        = 7;
+    ASSERT_TRUE(h.validate());
+    h.version = 99;
+    EXPECT_FALSE(h.validate());
+}
+
+TEST(IpcVersionMismatch, RadarDetectionRejectsWrongVersion) {
+    RadarDetection r{};
+    r.confidence = 0.5f;
+    ASSERT_TRUE(r.validate());
+    r.version = 99;
+    EXPECT_FALSE(r.validate());
+}
+
+TEST(IpcVersionMismatch, RadarDetectionListRejectsWrongVersion) {
+    RadarDetectionList l{};
+    l.num_detections = 0;
+    ASSERT_TRUE(l.validate());
+    l.version = 99;
+    EXPECT_FALSE(l.validate());
+}
+
+TEST(IpcVersionMismatch, FaultOverridesRejectsWrongVersion) {
+    FaultOverrides f{};
+    ASSERT_TRUE(f.validate());
+    f.version = 99;
+    EXPECT_FALSE(f.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// FaultOverrides validation (P1, Issue #315)
+// ═══════════════════════════════════════════════════════════
+TEST(IpcValidation, FaultOverridesDefaultValid) {
+    FaultOverrides f{};
+    EXPECT_TRUE(f.validate());
+}
+
+TEST(IpcValidation, FaultOverridesValidOverrides) {
+    FaultOverrides f{};
+    f.battery_percent   = 50.0f;
+    f.battery_voltage   = 16.8f;
+    f.fc_connected      = 1;
+    f.thermal_zone      = 2;
+    f.cpu_temp_override = 60.0f;
+    f.vio_quality       = 3;
+    EXPECT_TRUE(f.validate());
+}
+
+TEST(IpcValidation, FaultOverridesBatteryPercentTooHigh) {
+    FaultOverrides f{};
+    f.battery_percent = 150.0f;
+    EXPECT_FALSE(f.validate());
+}
+
+TEST(IpcValidation, FaultOverridesFcConnectedOutOfRange) {
+    FaultOverrides f{};
+    f.fc_connected = 5;
+    EXPECT_FALSE(f.validate());
+}
+
+TEST(IpcValidation, FaultOverridesThermalZoneOutOfRange) {
+    FaultOverrides f{};
+    f.thermal_zone = 10;
+    EXPECT_FALSE(f.validate());
+}
+
+TEST(IpcValidation, FaultOverridesVioQualityOutOfRange) {
+    FaultOverrides f{};
+    f.vio_quality = 8;
+    EXPECT_FALSE(f.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// GCSCommand param NaN/Inf rejection (P2, Issue #315)
+// ═══════════════════════════════════════════════════════════
+TEST(IpcValidation, GCSCommandNaNParam1) {
+    GCSCommand c{};
+    c.command = GCSCommandType::TAKEOFF;
+    c.param1  = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(c.validate());
+}
+
+TEST(IpcValidation, GCSCommandInfParam2) {
+    GCSCommand c{};
+    c.command = GCSCommandType::TAKEOFF;
+    c.param2  = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(c.validate());
+}
+
+TEST(IpcValidation, GCSCommandNaNParam3) {
+    GCSCommand c{};
+    c.command = GCSCommandType::TAKEOFF;
+    c.param3  = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(c.validate());
+}
