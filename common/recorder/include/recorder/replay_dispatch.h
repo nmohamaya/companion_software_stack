@@ -29,6 +29,8 @@
 
 #include "ipc/ipc_types.h"
 #include "ipc/wire_format.h"
+// TODO: Extract RecordEntry/RecordHeader into a lightweight record_entry.h
+//       to reduce compile dependencies for dispatch-only consumers.
 #include "recorder/flight_recorder.h"
 
 #include <algorithm>
@@ -82,11 +84,12 @@ template<typename Handler>
     DispatchResult result;
     result.msg_type = msg_type;
 
-    // Helper: deserialize if payload size matches T exactly
+    // Helper: deserialize if payload size matches T exactly and header is consistent
     auto try_deserialize = [&](auto* out) -> bool {
         using T = std::remove_pointer_t<decltype(out)>;
         static_assert(std::is_trivially_copyable_v<T>);
-        if (entry.payload.size() != sizeof(T)) return false;
+        if (entry.header.wire_header.payload_size != sizeof(T)) return false;
+        if (entry.payload.size() != entry.header.wire_header.payload_size) return false;
         std::copy(entry.payload.begin(), entry.payload.end(), reinterpret_cast<uint8_t*>(out));
         return true;
     };
@@ -142,10 +145,15 @@ template<typename Handler>
                                                                      float    speed) {
     if (speed <= 0.0f || std::isnan(speed)) return std::chrono::nanoseconds{0};
 
-    const auto delta_ns = std::max(static_cast<int64_t>(record_ts) - static_cast<int64_t>(first_ts),
-                                   int64_t{0});
-    return std::chrono::nanoseconds(
-        static_cast<int64_t>(static_cast<double>(delta_ns) / static_cast<double>(speed)));
+    // Compute delta in uint64_t to avoid implementation-defined overflow on int64_t cast
+    if (record_ts < first_ts) return std::chrono::nanoseconds{0};
+    const uint64_t delta_ns = record_ts - first_ts;
+
+    // Scale by speed, then clamp to INT64_MAX before constructing chrono duration
+    const double scaled  = static_cast<double>(delta_ns) / static_cast<double>(speed);
+    const auto   clamped = (scaled >= static_cast<double>(INT64_MAX)) ? INT64_MAX
+                                                                      : static_cast<int64_t>(scaled);
+    return std::chrono::nanoseconds(clamped);
 }
 
 }  // namespace drone::recorder

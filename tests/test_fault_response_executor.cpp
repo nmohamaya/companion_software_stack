@@ -217,24 +217,34 @@ TEST_F(FaultResponseExecutorTest, CollisionRecoveryAllowsRTL) {
 // log_new_faults: detects new fault flags
 // ═══════════════════════════════════════════════════════════
 TEST_F(FaultResponseExecutorTest, LogNewFaultsTracksNewFlags) {
-    // First call — all flags are new
+    // log_new_faults() updates internal last_active_faults_ and logs via spdlog.
+    // The internal state is not directly observable without a getter, but we verify:
+    //   1. No crash/UB on first call (all flags are new)
+    //   2. No crash/UB on second call with additional flag
+    //   3. Internal tracking is implicitly tested: reset() clears last_active_faults_,
+    //      and the execution path through new_flags = active & ~last_ is exercised.
     executor.log_new_faults(to_uint(FAULT_BATTERY_LOW));
-    // No crash or assertion failure = pass (log_new_faults only logs, no return value)
 
-    // Add a new flag — should detect FAULT_THERMAL_WARNING as new
+    // Add a new flag — exercises the new_flags != 0 path for FAULT_THERMAL_WARNING
     executor.log_new_faults(to_uint(FAULT_BATTERY_LOW) | to_uint(FAULT_THERMAL_WARNING));
-    // Still no crash = new flag detection works
+
+    // Verify reset clears the tracked faults (re-logging same flags should not crash)
+    executor.reset();
+    executor.log_new_faults(to_uint(FAULT_BATTERY_LOW));
 }
 
 // ═══════════════════════════════════════════════════════════
 // log_new_faults: no-ops on same flags
 // ═══════════════════════════════════════════════════════════
 TEST_F(FaultResponseExecutorTest, LogNewFaultsIgnoresKnownFlags) {
+    // Verifies the new_flags == 0 path (no log output) when flags are unchanged.
+    // log_new_faults() only produces spdlog output and has no return value or public
+    // accessor for last_active_faults_. The test verifies no-crash behavior and that
+    // the internal state tracking is exercised (new_flags = active & ~last_ == 0).
     uint32_t flags = to_uint(FAULT_BATTERY_LOW) | to_uint(FAULT_POSE_STALE);
     executor.log_new_faults(flags);
-    // Call again with same flags — should detect zero new flags
+    // Call again with same flags — exercises the new_flags == 0 early-exit path
     executor.log_new_faults(flags);
-    // No crash = known flags correctly filtered
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -295,4 +305,13 @@ TEST_F(FaultResponseExecutorTest, TakeoffStateLoiterWorks) {
 
     EXPECT_EQ(takeoff_fsm.state(), MissionState::LOITER);
     EXPECT_TRUE(takeoff_fsm.fault_triggered());
+    // LOITER should not send FC commands
+    EXPECT_TRUE(fc_calls.empty());
+    // A stop trajectory should have been published with valid=true and zero velocity
+    ASSERT_GE(traj_pub.messages().size(), 1u);
+    const auto& stop = traj_pub.messages().back();
+    EXPECT_TRUE(stop.valid);
+    EXPECT_FLOAT_EQ(stop.velocity_x, 0.0f);
+    EXPECT_FLOAT_EQ(stop.velocity_y, 0.0f);
+    EXPECT_FLOAT_EQ(stop.velocity_z, 0.0f);
 }

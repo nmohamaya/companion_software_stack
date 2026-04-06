@@ -4,8 +4,8 @@
 // from common/recorder/include/recorder/replay_dispatch.h.
 #include "recorder/replay_dispatch.h"
 
+#include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -141,9 +141,10 @@ TEST(ReplayDispatch, DispatchesPayloadStatus) {
 TEST(ReplayDispatch, WrongPayloadSizeNotDispatched) {
     TestHandler handler;
     RecordEntry entry;
-    entry.header.wire_header.magic    = kWireMagic;
-    entry.header.wire_header.version  = kWireVersion;
-    entry.header.wire_header.msg_type = WireMessageType::SLAM_POSE;
+    entry.header.wire_header.magic        = kWireMagic;
+    entry.header.wire_header.version      = kWireVersion;
+    entry.header.wire_header.msg_type     = WireMessageType::SLAM_POSE;
+    entry.header.wire_header.payload_size = 4;  // Wrong — doesn't match sizeof(Pose)
     // Wrong size — too small
     entry.payload.resize(4, 0);
 
@@ -172,10 +173,45 @@ TEST(ReplayDispatch, UnknownMessageTypeNotDispatched) {
 TEST(ReplayDispatch, EmptyPayloadNotDispatched) {
     TestHandler handler;
     RecordEntry entry;
-    entry.header.wire_header.magic    = kWireMagic;
-    entry.header.wire_header.version  = kWireVersion;
-    entry.header.wire_header.msg_type = WireMessageType::FC_STATE;
+    entry.header.wire_header.magic        = kWireMagic;
+    entry.header.wire_header.version      = kWireVersion;
+    entry.header.wire_header.msg_type     = WireMessageType::FC_STATE;
+    entry.header.wire_header.payload_size = 0;
     // Empty payload
+
+    auto result = dispatch_record(entry, handler);
+
+    EXPECT_FALSE(result.dispatched);
+    EXPECT_EQ(handler.total(), 0);
+}
+
+TEST(ReplayDispatch, MismatchedHeaderPayloadSizeVsActualPayload) {
+    TestHandler handler;
+
+    // Header says sizeof(Pose), but actual payload is truncated
+    RecordEntry entry;
+    entry.header.wire_header.magic        = kWireMagic;
+    entry.header.wire_header.version      = kWireVersion;
+    entry.header.wire_header.msg_type     = WireMessageType::SLAM_POSE;
+    entry.header.wire_header.payload_size = static_cast<uint32_t>(sizeof(Pose));
+    entry.payload.resize(sizeof(Pose) / 2, 0);  // Actual payload too small
+
+    auto result = dispatch_record(entry, handler);
+
+    EXPECT_FALSE(result.dispatched);
+    EXPECT_EQ(handler.total(), 0);
+}
+
+TEST(ReplayDispatch, MismatchedHeaderPayloadSizeVsExpectedType) {
+    TestHandler handler;
+
+    // Payload is sizeof(FCState) bytes, but header payload_size claims sizeof(Pose)
+    RecordEntry entry;
+    entry.header.wire_header.magic        = kWireMagic;
+    entry.header.wire_header.version      = kWireVersion;
+    entry.header.wire_header.msg_type     = WireMessageType::FC_STATE;
+    entry.header.wire_header.payload_size = static_cast<uint32_t>(sizeof(Pose));  // Wrong type size
+    entry.payload.resize(sizeof(Pose), 0);  // Matches header but not FCState
 
     auto result = dispatch_record(entry, handler);
 
