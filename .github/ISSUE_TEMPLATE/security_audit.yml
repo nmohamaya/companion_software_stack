@@ -1,0 +1,51 @@
+name: Security Audit
+description: Request a security review of a subsystem or interface
+labels: ["security-audit"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security audits are reviewed by the review-security agent.
+        Use this for proactive security reviews of interfaces, communication channels, and input handling.
+
+  - type: dropdown
+    id: audit_type
+    attributes:
+      label: Audit Focus
+      options:
+        - IPC input validation
+        - MAVLink authentication
+        - Zenoh TLS / transport security
+        - GCS command sanitization
+        - Config injection / path traversal
+        - Secrets management
+        - Full security review
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which interfaces, channels, or code paths to audit?
+      placeholder: |
+        **Interfaces:** GCS → P5 command path
+        **IPC topics:** /gcs_commands, /fc_commands
+        **Files:** process5_comms/src/gcs_link.cpp
+    validations:
+      required: true
+
+  - type: textarea
+    id: threat_model
+    attributes:
+      label: Threat Model
+      description: What attacks or threat scenarios should be considered?
+      placeholder: |
+        - Malicious GCS commands over MAVLink
+        - Spoofed IPC messages on shared network
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why is this audit needed? (new interface, pre-deployment, incident, etc.)

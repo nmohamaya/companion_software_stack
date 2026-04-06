@@ -609,6 +609,83 @@
 
 ---
 
+## Multi-Developer GitHub Setup
+
+When onboarding new developers or enabling multi-agent collaboration, several files that are currently **local-only** (gitignored) need to be shared. This section documents what needs to be uploaded and configured.
+
+### Files Currently Gitignored That Need Sharing
+
+| File/Directory | Currently | Action Needed | Why |
+|----------------|-----------|---------------|-----|
+| `CLAUDE.md` | `.gitignore` | **Remove from .gitignore, commit** | Agent role definitions, build commands, architecture reference — all agents need this |
+| `tasks/` | `.gitignore` | **Remove from .gitignore, commit** | `tasks/active-work.md` and `tasks/agent-changelog.md` are shared coordination state |
+| `tasks/sessions/*.log` | Not tracked | **Keep gitignored** (via `tasks/sessions/.gitignore`) | Session logs are ephemeral, per-machine |
+| `work_instructions.md` | `.gitignore` | **Evaluate** — merge useful content into `DEVELOPMENT_WORKFLOW.md` or remove | Personal notes vs shared guidance |
+| `docs/SECURITY.md` | `.gitignore` | **Evaluate** — security docs should be shared if they don't contain secrets | Security policy benefits all contributors |
+| `.claude/agents/` | **Tracked** | Already committed | Agent role definitions |
+| `.claude/shared-context/` | **Tracked** | Already committed | Domain knowledge for all agents |
+| `scripts/` | **Tracked** | Already committed | Orchestration scripts |
+
+### GitHub Repository Settings
+
+For multi-developer collaboration, configure these GitHub settings:
+
+1. **Branch protection on `main`:**
+   - Require PR reviews (1+ approvals)
+   - Require status checks (CI must pass)
+   - Require branches to be up to date before merging
+   - No force pushes
+
+2. **CODEOWNERS:** Already committed — auto-assigns reviewers by file path
+
+3. **Issue templates:** Already committed (8 templates in `.github/ISSUE_TEMPLATE/`)
+
+4. **PR template:** Already committed (`.github/pull_request_template.md`)
+
+5. **Labels:** Create domain labels for agent routing:
+   - `domain:perception`, `domain:nav`, `domain:integration`, `domain:infra`, `domain:comms`
+   - `type:bug`, `type:feature`, `type:refactor`, `type:safety-audit`, `type:security-audit`
+   - `agent:assigned`, `agent:completed`, `agent:blocked`
+
+6. **GitHub Projects board:** Create a project board with columns:
+   - Backlog | Triaged | In Progress | In Review | Done
+
+### .gitignore Changes Required
+
+Remove these lines from `.gitignore` to enable sharing:
+
+```diff
+- tasks/
+- CLAUDE.md
+```
+
+Add these lines to keep ephemeral/sensitive files local:
+
+```diff
++ # Agent session logs (ephemeral, per-machine)
++ tasks/sessions/*.log
++
++ # Local plan files (conversation-specific)
++ .claude/plans/
++ .claude/worktrees/
+```
+
+### Developer Onboarding Checklist
+
+- [ ] Clone the repo
+- [ ] Install dependencies (see `README.md`)
+- [ ] Install pre-commit hook: `ln -sf ../../deploy/pre-commit .git/hooks/pre-commit`
+- [ ] Verify build: `bash deploy/build.sh`
+- [ ] Verify tests: `./tests/run_tests.sh`
+- [ ] Review `CLAUDE.md` for architecture and agent roles
+- [ ] Review `.claude/agents/` for your assigned role
+- [ ] Read `.claude/shared-context/domain-knowledge.md` for known pitfalls
+- [ ] Check `tasks/active-work.md` for current assignments
+
+> **Issue:** [#358 — Enable multi-developer GitHub collaboration](https://github.com/nmohamaya/companion_software_stack/issues/358) — tracks the .gitignore changes and GitHub settings needed.
+
+---
+
 ## Metrics History
 
 | Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | Epic #110 | Epic #263 | **PR #346 (Current)** |

@@ -1,0 +1,66 @@
+name: Feature Request
+description: Propose a new feature or enhancement
+labels: ["enhancement", "triage"]
+body:
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      options:
+        - P1 Video Capture
+        - P2 Perception
+        - P3 SLAM/VIO/Nav
+        - P4 Mission Planner
+        - P5 Comms
+        - P6 Payload Manager
+        - P7 System Monitor
+        - IPC / MessageBus
+        - HAL
+        - Config
+        - Build / CMake
+        - CI / Deploy
+        - Tests
+        - Infrastructure
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What feature do you want and why?
+      placeholder: |
+        **Problem:** What limitation or gap does this address?
+
+        **Proposed solution:** How should it work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: How will we know this is done?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: size
+    attributes:
+      label: Estimated Size
+      options:
+        - "Small: <200 lines, single PR"
+        - "Medium: 200-600 lines, 1-2 PRs"
+        - "Large: 600+ lines, multi-phase"
+    validations:
+      required: true
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Design Notes
+      description: Architecture considerations, affected interfaces, IPC changes

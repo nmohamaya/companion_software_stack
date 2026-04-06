@@ -855,6 +855,189 @@ When two features must touch the same file (e.g., `result.h`), coordinate:
 | [docs/CI_SETUP.md](CI_SETUP.md)               | CI pipeline architecture & DevOps     | When CI jobs/matrix change                |
 | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Workflow & best practices             | When new practices are discovered         |
 
+---
+
+## Multi-Agent Pipeline
+
+This project uses a **13-agent pipeline** for concurrent development and parallel verification. See [ADR-010](../adr/ADR-010-multi-agent-pipeline-architecture.md) for the architecture decision record.
+
+### Pipeline Overview
+
+The pipeline applies **Amdahl's Law** to software verification: instead of one reviewer checking everything sequentially, 4 specialized review agents + 2 test agents verify every PR in parallel. The tech lead makes the single serial merge decision, minimizing the serial fraction.
+
+```
+Issue Created → ops-github triages/labels
+     ↓
+Tech Lead routes → Feature Agent (in worktree)
+     ↓
+Feature Agent creates PR
+     ↓
+Tech Lead routes PR → Parallel Review:
+  ├─ review-memory-safety  (always)
+  ├─ review-security       (always)
+  ├─ review-concurrency    (if atomics/mutexes/threads)
+  ├─ review-fault-recovery (if P4/P5/P7/watchdog)
+  ├─ test-unit             (always)
+  └─ test-scenario         (if IPC/HAL/Gazebo)
+     ↓
+All reviews pass → Tech Lead merges
+```
+
+### Launching Agents
+
+```bash
+# List available agent roles
+bash scripts/start-agent.sh --list
+
+# Launch an interactive session for a specific role
+bash scripts/start-agent.sh feature-perception
+
+# Launch with a specific task (non-interactive)
+bash scripts/start-agent.sh feature-nav "Implement issue #315: add version fields to IPC structs"
+
+# Dry run (show resolved config without launching)
+bash scripts/start-agent.sh feature-nav "placeholder task" --dry-run
+
+# Skip pre-flight checks (build/test verification)
+bash scripts/start-agent.sh feature-integration "Fix IPC timeout" --skip-preflight
+```
+
+### Issue-to-PR Lifecycle
+
+The `deploy-issue.sh` script automates the full issue→agent→PR workflow:
+
+```bash
+# Auto-route a GitHub issue to the correct agent
+bash scripts/deploy-issue.sh 123
+
+# Dry run (show routing decision without launching)
+bash scripts/deploy-issue.sh 123 --dry-run
+```
+
+**What happens:**
+1. Reads the issue via `gh issue view`
+2. Determines the agent role from issue labels using priority-based routing (e.g., `ipc` → `feature-infra-core`, `domain:perception` → `feature-perception`)
+3. Creates a git worktree and feature branch (`feature/issue-XXX-description`)
+4. Updates `tasks/active-work.md` with the assignment
+5. Launches the agent with the issue context (interactive by default, `--auto` for autonomous mode, `--headless` for CI)
+
+### PR Review Deployment
+
+```bash
+# Launch review agents for a specific PR
+bash scripts/deploy-review.sh 456
+
+# Launch all applicable reviewers (based on diff content)
+bash scripts/deploy-review.sh 456 --all
+
+# Dry run
+bash scripts/deploy-review.sh 456 --dry-run
+```
+
+Review agents are routed based on diff content — see the routing table in [CLAUDE.md](../../CLAUDE.md#review-routing).
+
+### Session Management
+
+Full sessions include pre-flight checks, health baselines, agent work, and post-session retro:
+
+```bash
+# Run a full orchestrated session with a task description
+bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation for issue #789"
+
+# With issue number for PR cross-referencing
+bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation" --issue 789
+
+# Session logs go to tasks/sessions/
+# Post-session validation runs automatically (validate-session.sh)
+# Retro appended to tasks/agent-changelog.md
+```
+
+### Hallucination Detection
+
+The `validate-session.sh` script detects common AI hallucination patterns:
+
+```bash
+bash scripts/validate-session.sh
+```
+
+**Checks performed:**
+- **Build verification** — project compiles with zero warnings (`-Werror`)
+- **Test count verification** — matches baseline in `tests/TESTS.md`
+- **Test execution verification** — tests actually run and pass
+- **Include verification** — `#include` paths in changed files resolve to real headers
+- **PR sanity** — PR body file references exist in the diff
+
+**Output:** `PASS` / `WARN` / `FAIL` with details for each check.
+
+### Agent Dashboards
+
+```bash
+# Team-wide dashboard
+bash scripts/agent-dashboard.sh --team
+
+# Per-agent dashboard
+bash scripts/agent-dashboard.sh --agent feature-perception
+
+# Git-based stats (commits, lines, cost estimates)
+bash scripts/agent-stats.sh
+```
+
+**Metrics tracked:**
+- Commits per agent/model/type
+- Lines added/removed
+- Estimated cost (by model pricing)
+- Hallucination rate (from validate-session.sh)
+- Epic progress (#284, #300)
+- Test coverage trend
+
+### Coordination & Shared State
+
+Agents coordinate through shared files:
+
+| File | Purpose | Updated by |
+|------|---------|------------|
+| `tasks/active-work.md` | Live work assignments | Tech lead, deploy scripts |
+| `tasks/agent-changelog.md` | Completed work log | All agents (append-only) |
+| `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls | Any agent that discovers one |
+| `docs/guides/AGENT_HANDOFF.md` | Cross-domain protocol | Tech lead |
+
+**Session start checklist** (performed by `run-session.sh`):
+1. Read `tasks/active-work.md` for current assignments
+2. Read `.claude/shared-context/domain-knowledge.md` for pitfalls
+3. Verify build is green and test count matches baseline
+4. Check for any blocking issues in `tasks/active-work.md`
+
+### Epic Coordination
+
+For multi-issue epics (e.g., #284 Modularity, #300 Multi-Customer Platform):
+
+- **ops-github** tracks epic progress and unblocks dependencies
+- **tech-lead** routes sub-issues to appropriate feature agents
+- **Integration branches** keep `main` demo-ready during multi-issue work
+- Each agent's role file defines its epic ownership
+
+### Boundary Enforcement
+
+Agent scope boundaries are enforced at three levels:
+
+1. **Pre-commit hook** (`deploy/pre-commit`) — Checks `CLAUDE_AGENT_ROLE` env var against file scope. Warning only.
+2. **CI job** (`agent-boundaries` workflow) — Branch-name→scope mapping. Warning only.
+3. **Agent tool restrictions** — Review agents have read-only tools, test agents can only write to `tests/`.
+
+### Branch Cleanup
+
+```bash
+# Clean up stale branches and worktrees
+bash scripts/cleanup-branches.sh
+
+# Dry run
+bash scripts/cleanup-branches.sh --dry-run
+```
+
+Removes branches already merged into `main` and their associated worktrees. Interactive — prompts for confirmation before deleting.
+
+---
+
 > **Living Document:** This workflow document is meant to evolve with the project.
 > When you discover a new best practice, debugging technique, or useful convention
 > during development, add it here so the team benefits from it going forward.
