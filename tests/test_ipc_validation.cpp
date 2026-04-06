@@ -3,6 +3,7 @@
 #include "ipc/ipc_types.h"
 
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <memory>
 
@@ -337,8 +338,8 @@ TEST(IpcValidation, IpcWaypointNegativeSpeed) {
 TEST(IpcValidation, MissionUploadValid) {
     MissionUpload u{};
     u.num_waypoints = 2;
-    u.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
-    u.waypoints[1]  = {4, 5, 6, 0, 2, 3, false};
+    u.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
+    u.waypoints[1]  = {IpcWaypoint::CURRENT_VERSION, 4, 5, 6, 0, 2, 3, false};
     EXPECT_TRUE(u.validate());
 }
 
@@ -509,5 +510,172 @@ TEST(IpcValidation, StructsRemainTriviallyCopyable) {
     static_assert(std::is_trivially_copyable_v<PayloadCommand>);
     static_assert(std::is_trivially_copyable_v<PayloadStatus>);
     static_assert(std::is_trivially_copyable_v<SystemHealth>);
+    static_assert(std::is_trivially_copyable_v<ThreadHealth>);
+    static_assert(std::is_trivially_copyable_v<ThreadHealthEntry>);
+    static_assert(std::is_trivially_copyable_v<ProcessHealthEntry>);
+    static_assert(std::is_trivially_copyable_v<FaultOverrides>);
+    static_assert(std::is_trivially_copyable_v<RadarDetection>);
+    static_assert(std::is_trivially_copyable_v<RadarDetectionList>);
     SUCCEED();  // static_asserts are the real test
+}
+
+// ═══════════════════════════════════════════════════════════
+// Version field defaults — every struct initializes version
+// to CURRENT_VERSION (Issue #315)
+// ═══════════════════════════════════════════════════════════
+TEST(IpcVersion, VideoFrameDefaultVersion) {
+    auto f = std::make_unique<VideoFrame>();
+    EXPECT_EQ(f->version, VideoFrame::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, StereoFrameDefaultVersion) {
+    StereoFrame f{};
+    EXPECT_EQ(f.version, StereoFrame::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, DetectedObjectDefaultVersion) {
+    DetectedObject o{};
+    EXPECT_EQ(o.version, DetectedObject::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, DetectedObjectListDefaultVersion) {
+    DetectedObjectList l{};
+    EXPECT_EQ(l.version, DetectedObjectList::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, PoseDefaultVersion) {
+    Pose p{};
+    EXPECT_EQ(p.version, Pose::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, MissionStatusDefaultVersion) {
+    MissionStatus m{};
+    EXPECT_EQ(m.version, MissionStatus::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, TrajectoryCmdDefaultVersion) {
+    TrajectoryCmd t{};
+    EXPECT_EQ(t.version, TrajectoryCmd::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, PayloadCommandDefaultVersion) {
+    PayloadCommand p{};
+    EXPECT_EQ(p.version, PayloadCommand::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, FCCommandDefaultVersion) {
+    FCCommand c{};
+    EXPECT_EQ(c.version, FCCommand::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, FCStateDefaultVersion) {
+    FCState s{};
+    EXPECT_EQ(s.version, FCState::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, GCSCommandDefaultVersion) {
+    GCSCommand c{};
+    EXPECT_EQ(c.version, GCSCommand::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, IpcWaypointDefaultVersion) {
+    IpcWaypoint w{};
+    EXPECT_EQ(w.version, IpcWaypoint::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, MissionUploadDefaultVersion) {
+    MissionUpload u{};
+    EXPECT_EQ(u.version, MissionUpload::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, PayloadStatusDefaultVersion) {
+    PayloadStatus s{};
+    EXPECT_EQ(s.version, PayloadStatus::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, ProcessHealthEntryDefaultVersion) {
+    ProcessHealthEntry e{};
+    EXPECT_EQ(e.version, ProcessHealthEntry::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, SystemHealthDefaultVersion) {
+    SystemHealth h{};
+    EXPECT_EQ(h.version, SystemHealth::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, ThreadHealthEntryDefaultVersion) {
+    ThreadHealthEntry e{};
+    EXPECT_EQ(e.version, ThreadHealthEntry::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, ThreadHealthDefaultVersion) {
+    ThreadHealth h{};
+    EXPECT_EQ(h.version, ThreadHealth::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, FaultOverridesDefaultVersion) {
+    FaultOverrides f{};
+    EXPECT_EQ(f.version, FaultOverrides::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, RadarDetectionDefaultVersion) {
+    RadarDetection r{};
+    EXPECT_EQ(r.version, RadarDetection::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, RadarDetectionListDefaultVersion) {
+    RadarDetectionList l{};
+    EXPECT_EQ(l.version, RadarDetectionList::CURRENT_VERSION);
+}
+
+TEST(IpcVersion, VersionIsFirstField) {
+    // Verify version is at offset 0 for all top-level IPC structs.
+    // This ensures version can always be read first during deserialization.
+    static_assert(offsetof(VideoFrame, version) == 0);
+    static_assert(offsetof(StereoFrame, version) == 0);
+    static_assert(offsetof(DetectedObject, version) == 0);
+    static_assert(offsetof(DetectedObjectList, version) == 0);
+    static_assert(offsetof(Pose, version) == 0);
+    static_assert(offsetof(MissionStatus, version) == 0);
+    static_assert(offsetof(TrajectoryCmd, version) == 0);
+    static_assert(offsetof(PayloadCommand, version) == 0);
+    static_assert(offsetof(FCCommand, version) == 0);
+    static_assert(offsetof(FCState, version) == 0);
+    static_assert(offsetof(GCSCommand, version) == 0);
+    static_assert(offsetof(IpcWaypoint, version) == 0);
+    static_assert(offsetof(MissionUpload, version) == 0);
+    static_assert(offsetof(PayloadStatus, version) == 0);
+    static_assert(offsetof(ProcessHealthEntry, version) == 0);
+    static_assert(offsetof(SystemHealth, version) == 0);
+    static_assert(offsetof(ThreadHealthEntry, version) == 0);
+    static_assert(offsetof(ThreadHealth, version) == 0);
+    static_assert(offsetof(FaultOverrides, version) == 0);
+    static_assert(offsetof(RadarDetection, version) == 0);
+    static_assert(offsetof(RadarDetectionList, version) == 0);
+    SUCCEED();
+}
+
+TEST(IpcVersion, AllVersionsAreOne) {
+    // All structs start at version 1
+    EXPECT_EQ(VideoFrame::CURRENT_VERSION, 1u);
+    EXPECT_EQ(StereoFrame::CURRENT_VERSION, 1u);
+    EXPECT_EQ(DetectedObject::CURRENT_VERSION, 1u);
+    EXPECT_EQ(DetectedObjectList::CURRENT_VERSION, 1u);
+    EXPECT_EQ(Pose::CURRENT_VERSION, 1u);
+    EXPECT_EQ(MissionStatus::CURRENT_VERSION, 1u);
+    EXPECT_EQ(TrajectoryCmd::CURRENT_VERSION, 1u);
+    EXPECT_EQ(PayloadCommand::CURRENT_VERSION, 1u);
+    EXPECT_EQ(FCCommand::CURRENT_VERSION, 1u);
+    EXPECT_EQ(FCState::CURRENT_VERSION, 1u);
+    EXPECT_EQ(GCSCommand::CURRENT_VERSION, 1u);
+    EXPECT_EQ(IpcWaypoint::CURRENT_VERSION, 1u);
+    EXPECT_EQ(MissionUpload::CURRENT_VERSION, 1u);
+    EXPECT_EQ(PayloadStatus::CURRENT_VERSION, 1u);
+    EXPECT_EQ(ProcessHealthEntry::CURRENT_VERSION, 1u);
+    EXPECT_EQ(SystemHealth::CURRENT_VERSION, 1u);
+    EXPECT_EQ(ThreadHealthEntry::CURRENT_VERSION, 1u);
+    EXPECT_EQ(ThreadHealth::CURRENT_VERSION, 1u);
+    EXPECT_EQ(FaultOverrides::CURRENT_VERSION, 1u);
+    EXPECT_EQ(RadarDetection::CURRENT_VERSION, 1u);
+    EXPECT_EQ(RadarDetectionList::CURRENT_VERSION, 1u);
 }

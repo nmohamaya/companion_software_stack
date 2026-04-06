@@ -178,8 +178,8 @@ TEST_F(GCSCommandHandlerTest, MissionUploadLoadsWaypoints) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 2;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
-    upload.waypoints[1]  = {4, 5, 6, 0, 2, 3, true};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
+    upload.waypoints[1]  = {IpcWaypoint::CURRENT_VERSION, 4, 5, 6, 0, 2, 3, true};
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -297,7 +297,14 @@ TEST_F(GCSCommandHandlerTest, NaNCoordinateUploadRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {std::numeric_limits<float>::quiet_NaN(), 2, 3, 0, 2, 3, false};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION,
+                            std::numeric_limits<float>::quiet_NaN(),
+                            2,
+                            3,
+                            0,
+                            2,
+                            3,
+                            false};
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -320,8 +327,9 @@ TEST_F(GCSCommandHandlerTest, InfCoordinateUploadRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, std::numeric_limits<float>::infinity(), 0, 2, 3, false};
-    upload.valid         = true;
+    upload.waypoints[0]  = {
+        IpcWaypoint::CURRENT_VERSION, 1, 2, std::numeric_limits<float>::infinity(), 0, 2, 3, false};
+    upload.valid = true;
     upload_sub.set(upload);
 
     GCSCommand cmd{};
@@ -346,7 +354,7 @@ TEST_F(GCSCommandHandlerTest, ZeroSpeedUploadRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 0.0f, false};  // speed = 0
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 0.0f, false};  // speed = 0
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -369,8 +377,9 @@ TEST_F(GCSCommandHandlerTest, NegativeRadiusUploadRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, -1.0f, 3, false};  // radius < 0
-    upload.valid         = true;
+    upload.waypoints[0]  = {
+        IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, -1.0f, 3, false};  // radius < 0
+    upload.valid = true;
     upload_sub.set(upload);
 
     GCSCommand cmd{};
@@ -392,8 +401,9 @@ TEST_F(GCSCommandHandlerTest, ExcessiveSpeedUploadRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 100.0f, false};  // speed > 50
-    upload.valid         = true;
+    upload.waypoints[0]  = {
+        IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 100.0f, false};  // speed > 50
+    upload.valid = true;
     upload_sub.set(upload);
 
     GCSCommand cmd{};
@@ -423,7 +433,7 @@ TEST_F(GCSCommandHandlerTest, RateLimitedUploadRejected) {
     MissionUpload upload1{};
     upload1.timestamp_ns  = 200;
     upload1.num_waypoints = 1;
-    upload1.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload1.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
     upload1.valid         = true;
     upload_sub.set(upload1);
 
@@ -441,7 +451,7 @@ TEST_F(GCSCommandHandlerTest, RateLimitedUploadRejected) {
     MissionUpload upload2{};
     upload2.timestamp_ns  = 300;
     upload2.num_waypoints = 1;
-    upload2.waypoints[0]  = {4, 5, 6, 0, 2, 3, false};
+    upload2.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 4, 5, 6, 0, 2, 3, false};
     upload2.valid         = true;
     upload_sub.set(upload2);
 
@@ -468,7 +478,7 @@ TEST_F(GCSCommandHandlerTest, UploadDuringRTLRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -493,7 +503,7 @@ TEST_F(GCSCommandHandlerTest, UploadDuringLandRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -516,7 +526,7 @@ TEST_F(GCSCommandHandlerTest, UploadDuringTakeoffRejected) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -540,7 +550,7 @@ TEST_F(GCSCommandHandlerTest, UploadDuringNavigateAccepted) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
     upload.valid         = true;
     upload_sub.set(upload);
 
@@ -567,7 +577,7 @@ TEST_F(GCSCommandHandlerTest, UploadDuringLoiterAccepted) {
     MissionUpload upload{};
     upload.timestamp_ns  = 200;
     upload.num_waypoints = 1;
-    upload.waypoints[0]  = {1, 2, 3, 0, 2, 3, false};
+    upload.waypoints[0]  = {IpcWaypoint::CURRENT_VERSION, 1, 2, 3, 0, 2, 3, false};
     upload.valid         = true;
     upload_sub.set(upload);
 
