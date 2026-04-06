@@ -510,7 +510,7 @@ Whether build passed, test count before/after, any failures."
             pipeline_options \
                 "a" "accept — proceed to validation" \
                 "c" "changes — open interactive session to request modifications" \
-                "r" "reject — discard all changes and abort"
+                "r" "reject — abort pipeline (worktree preserved)"
 
             read -rp "  Your choice: " CHOICE
             case "$CHOICE" in
@@ -536,8 +536,8 @@ Whether build passed, test count before/after, any failures."
         VALIDATE)
             pipeline_header "Running Validation (validate-session.sh)"
 
-            VALIDATION_OUTPUT="$("$PROJECT_DIR/scripts/validate-session.sh" --branch "$BRANCH" 2>&1)" || true
-            VALIDATION_EXIT=$?
+            VALIDATION_EXIT=0
+            VALIDATION_OUTPUT="$("$PROJECT_DIR/scripts/validate-session.sh" --branch "$BRANCH" 2>&1)" || VALIDATION_EXIT=$?
             echo "$VALIDATION_OUTPUT"
 
             STATE="CP2"
@@ -594,8 +594,13 @@ COMMITEOF
             pipeline_header "Pushing and Preparing PR"
 
             echo -e "  Pushing to origin/${BRANCH}..."
-            git push -u origin "$BRANCH" 2>&1 || true
-            echo -e "  ${GREEN}DONE${RESET}"
+            if git push -u origin "$BRANCH" 2>&1; then
+                echo -e "  ${GREEN}DONE${RESET}"
+            else
+                echo -e "  ${RED}Push failed.${RESET} Check your network/auth and retry."
+                STATE="CP2"
+                continue
+            fi
             echo ""
 
             # Generate PR title and body from AGENT_REPORT.md
@@ -656,14 +661,17 @@ Closes #${ISSUE}
                 c|create)
                     echo ""
                     echo -e "  Creating PR..."
+                    PR_CREATE_ERR=""
                     PR_URL="$(gh pr create --base "$BASE_BRANCH" \
                         --title "$PR_TITLE" \
-                        --body "$PR_BODY" 2>&1)" || {
+                        --body "$PR_BODY" 2>/dev/null)" || {
+                        PR_CREATE_ERR="$?"
+                    }
+                    if [[ -n "$PR_CREATE_ERR" || -z "$PR_URL" ]]; then
                         echo -e "  ${RED}Failed to create PR${RESET}"
-                        echo "  $PR_URL"
                         STATE="CP3"
                         continue
-                    }
+                    fi
                     PR_NUMBER="$(echo "$PR_URL" | grep -oP '/pull/\K[0-9]+' || true)"
                     echo -e "  ${GREEN}DONE${RESET}  ${PR_URL}"
                     STATE="REVIEW"
@@ -706,9 +714,9 @@ Closes #${ISSUE}
             "$PROJECT_DIR/scripts/deploy-review.sh" "$PR_NUMBER" 2>&1 || true
             echo ""
 
-            # Fetch the consolidated review comment
+            # Fetch the consolidated review comment (null-safe: returns empty if no match)
             REVIEW_FINDINGS="$(gh api "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" \
-                --jq 'map(select(.body | test("Automated Safety Review"))) | last | .body' 2>/dev/null || true)"
+                --jq '[map(select(.body | test("Automated Safety Review"))) | last | .body // empty] | first // empty' 2>/dev/null || true)"
 
             STATE="CP4"
             ;;
@@ -761,8 +769,8 @@ Do NOT create a PR or push — just fix the code and commit."
 
             echo ""
             echo -e "  ${BOLD}Re-validating after fixes...${RESET}"
-            VALIDATION_OUTPUT="$("$PROJECT_DIR/scripts/validate-session.sh" --branch "$BRANCH" 2>&1)" || true
-            VALIDATION_EXIT=$?
+            VALIDATION_EXIT=0
+            VALIDATION_OUTPUT="$("$PROJECT_DIR/scripts/validate-session.sh" --branch "$BRANCH" 2>&1)" || VALIDATION_EXIT=$?
             echo "$VALIDATION_OUTPUT"
 
             # Commit and push fixes
@@ -779,8 +787,11 @@ FIXEOF
 )" || echo -e "  ${YELLOW}WARN${RESET}  Nothing new to commit"
 
             echo -e "  Pushing fixes..."
-            git push 2>&1 || true
-            echo -e "  ${GREEN}DONE${RESET}"
+            if git push 2>&1; then
+                echo -e "  ${GREEN}DONE${RESET}"
+            else
+                echo -e "  ${YELLOW}WARN${RESET}  Push failed — you may need to push manually"
+            fi
 
             STATE="CP5"
             ;;
@@ -815,7 +826,9 @@ FIXEOF
             case "$CHOICE" in
                 d|done)
                     # Ensure everything is pushed
-                    git push 2>/dev/null || true
+                    if ! git push 2>&1; then
+                        echo -e "  ${YELLOW}WARN${RESET}  Final push failed — verify manually before merging"
+                    fi
                     STATE="CLEANUP"
                     ;;
                 r|re-review) STATE="REVIEW" ;;
