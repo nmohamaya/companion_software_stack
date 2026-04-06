@@ -21,6 +21,7 @@ PROTECTED_BRANCHES="main|develop"
 MERGED_BRANCHES=()
 while IFS= read -r branch; do
     branch=$(echo "$branch" | xargs)  # trim whitespace
+    branch="${branch#+ }"             # strip worktree marker (+ prefix)
     [[ -z "$branch" ]] && continue
     if echo "$branch" | grep -qE "^($PROTECTED_BRANCHES)$"; then
         continue
