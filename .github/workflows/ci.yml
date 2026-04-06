@@ -181,9 +181,15 @@ jobs:
 
     - name: Enforce coverage threshold
       run: |
-        COVERAGE=$(lcov --summary coverage.info 2>&1 | grep 'lines\.\.\.\.\.\.' | sed 's/.*: //' | sed 's/%.*//')
+        LCOV_SUMMARY=$(lcov --summary coverage.info 2>&1) || true
+        COVERAGE=$(echo "$LCOV_SUMMARY" | sed -n 's/.*lines\.\.\.\.\.\.: \([0-9.]*\)%.*/\1/p')
+        if [ -z "$COVERAGE" ] || ! echo "$COVERAGE" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+          echo "::error::Failed to parse line coverage from lcov summary"
+          echo "$LCOV_SUMMARY"
+          exit 1
+        fi
         echo "Line coverage: ${COVERAGE}%"
-        if [ "$(echo "${COVERAGE} < 70.0" | bc)" -eq 1 ]; then
+        if awk "BEGIN { exit !(${COVERAGE} < 70.0) }"; then
           echo "::error::Line coverage ${COVERAGE}% is below 70% threshold"
           exit 1
         fi

@@ -172,17 +172,22 @@ generate_coverage_report() {
     echo ""
 
     # Enforce coverage threshold (mirrors CI)
+    local lcov_summary
+    lcov_summary=$(lcov --summary "${BUILD_DIR}/coverage.info" 2>&1) || true
     local coverage
-    coverage=$(lcov --summary "${BUILD_DIR}/coverage.info" 2>&1 \
-               | grep 'lines\.\.\.\.\.\.' | sed 's/.*: //' | sed 's/%.*//')
-    echo "  Line coverage: ${coverage}%"
-    if command -v bc &>/dev/null && [ -n "$coverage" ]; then
-        if [ "$(echo "${coverage} < 70.0" | bc)" -eq 1 ]; then
-            echo -e "${RED}  ERROR: Line coverage ${coverage}% is below 70% threshold${RESET}"
-            return 1
-        fi
-        echo -e "${GREEN}  Coverage threshold (70%) met.${RESET}"
+    coverage=$(echo "$lcov_summary" | sed -n 's/.*lines\.\.\.\.\.\.: \([0-9.]*\)%.*/\1/p')
+    if [[ -z "$coverage" ]] || ! echo "$coverage" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+        echo -e "${RED}  ERROR: Failed to parse line coverage from lcov summary${RESET}"
+        echo "  lcov output was:"
+        echo "$lcov_summary"
+        return 1
     fi
+    echo "  Line coverage: ${coverage}%"
+    if awk "BEGIN { exit !(${coverage} < 70.0) }"; then
+        echo -e "${RED}  ERROR: Line coverage ${coverage}% is below 70% threshold${RESET}"
+        return 1
+    fi
+    echo -e "${GREEN}  Coverage threshold (70%) met.${RESET}"
 
     # Generate HTML report
     if command -v genhtml &>/dev/null; then
@@ -203,11 +208,25 @@ generate_coverage_report() {
 # shellcheck disable=SC2317  # called indirectly via run_job
 job_cov() {
     cd "$PROJECT_DIR"
-    build_and_test Debug -DENABLE_COVERAGE=ON
 
+    # Configure + build (without running tests — avoid double test run)
+    echo "  cmake -B build -DCMAKE_BUILD_TYPE=Debug -DALLOW_INSECURE_ZENOH=ON -DENABLE_COVERAGE=ON"
+    cmake -B "${BUILD_DIR}" \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+        -DALLOW_INSECURE_ZENOH=ON \
+        -DENABLE_COVERAGE=ON 2>&1
+
+    echo "  cmake --build build -j$(nproc)"
+    cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1
+
+    # Zero counters before the single test run
     echo ""
-    echo "  Zeroing counters and re-running tests for clean coverage..."
+    echo "  Zeroing counters..."
     lcov --zerocounters --directory "${BUILD_DIR}" 2>/dev/null
+
+    # Run tests once for clean coverage
+    echo "  ctest --output-on-failure"
     ctest --test-dir "${BUILD_DIR}" --output-on-failure -j"$(nproc)"
 
     generate_coverage_report
