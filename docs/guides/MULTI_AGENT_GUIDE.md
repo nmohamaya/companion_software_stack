@@ -644,16 +644,62 @@ Reviews are routed based on **diff content**, not labels:
 | P4/P5/P7 paths, watchdog, fault handling | + fault-recovery |
 | IPC, HAL, Gazebo configs | + scenario-test |
 
-## Shared State
+## Shared State & Cross-Agent Context
 
-Agents coordinate through these files:
+Agents coordinate through these shared files:
 
-| File | Purpose | Who writes |
-|------|---------|-----------|
-| `tasks/active-work.md` | Live work tracker | deploy-issue.sh, agents |
-| `tasks/agent-changelog.md` | Completed work log | run-session.sh |
-| `.claude/shared-context/domain-knowledge.md` | Cross-agent pitfalls | Any agent (tech-lead reviews) |
-| `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead |
+| File | Purpose | Who writes | Who reads |
+|------|---------|-----------|-----------|
+| `tasks/active-work.md` | Live work tracker — what's in-progress | deploy-issue.sh (start + cleanup) | All agents at session start |
+| `tasks/agent-changelog.md` | Completed work log — what was recently done | Pipeline CLEANUP, run-session.sh | All agents at session start |
+| `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls discovered during work | Any agent (tech-lead reviews) | All agents at session start |
+| `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead | Agents during handoff |
+| `tests/TESTS.md` | Test inventory and baseline count | Feature agents | All agents (verify test count) |
+| `docs/tracking/PROGRESS.md` | Improvement history | Feature agents | Agents needing project context |
+| `docs/tracking/ROADMAP.md` | Planned work and completion status | Feature agents | Agents checking what's done |
+| `docs/tracking/BUG_FIXES.md` | Bug fix log with root causes | Feature agents | Agents investigating regressions |
+
+### How Cross-Agent Context Works
+
+Every agent session automatically receives context about other agents' work. Both `deploy-issue.sh` and `start-agent.sh` inject this context into the agent's prompt at startup:
+
+1. **Active work awareness** — The agent sees entries from `tasks/active-work.md` showing which issues are in-progress, on which branches, by which agents. This prevents two agents from unknowingly modifying the same files.
+
+2. **Recent completion log** — The agent sees the last ~5 entries from `tasks/agent-changelog.md` showing what was recently completed. This prevents duplicate work and gives awareness of recent codebase changes.
+
+3. **Domain knowledge pitfalls** — The agent receives the full contents of `.claude/shared-context/domain-knowledge.md`, which contains non-obvious pitfalls discovered during previous sessions (e.g., "Zenoh sessions leak if not closed in test teardown", "radar returns NaN at ranges < 0.5m").
+
+### Lifecycle of Shared State
+
+```
+Session Start                    Session End (Pipeline CLEANUP)
+─────────────                    ─────────────────────────────
+                                 
+deploy-issue.sh                  CLEANUP state:
+  │                                │
+  ├─ Write active-work.md         ├─ Mark active-work.md → completed
+  │  (status: in-progress)        │
+  │                                ├─ Append to agent-changelog.md
+  ├─ Read active-work.md          │  (issue, branch, role, findings)
+  │  (inject into prompt)          │
+  │                                ├─ Check AGENT_REPORT.md for pitfalls
+  ├─ Read agent-changelog.md      │  → remind about domain-knowledge.md
+  │  (inject into prompt)          │
+  │                                └─ Verify issue↔PR linking
+  └─ Read domain-knowledge.md
+     (inject into prompt)
+```
+
+### Required Documentation Updates
+
+Every agent (in both `--auto` and `--pipeline` mode) is instructed to update these docs before completing work:
+
+- **`tests/TESTS.md`** — If tests were added/modified, update the count and add entries
+- **`docs/tracking/PROGRESS.md`** — Add an improvement entry (number, title, date, files, rationale)
+- **`docs/tracking/ROADMAP.md`** — Mark the issue as done if it appears in the roadmap
+- **`docs/tracking/BUG_FIXES.md`** — Add an entry if the work is a bug fix
+
+These updates ensure that the next agent session starts with accurate project state, not stale data.
 
 ## Workflow Examples
 
@@ -935,7 +981,7 @@ Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 6. **Claude CLI dependency.** Agents require the Claude Code CLI installed and authenticated. Each agent invocation consumes API tokens — there's no built-in cost cap or rate limiting.
 
-7. **No persistent agent memory across sessions.** Each agent invocation starts fresh. Context is provided through the agent definition file and the task prompt. Agents don't remember previous sessions (though `domain-knowledge.md` provides some continuity).
+7. **Limited persistent agent memory across sessions.** Each agent invocation starts fresh. Cross-agent context (active work, recent changelog, domain knowledge) is injected into every prompt automatically, but agents cannot recall the full history of previous sessions or decisions. The shared-state files provide continuity but not deep context.
 
 8. **CI integration is advisory.** The `agent-checks.yml` workflow warns about boundary violations and PR size — it doesn't block merges. The `auto-review.yml` workflow is disabled by default.
 
