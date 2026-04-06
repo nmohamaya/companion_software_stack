@@ -75,6 +75,7 @@ IS_BUG=false
 IS_REFACTOR=false
 IS_PERF=false
 DOMAIN_LABEL=""
+DOMAIN_PRI=0
 
 # Scan labels
 while IFS= read -r label; do
@@ -83,11 +84,15 @@ while IFS= read -r label; do
         bug)              IS_BUG=true ;;
         refactor)         IS_REFACTOR=true ;;
         performance)      IS_PERF=true ;;
-        perception|domain:perception) DOMAIN_LABEL="perception" ;;
-        nav-planning|domain:nav)     DOMAIN_LABEL="nav" ;;
-        comms|integration|domain:comms|domain:integration) DOMAIN_LABEL="integration" ;;
-        common|infra|infrastructure|modularity|domain:infra-core) DOMAIN_LABEL="infra-core" ;;
-        platform|deploy|ci|bsp|domain:infra-platform) DOMAIN_LABEL="infra-platform" ;;
+        # Domain labels: highest priority wins. Specific labels (ipc, perception)
+        # beat broad labels (platform, infrastructure). Priority: 3=specific, 2=mid, 1=broad.
+        perception|domain:perception) if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="perception"; DOMAIN_PRI=3; fi ;;
+        nav-planning|domain:nav)     if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="nav"; DOMAIN_PRI=3; fi ;;
+        comms|domain:comms)          if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="integration"; DOMAIN_PRI=3; fi ;;
+        ipc)                         if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="infra-core"; DOMAIN_PRI=3; fi ;;
+        integration|domain:integration) if [[ "${DOMAIN_PRI:-0}" -lt 2 ]]; then DOMAIN_LABEL="integration"; DOMAIN_PRI=2; fi ;;
+        common|infra|infrastructure|modularity|domain:infra-core) if [[ "${DOMAIN_PRI:-0}" -lt 2 ]]; then DOMAIN_LABEL="infra-core"; DOMAIN_PRI=2; fi ;;
+        platform|deploy|ci|bsp|domain:infra-platform) if [[ "${DOMAIN_PRI:-0}" -lt 1 ]]; then DOMAIN_LABEL="infra-platform"; DOMAIN_PRI=1; fi ;;
         safety-audit)     ROLE="review-memory-safety" ;;
         security-audit)   ROLE="review-security" ;;
         test-coverage)    ROLE="test-unit" ;;
