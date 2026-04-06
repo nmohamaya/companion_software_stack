@@ -309,6 +309,19 @@ ${recent}"
         fi
     fi
 
+    # Project status (where things stand, priorities, blocking bugs)
+    local status_file="$PROJECT_DIR/.claude/shared-context/project-status.md"
+    if [[ -f "$status_file" ]]; then
+        local status
+        status="$(cat "$status_file" 2>/dev/null || true)"
+        if [[ -n "$status" ]]; then
+            ctx="${ctx}
+
+CROSS-AGENT CONTEXT — Project status (current state, priorities, blocking bugs):
+${status}"
+        fi
+    fi
+
     # Domain knowledge / non-obvious pitfalls
     local dk_file="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
     if [[ -f "$dk_file" ]]; then

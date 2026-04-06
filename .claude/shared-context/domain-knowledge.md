@@ -82,3 +82,51 @@ Every standard library type needs its header explicitly included. Do not rely on
 
 ### Always initialize Eigen types
 Uninitialized Eigen vectors/matrices cause warnings under `-Wall`. Always use `= Eigen::Vector3f::Zero()` or equivalent at declaration.
+
+## Concurrency Design Rationale
+
+### When to use mutex vs atomic vs lock-free
+| Scenario | Mechanism | Example |
+|----------|-----------|---------|
+| Single small value (bool, int, ptr) | `std::atomic` with acquire/release | `offboard_active_` in Gazebo backends |
+| Multi-field struct, consistent snapshot | Mutex (`std::lock_guard`) | `MavlinkFCLink::cached_state_` (~100 bytes) |
+| Hot path (>10k ops/sec) | Lock-free (atomic, triple buffer) | `ThreadHeartbeat` |
+| Cold path (<100 ops/sec) | Mutex — simpler, correct, negligible cost | Config access |
+
+`FCState` is ~100 bytes and **cannot** be `std::atomic` (hardware atomics max 8-16 bytes). Use mutex. `memory_order_relaxed` is banned without justification — use `acquire`/`release`. Performance difference is zero on x86, ~1-2ns on ARM/Jetson.
+
+## Sensor Fusion Architecture
+
+### Camera provides bearing, radar provides range
+The UKF fuses camera (sub-degree bearing from pinhole model, color/class, bbox) with radar (±0.3m range, radial velocity). Neither alone gives a complete track. Covariance-driven: camera-only P(0,0)=100 (uncertain depth), radar-initialized P(0,0)=0.5 (accurate range).
+
+### UKF state and coordinate conventions
+State: `[x=depth(forward), y=lateral(right), z=vertical(down), vx, vy, vz]` in body frame (FRD). Radar azimuth from Gazebo is FLU (positive=left) — negate for UKF FRD (positive=right).
+
+### Depth estimation 4-tier strategy
+1. Horizon-truncated bbox → ground-plane depth from bbox bottom
+2. Apparent-size: `depth = assumed_height * fy / bbox_h`
+3. Ground-plane fallback: `depth = camera_height / ray_down`
+4. Near-horizon conservative 8m estimate
+
+Depth clamping at 40m (mission cam) and 8m (stereo/apparent size) creates ghost cells when depth estimation fails. Always check if a depth value equals these clamp values before trusting it.
+
+## False Cell Promotion (Known Bug — Issues #339/#340)
+
+### Ground features get promoted to permanent obstacles
+The `color_contour` detector misidentifies ground textures/shadows/landing pads as obstacles. Depth estimation fails → clamps to 40m or 8m. After `promotion_hits` observations, ghost cells become permanent static cells that never decay. Evidence: 616 promoted cells with only 4 real obstacles in scenario 02.
+
+### Workarounds in place
+- Scenario 02 (HD-map): `promotion_hits=0` disables promotion
+- Scenario 18 (perception): `max_static_cells=800` caps promoted cells
+
+## Production Readiness
+
+### DIAG logging must use spdlog::debug
+All per-tick and high-frequency diagnostic logging must use `spdlog::debug`, never `spdlog::info`. Gate with `spdlog::should_log()` to avoid string formatting overhead. PR #355 fixed this for `mission_state_tick.h`.
+
+### Don't fix code bugs by changing config
+When a test fails or behavior is wrong, investigate the root cause in code first. Never adjust config thresholds to mask a code bug — it will resurface in production with real sensors.
+
+### Integration branches for multi-issue features
+Multi-issue features (epics) use an integration branch between worktrees and main. All PRs target the integration branch. Merge to main only after all sub-issues pass + full regression. This keeps main demo-ready.

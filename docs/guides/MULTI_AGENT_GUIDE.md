@@ -667,6 +667,7 @@ Agents coordinate through these shared files:
 |------|---------|-----------|-----------|
 | `tasks/active-work.md` | Live work tracker — what's in-progress | deploy-issue.sh (start + cleanup) | All agents at session start |
 | `tasks/agent-changelog.md` | Completed work log — what was recently done | Pipeline CLEANUP, run-session.sh | All agents at session start |
+| `.claude/shared-context/project-status.md` | Project state, priorities, blocking bugs, active epics | Human (end of session) | All agents at session start |
 | `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls discovered during work | Any agent (tech-lead reviews) | All agents at session start |
 | `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead | Agents during handoff |
 | `tests/TESTS.md` | Test inventory and baseline count | Feature agents | All agents (verify test count) |
@@ -682,7 +683,9 @@ Every agent session automatically receives context about other agents' work. Bot
 
 2. **Recent completion log** — The agent sees the last ~5 entries from `tasks/agent-changelog.md` showing what was recently completed. This prevents duplicate work and gives awareness of recent codebase changes.
 
-3. **Domain knowledge pitfalls** — The agent receives the full contents of `.claude/shared-context/domain-knowledge.md`, which contains non-obvious pitfalls discovered during previous sessions (e.g., "Zenoh sessions leak if not closed in test teardown", "radar returns NaN at ranges < 0.5m").
+3. **Project status** — The agent receives `.claude/shared-context/project-status.md`, which contains the current project state: active epics and their status, blocking bugs, priority queue, recent milestones, architecture decisions in effect. This is the "where are we now" briefing.
+
+4. **Domain knowledge pitfalls** — The agent receives `.claude/shared-context/domain-knowledge.md`, which contains non-obvious technical pitfalls: build gotchas, API quirks, concurrency rules, sensor fusion architecture, known bugs and workarounds.
 
 ### Lifecycle of Shared State
 
@@ -701,8 +704,11 @@ deploy-issue.sh                  CLEANUP state:
   ├─ Read agent-changelog.md      │  → remind about domain-knowledge.md
   │  (inject into prompt)          │
   │                                └─ Verify issue↔PR linking
-  └─ Read domain-knowledge.md
-     (inject into prompt)
+  ├─ Read project-status.md
+  │  (inject into prompt)       Human (end of session):
+  │                                │
+  └─ Read domain-knowledge.md     └─ Update project-status.md
+     (inject into prompt)            (epics, priorities, bugs, metrics)
 ```
 
 ### Required Documentation Updates

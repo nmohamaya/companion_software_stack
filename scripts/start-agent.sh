@@ -225,6 +225,18 @@ ${RECENT_WORK}"
     fi
 fi
 
+# Project status (where things stand, priorities, blocking bugs)
+PROJECT_STATUS="$PROJECT_DIR/.claude/shared-context/project-status.md"
+if [[ -f "$PROJECT_STATUS" ]]; then
+    STATUS_CONTENT="$(cat "$PROJECT_STATUS" 2>/dev/null || true)"
+    if [[ -n "$STATUS_CONTENT" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+
+CROSS-AGENT CONTEXT — Project status (current state, priorities, blocking bugs):
+${STATUS_CONTENT}"
+    fi
+fi
+
 # Domain knowledge / non-obvious pitfalls
 DOMAIN_KNOWLEDGE="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
 if [[ -f "$DOMAIN_KNOWLEDGE" ]]; then
