@@ -23,11 +23,3 @@ _Move items here when merged. Keep for 1 week, then delete._
 ## Blocked
 
 _Items waiting on external input, other agents, or decisions._
-
-### [Issue #358] Enable multi-developer GitHub collaboration
-- **Agent:** feature-infra-platform
-- **Branch:** feat/issue-357-multi-agent-pipeline (bundled with pipeline PR)
-- **Status:** in-progress
-- **Files touched:** .gitignore, CLAUDE.md, tasks/, GitHub labels
-- **Started:** 2026-04-06
-- **Notes:** First pipeline test — executing directly on feature branch (no separate worktree)
