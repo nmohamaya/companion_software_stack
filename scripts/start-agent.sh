@@ -11,6 +11,9 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
+# ── Version ───────────────────────────────────────────────────────────────
+PIPELINE_VERSION="multi-agent-pipeline v1.0"
+
 # ── Role → Model mapping ───────────────────────────────────────────────────
 declare -A ROLE_MODEL=(
     [tech-lead]="claude-opus-4-6"
@@ -67,6 +70,7 @@ Usage: $(basename "$0") <role> "task description" [options]
 
 Options:
   --list            Print all available roles and exit
+  --version         Print pipeline version and exit
   --interactive     Launch interactive session (with task as first message)
   --dry-run         Print resolved config and exit
   --skip-preflight  Skip pre-flight checks
@@ -97,6 +101,7 @@ TASK=""
 for arg in "$@"; do
     case "$arg" in
         --list)           list_roles ;;
+        --version)        echo "$PIPELINE_VERSION"; exit 0 ;;
         --dry-run)        DRY_RUN=true ;;
         --skip-preflight) SKIP_PREFLIGHT=true ;;
         --interactive)    INTERACTIVE=true ;;
