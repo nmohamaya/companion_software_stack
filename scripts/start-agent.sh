@@ -216,9 +216,19 @@ echo -e "  Mode:  ${MODE}"
 echo ""
 
 # ── Launch ──────────────────────────────────────────────────────────────────
-# Launch the Claude CLI with the specified model and agent file.
-# Adjust the command below if the claude CLI syntax differs in your environment.
-exec claude \
-    --model "$MODEL" \
-    --agent-file "$PROJECT_DIR/.claude/agents/${ROLE}.md" \
-    --prompt "$PROMPT"
+# Launch the Claude CLI with the specified model and agent definition.
+# Agent files in .claude/agents/ are auto-discovered by name (without .md extension).
+# Use -p (print mode) for non-interactive/scripted runs, or interactive mode for
+# hands-on sessions.
+
+CMD=(claude --model "$MODEL" --agent "$ROLE")
+
+if [[ -n "$PROMPT" ]]; then
+    # Non-interactive: pass prompt via -p (print mode)
+    CMD+=(-p "$PROMPT")
+else
+    # Interactive: open a session with the agent's role context
+    true  # no extra flags needed
+fi
+
+exec "${CMD[@]}"
