@@ -52,6 +52,16 @@ struct RadarNoiseConfig {
         25.0f;  // max range for orphan creation (reject distant clutter)
     uint32_t radar_only_promotion_hits = 6;     // radar hits for static promotion (0.3s at 20Hz)
     bool     radar_only_enabled        = true;  // enable radar-only track initiation (Issue #231)
+
+    // Azimuth sign convention (Issue #348):
+    // true  = negate azimuth (Gazebo/Simulated: FLU → UKF FRD)
+    // false = native FRD (real radar hardware, e.g. TI AWR series)
+    bool negate_azimuth = true;
+
+    /// Apply sign convention to raw azimuth. Inlined for hot-path use.
+    [[nodiscard]] float az_sign(float raw_azimuth_rad) const {
+        return negate_azimuth ? -raw_azimuth_rad : raw_azimuth_rad;
+    }
 };
 
 /// Per-object UKF state for 3D tracking.
@@ -146,11 +156,12 @@ private:
     static constexpr float kBeta  = 2.0f;
     static constexpr float kKappa = 0.0f;
 
-    StateVec     x_;        // state estimate
-    StateMat     P_;        // state covariance
-    StateMat     Q_;        // process noise
-    MeasMat      R_;        // camera measurement noise
-    RadarMeasMat R_radar_;  // radar measurement noise
+    StateVec     x_;                     // state estimate
+    StateMat     P_;                     // state covariance
+    StateMat     Q_;                     // process noise
+    MeasMat      R_;                     // camera measurement noise
+    RadarMeasMat R_radar_;               // radar measurement noise
+    bool         negate_azimuth_{true};  // azimuth sign convention (Issue #348)
 };
 
 /// A dormant obstacle remembered in world frame after its ByteTrack track was lost.

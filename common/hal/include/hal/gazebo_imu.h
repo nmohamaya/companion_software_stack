@@ -41,7 +41,7 @@ public:
     void shutdown() {
         {
             std::lock_guard<std::mutex> lock(reading_mutex_);
-            if (!active_.load(std::memory_order_relaxed)) return;
+            if (!active_.load(std::memory_order_acquire)) return;
             active_.store(false, std::memory_order_release);
         }
         node_.Unsubscribe(gz_topic_);
@@ -58,7 +58,7 @@ public:
     /// @param rate_hz  Informational; actual rate is driven by Gazebo sensor.
     /// @return true on successful subscription
     bool init(int rate_hz) override {
-        if (active_.load(std::memory_order_relaxed)) {
+        if (active_.load(std::memory_order_acquire)) {
             spdlog::warn("[GazeboIMU] Already initialised on '{}'", gz_topic_);
             return false;
         }
@@ -131,7 +131,7 @@ private:
         // Store under lock (fast — ImuReading is ~56 bytes)
         {
             std::lock_guard<std::mutex> lock(reading_mutex_);
-            if (!active_.load(std::memory_order_relaxed)) return;
+            if (!active_.load(std::memory_order_acquire)) return;
             cached_reading_ = r;
         }
 
