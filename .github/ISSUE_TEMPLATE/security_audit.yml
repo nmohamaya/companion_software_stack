@@ -1,6 +1,6 @@
 name: Security Audit
 description: Request a security review of a subsystem or interface
-labels: ["security", "audit"]
+labels: ["security-audit"]
 body:
   - type: markdown
     attributes:

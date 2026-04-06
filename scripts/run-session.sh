@@ -14,10 +14,13 @@ RESET='\033[0m'
 # ── Usage ───────────────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
-Usage: $(basename "$0") <role> "task description"
+Usage: $(basename "$0") <role> "task description" [options]
 
-Full session orchestrator — runs pre-flight, health baseline, agent, and
-post-session validation with output logging.
+Full session orchestrator — runs pre-flight, health baseline, agent,
+post-session validation, and changelog update with output logging.
+
+Options:
+  --issue <number>  Link a GitHub issue number to the session
 EOF
     exit "${1:-1}"
 }
@@ -29,6 +32,25 @@ fi
 ROLE="$1"
 TASK="$2"
 shift 2
+
+# ── Parse remaining flags ──────────────────────────────────────────────────
+ISSUE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --issue)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: --issue requires a value${RESET}" >&2
+                exit 1
+            fi
+            ISSUE="$2"
+            shift 2
+            ;;
+        *)
+            echo -e "${RED}Error: unexpected argument '$1'${RESET}" >&2
+            usage 1
+            ;;
+    esac
+done
 
 SESSION_START="$(date +%s)"
 SESSION_TIMESTAMP="$(date +%Y-%m-%d-%H%M)"
@@ -45,7 +67,7 @@ log "${BOLD}=== Session: ${ROLE} @ ${SESSION_TIMESTAMP} ===${RESET}"
 log ""
 
 # ── 1. Pre-flight ──────────────────────────────────────────────────────────
-log "${BOLD}[1/5] Pre-flight checks${RESET}"
+log "${BOLD}[1/6] Pre-flight checks${RESET}"
 
 # Git state
 BRANCH="$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || echo "detached")"
@@ -86,7 +108,7 @@ START_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "unknow
 log ""
 
 # ── 2. Health baseline ─────────────────────────────────────────────────────
-log "${BOLD}[2/5] Health baseline${RESET}"
+log "${BOLD}[2/6] Health baseline${RESET}"
 
 BASELINE_TEST_COUNT="0"
 if [[ -d "$PROJECT_DIR/build" ]]; then
@@ -119,7 +141,7 @@ fi
 log ""
 
 # ── 3. Launch agent ────────────────────────────────────────────────────────
-log "${BOLD}[3/5] Launching agent${RESET}"
+log "${BOLD}[3/6] Launching agent${RESET}"
 log "  Role: ${ROLE}"
 log "  Task: ${TASK:0:80}${TASK:80:+...}"
 log ""
@@ -131,8 +153,27 @@ AGENT_EXIT=0
 
 log ""
 
-# ── 4. Post-session metrics ────────────────────────────────────────────────
-log "${BOLD}[4/5] Post-session report${RESET}"
+# ── 4. Post-session validation ─────────────────────────────────────────────
+log "${BOLD}[4/6] Post-session validation${RESET}"
+
+VALIDATE_EXIT=0
+VALIDATE_OUTPUT="$("$PROJECT_DIR/scripts/validate-session.sh" --branch "$BRANCH" 2>&1)" || VALIDATE_EXIT=$?
+echo "$VALIDATE_OUTPUT" | tee -a "$SESSION_LOG"
+
+if [[ $VALIDATE_EXIT -eq 0 ]]; then
+    if echo "$VALIDATE_OUTPUT" | grep -q "WARN"; then
+        VALIDATE_RESULT="WARN"
+    else
+        VALIDATE_RESULT="PASS"
+    fi
+else
+    VALIDATE_RESULT="FAIL"
+fi
+log "  Validation result: ${VALIDATE_RESULT}"
+log ""
+
+# ── 5. Post-session metrics ────────────────────────────────────────────────
+log "${BOLD}[5/6] Post-session report${RESET}"
 
 SESSION_END="$(date +%s)"
 ELAPSED=$(( SESSION_END - SESSION_START ))
@@ -157,10 +198,27 @@ log "  Uncommitted files: ${POST_UNCOMMITTED}"
 log "  New commits:       ${NEW_COMMITS}"
 log "  Elapsed:           ${ELAPSED_MIN}m ${ELAPSED_SEC}s"
 log "  Agent exit code:   ${AGENT_EXIT}"
+log "  Validation:        ${VALIDATE_RESULT}"
 log ""
 
-# ── 5. Append to agent changelog ───────────────────────────────────────────
-log "${BOLD}[5/5] Updating agent changelog${RESET}"
+# Detect PR number for changelog entry
+PR_NUMBER="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)"
+PR_REF=""
+if [[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]]; then
+    PR_REF="PR #${PR_NUMBER}"
+else
+    PR_REF="no PR"
+fi
+
+# Resolve model name from start-agent.sh role mapping
+case "$ROLE" in
+    test-unit|test-scenario) SESSION_MODEL="sonnet" ;;
+    ops-github)              SESSION_MODEL="haiku" ;;
+    *)                       SESSION_MODEL="opus" ;;
+esac
+
+# ── 6. Append to agent changelog ───────────────────────────────────────────
+log "${BOLD}[6/6] Updating agent changelog${RESET}"
 
 CHANGELOG="$PROJECT_DIR/tasks/agent-changelog.md"
 if [[ ! -f "$CHANGELOG" ]]; then
@@ -168,14 +226,21 @@ if [[ ! -f "$CHANGELOG" ]]; then
     echo "" >> "$CHANGELOG"
 fi
 
+SESSION_DATE="$(date +%Y-%m-%d)"
+ISSUE_REF=""
+if [[ -n "$ISSUE" ]]; then
+    ISSUE_REF=" | #${ISSUE}"
+fi
+
 cat >> "$CHANGELOG" <<EOF
 
-## ${SESSION_TIMESTAMP} — ${ROLE}
+### ${SESSION_DATE} | ${ROLE} | ${SESSION_MODEL} | ${PR_REF}${ISSUE_REF}
 - **Task:** ${TASK:0:120}
 - **Branch:** ${BRANCH}
 - **Tests:** ${BASELINE_TEST_COUNT} -> ${POST_TEST_COUNT}
 - **Commits:** ${NEW_COMMITS}
 - **Duration:** ${ELAPSED_MIN}m ${ELAPSED_SEC}s
+- **Validation:** ${VALIDATE_RESULT}
 - **Exit:** ${AGENT_EXIT}
 - **Log:** tasks/sessions/$(basename "$SESSION_LOG")
 EOF

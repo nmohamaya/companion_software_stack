@@ -117,8 +117,7 @@ if [[ -z "$ROLE" ]]; then
 fi
 
 if [[ -z "$TASK" && "$DRY_RUN" == "false" ]]; then
-    echo -e "${RED}Error: task description is required${RESET}" >&2
-    usage 1
+    echo -e "${CYAN}INFO${RESET}  No task provided — launching interactive session"
 fi
 
 # ── Validate role ───────────────────────────────────────────────────────────
@@ -190,9 +189,6 @@ esac
 
 # ── Build task prompt ───────────────────────────────────────────────────────
 PROMPT="$TASK"
-if [[ "$DRY_RUN" == "true" ]]; then
-    PROMPT="${PROMPT:+${PROMPT} }READ-ONLY mode: do not edit files, only analyze and plan"
-fi
 
 # ── Export role environment variable ────────────────────────────────────────
 export CLAUDE_AGENT_ROLE="$ROLE"
@@ -208,12 +204,21 @@ if [[ "$DRY_RUN" == "true" ]]; then
     MODE="dry-run (read-only)"
 fi
 
-echo -e "${BOLD}Launching agent${RESET}"
-echo -e "  Role:  ${CYAN}${ROLE}${RESET}"
-echo -e "  Model: ${ROLE_TIER[$ROLE]} (${MODEL})"
-echo -e "  Task:  ${TASK_DISPLAY}"
-echo -e "  Mode:  ${MODE}"
+AGENT_FILE="$PROJECT_DIR/.claude/agents/${ROLE}.md"
+
+echo -e "${BOLD}Agent configuration${RESET}"
+echo -e "  Role:       ${CYAN}${ROLE}${RESET}"
+echo -e "  Model:      ${ROLE_TIER[$ROLE]} (${MODEL})"
+echo -e "  Agent file: ${AGENT_FILE}"
+echo -e "  Task:       ${TASK_DISPLAY:-<interactive>}"
+echo -e "  Mode:       ${MODE}"
 echo ""
+
+# ── Dry-run: print resolved config and exit ────────────────────────────────
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "${CYAN}Dry-run mode — not launching agent.${RESET}"
+    exit 0
+fi
 
 # ── Launch ──────────────────────────────────────────────────────────────────
 # Launch the Claude CLI with the specified model and agent definition.

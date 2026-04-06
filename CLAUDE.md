@@ -387,8 +387,11 @@ This project uses a **13-agent pipeline** orchestrated via Claude Agent SDK. See
 # List available agents
 bash scripts/start-agent.sh --list
 
-# Launch an agent for a specific role
+# Launch an interactive session for a role
 bash scripts/start-agent.sh feature-perception
+
+# Launch with a specific task (non-interactive)
+bash scripts/start-agent.sh feature-nav "Implement issue #315: add version fields"
 
 # Deploy an agent for a GitHub issue (auto-routes by labels)
 bash scripts/deploy-issue.sh 123
@@ -397,14 +400,14 @@ bash scripts/deploy-issue.sh 123
 bash scripts/deploy-review.sh 456
 
 # Run a full orchestrated session
-bash scripts/run-session.sh feature-nav --issue 789
+bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation"
 
 # Validate a session (hallucination detection)
 bash scripts/validate-session.sh
 
 # View agent dashboard
-bash scripts/agent-dashboard.sh
-bash scripts/agent-dashboard.sh feature-perception
+bash scripts/agent-dashboard.sh                       # team-wide (default)
+bash scripts/agent-dashboard.sh feature-perception    # per-agent
 ```
 
 ### Review Routing

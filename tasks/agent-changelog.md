@@ -8,7 +8,7 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 ### YYYY-MM-DD | role | model | PR #XXX
 **Task:** description
 **Files:** key files changed
-**Tests:** X added, Y total passing (baseline: 1286)
+**Tests:** X added, Y total passing (baseline: see tests/TESTS.md)
 **Duration:** ~Xh
 **Cost:** $X.XX (if available)
 **Safety issues found:** list or "none"
@@ -22,7 +22,7 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 
 **Task:** Issue #358 — Enable multi-developer GitHub collaboration
 **Files:** .gitignore, CLAUDE.md, tasks/active-work.md, tasks/agent-changelog.md, tasks/sessions/.gitignore, scripts/deploy-issue.sh, scripts/validate-session.sh
-**Tests:** 0 added, 1286 total passing (baseline: 1259)
+**Tests:** 0 added, 1286 total passing (baseline: see tests/TESTS.md)
 **Safety issues found:** none
 **Hallucination flags:** PASS (3 pass, 1 warn — `lessons.md` reference in PR body)
 **Notes:** First pipeline test. Fixed `deploy-issue.sh` label routing (infrastructure, domain:*), fixed `validate-session.sh` false positive on "0 tests failed". Created 13 GitHub labels (6 domain + 3 agent + 4 audit).

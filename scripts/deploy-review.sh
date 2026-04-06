@@ -139,7 +139,18 @@ TIMESTAMP="$(date +%Y-%m-%d-%H%M)"
 PIDS=()
 LOGS=()
 
-REVIEW_PROMPT_TEMPLATE="Review PR #${PR}. Read the diff and provide a detailed safety review focused on your domain. Post findings as a structured list with file:line, severity (P1-P4), and fix suggestion."
+DIFF_FILES="$(echo "$DIFF" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//')"
+DIFF_TRUNCATED="$(echo "$DIFF" | head -500)"
+
+REVIEW_PROMPT_TEMPLATE="Review PR #${PR}.
+
+Changed files:
+${DIFF_FILES}
+
+Diff (first 500 lines):
+${DIFF_TRUNCATED}
+
+Provide a detailed safety review focused on your domain. Post findings as a structured list with file:line, severity (P1-P4), and fix suggestion."
 
 for reviewer in "${REVIEWERS[@]}"; do
     LOG_FILE="${SESSION_LOG_DIR}/${TIMESTAMP}-review-pr${PR}-${reviewer}.log"

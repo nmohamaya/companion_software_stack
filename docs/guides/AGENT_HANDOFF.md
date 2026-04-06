@@ -53,9 +53,9 @@ main (always demo-ready)
   |
   +-- integration/epic-XXX (collects all sub-issue PRs)
         |
-        +-- feat/issue-AAA (Agent A's worktree)
-        +-- feat/issue-BBB (Agent B's worktree)
-        +-- feat/issue-CCC (Agent C's worktree)
+        +-- feature/issue-AAA (Agent A's worktree)
+        +-- feature/issue-BBB (Agent B's worktree)
+        +-- feature/issue-CCC (Agent C's worktree)
 ```
 
 1. Create the integration branch from main: `git checkout -b integration/epic-XXX main`

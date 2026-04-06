@@ -1,6 +1,6 @@
 name: Safety Audit
 description: Request a safety review of a subsystem or change
-labels: ["safety", "audit"]
+labels: ["safety-audit"]
 body:
   - type: markdown
     attributes:

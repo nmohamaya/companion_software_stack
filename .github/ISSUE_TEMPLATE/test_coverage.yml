@@ -1,6 +1,6 @@
 name: Test Coverage
 description: Request new tests or coverage improvements
-labels: ["testing", "enhancement"]
+labels: ["test-coverage", "enhancement"]
 body:
   - type: dropdown
     id: test_type

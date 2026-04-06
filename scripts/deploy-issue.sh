@@ -14,29 +14,53 @@ RESET='\033[0m'
 # ── Usage ───────────────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
-Usage: $(basename "$0") <issue-number> [--dry-run]
+Usage: $(basename "$0") <issue-number> [options]
 
 Fetches a GitHub issue, routes it to the appropriate agent role based on
 labels, creates a worktree, and launches the agent.
+
+Options:
+  --base <branch>   Base branch to branch from (default: main)
+                    Use for integration branches: --base integration/epic-263
+  --dry-run         Print routing decision without executing
+  --help, -h        Show this help
 EOF
     exit "${1:-1}"
 }
 
+# ── Preflight checks ───────────────────────────────────────────────────────
+for cmd in gh jq; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo -e "${RED}Error: '$cmd' is required but not installed${RESET}" >&2
+        exit 1
+    fi
+done
+
 # ── Parse arguments ─────────────────────────────────────────────────────────
 ISSUE=""
 DRY_RUN=false
+BASE_BRANCH="main"
 
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run)  DRY_RUN=true ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)  DRY_RUN=true; shift ;;
+        --base)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: --base requires a branch name${RESET}" >&2
+                exit 1
+            fi
+            BASE_BRANCH="$2"
+            shift 2
+            ;;
         --help|-h)  usage 0 ;;
         *)
             if [[ -z "$ISSUE" ]]; then
-                ISSUE="$arg"
+                ISSUE="$1"
             else
-                echo -e "${RED}Error: unexpected argument '$arg'${RESET}" >&2
+                echo -e "${RED}Error: unexpected argument '$1'${RESET}" >&2
                 usage 1
             fi
+            shift
             ;;
     esac
 done
@@ -134,19 +158,20 @@ SLUG="${SLUG%-}"
 if [[ "$IS_BUG" == "true" ]]; then
     BRANCH="fix/issue-${ISSUE}-${SLUG}"
 else
-    BRANCH="feat/issue-${ISSUE}-${SLUG}"
+    BRANCH="feature/issue-${ISSUE}-${SLUG}"
 fi
 
 # ── 4. Dry-run or execute ──────────────────────────────────────────────────
 echo -e "${BOLD}Routing decision${RESET}"
 echo -e "  Issue:  #${ISSUE} — ${TITLE}"
 echo -e "  Role:   ${CYAN}${ROLE}${RESET}"
+echo -e "  Base:   ${BASE_BRANCH}"
 echo -e "  Branch: ${BRANCH}"
 echo ""
 
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "${YELLOW}DRY RUN${RESET} — would perform:"
-    echo "  1. git worktree add .claude/worktrees/issue-${ISSUE} -b ${BRANCH} main"
+    echo "  1. git worktree add .claude/worktrees/issue-${ISSUE} -b ${BRANCH} ${BASE_BRANCH}"
     echo "  2. Update tasks/active-work.md"
     echo "  3. Launch: start-agent.sh ${ROLE} <issue prompt>"
     exit 0
@@ -160,7 +185,7 @@ if [[ -d "$WORKTREE_DIR" ]]; then
     echo "  Re-using existing worktree."
 else
     echo -e "Creating worktree..."
-    git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" main 2>&1 || {
+    git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_BRANCH" 2>&1 || {
         # Branch may already exist — try without -b
         echo -e "${YELLOW}WARN${RESET}  Branch may already exist, trying checkout..."
         git -C "$PROJECT_DIR" worktree add "$WORKTREE_DIR" "$BRANCH" 2>&1 || {
@@ -192,11 +217,18 @@ EOF
 echo -e "  ${GREEN}DONE${RESET}  Updated tasks/active-work.md"
 
 # ── Construct prompt ────────────────────────────────────────────────────────
+PR_TARGET_NOTE=""
+if [[ "$BASE_BRANCH" != "main" ]]; then
+    PR_TARGET_NOTE="
+
+IMPORTANT: This branch was created from '${BASE_BRANCH}' (not main). When creating a PR, target '${BASE_BRANCH}' as the base branch, not main."
+fi
+
 PROMPT="Issue #${ISSUE}: ${TITLE}
 
 ${BODY}
 
-Work in this worktree. The branch is '${BRANCH}'. Implement the issue, add tests, and ensure the build passes."
+Work in this worktree. The branch is '${BRANCH}'.${PR_TARGET_NOTE} Implement the issue, add tests, and ensure the build passes."
 
 # ── Launch agent in the worktree ────────────────────────────────────────────
 echo ""

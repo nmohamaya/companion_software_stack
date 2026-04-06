@@ -165,7 +165,8 @@ done <<< "$CHANGED_FILES"
 
 # Report results
 if [[ ${#VIOLATIONS[@]} -eq 0 ]]; then
-    echo "All ${#CHANGED_FILES[@]} changed files are within $ROLE boundaries."
+    CHANGED_COUNT="$(echo "$CHANGED_FILES" | wc -l)"
+    echo "All ${CHANGED_COUNT} changed files are within $ROLE boundaries."
     exit 0
 else
     echo "BOUNDARY VIOLATIONS for role $ROLE:"

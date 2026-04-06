@@ -889,15 +889,17 @@ All reviews pass → Tech Lead merges
 # List available agent roles
 bash scripts/start-agent.sh --list
 
-# Launch a specific agent role
+# Launch an interactive session for a specific role
 bash scripts/start-agent.sh feature-perception
-bash scripts/start-agent.sh review-memory-safety
 
-# Dry run (show what would happen without launching)
+# Launch with a specific task (non-interactive)
+bash scripts/start-agent.sh feature-nav "Implement issue #315: add version fields to IPC structs"
+
+# Dry run (show resolved config without launching)
 bash scripts/start-agent.sh feature-nav --dry-run
 
 # Skip pre-flight checks (build/test verification)
-bash scripts/start-agent.sh feature-integration --skip-preflight
+bash scripts/start-agent.sh feature-integration "Fix IPC timeout" --skip-preflight
 ```
 
 ### Issue-to-PR Lifecycle
@@ -914,11 +916,10 @@ bash scripts/deploy-issue.sh 123 --dry-run
 
 **What happens:**
 1. Reads the issue via `gh issue view`
-2. Determines the agent role from issue labels (e.g., `domain:perception` → `feature-perception`)
-3. Creates a git worktree and feature branch
+2. Determines the agent role from issue labels using priority-based routing (e.g., `ipc` → `feature-infra-core`, `domain:perception` → `feature-perception`)
+3. Creates a git worktree and feature branch (`feature/issue-XXX-description`)
 4. Updates `tasks/active-work.md` with the assignment
 5. Launches the agent with the issue context
-6. On completion, creates a PR linking the issue
 
 ### PR Review Deployment
 
@@ -940,11 +941,12 @@ Review agents are routed based on diff content — see the routing table in [CLA
 Full sessions include pre-flight checks, health baselines, agent work, and post-session retro:
 
 ```bash
-# Run a full orchestrated session
-bash scripts/run-session.sh feature-nav --issue 789
+# Run a full orchestrated session with a task description
+bash scripts/run-session.sh feature-nav "Implement issue #789: VIO health fault escalation"
 
 # Session logs go to tasks/sessions/
-# Post-session retro appended to tasks/agent-changelog.md
+# Post-session validation runs automatically (validate-session.sh)
+# Retro appended to tasks/agent-changelog.md
 ```
 
 ### Hallucination Detection
@@ -959,20 +961,23 @@ bash scripts/validate-session.sh
 - **Build verification** — project compiles with zero warnings
 - **Test count verification** — matches baseline in `tests/TESTS.md`
 - **Test execution verification** — tests actually run and pass
-- **Symbol verification** — functions/types referenced in diffs exist in the codebase
-- **Include verification** — `#include` paths resolve to real files
-- **Diff sanity** — changes are syntactically valid C++
+- **Include verification** — `#include` paths in diff resolve to real files
+- **Diff sanity** — PR body file references exist in the diff or repo
 
 **Output:** `PASS` / `WARN` / `FAIL` with details for each check.
 
 ### Agent Dashboards
 
 ```bash
-# Team-wide dashboard
+# Team-wide dashboard (default when no args)
 bash scripts/agent-dashboard.sh
 
-# Per-agent dashboard
+# Per-agent dashboard (positional shorthand)
 bash scripts/agent-dashboard.sh feature-perception
+
+# Explicit flag form
+bash scripts/agent-dashboard.sh --agent feature-perception
+bash scripts/agent-dashboard.sh --team
 
 # Git-based stats (commits, lines, cost estimates)
 bash scripts/agent-stats.sh
@@ -1030,7 +1035,7 @@ bash scripts/cleanup-branches.sh
 bash scripts/cleanup-branches.sh --dry-run
 ```
 
-Removes branches merged >30 days ago and worktrees for deleted branches.
+Removes branches already merged into `main` and their associated worktrees.
 
 ---
 

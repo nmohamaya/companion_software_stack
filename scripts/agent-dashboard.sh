@@ -47,15 +47,21 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             usage
             ;;
-        *)
+        -*)
             echo "Unknown option: $1"
             usage
+            ;;
+        *)
+            # Positional arg: treat as --agent <role>
+            AGENT="$1"
+            shift
             ;;
     esac
 done
 
+# Default to --team mode when no arguments given
 if [[ -z "$AGENT" && "$TEAM" != true ]]; then
-    usage
+    TEAM=true
 fi
 
 CHANGELOG="$PROJECT_DIR/tasks/agent-changelog.md"

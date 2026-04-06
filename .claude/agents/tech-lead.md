@@ -24,7 +24,7 @@ Run these before starting any work:
 
 1. **Read active work:** `cat tasks/active-work.md`
 2. **Check worktrees:** `git worktree list` — verify no conflicts with in-flight agent work
-3. **Verify test baseline:** `ctest -N --test-dir build | grep "Total Tests:"` — must match current baseline in `tests/TESTS.md` (currently 1286)
+3. **Verify test baseline:** `ctest -N --test-dir build | grep "Total Tests:"` — must match current baseline (see `tests/TESTS.md` for current count)
 4. **Check branch status:** `git branch --show-current` and `git log --oneline -5`
 
 ## Post-Session Checklist

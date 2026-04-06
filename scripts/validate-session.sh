@@ -81,13 +81,7 @@ echo -e "${BOLD}[1/5] Build verification${RESET}"
 if [[ ! -d "$PROJECT_DIR/build" ]]; then
     result_fail "No build/ directory — run cmake first"
 else
-    BUILD_OUTPUT="$(cmake --build "$PROJECT_DIR/build" -j"$(nproc)" 2>&1)" || {
-        result_fail "Build failed"
-        echo "$BUILD_OUTPUT" | tail -20
-        echo ""
-    }
-
-    if [[ $? -eq 0 || -z "${BUILD_OUTPUT##*Built target*}" ]]; then
+    if BUILD_OUTPUT="$(cmake --build "$PROJECT_DIR/build" -j"$(nproc)" 2>&1)"; then
         # Check for warnings in build output (since -Werror turns them to errors,
         # a successful build means zero warnings, but double-check)
         WARNING_COUNT="$(echo "$BUILD_OUTPUT" | grep -ci "warning:" || true)"
@@ -96,6 +90,10 @@ else
         else
             result_pass "Build succeeded (zero warnings)"
         fi
+    else
+        result_fail "Build failed"
+        echo "$BUILD_OUTPUT" | tail -20
+        echo ""
     fi
 fi
 
@@ -166,7 +164,7 @@ echo ""
 echo -e "${BOLD}[4/5] Include verification${RESET}"
 
 # Get diff between main and current branch
-DIFF_INCLUDES="$(git -C "$PROJECT_DIR" diff main...HEAD 2>/dev/null \
+DIFF_INCLUDES="$(git -C "$PROJECT_DIR" diff main..."$BRANCH" 2>/dev/null \
     | grep -oP '^\+.*#include\s+"([^"]+)"' \
     | grep -oP '"[^"]+"' \
     | tr -d '"' \
@@ -245,7 +243,7 @@ else
     echo -e "  ${CYAN}INFO${RESET}  PR #${PR_NUMBER} found for branch"
 
     # Get actual diff stats
-    DIFF_STAT="$(git -C "$PROJECT_DIR" diff --stat main...HEAD 2>/dev/null || true)"
+    DIFF_STAT="$(git -C "$PROJECT_DIR" diff --stat main..."$BRANCH" 2>/dev/null || true)"
     FILES_CHANGED="$(echo "$DIFF_STAT" | tail -1 | grep -oP '[0-9]+ files? changed' || echo "unknown")"
     INSERTIONS="$(echo "$DIFF_STAT" | tail -1 | grep -oP '[0-9]+ insertions?' || echo "0 insertions")"
     DELETIONS="$(echo "$DIFF_STAT" | tail -1 | grep -oP '[0-9]+ deletions?' || echo "0 deletions")"
@@ -258,7 +256,7 @@ else
     if [[ -n "$PR_BODY" ]]; then
         # Basic sanity: check if PR mentions files that don't exist in the diff
         PR_MENTIONED_FILES="$(echo "$PR_BODY" | grep -oP '[a-zA-Z0-9_/]+\.(cpp|h|md)' | sort -u || true)"
-        DIFF_FILES="$(git -C "$PROJECT_DIR" diff --name-only main...HEAD 2>/dev/null | sort -u || true)"
+        DIFF_FILES="$(git -C "$PROJECT_DIR" diff --name-only main..."$BRANCH" 2>/dev/null | sort -u || true)"
 
         PHANTOM_FILES=()
         while IFS= read -r pf; do

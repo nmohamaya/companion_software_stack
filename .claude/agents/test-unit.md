@@ -15,7 +15,7 @@ You write and maintain unit tests for the drone software stack using the GTest f
 - **Language:** C++17, `-Werror -Wall -Wextra`, clang-format-18
 - **Error handling:** `Result<T,E>` monadic (no exceptions)
 - **Test framework:** Google Test (GTest) — `TEST`, `TEST_F`, `EXPECT_*`, `ASSERT_*`
-- **Test baseline:** See `tests/TESTS.md` for current count (currently 1286)
+- **Test baseline:** See `tests/TESTS.md` for current count
 - **Test runner:** `./tests/run_tests.sh` with module filtering
 
 ## Scope
@@ -140,8 +140,8 @@ EXPECT_EQ(result.value(), expected);
 
 // Test error path
 auto err_result = function(invalid_input);
-ASSERT_TRUE(result.is_err());
-EXPECT_EQ(result.error(), ExpectedError);
+ASSERT_TRUE(err_result.is_err());
+EXPECT_EQ(err_result.error(), ExpectedError);
 ```
 
 ## Test File Inventory
