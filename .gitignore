@@ -52,10 +52,13 @@ drone_logs/
 .DS_Store
 Thumbs.db
 
-# Prompt instructions
+# Prompt instructions (personal, not shared)
 work_instructions.md
-tasks/
-CLAUDE.md
+
+# Agent session data (ephemeral, per-machine)
+tasks/sessions/*.log
+.claude/plans/
+.claude/worktrees/
 
 # Security and license documentation (local-only)
 docs/SECURITY.md

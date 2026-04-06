@@ -144,7 +144,7 @@ if [[ ! -d "$PROJECT_DIR/build" ]]; then
 else
     TEST_OUTPUT="$(ctest --test-dir "$PROJECT_DIR/build" --output-on-failure -j"$(nproc)" 2>&1)" || true
 
-    TESTS_FAILED="$(echo "$TEST_OUTPUT" | grep -oP '[0-9]+ tests? failed' || true)"
+    TESTS_FAILED="$(echo "$TEST_OUTPUT" | grep -oP '[1-9][0-9]* tests? failed' || true)"
     TESTS_PASSED="$(echo "$TEST_OUTPUT" | grep -oP '[0-9]+% tests passed' || true)"
 
     if [[ -n "$TESTS_FAILED" ]]; then
