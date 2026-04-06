@@ -213,10 +213,10 @@ if [[ "$DRY_RUN" == "true" ]]; then
         echo "  6. CP2: Commit approval (commit / back / abort)"
         echo "  7. git push + gh pr create --base ${BASE_BRANCH}"
         echo "  8. CP3: PR preview (create / edit / back / abort)"
-        echo "  9. deploy-review.sh (parallel review agents)"
-        echo "  10. CP4: Review findings (accept / fix / back / reject)"
-        echo "  11. Feature agent fixes P1/P2 findings"
-        echo "  12. CP5: Final push (push / re-review / back / abort)"
+        echo "  9. deploy-review.sh (parallel review + test agents)"
+        echo "  10. CP4: Review & test findings (accept / fix / back / reject)"
+        echo "  11. Feature agent fixes P1/P2 findings → re-runs review + test agents"
+        echo "  12. CP5: Final summary (done / re-review / back / abort)"
         echo "  13. cleanup-branches.sh"
     else
         echo "  3. Launch: start-agent.sh ${ROLE} <issue prompt> (mode: ${MODE_LABEL})"
@@ -752,7 +752,7 @@ Closes #${ISSUE}
 
         # ── REVIEW: Deploy review agents ──────────────────────────────────
         REVIEW)
-            pipeline_header "Deploying Review Agents (deploy-review.sh)"
+            pipeline_header "Deploying Review + Test Agents (deploy-review.sh)"
 
             if [[ -z "$PR_NUMBER" ]]; then
                 echo -e "  ${RED}No PR number — skipping review agents.${RESET}"
@@ -774,7 +774,7 @@ Closes #${ISSUE}
 
         # ── CP4: Review Findings ──────────────────────────────────────────
         CP4)
-            pipeline_header "CHECKPOINT 4/5 — Safety Review Findings"
+            pipeline_header "CHECKPOINT 4/5 — Review & Test Findings"
 
             if [[ -n "$REVIEW_FINDINGS" ]]; then
                 echo "$REVIEW_FINDINGS"
@@ -785,7 +785,7 @@ Closes #${ISSUE}
 
             pipeline_options \
                 "a" "accept as-is — no fixes needed, proceed to final push" \
-                "f" "fix — feed findings to feature agent for fixing" \
+                "f" "fix — feed P1/P2 findings to feature agent, then re-run review + test agents" \
                 "b" "back — return to PR preview (CP3)" \
                 "r" "reject — abort pipeline"
 
@@ -844,7 +844,8 @@ FIXEOF
                 echo -e "  ${YELLOW}WARN${RESET}  Push failed — you may need to push manually"
             fi
 
-            STATE="CP5"
+            # Re-run review + test agents to verify fixes
+            STATE="REVIEW"
             ;;
 
         # ── CP5: Final Push ───────────────────────────────────────────────
@@ -869,7 +870,7 @@ FIXEOF
 
             pipeline_options \
                 "d" "done — finalize and clean up" \
-                "r" "re-review — run review agents again" \
+                "r" "re-review — run review + test agents again" \
                 "b" "back — return to review findings (CP4)" \
                 "a" "abort — exit pipeline"
 

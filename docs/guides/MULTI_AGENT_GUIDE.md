@@ -506,17 +506,20 @@ Issue fetch + label routing (automated)
 │   Options: [c]reate / [e]dit / [b]ack / [a]bort     │
 └─────────────────────┬───────────────────────────────┘
                       ▼
-  deploy-review.sh runs (automated: 2-4 review agents in parallel)
+  deploy-review.sh runs (automated: 2-4 review agents + 1-2 test agents in parallel)
                       │
 ┌─────────────────────▼───────────────────────────────┐
-│ CP4: Safety Review Findings                          │
-│   You see: P1-P4 findings from memory-safety,        │
-│            security, concurrency, fault-recovery      │
+│ CP4: Review & Test Findings                          │
+│   You see: P1-P4 findings from review agents         │
+│            (memory-safety, security, +conditional     │
+│            concurrency, fault-recovery)               │
+│            + test agent results (build, test pass/    │
+│            fail, test count vs baseline, coverage)    │
 │   Options: [a]ccept / [f]ix / [b]ack / [r]eject     │
 └─────────────────────┬───────────────────────────────┘
                       ▼
   Feature agent fixes P1/P2 findings (automated, if [f]ix chosen)
-  Re-validation runs (automated)
+  Re-runs review + test agents to verify fixes (automated)
                       │
 ┌─────────────────────▼───────────────────────────────┐
 │ CP5: Final Summary                                   │
@@ -633,16 +636,28 @@ Issues are routed to agents based on GitHub labels. When multiple domain labels 
 | Direct | `test-coverage` | test-unit |
 | Direct | `cross-domain` | tech-lead |
 
-## Review Routing Reference
+## Review & Test Routing Reference
 
-Reviews are routed based on **diff content**, not labels:
+`deploy-review.sh` launches **review agents** and **test agents** in parallel, routed by diff content:
 
-| Trigger in diff | Reviewers |
-|-----------------|-----------|
-| Any file | memory-safety + security + unit-test |
-| `std::atomic`, `mutex`, `thread`, `lock_guard` | + concurrency |
-| P4/P5/P7 paths, watchdog, fault handling | + fault-recovery |
-| IPC, HAL, Gazebo configs | + scenario-test |
+### Review Agents (safety review — read-only, Opus)
+
+| Trigger in diff | Agents launched |
+|-----------------|----------------|
+| Any file | review-memory-safety + review-security |
+| `std::atomic`, `mutex`, `thread`, `lock_guard` | + review-concurrency |
+| P4/P5/P7 paths, watchdog, fault handling | + review-fault-recovery |
+
+### Test Agents (build + test verification — Sonnet)
+
+| Trigger in diff | Agents launched |
+|-----------------|----------------|
+| Any file | test-unit (build, run all tests, verify count vs baseline) |
+| IPC, HAL, Gazebo configs | + test-scenario (scenario integration tests) |
+
+Review agents analyze the diff for safety issues (P1-P4 severity). Test agents check out the PR branch, build, run tests, and verify test count against the baseline in `tests/TESTS.md`. All agents run in parallel and their output is consolidated into a single PR comment.
+
+After fixes (`[f]ix` at CP4), **both review and test agents re-run automatically** to verify the fixes didn't introduce new issues or break tests.
 
 ## Shared State & Cross-Agent Context
 

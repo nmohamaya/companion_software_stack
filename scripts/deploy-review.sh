@@ -131,18 +131,24 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
-# ── 3. Launch reviewers in parallel ─────────────────────────────────────────
+# ── 3. Launch all agents in parallel ───────────────────────────────────────
 SESSION_LOG_DIR="$PROJECT_DIR/tasks/sessions"
 mkdir -p "$SESSION_LOG_DIR"
 
 TIMESTAMP="$(date +%Y-%m-%d-%H%M)"
+
+# Combined list of all agents (reviewers + testers)
+ALL_AGENTS=("${REVIEWERS[@]}" "${TESTERS[@]}")
 PIDS=()
 LOGS=()
 
 DIFF_FILES="$(echo "$DIFF" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' || true)"
 DIFF_TRUNCATED="$(echo "$DIFF" | head -500 || true)"
 
-REVIEW_PROMPT_TEMPLATE="Review PR #${PR}.
+# Fetch PR branch for test agents to check out
+PR_BRANCH="$(gh pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+
+REVIEW_PROMPT="Review PR #${PR}.
 
 Changed files:
 ${DIFF_FILES}
@@ -152,67 +158,132 @@ ${DIFF_TRUNCATED}
 
 Provide a detailed safety review focused on your domain. Post findings as a structured list with file:line, severity (P1-P4), and fix suggestion."
 
-for reviewer in "${REVIEWERS[@]}"; do
-    LOG_FILE="${SESSION_LOG_DIR}/${TIMESTAMP}-review-pr${PR}-${reviewer}.log"
+TEST_UNIT_PROMPT="Verify PR #${PR} (branch: ${PR_BRANCH}).
+
+Changed files:
+${DIFF_FILES}
+
+Your job:
+1. Check out the PR branch: git checkout ${PR_BRANCH}
+2. Build the project: bash deploy/build.sh
+3. Run all unit tests: ./tests/run_tests.sh
+4. Verify test count matches or exceeds the baseline in tests/TESTS.md: ctest -N --test-dir build | grep 'Total Tests:'
+5. Run tests for modules touched by the diff (look at changed file paths to determine modules)
+6. Check formatting: git diff --name-only | xargs clang-format-18 --dry-run --Werror 2>&1
+
+Report:
+- Build result (pass/fail, any warnings)
+- Test results (total tests, passed, failed, skipped)
+- Test count vs baseline (regression?)
+- Any test failures with details (test name, assertion, output)
+- Module-specific test results for changed modules
+- Formatting issues if any"
+
+TEST_SCENARIO_PROMPT="Verify PR #${PR} (branch: ${PR_BRANCH}) with scenario integration tests.
+
+Changed files:
+${DIFF_FILES}
+
+Your job:
+1. Check out the PR branch: git checkout ${PR_BRANCH}
+2. Build the project: bash deploy/build.sh
+3. Run simulated scenario tests: tests/run_scenario.sh
+4. If the diff touches IPC, HAL, or Gazebo configs, also run: tests/run_scenario_gazebo.sh
+5. Verify scenario configs use full stack coverage (A* planner, 3D obstacle avoider, populated static_obstacles) unless the scenario specifically tests something else
+
+Report:
+- Scenario results (which passed, which failed)
+- Any scenario regressions vs previous runs
+- Config issues (downgraded backends, empty static_obstacles where inappropriate)
+- Stack coverage assessment"
+
+echo -e "${BOLD}Launching ${#ALL_AGENTS[@]} agents in parallel...${RESET}"
+
+for agent in "${ALL_AGENTS[@]}"; do
+    LOG_FILE="${SESSION_LOG_DIR}/${TIMESTAMP}-review-pr${PR}-${agent}.log"
     LOGS+=("$LOG_FILE")
 
-    echo -e "  Launching ${CYAN}${reviewer}${RESET} (log: $(basename "$LOG_FILE"))"
+    echo -e "  Launching ${CYAN}${agent}${RESET} (log: $(basename "$LOG_FILE"))"
 
-    # Resolve model for this reviewer
-    case "$reviewer" in
-        test-unit|test-scenario) _MODEL="claude-sonnet-4-6" ;;
-        ops-github)              _MODEL="claude-haiku-4-5-20251001" ;;
-        *)                       _MODEL="claude-opus-4-6" ;;
+    # Resolve model and prompt for this agent
+    case "$agent" in
+        test-unit)
+            _MODEL="claude-sonnet-4-6"
+            _PROMPT="$TEST_UNIT_PROMPT"
+            ;;
+        test-scenario)
+            _MODEL="claude-sonnet-4-6"
+            _PROMPT="$TEST_SCENARIO_PROMPT"
+            ;;
+        ops-github)
+            _MODEL="claude-haiku-4-5-20251001"
+            _PROMPT="$REVIEW_PROMPT"
+            ;;
+        *)
+            _MODEL="claude-opus-4-6"
+            _PROMPT="$REVIEW_PROMPT"
+            ;;
     esac
 
     (
-        # Review agents are read-only — use acceptEdits permission mode
-        # (they won't edit, but this prevents hanging on permission prompts)
-        claude --model "$_MODEL" --agent "$reviewer" \
+        # Review agents are read-only (acceptEdits prevents permission prompts).
+        # Test agents need acceptEdits to run build/test commands.
+        claude --model "$_MODEL" --agent "$agent" \
             --permission-mode acceptEdits \
-            -p "$REVIEW_PROMPT_TEMPLATE" \
+            -p "$_PROMPT" \
             > "$LOG_FILE" 2>&1
     ) &
     PIDS+=($!)
 done
 
 echo ""
-echo -e "${BOLD}Waiting for all reviewers to complete...${RESET}"
+echo -e "${BOLD}Waiting for all agents to complete...${RESET}"
 
 # Wait for all background processes
 FAILED=0
 for i in "${!PIDS[@]}"; do
     if ! wait "${PIDS[$i]}"; then
-        echo -e "  ${YELLOW}WARN${RESET}  ${REVIEWERS[$i]} exited with non-zero status"
+        echo -e "  ${YELLOW}WARN${RESET}  ${ALL_AGENTS[$i]} exited with non-zero status"
         FAILED=$((FAILED + 1))
     else
-        echo -e "  ${GREEN}DONE${RESET}  ${REVIEWERS[$i]}"
+        echo -e "  ${GREEN}DONE${RESET}  ${ALL_AGENTS[$i]}"
     fi
 done
 
 echo ""
 
-# ── 4. Collect and consolidate review outputs ──────────────────────────────
-echo -e "${BOLD}Consolidating review findings...${RESET}"
+# ── 4. Collect and consolidate outputs ─────────────────────────────────────
+echo -e "${BOLD}Consolidating findings...${RESET}"
 
 CONSOLIDATED="## Automated Safety Review — PR #${PR}
 
-**Reviewers:** ${REVIEWERS[*]}
+**Review agents:** ${REVIEWERS[*]}
+**Test agents:** ${TESTERS[*]}
 **Date:** $(date +%Y-%m-%d)
 
 ---
 "
 
+# Review agent findings
+CONSOLIDATED+="
+# Safety Review Findings
+"
+
 for i in "${!REVIEWERS[@]}"; do
     reviewer="${REVIEWERS[$i]}"
-    log_file="${LOGS[$i]}"
+    # Find the log index in ALL_AGENTS
+    for j in "${!ALL_AGENTS[@]}"; do
+        if [[ "${ALL_AGENTS[$j]}" == "$reviewer" ]]; then
+            log_file="${LOGS[$j]}"
+            break
+        fi
+    done
 
     CONSOLIDATED+="
 ### ${reviewer}
 
 "
     if [[ -f "$log_file" && -s "$log_file" ]]; then
-        # Take last 200 lines (the findings, not the startup boilerplate)
         REVIEW_CONTENT="$(tail -200 "$log_file")"
         CONSOLIDATED+="${REVIEW_CONTENT}
 
@@ -224,8 +295,37 @@ for i in "${!REVIEWERS[@]}"; do
     fi
 done
 
+# Test agent results
+CONSOLIDATED+="
+# Test Verification Results
+"
+
+for tester in "${TESTERS[@]}"; do
+    for j in "${!ALL_AGENTS[@]}"; do
+        if [[ "${ALL_AGENTS[$j]}" == "$tester" ]]; then
+            log_file="${LOGS[$j]}"
+            break
+        fi
+    done
+
+    CONSOLIDATED+="
+### ${tester}
+
+"
+    if [[ -f "$log_file" && -s "$log_file" ]]; then
+        TEST_CONTENT="$(tail -200 "$log_file")"
+        CONSOLIDATED+="${TEST_CONTENT}
+
+"
+    else
+        CONSOLIDATED+="_No output captured._
+
+"
+    fi
+done
+
 CONSOLIDATED+="---
-_Generated by deploy-review.sh_"
+_Generated by deploy-review.sh — ${#REVIEWERS[@]} reviewers + ${#TESTERS[@]} test agents_"
 
 # ── 5. Post consolidated review as PR comment ──────────────────────────────
 echo -e "Posting consolidated review to PR #${PR}..."
@@ -246,5 +346,6 @@ echo ""
 echo -e "${BOLD}Review complete${RESET}"
 echo "  PR:        #${PR}"
 echo "  Reviewers: ${#REVIEWERS[@]}"
+echo "  Testers:   ${#TESTERS[@]}"
 echo "  Failed:    ${FAILED}"
 echo "  Logs:      ${SESSION_LOG_DIR}/${TIMESTAMP}-review-pr${PR}-*.log"
