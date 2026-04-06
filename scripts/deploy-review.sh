@@ -139,8 +139,8 @@ TIMESTAMP="$(date +%Y-%m-%d-%H%M)"
 PIDS=()
 LOGS=()
 
-DIFF_FILES="$(echo "$DIFF" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//')"
-DIFF_TRUNCATED="$(echo "$DIFF" | head -500)"
+DIFF_FILES="$(echo "$DIFF" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' || true)"
+DIFF_TRUNCATED="$(echo "$DIFF" | head -500 || true)"
 
 REVIEW_PROMPT_TEMPLATE="Review PR #${PR}.
 
@@ -158,9 +158,19 @@ for reviewer in "${REVIEWERS[@]}"; do
 
     echo -e "  Launching ${CYAN}${reviewer}${RESET} (log: $(basename "$LOG_FILE"))"
 
+    # Resolve model for this reviewer
+    case "$reviewer" in
+        test-unit|test-scenario) _MODEL="claude-sonnet-4-6" ;;
+        ops-github)              _MODEL="claude-haiku-4-5-20251001" ;;
+        *)                       _MODEL="claude-opus-4-6" ;;
+    esac
+
     (
-        "$PROJECT_DIR/scripts/start-agent.sh" "$reviewer" "$REVIEW_PROMPT_TEMPLATE" \
-            --skip-preflight \
+        # Review agents are read-only — use acceptEdits permission mode
+        # (they won't edit, but this prevents hanging on permission prompts)
+        claude --model "$_MODEL" --agent "$reviewer" \
+            --permission-mode acceptEdits \
+            -p "$REVIEW_PROMPT_TEMPLATE" \
             > "$LOG_FILE" 2>&1
     ) &
     PIDS+=($!)

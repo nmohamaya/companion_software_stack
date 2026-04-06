@@ -200,8 +200,7 @@ team_report() {
             local count
             count=$(grep -ci "$role" "$CHANGELOG" 2>/dev/null || echo 0)
             if [[ "$count" -gt 0 ]]; then
-                echo -e "  %-20s %d entries" "$role" "$count" 2>/dev/null || \
-                    printf "  %-20s %d entries\n" "$role" "$count"
+                printf "  %-20s %d entries\n" "$role" "$count"
             fi
         done
         echo ""

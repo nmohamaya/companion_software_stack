@@ -896,7 +896,7 @@ bash scripts/start-agent.sh feature-perception
 bash scripts/start-agent.sh feature-nav "Implement issue #315: add version fields to IPC structs"
 
 # Dry run (show resolved config without launching)
-bash scripts/start-agent.sh feature-nav --dry-run
+bash scripts/start-agent.sh feature-nav "placeholder task" --dry-run
 
 # Skip pre-flight checks (build/test verification)
 bash scripts/start-agent.sh feature-integration "Fix IPC timeout" --skip-preflight
@@ -919,7 +919,7 @@ bash scripts/deploy-issue.sh 123 --dry-run
 2. Determines the agent role from issue labels using priority-based routing (e.g., `ipc` → `feature-infra-core`, `domain:perception` → `feature-perception`)
 3. Creates a git worktree and feature branch (`feature/issue-XXX-description`)
 4. Updates `tasks/active-work.md` with the assignment
-5. Launches the agent with the issue context
+5. Launches the agent with the issue context (interactive by default, `--auto` for autonomous mode, `--headless` for CI)
 
 ### PR Review Deployment
 
@@ -942,7 +942,10 @@ Full sessions include pre-flight checks, health baselines, agent work, and post-
 
 ```bash
 # Run a full orchestrated session with a task description
-bash scripts/run-session.sh feature-nav "Implement issue #789: VIO health fault escalation"
+bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation for issue #789"
+
+# With issue number for PR cross-referencing
+bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation" --issue 789
 
 # Session logs go to tasks/sessions/
 # Post-session validation runs automatically (validate-session.sh)
@@ -958,26 +961,22 @@ bash scripts/validate-session.sh
 ```
 
 **Checks performed:**
-- **Build verification** — project compiles with zero warnings
+- **Build verification** — project compiles with zero warnings (`-Werror`)
 - **Test count verification** — matches baseline in `tests/TESTS.md`
 - **Test execution verification** — tests actually run and pass
-- **Include verification** — `#include` paths in diff resolve to real files
-- **Diff sanity** — PR body file references exist in the diff or repo
+- **Include verification** — `#include` paths in changed files resolve to real headers
+- **PR sanity** — PR body file references exist in the diff
 
 **Output:** `PASS` / `WARN` / `FAIL` with details for each check.
 
 ### Agent Dashboards
 
 ```bash
-# Team-wide dashboard (default when no args)
-bash scripts/agent-dashboard.sh
-
-# Per-agent dashboard (positional shorthand)
-bash scripts/agent-dashboard.sh feature-perception
-
-# Explicit flag form
-bash scripts/agent-dashboard.sh --agent feature-perception
+# Team-wide dashboard
 bash scripts/agent-dashboard.sh --team
+
+# Per-agent dashboard
+bash scripts/agent-dashboard.sh --agent feature-perception
 
 # Git-based stats (commits, lines, cost estimates)
 bash scripts/agent-stats.sh
@@ -1035,7 +1034,7 @@ bash scripts/cleanup-branches.sh
 bash scripts/cleanup-branches.sh --dry-run
 ```
 
-Removes branches already merged into `main` and their associated worktrees.
+Removes branches already merged into `main` and their associated worktrees. Interactive — prompts for confirmation before deleting.
 
 ---
 

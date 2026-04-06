@@ -22,8 +22,15 @@ labels, creates a worktree, and launches the agent.
 Options:
   --base <branch>   Base branch to branch from (default: main)
                     Use for integration branches: --base integration/epic-263
+  --auto            Agent works autonomously, then writes AGENT_REPORT.md
+                    for you to review. You accept, reject, or request changes.
+  --headless        Non-interactive print mode (for CI with pre-configured perms)
   --dry-run         Print routing decision without executing
   --help, -h        Show this help
+
+Modes:
+  (default)   Interactive — you approve changes and converse in real time
+  --auto      Autonomous — agent works, writes report, you review afterward
 EOF
     exit "${1:-1}"
 }
@@ -39,11 +46,15 @@ done
 # ── Parse arguments ─────────────────────────────────────────────────────────
 ISSUE=""
 DRY_RUN=false
+HEADLESS=false
+AUTO=false
 BASE_BRANCH="main"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run)  DRY_RUN=true; shift ;;
+        --dry-run)   DRY_RUN=true; shift ;;
+        --headless)  HEADLESS=true; shift ;;
+        --auto)      AUTO=true; shift ;;
         --base)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: --base requires a branch name${RESET}" >&2
@@ -233,4 +244,123 @@ Work in this worktree. The branch is '${BRANCH}'.${PR_TARGET_NOTE} Implement the
 # ── Launch agent in the worktree ────────────────────────────────────────────
 echo ""
 cd "$WORKTREE_DIR"
-exec "$PROJECT_DIR/scripts/start-agent.sh" "$ROLE" "$PROMPT" --skip-preflight
+
+if [[ "$AUTO" == "true" ]]; then
+    # Auto mode: agent works autonomously, writes a report, user reviews.
+    REPORT_FILE="$WORKTREE_DIR/AGENT_REPORT.md"
+
+    AUTO_PROMPT="${PROMPT}
+
+IMPORTANT — AUTO MODE INSTRUCTIONS:
+1. Implement the issue fully (code, tests, build verification).
+2. Do NOT create a PR or push — leave changes as local commits.
+3. When done, write AGENT_REPORT.md in the worktree root with this structure:
+
+# Change Report — Issue #${ISSUE}
+
+## Summary
+One paragraph describing what was done.
+
+## Files Changed
+| File | Change | Reason |
+|------|--------|--------|
+
+## Tests Added/Modified
+List of test changes with expected behavior.
+
+## Decisions Made
+Any non-obvious design decisions and why.
+
+## Risks / Review Attention
+Anything the reviewer should look closely at.
+
+## Build & Test Status
+Whether build passed, test count before/after, any failures."
+
+    # Resolve model from role
+    declare -A _ROLE_MODEL=(
+        [tech-lead]="claude-opus-4-6" [feature-perception]="claude-opus-4-6"
+        [feature-nav]="claude-opus-4-6" [feature-integration]="claude-opus-4-6"
+        [feature-infra-core]="claude-opus-4-6" [feature-infra-platform]="claude-opus-4-6"
+        [review-memory-safety]="claude-opus-4-6" [review-concurrency]="claude-opus-4-6"
+        [review-fault-recovery]="claude-opus-4-6" [review-security]="claude-opus-4-6"
+        [test-unit]="claude-sonnet-4-6" [test-scenario]="claude-sonnet-4-6"
+        [ops-github]="claude-haiku-4-5-20251001"
+    )
+    MODEL="${_ROLE_MODEL[$ROLE]:-claude-opus-4-6}"
+
+    echo -e "${CYAN}Auto mode${RESET} — agent working autonomously..."
+    echo -e "  Report: ${REPORT_FILE}"
+    echo ""
+
+    # Phase 1: Agent works autonomously
+    claude --model "$MODEL" --agent "$ROLE" \
+        --permission-mode acceptEdits \
+        -p "$AUTO_PROMPT" || true
+
+    # Phase 2: Show report and enter review loop
+    echo ""
+    echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
+    echo -e "${BOLD}  Agent work complete — review phase${RESET}"
+    echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
+    echo ""
+
+    if [[ -f "$REPORT_FILE" ]]; then
+        cat "$REPORT_FILE"
+    else
+        echo -e "${YELLOW}WARN${RESET}  No AGENT_REPORT.md found — showing git diff instead"
+        git -C "$WORKTREE_DIR" diff --stat HEAD~1 2>/dev/null || \
+            git -C "$WORKTREE_DIR" diff --stat 2>/dev/null || true
+    fi
+
+    echo ""
+    echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
+    echo ""
+
+    # Review loop
+    while true; do
+        echo -e "  ${GREEN}[a]ccept${RESET}  — approve changes, ready for PR"
+        echo -e "  ${YELLOW}[c]hanges${RESET} — request changes (opens interactive session)"
+        echo -e "  ${RED}[r]eject${RESET}  — discard all changes"
+        echo ""
+        read -rp "  Your verdict: " VERDICT
+
+        case "$VERDICT" in
+            a|accept)
+                echo ""
+                echo -e "  ${GREEN}Accepted.${RESET} Changes are committed in: ${WORKTREE_DIR}"
+                echo -e "  Next steps:"
+                echo -e "    cd $WORKTREE_DIR"
+                echo -e "    git push -u origin $BRANCH"
+                echo -e "    gh pr create --base $BASE_BRANCH"
+                exit 0
+                ;;
+            c|changes)
+                echo ""
+                echo -e "  ${CYAN}Opening interactive session${RESET} — tell the agent what to change."
+                echo -e "  The agent has all its previous context.\n"
+                exec claude --model "$MODEL" --agent "$ROLE" --continue
+                ;;
+            r|reject)
+                echo ""
+                read -rp "  This will reset all changes. Are you sure? [y/N] " CONFIRM
+                if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+                    git -C "$WORKTREE_DIR" checkout . 2>/dev/null || true
+                    git -C "$WORKTREE_DIR" clean -fd 2>/dev/null || true
+                    echo -e "  ${RED}Changes discarded.${RESET}"
+                    exit 1
+                fi
+                ;;
+            *)
+                echo -e "  ${RED}Invalid choice.${RESET} Enter a, c, or r."
+                ;;
+        esac
+    done
+
+elif [[ "$HEADLESS" == "true" ]]; then
+    # Headless: non-interactive print mode (no auto-approve — will hang on prompts)
+    exec "$PROJECT_DIR/scripts/start-agent.sh" "$ROLE" "$PROMPT" --skip-preflight
+else
+    # Interactive (default): agent gets issue context, you can approve changes and converse
+    exec "$PROJECT_DIR/scripts/start-agent.sh" "$ROLE" "$PROMPT" --skip-preflight --interactive
+fi

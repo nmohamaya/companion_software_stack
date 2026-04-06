@@ -67,7 +67,8 @@ Usage: $(basename "$0") <role> "task description" [options]
 
 Options:
   --list            Print all available roles and exit
-  --dry-run         Run agent in read-only analysis mode
+  --interactive     Launch interactive session (with task as first message)
+  --dry-run         Print resolved config and exit
   --skip-preflight  Skip pre-flight checks
 
 Roles: ${ALL_ROLES[*]}
@@ -89,15 +90,17 @@ list_roles() {
 # ── Parse arguments ─────────────────────────────────────────────────────────
 DRY_RUN=false
 SKIP_PREFLIGHT=false
+INTERACTIVE=false
 ROLE=""
 TASK=""
 
 for arg in "$@"; do
     case "$arg" in
-        --list)       list_roles ;;
-        --dry-run)    DRY_RUN=true ;;
+        --list)           list_roles ;;
+        --dry-run)        DRY_RUN=true ;;
         --skip-preflight) SKIP_PREFLIGHT=true ;;
-        --help|-h)    usage 0 ;;
+        --interactive)    INTERACTIVE=true ;;
+        --help|-h)        usage 0 ;;
         *)
             if [[ -z "$ROLE" ]]; then
                 ROLE="$arg"
@@ -228,12 +231,14 @@ fi
 
 CMD=(claude --model "$MODEL" --agent "$ROLE")
 
-if [[ -n "$PROMPT" ]]; then
+if [[ "$INTERACTIVE" == "true" && -n "$PROMPT" ]]; then
+    # Interactive with context: pass prompt as positional arg (first message)
+    # Agent opens interactively — user can converse after the initial response
+    CMD+=("$PROMPT")
+elif [[ -n "$PROMPT" ]]; then
     # Non-interactive: pass prompt via -p (print mode)
     CMD+=(-p "$PROMPT")
-else
-    # Interactive: open a session with the agent's role context
-    true  # no extra flags needed
 fi
+# No prompt + no flags = fully interactive session (no initial message)
 
 exec "${CMD[@]}"

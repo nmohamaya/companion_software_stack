@@ -144,8 +144,11 @@ Each agent has a defined scope of files it may edit. Review agents are **read-on
 The simplest way to use the pipeline — point it at an issue and it handles the rest:
 
 ```bash
-# Route issue #123 to the right agent automatically
+# Interactive (default) — you approve changes and converse in real time
 bash scripts/deploy-issue.sh 123
+
+# Auto mode — agent works autonomously, you review a report afterward
+bash scripts/deploy-issue.sh 123 --auto
 
 # Preview routing without executing
 bash scripts/deploy-issue.sh 123 --dry-run
@@ -154,12 +157,25 @@ bash scripts/deploy-issue.sh 123 --dry-run
 bash scripts/deploy-issue.sh 123 --base integration/epic-XXX
 ```
 
-**What happens:**
+#### Launch Modes
+
+| Mode | Flag | Permissions | You do... |
+|------|------|-------------|-----------|
+| **Interactive** | *(default)* | You approve each change | Converse with the agent in real time |
+| **Auto** | `--auto` | File edits auto-approved | Review `AGENT_REPORT.md` after, then accept/change/reject |
+| **Headless** | `--headless` | None (for CI sandboxes) | Pre-configure permissions externally |
+
+**What happens (all modes):**
 1. Fetches the issue from GitHub (title, body, labels)
 2. Routes to an agent based on labels (priority-based: specific labels beat broad ones)
 3. Creates a git worktree + branch
 4. Updates `tasks/active-work.md`
 5. Launches the agent with the issue context as its prompt
+
+**Auto mode additionally:**
+6. Agent commits locally but does NOT push or create a PR
+7. Agent writes `AGENT_REPORT.md` with a structured change report
+8. You review the report and choose: **accept**, **request changes**, or **reject**
 
 ### 2. Launch a Review on a PR
 
@@ -174,7 +190,176 @@ bash scripts/deploy-review.sh 456 --dry-run
 bash scripts/deploy-review.sh 456 --all
 ```
 
-### 3. Run a Full Orchestrated Session
+Review agents launch in parallel and post a consolidated comment on the PR when done. Monitor progress in a separate terminal:
+
+```bash
+# Watch log sizes grow (see which agents are still working)
+watch -n 5 'wc -l tasks/sessions/*-review-pr456-*.log'
+
+# Tail a specific reviewer's output in real time
+tail -f tasks/sessions/*-review-pr456-review-memory-safety.log
+```
+
+### 3. Manual Mode — Step-by-Step Walkthrough
+
+This is the most hands-on workflow. You control every step, running each script individually. Best for learning the pipeline or when you want full visibility.
+
+> **Note on paths:** When working inside a worktree (`.claude/worktrees/issue-N/`),
+> scripts live in the main repo, not the worktree. Set `REPO_ROOT` to the main repo path:
+> ```bash
+> export REPO_ROOT=/path/to/companion_software_stack
+> ```
+> All script commands below use `$REPO_ROOT/scripts/...` to work from any directory.
+
+#### Step 1: Deploy the feature agent interactively
+
+```bash
+# Preview routing first
+bash scripts/deploy-issue.sh 315 --base integration/epic-357 --dry-run
+
+# Launch — you'll approve changes and converse with the agent
+bash scripts/deploy-issue.sh 315 --base integration/epic-357
+```
+
+The agent opens an interactive session. You guide the work, approve edits, and the agent commits when you're satisfied.
+
+#### Step 2: Validate the agent's work (hallucination detection)
+
+```bash
+bash scripts/validate-session.sh
+```
+
+Review the output — it checks build, test count, test execution, `#include` paths, and PR body references. Fix any issues before proceeding.
+
+#### Step 3: Push and create the PR
+
+```bash
+cd .claude/worktrees/issue-315
+git push -u origin <branch-name>
+gh pr create --base integration/epic-357
+```
+
+#### Step 4: Deploy review agents on the PR
+
+```bash
+# Back in the main repo directory
+bash scripts/deploy-review.sh <pr-number>
+```
+
+This launches review agents in parallel (memory-safety, security, + conditional concurrency/fault-recovery based on diff content). Monitor them:
+
+```bash
+# In a separate terminal — watch progress
+watch -n 5 'wc -l tasks/sessions/*-review-pr<number>-*.log'
+
+# Peek at a specific reviewer
+tail -f tasks/sessions/*-review-pr<number>-review-memory-safety.log
+```
+
+When complete, a consolidated review is posted as a PR comment.
+
+#### Step 5: Review the findings
+
+The consolidated review is posted as a PR comment with findings grouped by reviewer and severity:
+
+| Severity | Meaning | Action |
+|----------|---------|--------|
+| **P1** | Critical / blocks merge | Fix immediately |
+| **P2** | Memory, perf, should fix | Fix before merge |
+| **P3** | Code quality | Fix or document why not — follow-up OK |
+| **P4** | Tests, docs, nice-to-have | Fix if time permits |
+
+Read the PR comment on GitHub or fetch it locally:
+
+```bash
+# View the review comment
+gh pr view <pr-number> --comments
+```
+
+#### Step 6: Feed review findings to the feature agent
+
+Open an interactive session in the worktree with the **same feature agent** that did the original work — it has the most context for fixing issues.
+
+```bash
+cd .claude/worktrees/issue-<NUMBER>
+bash "$REPO_ROOT/scripts/start-agent.sh" <agent-role>
+```
+
+Then paste a structured prompt listing each finding with severity, location, and the fix. Be specific — the more detail you give, the better the fixes:
+
+```
+The review agents found these issues on PR #<NUMBER>. Fix all P1 and P2 findings:
+
+P1 (must fix):
+1. <finding> — <specific fix instruction with file:line if available>
+2. <finding> — <specific fix instruction>
+
+P2 (should fix):
+1. <finding> — <specific fix instruction>
+2. <finding> — <specific fix instruction>
+
+P3 (follow-up OK — file as separate issues if not fixing now):
+1. <finding>
+```
+
+**Tips for writing the fix prompt:**
+- Copy the fix suggestions directly from the review comment — reviewers give specific code snippets
+- Include file paths and line numbers when the review provides them
+- Group by severity so the agent prioritizes correctly
+- Tell the agent explicitly which severities to fix now vs defer
+
+The agent applies the fixes. You approve each change interactively.
+
+**Example** (from a real review of IPC version fields):
+
+```
+The review agents found these issues on PR #361. Fix all P1 and P2 findings:
+
+P1 (must fix):
+1. validate() never checks version field — add `if (version != CURRENT_VERSION)
+   return false;` as first line of every validate() method in ipc_types.h
+2. FaultOverrides has no validate() method — add one that checks version and
+   sentinel-range validity
+3. IpcWaypoint aggregate inits in 5+ files NOT updated — silent coordinate
+   corruption in process4_mission_planner/src/main.cpp,
+   tests/test_fault_response_executor.cpp, tests/test_mission_state_tick.cpp,
+   tests/test_mission_fsm.cpp, tests/test_collision_recovery.cpp
+4. wire_deserialize accepts version-mismatched payloads — check
+   out.version == T::CURRENT_VERSION after deserialization
+
+P2 (should fix):
+1. Add default member initializers (= 0, = {}, = false) to ALL fields in all
+   IPC structs
+2. Add _pad0 to FaultOverrides for consistency
+3. Add missing static_assert(sizeof(...)) for SystemHealth, ThreadHealth,
+   ProcessHealthEntry, ThreadHealthEntry, FaultOverrides, RadarDetection
+4. Add version mismatch rejection tests for each struct
+5. Add std::isfinite() checks for GCSCommand::validate() param1/param2/param3
+```
+
+#### Step 7: Re-validate and push fixes
+
+```bash
+bash "$REPO_ROOT/scripts/validate-session.sh"
+git push
+```
+
+Optionally re-run reviews on the updated PR to verify all findings are addressed:
+
+```bash
+bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+```
+
+#### Step 8: Merge in GitHub UI
+
+Review the PR one final time in GitHub, then merge. After merge:
+
+```bash
+# Cleanup worktree and branches
+bash scripts/cleanup-branches.sh
+```
+
+### 4. Orchestrated Session
 
 For more control, use the session orchestrator which adds pre/post validation:
 
@@ -183,7 +368,7 @@ For more control, use the session orchestrator which adds pre/post validation:
 bash scripts/run-session.sh feature-nav "Implement A* path planner" --issue 789
 ```
 
-### 4. Launch an Agent Directly
+### 5. Launch an Agent Directly
 
 For ad-hoc work or interactive sessions:
 
@@ -201,7 +386,7 @@ bash scripts/start-agent.sh feature-nav
 bash scripts/start-agent.sh feature-integration "test" --dry-run
 ```
 
-### 5. Validate a Session
+### 6. Validate a Session
 
 After an agent completes work, verify nothing was hallucinated:
 
@@ -215,7 +400,49 @@ bash scripts/validate-session.sh --branch feature/issue-123-foo
 
 Checks: build succeeds, test count matches baseline, all tests pass, `#include` paths exist, PR body references real files.
 
-### 6. View Dashboards and Stats
+### 7. After the Agent Finishes — Post-Agent Checklist
+
+Once the agent completes its work (interactive or auto mode), changes are **local commits in the worktree** — nothing is pushed. Follow these steps:
+
+```bash
+# 1. Go to the worktree
+cd .claude/worktrees/issue-<NUMBER>
+
+# 2. Review what the agent did
+git log --oneline <base-branch>..HEAD        # commits
+git diff --stat <base-branch>..HEAD          # files changed
+
+# 3. Validate (hallucination detection — checks build, tests, includes)
+bash "$REPO_ROOT/scripts/validate-session.sh"
+
+# 4. Push and create PR
+git push -u origin <branch-name>
+gh pr create --base <base-branch>            # main or integration/epic-XXX
+
+# 5. Deploy review agents on the PR
+bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+
+# 6. Address review comments, then merge the PR
+```
+
+**If using an integration branch** (multi-issue epic), there are additional steps after all sub-issues are merged:
+
+```bash
+# 7. Create final PR from integration branch to main
+gh pr create --base main --head integration/epic-XXX \
+  --title "feat(#XXX): Epic description"
+
+# 8. After merge, cleanup
+git branch -d integration/epic-XXX
+git push origin --delete integration/epic-XXX
+bash "$REPO_ROOT/scripts/cleanup-branches.sh"
+```
+
+**Quick reference for `<base-branch>`:**
+- Single issue targeting main: `main`
+- Sub-issue targeting an epic: `integration/epic-XXX`
+
+### 8. View Dashboards and Stats
 
 ```bash
 # Team-wide dashboard
@@ -228,7 +455,7 @@ bash scripts/agent-dashboard.sh feature-perception
 bash scripts/agent-stats.sh
 ```
 
-### 7. Cleanup
+### 9. Cleanup
 
 ```bash
 # Remove stale branches and worktrees
@@ -329,6 +556,220 @@ bash scripts/start-agent.sh feature-integration
 
 # You can now have a conversation with the agent about P5/P6/P7 code
 ```
+
+### Example 4: Auto Mode — Full Walkthrough
+
+This example walks through the complete `--auto` workflow for issue #315 (add version fields to IPC structs), targeting an integration branch.
+
+#### Step 1: Create the integration branch (one-time per epic)
+
+```bash
+git branch integration/epic-357 main
+git push -u origin integration/epic-357
+```
+
+#### Step 2: Ensure the issue has labels
+
+```bash
+$ gh issue view 315 --json labels --jq '.labels[].name'
+ipc
+platform
+```
+
+Good — `ipc` (priority 3) will route to `feature-infra-core`.
+
+#### Step 3: Preview routing
+
+```bash
+$ bash scripts/deploy-issue.sh 315 --base integration/epic-357 --dry-run
+
+Fetching issue #315...
+  Title:  feat(#300-C1): Add version fields to all IPC structs
+  Labels: ipc
+platform
+
+Routing decision
+  Issue:  #315 — feat(#300-C1): Add version fields to all IPC structs
+  Role:   feature-infra-core
+  Base:   integration/epic-357
+  Branch: feature/issue-315-feat300-c1-add-version-fields-to-all-ipc
+
+DRY RUN — would perform:
+  1. git worktree add .claude/worktrees/issue-315 -b feature/issue-315-... integration/epic-357
+  2. Update tasks/active-work.md
+  3. Launch: start-agent.sh feature-infra-core <issue prompt>
+```
+
+#### Step 4: Launch in auto mode
+
+```bash
+$ bash scripts/deploy-issue.sh 315 --base integration/epic-357 --auto
+
+Fetching issue #315...
+  Title:  feat(#300-C1): Add version fields to all IPC structs
+  Labels: ipc
+platform
+
+Routing decision
+  Issue:  #315 — feat(#300-C1): Add version fields to all IPC structs
+  Role:   feature-infra-core
+  Base:   integration/epic-357
+  Branch: feature/issue-315-feat300-c1-add-version-fields-to-all-ipc
+
+Creating worktree...
+  DONE  Worktree: .claude/worktrees/issue-315
+  DONE  Updated tasks/active-work.md
+
+Auto mode — agent working autonomously...
+  Report: .claude/worktrees/issue-315/AGENT_REPORT.md
+
+# ... agent works for several minutes ...
+```
+
+#### Step 5: Review the report
+
+When the agent finishes, the report is displayed automatically:
+
+```
+═══════════════════════════════════════════════════════
+  Agent work complete — review phase
+═══════════════════════════════════════════════════════
+
+# Change Report — Issue #315
+
+## Summary
+Added `uint16_t version` field to all 12 IPC structs in ipc_types.h with
+default value 1. Updated serialization, added version validation on
+deserialization, and added 24 new unit tests.
+
+## Files Changed
+| File                          | Change   | Reason                          |
+|-------------------------------|----------|---------------------------------|
+| common/ipc/include/ipc_types.h | Modified | Added version field to structs |
+| common/ipc/src/message_bus.cpp  | Modified | Version validation on receive  |
+| tests/test_ipc_versioning.cpp   | Created  | 24 new tests for versioning    |
+
+## Tests Added/Modified
+- test_ipc_versioning.cpp: version field defaults, wire format, mismatch handling
+
+## Decisions Made
+- Used uint16_t (not uint8_t) to allow >255 versions over project lifetime
+- Version mismatch logs a warning but doesn't reject — forward compatibility
+
+## Risks / Review Attention
+- Wire format changed — existing recorded data won't deserialize without migration
+- static_assert(is_trivially_copyable) still passes for all structs
+
+## Build & Test Status
+Build: PASS (zero warnings)
+Tests: 1259 → 1283 (24 added, 0 failures)
+
+═══════════════════════════════════════════════════════
+
+  [a]ccept  — approve changes, ready for PR
+  [c]hanges — request changes (opens interactive session)
+  [r]eject  — discard all changes
+
+  Your verdict: _
+```
+
+#### Step 6a: Accept
+
+```
+  Your verdict: a
+
+  Accepted. Changes are committed in: .claude/worktrees/issue-315
+  Next steps:
+    cd .claude/worktrees/issue-315
+    git push -u origin feature/issue-315-feat300-c1-add-version-fields-to-all-ipc
+    gh pr create --base integration/epic-357
+```
+
+#### Step 6b: Request changes
+
+```
+  Your verdict: c
+
+  Opening interactive session — tell the agent what to change.
+  The agent has all its previous context.
+
+> Use uint8_t instead of uint16_t for the version field, and add a
+> migration helper for old recorded data.
+```
+
+The agent picks up its previous context (`--continue`) and applies your feedback. When done, you review again.
+
+#### Step 6c: Reject
+
+```
+  Your verdict: r
+
+  This will reset all changes. Are you sure? [y/N] y
+  Changes discarded.
+```
+
+All changes in the worktree are reverted.
+
+#### Step 7: Validate, push, and deploy reviewers
+
+After accepting (step 6a), validate and create the PR:
+
+```bash
+cd .claude/worktrees/issue-315
+
+# Validate — check for hallucinations
+bash "$REPO_ROOT/scripts/validate-session.sh"
+
+# Push and create PR
+git push -u origin feature/issue-315-feat300-c1-add-version-fields-to-all-ipc
+gh pr create --base integration/epic-357
+
+# Deploy review agents — they run in parallel
+bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+```
+
+Monitor review progress in a separate terminal:
+
+```bash
+watch -n 5 'wc -l tasks/sessions/*-review-pr<number>-*.log'
+```
+
+#### Step 8: Review findings and feed back to the feature agent
+
+The review agents post a consolidated comment on the PR. Read it:
+
+```bash
+gh pr view <pr-number> --comments
+```
+
+Each finding has a severity (P1-P4). For P1/P2 findings, open an interactive session
+with the **same feature agent** that did the original work — it has the best context:
+
+```bash
+cd .claude/worktrees/issue-315
+bash "$REPO_ROOT/scripts/start-agent.sh" feature-infra-core
+```
+
+Paste a structured prompt with each finding, severity, and specific fix instructions
+(see [Manual Mode Step 6](#step-6-feed-review-findings-to-the-feature-agent) for the
+full prompt template and a real-world example).
+
+The agent applies fixes. You approve each change. Then re-validate and push:
+
+```bash
+bash "$REPO_ROOT/scripts/validate-session.sh"
+git push
+```
+
+Optionally re-run reviewers to verify fixes:
+
+```bash
+bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+```
+
+#### Step 9: Merge in GitHub UI
+
+Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 ## Limitations
 
