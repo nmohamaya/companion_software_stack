@@ -72,7 +72,7 @@ public:
             while (start < key.size()) {
                 size_t      dot  = key.find('.', start);
                 std::string part = key.substr(start, dot - start);
-                if (!node->contains(part)) return default_val;
+                if (!node->is_object() || !node->contains(part)) return default_val;
                 node = &(*node)[part];
                 if (dot == std::string::npos) break;
                 start = dot + 1;
@@ -93,7 +93,7 @@ public:
             while (start < key.size()) {
                 size_t      dot  = key.find('.', start);
                 std::string part = key.substr(start, dot - start);
-                if (!node->contains(part)) {
+                if (!node->is_object() || !node->contains(part)) {
                     return util::Result<T>::err(
                         util::Error(util::ErrorCode::MissingKey, "Missing config key: " + key));
                 }
@@ -119,7 +119,7 @@ public:
         while (start < key.size()) {
             size_t      dot  = key.find('.', start);
             std::string part = key.substr(start, dot - start);
-            if (!node->contains(part)) return false;
+            if (!node->is_object() || !node->contains(part)) return false;
             node = &(*node)[part];
             if (dot == std::string::npos) break;
             start = dot + 1;
@@ -135,7 +135,7 @@ public:
             while (start < key.size()) {
                 size_t      dot  = key.find('.', start);
                 std::string part = key.substr(start, dot - start);
-                if (!node->contains(part)) return nlohmann::json::object();
+                if (!node->is_object() || !node->contains(part)) return nlohmann::json::object();
                 node = &(*node)[part];
                 if (dot == std::string::npos) break;
                 start = dot + 1;

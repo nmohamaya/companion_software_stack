@@ -9,6 +9,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_validator.h"
 #include "util/diagnostic.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
@@ -224,6 +225,11 @@ int main(int argc, char* argv[]) {
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
         spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+    } else {
+        if (int rc = drone::util::validate_or_exit(cfg, drone::util::video_capture_schema());
+            rc != 0) {
+            return rc;
+        }
     }
 
     spdlog::info("=== Video Capture process starting (PID {}) ===", getpid());

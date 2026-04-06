@@ -344,8 +344,8 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
-            // DEBUG(#237): Full diagnostic every 10 ticks (~1s at 10Hz)
-            if (debug_tick_++ % 10 == 0) {
+            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by spdlog runtime level
+            if (spdlog::should_log(spdlog::level::debug) && debug_tick_++ % 10 == 0) {
                 const float dpx        = static_cast<float>(pose.translation[0]);
                 const float dpy        = static_cast<float>(pose.translation[1]);
                 const float dpz        = static_cast<float>(pose.translation[2]);
@@ -361,14 +361,14 @@ private:
                 int         stat = base ? static_cast<int>(base->grid().static_count()) : -1;
                 int         prom = base ? base->grid().promoted_count() : -1;
                 bool        fb   = grid_planner && grid_planner->using_direct_fallback();
-                spdlog::info("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
-                             " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
-                             " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
-                             " grid: occ={} static={} promoted={} fallback={}",
-                             dpx, dpy, dpz, fsm.current_wp_index() + 1, fsm.total_waypoints(),
-                             wp->x, wp->y, wp->z, dist_to_wp, planned.velocity_x,
-                             planned.velocity_y, planned.velocity_z, traj.velocity_x,
-                             traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb);
+                spdlog::debug("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
+                              " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
+                              " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
+                              " grid: occ={} static={} promoted={} fallback={}",
+                              dpx, dpy, dpz, fsm.current_wp_index() + 1, fsm.total_waypoints(),
+                              wp->x, wp->y, wp->z, dist_to_wp, planned.velocity_x,
+                              planned.velocity_y, planned.velocity_z, traj.velocity_x,
+                              traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb);
             }
 
             traj_pub.publish(traj);

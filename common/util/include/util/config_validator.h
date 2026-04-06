@@ -42,7 +42,7 @@ inline const nlohmann::json* walk_key(const nlohmann::json& root, const std::str
     while (start < key.size()) {
         size_t      dot  = key.find('.', start);
         std::string part = key.substr(start, dot - start);
-        if (!node->contains(part)) return nullptr;
+        if (!node->is_object() || !node->contains(part)) return nullptr;
         node = &(*node)[part];
         if (dot == std::string::npos) break;
         start = dot + 1;
@@ -357,6 +357,27 @@ inline ConfigSchema system_monitor_schema() {
     s.optional<double>("system_monitor.thresholds.battery_warn_percent").range(0.0, 100.0);
     s.optional<double>("system_monitor.thresholds.battery_crit_percent").range(0.0, 100.0);
     return s;
+}
+
+// ── validate_or_exit() — validate and log errors ───────────
+// Returns 0 on success, 1 on validation failure (logs errors via spdlog).
+// Catches exceptions from malformed configs (defense-in-depth).
+inline int validate_or_exit(const Config& cfg, const ConfigSchema& schema) {
+    try {
+        auto validation = validate(cfg, schema);
+        if (!validation.is_ok()) {
+            for (const auto& err : validation.error()) {
+                spdlog::error("[Config] {}", err);
+            }
+            spdlog::error("Config validation failed — exiting");
+            return 1;
+        }
+    } catch (const std::exception& ex) {
+        spdlog::error("Config validation error: {}", ex.what());
+        spdlog::error("Config validation failed — exiting");
+        return 1;
+    }
+    return 0;
 }
 
 }  // namespace drone::util
