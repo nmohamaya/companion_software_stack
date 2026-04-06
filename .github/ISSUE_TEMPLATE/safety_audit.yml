@@ -1,0 +1,44 @@
+name: Safety Audit
+description: Request a safety review of a subsystem or change
+labels: ["safety", "audit"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Safety audits are reviewed by memory-safety, concurrency, and fault-recovery agents.
+        Use this for proactive safety reviews, not bug reports.
+
+  - type: dropdown
+    id: audit_type
+    attributes:
+      label: Audit Type
+      options:
+        - Memory safety (RAII, ownership, lifetimes)
+        - Concurrency (races, deadlocks, atomics)
+        - Fault recovery (watchdog, degradation, restart)
+        - Full safety review (all of the above)
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which files, modules, or code paths to audit?
+      placeholder: |
+        **Files:** common/hal/src/mavlink_fc_link.cpp
+        **Code paths:** FC state update → mission planner read
+    validations:
+      required: true
+
+  - type: textarea
+    id: concern
+    attributes:
+      label: Specific Concerns
+      description: Any known risks or areas of uncertainty?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why is this audit needed now? (new code, incident, pre-release, etc.)

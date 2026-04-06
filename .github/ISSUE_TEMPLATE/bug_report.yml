@@ -1,0 +1,93 @@
+name: Bug Report
+description: Report a bug in the companion software stack
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Please fill in the details below.
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      description: Which subsystem is affected?
+      options:
+        - P1 Video Capture
+        - P2 Perception
+        - P3 SLAM/VIO/Nav
+        - P4 Mission Planner
+        - P5 Comms
+        - P6 Payload Manager
+        - P7 System Monitor
+        - IPC / MessageBus
+        - HAL
+        - Config
+        - Build / CMake
+        - CI / Deploy
+        - Tests
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "Critical: Loss of vehicle / safety violation"
+        - "High: Feature broken, no workaround"
+        - "Medium: Feature degraded, workaround exists"
+        - "Low: Cosmetic or minor inconvenience"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+      placeholder: |
+        **What happened:**
+
+        **Expected behavior:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug
+      placeholder: |
+        1. Configure with...
+        2. Launch with...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: HAL Backend
+      description: Which backend was active?
+      options:
+        - Simulated
+        - Gazebo SITL
+        - Real hardware (Jetson Orin)
+        - N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste relevant log output, stack traces, or error messages
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Config changes, environment details, related issues

@@ -1,0 +1,66 @@
+name: Refactor
+description: Propose a code refactoring or cleanup
+labels: ["refactor"]
+body:
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      options:
+        - P1 Video Capture
+        - P2 Perception
+        - P3 SLAM/VIO/Nav
+        - P4 Mission Planner
+        - P5 Comms
+        - P6 Payload Manager
+        - P7 System Monitor
+        - IPC / MessageBus
+        - HAL
+        - Common utilities
+        - Config
+        - Build / CMake
+        - Cross-domain
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs refactoring and why?
+      placeholder: |
+        **Current state:** ...
+        **Problem:** ...
+        **Proposed refactoring:** ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Files Affected
+      description: List the files that will change
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety Considerations
+      options:
+        - label: "Changes affect flight-critical code paths"
+        - label: "Changes affect IPC message types or topics"
+        - label: "Changes affect HAL interfaces"
+        - label: "Changes affect concurrency patterns"
+        - label: "None of the above"
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      placeholder: |
+        - [ ] All existing tests pass
+        - [ ] No behavioral changes (pure refactor)
+        - [ ] ...
+    validations:
+      required: true

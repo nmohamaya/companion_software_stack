@@ -1,0 +1,59 @@
+# Auto-review workflow — launches AI review agents on PRs.
+# DISABLED by default. Enable by changing `if: false` to `if: true`
+# after multi-agent pipeline is tested and validated.
+
+name: Auto Review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+jobs:
+  route-reviewers:
+    if: false  # DISABLED — enable after multi-agent pipeline validation
+    runs-on: ubuntu-24.04
+    name: route-reviewers
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Determine reviewers
+      id: route
+      run: |
+        DIFF=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+        DIFF_CONTENT=$(git diff "origin/${{ github.base_ref }}...HEAD")
+
+        # Always triggered
+        REVIEWERS="memory-safety,security"
+        TESTS="unit"
+
+        # Concurrency review: atomics, mutexes, threads
+        if echo "$DIFF_CONTENT" | grep -qE 'std::atomic|std::mutex|std::thread|lock_guard|unique_lock'; then
+          REVIEWERS="${REVIEWERS},concurrency"
+        fi
+
+        # Fault recovery review: P4/P5/P7, watchdog, fault handling
+        if echo "$DIFF" | grep -qE 'process[457]|watchdog|fault|restart_policy'; then
+          REVIEWERS="${REVIEWERS},fault-recovery"
+        fi
+
+        # Scenario tests: IPC, HAL, Gazebo
+        if echo "$DIFF" | grep -qE 'common/ipc|common/hal|config/scenarios|gazebo'; then
+          TESTS="${TESTS},scenario"
+        fi
+
+        echo "reviewers=${REVIEWERS}" >> "$GITHUB_OUTPUT"
+        echo "tests=${TESTS}" >> "$GITHUB_OUTPUT"
+        echo "Routed reviewers: ${REVIEWERS}"
+        echo "Routed tests: ${TESTS}"
+
+    - name: Launch review agents
+      run: |
+        echo "Would launch review agents: ${{ steps.route.outputs.reviewers }}"
+        echo "Would launch test agents: ${{ steps.route.outputs.tests }}"
+        echo ""
+        echo "To enable: set 'if: false' to 'if: true' in this workflow"
+        echo "Then configure scripts/deploy-review.sh with CI credentials"

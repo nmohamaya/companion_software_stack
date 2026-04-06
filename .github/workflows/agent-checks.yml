@@ -1,0 +1,111 @@
+name: Agent Checks
+
+on:
+  pull_request:
+    branches: [main, 'integration/**']
+
+jobs:
+  # ── Agent boundary enforcement (warning-only) ──────────────────
+  agent-boundaries:
+    runs-on: ubuntu-24.04
+    name: agent-boundaries
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check agent boundaries
+      run: |
+        BRANCH="${{ github.head_ref }}"
+        echo "Branch: ${BRANCH}"
+
+        # Extract agent role from branch name pattern: role/issue-XX-desc
+        # Map branch prefixes to expected scopes
+        declare -A SCOPE_MAP
+        SCOPE_MAP[feature/perception]="process1_video_capture process2_perception"
+        SCOPE_MAP[feature/nav]="process3_slam_vio_nav process4_mission_planner"
+        SCOPE_MAP[feature/integration]="process5_comms process6_payload_manager process7_system_monitor common/ipc common/hal"
+        SCOPE_MAP[feature/infra-core]="common/util common/recorder CMakeLists.txt config/default.json config/base.json"
+        SCOPE_MAP[feature/infra-platform]="deploy scripts .github boards config/customers"
+
+        # Find matching scope
+        MATCHED_SCOPE=""
+        for prefix in "${!SCOPE_MAP[@]}"; do
+          if [[ "$BRANCH" == ${prefix}* ]]; then
+            MATCHED_SCOPE="${SCOPE_MAP[$prefix]}"
+            echo "Matched scope for prefix '${prefix}': ${MATCHED_SCOPE}"
+            break
+          fi
+        done
+
+        if [[ -z "$MATCHED_SCOPE" ]]; then
+          echo "No agent scope constraint for branch '${BRANCH}' — skipping"
+          exit 0
+        fi
+
+        # Get changed files
+        CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" || true)
+        if [[ -z "$CHANGED" ]]; then
+          echo "No changed files detected"
+          exit 0
+        fi
+
+        # Check each changed file against allowed scopes
+        VIOLATIONS=""
+        while IFS= read -r file; do
+          IN_SCOPE=false
+          for scope_dir in $MATCHED_SCOPE; do
+            if [[ "$file" == ${scope_dir}* ]] || [[ "$file" == "tests/"* ]]; then
+              IN_SCOPE=true
+              break
+            fi
+          done
+          if [[ "$IN_SCOPE" == false ]]; then
+            VIOLATIONS="${VIOLATIONS}  ⚠ ${file}\n"
+          fi
+        done <<< "$CHANGED"
+
+        if [[ -n "$VIOLATIONS" ]]; then
+          echo "::warning::Agent boundary violations detected (advisory only):"
+          echo -e "$VIOLATIONS"
+          echo ""
+          echo "These files are outside the expected scope for branch '${BRANCH}'."
+          echo "This is a warning — the check will not fail."
+        else
+          echo "All changed files are within expected agent scope."
+        fi
+
+  # ── PR size check ──────────────────────────────────────────────
+  pr-size:
+    runs-on: ubuntu-24.04
+    name: pr-size
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check PR size
+      run: |
+        # Count lines changed (additions + deletions), excluding auto-generated
+        STATS=$(git diff --stat "origin/${{ github.base_ref }}...HEAD" -- \
+          ':!*.lock' ':!*.json' ':!*.generated.*' ':!coverage-report/*' | tail -1)
+
+        # Extract total insertions and deletions
+        INSERTIONS=$(echo "$STATS" | grep -oP '\d+(?= insertion)' || echo 0)
+        DELETIONS=$(echo "$STATS" | grep -oP '\d+(?= deletion)' || echo 0)
+        TOTAL=$((INSERTIONS + DELETIONS))
+
+        echo "PR size: +${INSERTIONS} -${DELETIONS} = ${TOTAL} lines changed"
+
+        if [ "$TOTAL" -gt 1500 ]; then
+          echo "::error::PR is too large (${TOTAL} lines). Maximum is 1500. Please split into smaller PRs."
+          exit 1
+        elif [ "$TOTAL" -gt 800 ]; then
+          echo "::warning::PR is large (${TOTAL} lines). Consider splitting into smaller PRs (<400 lines recommended)."
+        elif [ "$TOTAL" -gt 400 ]; then
+          echo "::notice::PR has ${TOTAL} lines changed. Target is <400 lines per PR."
+        else
+          echo "PR size is good (${TOTAL} lines)."
+        fi

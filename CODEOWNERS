@@ -1,0 +1,47 @@
+# CODEOWNERS — maps directories to responsible agents/reviewers.
+# GitHub uses this to auto-assign PR reviewers.
+#
+# Format: <pattern> <owner1> [<owner2> ...]
+# Owners can be GitHub usernames or team slugs (@org/team).
+#
+# Agent role mapping (for reference — actual GitHub users TBD):
+#   feature-perception    → P1/P2 code
+#   feature-nav           → P3/P4 code
+#   feature-integration   → P5/P6/P7 + IPC + HAL
+#   feature-infra-core    → common libs, CMake, config
+#   feature-infra-platform → deploy, CI, boards
+
+# ── Process code ──────────────────────────────────────────────────
+/process1_video_capture/   @nmohamaya
+/process2_perception/      @nmohamaya
+/process3_slam_vio_nav/    @nmohamaya
+/process4_mission_planner/ @nmohamaya
+/process5_comms/           @nmohamaya
+/process6_payload_manager/ @nmohamaya
+/process7_system_monitor/  @nmohamaya
+
+# ── Common libraries ─────────────────────────────────────────────
+/common/ipc/               @nmohamaya
+/common/hal/               @nmohamaya
+/common/util/              @nmohamaya
+/common/recorder/          @nmohamaya
+
+# ── Infrastructure ───────────────────────────────────────────────
+/deploy/                   @nmohamaya
+/scripts/                  @nmohamaya
+/.github/                  @nmohamaya
+/boards/                   @nmohamaya
+
+# ── Configuration ────────────────────────────────────────────────
+/config/                   @nmohamaya
+CMakeLists.txt             @nmohamaya
+
+# ── Tests ────────────────────────────────────────────────────────
+/tests/                    @nmohamaya
+
+# ── Documentation ────────────────────────────────────────────────
+/docs/                     @nmohamaya
+
+# ── Agent infrastructure ─────────────────────────────────────────
+/.claude/agents/           @nmohamaya
+/tasks/                    @nmohamaya

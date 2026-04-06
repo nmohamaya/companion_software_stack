@@ -1,0 +1,63 @@
+name: Test Coverage
+description: Request new tests or coverage improvements
+labels: ["testing", "enhancement"]
+body:
+  - type: dropdown
+    id: test_type
+    attributes:
+      label: Test Type
+      options:
+        - Unit test (GTest)
+        - Scenario test (Gazebo SITL)
+        - Integration test
+        - Regression test (for a bug fix)
+        - Stress / load test
+    validations:
+      required: true
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      options:
+        - P1 Video Capture
+        - P2 Perception
+        - P3 SLAM/VIO/Nav
+        - P4 Mission Planner
+        - P5 Comms
+        - P6 Payload Manager
+        - P7 System Monitor
+        - IPC / MessageBus
+        - HAL
+        - Common utilities
+        - Config
+        - Cross-domain
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What code paths need test coverage?
+      placeholder: |
+        **Untested paths:**
+        **Expected test count increase:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Test Scenarios
+      description: Specific scenarios to test
+      placeholder: |
+        - [ ] Normal operation: ...
+        - [ ] Edge case: ...
+        - [ ] Error path: ...
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Coverage report link, related bug, etc.

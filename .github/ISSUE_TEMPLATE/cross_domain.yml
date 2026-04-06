@@ -1,0 +1,65 @@
+name: Cross-Domain Change
+description: Change that spans multiple processes or subsystems
+labels: ["cross-domain", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Cross-domain changes require coordination between multiple agents.
+        Use this template when a change touches 2+ process directories or involves IPC contract changes.
+
+  - type: checkboxes
+    id: domains
+    attributes:
+      label: Domains Affected
+      options:
+        - label: P1 Video Capture
+        - label: P2 Perception
+        - label: P3 SLAM/VIO/Nav
+        - label: P4 Mission Planner
+        - label: P5 Comms
+        - label: P6 Payload Manager
+        - label: P7 System Monitor
+        - label: IPC / MessageBus
+        - label: HAL
+        - label: Common libs (util, recorder)
+        - label: Config system
+        - label: Build / CMake
+        - label: Deploy / CI
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to change and why it spans multiple domains?
+    validations:
+      required: true
+
+  - type: textarea
+    id: ipc_changes
+    attributes:
+      label: IPC Contract Changes
+      description: Any changes to message types, topics, or pub/sub relationships?
+      placeholder: |
+        **Topics added/modified:**
+        **Message types changed:**
+        **Publishers/subscribers affected:**
+
+  - type: textarea
+    id: coordination
+    attributes:
+      label: Coordination Plan
+      description: How should this be phased? Which domain goes first?
+      placeholder: |
+        Phase 1: ...
+        Phase 2: ...
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+    validations:
+      required: true

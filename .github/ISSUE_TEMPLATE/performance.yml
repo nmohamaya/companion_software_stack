@@ -1,0 +1,72 @@
+name: Performance
+description: Report a performance issue or propose an optimization
+labels: ["performance"]
+body:
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      options:
+        - Performance regression (was faster before)
+        - Optimization opportunity
+        - Latency issue
+        - Memory usage issue
+        - CPU usage issue
+    validations:
+      required: true
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      options:
+        - P1 Video Capture
+        - P2 Perception
+        - P3 SLAM/VIO/Nav
+        - P4 Mission Planner
+        - P5 Comms
+        - P6 Payload Manager
+        - P7 System Monitor
+        - IPC / MessageBus
+        - HAL
+        - Common utilities
+        - Cross-domain
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the performance issue
+      placeholder: |
+        **Current performance:** ... ms / ... MB / ... %CPU
+        **Expected/target:** ... ms / ... MB / ... %CPU
+        **Impact:** ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Measurements
+      description: Profiling data, benchmarks, or timing logs
+      render: shell
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - x86_64 (dev machine)
+        - Jetson Orin (ARM64)
+        - Both
+        - N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_fix
+    attributes:
+      label: Proposed Optimization
+      description: If you have ideas for fixing the performance issue

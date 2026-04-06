@@ -40,4 +40,90 @@ echo "[pre-commit] Formatting $(echo "$STAGED_FILES" | wc -l) file(s) with $FMT"
 echo "$STAGED_FILES" | xargs "$FMT" -i
 echo "$STAGED_FILES" | xargs git add
 
+# ── Agent boundary check (advisory) ─────────────────────────────
+# If CLAUDE_AGENT_ROLE is set, warn about files outside the agent's scope.
+# This is advisory only — it does NOT block the commit.
+if [[ -n "${CLAUDE_AGENT_ROLE:-}" ]]; then
+    declare -A AGENT_SCOPE
+    AGENT_SCOPE[feature-perception]="process1_video_capture/ process2_perception/ common/hal/"
+    AGENT_SCOPE[feature-nav]="process3_slam_vio_nav/ process4_mission_planner/ common/hal/"
+    AGENT_SCOPE[feature-integration]="process5_comms/ process6_payload_manager/ process7_system_monitor/ common/ipc/ common/hal/"
+    AGENT_SCOPE[feature-infra-core]="common/util/ common/recorder/ common/ipc/ CMakeLists.txt config/"
+    AGENT_SCOPE[feature-infra-platform]="deploy/ scripts/ .github/ boards/ config/customers/"
+    AGENT_SCOPE[test-unit]="tests/ config/scenarios/"
+    AGENT_SCOPE[test-scenario]="tests/ config/scenarios/"
+
+    ALLOWED="${AGENT_SCOPE[${CLAUDE_AGENT_ROLE}]:-}"
+    if [[ -n "$ALLOWED" ]]; then
+        BOUNDARY_WARNINGS=""
+        while IFS= read -r file; do
+            IN_SCOPE=false
+            # tests/ is always allowed for feature agents
+            if [[ "$file" == tests/* ]]; then
+                IN_SCOPE=true
+            else
+                for scope_dir in $ALLOWED; do
+                    if [[ "$file" == ${scope_dir}* ]]; then
+                        IN_SCOPE=true
+                        break
+                    fi
+                done
+            fi
+            if [[ "$IN_SCOPE" == false ]]; then
+                BOUNDARY_WARNINGS="${BOUNDARY_WARNINGS}  ⚠ ${file}\n"
+            fi
+        done <<< "$STAGED_FILES"
+
+        if [[ -n "$BOUNDARY_WARNINGS" ]]; then
+            echo ""
+            echo "[pre-commit] ⚠ Agent boundary warning (${CLAUDE_AGENT_ROLE}):"
+            echo -e "$BOUNDARY_WARNINGS"
+            echo "  These files are outside your expected scope."
+            echo "  This is advisory only — commit will proceed."
+            echo ""
+        fi
+    fi
+fi
+
+# ── Include existence check ──────────────────────────────────────
+# Verify that #include paths in staged files resolve to real files.
+# Advisory only — warns but does not block.
+INCLUDE_WARNINGS=""
+while IFS= read -r file; do
+    if [[ ! -f "$file" ]]; then
+        continue
+    fi
+    # Extract local includes (quoted, not angle-bracket system includes)
+    while IFS= read -r include_path; do
+        # Check relative to file's directory and common include roots
+        FILE_DIR=$(dirname "$file")
+        FOUND=false
+        for search_dir in "$FILE_DIR" "common" "." ; do
+            if [[ -f "${search_dir}/${include_path}" ]]; then
+                FOUND=true
+                break
+            fi
+        done
+        # Also check standard include directories
+        for dir in common/*/include common/ipc/include common/hal/include common/util/include common/recorder/include process*/include; do
+            if [[ -f "${dir}/${include_path}" ]]; then
+                FOUND=true
+                break
+            fi
+        done
+        if [[ "$FOUND" == false ]]; then
+            INCLUDE_WARNINGS="${INCLUDE_WARNINGS}  ⚠ ${file}: #include \"${include_path}\" — file not found\n"
+        fi
+    done < <(grep -oP '#include\s+"[^"]+"' "$file" 2>/dev/null | sed 's/#include\s*"//;s/"//')
+done <<< "$STAGED_FILES"
+
+if [[ -n "$INCLUDE_WARNINGS" ]]; then
+    echo ""
+    echo "[pre-commit] ⚠ Include path warnings:"
+    echo -e "$INCLUDE_WARNINGS"
+    echo "  These #include paths could not be resolved locally."
+    echo "  They may be valid (system headers, build-generated) — verify manually."
+    echo ""
+fi
+
 exit 0
