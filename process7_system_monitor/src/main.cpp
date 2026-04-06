@@ -47,13 +47,9 @@ int main(int argc, char* argv[]) {
     if (!cfg.load(args.config_path)) {
         spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
-        auto validation = drone::util::validate(cfg, drone::util::system_monitor_schema());
-        if (!validation.is_ok()) {
-            for (const auto& err : validation.error()) {
-                spdlog::error("[Config] {}", err);
-            }
-            spdlog::error("Config validation failed — exiting");
-            return 1;
+        if (int rc = drone::util::validate_or_exit(cfg, drone::util::system_monitor_schema());
+            rc != 0) {
+            return rc;
         }
     }
 

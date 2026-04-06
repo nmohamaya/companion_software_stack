@@ -344,8 +344,8 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
-            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by log level
-            if (debug_tick_++ % 10 == 0) {
+            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by spdlog runtime level
+            if (spdlog::should_log(spdlog::level::debug) && debug_tick_++ % 10 == 0) {
                 const float dpx        = static_cast<float>(pose.translation[0]);
                 const float dpy        = static_cast<float>(pose.translation[1]);
                 const float dpz        = static_cast<float>(pose.translation[2]);
