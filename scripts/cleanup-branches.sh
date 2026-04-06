@@ -5,9 +5,15 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 DRY_RUN=false
-if [[ "${1:-}" == "--dry-run" ]]; then
-    DRY_RUN=true
-fi
+AUTO_YES=false
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        --yes|-y)  AUTO_YES=true ;;
+        --help|-h) echo "Usage: $(basename "$0") [--dry-run] [--yes]"; exit 0 ;;
+        *)         echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
 
 PROTECTED_BRANCHES="main|develop"
 
@@ -74,8 +80,12 @@ if [[ "$DRY_RUN" == true ]]; then
     exit 0
 fi
 
-# Prompt for confirmation
-read -rp "Proceed with cleanup? [y/N] " CONFIRM
+# Prompt for confirmation (skip if --yes)
+if [[ "$AUTO_YES" == "true" ]]; then
+    CONFIRM="y"
+else
+    read -rp "Proceed with cleanup? [y/N] " CONFIRM
+fi
 if [[ ! "$CONFIRM" =~ ^[yY]$ ]]; then
     echo "Aborted."
     exit 0

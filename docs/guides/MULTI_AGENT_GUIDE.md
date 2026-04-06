@@ -465,6 +465,156 @@ bash scripts/cleanup-branches.sh
 git worktree list
 ```
 
+## Pipeline Mode (`--pipeline`)
+
+The pipeline mode chains all scripts into a single guided flow with **5 human checkpoints**. Everything between checkpoints is automated.
+
+```bash
+bash scripts/deploy-issue.sh 123 --pipeline
+bash scripts/deploy-issue.sh 123 --pipeline --base integration/epic-300
+```
+
+### Flow
+
+```
+Issue fetch + label routing (automated)
+  → Worktree + branch creation (automated)
+  → Agent works autonomously (automated)
+  → AGENT_REPORT.md written
+  │
+  ▼
+┌─────────────────────────────────────────────────────┐
+│ CP1: Changes Review                                  │
+│   You see: AGENT_REPORT.md + git diff --stat         │
+│   Options: [a]ccept / [c]hanges / [r]eject           │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  validate-session.sh runs (automated: build, tests, hallucination detection)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP2: Hallucination Report                            │
+│   You see: PASS/WARN/FAIL for build, test count,     │
+│            test execution, #include paths, PR sanity  │
+│   Options: [c]ommit / [b]ack to CP1 / [a]bort       │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  git push + PR title/body generated (automated)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP3: PR Preview                                      │
+│   You see: PR title + body                           │
+│   Options: [c]reate / [e]dit / [b]ack / [a]bort     │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  deploy-review.sh runs (automated: 2-4 review agents in parallel)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP4: Safety Review Findings                          │
+│   You see: P1-P4 findings from memory-safety,        │
+│            security, concurrency, fault-recovery      │
+│   Options: [a]ccept / [f]ix / [b]ack / [r]eject     │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  Feature agent fixes P1/P2 findings (automated, if [f]ix chosen)
+  Re-validation runs (automated)
+                      │
+┌─────────────────────▼───────────────────────────────┐
+│ CP5: Final Summary                                   │
+│   You see: commit log + validation status            │
+│   Options: [d]one / [r]e-review / [b]ack / [a]bort  │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+  Cleanup offered (automated)
+  → Merge in GitHub UI (manual)
+```
+
+### Back-Navigation
+
+Every checkpoint supports going **back** to the previous checkpoint. The pipeline is a state machine, not a linear sequence:
+
+- **CP2 → CP1**: Re-review changes, request more modifications
+- **CP3 → CP2**: Re-commit with different content
+- **CP4 → CP3**: Edit PR before re-reviewing
+- **CP5 → CP4**: Fix more items or re-review
+
+### Example Walkthrough
+
+```bash
+$ bash scripts/deploy-issue.sh 315 --pipeline --base integration/epic-300
+
+═══════════════════════════════════════════════════════
+  Phase 1/5 — Agent Working (feature-infra-core)
+═══════════════════════════════════════════════════════
+  ... agent works for ~5 minutes ...
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 1/5 — Changes Review
+═══════════════════════════════════════════════════════
+  # Change Report — Issue #315
+  ## Summary
+  Added version fields to all 21 IPC structs...
+  ...
+  [a] accept  [c] changes  [r] reject
+  Your choice: a
+
+  Running Validation (validate-session.sh)...
+  [1/5] Build verification       PASS
+  [2/5] Test count verification   PASS  (1309 tests)
+  [3/5] Test execution            PASS
+  [4/5] Include verification      PASS
+  [5/5] PR sanity                 PASS
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 2/5 — Commit Approval
+═══════════════════════════════════════════════════════
+  Validation passed.
+  [c] commit  [b] back  [a] abort
+  Your choice: c
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 3/5 — PR Preview
+═══════════════════════════════════════════════════════
+  Title: feat(#315): Add version fields to all IPC structs
+  Body: ...
+  [c] create  [e] edit  [b] back  [a] abort
+  Your choice: c
+  PR created: https://github.com/.../pull/361
+
+  Deploying review agents... (4 agents in parallel)
+  DONE  review-memory-safety
+  DONE  review-security
+  DONE  review-concurrency
+  DONE  review-fault-recovery
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 4/5 — Safety Review Findings
+═══════════════════════════════════════════════════════
+  P1: validate() never checks version field (2 findings)
+  P2: Missing default member initializers (1 finding)
+  P3: Positional aggregate init fragile (1 finding)
+  [a] accept  [f] fix  [b] back  [r] reject
+  Your choice: f
+
+  Launching feature agent to fix findings...
+  ... agent fixes P1/P2 ...
+  Re-validating... PASS
+
+═══════════════════════════════════════════════════════
+  CHECKPOINT 5/5 — Final Summary
+═══════════════════════════════════════════════════════
+  c885d53 feat(#315): Add version fields to all IPC structs
+  a1b2c3d fix(#315): address review findings
+  Validation passed.
+  [d] done  [r] re-review  [b] back  [a] abort
+  Your choice: d
+
+  Pipeline Complete
+  PR: https://github.com/.../pull/361
+  Next step: Review and merge the PR in GitHub UI.
+```
+
+---
+
 ## Label Routing Reference
 
 Issues are routed to agents based on GitHub labels. When multiple domain labels exist, **priority wins** (not label order):
