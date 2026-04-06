@@ -193,46 +193,50 @@ esac
 # ── Build task prompt with cross-agent context ─────────────────────────────
 PROMPT="$TASK"
 
-if [[ -n "$PROMPT" ]]; then
-    CROSS_AGENT_CTX=""
+# Gather cross-agent context (always, including interactive sessions)
+CROSS_AGENT_CTX=""
 
-    # Active work by other agents (avoid conflicts)
-    ACTIVE_WORK_FILE="$PROJECT_DIR/tasks/active-work.md"
-    if [[ -f "$ACTIVE_WORK_FILE" ]]; then
-        ACTIVE_ENTRIES="$(grep -E '## Issue|Branch:|Status:' "$ACTIVE_WORK_FILE" 2>/dev/null | tail -30 || true)"
-        if [[ -n "$ACTIVE_ENTRIES" ]]; then
-            CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+# Active work by other agents (avoid conflicts)
+ACTIVE_WORK_FILE="$PROJECT_DIR/tasks/active-work.md"
+if [[ -f "$ACTIVE_WORK_FILE" ]]; then
+    ACTIVE_ENTRIES="$(grep -E '## Issue|Branch:|Status:' "$ACTIVE_WORK_FILE" 2>/dev/null | tail -30 || true)"
+    if [[ -n "$ACTIVE_ENTRIES" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
 
 CROSS-AGENT CONTEXT — Active work by other agents (avoid touching these files/branches):
 ${ACTIVE_ENTRIES}"
-        fi
     fi
+fi
 
-    # Recent completed work (last 5 entries from changelog)
-    CHANGELOG_FILE="$PROJECT_DIR/tasks/agent-changelog.md"
-    if [[ -f "$CHANGELOG_FILE" ]]; then
-        RECENT_WORK="$(grep -E '^###|Issue:|Status:' "$CHANGELOG_FILE" 2>/dev/null | tail -15 || true)"
-        if [[ -n "$RECENT_WORK" ]]; then
-            CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+# Recent completed work (last 5 entries from changelog)
+CHANGELOG_FILE="$PROJECT_DIR/tasks/agent-changelog.md"
+if [[ -f "$CHANGELOG_FILE" ]]; then
+    RECENT_WORK="$(grep -E '^###|Issue:|Status:' "$CHANGELOG_FILE" 2>/dev/null | tail -15 || true)"
+    if [[ -n "$RECENT_WORK" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
 
 CROSS-AGENT CONTEXT — Recently completed work (for awareness, avoid duplicate effort):
 ${RECENT_WORK}"
-        fi
     fi
+fi
 
-    # Domain knowledge / non-obvious pitfalls
-    DOMAIN_KNOWLEDGE="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
-    if [[ -f "$DOMAIN_KNOWLEDGE" ]]; then
-        DK_CONTENT="$(cat "$DOMAIN_KNOWLEDGE" 2>/dev/null || true)"
-        if [[ -n "$DK_CONTENT" ]]; then
-            CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+# Domain knowledge / non-obvious pitfalls
+DOMAIN_KNOWLEDGE="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
+if [[ -f "$DOMAIN_KNOWLEDGE" ]]; then
+    DK_CONTENT="$(cat "$DOMAIN_KNOWLEDGE" 2>/dev/null || true)"
+    if [[ -n "$DK_CONTENT" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
 
 CROSS-AGENT CONTEXT — Domain knowledge (non-obvious pitfalls shared by all agents):
 ${DK_CONTENT}"
-        fi
     fi
+fi
 
+if [[ -n "$PROMPT" ]]; then
     PROMPT="${PROMPT}${CROSS_AGENT_CTX}"
+elif [[ -n "$CROSS_AGENT_CTX" ]]; then
+    # Interactive session without task — inject context as initial message
+    PROMPT="Review the cross-agent context below for this session.${CROSS_AGENT_CTX}"
 fi
 
 # ── Export role environment variable ────────────────────────────────────────

@@ -278,45 +278,64 @@ ${BODY}
 Work in this worktree. The branch is '${BRANCH}'.${PR_TARGET_NOTE} Implement the issue, add tests, and ensure the build passes."
 
 # ── Gather cross-agent context ─────────────────────────────────────────────
-CROSS_AGENT_CTX=""
+# Context is injected into auto/pipeline prompts (which call claude directly).
+# For headless/interactive modes, start-agent.sh handles injection to avoid duplication.
+gather_cross_agent_context() {
+    local ctx=""
 
-# Active work by other agents (avoid conflicts)
-ACTIVE_WORK_FILE="$PROJECT_DIR/tasks/active-work.md"
-if [[ -f "$ACTIVE_WORK_FILE" ]]; then
-    ACTIVE_ENTRIES="$(grep -E '## Issue|Branch:|Status:' "$ACTIVE_WORK_FILE" 2>/dev/null | tail -30 || true)"
-    if [[ -n "$ACTIVE_ENTRIES" ]]; then
-        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+    # Active work by other agents (avoid conflicts)
+    local active_work_file="$PROJECT_DIR/tasks/active-work.md"
+    if [[ -f "$active_work_file" ]]; then
+        local entries
+        entries="$(grep -E '## Issue|Branch:|Status:' "$active_work_file" 2>/dev/null | tail -30 || true)"
+        if [[ -n "$entries" ]]; then
+            ctx="${ctx}
 
 CROSS-AGENT CONTEXT — Active work by other agents (avoid touching these files/branches):
-${ACTIVE_ENTRIES}"
+${entries}"
+        fi
     fi
-fi
 
-# Recent completed work (last 5 entries from changelog)
-CHANGELOG_FILE="$PROJECT_DIR/tasks/agent-changelog.md"
-if [[ -f "$CHANGELOG_FILE" ]]; then
-    RECENT_WORK="$(grep -E '^###|Issue:|Status:' "$CHANGELOG_FILE" 2>/dev/null | tail -15 || true)"
-    if [[ -n "$RECENT_WORK" ]]; then
-        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+    # Recent completed work (last 5 entries from changelog)
+    local changelog_file="$PROJECT_DIR/tasks/agent-changelog.md"
+    if [[ -f "$changelog_file" ]]; then
+        local recent
+        recent="$(grep -E '^###|Issue:|Status:' "$changelog_file" 2>/dev/null | tail -15 || true)"
+        if [[ -n "$recent" ]]; then
+            ctx="${ctx}
 
 CROSS-AGENT CONTEXT — Recently completed work (for awareness, avoid duplicate effort):
-${RECENT_WORK}"
+${recent}"
+        fi
     fi
-fi
 
-# Domain knowledge / non-obvious pitfalls
-DOMAIN_KNOWLEDGE="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
-if [[ -f "$DOMAIN_KNOWLEDGE" ]]; then
-    DK_CONTENT="$(cat "$DOMAIN_KNOWLEDGE" 2>/dev/null || true)"
-    if [[ -n "$DK_CONTENT" ]]; then
-        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+    # Domain knowledge / non-obvious pitfalls
+    local dk_file="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
+    if [[ -f "$dk_file" ]]; then
+        local dk
+        dk="$(cat "$dk_file" 2>/dev/null || true)"
+        if [[ -n "$dk" ]]; then
+            ctx="${ctx}
 
 CROSS-AGENT CONTEXT — Domain knowledge (non-obvious pitfalls shared by all agents):
-${DK_CONTENT}"
+${dk}"
+        fi
     fi
-fi
 
-PROMPT="${PROMPT}${CROSS_AGENT_CTX}"
+    echo "$ctx"
+}
+
+# ── Role → Model mapping (shared across all modes) ────────────────────────
+declare -A _ROLE_MODEL=(
+    [tech-lead]="claude-opus-4-6" [feature-perception]="claude-opus-4-6"
+    [feature-nav]="claude-opus-4-6" [feature-integration]="claude-opus-4-6"
+    [feature-infra-core]="claude-opus-4-6" [feature-infra-platform]="claude-opus-4-6"
+    [review-memory-safety]="claude-opus-4-6" [review-concurrency]="claude-opus-4-6"
+    [review-fault-recovery]="claude-opus-4-6" [review-security]="claude-opus-4-6"
+    [test-unit]="claude-sonnet-4-6" [test-scenario]="claude-sonnet-4-6"
+    [ops-github]="claude-haiku-4-5-20251001"
+)
+MODEL="${_ROLE_MODEL[$ROLE]:-claude-opus-4-6}"
 
 # ── Launch agent in the worktree ────────────────────────────────────────────
 echo ""
@@ -326,7 +345,9 @@ if [[ "$AUTO" == "true" ]]; then
     # Auto mode: agent works autonomously, writes a report, user reviews.
     REPORT_FILE="$WORKTREE_DIR/AGENT_REPORT.md"
 
-    AUTO_PROMPT="${PROMPT}
+    CROSS_AGENT_CTX="$(gather_cross_agent_context)"
+
+    AUTO_PROMPT="${PROMPT}${CROSS_AGENT_CTX}
 
 IMPORTANT — AUTO MODE INSTRUCTIONS:
 1. Implement the issue fully (code, tests, build verification).
@@ -358,18 +379,6 @@ Anything the reviewer should look closely at.
 
 ## Build & Test Status
 Whether build passed, test count before/after, any failures."
-
-    # Resolve model from role
-    declare -A _ROLE_MODEL=(
-        [tech-lead]="claude-opus-4-6" [feature-perception]="claude-opus-4-6"
-        [feature-nav]="claude-opus-4-6" [feature-integration]="claude-opus-4-6"
-        [feature-infra-core]="claude-opus-4-6" [feature-infra-platform]="claude-opus-4-6"
-        [review-memory-safety]="claude-opus-4-6" [review-concurrency]="claude-opus-4-6"
-        [review-fault-recovery]="claude-opus-4-6" [review-security]="claude-opus-4-6"
-        [test-unit]="claude-sonnet-4-6" [test-scenario]="claude-sonnet-4-6"
-        [ops-github]="claude-haiku-4-5-20251001"
-    )
-    MODEL="${_ROLE_MODEL[$ROLE]:-claude-opus-4-6}"
 
     echo -e "${CYAN}Auto mode${RESET} — agent working autonomously..."
     echo -e "  Report: ${REPORT_FILE}"
@@ -466,18 +475,6 @@ elif [[ "$PIPELINE" == "true" ]]; then
         echo ""
     }
 
-    # ── Role → Model mapping ───────────────────────────────────────────────
-    declare -A _ROLE_MODEL=(
-        [tech-lead]="claude-opus-4-6" [feature-perception]="claude-opus-4-6"
-        [feature-nav]="claude-opus-4-6" [feature-integration]="claude-opus-4-6"
-        [feature-infra-core]="claude-opus-4-6" [feature-infra-platform]="claude-opus-4-6"
-        [review-memory-safety]="claude-opus-4-6" [review-concurrency]="claude-opus-4-6"
-        [review-fault-recovery]="claude-opus-4-6" [review-security]="claude-opus-4-6"
-        [test-unit]="claude-sonnet-4-6" [test-scenario]="claude-sonnet-4-6"
-        [ops-github]="claude-haiku-4-5-20251001"
-    )
-    MODEL="${_ROLE_MODEL[$ROLE]:-claude-opus-4-6}"
-
     REPORT_FILE="$WORKTREE_DIR/AGENT_REPORT.md"
     VALIDATION_OUTPUT=""
     VALIDATION_EXIT=0
@@ -487,7 +484,9 @@ elif [[ "$PIPELINE" == "true" ]]; then
     PR_BODY=""
     REVIEW_FINDINGS=""
 
-    AUTO_PROMPT="${PROMPT}
+    CROSS_AGENT_CTX="$(gather_cross_agent_context)"
+
+    AUTO_PROMPT="${PROMPT}${CROSS_AGENT_CTX}
 
 IMPORTANT — PIPELINE MODE INSTRUCTIONS:
 1. Implement the issue fully (code, tests, build verification).
@@ -574,7 +573,7 @@ Whether build passed, test count before/after, any failures."
                     STATE="CP1"  # loop back to review updated changes
                     ;;
                 r|reject)
-                    read -rp "  Discard all changes? [y/N] " CONFIRM
+                    read -rp "  Abort pipeline? (worktree preserved) [y/N] " CONFIRM
                     if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
                         STATE="ABORT"
                     fi
@@ -702,7 +701,7 @@ Closes #${ISSUE}
             else
                 pipeline_options \
                     "c" "create — create the PR on GitHub" \
-                    "e" "edit — modify title or body before creating" \
+                    "e" "edit — modify title before creating (body editable on GitHub)" \
                     "b" "back — return to CP2" \
                     "a" "abort — exit pipeline"
             fi
@@ -713,13 +712,17 @@ Closes #${ISSUE}
                     echo ""
                     echo -e "  Creating PR..."
                     PR_CREATE_ERR=""
+                    PR_CREATE_STDERR_FILE="$(mktemp)"
                     PR_URL="$(gh pr create --base "$BASE_BRANCH" \
                         --title "$PR_TITLE" \
-                        --body "$PR_BODY" 2>/dev/null)" || {
+                        --body "$PR_BODY" 2>"$PR_CREATE_STDERR_FILE")" || {
                         PR_CREATE_ERR="$?"
                     }
+                    PR_CREATE_STDERR="$(cat "$PR_CREATE_STDERR_FILE" 2>/dev/null || true)"
+                    rm -f "$PR_CREATE_STDERR_FILE"
                     if [[ -n "$PR_CREATE_ERR" || -z "$PR_URL" ]]; then
                         echo -e "  ${RED}Failed to create PR${RESET}"
+                        [[ -n "$PR_CREATE_STDERR" ]] && echo "  $PR_CREATE_STDERR"
                         STATE="CP3"
                         continue
                     fi
@@ -840,12 +843,13 @@ FIXEOF
             echo -e "  Pushing fixes..."
             if git push 2>&1; then
                 echo -e "  ${GREEN}DONE${RESET}"
+                # Re-run review + test agents to verify fixes
+                STATE="REVIEW"
             else
-                echo -e "  ${YELLOW}WARN${RESET}  Push failed — you may need to push manually"
+                echo -e "  ${RED}Push failed.${RESET} Fixes committed locally but not pushed."
+                echo -e "  Fix the issue and the pipeline will retry at CP5."
+                STATE="CP5"
             fi
-
-            # Re-run review + test agents to verify fixes
-            STATE="REVIEW"
             ;;
 
         # ── CP5: Final Push ───────────────────────────────────────────────
@@ -877,11 +881,12 @@ FIXEOF
             read -rp "  Your choice: " CHOICE
             case "$CHOICE" in
                 d|done)
-                    # Ensure everything is pushed
-                    if ! git push 2>&1; then
-                        echo -e "  ${YELLOW}WARN${RESET}  Final push failed — verify manually before merging"
+                    # Ensure everything is pushed — block on failure
+                    if git push 2>&1; then
+                        STATE="CLEANUP"
+                    else
+                        echo -e "  ${RED}Push failed.${RESET} Fix the issue and choose [d]one again to retry."
                     fi
-                    STATE="CLEANUP"
                     ;;
                 r|re-review) STATE="REVIEW" ;;
                 b|back)      STATE="CP4" ;;
@@ -912,11 +917,17 @@ Closes #${ISSUE}"
             echo ""
 
             # ── Update shared state for cross-agent alignment ─────────────
-            # 1. Mark active-work.md as completed
+            # 1. Mark active-work.md as completed (awk for block-scoped replacement)
             ACTIVE_WORK="$PROJECT_DIR/tasks/active-work.md"
             if [[ -f "$ACTIVE_WORK" ]]; then
-                sed -i "s/## Issue #${ISSUE}.*$/&\n- **Completed:** $(date +%Y-%m-%d\ %H:%M)/" "$ACTIVE_WORK" 2>/dev/null || true
-                sed -i "s/\(Issue #${ISSUE}.*\)in-progress/\1completed/" "$ACTIVE_WORK" 2>/dev/null || true
+                ACTIVE_WORK_TMP="$(mktemp)"
+                awk -v issue="$ISSUE" '
+                    BEGIN { in_block = 0 }
+                    $0 ~ "^## Issue #" issue "([[:space:]]|$)" { in_block = 1; print; next }
+                    in_block && $0 ~ "^## Issue #" { in_block = 0 }
+                    in_block && $0 == "- **Status:** in-progress" { print "- **Status:** completed"; next }
+                    { print }
+                ' "$ACTIVE_WORK" > "$ACTIVE_WORK_TMP" && mv "$ACTIVE_WORK_TMP" "$ACTIVE_WORK" || rm -f "$ACTIVE_WORK_TMP"
                 echo -e "  ${GREEN}UPDATED${RESET}  tasks/active-work.md → completed"
             fi
 

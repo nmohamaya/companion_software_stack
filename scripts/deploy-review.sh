@@ -147,6 +147,11 @@ DIFF_TRUNCATED="$(echo "$DIFF" | head -500 || true)"
 
 # Fetch PR branch for test agents to check out
 PR_BRANCH="$(gh pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+if [[ -z "$PR_BRANCH" ]]; then
+    echo -e "${RED}Error:${RESET} Unable to determine branch name for PR #${PR}."
+    echo "  Verify the PR exists and gh auth is configured."
+    exit 1
+fi
 
 REVIEW_PROMPT="Review PR #${PR}.
 
