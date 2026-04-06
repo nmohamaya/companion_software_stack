@@ -16,8 +16,10 @@ jobs:
         fetch-depth: 0
 
     - name: Check agent boundaries
+      env:
+        BRANCH: ${{ github.head_ref }}
+        BASE_REF: ${{ github.base_ref }}
       run: |
-        BRANCH="${{ github.head_ref }}"
         echo "Branch: ${BRANCH}"
 
         # Extract agent role from branch name pattern: role/issue-XX-desc
@@ -44,8 +46,8 @@ jobs:
           exit 0
         fi
 
-        # Get changed files
-        CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" || true)
+        # Get changed files (BASE_REF from env to prevent script injection)
+        CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD" || true)
         if [[ -z "$CHANGED" ]]; then
           echo "No changed files detected"
           exit 0
@@ -87,9 +89,11 @@ jobs:
         fetch-depth: 0
 
     - name: Check PR size
+      env:
+        BASE_REF: ${{ github.base_ref }}
       run: |
         # Count lines changed (additions + deletions), excluding auto-generated
-        STATS=$(git diff --stat "origin/${{ github.base_ref }}...HEAD" -- \
+        STATS=$(git diff --stat "origin/${BASE_REF}...HEAD" -- \
           ':!*.lock' ':!*.json' ':!*.generated.*' ':!coverage-report/*' | tail -1)
 
         # Extract total insertions and deletions

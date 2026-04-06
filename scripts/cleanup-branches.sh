@@ -26,12 +26,14 @@ done < <(git branch --merged main 2>/dev/null | grep -v '\*' || true)
 declare -A WORKTREE_MAP
 while IFS= read -r line; do
     [[ -z "$line" ]] && continue
+    # Use porcelain-compatible parsing: first field is path (may contain spaces with awk,
+    # but standard git worktree list separates fields by whitespace with path first)
     WT_PATH=$(echo "$line" | awk '{print $1}')
     WT_BRANCH=$(echo "$line" | grep -oP '\[.*?\]' | tr -d '[]' || true)
     if [[ -n "$WT_BRANCH" ]]; then
         WORKTREE_MAP["$WT_BRANCH"]="$WT_PATH"
     fi
-done < <(git worktree list 2>/dev/null)
+done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{path=$0; sub(/^worktree /, "", path)} /^branch /{br=$0; sub(/^branch refs\/heads\//, "", br); print path " [" br "]"}')
 
 # Identify stale worktrees (worktrees whose branch is merged)
 STALE_WORKTREES=()

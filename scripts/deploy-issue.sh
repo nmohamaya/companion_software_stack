@@ -61,7 +61,8 @@ ISSUE_JSON="$(gh issue view "$ISSUE" --json title,body,labels,number 2>/dev/null
 }
 
 TITLE="$(echo "$ISSUE_JSON" | jq -r '.title')"
-BODY="$(echo "$ISSUE_JSON" | jq -r '.body // ""')"
+# Sanitize body: strip control characters and cap length to prevent prompt injection
+BODY="$(echo "$ISSUE_JSON" | jq -r '.body // ""' | tr -cd '[:print:]\n\t' | head -c 4096)"
 LABELS="$(echo "$ISSUE_JSON" | jq -r '.labels[].name' 2>/dev/null || true)"
 
 echo -e "  Title:  ${CYAN}${TITLE}${RESET}"

@@ -20,7 +20,8 @@ Launches review agents against a PR. By default launches memory-safety and
 security reviewers, plus concurrency and fault-recovery if the diff warrants it.
 
 Options:
-  --all   Force all 4 review agents regardless of diff content
+  --all       Force all 4 review agents regardless of diff content
+  --dry-run   Show routing decision without launching agents
 EOF
     exit "${1:-1}"
 }
@@ -28,10 +29,12 @@ EOF
 # ── Parse arguments ─────────────────────────────────────────────────────────
 PR=""
 FORCE_ALL=false
+DRY_RUN=false
 
 for arg in "$@"; do
     case "$arg" in
         --all)      FORCE_ALL=true ;;
+        --dry-run)  DRY_RUN=true ;;
         --help|-h)  usage 0 ;;
         *)
             if [[ -z "$PR" ]]; then
@@ -100,6 +103,33 @@ for r in "${REVIEWERS[@]}"; do
     echo -e "  ${CYAN}${r}${RESET}"
 done
 echo ""
+
+
+# Also determine test agents
+TESTERS=("test-unit")
+if echo "$DIFF" | grep -qE 'common/ipc|common/hal|config/scenarios|gazebo'; then
+    TESTERS+=("test-scenario")
+fi
+
+echo ""
+echo -e "${BOLD}Test agents to launch:${RESET}"
+for t in "${TESTERS[@]}"; do
+    echo -e "  ${CYAN}${t}${RESET}"
+done
+echo ""
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "${YELLOW}${BOLD}DRY RUN${RESET} — would launch ${#REVIEWERS[@]} reviewers + ${#TESTERS[@]} test agents for PR #${PR}"
+    echo ""
+    echo "Routing reasons:"
+    echo "  memory-safety:  always"
+    echo "  security:       always"
+    [[ "$NEED_CONCURRENCY" == "true" ]] && echo "  concurrency:    diff contains atomic/mutex/thread patterns"
+    [[ "$NEED_FAULT_RECOVERY" == "true" ]] && echo "  fault-recovery: diff touches P4/P5/P7 or watchdog/fault code"
+    echo "  test-unit:      always"
+    [[ "${#TESTERS[@]}" -gt 1 ]] && echo "  test-scenario:  diff touches IPC/HAL/Gazebo configs"
+    exit 0
+fi
 
 # ── 3. Launch reviewers in parallel ─────────────────────────────────────────
 SESSION_LOG_DIR="$PROJECT_DIR/tasks/sessions"
