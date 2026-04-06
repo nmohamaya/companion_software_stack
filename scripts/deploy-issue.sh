@@ -277,6 +277,47 @@ ${BODY}
 
 Work in this worktree. The branch is '${BRANCH}'.${PR_TARGET_NOTE} Implement the issue, add tests, and ensure the build passes."
 
+# ── Gather cross-agent context ─────────────────────────────────────────────
+CROSS_AGENT_CTX=""
+
+# Active work by other agents (avoid conflicts)
+ACTIVE_WORK_FILE="$PROJECT_DIR/tasks/active-work.md"
+if [[ -f "$ACTIVE_WORK_FILE" ]]; then
+    ACTIVE_ENTRIES="$(grep -E '## Issue|Branch:|Status:' "$ACTIVE_WORK_FILE" 2>/dev/null | tail -30 || true)"
+    if [[ -n "$ACTIVE_ENTRIES" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+
+CROSS-AGENT CONTEXT — Active work by other agents (avoid touching these files/branches):
+${ACTIVE_ENTRIES}"
+    fi
+fi
+
+# Recent completed work (last 5 entries from changelog)
+CHANGELOG_FILE="$PROJECT_DIR/tasks/agent-changelog.md"
+if [[ -f "$CHANGELOG_FILE" ]]; then
+    RECENT_WORK="$(grep -E '^###|Issue:|Status:' "$CHANGELOG_FILE" 2>/dev/null | tail -15 || true)"
+    if [[ -n "$RECENT_WORK" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+
+CROSS-AGENT CONTEXT — Recently completed work (for awareness, avoid duplicate effort):
+${RECENT_WORK}"
+    fi
+fi
+
+# Domain knowledge / non-obvious pitfalls
+DOMAIN_KNOWLEDGE="$PROJECT_DIR/.claude/shared-context/domain-knowledge.md"
+if [[ -f "$DOMAIN_KNOWLEDGE" ]]; then
+    DK_CONTENT="$(cat "$DOMAIN_KNOWLEDGE" 2>/dev/null || true)"
+    if [[ -n "$DK_CONTENT" ]]; then
+        CROSS_AGENT_CTX="${CROSS_AGENT_CTX}
+
+CROSS-AGENT CONTEXT — Domain knowledge (non-obvious pitfalls shared by all agents):
+${DK_CONTENT}"
+    fi
+fi
+
+PROMPT="${PROMPT}${CROSS_AGENT_CTX}"
+
 # ── Launch agent in the worktree ────────────────────────────────────────────
 echo ""
 cd "$WORKTREE_DIR"
@@ -289,8 +330,13 @@ if [[ "$AUTO" == "true" ]]; then
 
 IMPORTANT — AUTO MODE INSTRUCTIONS:
 1. Implement the issue fully (code, tests, build verification).
-2. Do NOT create a PR or push — leave changes as local commits.
-3. When done, write AGENT_REPORT.md in the worktree root with this structure:
+2. Update documentation (REQUIRED before completion):
+   - tests/TESTS.md — if you added/modified tests, update the test count and add entries
+   - docs/tracking/PROGRESS.md — add an improvement entry (number, title, date, files, what/why)
+   - docs/tracking/ROADMAP.md — mark the issue as done if it appears there
+   - docs/tracking/BUG_FIXES.md — add entry if this is a bug fix
+3. Do NOT create a PR or push — leave changes as local commits.
+4. When done, write AGENT_REPORT.md in the worktree root with this structure:
 
 # Change Report — Issue #${ISSUE}
 
@@ -445,8 +491,13 @@ elif [[ "$PIPELINE" == "true" ]]; then
 
 IMPORTANT — PIPELINE MODE INSTRUCTIONS:
 1. Implement the issue fully (code, tests, build verification).
-2. Do NOT create a PR or push — leave changes as local commits.
-3. When done, write AGENT_REPORT.md in the worktree root with this structure:
+2. Update documentation (REQUIRED before completion):
+   - tests/TESTS.md — if you added/modified tests, update the test count and add entries
+   - docs/tracking/PROGRESS.md — add an improvement entry (number, title, date, files, what/why)
+   - docs/tracking/ROADMAP.md — mark the issue as done if it appears there
+   - docs/tracking/BUG_FIXES.md — add entry if this is a bug fix
+3. Do NOT create a PR or push — leave changes as local commits.
+4. When done, write AGENT_REPORT.md in the worktree root with this structure:
 
 # Change Report — Issue #${ISSUE}
 
@@ -856,6 +907,39 @@ Closes #${ISSUE}"
                     gh pr edit "$PR_NUMBER" --body "$UPDATED_BODY" 2>&1 | grep -v "Projects (classic)" || true
                     echo -e "  ${GREEN}FIXED${RESET}  PR body updated with issue link."
                 fi
+            fi
+            echo ""
+
+            # ── Update shared state for cross-agent alignment ─────────────
+            # 1. Mark active-work.md as completed
+            ACTIVE_WORK="$PROJECT_DIR/tasks/active-work.md"
+            if [[ -f "$ACTIVE_WORK" ]]; then
+                sed -i "s/## Issue #${ISSUE}.*$/&\n- **Completed:** $(date +%Y-%m-%d\ %H:%M)/" "$ACTIVE_WORK" 2>/dev/null || true
+                sed -i "s/\(Issue #${ISSUE}.*\)in-progress/\1completed/" "$ACTIVE_WORK" 2>/dev/null || true
+                echo -e "  ${GREEN}UPDATED${RESET}  tasks/active-work.md → completed"
+            fi
+
+            # 2. Append to agent-changelog.md
+            CHANGELOG="$PROJECT_DIR/tasks/agent-changelog.md"
+            if [[ ! -f "$CHANGELOG" ]]; then
+                echo "# Agent Changelog" > "$CHANGELOG"
+                echo "" >> "$CHANGELOG"
+            fi
+            cat >> "$CHANGELOG" <<CHANGELOG_EOF
+
+### $(date +%Y-%m-%d) | ${ROLE} | ${MODEL} | PR #${PR_NUMBER:-N/A}
+- **Issue:** #${ISSUE} — ${TITLE}
+- **Branch:** ${BRANCH}
+- **Mode:** pipeline
+- **Review agents:** $(echo "$REVIEW_FINDINGS" | grep -coP '\bP[1-4]\b' 2>/dev/null || echo "0") findings
+- **Status:** completed
+CHANGELOG_EOF
+            echo -e "  ${GREEN}UPDATED${RESET}  tasks/agent-changelog.md"
+
+            # 3. Remind about shared-context if non-obvious pitfalls were discovered
+            if [[ -f "$REPORT_FILE" ]] && grep -qiE 'risk|pitfall|gotcha|non-obvious|surprising' "$REPORT_FILE" 2>/dev/null; then
+                echo -e "  ${YELLOW}REMINDER${RESET} AGENT_REPORT.md mentions risks/pitfalls — consider adding to"
+                echo -e "           .claude/shared-context/domain-knowledge.md for other agents"
             fi
             echo ""
 
