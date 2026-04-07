@@ -16,6 +16,7 @@ Session naming: pipeline-<issue-number>
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -115,24 +116,63 @@ class TmuxSession:
             logger.warning("tmux launch error: %s", e)
             return False
 
-    def attach(self) -> bool:
-        """Attach to the tmux session (replaces current terminal).
+    def exec_attach(self) -> bool:
+        """Attach to the tmux session via execvp (replaces current process).
 
-        Returns False if the session doesn't exist or tmux is unavailable.
-        On success, this call does not return (exec replaces the process).
+        WARNING: On success, this call does NOT return — os.execvp replaces
+        the current process image entirely. Only call this when you are ready
+        to hand control to tmux.
+
+        Returns False if the session doesn't exist, tmux is unavailable,
+        or execvp fails (e.g., session died between exists() check and exec).
         """
         if not tmux_available():
             return False
         if not self.exists():
             return False
 
-        # Use exec to replace current process — cleaner than subprocess
-        os.execvp("tmux", ["tmux", "attach-session", "-t", self.session_name])
-        # execvp does not return on success
-        return False  # only reached on failure
+        try:
+            # execvp replaces the process — only returns on failure
+            os.execvp("tmux", ["tmux", "attach-session", "-t", self.session_name])
+        except OSError as e:
+            # TOCTOU: session may have died between exists() and execvp,
+            # or tmux binary could be missing/broken.
+            logger.warning(
+                "Failed to exec-attach to %s: %s", self.session_name, e
+            )
+        return False
+
+    def attach(self) -> bool:
+        """Attach to the tmux session via subprocess (caller retains control).
+
+        Unlike exec_attach(), this runs tmux in a subprocess and returns
+        when the user detaches. Safer for callers that need to continue
+        after the user detaches.
+
+        Returns True if tmux ran successfully, False on failure.
+        """
+        if not tmux_available():
+            return False
+        if not self.exists():
+            return False
+
+        try:
+            result = subprocess.run(
+                ["tmux", "attach-session", "-t", self.session_name],
+            )
+            return result.returncode == 0
+        except OSError as e:
+            logger.warning(
+                "Failed to attach to %s: %s", self.session_name, e
+            )
+            return False
 
     def send_keys(self, keys: str) -> bool:
-        """Send keys to the tmux session (for automation/testing).
+        """Send keys to the tmux session.
+
+        Intended for test automation only — keys are passed directly to
+        ``tmux send-keys`` without sanitization. Do not expose to
+        untrusted input.
 
         Returns True on success.
         """
@@ -262,5 +302,5 @@ def session_status(issue: int) -> str | None:
             f"  Checkpoints: {checkpoints_done}/5 completed\n"
             f"  Fix iters:   {state.fix_iterations}"
         )
-    except Exception:
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError):
         return None

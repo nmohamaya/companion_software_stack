@@ -233,12 +233,20 @@ def cp4_findings(
     """
     io.header("CHECKPOINT 4/5 — Review & Test Findings")
 
-    # Send push notification
+    # Send push notification — deliberately omit review finding content to
+    # avoid leaking security-relevant code review comments to the external
+    # ntfy server. Send only a generic summary.
     if notifier:
-        finding_summary = "No findings" if not review_findings else (
-            review_findings[:200] + "..." if len(review_findings) > 200
-            else review_findings
-        )
+        if not review_findings:
+            finding_summary = "No findings"
+        else:
+            # Count severity levels without leaking content
+            p1_count = review_findings.lower().count("[p1]")
+            p2_count = review_findings.lower().count("[p2]")
+            p3_count = review_findings.lower().count("[p3]")
+            finding_summary = (
+                f"{p1_count} P1, {p2_count} P2, {p3_count} P3 finding(s)"
+            )
         notifier.send_checkpoint(
             4, f"Review complete — {finding_summary}",
             issue=state.issue_number,

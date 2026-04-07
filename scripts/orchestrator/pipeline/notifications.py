@@ -8,6 +8,15 @@ Configuration:
   Set NTFY_TOPIC environment variable or pass topic= to Notifier.
   No account needed — just pick a unique, hard-to-guess topic string.
 
+  For production use, self-host ntfy and set NTFY_TOKEN for authentication:
+    NTFY_SERVER=https://ntfy.internal.example.com
+    NTFY_TOPIC=pipeline-notifications
+    NTFY_TOKEN=tk_your_auth_token_here
+
+  WARNING: The default ntfy.sh server is public — anyone who knows the
+  topic name can subscribe to notifications. Use a hard-to-guess topic
+  or self-host with authentication for sensitive pipelines.
+
 Usage:
     notifier = Notifier(topic="drone-pipeline-nm")
     notifier.send_checkpoint(1, "12 files changed, build passes", issue=367)
@@ -19,9 +28,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from urllib.parse import quote as url_quote
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +45,37 @@ class NotifyEvent(Enum):
     COMPLETE = auto()
 
 
+# Topic names must be alphanumeric, hyphens, or underscores only.
+_VALID_TOPIC_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _validate_topic(topic: str) -> str:
+    """Validate and return the topic, or raise ValueError."""
+    if topic and not _VALID_TOPIC_RE.match(topic):
+        raise ValueError(
+            f"Invalid ntfy topic '{topic}': must contain only "
+            f"alphanumeric characters, hyphens, or underscores."
+        )
+    return topic
+
+
+def _validate_server_url(url: str) -> str:
+    """Validate server URL uses HTTPS (unless explicitly opted out)."""
+    if url and not url.startswith("https://"):
+        if os.environ.get("NTFY_INSECURE") == "1":
+            logger.warning(
+                "NTFY_SERVER is not HTTPS (%s) — proceeding because "
+                "NTFY_INSECURE=1 is set.",
+                url,
+            )
+        else:
+            raise ValueError(
+                f"NTFY_SERVER must use HTTPS (got '{url}'). "
+                f"Set NTFY_INSECURE=1 to allow non-HTTPS."
+            )
+    return url
+
+
 @dataclass
 class NotifyConfig:
     """Notification configuration — mirrors pipeline.notifications in config."""
@@ -42,6 +84,7 @@ class NotifyConfig:
     provider: str = "ntfy"
     topic: str = ""
     server_url: str = "https://ntfy.sh"
+    auth_token: str = ""  # NTFY_TOKEN for authenticated ntfy servers
     notify_on: list[str] = field(
         default_factory=lambda: ["checkpoint", "error", "complete"]
     )
@@ -50,19 +93,41 @@ class NotifyConfig:
     def from_env(cls) -> NotifyConfig:
         """Build config from environment variables.
 
-        NTFY_TOPIC:   topic name (required to enable)
-        NTFY_SERVER:  server URL (default: https://ntfy.sh)
-        NTFY_EVENTS:  comma-separated event list (default: checkpoint,error,complete)
+        NTFY_TOPIC:    topic name (required to enable)
+        NTFY_SERVER:   server URL (default: https://ntfy.sh), must be HTTPS
+        NTFY_TOKEN:    auth token for authenticated ntfy servers (optional)
+        NTFY_EVENTS:   comma-separated event list (default: checkpoint,error,complete)
+        NTFY_INSECURE: set to "1" to allow non-HTTPS server URLs
         """
         topic = os.environ.get("NTFY_TOPIC", "")
         server = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
+        token = os.environ.get("NTFY_TOKEN", "")
         events_str = os.environ.get("NTFY_EVENTS", "checkpoint,error,complete")
         events = [e.strip() for e in events_str.split(",") if e.strip()]
+
+        # Validate inputs
+        if topic:
+            _validate_topic(topic)
+            _validate_server_url(server)
+
+        # Warn about public ntfy.sh without authentication
+        if (
+            topic
+            and server.rstrip("/") == "https://ntfy.sh"
+            and not token
+        ):
+            logger.warning(
+                "Using public ntfy.sh without authentication — anyone who "
+                "knows the topic '%s' can read notifications. Consider "
+                "self-hosting ntfy with NTFY_TOKEN for sensitive pipelines.",
+                topic,
+            )
 
         return cls(
             enabled=bool(topic),
             topic=topic,
             server_url=server,
+            auth_token=token,
             notify_on=events,
         )
 
@@ -79,15 +144,18 @@ class Notifier:
         *,
         topic: str = "",
         server_url: str = "https://ntfy.sh",
+        auth_token: str = "",
         config: NotifyConfig | None = None,
     ) -> None:
         if config is not None:
             self._config = config
         elif topic:
+            _validate_topic(topic)
             self._config = NotifyConfig(
                 enabled=True,
                 topic=topic,
                 server_url=server_url,
+                auth_token=auth_token,
             )
         else:
             self._config = NotifyConfig.from_env()
@@ -208,13 +276,23 @@ class Notifier:
     ) -> bool:
         """Send a notification via curl to ntfy.sh.
 
-        Returns True on success, False on failure. Never raises.
+        Returns True on success, False on failure. Never raises — notification
+        failures are logged but must not block the pipeline.
         """
         if not self.enabled:
             return False
 
-        url = f"{self._config.server_url.rstrip('/')}/{self._config.topic}"
-        cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}"]
+        # Build URL with properly encoded topic to prevent path traversal
+        base = self._config.server_url.rstrip("/")
+        safe_topic = url_quote(self._config.topic, safe="")
+        url = f"{base}/{safe_topic}"
+
+        cmd = [
+            "curl", "-s",
+            "--fail-with-body",  # fail on HTTP errors
+            "-o", "/dev/null",
+            "-w", "%{http_code}",
+        ]
         cmd.extend(["-d", message])
         if title:
             cmd.extend(["-H", f"Title: {title}"])
@@ -222,6 +300,9 @@ class Notifier:
             cmd.extend(["-H", f"Tags: {tags}"])
         if priority:
             cmd.extend(["-H", f"Priority: {priority}"])
+        # Add authentication header if token is configured
+        if self._config.auth_token:
+            cmd.extend(["-H", f"Authorization: Bearer {self._config.auth_token}"])
         cmd.append(url)
 
         try:
@@ -244,6 +325,6 @@ class Notifier:
         except subprocess.TimeoutExpired:
             logger.warning("Notification timed out: %s", title)
             return False
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             logger.warning("Notification error: %s", e)
             return False

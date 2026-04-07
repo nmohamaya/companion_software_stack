@@ -17,9 +17,9 @@ Implemented tmux session management and ntfy.sh push notifications for the multi
 | `scripts/orchestrator/pipeline/notifications.py` | ntfy.sh notification module — `Notifier`, `NotifyConfig`, `NotifyEvent` |
 | `scripts/orchestrator/pipeline/tmux.py` | tmux session management — `TmuxSession`, `list_pipeline_sessions`, `session_status` |
 | `scripts/orchestrator/commands/pipeline_monitor.py` | `pipeline list/attach/status/kill` subcommands |
-| `tests/test_orchestrator/test_notifications.py` | 18 unit tests for notification module |
-| `tests/test_orchestrator/test_tmux.py` | 20 unit tests for tmux module |
-| `tests/test_orchestrator/test_checkpoint_notifications.py` | 10 integration tests for checkpoint + notification |
+| `tests/test_orchestrator/test_notifications.py` | 37 unit tests for notification module (config, validation, send, auth) |
+| `tests/test_orchestrator/test_tmux.py` | 29 unit tests for tmux module (launch, attach, exec_attach, list, status) |
+| `tests/test_orchestrator/test_checkpoint_notifications.py` | 11 integration tests for checkpoint + notification |
 
 ### Modified Files
 
@@ -86,9 +86,9 @@ python -m orchestrator deploy-issue 367 --pipeline --tmux --notify drone-pipelin
 
 ## Test Plan
 
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_notifications.py -v` — 18 tests
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_tmux.py -v` — 20 tests
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_checkpoint_notifications.py -v` — 10 tests
+- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_notifications.py -v` — 37 tests
+- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_tmux.py -v` — 29 tests
+- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_checkpoint_notifications.py -v` — 11 tests
 - [ ] Existing tests still pass: `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/ -v`
 - [ ] Manual: `--notify` flag sends real notification to ntfy.sh topic
 - [ ] Manual: `--tmux` flag creates tmux session and attaches

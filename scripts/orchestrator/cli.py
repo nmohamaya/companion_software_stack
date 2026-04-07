@@ -152,7 +152,7 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
     if subcmd == "attach":
         return run_attach(args.issue)
     if subcmd == "status":
-        return run_status(issue=args.issue if hasattr(args, "issue") else None)
+        return run_status(issue=args.issue)
     if subcmd == "kill":
         return run_kill(args.issue)
 

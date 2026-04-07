@@ -11,6 +11,8 @@ from orchestrator.pipeline.notifications import (
     NotifyConfig,
     NotifyEvent,
     Notifier,
+    _validate_topic,
+    _validate_server_url,
 )
 
 
@@ -55,6 +57,73 @@ class TestNotifyConfig:
         monkeypatch.setenv("NTFY_EVENTS", "")
         cfg = NotifyConfig.from_env()
         assert cfg.notify_on == []
+
+    def test_from_env_with_auth_token(self, monkeypatch):
+        monkeypatch.setenv("NTFY_TOPIC", "test")
+        monkeypatch.setenv("NTFY_TOKEN", "tk_secret123")
+        cfg = NotifyConfig.from_env()
+        assert cfg.auth_token == "tk_secret123"
+
+    def test_from_env_rejects_non_https(self, monkeypatch):
+        monkeypatch.setenv("NTFY_TOPIC", "test")
+        monkeypatch.setenv("NTFY_SERVER", "http://evil.com")
+        monkeypatch.delenv("NTFY_INSECURE", raising=False)
+        with pytest.raises(ValueError, match="must use HTTPS"):
+            NotifyConfig.from_env()
+
+    def test_from_env_allows_non_https_with_insecure(self, monkeypatch):
+        monkeypatch.setenv("NTFY_TOPIC", "test")
+        monkeypatch.setenv("NTFY_SERVER", "http://local.dev")
+        monkeypatch.setenv("NTFY_INSECURE", "1")
+        cfg = NotifyConfig.from_env()
+        assert cfg.server_url == "http://local.dev"
+
+    def test_from_env_rejects_invalid_topic(self, monkeypatch):
+        monkeypatch.setenv("NTFY_TOPIC", "../../admin/messages")
+        with pytest.raises(ValueError, match="Invalid ntfy topic"):
+            NotifyConfig.from_env()
+
+
+class TestValidation:
+    """Test topic and URL validation."""
+
+    def test_valid_topic_alphanumeric(self):
+        assert _validate_topic("my-pipeline-123") == "my-pipeline-123"
+
+    def test_valid_topic_underscores(self):
+        assert _validate_topic("drone_pipeline_nm") == "drone_pipeline_nm"
+
+    def test_invalid_topic_path_traversal(self):
+        with pytest.raises(ValueError, match="Invalid ntfy topic"):
+            _validate_topic("../../admin/messages")
+
+    def test_invalid_topic_slashes(self):
+        with pytest.raises(ValueError, match="Invalid ntfy topic"):
+            _validate_topic("my/topic")
+
+    def test_invalid_topic_query_string(self):
+        with pytest.raises(ValueError, match="Invalid ntfy topic"):
+            _validate_topic("topic?param=1")
+
+    def test_empty_topic_passes(self):
+        assert _validate_topic("") == ""
+
+    def test_valid_https_url(self):
+        assert _validate_server_url("https://ntfy.sh") == "https://ntfy.sh"
+
+    def test_rejects_http_url(self, monkeypatch):
+        monkeypatch.delenv("NTFY_INSECURE", raising=False)
+        with pytest.raises(ValueError, match="must use HTTPS"):
+            _validate_server_url("http://evil.com")
+
+    def test_allows_http_with_insecure(self, monkeypatch):
+        monkeypatch.setenv("NTFY_INSECURE", "1")
+        result = _validate_server_url("http://local.dev")
+        assert result == "http://local.dev"
+
+    def test_notifier_rejects_invalid_topic(self):
+        with pytest.raises(ValueError, match="Invalid ntfy topic"):
+            Notifier(topic="bad/topic")
 
 
 class TestNotifyEvent:
@@ -200,3 +269,31 @@ class TestNotifierSend:
         n.send_checkpoint(1, "test")
         cmd = mock_run.call_args[0][0]
         assert "https://ntfy.example.com/test" in cmd
+
+    @patch("orchestrator.pipeline.notifications.subprocess.run")
+    def test_auth_token_included_in_curl(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="200", stderr="")
+        n = Notifier(
+            topic="test",
+            auth_token="tk_secret123",
+        )
+        n.send_checkpoint(1, "test")
+        cmd = mock_run.call_args[0][0]
+        assert "Authorization: Bearer tk_secret123" in cmd
+
+    @patch("orchestrator.pipeline.notifications.subprocess.run")
+    def test_no_auth_header_when_no_token(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="200", stderr="")
+        n = Notifier(topic="test")
+        n.send_checkpoint(1, "test")
+        cmd = mock_run.call_args[0][0]
+        auth_headers = [c for c in cmd if "Authorization" in str(c)]
+        assert len(auth_headers) == 0
+
+    @patch("orchestrator.pipeline.notifications.subprocess.run")
+    def test_fail_with_body_flag(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="200", stderr="")
+        n = Notifier(topic="test")
+        n.send_checkpoint(1, "test")
+        cmd = mock_run.call_args[0][0]
+        assert "--fail-with-body" in cmd

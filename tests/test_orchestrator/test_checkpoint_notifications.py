@@ -99,17 +99,23 @@ class TestCp3WithNotifier:
 
 
 class TestCp4WithNotifier:
-    def test_sends_notification(self, state, mock_notifier):
+    def test_sends_notification_with_sanitized_summary(self, state, mock_notifier):
+        """CP4 notification should show severity counts, not raw findings."""
         io = TestConsole(inputs=["accept"])
         cp4_findings(
             state, io,
-            review_findings="P2: missing error check",
+            review_findings="[P2] missing error check\n[P3] broad exception",
             notifier=mock_notifier,
         )
         mock_notifier.send_checkpoint.assert_called_once()
         call_args = mock_notifier.send_checkpoint.call_args
         assert call_args[0][0] == 4
-        assert "P2:" in call_args[0][1]
+        summary = call_args[0][1]
+        # Should contain severity counts, NOT raw finding content
+        assert "P2" in summary
+        assert "P3" in summary
+        # Should NOT leak the actual finding text
+        assert "missing error check" not in summary
 
     def test_no_findings_notification(self, state, mock_notifier):
         io = TestConsole(inputs=["accept"])

@@ -18,6 +18,7 @@ Optional enhancements (--tmux, --notify):
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -285,15 +286,21 @@ def run(
     # 7. tmux wrapping — if --tmux and we're not already inside the session,
     # re-launch ourselves inside a tmux session and exit.
     if use_tmux and pipeline and not dry_run:
-        # Check if we're already inside the tmux session
-        inside_tmux = os.environ.get("TMUX_PANE") is not None
+        # Use a pipeline-specific env var to detect re-launch (not generic
+        # TMUX_PANE, which could be set by an outer tmux session).
+        pipeline_session_id = f"pipeline-{issue_number}"
+        inside_pipeline_tmux = (
+            os.environ.get("PIPELINE_TMUX_SESSION") == pipeline_session_id
+        )
         session = TmuxSession(issue_number)
 
-        if not inside_tmux and not session.exists():
+        if not inside_pipeline_tmux and not session.exists():
             if not tmux_available():
                 io.warn("tmux not installed — running without tmux session")
             else:
-                # Build the command to re-launch inside tmux
+                # Build the command to re-launch inside tmux.
+                # Use shlex.join() to properly quote arguments against shell
+                # metacharacter injection (e.g., from --base or --notify values).
                 args = [sys.executable, "-m", "orchestrator", "deploy-issue"]
                 args.append(str(issue_number))
                 args.append("--pipeline")
@@ -305,15 +312,22 @@ def run(
                     args.extend(["--notify", notify_topic])
                 # Don't pass --tmux again (avoids infinite loop)
 
-                cmd = " ".join(args)
-                io.print(f"Launching pipeline in tmux session: pipeline-{issue_number}")
-                io.print(f"  Detach: Ctrl+B, D")
-                io.print(f"  Reattach: tmux attach -t pipeline-{issue_number}")
+                # Set PIPELINE_TMUX_SESSION so the re-launched process knows
+                # it's inside the pipeline tmux session (not a generic one).
+                env_prefix = (
+                    f"PIPELINE_TMUX_SESSION={shlex.quote(pipeline_session_id)}"
+                )
+                cmd = f"{env_prefix} {shlex.join(args)}"
+                io.print(f"Launching pipeline in tmux session: {pipeline_session_id}")
+                io.print("  Detach: Ctrl+B, D")
+                io.print(f"  Reattach: tmux attach -t {pipeline_session_id}")
                 io.print("")
 
                 session.launch(cmd, cwd=str(project_dir))
-                session.attach()
-                # If attach returns (shouldn't normally), exit
+                if not session.exec_attach():
+                    io.error("Failed to attach to tmux session.")
+                    return 1
+                # exec_attach() uses execvp — if we reach here, exec failed
                 return 0
 
     # 8. Dispatch by mode
@@ -338,9 +352,11 @@ def run(
     if not skip_tech_lead:
         tech_lead = TechLead(claude=claude, github=github, io=io)
 
-    # Create notifier for push notifications (if topic provided or env var set)
-    notifier = Notifier(topic=notify_topic) if notify_topic else Notifier()
-    if notifier.enabled:
+    # Create notifier for push notifications (if topic provided or env var set).
+    # Set to None when disabled to avoid repeated should_notify() checks.
+    _notifier_candidate = Notifier(topic=notify_topic) if notify_topic else Notifier()
+    notifier: Notifier | None = _notifier_candidate if _notifier_candidate.enabled else None
+    if notifier:
         io.info(f"Notifications enabled → ntfy.sh/{notifier.topic}")
 
     # Gather issue metadata for PR linking
@@ -479,26 +495,27 @@ def _run_pipeline(
 
         if is_terminal(current):
             if current == PipelineState.CLEANUP:
-                action = handle_cleanup(
-                    state, io, git, github, project_dir=project_dir
-                )
-                # Send completion notification
+                # Send completion notification before cleanup so a crash in
+                # cleanup doesn't silence the notification.
                 if notifier:
                     notifier.send_complete(
                         issue_number,
                         pr_url=state.pr_url,
                         pr_number=state.pr_number,
                     )
+                handle_cleanup(
+                    state, io, git, github, project_dir=project_dir
+                )
                 return 0
             else:  # ABORT
-                action = handle_abort(state, io, git, project_dir=project_dir)
-                # Send error notification on abort
+                # Send error notification before abort handler for same reason.
                 if notifier:
                     notifier.send_error(
                         "Pipeline aborted by user",
                         issue=issue_number,
                         state="ABORT",
                     )
+                handle_abort(state, io, git, project_dir=project_dir)
                 return 1
 
         # Dispatch to handler or checkpoint

@@ -164,6 +164,50 @@ class TestTmuxSession:
         s = TmuxSession(issue=42)
         assert s.capture_pane() == ""
 
+    @patch("orchestrator.pipeline.tmux.tmux_available", return_value=False)
+    def test_exec_attach_no_tmux(self, _):
+        s = TmuxSession(issue=42)
+        assert s.exec_attach() is False
+
+    @patch("orchestrator.pipeline.tmux.tmux_available", return_value=True)
+    @patch("orchestrator.pipeline.tmux.subprocess.run")
+    def test_exec_attach_session_not_exists(self, mock_run, _):
+        mock_run.return_value = MagicMock(returncode=1)  # has-session → no
+        s = TmuxSession(issue=42)
+        assert s.exec_attach() is False
+
+    @patch("orchestrator.pipeline.tmux.os.execvp")
+    @patch("orchestrator.pipeline.tmux.tmux_available", return_value=True)
+    @patch("orchestrator.pipeline.tmux.subprocess.run")
+    def test_exec_attach_handles_os_error(self, mock_run, _, mock_execvp):
+        """exec_attach gracefully handles OSError from execvp (TOCTOU race)."""
+        mock_run.return_value = MagicMock(returncode=0)  # has-session → yes
+        mock_execvp.side_effect = OSError("No such file or directory")
+        s = TmuxSession(issue=42)
+        assert s.exec_attach() is False
+
+    @patch("orchestrator.pipeline.tmux.tmux_available", return_value=False)
+    def test_attach_subprocess_no_tmux(self, _):
+        s = TmuxSession(issue=42)
+        assert s.attach() is False
+
+    @patch("orchestrator.pipeline.tmux.tmux_available", return_value=True)
+    @patch("orchestrator.pipeline.tmux.subprocess.run")
+    def test_attach_subprocess_not_exists(self, mock_run, _):
+        mock_run.return_value = MagicMock(returncode=1)  # has-session → no
+        s = TmuxSession(issue=42)
+        assert s.attach() is False
+
+    @patch("orchestrator.pipeline.tmux.tmux_available", return_value=True)
+    @patch("orchestrator.pipeline.tmux.subprocess.run")
+    def test_attach_subprocess_success(self, mock_run, _):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # has-session → yes
+            MagicMock(returncode=0),  # attach-session → success
+        ]
+        s = TmuxSession(issue=42)
+        assert s.attach() is True
+
 
 class TestListPipelineSessions:
     """Test list_pipeline_sessions()."""

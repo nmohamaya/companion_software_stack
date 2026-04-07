@@ -64,10 +64,11 @@ def run_attach(issue: int, *, io: Console | None = None) -> int:
         return run_list(io=io)
 
     io.print(f"Attaching to pipeline-{issue}...")
-    session.attach()
-    # attach() uses exec — if we reach here, it failed
-    io.error("Failed to attach to tmux session.")
-    return 1
+    if not session.exec_attach():
+        # exec_attach() uses execvp — we only reach here if it failed
+        io.error("Failed to attach to tmux session.")
+        return 1
+    return 0  # unreachable on successful exec, but satisfies linters
 
 
 def run_status(issue: int | None = None, *, io: Console | None = None) -> int:
@@ -110,7 +111,11 @@ def run_status(issue: int | None = None, *, io: Console | None = None) -> int:
 
 
 def run_kill(issue: int, *, io: Console | None = None) -> int:
-    """Kill a pipeline tmux session."""
+    """Kill a pipeline tmux session.
+
+    Note: no per-user authorization check — assumes single-user deployment.
+    In multi-user environments, verify tmux session ownership before killing.
+    """
     if io is None:
         io = Console()
 
