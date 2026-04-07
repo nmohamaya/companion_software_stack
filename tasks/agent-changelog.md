@@ -33,3 +33,10 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 - **Mode:** pipeline
 - **Fix iterations:** 0
 - **Status:** completed
+
+### 2026-04-07 | feature-infra-platform | opus | PR #375
+- **Issue:** #299 — feat: Add --json-logs flag to scenario runners and launch_gazebo.sh
+- **Branch:** feature/issue-299-feat-add---json-logs-flag-to-scenario-ru
+- **Mode:** pipeline
+- **Fix iterations:** 0
+- **Status:** completed
