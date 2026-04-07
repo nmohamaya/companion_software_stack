@@ -62,4 +62,6 @@ tasks/sessions/*.log
 
 # Security and license documentation (local-only)
 docs/SECURITY.md
-docs/LICENSE_AUDIT.md
+docs/LICENSE_AUDIT.mdscripts/orchestrator.egg-info/
+__pycache__/
+*.pyc
