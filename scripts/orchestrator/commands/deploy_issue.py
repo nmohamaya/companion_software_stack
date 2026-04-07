@@ -294,7 +294,16 @@ def run(
         )
         session = TmuxSession(issue_number)
 
-        if not inside_pipeline_tmux and not session.exists():
+        if not inside_pipeline_tmux:
+            if session.exists():
+                # Session already running — attach instead of starting a duplicate
+                io.print(f"Pipeline session already running: {pipeline_session_id}")
+                io.print("  Detach: Ctrl+B, D")
+                io.print(f"  Reattach: tmux attach -t {pipeline_session_id}")
+                io.print("")
+                session.attach()
+                return 0
+
             if not tmux_available():
                 io.warn("tmux not installed — running without tmux session")
             else:

@@ -103,7 +103,7 @@ class NotifyConfig:
         server = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
         token = os.environ.get("NTFY_TOKEN", "")
         events_str = os.environ.get("NTFY_EVENTS", "checkpoint,error,complete")
-        events = [e.strip() for e in events_str.split(",") if e.strip()]
+        events = [e.strip().lower() for e in events_str.split(",") if e.strip()]
 
         # Validate inputs
         if topic:
