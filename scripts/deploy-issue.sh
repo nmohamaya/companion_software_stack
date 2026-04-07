@@ -22,6 +22,7 @@ labels, creates a worktree, and launches the agent.
 Options:
   --base <branch>   Base branch to branch from (default: main)
                     Use for integration branches: --base integration/epic-263
+                    If omitted, an interactive prompt offers the choice.
   --auto            Agent works autonomously, then writes AGENT_REPORT.md
                     for you to review. You accept, reject, or request changes.
   --pipeline        Full guided pipeline: agent work → validation → PR → review
@@ -53,6 +54,7 @@ HEADLESS=false
 AUTO=false
 PIPELINE=false
 BASE_BRANCH="main"
+BASE_BRANCH_EXPLICIT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             BASE_BRANCH="$2"
+            BASE_BRANCH_EXPLICIT=true
             shift 2
             ;;
         --help|-h)  usage 0 ;;
@@ -277,6 +280,64 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
+# ── Branch strategy prompt ─────────────────────────────────────────────────
+# Ask the user whether to target main or an integration branch.
+# Skip when: --base was explicit, --headless (no TTY), or --dry-run already exited above.
+if [[ "$BASE_BRANCH_EXPLICIT" == "false" && "$HEADLESS" == "false" ]]; then
+    echo -e "${BOLD}Branch strategy${RESET}"
+    echo -e "  ${CYAN}[m]${RESET} main — PR targets main directly (default)"
+    echo -e "  ${CYAN}[i]${RESET} integration — create/use an integration branch, PR targets that"
+    echo ""
+    read -rp "  Your choice [m]: " BRANCH_STRATEGY
+
+    case "${BRANCH_STRATEGY:-m}" in
+        i|integration)
+            SUGGESTED_INTEG="integration/issue-${ISSUE}-${SLUG}"
+            echo ""
+            echo -e "  Suggested: ${CYAN}${SUGGESTED_INTEG}${RESET}"
+            echo -e "  Enter a custom name (e.g. integration/epic-263) or press Enter to accept."
+            read -rp "  Integration branch: " CUSTOM_INTEG
+            INTEG_BRANCH="${CUSTOM_INTEG:-$SUGGESTED_INTEG}"
+
+            # Create from latest remote main if it doesn't exist
+            if git -C "$PROJECT_DIR" rev-parse --verify "$INTEG_BRANCH" &>/dev/null; then
+                echo -e "  ${GREEN}REUSING${RESET} existing branch: ${INTEG_BRANCH}"
+            else
+                echo -e "  Fetching latest main from origin..."
+                git -C "$PROJECT_DIR" fetch origin main 2>&1 || true
+                echo -e "  Creating integration branch from origin/main..."
+                git -C "$PROJECT_DIR" branch "$INTEG_BRANCH" origin/main 2>&1 || {
+                    # Fallback to local main if origin/main isn't available
+                    echo -e "  ${YELLOW}WARN${RESET}  origin/main not available, using local main"
+                    git -C "$PROJECT_DIR" branch "$INTEG_BRANCH" main
+                }
+                echo -e "  ${GREEN}CREATED${RESET} ${INTEG_BRANCH}"
+            fi
+
+            # Push to origin (verify remote branch exists after)
+            git -C "$PROJECT_DIR" push -u origin "$INTEG_BRANCH" 2>&1 || {
+                if git -C "$PROJECT_DIR" ls-remote --exit-code origin "refs/heads/$INTEG_BRANCH" >/dev/null 2>&1; then
+                    echo -e "  ${YELLOW}WARN${RESET}  Push failed, but remote branch already exists (continuing)"
+                else
+                    echo -e "  ${RED}ERROR${RESET}  Push failed and remote branch does not exist."
+                    echo -e "  Resolve the push issue (auth, network, permissions) and retry."
+                    exit 1
+                fi
+            }
+
+            BASE_BRANCH="$INTEG_BRANCH"
+            echo ""
+            echo -e "  ${GREEN}Target:${RESET} PRs will target ${CYAN}${BASE_BRANCH}${RESET}"
+            echo ""
+            ;;
+        m|main|"")
+            ;; # default — no changes
+        *)
+            echo -e "  ${YELLOW}Unrecognized '${BRANCH_STRATEGY}', defaulting to main.${RESET}"
+            ;;
+    esac
+fi
+
 # ── Create worktree ────────────────────────────────────────────────────────
 WORKTREE_DIR="$PROJECT_DIR/.claude/worktrees/issue-${ISSUE}"
 
@@ -294,6 +355,46 @@ else
         }
     }
     echo -e "  ${GREEN}DONE${RESET}  Worktree: $WORKTREE_DIR"
+fi
+
+# ── Check for saved pipeline state (resume support) ───────────────────────
+PIPELINE_STATE_FILE="$WORKTREE_DIR/.pipeline-state"
+RESUME_STATE=""
+
+if [[ "$PIPELINE" == "true" && -f "$PIPELINE_STATE_FILE" ]]; then
+    SAVED_STATE="$(grep '^STATE=' "$PIPELINE_STATE_FILE" 2>/dev/null || true)"
+    SAVED_STATE="${SAVED_STATE#STATE=}"
+    if [[ -n "$SAVED_STATE" ]]; then
+        echo ""
+        echo -e "  ${CYAN}Found saved pipeline state at ${SAVED_STATE}.${RESET}"
+        read -rp "  Resume from ${SAVED_STATE}? [Y/n] " RESUME_CHOICE
+        if [[ ! "$RESUME_CHOICE" =~ ^[nN] ]]; then
+            # Restore saved variables safely (parse key=value, don't source)
+            while IFS='=' read -r key value || [[ -n "$key" ]]; do
+                [[ -z "$key" ]] && continue
+                case "$key" in
+                    STATE)            STATE="$value" ;;
+                    PR_NUMBER)        PR_NUMBER="$value" ;;
+                    PR_URL)           PR_URL="$value" ;;
+                    VALIDATION_EXIT)  VALIDATION_EXIT="$value" ;;
+                    BASE_BRANCH)      BASE_BRANCH="$value" ;;
+                    ROLE)             ROLE="$value" ;;
+                    MODEL)            MODEL="$value" ;;
+                    ISSUE)            ISSUE="$value" ;;
+                    TITLE)            TITLE="$value" ;;
+                    BRANCH)           BRANCH="$value" ;;
+                esac
+            done < "$PIPELINE_STATE_FILE"
+            RESUME_STATE="$STATE"
+            echo -e "  ${GREEN}Resuming pipeline from ${STATE}${RESET}"
+        else
+            rm -f "$PIPELINE_STATE_FILE"
+            echo -e "  Starting fresh pipeline."
+        fi
+    else
+        echo -e "  ${YELLOW}WARN${RESET}  Saved pipeline state file is corrupt — starting fresh."
+        rm -f "$PIPELINE_STATE_FILE"
+    fi
 fi
 
 # ── Update active-work.md ──────────────────────────────────────────────────
@@ -491,7 +592,13 @@ Whether build passed, test count before/after, any failures."
                 echo -e "    git push -u origin $BRANCH"
                 echo -e "    gh pr create --base $BASE_BRANCH --body \"Closes #${ISSUE}\""
                 echo ""
-                echo -e "  ${YELLOW}IMPORTANT:${RESET} PR body MUST include 'Closes #${ISSUE}' to link the issue."
+                if [[ "$BASE_BRANCH" != "main" ]]; then
+                    echo -e "  ${YELLOW}Integration branch:${RESET} PR will target '${BASE_BRANCH}', not main."
+                    echo -e "  When all sub-issues are done, create a PR from integration → main:"
+                    echo -e "    gh pr create --base main --head ${BASE_BRANCH} --title \"integration: merge ${BASE_BRANCH}\""
+                else
+                    echo -e "  ${YELLOW}IMPORTANT:${RESET} PR body MUST include 'Closes #${ISSUE}' to link the issue."
+                fi
                 exit 0
                 ;;
             c|changes)
@@ -521,9 +628,26 @@ elif [[ "$PIPELINE" == "true" ]]; then
     # Full guided pipeline: agent work → validation → PR → review → fix → push
     # 5 human checkpoints, everything else automated.
 
-    trap 'echo -e "\n${YELLOW}Pipeline interrupted.${RESET} Worktree preserved at: $WORKTREE_DIR"; exit 130' INT TERM
-
     # ── Helper functions ───────────────────────────────────────────────────
+    save_pipeline_state() {
+        # Use printf %q to safely escape values (e.g., TITLE with spaces/special chars)
+        printf 'STATE=%s\n' "$STATE" > "$PIPELINE_STATE_FILE"
+        printf 'PR_NUMBER=%s\n' "$PR_NUMBER" >> "$PIPELINE_STATE_FILE"
+        printf 'PR_URL=%s\n' "$PR_URL" >> "$PIPELINE_STATE_FILE"
+        printf 'VALIDATION_EXIT=%s\n' "$VALIDATION_EXIT" >> "$PIPELINE_STATE_FILE"
+        printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH" >> "$PIPELINE_STATE_FILE"
+        printf 'ROLE=%s\n' "$ROLE" >> "$PIPELINE_STATE_FILE"
+        printf 'MODEL=%s\n' "$MODEL" >> "$PIPELINE_STATE_FILE"
+        printf 'ISSUE=%s\n' "$ISSUE" >> "$PIPELINE_STATE_FILE"
+        printf 'TITLE=%s\n' "$TITLE" >> "$PIPELINE_STATE_FILE"
+        printf 'BRANCH=%s\n' "$BRANCH" >> "$PIPELINE_STATE_FILE"
+    }
+
+    # Initialize STATE before trap to avoid empty value on early interrupt
+    STATE="INIT"
+
+    trap 'save_pipeline_state; echo -e "\n${YELLOW}Pipeline interrupted at ${STATE}.${RESET}"; echo "  Resume: bash scripts/deploy-issue.sh ${ISSUE} --pipeline"; exit 130' INT TERM
+
     pipeline_header() {
         echo ""
         echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
@@ -539,6 +663,50 @@ elif [[ "$PIPELINE" == "true" ]]; then
             echo -e "  ${CYAN}[${key}]${RESET} ${desc}"
         done
         echo ""
+    }
+
+    create_integration_pr() {
+        # Create a PR from integration branch → main, listing all sub-PRs.
+        local integ_branch="$1"
+        echo ""
+        echo -e "  ${BOLD}Creating PR: ${integ_branch} → main${RESET}"
+
+        # Gather sub-PRs that were merged into this integration branch
+        local sub_prs
+        sub_prs="$(gh pr list --base "$integ_branch" --state merged --json number,title \
+            --jq '.[] | "- PR #\(.number): \(.title)"' 2>/dev/null || true)"
+
+        local integ_body
+        integ_body="$(cat <<INTEGEOF
+## Summary
+
+Integration branch \`${integ_branch}\` is ready to merge into main.
+
+## Sub-PRs included
+
+${sub_prs:-No sub-PRs found (changes may have been pushed directly).}
+
+## Test plan
+
+- [ ] All tests pass on integration branch
+- [ ] Review consolidated changes
+
+Generated via deploy-issue.sh pipeline mode
+INTEGEOF
+)"
+
+        local integ_url
+        integ_url="$(gh pr create \
+            --base main \
+            --head "$integ_branch" \
+            --title "integration: merge ${integ_branch} into main" \
+            --body "$integ_body" 2>&1)" || {
+            echo -e "  ${RED}Failed to create PR.${RESET}"
+            echo "  $integ_url"
+            return 1
+        }
+        echo -e "  ${GREEN}DONE${RESET}  ${integ_url}"
+        return 0
     }
 
     REPORT_FILE="$WORKTREE_DIR/AGENT_REPORT.md"
@@ -586,9 +754,14 @@ Anything the reviewer should look closely at.
 Whether build passed, test count before/after, any failures."
 
     # ── State machine ──────────────────────────────────────────────────────
-    STATE="AGENT_WORK"
+    if [[ -n "$RESUME_STATE" ]]; then
+        STATE="$RESUME_STATE"
+    else
+        STATE="AGENT_WORK"
+    fi
 
     while true; do
+        save_pipeline_state
         case "$STATE" in
 
         # ── AGENT_WORK: Agent works autonomously ──────────────────────────
@@ -1027,15 +1200,85 @@ CHANGELOG_EOF
             echo -e "  ${GREEN}Role:${RESET}     ${ROLE}"
             echo -e "  ${GREEN}Model:${RESET}    ${MODEL}"
             echo ""
-            echo -e "  ${BOLD}Next step:${RESET} Review and merge the PR in GitHub UI."
-            echo ""
+            if [[ "$BASE_BRANCH" != "main" ]]; then
+                # ── Integration branch: offer test / pr-to-main / done / cleanup
+                echo -e "  ${YELLOW}NOTE:${RESET} PR targets integration branch '${BASE_BRANCH}', not main."
+                echo ""
 
-            # Offer cleanup (don't force it — user may want the worktree)
-            read -rp "  Clean up merged branches/worktrees? [y/N] " CLEANUP_CHOICE
-            if [[ "$CLEANUP_CHOICE" =~ ^[yY]$ ]]; then
-                "$PROJECT_DIR/scripts/cleanup-branches.sh" --yes 2>&1 || true
+                INTEG_DONE=false
+                while [[ "$INTEG_DONE" == "false" ]]; do
+                    pipeline_options \
+                        "t" "test — run full test suite on integration branch" \
+                        "p" "pr-to-main — create PR from ${BASE_BRANCH} → main" \
+                        "d" "done — finish (keep working on more issues against ${BASE_BRANCH})" \
+                        "c" "cleanup — clean up this issue's worktree only (preserve integration branch)"
+
+                    read -rp "  Your choice: " INTEG_CHOICE
+                    case "$INTEG_CHOICE" in
+                        t|test)
+                            echo ""
+                            echo -e "  ${BOLD}Running test suite on ${BASE_BRANCH}...${RESET}"
+
+                            TEST_WORKTREE="$PROJECT_DIR/.claude/worktrees/_test-integ"
+                            if [[ -d "$TEST_WORKTREE" ]]; then
+                                git -C "$PROJECT_DIR" worktree remove "$TEST_WORKTREE" --force 2>/dev/null || true
+                            fi
+                            git -C "$PROJECT_DIR" worktree add "$TEST_WORKTREE" "$BASE_BRANCH" 2>&1 || {
+                                echo -e "  ${RED}Failed to create test worktree${RESET}"
+                                continue
+                            }
+
+                            TEST_EXIT=0
+                            (cd "$TEST_WORKTREE" && \
+                                "$PROJECT_DIR/scripts/validate-session.sh" --branch "$BASE_BRANCH" 2>&1) || TEST_EXIT=$?
+
+                            git -C "$PROJECT_DIR" worktree remove "$TEST_WORKTREE" --force 2>/dev/null || true
+
+                            if [[ $TEST_EXIT -eq 0 ]]; then
+                                echo -e "  ${GREEN}All tests passed on ${BASE_BRANCH}.${RESET}"
+                            else
+                                echo -e "  ${RED}Tests failed on ${BASE_BRANCH}.${RESET} Fix issues before merging to main."
+                            fi
+                            echo ""
+                            ;;
+                        p|pr-to-main)
+                            create_integration_pr "$BASE_BRANCH" || true
+                            echo ""
+                            ;;
+                        d|done)
+                            echo ""
+                            echo -e "  ${GREEN}Done.${RESET} Integration branch '${BASE_BRANCH}' preserved."
+                            echo -e "  Deploy more issues against it with:"
+                            echo -e "    bash scripts/deploy-issue.sh <issue> --base ${BASE_BRANCH}"
+                            INTEG_DONE=true
+                            ;;
+                        c|cleanup)
+                            echo ""
+                            echo -e "  Cleaning up worktree only (integration branch preserved)..."
+                            git -C "$PROJECT_DIR" worktree remove "$WORKTREE_DIR" 2>/dev/null || {
+                                echo -e "  ${YELLOW}WARN${RESET}  Could not remove worktree (may have uncommitted changes)"
+                            }
+                            echo -e "  ${GREEN}DONE${RESET}  Worktree removed. Branch '${BASE_BRANCH}' still exists."
+                            INTEG_DONE=true
+                            ;;
+                        *)
+                            echo -e "  ${RED}Invalid choice.${RESET}"
+                            ;;
+                    esac
+                done
+            else
+                # ── Standard main-branch cleanup
+                echo -e "  ${BOLD}Next step:${RESET} Review and merge the PR in GitHub UI."
+                echo ""
+
+                read -rp "  Clean up merged branches/worktrees? [y/N] " CLEANUP_CHOICE
+                if [[ "$CLEANUP_CHOICE" =~ ^[yY]$ ]]; then
+                    "$PROJECT_DIR/scripts/cleanup-branches.sh" --yes 2>&1 || true
+                fi
             fi
 
+            # Pipeline completed successfully — remove state file
+            rm -f "$PIPELINE_STATE_FILE"
             exit 0
             ;;
 
@@ -1043,13 +1286,17 @@ CHANGELOG_EOF
         ABORT)
             pipeline_header "Pipeline Aborted"
 
+            save_pipeline_state
             echo -e "  Worktree preserved at: ${WORKTREE_DIR}"
             echo -e "  Branch: ${BRANCH}"
             [[ -n "$PR_URL" ]] && echo -e "  PR: ${PR_URL} (still open)"
             echo ""
-            echo -e "  You can resume manually:"
+            echo -e "  Resume pipeline:"
+            echo -e "    bash scripts/deploy-issue.sh ${ISSUE} --pipeline"
+            echo ""
+            echo -e "  Or work interactively:"
             echo -e "    cd $WORKTREE_DIR"
-            echo -e "    bash $PROJECT_DIR/scripts/start-agent.sh $ROLE --interactive"
+            echo -e "    bash scripts/start-agent.sh $ROLE --interactive"
             exit 1
             ;;
 
