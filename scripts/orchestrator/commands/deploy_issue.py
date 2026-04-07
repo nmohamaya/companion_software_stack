@@ -441,12 +441,7 @@ def _run_pipeline(
             diff_stat = ""
             try:
                 wt_git = Git(worktree_dir)
-                # Use working-tree diff against base so uncommitted changes
-                # also appear (agent may not have committed everything).
-                diff_stat = wt_git.diff_stat_working_tree(base_branch)
-                if not diff_stat:
-                    # Fall back to committed-only diff
-                    diff_stat = wt_git.diff_stat(base_branch, "HEAD")
+                diff_stat = wt_git.diff_stat(base_branch, "HEAD")
             except Exception:
                 pass
             action = cp1_review(

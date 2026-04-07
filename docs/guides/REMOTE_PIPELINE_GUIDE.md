@@ -22,7 +22,7 @@ The pipeline (`deploy-issue.sh --pipeline`) has 5 human checkpoints where you ap
 
 | App | Platform | Purpose |
 |-----|----------|---------|
-| Termux | Android | Full Linux terminal + SSH (free, open-source) |
+| JuiceSSH | Android | SSH terminal |
 | Blink Shell | iOS | SSH terminal |
 | Tailscale | Android / iOS | VPN |
 | ntfy | Android / iOS | Push notifications |

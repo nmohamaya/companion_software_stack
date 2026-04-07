@@ -115,15 +115,6 @@ class Git:
         result = self._run("diff", "HEAD", check=False)
         return result.stdout
 
-    def diff_stat_working_tree(self, base: str = "HEAD") -> str:
-        """Get diff --stat including uncommitted changes (staged + unstaged).
-
-        Uses two-dot diff (base..HEAD plus working tree) so uncommitted
-        changes show up — unlike three-dot which only compares commits.
-        """
-        result = self._run("diff", "--stat", base, check=False)
-        return result.stdout.strip()
-
     def log_oneline(
         self,
         n: int = 10,
