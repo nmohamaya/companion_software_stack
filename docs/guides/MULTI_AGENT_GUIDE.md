@@ -13,13 +13,14 @@ The pipeline applies **Amdahl's Law** to software verification: feature agents p
                           └──────┬──────────────────────────────┬───────────────┘
                                  │                              │
                     ┌────────────▼────────────┐    ┌────────────▼────────────┐
-                    │   deploy-issue.sh 123    │    │   deploy-review.sh 456  │
-                    │   (routes by labels)     │    │   (routes by diff)      │
+                    │  orchestrator             │    │  orchestrator             │
+                    │  deploy-issue 123         │    │  deploy-review 456        │
+                    │   (routes by labels)      │    │   (routes by diff)        │
                     └────────────┬────────────┘    └────────────┬────────────┘
                                  │                              │
                     ┌────────────▼────────────┐    ┌────────────▼────────────┐
-                    │      start-agent.sh      │    │      start-agent.sh     │
-                    │   (model + role setup)    │    │   (parallel launches)   │
+                    │  orchestrator start       │    │  orchestrator start      │
+                    │   (model + role setup)    │    │   (parallel launches)    │
                     └────────────┬────────────┘    └────────────┬────────────┘
                                  │                              │
               ┌──────────────────▼──────────────────────────────▼──────────┐
@@ -44,7 +45,7 @@ The pipeline applies **Amdahl's Law** to software verification: feature agents p
                           ┌─────────────▼─────────────┐
                           │        TECH LEAD           │
                           │  (serial merge decision)   │
-                          │  validate-session.sh       │
+                          │  orchestrator validate     │
                           └─────────────┬─────────────┘
                                         │
                                   Merge to main
@@ -54,7 +55,7 @@ The pipeline applies **Amdahl's Law** to software verification: feature agents p
 
 ```mermaid
 flowchart TD
-    Issue[GitHub Issue with labels] -->|deploy-issue.sh| Route{Route by labels}
+    Issue[GitHub Issue with labels] -->|orchestrator deploy-issue| Route{Route by labels}
     Route -->|perception| FP[feature-perception]
     Route -->|nav-planning| FN[feature-nav]
     Route -->|comms/integration| FI[feature-integration]
@@ -71,7 +72,7 @@ flowchart TD
     FIC -->|creates PR| PR
     FIP -->|creates PR| PR
 
-    PR -->|deploy-review.sh| Review{Route by diff content}
+    PR -->|orchestrator deploy-review| Review{Route by diff content}
     Review -->|always| RMS2[review-memory-safety]
     Review -->|always| RS2[review-security]
     Review -->|always| TU2[test-unit]
@@ -87,7 +88,7 @@ flowchart TD
     TS -->|comments| PR
 
     PR -->|all reviews pass| TL2[tech-lead]
-    TL2 -->|validate-session.sh| Merge[Merge to main]
+    TL2 -->|orchestrator validate| Merge[Merge to main]
 ```
 
 ## Integration Branch Flow (Multi-Issue Epics)
@@ -97,9 +98,9 @@ When a feature spans multiple issues across domains, use an **integration branch
 ```mermaid
 flowchart TD
     Main[main branch] -->|create| IB[integration/epic-XXX]
-    IB -->|"deploy-issue.sh 100 --base integration/epic-XXX"| W1[feature/issue-100-...]
-    IB -->|"deploy-issue.sh 101 --base integration/epic-XXX"| W2[feature/issue-101-...]
-    IB -->|"deploy-issue.sh 102 --base integration/epic-XXX"| W3[feature/issue-102-...]
+    IB -->|"orchestrator deploy-issue 100 --base integration/epic-XXX"| W1[feature/issue-100-...]
+    IB -->|"orchestrator deploy-issue 101 --base integration/epic-XXX"| W2[feature/issue-101-...]
+    IB -->|"orchestrator deploy-issue 102 --base integration/epic-XXX"| W3[feature/issue-102-...]
 
     W1 -->|PR targets integration branch| IB
     W2 -->|PR targets integration branch| IB
@@ -128,7 +129,7 @@ flowchart TD
 
 ### Agent Boundaries
 
-Each agent has a defined scope of files it may edit. Review agents are **read-only** — they can only read code and post comments. The `check-agent-boundaries.sh` script enforces these boundaries (advisory in CI).
+Each agent has a defined scope of files it may edit. Review agents are **read-only** — they can only read code and post comments. The `python -m orchestrator boundaries` command enforces these boundaries (advisory in CI).
 
 ## Setup for New Users
 
@@ -138,9 +139,9 @@ The multi-agent framework runs on **your local machine** using the Claude Code C
 
 | Requirement | Install | Verify |
 |-------------|---------|--------|
+| Python 3.10+ | System package or pyenv | `python3 --version` |
 | Claude Code CLI | [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code) | `claude --version` |
 | GitHub CLI | `sudo apt install gh` or [cli.github.com](https://cli.github.com) | `gh auth status` |
-| jq | `sudo apt install jq` | `jq --version` |
 | Build toolchain | See [GETTING_STARTED.md](GETTING_STARTED.md) | `cmake --version && clang-format-18 --version` |
 
 ### First-Time Setup
@@ -156,18 +157,21 @@ claude auth
 # 3. Authenticate GitHub CLI
 gh auth login
 
-# 4. Verify agent definitions exist
+# 4. Install the orchestrator package
+pip install -e .              # or: pip install -e .[dev] for test dependencies
+
+# 5. Verify agent definitions exist
 ls .claude/agents/    # Should show 13 .md files
 
-# 5. Verify shared context exists
+# 6. Verify shared context exists
 ls .claude/shared-context/   # Should show domain-knowledge.md, project-status.md
 
-# 6. Build the project (needed before agents can run tests)
+# 7. Build the project (needed before agents can run tests)
 bash deploy/build.sh
 
-# 7. Test the setup with a dry run
-bash scripts/deploy-issue.sh 123 --dry-run    # Shows routing without launching
-bash scripts/start-agent.sh --list             # Shows all 13 agent roles
+# 8. Test the setup with a dry run
+python -m orchestrator deploy-issue 123 --dry-run    # Shows routing without launching
+python -m orchestrator list                          # Shows all 13 agent roles
 ```
 
 ### What's Included in the Repo
@@ -179,7 +183,7 @@ Everything an agent needs is checked into git:
 | Agent definitions | `.claude/agents/*.md` | Role scope, tools, instructions per agent |
 | Project instructions | `CLAUDE.md` | Build commands, architecture, coding standards |
 | Shared context | `.claude/shared-context/` | Project status + domain knowledge (injected into every agent prompt) |
-| Pipeline scripts | `scripts/deploy-issue.sh`, `deploy-review.sh`, etc. | Orchestration, routing, review |
+| Orchestrator package | `scripts/orchestrator/` | Python CLI: routing, pipeline FSM, review, tech-lead |
 | Scenario configs | `config/scenarios/*.json` | Integration test scenarios |
 
 ### What's NOT Shared
@@ -210,16 +214,19 @@ The simplest way to use the pipeline — point it at an issue and it handles the
 
 ```bash
 # Interactive (default) — you approve changes and converse in real time
-bash scripts/deploy-issue.sh 123
+python -m orchestrator deploy-issue 123
 
-# Auto mode — agent works autonomously, you review a report afterward
-bash scripts/deploy-issue.sh 123 --auto
+# Headless mode — agent works autonomously, non-interactive
+python -m orchestrator deploy-issue 123 --headless
 
 # Preview routing without executing
-bash scripts/deploy-issue.sh 123 --dry-run
+python -m orchestrator deploy-issue 123 --dry-run
+
+# Pipeline mode — 5 checkpoints with automated steps between
+python -m orchestrator deploy-issue 123 --pipeline
 
 # For epic sub-issues, branch from the integration branch
-bash scripts/deploy-issue.sh 123 --base integration/epic-XXX
+python -m orchestrator deploy-issue 123 --base integration/epic-XXX
 ```
 
 #### Launch Modes
@@ -227,8 +234,8 @@ bash scripts/deploy-issue.sh 123 --base integration/epic-XXX
 | Mode | Flag | Permissions | You do... |
 |------|------|-------------|-----------|
 | **Interactive** | *(default)* | You approve each change | Converse with the agent in real time |
-| **Auto** | `--auto` | File edits auto-approved | Review `AGENT_REPORT.md` after, then accept/change/reject |
-| **Headless** | `--headless` | None (for CI sandboxes) | Pre-configure permissions externally |
+| **Headless** | `--headless` | File edits auto-approved | Review `AGENT_REPORT.md` after, then accept/change/reject |
+| **Pipeline** | `--pipeline` | 5 human checkpoints | Automated steps between checkpoints (see Pipeline Mode) |
 
 **What happens (all modes):**
 1. Fetches the issue from GitHub (title, body, labels)
@@ -246,13 +253,13 @@ bash scripts/deploy-issue.sh 123 --base integration/epic-XXX
 
 ```bash
 # Auto-route reviewers based on the PR's diff content
-bash scripts/deploy-review.sh 456
+python -m orchestrator deploy-review 456
 
 # Preview which reviewers would be triggered
-bash scripts/deploy-review.sh 456 --dry-run
+python -m orchestrator deploy-review 456 --dry-run
 
 # Force all reviewers
-bash scripts/deploy-review.sh 456 --all
+python -m orchestrator deploy-review 456 --all
 ```
 
 Review agents launch in parallel and post a consolidated comment on the PR when done. Monitor progress in a separate terminal:
@@ -280,10 +287,10 @@ This is the most hands-on workflow. You control every step, running each script 
 
 ```bash
 # Preview routing first
-bash scripts/deploy-issue.sh 315 --base integration/epic-357 --dry-run
+python -m orchestrator deploy-issue 315 --base integration/epic-357 --dry-run
 
 # Launch — you'll approve changes and converse with the agent
-bash scripts/deploy-issue.sh 315 --base integration/epic-357
+python -m orchestrator deploy-issue 315 --base integration/epic-357
 ```
 
 The agent opens an interactive session. You guide the work, approve edits, and the agent commits when you're satisfied.
@@ -291,7 +298,7 @@ The agent opens an interactive session. You guide the work, approve edits, and t
 #### Step 2: Validate the agent's work (hallucination detection)
 
 ```bash
-bash scripts/validate-session.sh
+python -m orchestrator validate
 ```
 
 Review the output — it checks build, test count, test execution, `#include` paths, and PR body references. Fix any issues before proceeding.
@@ -308,7 +315,7 @@ gh pr create --base integration/epic-357
 
 ```bash
 # Back in the main repo directory
-bash scripts/deploy-review.sh <pr-number>
+python -m orchestrator deploy-review <pr-number>
 ```
 
 This launches review agents in parallel (memory-safety, security, + conditional concurrency/fault-recovery based on diff content). Monitor them:
@@ -347,7 +354,7 @@ Open an interactive session in the worktree with the **same feature agent** that
 
 ```bash
 cd .claude/worktrees/issue-<NUMBER>
-bash "$REPO_ROOT/scripts/start-agent.sh" <agent-role>
+python -m orchestrator start <agent-role>
 ```
 
 Then paste a structured prompt listing each finding with severity, location, and the fix. Be specific — the more detail you give, the better the fixes:
@@ -405,14 +412,14 @@ P2 (should fix):
 #### Step 7: Re-validate and push fixes
 
 ```bash
-bash "$REPO_ROOT/scripts/validate-session.sh"
+python -m orchestrator validate
 git push
 ```
 
 Optionally re-run reviews on the updated PR to verify all findings are addressed:
 
 ```bash
-bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+python -m orchestrator deploy-review <pr-number>
 ```
 
 #### Step 8: Merge in GitHub UI
@@ -421,7 +428,7 @@ Review the PR one final time in GitHub, then merge. After merge:
 
 ```bash
 # Cleanup worktree and branches
-bash scripts/cleanup-branches.sh
+python -m orchestrator cleanup
 ```
 
 ### 4. Orchestrated Session
@@ -430,7 +437,7 @@ For more control, use the session orchestrator which adds pre/post validation:
 
 ```bash
 # Full session with pre-flight, agent, validation, and changelog
-bash scripts/run-session.sh feature-nav "Implement A* path planner" --issue 789
+python -m orchestrator session feature-nav "Implement A* path planner" --issue 789
 ```
 
 ### 5. Launch an Agent Directly
@@ -439,16 +446,16 @@ For ad-hoc work or interactive sessions:
 
 ```bash
 # List all available roles
-bash scripts/start-agent.sh --list
+python -m orchestrator list
 
 # Launch with a task
-bash scripts/start-agent.sh feature-perception "Add YOLOv8 detector backend"
+python -m orchestrator start feature-perception "Add YOLOv8 detector backend"
 
 # Interactive session (no task — opens Claude CLI)
-bash scripts/start-agent.sh feature-nav
+python -m orchestrator start feature-nav
 
 # Dry-run: print resolved config without launching
-bash scripts/start-agent.sh feature-integration "test" --dry-run
+python -m orchestrator start feature-integration "test" --dry-run
 ```
 
 ### 6. Validate a Session
@@ -457,10 +464,10 @@ After an agent completes work, verify nothing was hallucinated:
 
 ```bash
 # Validate current branch
-bash scripts/validate-session.sh
+python -m orchestrator validate
 
 # Validate a specific branch
-bash scripts/validate-session.sh --branch feature/issue-123-foo
+python -m orchestrator validate --branch feature/issue-123-foo
 ```
 
 Checks: build succeeds, test count matches baseline, all tests pass, `#include` paths exist, PR body references real files.
@@ -478,14 +485,14 @@ git log --oneline <base-branch>..HEAD        # commits
 git diff --stat <base-branch>..HEAD          # files changed
 
 # 3. Validate (hallucination detection — checks build, tests, includes)
-bash "$REPO_ROOT/scripts/validate-session.sh"
+python -m orchestrator validate
 
 # 4. Push and create PR
 git push -u origin <branch-name>
 gh pr create --base <base-branch>            # main or integration/epic-XXX
 
 # 5. Deploy review agents on the PR
-bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+python -m orchestrator deploy-review <pr-number>
 
 # 6. Address review comments, then merge the PR
 ```
@@ -500,7 +507,7 @@ gh pr create --base main --head integration/epic-XXX \
 # 8. After merge, cleanup
 git branch -d integration/epic-XXX
 git push origin --delete integration/epic-XXX
-bash "$REPO_ROOT/scripts/cleanup-branches.sh"
+python -m orchestrator cleanup
 ```
 
 **Quick reference for `<base-branch>`:**
@@ -511,32 +518,81 @@ bash "$REPO_ROOT/scripts/cleanup-branches.sh"
 
 ```bash
 # Team-wide dashboard
-bash scripts/agent-dashboard.sh
+python -m orchestrator dashboard --team
 
 # Per-agent stats
-bash scripts/agent-dashboard.sh feature-perception
+python -m orchestrator dashboard --agent feature-perception
 
 # Git-based agent stats (commits, lines, cost)
-bash scripts/agent-stats.sh
+python -m orchestrator stats
 ```
 
 ### 9. Cleanup
 
 ```bash
 # Remove stale branches and worktrees
-bash scripts/cleanup-branches.sh
+python -m orchestrator cleanup
+
+# Dry-run (show what would be cleaned)
+python -m orchestrator cleanup --dry-run
 
 # List all active worktrees
 git worktree list
 ```
+
+### 10. Tech-Lead Orchestration
+
+The `orchestrate` command uses the tech-lead agent as a strategy layer to analyze issues, recommend routing/priority, and drive the full pipeline with human approval at every checkpoint.
+
+```bash
+# Orchestrate a single issue (tech-lead analyzes → routes → launches pipeline)
+python -m orchestrator orchestrate 123
+
+# Orchestrate an epic (tech-lead produces phased plan, executes sequentially)
+python -m orchestrator orchestrate 500 --epic
+
+# Preview the tech-lead's recommendation without executing
+python -m orchestrator orchestrate 123 --dry-run
+```
+
+**Single-issue flow:**
+
+1. Tech-lead (Opus) analyzes issue → recommends role, priority, sequencing, labels
+2. Human reviews and approves/modifies routing
+3. Ops-github (Haiku) applies labels and milestones
+4. Feature agent works via `deploy-issue --pipeline` (5 checkpoints)
+
+**Epic flow:**
+
+1. Tech-lead produces a phased plan (Foundation → Feature → Polish)
+2. Human approves the plan
+3. Each phase's issues are orchestrated sequentially, with human approval between phases
+
+### 11. Sync Project Status
+
+Auto-regenerate `.claude/shared-context/project-status.md` from live data (git, GitHub, ctest) while preserving the human-authored `## Notes` section:
+
+```bash
+python -m orchestrator sync-status
+```
+
+This is also called automatically at pipeline CLEANUP and at the end of `orchestrator session`.
+
+### 12. Health Report
+
+```bash
+python -m orchestrator health
+```
+
+Reports test count vs baseline, coverage delta, and build status.
 
 ## Pipeline Mode (`--pipeline`)
 
 The pipeline mode chains all scripts into a single guided flow with **5 human checkpoints**. Everything between checkpoints is automated.
 
 ```bash
-bash scripts/deploy-issue.sh 123 --pipeline
-bash scripts/deploy-issue.sh 123 --pipeline --base integration/epic-300
+python -m orchestrator deploy-issue 123 --pipeline
+python -m orchestrator deploy-issue 123 --pipeline --base integration/epic-300
 ```
 
 ### Flow
@@ -554,7 +610,7 @@ Issue fetch + label routing (automated)
 │   Options: [a]ccept / [c]hanges / [r]eject           │
 └─────────────────────┬───────────────────────────────┘
                       ▼
-  validate-session.sh runs (automated: build, tests, hallucination detection)
+  orchestrator validate runs (automated: build, tests, hallucination detection)
                       │
 ┌─────────────────────▼───────────────────────────────┐
 │ CP2: Hallucination Report                            │
@@ -571,7 +627,7 @@ Issue fetch + label routing (automated)
 │   Options: [c]reate / [e]dit / [b]ack / [a]bort     │
 └─────────────────────┬───────────────────────────────┘
                       ▼
-  deploy-review.sh runs (automated: 2-4 review agents + 1-2 test agents in parallel)
+  orchestrator deploy-review runs (automated: 2-4 review agents + 1-2 test agents in parallel)
                       │
 ┌─────────────────────▼───────────────────────────────┐
 │ CP4: Review & Test Findings                          │
@@ -608,7 +664,7 @@ Every checkpoint supports going **back** to the previous checkpoint. The pipelin
 ### Example Walkthrough
 
 ```bash
-$ bash scripts/deploy-issue.sh 315 --pipeline --base integration/epic-300
+$ python -m orchestrator deploy-issue 315 --pipeline --base integration/epic-300
 
 ═══════════════════════════════════════════════════════
   Phase 1/5 — Agent Working (feature-infra-core)
@@ -625,7 +681,7 @@ $ bash scripts/deploy-issue.sh 315 --pipeline --base integration/epic-300
   [a] accept  [c] changes  [r] reject
   Your choice: a
 
-  Running Validation (validate-session.sh)...
+  Running Validation (orchestrator validate)...
   [1/5] Build verification       PASS
   [2/5] Test count verification   PASS  (1309 tests)
   [3/5] Test execution            PASS
@@ -703,7 +759,7 @@ Issues are routed to agents based on GitHub labels. When multiple domain labels 
 
 ## Review & Test Routing Reference
 
-`deploy-review.sh` launches **review agents** and **test agents** in parallel, routed by diff content:
+`python -m orchestrator deploy-review` launches **review agents** and **test agents** in parallel, routed by diff content:
 
 ### Review Agents (safety review — read-only, Opus)
 
@@ -730,9 +786,9 @@ Agents coordinate through these shared files:
 
 | File | Purpose | Who writes | Who reads |
 |------|---------|-----------|-----------|
-| `tasks/active-work.md` | Live work tracker — what's in-progress | deploy-issue.sh (start + cleanup) | All agents at session start |
-| `tasks/agent-changelog.md` | Completed work log — what was recently done | Pipeline CLEANUP, run-session.sh | All agents at session start |
-| `.claude/shared-context/project-status.md` | Project state, priorities, blocking bugs, active epics | Human (end of session) | All agents at session start |
+| `tasks/active-work.md` | Live work tracker — what's in-progress | orchestrator deploy-issue (start + cleanup) | All agents at session start |
+| `tasks/agent-changelog.md` | Completed work log — what was recently done | Pipeline CLEANUP, orchestrator session | All agents at session start |
+| `.claude/shared-context/project-status.md` | Project state, priorities, blocking bugs, active epics | `orchestrator sync-status` + human notes | All agents at session start |
 | `.claude/shared-context/domain-knowledge.md` | Non-obvious pitfalls discovered during work | Any agent (tech-lead reviews) | All agents at session start |
 | `docs/guides/AGENT_HANDOFF.md` | Cross-domain handoff protocol | tech-lead | Agents during handoff |
 | `tests/TESTS.md` | Test inventory and baseline count | Feature agents | All agents (verify test count) |
@@ -742,7 +798,7 @@ Agents coordinate through these shared files:
 
 ### How Cross-Agent Context Works
 
-Every agent session automatically receives context about other agents' work. Both `deploy-issue.sh` and `start-agent.sh` inject this context into the agent's prompt at startup:
+Every agent session automatically receives context about other agents' work. Both `orchestrator deploy-issue` and `orchestrator start` inject this context into the agent's prompt at startup:
 
 1. **Active work awareness** — The agent sees entries from `tasks/active-work.md` showing which issues are in-progress, on which branches, by which agents. This prevents two agents from unknowingly modifying the same files.
 
@@ -758,7 +814,7 @@ Every agent session automatically receives context about other agents' work. Bot
 Session Start                    Session End (Pipeline CLEANUP)
 ─────────────                    ─────────────────────────────
                                  
-deploy-issue.sh                  CLEANUP state:
+orchestrator deploy-issue         CLEANUP state:
   │                                │
   ├─ Write active-work.md         ├─ Mark active-work.md → completed
   │  (status: in-progress)        │
@@ -768,12 +824,12 @@ deploy-issue.sh                  CLEANUP state:
   │                                ├─ Check AGENT_REPORT.md for pitfalls
   ├─ Read agent-changelog.md      │  → remind about domain-knowledge.md
   │  (inject into prompt)          │
+  │                                ├─ Run orchestrator sync-status
+  ├─ Read project-status.md       │  (auto-update project-status.md)
+  │  (inject into prompt)          │
   │                                └─ Verify issue↔PR linking
-  ├─ Read project-status.md
-  │  (inject into prompt)       Human (end of session):
-  │                                │
-  └─ Read domain-knowledge.md     └─ Update project-status.md
-     (inject into prompt)            (epics, priorities, bugs, metrics)
+  └─ Read domain-knowledge.md
+     (inject into prompt)
 ```
 
 ### Required Documentation Updates
@@ -794,14 +850,14 @@ These updates ensure that the next agent session starts with accurate project st
 ```bash
 # 1. Create issue on GitHub with labels: "perception", "enhancement"
 # 2. Deploy
-bash scripts/deploy-issue.sh 400
+python -m orchestrator deploy-issue 400
 
 # Agent creates worktree, implements feature, creates PR
 # 3. Review
-bash scripts/deploy-review.sh <pr-number>
+python -m orchestrator deploy-review <pr-number>
 
 # 4. Validate and merge
-bash scripts/validate-session.sh --branch feature/issue-400-...
+python -m orchestrator validate --branch feature/issue-400-...
 # Tech lead merges if all checks pass
 ```
 
@@ -813,9 +869,9 @@ git checkout -b integration/epic-500 main
 git push -u origin integration/epic-500
 
 # 2. Deploy sub-issues against the integration branch
-bash scripts/deploy-issue.sh 501 --base integration/epic-500
-bash scripts/deploy-issue.sh 502 --base integration/epic-500
-bash scripts/deploy-issue.sh 503 --base integration/epic-500
+python -m orchestrator deploy-issue 501 --base integration/epic-500
+python -m orchestrator deploy-issue 502 --base integration/epic-500
+python -m orchestrator deploy-issue 503 --base integration/epic-500
 
 # Each agent creates a PR targeting integration/epic-500 (not main)
 
@@ -834,7 +890,7 @@ git push origin --delete integration/epic-500
 
 ```bash
 # Launch an agent interactively for a specific domain
-bash scripts/start-agent.sh feature-integration
+python -m orchestrator start feature-integration
 
 # You can now have a conversation with the agent about P5/P6/P7 code
 ```
@@ -863,7 +919,7 @@ Good — `ipc` (priority 3) will route to `feature-infra-core`.
 #### Step 3: Preview routing
 
 ```bash
-$ bash scripts/deploy-issue.sh 315 --base integration/epic-357 --dry-run
+$ python -m orchestrator deploy-issue 315 --base integration/epic-357 --dry-run
 
 Fetching issue #315...
   Title:  feat(#300-C1): Add version fields to all IPC structs
@@ -879,13 +935,13 @@ Routing decision
 DRY RUN — would perform:
   1. git worktree add .claude/worktrees/issue-315 -b feature/issue-315-... integration/epic-357
   2. Update tasks/active-work.md
-  3. Launch: start-agent.sh feature-infra-core <issue prompt>
+  3. Launch: orchestrator start feature-infra-core <issue prompt>
 ```
 
 #### Step 4: Launch in auto mode
 
 ```bash
-$ bash scripts/deploy-issue.sh 315 --base integration/epic-357 --auto
+$ python -m orchestrator deploy-issue 315 --base integration/epic-357 --headless
 
 Fetching issue #315...
   Title:  feat(#300-C1): Add version fields to all IPC structs
@@ -1000,14 +1056,14 @@ After accepting (step 6a), validate and create the PR:
 cd .claude/worktrees/issue-315
 
 # Validate — check for hallucinations
-bash "$REPO_ROOT/scripts/validate-session.sh"
+python -m orchestrator validate
 
 # Push and create PR
 git push -u origin feature/issue-315-feat300-c1-add-version-fields-to-all-ipc
 gh pr create --base integration/epic-357
 
 # Deploy review agents — they run in parallel
-bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+python -m orchestrator deploy-review <pr-number>
 ```
 
 Monitor review progress in a separate terminal:
@@ -1029,7 +1085,7 @@ with the **same feature agent** that did the original work — it has the best c
 
 ```bash
 cd .claude/worktrees/issue-315
-bash "$REPO_ROOT/scripts/start-agent.sh" feature-infra-core
+python -m orchestrator start feature-infra-core
 ```
 
 Paste a structured prompt with each finding, severity, and specific fix instructions
@@ -1039,14 +1095,14 @@ full prompt template and a real-world example).
 The agent applies fixes. You approve each change. Then re-validate and push:
 
 ```bash
-bash "$REPO_ROOT/scripts/validate-session.sh"
+python -m orchestrator validate
 git push
 ```
 
 Optionally re-run reviewers to verify fixes:
 
 ```bash
-bash "$REPO_ROOT/scripts/deploy-review.sh" <pr-number>
+python -m orchestrator deploy-review <pr-number>
 ```
 
 #### Step 9: Merge in GitHub UI
@@ -1061,7 +1117,7 @@ Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 3. **No automatic conflict resolution.** When two agents modify overlapping files (even via separate worktrees), merge conflicts must be resolved manually. The integration branch pattern mitigates this but doesn't eliminate it.
 
-4. **Label routing requires upfront labeling.** `deploy-issue.sh` routes based on GitHub labels. If an issue has no recognized labels, the script fails. Labels must be applied before deployment.
+4. **Label routing requires upfront labeling.** `orchestrator deploy-issue` routes based on GitHub labels. If an issue has no recognized labels, the command fails. Labels must be applied before deployment.
 
 5. **Single-machine worktree limit.** All worktrees exist on one machine. The pipeline doesn't distribute agents across multiple machines (though the Claude Agent SDK could support this).
 
@@ -1071,7 +1127,7 @@ Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 8. **CI integration is advisory.** The `agent-checks.yml` workflow warns about boundary violations and PR size — it doesn't block merges. The `auto-review.yml` workflow is disabled by default.
 
-9. **Hallucination detection is heuristic.** `validate-session.sh` checks for common hallucination patterns (missing includes, phantom files in PR body, test count regression) but cannot catch all cases. Human review remains essential.
+9. **Hallucination detection is heuristic.** `orchestrator validate` checks for common hallucination patterns (missing includes, phantom files in PR body, test count regression) but cannot catch all cases. Human review remains essential.
 
 10. **No rollback automation.** If an agent's merged PR introduces a regression, there's no automated revert. Standard git revert workflows apply.
 
@@ -1081,7 +1137,7 @@ Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 2. **Cost tracking and budgets.** Track API token usage per agent/session/issue. Set per-issue cost budgets with automatic termination. Dashboard shows cost-per-test, cost-per-line, and cost-per-fix.
 
-3. **Automatic PR chaining.** When Agent A's PR merges, automatically trigger dependent agents (Agent B) based on handoff issues. Currently requires manual `deploy-issue.sh` invocation.
+3. **Automatic PR chaining.** When Agent A's PR merges, automatically trigger dependent agents (Agent B) based on handoff issues. Currently requires manual `orchestrator deploy-issue` invocation.
 
 4. **Persistent agent context.** Give agents access to a vector store of previous sessions, decisions, and domain knowledge so they can learn from past work without re-deriving context.
 

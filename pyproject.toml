@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orchestrator"
+version = "2.0.0"
+description = "Multi-agent pipeline orchestration for the drone companion stack"
+requires-python = ">=3.10"
+# Zero external dependencies — stdlib only
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+include = ["orchestrator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/test_orchestrator"]
+pythonpath = ["scripts"]
