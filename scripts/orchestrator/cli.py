@@ -53,6 +53,8 @@ def _cmd_deploy_issue(args: argparse.Namespace) -> int:
         skip_tech_lead=args.skip_tech_lead,
         base_branch=args.base,
         dry_run=args.dry_run,
+        use_tmux=args.tmux,
+        notify_topic=args.notify or "",
     )
 
 
@@ -136,6 +138,28 @@ def _cmd_orchestrate(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_pipeline(args: argparse.Namespace) -> int:
+    from orchestrator.commands.pipeline_monitor import (
+        run_attach,
+        run_kill,
+        run_list,
+        run_status,
+    )
+
+    subcmd = args.pipeline_command
+    if subcmd == "list":
+        return run_list()
+    if subcmd == "attach":
+        return run_attach(args.issue)
+    if subcmd == "status":
+        return run_status(issue=args.issue if hasattr(args, "issue") else None)
+    if subcmd == "kill":
+        return run_kill(args.issue)
+
+    # No subcommand — show list
+    return run_list()
+
+
 # ── Parser ─────────────────────────────────────────────────────────────────
 
 
@@ -173,6 +197,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip tech-lead analysis (use auto-triage only)")
     p.add_argument("--base", default="main", help="Base branch (default: main)")
     p.add_argument("--dry-run", action="store_true", help="Show routing without launching")
+    p.add_argument("--tmux", action="store_true",
+                   help="Run pipeline inside a named tmux session (pipeline-<issue>)")
+    p.add_argument("--notify", metavar="TOPIC",
+                   help="ntfy.sh topic for push notifications (or set NTFY_TOPIC env var)")
 
     # ── deploy-review ──────────────────────────────────────────────────
     p = sub.add_parser("deploy-review", help="Launch review agents for a PR")
@@ -232,6 +260,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--epic", action="store_true", help="Treat as epic (multi-issue)")
     p.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
+    # ── pipeline ──────────────────────────────────────────────────────
+    p = sub.add_parser("pipeline", help="Monitor and manage pipeline sessions")
+    pipeline_sub = p.add_subparsers(dest="pipeline_command", help="Pipeline commands")
+
+    pipeline_sub.add_parser("list", help="List active pipeline tmux sessions")
+
+    ps = pipeline_sub.add_parser("attach", help="Attach to a pipeline session")
+    ps.add_argument("issue", type=int, help="Issue number")
+
+    ps = pipeline_sub.add_parser("status", help="Show pipeline checkpoint status")
+    ps.add_argument("issue", type=int, nargs="?", default=None,
+                    help="Issue number (omit for all)")
+
+    ps = pipeline_sub.add_parser("kill", help="Kill a pipeline session")
+    ps.add_argument("issue", type=int, help="Issue number")
+
     return parser
 
 
@@ -253,6 +297,7 @@ COMMAND_HANDLERS = {
     "log": _cmd_log,
     "sync-status": _cmd_sync_status,
     "orchestrate": _cmd_orchestrate,
+    "pipeline": _cmd_pipeline,
 }
 
 

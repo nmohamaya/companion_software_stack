@@ -9,10 +9,15 @@ Three modes:
   - Headless (--headless): Fire-and-forget, no checkpoints, no tech-lead.
 
 Both interactive and pipeline use the same 12-state FSM with 5 checkpoints.
+
+Optional enhancements (--tmux, --notify):
+  - --tmux: run the pipeline inside a named tmux session for remote attach
+  - --notify <topic>: send ntfy.sh push notifications at each checkpoint
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -48,6 +53,8 @@ from orchestrator.pipeline.handlers import (
     handle_review,
     handle_validate,
 )
+from orchestrator.pipeline.notifications import Notifier
+from orchestrator.pipeline.tmux import TmuxSession, tmux_available
 
 
 def _prompt_branch_strategy(io: Console, git: Git, issue_number: int) -> str:
@@ -156,6 +163,8 @@ def run(
     skip_tech_lead: bool = False,
     base_branch: str = "main",
     dry_run: bool = False,
+    use_tmux: bool = False,
+    notify_topic: str = "",
 ) -> int:
     """Deploy an agent for a GitHub issue.
 
@@ -164,6 +173,10 @@ def run(
       - Interactive: agent runs interactively, user can chat and guide live.
       - Pipeline: agent runs autonomously (print mode), for on-the-move use.
       - Headless: fire-and-forget, no FSM, no checkpoints, no tech-lead.
+
+    Optional:
+      - use_tmux: wrap pipeline in a named tmux session for remote attach.
+      - notify_topic: ntfy.sh topic for push notifications at checkpoints.
     """
     if io is None:
         io = Console()
@@ -269,7 +282,41 @@ def run(
         f"coding standards.\n"
     )
 
-    # 7. Dispatch by mode
+    # 7. tmux wrapping — if --tmux and we're not already inside the session,
+    # re-launch ourselves inside a tmux session and exit.
+    if use_tmux and pipeline and not dry_run:
+        # Check if we're already inside the tmux session
+        inside_tmux = os.environ.get("TMUX_PANE") is not None
+        session = TmuxSession(issue_number)
+
+        if not inside_tmux and not session.exists():
+            if not tmux_available():
+                io.warn("tmux not installed — running without tmux session")
+            else:
+                # Build the command to re-launch inside tmux
+                args = [sys.executable, "-m", "orchestrator", "deploy-issue"]
+                args.append(str(issue_number))
+                args.append("--pipeline")
+                if skip_tech_lead:
+                    args.append("--skip-tech-lead")
+                if base_branch != "main":
+                    args.extend(["--base", base_branch])
+                if notify_topic:
+                    args.extend(["--notify", notify_topic])
+                # Don't pass --tmux again (avoids infinite loop)
+
+                cmd = " ".join(args)
+                io.print(f"Launching pipeline in tmux session: pipeline-{issue_number}")
+                io.print(f"  Detach: Ctrl+B, D")
+                io.print(f"  Reattach: tmux attach -t pipeline-{issue_number}")
+                io.print("")
+
+                session.launch(cmd, cwd=str(project_dir))
+                session.attach()
+                # If attach returns (shouldn't normally), exit
+                return 0
+
+    # 8. Dispatch by mode
     if headless:
         # Fire-and-forget: no FSM, no checkpoints, no tech-lead
         io.print("Launching agent in headless mode...")
@@ -290,6 +337,11 @@ def run(
     tech_lead = None
     if not skip_tech_lead:
         tech_lead = TechLead(claude=claude, github=github, io=io)
+
+    # Create notifier for push notifications (if topic provided or env var set)
+    notifier = Notifier(topic=notify_topic) if notify_topic else Notifier()
+    if notifier.enabled:
+        io.info(f"Notifications enabled → ntfy.sh/{notifier.topic}")
 
     # Gather issue metadata for PR linking
     issue_labels = issue.labels
@@ -327,6 +379,7 @@ def run(
         prompt=prompt,
         interactive=interactive,
         tech_lead=tech_lead,
+        notifier=notifier,
     )
 
 
@@ -352,12 +405,14 @@ def _run_pipeline(
     prompt: str,
     interactive: bool = True,
     tech_lead: TechLead | None = None,
+    notifier: Notifier | None = None,
 ) -> int:
     """Run the 12-state pipeline FSM.
 
     interactive=True: agent runs interactively (user can chat).
     interactive=False: agent runs in print mode (autonomous).
     tech_lead: if provided, used for advisory review at CP1 and CP4.
+    notifier: if provided, sends push notifications at each checkpoint.
     """
 
     # Check for resume state
@@ -427,9 +482,23 @@ def _run_pipeline(
                 action = handle_cleanup(
                     state, io, git, github, project_dir=project_dir
                 )
+                # Send completion notification
+                if notifier:
+                    notifier.send_complete(
+                        issue_number,
+                        pr_url=state.pr_url,
+                        pr_number=state.pr_number,
+                    )
                 return 0
             else:  # ABORT
                 action = handle_abort(state, io, git, project_dir=project_dir)
+                # Send error notification on abort
+                if notifier:
+                    notifier.send_error(
+                        "Pipeline aborted by user",
+                        issue=issue_number,
+                        state="ABORT",
+                    )
                 return 1
 
         # Dispatch to handler or checkpoint
@@ -457,6 +526,7 @@ def _run_pipeline(
                 report_path=report_path,
                 diff_stat=diff_stat,
                 tech_lead=tech_lead,
+                notifier=notifier,
             )
             if action == "changes":
                 # Open interactive session for modifications
@@ -475,6 +545,7 @@ def _run_pipeline(
                 state, io,
                 validation_output=validation_output,
                 validation_passed=validation_passed,
+                notifier=notifier,
             )
             if action == "commit":
                 # Stage and commit in the worktree (where agent made changes)
@@ -495,7 +566,7 @@ def _run_pipeline(
             action = handle_pr_create(state, io, wt_git, github)
 
         elif current == PipelineState.CP3_PR_PREVIEW:
-            action = cp3_pr_preview(state, io)
+            action = cp3_pr_preview(state, io, notifier=notifier)
             if action == "create":
                 try:
                     pr = github.create_pr(
@@ -542,6 +613,7 @@ def _run_pipeline(
                 state, io,
                 review_findings=review_findings,
                 tech_lead=tech_lead,
+                notifier=notifier,
             )
 
         elif current == PipelineState.FIX_AND_REVALIDATE:
@@ -562,6 +634,7 @@ def _run_pipeline(
                 state, io,
                 commit_log=commit_log,
                 validation_passed=validation_passed,
+                notifier=notifier,
             )
 
         else:
