@@ -1,48 +1,101 @@
-# Agent Report: Issue #299 — Add --json-logs flag to scenario runners
-
-**Agent:** feature-infra-platform
-**Branch:** feature/issue-299-feat-add---json-logs-flag-to-scenario-ru
-**Date:** 2026-04-07
+# Agent Report — Issue #371: Remote Pipeline Monitoring
 
 ## Summary
 
-Added `--json-logs` flag to `tests/run_scenario.sh` and `tests/run_scenario_gazebo.sh` so structured JSON log output can be enabled when running scenarios. The flag is forwarded through to the underlying launcher scripts (`launch_all.sh` and `launch_gazebo.sh`), which in turn pass it to all 7 companion process binaries.
+Implemented tmux session management and ntfy.sh push notifications for the multi-agent pipeline, enabling monitoring and checkpoint approval from any device (phone via SSH, tablet, another terminal).
+
+**Two complementary layers:**
+1. **tmux sessions** — Pipeline runs inside a named tmux session (`pipeline-<issue>`). User can detach, walk away, and reattach from any device.
+2. **ntfy.sh notifications** — Push notifications sent at each of the 5 checkpoints, on errors, and on completion. User gets a ping on their phone without watching the terminal.
 
 ## Changes
 
-| File | Change |
-|------|--------|
-| `tests/run_scenario.sh` | Added `--json-logs` to arg parser, help text, `--all` recursive call, and `launch_all.sh` invocation |
-| `tests/run_scenario_gazebo.sh` | Added `--json-logs` to arg parser, help text, `--all` recursive call, and `launch_gazebo.sh` invocation |
+### New Files
 
-**Note:** `deploy/launch_gazebo.sh` already forwards unknown args to all binaries via its `EXTRA_ARGS` catch-all (line 39: `*) EXTRA_ARGS="${EXTRA_ARGS} ${arg}" ;;`), so no modification was needed there. The issue description suggested modifying it, but the existing code already handles the pass-through correctly.
+| File | Purpose |
+|------|---------|
+| `scripts/orchestrator/pipeline/notifications.py` | ntfy.sh notification module — `Notifier`, `NotifyConfig`, `NotifyEvent` |
+| `scripts/orchestrator/pipeline/tmux.py` | tmux session management — `TmuxSession`, `list_pipeline_sessions`, `session_status` |
+| `scripts/orchestrator/commands/pipeline_monitor.py` | `pipeline list/attach/status/kill` subcommands |
+| `tests/test_orchestrator/test_notifications.py` | 37 unit tests for notification module (config, validation, send, auth) |
+| `tests/test_orchestrator/test_tmux.py` | 29 unit tests for tmux module (launch, attach, exec_attach, list, status) |
+| `tests/test_orchestrator/test_checkpoint_notifications.py` | 11 integration tests for checkpoint + notification |
 
-## Verification
+### Modified Files
 
-- Bash syntax check: both scripts pass `bash -n` validation
-- Help output: `--json-logs` appears correctly in both `--help` outputs
-- Quick CI: 2/2 jobs passed (FMT + BUILD), 1286/1286 tests pass, 0 warnings
-- No C++ files modified, so format/clang-tidy not applicable
+| File | Changes |
+|------|---------|
+| `scripts/orchestrator/pipeline/checkpoints.py` | Added optional `notifier` param to all 5 checkpoint functions; sends notification at each checkpoint |
+| `scripts/orchestrator/commands/deploy_issue.py` | Added `--tmux` and `--notify` flags; tmux session wrapping; notifier creation and passing through pipeline |
+| `scripts/orchestrator/cli.py` | Added `--tmux`/`--notify` flags to `deploy-issue`; added `pipeline` subcommand group (list/attach/status/kill) |
 
 ## Usage
 
+### tmux sessions
 ```bash
-# Tier 1 scenario with JSON logs
-tests/run_scenario.sh config/scenarios/03_battery_degradation.json --json-logs
+# Launch pipeline in tmux (detachable)
+python -m orchestrator deploy-issue 367 --pipeline --tmux
 
-# Tier 2 Gazebo scenario with JSON logs
-tests/run_scenario_gazebo.sh config/scenarios/18_perception_avoidance.json --json-logs
+# Detach: Ctrl+B, D
+# Reattach from any device:
+tmux attach -t pipeline-367
 
-# All scenarios with JSON logs
-tests/run_scenario.sh --all --json-logs
-tests/run_scenario_gazebo.sh --all --json-logs
+# List active pipelines
+python -m orchestrator pipeline list
 
-# Direct Gazebo launch (already worked before this change)
-bash deploy/launch_gazebo.sh --json-logs
+# Check status
+python -m orchestrator pipeline status 367
+
+# Attach to session
+python -m orchestrator pipeline attach 367
+
+# Kill session
+python -m orchestrator pipeline kill 367
 ```
 
-## Commit
+### ntfy.sh notifications
+```bash
+# Via command line flag
+python -m orchestrator deploy-issue 367 --pipeline --notify drone-pipeline-nm
 
+# Via environment variable
+export NTFY_TOPIC=drone-pipeline-nm
+python -m orchestrator deploy-issue 367 --pipeline
+
+# Custom server (self-hosted)
+export NTFY_SERVER=https://ntfy.example.com
+export NTFY_TOPIC=my-topic
 ```
-feat(#299): add --json-logs flag to scenario runners
+
+### Combined (recommended for on-the-move use)
+```bash
+python -m orchestrator deploy-issue 367 --pipeline --tmux --notify drone-pipeline-nm
 ```
+
+## Architecture Decisions
+
+1. **Graceful degradation** — Notifications never block the pipeline. If ntfy.sh is unreachable or curl fails, it logs a warning and continues. tmux unavailability falls back to direct execution.
+
+2. **No new dependencies** — Uses only `curl` (for ntfy) and `tmux`, both standard on Linux. No Python packages needed.
+
+3. **Environment-based config** — `NTFY_TOPIC`, `NTFY_SERVER`, `NTFY_EVENTS` env vars allow persistent config without editing code.
+
+4. **Session naming convention** — `pipeline-<issue-number>` for predictable naming and easy scripting.
+
+5. **Layer 3 deferred** — Interactive ntfy responses (approve/reject from notification) intentionally deferred to a future phase per the issue spec.
+
+## Test Plan
+
+- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_notifications.py -v` — 37 tests
+- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_tmux.py -v` — 29 tests
+- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_checkpoint_notifications.py -v` — 11 tests
+- [ ] Existing tests still pass: `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/ -v`
+- [ ] Manual: `--notify` flag sends real notification to ntfy.sh topic
+- [ ] Manual: `--tmux` flag creates tmux session and attaches
+- [ ] C++ build unaffected (no C++ changes)
+
+## Risks / Review Attention
+
+- **Low risk** — Python-only changes to the orchestrator; no C++ code modified, no ctest count change.
+- **External dependency** — ntfy.sh is a free service; self-hosting recommended for production use.
+- **tmux availability** — Falls back gracefully if tmux is not installed.

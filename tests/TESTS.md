@@ -1214,4 +1214,20 @@ is not available.
 
 ---
 
-*Last updated: April 2026 — 1259 unit tests across 56 C++ files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #346 (Issue #345): bbox ground-feature filters, depth confidence gating, radar orphan tuning, CW/CCW survey rotation, scenario 26 VIO validation, clamp penalty fix, stop trajectory fix, wire version validation (+21 tests from 1238). All 1259 tests passing.*
+## Python Orchestrator Tests (pytest)
+
+The multi-agent pipeline orchestrator (`scripts/orchestrator/`) has its own
+pytest test suite, separate from the C++ GTest suite tracked by ctest.
+
+**Run:** `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/ -v`
+
+| File | Tests | Description |
+|------|-------|-------------|
+| `tests/test_orchestrator/test_notifications.py` | 37 | ntfy.sh notification module — config, validation, send, auth token, graceful degradation |
+| `tests/test_orchestrator/test_tmux.py` | 29 | tmux session management — launch, attach, exec_attach, list, status, TOCTOU handling |
+| `tests/test_orchestrator/test_checkpoint_notifications.py` | 11 | Checkpoint ↔ notification integration — CP1–CP5 with/without notifier, sanitized CP4 |
+| **Total** | **77** | |
+
+---
+
+*Last updated: April 2026 — 1259 C++ unit tests across 56 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #374 (Issue #371): remote pipeline monitoring — tmux sessions, ntfy.sh notifications, security hardening. PR #346 (Issue #345): bbox ground-feature filters, depth confidence gating, radar orphan tuning, CW/CCW survey rotation, scenario 26 VIO validation, clamp penalty fix, stop trajectory fix, wire version validation (+21 tests from 1238). All 1259 C++ tests passing.*
