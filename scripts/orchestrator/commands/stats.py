@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from orchestrator.config import resolve_project_dir
 from orchestrator.console import Console
 from orchestrator.git import Git
 
@@ -24,7 +25,7 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
 
     period = "all time" if all_time else since
     io.header("Agent Commit Statistics")
@@ -46,11 +47,11 @@ def run(
     try:
         from orchestrator.git import GitError
         result = git._run(
-            ["git", "log"]
-            + (["--since", since] if since_arg else [])
-            + ["--format=%H %s%n%(trailers:key=Co-Authored-By,valueonly)"]
+            "log",
+            *(["--since", since] if since_arg else []),
+            "--format=%H %s%n%(trailers:key=Co-Authored-By,valueonly)",
         )
-        lines = result.splitlines()
+        lines = (result.stdout or "").splitlines()
     except Exception:
         lines = []
 

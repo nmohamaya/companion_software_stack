@@ -885,53 +885,65 @@ All reviews pass → Tech Lead merges
 
 ### Launching Agents
 
+All agent orchestration uses the Python orchestrator. **Run from the project root** with `PYTHONPATH=scripts`:
+
 ```bash
+# Set PYTHONPATH (add to your .bashrc / .zshrc to make permanent)
+export PYTHONPATH=scripts
+
+# Or prefix each command:
+# PYTHONPATH=scripts python3 -m orchestrator <command>
+
 # List available agent roles
-bash scripts/start-agent.sh --list
+python3 -m orchestrator list
 
 # Launch an interactive session for a specific role
-bash scripts/start-agent.sh feature-perception
+python3 -m orchestrator start feature-perception
 
 # Launch with a specific task (non-interactive)
-bash scripts/start-agent.sh feature-nav "Implement issue #315: add version fields to IPC structs"
-
-# Dry run (show resolved config without launching)
-bash scripts/start-agent.sh feature-nav "placeholder task" --dry-run
-
-# Skip pre-flight checks (build/test verification)
-bash scripts/start-agent.sh feature-integration "Fix IPC timeout" --skip-preflight
+python3 -m orchestrator start feature-nav "Implement issue #315: add version fields to IPC structs"
 ```
 
 ### Issue-to-PR Lifecycle
 
-The `deploy-issue.sh` script automates the full issue→agent→PR workflow:
+The `deploy-issue` command automates the full issue→agent→PR workflow:
 
 ```bash
-# Auto-route a GitHub issue to the correct agent
-bash scripts/deploy-issue.sh 123
+# Auto-route a GitHub issue to the correct agent (interactive)
+python3 -m orchestrator deploy-issue 123
+
+# Pipeline mode — 5 checkpoints with automated steps between
+python3 -m orchestrator deploy-issue 123 --pipeline
+
+# Pipeline with mobile push notifications at checkpoints
+python3 -m orchestrator deploy-issue 123 --pipeline --notify drone-pipeline-yourname
+
+# Headless mode — fire-and-forget, no checkpoints
+python3 -m orchestrator deploy-issue 123 --headless
 
 # Dry run (show routing decision without launching)
-bash scripts/deploy-issue.sh 123 --dry-run
+python3 -m orchestrator deploy-issue 123 --dry-run
+
+# Branch from an integration branch (for epic sub-issues)
+python3 -m orchestrator deploy-issue 123 --base integration/epic-XXX
 ```
 
 **What happens:**
 1. Reads the issue via `gh issue view`
-2. Determines the agent role from issue labels using priority-based routing (e.g., `ipc` → `feature-infra-core`, `domain:perception` → `feature-perception`)
-3. Creates a git worktree and feature branch (`feature/issue-XXX-description`)
-4. Updates `tasks/active-work.md` with the assignment
-5. Launches the agent with the issue context (interactive by default, `--auto` for autonomous mode, `--headless` for CI)
+2. Tech-lead analyzes and routes to the correct agent (or auto-routes by labels)
+3. Prompts for branch strategy (main vs integration branch)
+4. Creates a git worktree and feature branch (`feature/issue-XXX-description`)
+5. Updates `tasks/active-work.md` with the assignment
+6. Launches the agent with the issue context
 
 ### PR Review Deployment
 
 ```bash
-# Launch review agents for a specific PR
-bash scripts/deploy-review.sh 456
-
-# Launch all applicable reviewers (based on diff content)
-bash scripts/deploy-review.sh 456 --all
+# Launch review agents for a specific PR (auto-routes by diff content)
+python3 -m orchestrator deploy-review 456
 
 # Dry run
-bash scripts/deploy-review.sh 456 --dry-run
+python3 -m orchestrator deploy-review 456 --dry-run
 ```
 
 Review agents are routed based on diff content — see the routing table in [CLAUDE.md](../../CLAUDE.md#review-routing).
@@ -942,22 +954,19 @@ Full sessions include pre-flight checks, health baselines, agent work, and post-
 
 ```bash
 # Run a full orchestrated session with a task description
-bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation for issue #789"
-
-# With issue number for PR cross-referencing
-bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation" --issue 789
+python3 -m orchestrator session feature-nav "Implement VIO health fault escalation for issue #789"
 
 # Session logs go to tasks/sessions/
-# Post-session validation runs automatically (validate-session.sh)
+# Post-session validation runs automatically
 # Retro appended to tasks/agent-changelog.md
 ```
 
 ### Hallucination Detection
 
-The `validate-session.sh` script detects common AI hallucination patterns:
+The `validate` command detects common AI hallucination patterns:
 
 ```bash
-bash scripts/validate-session.sh
+python3 -m orchestrator validate
 ```
 
 **Checks performed:**
@@ -973,13 +982,13 @@ bash scripts/validate-session.sh
 
 ```bash
 # Team-wide dashboard
-bash scripts/agent-dashboard.sh --team
+python3 -m orchestrator dashboard
 
 # Per-agent dashboard
-bash scripts/agent-dashboard.sh --agent feature-perception
+python3 -m orchestrator dashboard feature-perception
 
 # Git-based stats (commits, lines, cost estimates)
-bash scripts/agent-stats.sh
+python3 -m orchestrator stats
 ```
 
 **Metrics tracked:**
@@ -1028,10 +1037,10 @@ Agent scope boundaries are enforced at three levels:
 
 ```bash
 # Clean up stale branches and worktrees
-bash scripts/cleanup-branches.sh
+python3 -m orchestrator cleanup
 
 # Dry run
-bash scripts/cleanup-branches.sh --dry-run
+python3 -m orchestrator cleanup --dry-run
 ```
 
 Removes branches already merged into `main` and their associated worktrees. Interactive — prompts for confirmation before deleting.

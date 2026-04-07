@@ -384,30 +384,39 @@ This project uses a **13-agent pipeline** orchestrated via Claude Agent SDK. See
 ### Quick Commands
 
 ```bash
+# All commands use the Python orchestrator (PYTHONPATH=scripts is required)
+export PYTHONPATH=scripts
+
 # List available agents
-bash scripts/start-agent.sh --list
+python3 -m orchestrator list
 
 # Launch an interactive session for a role
-bash scripts/start-agent.sh feature-perception
+python3 -m orchestrator start feature-perception
 
 # Launch with a specific task (non-interactive)
-bash scripts/start-agent.sh feature-nav "Implement issue #315: add version fields"
+python3 -m orchestrator start feature-nav "Implement issue #315: add version fields"
 
 # Deploy an agent for a GitHub issue (auto-routes by labels)
-bash scripts/deploy-issue.sh 123
+python3 -m orchestrator deploy-issue 123
+
+# Deploy with pipeline mode (5 checkpoints, automated between)
+python3 -m orchestrator deploy-issue 123 --pipeline
+
+# Deploy with mobile notifications at checkpoints
+python3 -m orchestrator deploy-issue 123 --pipeline --notify drone-pipeline-yourname
 
 # Launch review agents for a PR (auto-routes by diff content)
-bash scripts/deploy-review.sh 456
+python3 -m orchestrator deploy-review 456
 
 # Run a full orchestrated session
-bash scripts/run-session.sh feature-nav "Implement VIO health fault escalation"
+python3 -m orchestrator session feature-nav "Implement VIO health fault escalation"
 
 # Validate a session (hallucination detection)
-bash scripts/validate-session.sh
+python3 -m orchestrator validate
 
 # View agent dashboard
-bash scripts/agent-dashboard.sh                       # team-wide (default)
-bash scripts/agent-dashboard.sh feature-perception    # per-agent
+python3 -m orchestrator dashboard                     # team-wide (default)
+python3 -m orchestrator dashboard feature-perception  # per-agent
 ```
 
 ### Review Routing

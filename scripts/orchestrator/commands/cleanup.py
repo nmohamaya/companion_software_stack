@@ -6,6 +6,7 @@ Finds merged branches and stale worktrees, optionally removes them.
 
 from __future__ import annotations
 
+from orchestrator.config import resolve_project_dir
 from orchestrator.console import Console
 from orchestrator.git import Git
 
@@ -24,7 +25,7 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
 
     io.header("Branch & Worktree Cleanup")
 

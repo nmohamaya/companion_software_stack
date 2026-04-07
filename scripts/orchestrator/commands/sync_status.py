@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from orchestrator.build import BuildSystem
+from orchestrator.config import resolve_project_dir
 from orchestrator.console import Console
 from orchestrator.git import Git
 from orchestrator.github import GitHub
@@ -39,12 +40,11 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
     if github is None:
         github = GitHub()
 
     if project_dir is None:
-        from orchestrator.config import resolve_project_dir
         project_dir = resolve_project_dir()
 
     if build is None:

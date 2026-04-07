@@ -157,8 +157,8 @@ claude auth
 # 3. Authenticate GitHub CLI
 gh auth login
 
-# 4. Install the orchestrator package
-pip install -e .              # or: pip install -e .[dev] for test dependencies
+# 4. Set PYTHONPATH so the orchestrator module is discoverable
+export PYTHONPATH=scripts     # Add to .bashrc / .zshrc to make permanent
 
 # 5. Verify agent definitions exist
 ls .claude/agents/    # Should show 13 .md files
@@ -208,6 +208,8 @@ Use `--dry-run` on any script to preview what would be launched without spending
 
 ## Quick Start
 
+> **Important:** All `python -m orchestrator` commands must be run from the **project root** with `PYTHONPATH=scripts` set (see First-Time Setup step 4).
+
 ### 1. Deploy an Agent for a GitHub Issue
 
 The simplest way to use the pipeline — point it at an issue and it handles the rest:
@@ -236,6 +238,7 @@ python -m orchestrator deploy-issue 123 --base integration/epic-XXX
 | **Interactive** | *(default)* | You approve each change | Converse with the agent in real time |
 | **Headless** | `--headless` | File edits auto-approved | Review `AGENT_REPORT.md` after, then accept/change/reject |
 | **Pipeline** | `--pipeline` | 5 human checkpoints | Automated steps between checkpoints (see Pipeline Mode) |
+| **Pipeline + notify** | `--pipeline --notify <topic>` | Same as pipeline | Same + push notifications on phone at each checkpoint |
 
 **What happens (all modes):**
 1. Fetches the issue from GitHub (title, body, labels)
@@ -593,7 +596,25 @@ The pipeline mode chains all scripts into a single guided flow with **5 human ch
 ```bash
 python -m orchestrator deploy-issue 123 --pipeline
 python -m orchestrator deploy-issue 123 --pipeline --base integration/epic-300
+
+# With mobile push notifications (ntfy.sh)
+python -m orchestrator deploy-issue 123 --pipeline --notify drone-pipeline-yourname
+
+# Or set topic via environment variable
+export NTFY_TOPIC="drone-pipeline-yourname"
+python -m orchestrator deploy-issue 123 --pipeline
 ```
+
+### Remote Monitoring
+
+Run pipelines on your dev machine and approve checkpoints from your phone. See the [Remote Pipeline Guide](REMOTE_PIPELINE_GUIDE.md) for full setup instructions.
+
+**Quick version:**
+
+1. Start the pipeline inside a tmux session: `tmux new-session -s pipeline-123`
+2. SSH in from your phone (via NordVPN Meshnet or Tailscale + Termux)
+3. Attach to the session: `tmux attach -t pipeline-123`
+4. Optionally add `--notify <topic>` for push notifications at checkpoints
 
 ### Flow
 

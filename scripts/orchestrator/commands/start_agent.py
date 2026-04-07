@@ -34,7 +34,7 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
     if claude is None:
         claude = Claude()
 

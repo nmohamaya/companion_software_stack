@@ -32,7 +32,7 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
     if github is None:
         github = GitHub()
     if claude is None:

@@ -31,7 +31,7 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
     if github is None:
         github = GitHub()
 
@@ -69,10 +69,10 @@ def run(
         fail("No build/ directory — run cmake first")
     else:
         try:
-            result = build.build()
-            if result.returncode == 0:
-                if "warning:" in result.stdout.lower():
-                    warn("Build succeeded but warnings detected")
+            success, output, warning_count = build.build()
+            if success:
+                if warning_count > 0:
+                    warn(f"Build succeeded but {warning_count} warning(s) detected")
                 else:
                     pass_("Build succeeded (zero warnings)")
             else:
@@ -102,14 +102,16 @@ def run(
         fail("Cannot run tests — no build directory")
     else:
         try:
-            test_result = build.run_tests()
-            parsed = build.parse_test_results(test_result.stdout)
-            if parsed.get("failed", 0) > 0:
-                fail(f"Test failures: {parsed['failed']} tests failed")
-            elif parsed.get("passed_pct") == 100:
-                pass_(f"All tests passed ({parsed.get('total', '?')} tests)")
+            test_output, test_exit = build.run_tests()
+            parsed = build.parse_test_results(test_output)
+            if "failures" in parsed and "0 tests" not in parsed["failures"]:
+                fail(f"Test failures: {parsed['failures']}")
+            elif "pass_rate" in parsed:
+                pass_(f"Tests completed: {parsed['pass_rate']}")
+            elif test_exit == 0:
+                pass_("All tests passed")
             else:
-                pass_(f"Tests completed: {parsed.get('passed_pct', '?')}% passed")
+                fail("Tests failed")
         except Exception as e:
             fail(f"Test error: {e}")
     io.print("")

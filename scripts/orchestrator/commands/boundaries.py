@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 
-from orchestrator.config import ALWAYS_ALLOWED_PATTERNS, ROLE_BOUNDARY_PATTERNS
+from orchestrator.config import ALWAYS_ALLOWED_PATTERNS, ROLE_BOUNDARY_PATTERNS, resolve_project_dir
 from orchestrator.console import Console
 from orchestrator.git import Git
 from orchestrator.routing import role_for_branch
@@ -68,7 +68,7 @@ def run(
     if io is None:
         io = Console()
     if git is None:
-        git = Git()
+        git = Git(resolve_project_dir())
 
     changed = git.diff_name_only(base, "HEAD")
     if not changed:

@@ -128,6 +128,7 @@ class Git:
         self,
         n: int = 10,
         since_commit: str | None = None,
+        since: str | None = None,
         ref_range: str | None = None,
     ) -> list[str]:
         """Get recent commit log as one-line entries."""
@@ -136,6 +137,8 @@ class Git:
             args.append(ref_range)
         elif since_commit:
             args.append(f"{since_commit}..HEAD")
+        elif since:
+            args.extend(["--since", since])
         else:
             args.extend(["-n", str(n)])
         result = self._run(*args, check=False)
