@@ -10,7 +10,7 @@ _No active work. Add entries in this format:_
 ### [Issue #XXX] Short description
 - **Agent:** role-name
 - **Branch:** feat/issue-XXX-description
-- **Status:** in-progress | waiting-for-review | blocked
+- **Status:** completed | waiting-for-review | blocked
 - **Files touched:** list key files
 - **Started:** YYYY-MM-DD
 - **Notes:** any blockers or coordination needed

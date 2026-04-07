@@ -210,8 +210,19 @@ class TechLead:
             reasoning="No tech-lead output available.",
         )
 
-        if output:
+        if isinstance(output, str) and output.strip():
             assessment = _parse_review_assessment(output, assessment)
+            # If parsing failed to extract reasoning, show what we got
+            if assessment.reasoning == "No tech-lead output available.":
+                assessment.reasoning = (
+                    f"Tech-lead responded but output could not be parsed. "
+                    f"First 200 chars: {output[:200]}"
+                )
+        else:
+            self._io.print(
+                f"  WARN: Tech-lead returned no output for {checkpoint}. "
+                f"Check stderr for diagnostics."
+            )
 
         return assessment
 

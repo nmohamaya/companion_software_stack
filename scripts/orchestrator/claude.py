@@ -92,6 +92,15 @@ class Claude:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, **run_kwargs
             )
+            if result.returncode != 0 and not result.stdout.strip():
+                # Log diagnostic when capture returns nothing
+                import sys
+                stderr_snippet = (result.stderr or "")[:500]
+                print(
+                    f"  [claude capture] exit={result.returncode}, "
+                    f"stderr={stderr_snippet!r}",
+                    file=sys.stderr,
+                )
             return result.stdout
 
         result = subprocess.run(cmd, **run_kwargs)

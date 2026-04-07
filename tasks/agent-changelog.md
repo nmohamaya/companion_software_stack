@@ -26,3 +26,10 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 **Safety issues found:** none
 **Hallucination flags:** PASS (3 pass, 1 warn — `lessons.md` reference in PR body)
 **Notes:** First pipeline test. Fixed `deploy-issue.sh` label routing (infrastructure, domain:*), fixed `validate-session.sh` false positive on "0 tests failed". Created 13 GitHub labels (6 domain + 3 agent + 4 audit).
+
+### 2026-04-07 | feature-infra-platform | opus | PR #374
+- **Issue:** #371 — feat: remote pipeline monitoring — tmux sessions + ntfy.sh mobile notifications
+- **Branch:** feature/issue-371-feat-remote-pipeline-monitoring--tmux-se
+- **Mode:** pipeline
+- **Fix iterations:** 0
+- **Status:** completed

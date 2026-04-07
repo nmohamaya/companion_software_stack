@@ -120,6 +120,14 @@ The `color_contour` detector misidentifies ground textures/shadows/landing pads 
 - Scenario 02 (HD-map): `promotion_hits=0` disables promotion
 - Scenario 18 (perception): `max_static_cells=800` caps promoted cells
 
+## Pipeline Monitoring (tmux + ntfy.sh)
+
+### ntfy.sh topics are public by default
+Pipeline notifications sent via ntfy.sh include issue numbers, PR URLs, branch names, and checkpoint summaries. The default `ntfy.sh` public server means anyone who guesses the topic name can read these. For production use: self-host ntfy with `NTFY_TOKEN` authentication, or use `--notify-minimal` mode. Set `NTFY_SERVER` to your self-hosted instance and `NTFY_TOKEN` for auth.
+
+### tmux session attach uses execvp — no return on success
+`TmuxSession.exec_attach()` calls `os.execvp()` which replaces the current process. If the session dies between the exists() check and the exec call (TOCTOU race), an `OSError` is raised. The code handles this, but callers should be aware that `exec_attach()` never returns on success.
+
 ## Production Readiness
 
 ### DIAG logging must use spdlog::debug

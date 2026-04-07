@@ -159,27 +159,26 @@ class BuildSystem:
     # ── Expected test count ────────────────────────────────────────────────
 
     def expected_test_count(self) -> int | None:
-        """Extract expected test count from tests/TESTS.md."""
+        """Extract expected test count from tests/TESTS.md.
+
+        The Total row format is:
+          | **Total** | **56 C++ + 5 shell** | **1259 + 42 + 250+** | |
+        We need the ctest-registered count (1259), not the file count (56).
+        Strategy: find the Total row, extract all numbers >= 100, return the
+        largest — that's the unit test baseline.
+        """
         tests_md = self.project_dir / "tests" / "TESTS.md"
         if not tests_md.exists():
             return None
 
         content = tests_md.read_text()
 
-        # Look for **NNNN** pattern (bold number, 3+ digits)
-        match = re.search(r"\*\*(\d{3,})\*\*", content)
-        if match:
-            try:
-                return int(match.group(1))
-            except ValueError:
-                pass
-
-        # Fallback: "Total" followed by a number
-        match = re.search(r"(?i)total[^\d]*(\d+)", content)
-        if match:
-            try:
-                return int(match.group(1))
-            except ValueError:
-                pass
+        # Find lines containing "Total" (case-insensitive)
+        for line in content.splitlines():
+            if re.search(r"(?i)\btotal\b", line):
+                # Extract all numbers >= 100 on this line
+                numbers = [int(n) for n in re.findall(r"\d+", line) if int(n) >= 100]
+                if numbers:
+                    return max(numbers)
 
         return None

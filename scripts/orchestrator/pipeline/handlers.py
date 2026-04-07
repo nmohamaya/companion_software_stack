@@ -40,8 +40,10 @@ def handle_agent_work(
 ) -> str:
     """Launch the feature agent.
 
-    In interactive mode the user can chat with the agent live.
-    In pipeline mode the agent works autonomously (print mode).
+    Both modes use launch_interactive_with_prompt() so the agent can
+    request tool permissions from the user when needed (e.g. git, bash).
+    The difference is just the prompt content — pipeline mode adds
+    autonomous instructions telling the agent to work without chatting.
     Returns "complete" when the agent exits.
     """
     mode_label = "interactive" if interactive else "autonomous (writes AGENT_REPORT.md)"
@@ -54,20 +56,15 @@ def handle_agent_work(
         io.print(f"  CWD:    {worktree}")
     io.print("")
 
-    if interactive:
-        claude.launch_interactive_with_prompt(
-            model=state.model_tier,
-            agent=state.agent_role,
-            prompt=prompt,
-            cwd=worktree,
-        )
-    else:
-        claude.launch_print(
-            model=state.model_tier,
-            agent=state.agent_role,
-            prompt=prompt,
-            cwd=worktree,
-        )
+    # Always use interactive launch so the agent can request permissions
+    # (git, bash, etc.) from the user when sandbox restrictions apply.
+    # In pipeline mode, the prompt itself contains autonomous instructions.
+    claude.launch_interactive_with_prompt(
+        model=state.model_tier,
+        agent=state.agent_role,
+        prompt=prompt,
+        cwd=worktree,
+    )
     return "complete"
 
 
@@ -257,21 +254,14 @@ def handle_fix_and_revalidate(
     mode_label = "interactive" if interactive else "autonomous"
     io.print(f"  Launching feature agent to fix findings ({mode_label})...")
 
-    if interactive:
-        claude.launch_interactive_with_prompt(
-            model=state.model_tier,
-            agent=state.agent_role,
-            prompt=fix_prompt,
-            cwd=worktree,
-        )
-    else:
-        claude.launch_print(
-            model=state.model_tier,
-            agent=state.agent_role,
-            prompt=fix_prompt,
-            continue_session=True,
-            cwd=worktree,
-        )
+    # Always use interactive launch so the agent can request permissions
+    # from the user when sandbox restrictions apply.
+    claude.launch_interactive_with_prompt(
+        model=state.model_tier,
+        agent=state.agent_role,
+        prompt=fix_prompt,
+        cwd=worktree,
+    )
 
     io.print("  Re-validating after fixes...")
     # Simplified validation
