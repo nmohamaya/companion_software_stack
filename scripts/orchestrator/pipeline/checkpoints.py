@@ -7,6 +7,9 @@ and decides the next action. Every checkpoint function:
   - Prompts for a decision
   - Returns the action string that drives the FSM transition
 
+Optional ntfy.sh push notifications are sent at each checkpoint so the
+user can monitor progress from their phone without watching the terminal.
+
 This keeps all user-facing interaction in one place and makes checkpoints
 fully testable via TestConsole with scripted inputs.
 """
@@ -20,6 +23,7 @@ from orchestrator.pipeline.state import PipelineStateData
 
 if TYPE_CHECKING:
     from orchestrator.console import IOProtocol
+    from orchestrator.pipeline.notifications import Notifier
     from orchestrator.tech_lead import TechLead
 
 
@@ -30,6 +34,7 @@ def cp1_review(
     report_path: Path | None = None,
     diff_stat: str = "",
     tech_lead: TechLead | None = None,
+    notifier: Notifier | None = None,
 ) -> str:
     """Checkpoint 1: Changes Review.
 
@@ -37,6 +42,15 @@ def cp1_review(
     and asks: accept / changes / reject
     """
     io.header("CHECKPOINT 1/5 — Changes Review")
+
+    # Send push notification
+    if notifier:
+        summary = diff_stat[:200] if diff_stat else "Agent work complete — review needed"
+        notifier.send_checkpoint(
+            1, summary,
+            issue=state.issue_number,
+            recommendation="review changes",
+        )
 
     if report_path and report_path.exists():
         io.print(report_path.read_text())
@@ -93,6 +107,7 @@ def cp2_commit(
     *,
     validation_output: str = "",
     validation_passed: bool = True,
+    notifier: Notifier | None = None,
 ) -> str:
     """Checkpoint 2: Commit Approval.
 
@@ -100,6 +115,15 @@ def cp2_commit(
       commit / back / abort
     """
     io.header("CHECKPOINT 2/5 — Commit Approval")
+
+    # Send push notification
+    if notifier:
+        status = "passed" if validation_passed else "FAILED"
+        notifier.send_checkpoint(
+            2, f"Validation {status} — commit approval needed",
+            issue=state.issue_number,
+            recommendation="commit" if validation_passed else "review failures",
+        )
 
     io.print("--- Validation Results ---")
     if validation_output:
@@ -132,6 +156,8 @@ def cp2_commit(
 def cp3_pr_preview(
     state: PipelineStateData,
     io: IOProtocol,
+    *,
+    notifier: Notifier | None = None,
 ) -> str:
     """Checkpoint 3: PR Preview.
 
@@ -140,6 +166,15 @@ def cp3_pr_preview(
     Existing PR shows update/skip; new PR shows create/edit.
     """
     io.header("CHECKPOINT 3/5 — PR Preview")
+
+    # Send push notification
+    if notifier:
+        action = "update" if state.pr_number else "create"
+        notifier.send_checkpoint(
+            3, f"PR ready to {action}: {state.pr_title}",
+            issue=state.issue_number,
+            recommendation=action,
+        )
 
     io.print(f"Title: {state.pr_title}")
     io.print("")
@@ -189,6 +224,7 @@ def cp4_findings(
     *,
     review_findings: str = "",
     tech_lead: TechLead | None = None,
+    notifier: Notifier | None = None,
 ) -> str:
     """Checkpoint 4: Review & Test Findings.
 
@@ -196,6 +232,26 @@ def cp4_findings(
     and asks: accept / fix / back / reject
     """
     io.header("CHECKPOINT 4/5 — Review & Test Findings")
+
+    # Send push notification — deliberately omit review finding content to
+    # avoid leaking security-relevant code review comments to the external
+    # ntfy server. Send only a generic summary.
+    if notifier:
+        if not review_findings:
+            finding_summary = "No findings"
+        else:
+            # Count severity levels without leaking content
+            p1_count = review_findings.lower().count("[p1]")
+            p2_count = review_findings.lower().count("[p2]")
+            p3_count = review_findings.lower().count("[p3]")
+            finding_summary = (
+                f"{p1_count} P1, {p2_count} P2, {p3_count} P3 finding(s)"
+            )
+        notifier.send_checkpoint(
+            4, f"Review complete — {finding_summary}",
+            issue=state.issue_number,
+            recommendation="review findings",
+        )
 
     if review_findings:
         io.print(review_findings)
@@ -248,6 +304,7 @@ def cp5_final(
     *,
     commit_log: str = "",
     validation_passed: bool = True,
+    notifier: Notifier | None = None,
 ) -> str:
     """Checkpoint 5: Final Summary.
 
@@ -255,6 +312,16 @@ def cp5_final(
       done / re_review / back / abort
     """
     io.header("CHECKPOINT 5/5 — Final Summary")
+
+    # Send push notification
+    if notifier:
+        status = "passed" if validation_passed else "has warnings"
+        pr_info = f" PR: {state.pr_url}" if state.pr_url else ""
+        notifier.send_checkpoint(
+            5, f"Final review — validation {status}.{pr_info}",
+            issue=state.issue_number,
+            recommendation="done" if validation_passed else "review",
+        )
 
     io.print("--- Commit History ---")
     if commit_log:
