@@ -129,7 +129,14 @@ def handle_pr_create(
     # Generate default PR title/body if not set
     if not state.pr_title:
         prefix = "fix" if state.is_bug else "feat"
-        state.pr_title = f"{prefix}(#{state.issue_number}): {state.issue_title}"
+        # Strip leading type prefix from title to avoid duplication
+        # e.g. "feat: remote pipeline..." → "remote pipeline..."
+        title = state.issue_title
+        for strip_prefix in ("feat:", "fix:", "chore:", "refactor:", "docs:", "test:", "perf:"):
+            if title.lower().startswith(strip_prefix):
+                title = title[len(strip_prefix):].strip()
+                break
+        state.pr_title = f"{prefix}(#{state.issue_number}): {title}"
 
     if not state.pr_body:
         report_path = Path(state.worktree_path) / "AGENT_REPORT.md"
@@ -145,9 +152,14 @@ def handle_pr_create(
 
         diff_stat = ""
         try:
-            diff_stat = git.diff_stat("main", "HEAD")
+            # Diff against origin/main since we're in a worktree and
+            # local 'main' may not be up to date
+            diff_stat = git.diff_stat("origin/main", "HEAD")
         except Exception:
-            pass
+            try:
+                diff_stat = git.diff_stat("main", "HEAD")
+            except Exception:
+                pass
 
         # Build closing/linking references
         closing_refs = f"Closes #{state.issue_number}"

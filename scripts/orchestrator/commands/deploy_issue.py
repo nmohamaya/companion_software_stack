@@ -408,6 +408,10 @@ def _run_pipeline(
     mode_label = "interactive" if interactive else "pipeline (autonomous)"
     io.info(f"Mode: {mode_label}")
 
+    # Git instance for worktree operations (commits, pushes, diffs).
+    # The main `git` is rooted at project_dir; worktree has its own checkout.
+    wt_git = Git(worktree_dir)
+
     # Track validation state across checkpoints
     validation_output = ""
     validation_passed = True
@@ -440,8 +444,12 @@ def _run_pipeline(
             report_path = worktree_dir / "AGENT_REPORT.md"
             diff_stat = ""
             try:
-                wt_git = Git(worktree_dir)
-                diff_stat = wt_git.diff_stat(base_branch, "HEAD")
+                # Use working-tree diff against base so uncommitted changes
+                # also appear (agent may not have committed everything).
+                diff_stat = wt_git.diff_stat_working_tree(base_branch)
+                if not diff_stat:
+                    # Fall back to committed-only diff
+                    diff_stat = wt_git.diff_stat(base_branch, "HEAD")
             except Exception:
                 pass
             action = cp1_review(
@@ -469,22 +477,22 @@ def _run_pipeline(
                 validation_passed=validation_passed,
             )
             if action == "commit":
-                # Stage and commit
+                # Stage and commit in the worktree (where agent made changes)
                 try:
-                    git.add_all()
+                    wt_git.add_all()
                     msg = (
                         f"feat(#{issue_number}): {issue_title}\n\n"
                         f"Pipeline commit for issue #{issue_number}.\n"
                         f"Agent role: {role}\n\n"
                         f"Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
                     )
-                    git.commit(msg)
+                    wt_git.commit(msg)
                     io.pass_("Changes committed")
                 except Exception:
                     io.warn("Nothing to commit (may already be committed)")
 
         elif current == PipelineState.PR_CREATE:
-            action = handle_pr_create(state, io, git, github)
+            action = handle_pr_create(state, io, wt_git, github)
 
         elif current == PipelineState.CP3_PR_PREVIEW:
             action = cp3_pr_preview(state, io)
@@ -538,7 +546,7 @@ def _run_pipeline(
 
         elif current == PipelineState.FIX_AND_REVALIDATE:
             action = handle_fix_and_revalidate(
-                state, io, claude, git, build,
+                state, io, claude, wt_git, build,
                 review_findings=review_findings,
                 interactive=interactive,
             )
@@ -546,7 +554,7 @@ def _run_pipeline(
         elif current == PipelineState.CP5_FINAL:
             commit_log = ""
             try:
-                log_lines = git.log_oneline()
+                log_lines = wt_git.log_oneline()
                 commit_log = "\n".join(log_lines[:20])
             except Exception:
                 pass
