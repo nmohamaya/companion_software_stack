@@ -124,7 +124,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
-| **Total** | **56 C++ + 5 shell** | **1259 + 42 + 250+** | |
+| **Total** | **56 C++ + 6 shell** | **1259 + 42 + 250+** | |
 
 ---
 
@@ -1189,6 +1189,24 @@ to catch unexpected collisions (Fix #40).
 
 ---
 
+### test_deploy_review.sh — deploy-review.sh CLI tests
+
+**What it tests:** `--status` flag, `--help` output, argument validation, mock gh response parsing
+
+| # | Test | Assertions |
+|---|------|------------|
+| 1 | `--help` flag exits 0, mentions `--status`, `--all`, `--dry-run` | 4 |
+| 2 | Missing PR number exits non-zero | 2 |
+| 3 | `--status` without PR number exits non-zero | 2 |
+| 4 | Non-numeric PR number rejected | 2 |
+| 5 | Mock: NEEDS_FIX status (P2 findings) | 10 |
+| 6 | Mock: NO_REVIEW path (no matching comments) | 2 |
+| 7 | Mock: PASS status (no P1/P2 findings) | 5 |
+
+**Run:** `bash tests/test_deploy_review.sh`
+
+---
+
 ## Conditional Compilation Guards
 
 Some tests require optional dependencies.  The build system uses compile-time
@@ -1214,4 +1232,4 @@ is not available.
 
 ---
 
-*Last updated: April 2026 — 1259 unit tests across 56 C++ files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #346 (Issue #345): bbox ground-feature filters, depth confidence gating, radar orphan tuning, CW/CCW survey rotation, scenario 26 VIO validation, clamp penalty fix, stop trajectory fix, wire version validation (+21 tests from 1238). All 1259 tests passing.*
+*Last updated: April 2026 — 1259 unit tests across 56 C++ files + 42 E2E checks (6 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. Issue #365: added `test_deploy_review.sh` for `--status` flag CLI tests. All 1259 C++ tests passing.*

@@ -2889,4 +2889,24 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #67 (PR #346). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #68 — Add --status flag to deploy-review.sh (Issue #365)
+
+**Date:** 2026-04-07
+**Category:** Infrastructure / Developer Tooling
+**Issue:** [#365](https://github.com/nmohamaya/companion_software_stack/issues/365)
+
+**What:**
+- Added `--status <pr>` flag to `scripts/deploy-review.sh` that fetches the latest "Automated Safety Review" PR comment and displays a summary
+- Shows reviewer list, tester list, finding counts by severity (P1-P4), and overall status (PASS / NEEDS_FIX / NO_REVIEW)
+- Converted argument parsing from `for` loop to `while` loop to support `--status <arg>` style options
+- Added `tests/test_deploy_review.sh` with 20+ assertions covering CLI parsing, mock gh responses, and all status paths
+
+**Files modified:** `scripts/deploy-review.sh`, `tests/test_deploy_review.sh` (new)
+
+**Why:** After running `deploy-review.sh` on a PR, there was no quick way to check review results without going to GitHub. This flag provides instant terminal feedback.
+
+**Test count:** 1259 (unchanged — shell tests are not counted in ctest baseline)
+
+---
+
+_Last updated after Improvement #68 (PR for #365). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

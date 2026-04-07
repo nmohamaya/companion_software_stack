@@ -15,34 +15,121 @@ RESET='\033[0m'
 usage() {
     cat <<EOF
 Usage: $(basename "$0") <pr-number> [--all]
+       $(basename "$0") --status <pr-number>
 
 Launches review agents against a PR. By default launches memory-safety and
 security reviewers, plus concurrency and fault-recovery if the diff warrants it.
 
 Options:
-  --all       Force all 4 review agents regardless of diff content
-  --dry-run   Show routing decision without launching agents
+  --all              Force all 4 review agents regardless of diff content
+  --dry-run          Show routing decision without launching agents
+  --status <pr>      Show last review results for a PR without launching agents
 EOF
     exit "${1:-1}"
+}
+
+# ── Status display function ────────────────────────────────────────────────
+show_status() {
+    local pr="$1"
+
+    # Fetch the latest "Automated Safety Review" comment from the PR
+    local comments
+    comments="$(gh pr view "$pr" --comments --json comments \
+        --jq '.comments[] | select(.body | test("Automated Safety Review")) | {createdAt, body}' \
+        2>/dev/null)" || {
+        echo -e "${RED}Error: failed to fetch PR #${pr} — check gh auth and PR number${RESET}" >&2
+        exit 1
+    }
+
+    if [[ -z "$comments" ]]; then
+        echo -e "PR #${pr}  Last review: ${YELLOW}none${RESET}"
+        echo -e "Status: ${YELLOW}NO_REVIEW${RESET}"
+        exit 0
+    fi
+
+    # Get the last matching comment (most recent)
+    local last_comment
+    last_comment="$(echo "$comments" | tail -1)"
+
+    local review_date
+    review_date="$(echo "$last_comment" | jq -r '.createdAt // empty' 2>/dev/null | cut -dT -f1)"
+    if [[ -z "$review_date" ]]; then
+        review_date="unknown"
+    fi
+
+    local body
+    body="$(echo "$last_comment" | jq -r '.body // empty' 2>/dev/null)"
+
+    # Extract reviewer list
+    local reviewers_line
+    reviewers_line="$(echo "$body" | grep -oP '(?<=\*\*Review agents:\*\* ).*' || true)"
+    if [[ -z "$reviewers_line" ]]; then
+        reviewers_line="unknown"
+    fi
+
+    # Extract tester list
+    local testers_line
+    testers_line="$(echo "$body" | grep -oP '(?<=\*\*Test agents:\*\* ).*' || true)"
+    if [[ -z "$testers_line" ]]; then
+        testers_line="none"
+    fi
+
+    # Count findings by severity (P1, P2, P3, P4)
+    local p1 p2 p3 p4
+    p1="$(echo "$body" | grep -ciP '\bP1\b' || true)"
+    p2="$(echo "$body" | grep -ciP '\bP2\b' || true)"
+    p3="$(echo "$body" | grep -ciP '\bP3\b' || true)"
+    p4="$(echo "$body" | grep -ciP '\bP4\b' || true)"
+
+    # Determine overall status
+    local status status_color
+    if [[ "$p1" -gt 0 ]]; then
+        status="NEEDS_FIX"
+        status_color="$RED"
+    elif [[ "$p2" -gt 0 ]]; then
+        status="NEEDS_FIX"
+        status_color="$YELLOW"
+    else
+        status="PASS"
+        status_color="$GREEN"
+    fi
+
+    # Display
+    echo -e "PR #${pr}  Last review: ${BOLD}${review_date}${RESET}"
+    echo -e "Reviewers: ${CYAN}${reviewers_line}${RESET}"
+    echo -e "Testers:   ${CYAN}${testers_line}${RESET}"
+    echo -e "Findings:  ${p1} P1, ${p2} P2, ${p3} P3, ${p4} P4"
+    echo -e "Status:    ${status_color}${status}${RESET}"
+    exit 0
 }
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
 PR=""
 FORCE_ALL=false
 DRY_RUN=false
+STATUS_MODE=false
 
-for arg in "$@"; do
-    case "$arg" in
-        --all)      FORCE_ALL=true ;;
-        --dry-run)  DRY_RUN=true ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --all)      FORCE_ALL=true; shift ;;
+        --dry-run)  DRY_RUN=true; shift ;;
         --help|-h)  usage 0 ;;
+        --status)
+            STATUS_MODE=true
+            shift
+            if [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; then
+                PR="$1"
+                shift
+            fi
+            ;;
         *)
             if [[ -z "$PR" ]]; then
-                PR="$arg"
+                PR="$1"
             else
-                echo -e "${RED}Error: unexpected argument '$arg'${RESET}" >&2
+                echo -e "${RED}Error: unexpected argument '$1'${RESET}" >&2
                 usage 1
             fi
+            shift
             ;;
     esac
 done
@@ -55,6 +142,11 @@ fi
 if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
     echo -e "${RED}Error: PR number must be numeric, got '$PR'${RESET}" >&2
     exit 1
+fi
+
+# If --status mode, show status and exit
+if [[ "$STATUS_MODE" == "true" ]]; then
+    show_status "$PR"
 fi
 
 # ── 1. Fetch PR diff ───────────────────────────────────────────────────────
