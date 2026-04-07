@@ -20,6 +20,7 @@
 #   --dry-run               Parse scenario, show plan, don't execute
 #   --verbose               Extra verbose output
 #   --gui                   Launch Gazebo GUI (3D visualisation)
+#   --json-logs             Enable structured JSON log output
 #   --ipc <shm|zenoh>       Override IPC backend (default: from base config)
 #
 # Environment variables:
@@ -72,6 +73,7 @@ VERBOSE=false
 RUN_ALL=false
 LIST_ONLY=false
 GUI_FLAG=""
+JSON_LOGS=""
 IPC_BACKEND=""
 
 while [[ $# -gt 0 ]]; do
@@ -84,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)      DRY_RUN=true ;;
         --verbose)      VERBOSE=true ;;
         --gui)          GUI_FLAG="--gui" ;;
+        --json-logs)    JSON_LOGS="--json-logs" ;;
         --ipc)
             IPC_BACKEND="$2"
             if [[ "$IPC_BACKEND" != "shm" && "$IPC_BACKEND" != "zenoh" ]]; then
@@ -103,6 +106,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --dry-run             Parse and show plan only"
             echo "  --verbose             Extra output"
             echo "  --gui                 Launch Gazebo 3D GUI"
+            echo "  --json-logs           Enable structured JSON log output"
             echo "  --ipc <shm|zenoh>     Override IPC transport backend"
             echo "  --list                List available scenarios"
             echo "  --all                 Run all Tier 2 scenarios"
@@ -303,6 +307,7 @@ if [[ "$RUN_ALL" == "true" ]]; then
         [[ -n "$TIMEOUT_OVERRIDE" ]] && args+=(--timeout "$TIMEOUT_OVERRIDE")
         [[ -n "$IPC_BACKEND" ]] && args+=(--ipc "$IPC_BACKEND")
         [[ -n "$GUI_FLAG" ]] && args+=("$GUI_FLAG")
+        [[ -n "$JSON_LOGS" ]] && args+=(--json-logs)
         [[ "$DRY_RUN" == "true" ]] && args+=(--dry-run)
         [[ "$VERBOSE" == "true" ]] && args+=(--verbose)
 
@@ -522,7 +527,7 @@ LOG_DIR="$SCENARIO_LOG_DIR" \
 CONFIG_FILE="$MERGED_CONFIG" \
 PX4_DIR="$PX4_DIR" \
 GZ_WORLD="$GZ_WORLD" \
-    "${DEPLOY_DIR}/launch_gazebo.sh" $GUI_FLAG \
+    "${DEPLOY_DIR}/launch_gazebo.sh" $GUI_FLAG $JSON_LOGS \
     > "${SCENARIO_LOG_DIR}/launcher.log" 2>&1 &
 LAUNCHER_PID=$!
 

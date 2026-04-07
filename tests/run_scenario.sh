@@ -20,6 +20,7 @@
 #   --dry-run               Parse scenario, show plan, but don't execute
 #   --verbose               Extra verbose output
 #   --tier <1|2>            Filter by tier when using --all
+#   --json-logs             Enable structured JSON log output
 #   --ipc <shm|zenoh>       Override IPC backend (default: from base config)
 #
 # Exit codes:
@@ -65,6 +66,7 @@ RUN_ALL=false
 TIER_FILTER=""
 LIST_ONLY=false
 IPC_BACKEND=""
+JSON_LOGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -75,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --timeout)      TIMEOUT_OVERRIDE="$2"; shift ;;
         --dry-run)      DRY_RUN=true ;;
         --verbose)      VERBOSE=true ;;
+        --json-logs)    JSON_LOGS="--json-logs" ;;
         --tier)         TIER_FILTER="$2"; shift ;;
         --ipc)
             IPC_BACKEND="$2"
@@ -95,6 +98,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --dry-run             Parse and show plan only"
             echo "  --verbose             Extra output"
             echo "  --tier <1|2>          Filter by tier"
+            echo "  --json-logs           Enable structured JSON log output"
             echo "  --ipc <shm|zenoh>     Override IPC transport backend"
             echo "  --list                List available scenarios"
             echo "  --all                 Run all matching scenarios"
@@ -278,6 +282,7 @@ if [[ "$RUN_ALL" == "true" ]]; then
         [[ -n "$IPC_BACKEND" ]] && args+=(--ipc "$IPC_BACKEND")
         [[ "$DRY_RUN" == "true" ]] && args+=(--dry-run)
         [[ "$VERBOSE" == "true" ]] && args+=(--verbose)
+        [[ -n "$JSON_LOGS" ]] && args+=(--json-logs)
 
         if "$0" "${args[@]}"; then
             PASSED_SCENARIOS=$((PASSED_SCENARIOS + 1))
@@ -442,7 +447,7 @@ cleanup_scenario() {
 trap cleanup_scenario EXIT INT TERM
 
 # Launch via deploy script with merged config
-"${DEPLOY_DIR}/launch_all.sh" --config "$MERGED_CONFIG" > "${SCENARIO_LOG_DIR}/launcher.log" 2>&1 &
+"${DEPLOY_DIR}/launch_all.sh" --config "$MERGED_CONFIG" $JSON_LOGS > "${SCENARIO_LOG_DIR}/launcher.log" 2>&1 &
 LAUNCHER_PID=$!
 
 echo -e "  Launcher PID: ${LAUNCHER_PID}"
