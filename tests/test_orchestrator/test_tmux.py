@@ -217,14 +217,14 @@ class TestSessionStatus:
 
     def test_no_state_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "orchestrator.pipeline.tmux.resolve_project_dir",
+            "orchestrator.config.resolve_project_dir",
             lambda: tmp_path,
         )
         assert session_status(42) is None
 
     def test_wrong_issue(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "orchestrator.pipeline.tmux.resolve_project_dir",
+            "orchestrator.config.resolve_project_dir",
             lambda: tmp_path,
         )
         state_file = tmp_path / ".pipeline-state"
@@ -237,7 +237,7 @@ class TestSessionStatus:
 
     def test_matching_issue(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "orchestrator.pipeline.tmux.resolve_project_dir",
+            "orchestrator.config.resolve_project_dir",
             lambda: tmp_path,
         )
         state_file = tmp_path / ".pipeline-state"
