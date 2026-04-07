@@ -299,18 +299,30 @@ if [[ "$BASE_BRANCH_EXPLICIT" == "false" && "$HEADLESS" == "false" ]]; then
             read -rp "  Integration branch: " CUSTOM_INTEG
             INTEG_BRANCH="${CUSTOM_INTEG:-$SUGGESTED_INTEG}"
 
-            # Create from main if it doesn't exist
+            # Create from latest remote main if it doesn't exist
             if git -C "$PROJECT_DIR" rev-parse --verify "$INTEG_BRANCH" &>/dev/null; then
                 echo -e "  ${GREEN}REUSING${RESET} existing branch: ${INTEG_BRANCH}"
             else
-                echo -e "  Creating integration branch from main..."
-                git -C "$PROJECT_DIR" branch "$INTEG_BRANCH" main
+                echo -e "  Fetching latest main from origin..."
+                git -C "$PROJECT_DIR" fetch origin main 2>&1 || true
+                echo -e "  Creating integration branch from origin/main..."
+                git -C "$PROJECT_DIR" branch "$INTEG_BRANCH" origin/main 2>&1 || {
+                    # Fallback to local main if origin/main isn't available
+                    echo -e "  ${YELLOW}WARN${RESET}  origin/main not available, using local main"
+                    git -C "$PROJECT_DIR" branch "$INTEG_BRANCH" main
+                }
                 echo -e "  ${GREEN}CREATED${RESET} ${INTEG_BRANCH}"
             fi
 
-            # Push to origin (idempotent)
+            # Push to origin (verify remote branch exists after)
             git -C "$PROJECT_DIR" push -u origin "$INTEG_BRANCH" 2>&1 || {
-                echo -e "  ${YELLOW}WARN${RESET}  Push failed — branch may already exist on remote (continuing)"
+                if git -C "$PROJECT_DIR" ls-remote --exit-code origin "refs/heads/$INTEG_BRANCH" >/dev/null 2>&1; then
+                    echo -e "  ${YELLOW}WARN${RESET}  Push failed, but remote branch already exists (continuing)"
+                else
+                    echo -e "  ${RED}ERROR${RESET}  Push failed and remote branch does not exist."
+                    echo -e "  Resolve the push issue (auth, network, permissions) and retry."
+                    exit 1
+                fi
             }
 
             BASE_BRANCH="$INTEG_BRANCH"
@@ -350,18 +362,38 @@ PIPELINE_STATE_FILE="$WORKTREE_DIR/.pipeline-state"
 RESUME_STATE=""
 
 if [[ "$PIPELINE" == "true" && -f "$PIPELINE_STATE_FILE" ]]; then
-    SAVED_STATE="$(grep '^STATE=' "$PIPELINE_STATE_FILE" | cut -d= -f2)"
-    echo ""
-    echo -e "  ${CYAN}Found saved pipeline state at ${SAVED_STATE}.${RESET}"
-    read -rp "  Resume from ${SAVED_STATE}? [Y/n] " RESUME_CHOICE
-    if [[ ! "$RESUME_CHOICE" =~ ^[nN] ]]; then
-        # Restore saved variables
-        source "$PIPELINE_STATE_FILE"
-        RESUME_STATE="$STATE"
-        echo -e "  ${GREEN}Resuming pipeline from ${STATE}${RESET}"
+    SAVED_STATE="$(grep '^STATE=' "$PIPELINE_STATE_FILE" 2>/dev/null || true)"
+    SAVED_STATE="${SAVED_STATE#STATE=}"
+    if [[ -n "$SAVED_STATE" ]]; then
+        echo ""
+        echo -e "  ${CYAN}Found saved pipeline state at ${SAVED_STATE}.${RESET}"
+        read -rp "  Resume from ${SAVED_STATE}? [Y/n] " RESUME_CHOICE
+        if [[ ! "$RESUME_CHOICE" =~ ^[nN] ]]; then
+            # Restore saved variables safely (parse key=value, don't source)
+            while IFS='=' read -r key value || [[ -n "$key" ]]; do
+                [[ -z "$key" ]] && continue
+                case "$key" in
+                    STATE)            STATE="$value" ;;
+                    PR_NUMBER)        PR_NUMBER="$value" ;;
+                    PR_URL)           PR_URL="$value" ;;
+                    VALIDATION_EXIT)  VALIDATION_EXIT="$value" ;;
+                    BASE_BRANCH)      BASE_BRANCH="$value" ;;
+                    ROLE)             ROLE="$value" ;;
+                    MODEL)            MODEL="$value" ;;
+                    ISSUE)            ISSUE="$value" ;;
+                    TITLE)            TITLE="$value" ;;
+                    BRANCH)           BRANCH="$value" ;;
+                esac
+            done < "$PIPELINE_STATE_FILE"
+            RESUME_STATE="$STATE"
+            echo -e "  ${GREEN}Resuming pipeline from ${STATE}${RESET}"
+        else
+            rm -f "$PIPELINE_STATE_FILE"
+            echo -e "  Starting fresh pipeline."
+        fi
     else
+        echo -e "  ${YELLOW}WARN${RESET}  Saved pipeline state file is corrupt — starting fresh."
         rm -f "$PIPELINE_STATE_FILE"
-        echo -e "  Starting fresh pipeline."
     fi
 fi
 
@@ -598,19 +630,21 @@ elif [[ "$PIPELINE" == "true" ]]; then
 
     # ── Helper functions ───────────────────────────────────────────────────
     save_pipeline_state() {
-        cat > "$PIPELINE_STATE_FILE" <<STATEEOF
-STATE=$STATE
-PR_NUMBER=$PR_NUMBER
-PR_URL=$PR_URL
-VALIDATION_EXIT=$VALIDATION_EXIT
-BASE_BRANCH=$BASE_BRANCH
-ROLE=$ROLE
-MODEL=$MODEL
-ISSUE=$ISSUE
-TITLE=$TITLE
-BRANCH=$BRANCH
-STATEEOF
+        # Use printf %q to safely escape values (e.g., TITLE with spaces/special chars)
+        printf 'STATE=%s\n' "$STATE" > "$PIPELINE_STATE_FILE"
+        printf 'PR_NUMBER=%s\n' "$PR_NUMBER" >> "$PIPELINE_STATE_FILE"
+        printf 'PR_URL=%s\n' "$PR_URL" >> "$PIPELINE_STATE_FILE"
+        printf 'VALIDATION_EXIT=%s\n' "$VALIDATION_EXIT" >> "$PIPELINE_STATE_FILE"
+        printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH" >> "$PIPELINE_STATE_FILE"
+        printf 'ROLE=%s\n' "$ROLE" >> "$PIPELINE_STATE_FILE"
+        printf 'MODEL=%s\n' "$MODEL" >> "$PIPELINE_STATE_FILE"
+        printf 'ISSUE=%s\n' "$ISSUE" >> "$PIPELINE_STATE_FILE"
+        printf 'TITLE=%s\n' "$TITLE" >> "$PIPELINE_STATE_FILE"
+        printf 'BRANCH=%s\n' "$BRANCH" >> "$PIPELINE_STATE_FILE"
     }
+
+    # Initialize STATE before trap to avoid empty value on early interrupt
+    STATE="INIT"
 
     trap 'save_pipeline_state; echo -e "\n${YELLOW}Pipeline interrupted at ${STATE}.${RESET}"; echo "  Resume: bash scripts/deploy-issue.sh ${ISSUE} --pipeline"; exit 130' INT TERM
 
