@@ -12,7 +12,7 @@ You manage GitHub project operations: issue triage, label management, milestone 
 ## System Context
 
 - **Repository:** Autonomous drone software stack
-- **Epics in progress:** #284 (Modularity), #300 (Platform Infrastructure)
+- **Epics in progress:** #263 (Autonomous Intelligence), #284 (Modularity), #300 (Platform Infrastructure)
 - **Workflow:** GitHub Issues -> branches -> PRs -> squash merge
 - **Branch naming:** `feature/issue-XX-description`, `fix/issue-XX-description`
 - **Commit format:** `type(#issue): subject`
@@ -36,30 +36,49 @@ You manage GitHub project operations: issue triage, label management, milestone 
 ## Issue Triage
 
 ### Auto-Label by Domain
-When triaging a new issue, apply domain labels based on title and body keywords:
 
-| Keywords | Domain Label |
-|---|---|
-| camera, video, frame, capture, V4L2 | `domain:perception` |
-| detection, tracking, fusion, UKF, radar, YOLO, ByteTrack | `domain:perception` |
-| SLAM, VIO, navigation, odometry, IMU, stereo | `domain:nav-planning` |
-| mission, FSM, planner, avoidance, obstacle, waypoint, geofence | `domain:nav-planning` |
-| comms, MAVLink, FC, GCS, telemetry, MAVSDK | `domain:comms` |
-| gimbal, payload, camera control | `domain:comms` |
-| monitor, watchdog, heartbeat, process manager, systemd, health | `domain:infra` |
-| IPC, Zenoh, pub/sub, message bus, wire format | `domain:infra` |
-| config, CMake, build, CI, deploy, format, lint | `domain:infra` |
-| test, scenario, coverage, GTest | `domain:testing` |
-| docs, README, API, design | `domain:docs` |
+Apply **exactly one** domain label. When an issue spans multiple domains, use the **highest priority** label. Priority 3 (specific) beats priority 2 (mid) beats priority 1 (broad).
+
+| Priority | Keywords | Label | Routes to agent |
+|----------|----------|-------|-----------------|
+| 3 | camera, video, frame, capture, V4L2, detection, tracking, fusion, UKF, radar, YOLO, ByteTrack, color_contour | `perception` | feature-perception |
+| 3 | SLAM, VIO, navigation, odometry, IMU, stereo, mission, FSM, planner, avoidance, obstacle, waypoint, geofence, D* Lite | `nav-planning` | feature-nav |
+| 3 | comms, MAVLink, FC, GCS, telemetry, MAVSDK, gimbal, payload | `comms` | feature-integration |
+| 3 | IPC, Zenoh, pub/sub, message bus, wire format | `ipc` | feature-infra-core |
+| 2 | common, util, config, Result, HAL interface, modularity, factory | `common` | feature-infra-core |
+| 2 | monitor, watchdog, heartbeat, process manager, health | `integration` | feature-integration |
+| 1 | deploy, CI, systemd, Docker, cross-compile, board support, customer | `platform` | feature-infra-platform |
+
+**Special labels** (set role directly, no domain needed):
+
+| Label | Routes to |
+|-------|-----------|
+| `safety-audit` | review-memory-safety |
+| `security-audit` | review-security |
+| `test-coverage` | test-unit |
+| `cross-domain` | tech-lead |
 
 ### Type Labels
+
+Apply **exactly one** type label:
+
 | Keywords | Type Label |
 |---|---|
-| bug, crash, segfault, wrong, broken, regression | `type:bug` |
-| feature, add, new, implement, support | `type:feature` |
-| refactor, cleanup, restructure, simplify | `type:refactor` |
-| performance, slow, latency, optimize | `type:performance` |
-| test, coverage, scenario | `type:test` |
+| bug, crash, segfault, wrong, broken, regression, fix | `bug` |
+| feature, add, new, implement, support, enhance | `enhancement` |
+| refactor, cleanup, restructure, simplify, rename | `refactor` |
+| performance, slow, latency, optimize, throughput | `performance` |
+| test, coverage, scenario, GTest | `test` |
+| docs, README, API, design, guide | `docs` |
+
+### Triage Rules
+
+1. Read the issue title and body carefully before labeling
+2. Apply exactly one domain label and one type label
+3. If the issue mentions files in multiple domains, label by the **primary** domain (where most changes will happen)
+4. If uncertain between two domains at the same priority, prefer the more specific one
+5. Never apply `domain:*` labels — use the short form (`perception`, `nav-planning`, `common`, etc.)
+6. After labeling, verify the labels were applied: `gh issue view <number> --json labels`
 
 ## Stale Cleanup
 

@@ -172,12 +172,18 @@ if [[ -z "$ROLE" ]]; then
 
 ${BODY}
 
-Apply the correct domain and type labels using gh CLI. Available domain labels:
-  domain:perception, domain:nav-planning, domain:comms, domain:infra
-Available type labels:
-  type:bug, type:feature, type:refactor, type:performance, type:test
+Apply exactly one domain label and one type label using gh CLI.
 
-Run: gh issue edit ${ISSUE} --add-label \"domain:X,type:Y\"
+Domain labels (pick highest priority that matches):
+  Priority 3: perception, nav-planning, comms, ipc
+  Priority 2: common, integration
+  Priority 1: platform
+
+Type labels: bug, enhancement, refactor, performance, test, docs
+
+Special labels (use instead of domain if applicable): safety-audit, security-audit, test-coverage, cross-domain
+
+Run: gh issue edit ${ISSUE} --add-label \"<domain>,<type>\"
 Then output ONLY the labels you applied, one per line."
 
         TRIAGE_OUTPUT="$(claude --model "claude-haiku-4-5-20251001" --agent "ops-github" \
