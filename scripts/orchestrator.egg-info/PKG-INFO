@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: orchestrator
+Version: 2.0.0
+Summary: Multi-agent pipeline orchestration for the drone companion stack
+Requires-Python: >=3.10
+License-File: LICENSE
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Dynamic: license-file
