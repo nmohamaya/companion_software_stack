@@ -164,14 +164,61 @@ if [[ -z "$ROLE" ]]; then
     elif [[ -n "$DOMAIN_LABEL" ]]; then
         ROLE="feature-${DOMAIN_LABEL}"
     else
-        echo -e "${RED}Error: cannot determine agent role — no recognized domain label found${RESET}" >&2
+        # No recognized labels — try auto-triage with ops-github agent
+        echo -e "${YELLOW}No recognized domain label found.${RESET} Attempting auto-triage..."
         echo ""
-        echo "Recognized labels for routing:"
-        echo "  perception, nav-planning, comms, integration, common, infra, modularity,"
-        echo "  platform, deploy, ci, safety-audit, security-audit, test-coverage, cross-domain"
-        echo ""
-        echo "Add one of these labels to issue #${ISSUE} and re-run."
-        exit 1
+
+        TRIAGE_PROMPT="Triage issue #${ISSUE}: ${TITLE}
+
+${BODY}
+
+Apply the correct domain and type labels using gh CLI. Available domain labels:
+  domain:perception, domain:nav-planning, domain:comms, domain:infra
+Available type labels:
+  type:bug, type:feature, type:refactor, type:performance, type:test
+
+Run: gh issue edit ${ISSUE} --add-label \"domain:X,type:Y\"
+Then output ONLY the labels you applied, one per line."
+
+        TRIAGE_OUTPUT="$(claude --model "claude-haiku-4-5-20251001" --agent "ops-github" \
+            --permission-mode acceptEdits \
+            -p "$TRIAGE_PROMPT" 2>/dev/null || true)"
+
+        if [[ -n "$TRIAGE_OUTPUT" ]]; then
+            echo -e "  ${GREEN}Auto-triage complete.${RESET} Re-fetching labels..."
+            # Re-fetch labels after triage
+            LABELS="$(gh issue view "$ISSUE" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+            echo -e "  Labels: ${LABELS:-<none>}"
+            echo ""
+
+            # Re-scan labels
+            while IFS= read -r label; do
+                [[ -z "$label" ]] && continue
+                case "$label" in
+                    perception|domain:perception) if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="perception"; DOMAIN_PRI=3; fi ;;
+                    nav-planning|domain:nav)      if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="nav"; DOMAIN_PRI=3; fi ;;
+                    comms|domain:comms)            if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="integration"; DOMAIN_PRI=3; fi ;;
+                    ipc)                           if [[ "${DOMAIN_PRI:-0}" -lt 3 ]]; then DOMAIN_LABEL="infra-core"; DOMAIN_PRI=3; fi ;;
+                    common|infra|infrastructure|modularity|domain:infra-core) if [[ "${DOMAIN_PRI:-0}" -lt 2 ]]; then DOMAIN_LABEL="infra-core"; DOMAIN_PRI=2; fi ;;
+                    platform|deploy|ci|domain:infra-platform) if [[ "${DOMAIN_PRI:-0}" -lt 1 ]]; then DOMAIN_LABEL="infra-platform"; DOMAIN_PRI=1; fi ;;
+                esac
+            done <<< "$LABELS"
+
+            if [[ -n "$DOMAIN_LABEL" ]]; then
+                ROLE="feature-${DOMAIN_LABEL}"
+            fi
+        fi
+
+        if [[ -z "$ROLE" ]]; then
+            echo -e "${RED}Error: auto-triage could not determine agent role${RESET}" >&2
+            echo ""
+            echo "Recognized labels for routing:"
+            echo "  perception, nav-planning, comms, integration, common, infra, modularity,"
+            echo "  platform, deploy, ci, safety-audit, security-audit, test-coverage, cross-domain"
+            echo ""
+            echo "Add one of these labels to issue #${ISSUE} and re-run."
+            exit 1
+        fi
     fi
 fi
 
