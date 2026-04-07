@@ -130,14 +130,79 @@ flowchart TD
 
 Each agent has a defined scope of files it may edit. Review agents are **read-only** — they can only read code and post comments. The `check-agent-boundaries.sh` script enforces these boundaries (advisory in CI).
 
-## Quick Start
+## Setup for New Users
+
+The multi-agent framework runs on **your local machine** using the Claude Code CLI. Each user needs their own setup — there is no shared account or server.
 
 ### Prerequisites
 
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- GitHub CLI (`gh`) authenticated: `gh auth login`
-- `jq` installed: `sudo apt install jq`
-- Repository cloned with the agent definitions in `.claude/agents/`
+| Requirement | Install | Verify |
+|-------------|---------|--------|
+| Claude Code CLI | [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code) | `claude --version` |
+| GitHub CLI | `sudo apt install gh` or [cli.github.com](https://cli.github.com) | `gh auth status` |
+| jq | `sudo apt install jq` | `jq --version` |
+| Build toolchain | See [GETTING_STARTED.md](GETTING_STARTED.md) | `cmake --version && clang-format-18 --version` |
+
+### First-Time Setup
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/nmohamaya/companion_software_stack.git
+cd companion_software_stack
+
+# 2. Authenticate Claude Code CLI (uses YOUR API key — costs go to your account)
+claude auth
+
+# 3. Authenticate GitHub CLI
+gh auth login
+
+# 4. Verify agent definitions exist
+ls .claude/agents/    # Should show 13 .md files
+
+# 5. Verify shared context exists
+ls .claude/shared-context/   # Should show domain-knowledge.md, project-status.md
+
+# 6. Build the project (needed before agents can run tests)
+bash deploy/build.sh
+
+# 7. Test the setup with a dry run
+bash scripts/deploy-issue.sh 123 --dry-run    # Shows routing without launching
+bash scripts/start-agent.sh --list             # Shows all 13 agent roles
+```
+
+### What's Included in the Repo
+
+Everything an agent needs is checked into git:
+
+| Component | Path | Purpose |
+|-----------|------|---------|
+| Agent definitions | `.claude/agents/*.md` | Role scope, tools, instructions per agent |
+| Project instructions | `CLAUDE.md` | Build commands, architecture, coding standards |
+| Shared context | `.claude/shared-context/` | Project status + domain knowledge (injected into every agent prompt) |
+| Pipeline scripts | `scripts/deploy-issue.sh`, `deploy-review.sh`, etc. | Orchestration, routing, review |
+| Scenario configs | `config/scenarios/*.json` | Integration test scenarios |
+
+### What's NOT Shared
+
+| Item | Why | What to do |
+|------|-----|-----------|
+| API credentials | Per-user, per-account | Run `claude auth` with your key |
+| GitHub auth tokens | Per-user | Run `gh auth login` |
+| Session logs | Machine-local | Generated at `tasks/sessions/*.log` |
+| Worktrees | Machine-local | Created at `.claude/worktrees/` by pipeline |
+| Claude Code memory | Per-user (`~/.claude/`) | Builds up over time as you work |
+
+### Cost Awareness
+
+Each agent invocation consumes API tokens charged to **your** Claude account. Rough guide:
+- Feature agent (Opus): ~$1-5 per issue depending on complexity
+- Review agent (Opus): ~$0.50-2 per PR review
+- Test agent (Sonnet): ~$0.25-1 per test run
+- Pipeline mode: runs 1 feature + 2-6 review/test agents = ~$3-10 per issue
+
+Use `--dry-run` on any script to preview what would be launched without spending tokens.
+
+## Quick Start
 
 ### 1. Deploy an Agent for a GitHub Issue
 

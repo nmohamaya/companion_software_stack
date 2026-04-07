@@ -96,6 +96,9 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) | Branching, PRs, CI, review process |
 | [BUG_FIXES.md](docs/tracking/BUG_FIXES.md) | Documented bugs fixed (good reference for common pitfalls) |
 | [TESTS.md](tests/TESTS.md) | Full test inventory with suites, counts, and run instructions |
+| **Multi-Agent Pipeline** | |
+| [MULTI_AGENT_GUIDE.md](docs/guides/MULTI_AGENT_GUIDE.md) | 13-agent AI pipeline: setup, deployment, review, pipeline mode |
+| [ADR-010](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Architecture decision record for the multi-agent pipeline |
 
 ---
 
