@@ -265,13 +265,6 @@ TEST(ByteTrackConfig, DefaultParams) {
     EXPECT_EQ(params.min_hits, 3u);
 }
 
-TEST(ByteTrackConfig, FactoryReturnsResult) {
-    // Factory returns Result<> — verify Ok path
-    auto result = create_tracker("bytetrack");
-    ASSERT_TRUE(result.is_ok());
-    EXPECT_EQ(result.value()->name(), "bytetrack");
-}
-
 TEST(ByteTrackConfig, FactoryWithNullConfig) {
     // Factory with nullptr config uses all defaults — should still work
     auto result = create_tracker("bytetrack", nullptr);

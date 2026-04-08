@@ -245,9 +245,10 @@ TrackerResult create_tracker(const std::string&                    backend,
         return TrackerResult::ok(make_bytetrack());
     }
 
-    // Unknown backend — warn and fall back to ByteTrack with default params.
-    spdlog::warn("Unknown tracker backend '{}' — falling back to bytetrack", backend);
-    return TrackerResult::ok(std::make_unique<ByteTrackTracker>());
+    // Unknown backend — warn and fall back to ByteTrack using the shared factory path.
+    spdlog::warn("[tracker_factory] Unknown tracker backend '{}' — falling back to bytetrack",
+                 backend);
+    return TrackerResult::ok(make_bytetrack());
 }
 
 }  // namespace drone::perception
