@@ -436,3 +436,12 @@ Not all reviewers run on every PR — routing is by diff content:
 - `tasks/agent-changelog.md` — Completed work log (append at session end)
 - `.claude/shared-context/domain-knowledge.md` — Non-obvious pitfalls all agents should know
 - `docs/guides/AGENT_HANDOFF.md` — Cross-domain handoff protocol
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
