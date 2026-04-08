@@ -19,6 +19,8 @@
 // once at startup from config, so allocation efficiency is not critical.
 #pragma once
 
+#include "util/ilogger.h"
+
 #include <algorithm>
 #include <queue>
 #include <set>
@@ -26,8 +28,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::util {
 
@@ -109,9 +109,9 @@ public:
 
         // If not all nodes are in order, there's a cycle
         if (order.size() != nodes_.size()) {
-            spdlog::error("[ProcessGraph] Cycle detected in launch dependencies — "
-                          "got {} of {} nodes",
-                          order.size(), nodes_.size());
+            DRONE_LOG_ERROR("[ProcessGraph] Cycle detected in launch dependencies — "
+                            "got {} of {} nodes",
+                            order.size(), nodes_.size());
             return {};
         }
 
@@ -160,13 +160,14 @@ public:
         // Check all referenced nodes exist
         for (const auto& [child, parents] : launch_deps_) {
             if (nodes_.count(child) == 0) {
-                spdlog::error("[ProcessGraph] launch_after references unknown process: {}", child);
+                DRONE_LOG_ERROR("[ProcessGraph] launch_after references unknown process: {}",
+                                child);
                 return false;
             }
             for (const auto& parent : parents) {
                 if (nodes_.count(parent) == 0) {
-                    spdlog::error("[ProcessGraph] launch_after references unknown dependency: {}",
-                                  parent);
+                    DRONE_LOG_ERROR("[ProcessGraph] launch_after references unknown dependency: {}",
+                                    parent);
                     return false;
                 }
             }
@@ -174,14 +175,14 @@ public:
 
         for (const auto& [source, targets] : cascade_deps_) {
             if (nodes_.count(source) == 0) {
-                spdlog::error("[ProcessGraph] restart_cascade references unknown source: {}",
-                              source);
+                DRONE_LOG_ERROR("[ProcessGraph] restart_cascade references unknown source: {}",
+                                source);
                 return false;
             }
             for (const auto& target : targets) {
                 if (nodes_.count(target) == 0) {
-                    spdlog::error("[ProcessGraph] restart_cascade references unknown target: {}",
-                                  target);
+                    DRONE_LOG_ERROR("[ProcessGraph] restart_cascade references unknown target: {}",
+                                    target);
                     return false;
                 }
             }
@@ -203,7 +204,7 @@ public:
                 auto reverse_targets = cascade_targets(t);
                 if (std::find(reverse_targets.begin(), reverse_targets.end(), node) !=
                     reverse_targets.end()) {
-                    spdlog::warn("[ProcessGraph] Cascade cycle detected: {} ↔ {}", node, t);
+                    DRONE_LOG_WARN("[ProcessGraph] Cascade cycle detected: {} ↔ {}", node, t);
                 }
             }
         }

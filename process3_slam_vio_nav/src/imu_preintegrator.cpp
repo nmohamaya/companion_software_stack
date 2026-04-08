@@ -9,9 +9,9 @@
 
 #include "slam/imu_preintegrator.h"
 
-#include <cmath>
+#include "util/ilogger.h"
 
-#include <spdlog/spdlog.h>
+#include <cmath>
 
 namespace drone::slam {
 

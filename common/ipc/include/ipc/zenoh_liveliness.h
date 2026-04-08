@@ -20,6 +20,7 @@
 #pragma once
 
 #include "ipc/zenoh_session.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <functional>
@@ -29,7 +30,6 @@
 #include <string_view>
 #include <vector>
 
-#include <spdlog/spdlog.h>
 #include <zenoh.hxx>
 
 namespace drone::ipc {
@@ -66,9 +66,9 @@ public:
             auto  key     = zenoh::KeyExpr(key_expr_);
             token_.emplace(session.liveliness_declare_token(key));
             valid_ = true;
-            spdlog::info("[Liveliness] Token declared: {}", key_expr_);
+            DRONE_LOG_INFO("[Liveliness] Token declared: {}", key_expr_);
         } catch (const std::exception& e) {
-            spdlog::error("[Liveliness] Failed to declare token '{}': {}", key_expr_, e.what());
+            DRONE_LOG_ERROR("[Liveliness] Failed to declare token '{}': {}", key_expr_, e.what());
             valid_ = false;
         }
     }
@@ -77,9 +77,9 @@ public:
         if (valid_ && token_.has_value()) {
             try {
                 token_.reset();  // RAII — destructor undeclares the token
-                spdlog::info("[Liveliness] Token undeclared: {}", key_expr_);
+                DRONE_LOG_INFO("[Liveliness] Token undeclared: {}", key_expr_);
             } catch (const std::exception& e) {
-                spdlog::warn("[Liveliness] Error undeclaring token: {}", e.what());
+                DRONE_LOG_WARN("[Liveliness] Error undeclaring token: {}", e.what());
             }
         }
     }
@@ -127,8 +127,8 @@ private:
 ///
 /// Usage:
 ///   LivelinessMonitor monitor(
-///       [](const std::string& p) { spdlog::info("ALIVE: {}", p); },
-///       [](const std::string& p) { spdlog::error("DIED: {}", p); }
+///       [](const std::string& p) { DRONE_LOG_INFO("ALIVE: {}", p); },
+///       [](const std::string& p) { DRONE_LOG_ERROR("DIED: {}", p); }
 ///   );
 ///   auto alive = monitor.get_alive_processes();
 class LivelinessMonitor {
@@ -181,9 +181,9 @@ public:
                 // on_drop (subscriber destroyed)
                 []() {}, std::move(opts)));
 
-            spdlog::info("[Liveliness] Monitor started on '{}'", kLivelinessWildcard);
+            DRONE_LOG_INFO("[Liveliness] Monitor started on '{}'", kLivelinessWildcard);
         } catch (const std::exception& e) {
-            spdlog::error("[Liveliness] Failed to start monitor: {}", e.what());
+            DRONE_LOG_ERROR("[Liveliness] Failed to start monitor: {}", e.what());
         }
     }
 

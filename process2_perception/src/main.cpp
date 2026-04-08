@@ -19,6 +19,7 @@
 #include "util/config.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -33,8 +34,6 @@
 #include <chrono>
 #include <thread>
 
-#include <spdlog/spdlog.h>
-
 using namespace drone::perception;
 
 static std::atomic<bool> g_running{true};
@@ -43,7 +42,7 @@ static std::atomic<bool> g_running{true};
 static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                              drone::TripleBuffer<Detection2DList>&            output_queue,
                              std::atomic<bool>& running, IDetector& detector) {
-    spdlog::info("[Inference] Thread started — using detector: {}", detector.name());
+    DRONE_LOG_INFO("[Inference] Thread started — using detector: {}", detector.name());
 
     auto hb = drone::util::ScopedHeartbeat("inference", true);
 
@@ -75,22 +74,22 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
             if (diag.has_warnings() || diag.has_errors()) {
                 diag.log_summary("Inference");
             } else if (frame_count % 100 == 0) {
-                spdlog::info("[Inference] Processed {} frames (writes={})", frame_count,
-                             output_queue.write_count());
+                DRONE_LOG_INFO("[Inference] Processed {} frames (writes={})", frame_count,
+                               output_queue.write_count());
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
-    spdlog::info("[Inference] Thread stopped — {} frames, {} writes", frame_count,
-                 output_queue.write_count());
+    DRONE_LOG_INFO("[Inference] Thread stopped — {} frames, {} writes", frame_count,
+                   output_queue.write_count());
 }
 
 // ── Tracker thread ──────────────────────────────────────────
 static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
                            drone::TripleBuffer<TrackedObjectList>& output_queue,
                            std::atomic<bool>& running, ITracker& tracker) {
-    spdlog::info("[Tracker] Thread started — backend: {}", tracker.name());
+    DRONE_LOG_INFO("[Tracker] Thread started — backend: {}", tracker.name());
 
     auto hb = drone::util::ScopedHeartbeat("tracker", true);
 
@@ -115,8 +114,8 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
             ++cycle_count;
 
             if (cycle_count % kStatusInterval == 0) {
-                spdlog::info("[Tracker] Status: backend={}, cycles={}, writes={}", tracker.name(),
-                             cycle_count, output_queue.write_count());
+                DRONE_LOG_INFO("[Tracker] Status: backend={}, cycles={}, writes={}", tracker.name(),
+                               cycle_count, output_queue.write_count());
             }
 
             if (diag.has_warnings() || diag.has_errors()) {
@@ -126,8 +125,8 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
-    spdlog::info("[Tracker] Thread stopped — {} cycles, {} writes", cycle_count,
-                 output_queue.write_count());
+    DRONE_LOG_INFO("[Tracker] Thread stopped — {} cycles, {} writes", cycle_count,
+                   output_queue.write_count());
 }
 
 // ── Fusion thread ───────────────────────────────────────────
@@ -140,8 +139,8 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                           drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
                           drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
                           std::atomic<bool>& running, IFusionEngine& engine, int fusion_rate_hz) {
-    spdlog::info("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
-                 fusion_rate_hz);
+    DRONE_LOG_INFO("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
+                   fusion_rate_hz);
 
     auto hb = drone::util::ScopedHeartbeat("fusion", true);
 
@@ -163,14 +162,14 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             drone::ipc::Pose p{};
             if (pose_sub.receive(p)) {
                 if (!has_pose) {
-                    spdlog::info("[Fusion] First SLAM pose received: ({:.2f}, {:.2f}, {:.2f})",
-                                 p.translation[0], p.translation[1], p.translation[2]);
+                    DRONE_LOG_INFO("[Fusion] First SLAM pose received: ({:.2f}, {:.2f}, {:.2f})",
+                                   p.translation[0], p.translation[1], p.translation[2]);
                 }
                 latest_pose = p;
                 has_pose    = true;
             } else if (fusion_count > 0 && fusion_count % 300 == 0 && !has_pose) {
-                spdlog::warn("[Fusion] Still no SLAM pose after {} cycles (sub connected={})",
-                             fusion_count, pose_sub.is_connected());
+                DRONE_LOG_WARN("[Fusion] Still no SLAM pose after {} cycles (sub connected={})",
+                               fusion_count, pose_sub.is_connected());
             }
         }
 
@@ -263,7 +262,7 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             // Only publish once we have a valid pose — positions are meaningless
             // in camera frame and would produce incorrect avoidance reactions.
             if (!has_pose) {
-                spdlog::debug("[Fusion] Skipping publish — no pose available yet");
+                DRONE_LOG_DEBUG("[Fusion] Skipping publish — no pose available yet");
                 continue;
             }
 
@@ -308,8 +307,8 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             if (diag.has_warnings() || diag.has_errors()) {
                 diag.log_summary("Fusion");
             } else if (fusion_count % 100 == 0) {
-                spdlog::info("[Fusion] {} cycles, {} fused objects this frame", fusion_count,
-                             fused.objects.size());
+                DRONE_LOG_INFO("[Fusion] {} cycles, {} fused objects this frame", fusion_count,
+                               fused.objects.size());
             }
         }
 
@@ -322,8 +321,8 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
         }
         std::this_thread::sleep_until(next_tick);
     }
-    spdlog::info("[Fusion] Thread stopped after {} cycles (reads={})", fusion_count,
-                 tracked_queue.read_count());
+    DRONE_LOG_INFO("[Fusion] Thread stopped after {} cycles (reads={})", fusion_count,
+                   tracked_queue.read_count());
 }
 
 // ── Radar HAL read thread ──────────────────────────────────
@@ -337,8 +336,8 @@ static void radar_read_thread(drone::hal::IRadar&                               
     constexpr int kMaxRateHz        = 1000;
     int           effective_rate_hz = update_rate_hz;
     if (effective_rate_hz < kMinRateHz || effective_rate_hz > kMaxRateHz) {
-        spdlog::warn("[Radar] Invalid update rate {} Hz — clamping to [{}, {}]", update_rate_hz,
-                     kMinRateHz, kMaxRateHz);
+        DRONE_LOG_WARN("[Radar] Invalid update rate {} Hz — clamping to [{}, {}]", update_rate_hz,
+                       kMinRateHz, kMaxRateHz);
         effective_rate_hz = std::clamp(effective_rate_hz, kMinRateHz, kMaxRateHz);
     }
 
@@ -346,8 +345,8 @@ static void radar_read_thread(drone::hal::IRadar&                               
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(1)) /
         effective_rate_hz;
 
-    spdlog::info("[Radar] Read thread started — backend: {}, rate: {} Hz, period: {} ms",
-                 radar.name(), effective_rate_hz, period.count());
+    DRONE_LOG_INFO("[Radar] Read thread started — backend: {}, rate: {} Hz, period: {} ms",
+                   radar.name(), effective_rate_hz, period.count());
 
     auto hb = drone::util::ScopedHeartbeat("radar_read", true);
 
@@ -365,7 +364,7 @@ static void radar_read_thread(drone::hal::IRadar&                               
         std::this_thread::sleep_for(period);
     }
 
-    spdlog::info("[Radar] Read thread stopped — {} publishes", read_count);
+    DRONE_LOG_INFO("[Radar] Read thread stopped — {} publishes", read_count);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -380,7 +379,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::perception_schema());
             rc != 0) {
@@ -388,7 +387,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    spdlog::info("=== Perception process starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== Perception process starting (PID {}) ===", getpid());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -399,7 +398,7 @@ int main(int argc, char* argv[]) {
     // ── Subscribe to video frames from Process 1 ────────────
     auto video_sub = bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
     if (!video_sub->is_connected()) {
-        spdlog::error("Cannot connect to video channel — is video_capture running?");
+        DRONE_LOG_ERROR("Cannot connect to video channel — is video_capture running?");
         return 1;
     }
 
@@ -407,19 +406,19 @@ int main(int argc, char* argv[]) {
     auto det_pub =
         bus.advertise<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!det_pub->is_ready()) {
-        spdlog::error("Failed to create publisher: {}", drone::ipc::topics::DETECTED_OBJECTS);
+        DRONE_LOG_ERROR("Failed to create publisher: {}", drone::ipc::topics::DETECTED_OBJECTS);
         return 1;
     }
 
     // ── Create detector from config ────────────────────────────
     std::string detector_backend = cfg.get<std::string>("perception.detector.backend", "simulated");
     auto        detector         = create_detector(detector_backend, &cfg);
-    spdlog::info("[Perception] Detector backend: {} ({})", detector_backend, detector->name());
+    DRONE_LOG_INFO("[Perception] Detector backend: {} ({})", detector_backend, detector->name());
 
     // ── Create tracker from config ────────────────────────────
     std::string tracker_backend = cfg.get<std::string>("perception.tracker.backend", "bytetrack");
     auto        tracker         = create_tracker(tracker_backend, &cfg);
-    spdlog::info("[Perception] Tracker  backend: {} ({})", tracker_backend, tracker->name());
+    DRONE_LOG_INFO("[Perception] Tracker  backend: {} ({})", tracker_backend, tracker->name());
 
     // ── Create fusion engine from config ────────────────────
     CalibrationData calib;
@@ -435,7 +434,7 @@ int main(int argc, char* argv[]) {
 
     std::string fusion_backend = cfg.get<std::string>("perception.fusion.backend", "camera_only");
     auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);
-    spdlog::info("[Perception] Fusion   backend: {} ({})", fusion_backend, fusion_engine->name());
+    DRONE_LOG_INFO("[Perception] Fusion   backend: {} ({})", fusion_backend, fusion_engine->name());
 
     // ── Create radar HAL + publisher (optional) ────────────
     bool radar_enabled = cfg.get<bool>("perception.radar.enabled", false);
@@ -447,20 +446,20 @@ int main(int argc, char* argv[]) {
         try {
             radar = drone::hal::create_radar(cfg, "perception.radar");
             if (!radar->init()) {
-                spdlog::error("[Radar] HAL init() failed — radar disabled");
+                DRONE_LOG_ERROR("[Radar] HAL init() failed — radar disabled");
                 radar.reset();
             } else {
                 radar_pub = bus.advertise<drone::ipc::RadarDetectionList>(
                     drone::ipc::topics::RADAR_DETECTIONS);
-                spdlog::info("[Perception] Radar HAL: {} — publishing to {}", radar->name(),
-                             drone::ipc::topics::RADAR_DETECTIONS);
+                DRONE_LOG_INFO("[Perception] Radar HAL: {} — publishing to {}", radar->name(),
+                               drone::ipc::topics::RADAR_DETECTIONS);
             }
         } catch (const std::exception& e) {
-            spdlog::error("[Radar] Failed to create HAL backend: {} — radar disabled", e.what());
+            DRONE_LOG_ERROR("[Radar] Failed to create HAL backend: {} — radar disabled", e.what());
             radar.reset();
         }
     } else {
-        spdlog::info("[Perception] Radar disabled (perception.radar.enabled=false)");
+        DRONE_LOG_INFO("[Perception] Radar disabled (perception.radar.enabled=false)");
     }
 
     // ── Internal triple buffers (lock-free latest-value handoff) ──
@@ -492,7 +491,7 @@ int main(int argc, char* argv[]) {
         t_radar = std::thread(radar_read_thread, std::ref(*radar), std::ref(*radar_pub),
                               std::ref(g_running), radar_update_rate_hz);
     } else if (radar) {
-        spdlog::warn("[Radar] HAL active but publisher not ready — radar read thread disabled");
+        DRONE_LOG_WARN("[Radar] HAL active but publisher not ready — radar read thread disabled");
     }
 
     // ── Thread watchdog + health publisher ──────────────────
@@ -501,7 +500,7 @@ int main(int argc, char* argv[]) {
         bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_PERCEPTION);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "perception", watchdog);
 
-    spdlog::info("All perception threads started — READY");
+    DRONE_LOG_INFO("All perception threads started — READY");
     drone::systemd::notify_ready();
 
     // ── Main loop ───────────────────────────────────────────
@@ -509,16 +508,16 @@ int main(int argc, char* argv[]) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
-        spdlog::info("[HealthCheck] perception alive");
+        DRONE_LOG_INFO("[HealthCheck] perception alive");
     }
 
     drone::systemd::notify_stopping();
-    spdlog::info("Shutting down...");
+    DRONE_LOG_INFO("Shutting down...");
     t_inference.join();
     t_tracker.join();
     t_fusion.join();
     if (t_radar.joinable()) t_radar.join();
 
-    spdlog::info("=== Perception process stopped ===");
+    DRONE_LOG_INFO("=== Perception process stopped ===");
     return 0;
 }

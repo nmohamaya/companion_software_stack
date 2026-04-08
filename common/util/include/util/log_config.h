@@ -1,6 +1,7 @@
 // common/util/include/util/log_config.h
 // Logging initialisation using spdlog.
 #pragma once
+#include "util/ilogger.h"
 #include "util/json_log_sink.h"
 
 #include <cstdlib>
@@ -57,8 +58,8 @@ inline void init(const std::string& process_name, const std::string& log_dir,
             logger->set_level(spdlog::level::info);
 
         spdlog::set_default_logger(logger);
-        spdlog::info("Logger '{}' initialised — level={}, json={}", process_name, level_str,
-                     json_mode ? "on" : "off");
+        DRONE_LOG_INFO("Logger '{}' initialised — level={}, json={}", process_name, level_str,
+                       json_mode ? "on" : "off");
     } catch (const spdlog::spdlog_ex& ex) {
         std::fprintf(stderr, "Log init failed: %s\n", ex.what());
         // Fall back to default console logger

@@ -13,6 +13,7 @@
 #include "planner/mission_fsm.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <cmath>
@@ -20,8 +21,6 @@
 #include <functional>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -70,7 +69,7 @@ public:
 
         switch (gcs_cmd.command) {
             case drone::ipc::GCSCommandType::RTL:
-                spdlog::info("[Planner] GCS command: RTL corr={:#x}", gcs_cmd.correlation_id);
+                DRONE_LOG_INFO("[Planner] GCS command: RTL corr={:#x}", gcs_cmd.correlation_id);
                 send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
                 publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
                 flight_state.rtl_start_time = std::chrono::steady_clock::now();
@@ -79,7 +78,7 @@ public:
                 break;
 
             case drone::ipc::GCSCommandType::LAND:
-                spdlog::info("[Planner] GCS command: LAND corr={:#x}", gcs_cmd.correlation_id);
+                DRONE_LOG_INFO("[Planner] GCS command: LAND corr={:#x}", gcs_cmd.correlation_id);
                 send_fc(drone::ipc::FCCommandType::LAND, 0.0f);
                 flight_state.land_sent = true;
                 publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
@@ -87,23 +86,23 @@ public:
                 break;
 
             case drone::ipc::GCSCommandType::MISSION_PAUSE:
-                spdlog::info("[Planner] GCS command: MISSION_PAUSE corr={:#x}",
-                             gcs_cmd.correlation_id);
+                DRONE_LOG_INFO("[Planner] GCS command: MISSION_PAUSE corr={:#x}",
+                               gcs_cmd.correlation_id);
                 publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
                 fsm.on_loiter();
                 break;
 
             case drone::ipc::GCSCommandType::MISSION_START:
-                spdlog::info("[Planner] GCS command: MISSION_START corr={:#x}",
-                             gcs_cmd.correlation_id);
+                DRONE_LOG_INFO("[Planner] GCS command: MISSION_START corr={:#x}",
+                               gcs_cmd.correlation_id);
                 if (fsm.state() == MissionState::LOITER) {
                     fsm.on_navigate();
                 }
                 break;
 
             case drone::ipc::GCSCommandType::MISSION_ABORT:
-                spdlog::info("[Planner] GCS command: MISSION_ABORT corr={:#x}",
-                             gcs_cmd.correlation_id);
+                DRONE_LOG_INFO("[Planner] GCS command: MISSION_ABORT corr={:#x}",
+                               gcs_cmd.correlation_id);
                 send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
                 publish_stop_trajectory(traj_pub, gcs_cmd.correlation_id);
                 flight_state.rtl_start_time = std::chrono::steady_clock::now();
@@ -152,8 +151,8 @@ private:
         if (state == MissionState::RTL || state == MissionState::LAND ||
             state == MissionState::EMERGENCY || state == MissionState::TAKEOFF ||
             state == MissionState::COLLISION_RECOVERY) {
-            spdlog::warn("[Planner] MISSION_UPLOAD rejected — unsafe FSM state '{}' corr={:#x}",
-                         static_cast<int>(state), correlation_id);
+            DRONE_LOG_WARN("[Planner] MISSION_UPLOAD rejected — unsafe FSM state '{}' corr={:#x}",
+                           static_cast<int>(state), correlation_id);
             ++state_rejected_count_;
             return;
         }
@@ -165,9 +164,9 @@ private:
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last_upload_time_)
                     .count();
             if (elapsed_ms < limits_.rate_limit_ms) {
-                spdlog::warn("[Planner] MISSION_UPLOAD rate-limited — {}ms since last upload "
-                             "(min {}ms) corr={:#x}",
-                             elapsed_ms, limits_.rate_limit_ms, correlation_id);
+                DRONE_LOG_WARN("[Planner] MISSION_UPLOAD rate-limited — {}ms since last upload "
+                               "(min {}ms) corr={:#x}",
+                               elapsed_ms, limits_.rate_limit_ms, correlation_id);
                 ++rate_limited_count_;
                 return;
             }
@@ -176,7 +175,7 @@ private:
         drone::ipc::MissionUpload upload{};
         if (!upload_sub.is_connected() || !upload_sub.receive(upload) || !upload.valid ||
             upload.timestamp_ns <= last_upload_timestamp_ || upload.num_waypoints == 0) {
-            spdlog::warn("[Planner] MISSION_UPLOAD command but no valid upload data available");
+            DRONE_LOG_WARN("[Planner] MISSION_UPLOAD command but no valid upload data available");
             return;
         }
 
@@ -191,27 +190,27 @@ private:
             // #177: NaN/Inf coordinate check
             if (!std::isfinite(sw.x) || !std::isfinite(sw.y) || !std::isfinite(sw.z) ||
                 !std::isfinite(sw.yaw)) {
-                spdlog::error("[Planner] MISSION_UPLOAD rejected — waypoint {} has "
-                              "non-finite coordinate corr={:#x}",
-                              i, correlation_id);
+                DRONE_LOG_ERROR("[Planner] MISSION_UPLOAD rejected — waypoint {} has "
+                                "non-finite coordinate corr={:#x}",
+                                i, correlation_id);
                 valid = false;
                 break;
             }
 
             // #178: speed and radius range validation
             if (sw.speed < limits_.speed_min_mps || sw.speed > limits_.speed_max_mps) {
-                spdlog::error("[Planner] MISSION_UPLOAD rejected — waypoint {} speed "
-                              "{:.1f} outside [{:.1f}, {:.1f}] corr={:#x}",
-                              i, sw.speed, limits_.speed_min_mps, limits_.speed_max_mps,
-                              correlation_id);
+                DRONE_LOG_ERROR("[Planner] MISSION_UPLOAD rejected — waypoint {} speed "
+                                "{:.1f} outside [{:.1f}, {:.1f}] corr={:#x}",
+                                i, sw.speed, limits_.speed_min_mps, limits_.speed_max_mps,
+                                correlation_id);
                 valid = false;
                 break;
             }
             if (sw.radius < limits_.radius_min_m || sw.radius > limits_.radius_max_m) {
-                spdlog::error("[Planner] MISSION_UPLOAD rejected — waypoint {} radius "
-                              "{:.1f} outside [{:.1f}, {:.1f}] corr={:#x}",
-                              i, sw.radius, limits_.radius_min_m, limits_.radius_max_m,
-                              correlation_id);
+                DRONE_LOG_ERROR("[Planner] MISSION_UPLOAD rejected — waypoint {} radius "
+                                "{:.1f} outside [{:.1f}, {:.1f}] corr={:#x}",
+                                i, sw.radius, limits_.radius_min_m, limits_.radius_max_m,
+                                correlation_id);
                 valid = false;
                 break;
             }
@@ -226,8 +225,8 @@ private:
 
         last_upload_time_ = now;
         fsm.load_mission(new_wps);
-        spdlog::info("[Planner] GCS MISSION_UPLOAD: {} waypoints loaded corr={:#x}", new_wps.size(),
-                     correlation_id);
+        DRONE_LOG_INFO("[Planner] GCS MISSION_UPLOAD: {} waypoints loaded corr={:#x}",
+                       new_wps.size(), correlation_id);
         diag.add_warning("MissionUpload", "Mid-flight waypoint upload: " +
                                               std::to_string(new_wps.size()) + " waypoints");
         if (fsm.state() == MissionState::NAVIGATE || fsm.state() == MissionState::LOITER) {

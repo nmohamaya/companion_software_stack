@@ -8,6 +8,7 @@
 // the stuck callback fires.
 #pragma once
 
+#include "util/ilogger.h"
 #include "util/thread_heartbeat.h"
 
 #include <atomic>
@@ -17,8 +18,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::util {
 
@@ -148,10 +147,10 @@ private:
                     }
                 }
                 if (!was_previously_stuck) {
-                    spdlog::error("[Watchdog] Thread '{}' stuck for {:.1f}s "
-                                  "(threshold: {:.1f}s, critical: {})",
-                                  beat.name, static_cast<double>(delta) / 1e9,
-                                  static_cast<double>(threshold_ns) / 1e9, beat.is_critical);
+                    DRONE_LOG_ERROR("[Watchdog] Thread '{}' stuck for {:.1f}s "
+                                    "(threshold: {:.1f}s, critical: {})",
+                                    beat.name, static_cast<double>(delta) / 1e9,
+                                    static_cast<double>(threshold_ns) / 1e9, beat.is_critical);
                 }
 
                 // Fire callback (outside cb_mutex_ to avoid deadlock)

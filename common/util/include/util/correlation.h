@@ -19,7 +19,7 @@
 //   outgoing_msg.correlation_id = CorrelationContext::get();
 //
 //   // In log messages:
-//   spdlog::info("[cmd] corr={:#x} action=RTL", CorrelationContext::get());
+//   DRONE_LOG_INFO("[cmd] corr={:#x} action=RTL", CorrelationContext::get());
 #pragma once
 
 #include <atomic>

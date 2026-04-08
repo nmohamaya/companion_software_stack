@@ -12,11 +12,11 @@
 #include <opencv2/imgproc.hpp>
 #endif
 
+#include "util/ilogger.h"
+
 #include <chrono>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::perception {
 

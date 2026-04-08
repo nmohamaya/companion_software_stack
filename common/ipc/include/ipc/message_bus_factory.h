@@ -23,12 +23,11 @@
 #include "ipc/message_bus.h"
 #include "ipc/zenoh_network_config.h"
 #include "ipc/zenoh_session.h"
+#include "util/ilogger.h"
 
 #include <memory>
 #include <string>
 #include <type_traits>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
@@ -45,13 +44,13 @@ inline MessageBus create_message_bus(const std::string& backend           = "zen
                                      const std::string& zenoh_config_json = "") {
     if (backend != "zenoh") {
         if (backend == "shm") {
-            spdlog::error("[MessageBusFactory] The 'shm' backend has been removed. "
-                          "Please update config/default.json to use ipc_backend: \"zenoh\". "
-                          "Falling back to Zenoh.");
+            DRONE_LOG_ERROR("[MessageBusFactory] The 'shm' backend has been removed. "
+                            "Please update config/default.json to use ipc_backend: \"zenoh\". "
+                            "Falling back to Zenoh.");
         } else {
-            spdlog::error("[MessageBusFactory] Unknown backend '{}' — only 'zenoh' is "
-                          "currently supported. Falling back to Zenoh.",
-                          backend);
+            DRONE_LOG_ERROR("[MessageBusFactory] Unknown backend '{}' — only 'zenoh' is "
+                            "currently supported. Falling back to Zenoh.",
+                            backend);
         }
     }
 
@@ -62,7 +61,7 @@ inline MessageBus create_message_bus(const std::string& backend           = "zen
     if (shm_pool_mb > 0) {
         drone::ipc::ZenohSession::instance().configure_shm(shm_pool_mb * 1024 * 1024);
     }
-    spdlog::info("[MessageBusFactory] Selected backend: Zenoh");
+    DRONE_LOG_INFO("[MessageBusFactory] Selected backend: Zenoh");
     return MessageBus(std::make_unique<ZenohMessageBus>());
 }
 

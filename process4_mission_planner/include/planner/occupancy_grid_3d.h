@@ -6,6 +6,7 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <array>
@@ -17,8 +18,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -165,9 +164,9 @@ public:
                 }
         const size_t added = static_occupied_.size() - before;
         hd_map_static_count_ += added;
-        spdlog::info("[HD-map] Static obstacle at ({:.1f},{:.1f}) r={:.1f}m h={:.1f}m "
-                     "-> {} new cells (total static: {})",
-                     wx, wy, radius_m, height_m, added, static_occupied_.size());
+        DRONE_LOG_INFO("[HD-map] Static obstacle at ({:.1f},{:.1f}) r={:.1f}m h={:.1f}m "
+                       "-> {} new cells (total static: {})",
+                       wx, wy, radius_m, height_m, added, static_occupied_.size());
     }
 
     /// Insert obstacles from a detected object list.
@@ -302,18 +301,18 @@ public:
 
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
-            spdlog::info("[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
-                         "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
-                         "drone=({},{},{})",
-                         objects.num_objects, accepted, suppressed, excluded_cells,
-                         occupied_.size(), static_occupied_.size(), promoted_count_,
-                         hd_map_static_count_, max_static_cells_, total_predictions_applied_,
-                         drone_cell.x, drone_cell.y, drone_cell.z);
+            DRONE_LOG_INFO(
+                "[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
+                "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
+                "drone=({},{},{})",
+                objects.num_objects, accepted, suppressed, excluded_cells, occupied_.size(),
+                static_occupied_.size(), promoted_count_, hd_map_static_count_, max_static_cells_,
+                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
-                    spdlog::debug("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
-                                  obj.position_x, obj.position_y, obj.position_z, obj.confidence);
+                    DRONE_LOG_DEBUG("[Grid]   obj[{}] pos=({:.1f},{:.1f},{:.1f}) conf={:.2f}", i,
+                                    obj.position_x, obj.position_y, obj.position_z, obj.confidence);
                 }
             }
         }

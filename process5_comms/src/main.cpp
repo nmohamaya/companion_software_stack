@@ -17,6 +17,7 @@
 #include "util/config_validator.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/sd_notify.h"
@@ -30,15 +31,13 @@
 #include <cmath>
 #include <thread>
 
-#include <spdlog/spdlog.h>
-
 static std::atomic<bool> g_running{true};
 
 // ── FC receive thread (10 Hz) ───────────────────────────────
 static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::ipc::FCState>& pub,
                          drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub) {
     set_thread_params("fc_rx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] fc_rx thread started using {}", fc.name());
+    DRONE_LOG_INFO("[Comms] fc_rx thread started using {}", fc.name());
 
     // When FC link is overridden to disconnected, freeze the timestamp
     // so the FaultManager sees a stale heartbeat (simulates real link loss).
@@ -95,7 +94,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                          drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>& traj_sub,
                          drone::ipc::ISubscriber<drone::ipc::FCCommand>&     cmd_sub) {
     set_thread_params("fc_tx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] fc_tx thread started using {}", fc.name());
+    DRONE_LOG_INFO("[Comms] fc_tx thread started using {}", fc.name());
 
     auto hb = drone::util::ScopedHeartbeat("fc_tx", true);
 
@@ -116,30 +115,30 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
 
             switch (fc_cmd.command) {
                 case drone::ipc::FCCommandType::ARM:
-                    spdlog::info("[Comms] FC cmd: ARM corr={:#x}", fc_cmd.correlation_id);
+                    DRONE_LOG_INFO("[Comms] FC cmd: ARM corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok = fc.send_arm(true);
                     break;
                 case drone::ipc::FCCommandType::DISARM:
-                    spdlog::info("[Comms] FC cmd: DISARM corr={:#x}", fc_cmd.correlation_id);
+                    DRONE_LOG_INFO("[Comms] FC cmd: DISARM corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok = fc.send_arm(false);
                     break;
                 case drone::ipc::FCCommandType::TAKEOFF:
-                    spdlog::info("[Comms] FC cmd: TAKEOFF to {:.1f}m corr={:#x}", fc_cmd.param1,
-                                 fc_cmd.correlation_id);
+                    DRONE_LOG_INFO("[Comms] FC cmd: TAKEOFF to {:.1f}m corr={:#x}", fc_cmd.param1,
+                                   fc_cmd.correlation_id);
                     cmd_ok = fc.send_takeoff(fc_cmd.param1);
                     break;
                 case drone::ipc::FCCommandType::SET_MODE:
-                    spdlog::info("[Comms] FC cmd: SET_MODE {} corr={:#x}",
-                                 static_cast<int>(fc_cmd.param1), fc_cmd.correlation_id);
+                    DRONE_LOG_INFO("[Comms] FC cmd: SET_MODE {} corr={:#x}",
+                                   static_cast<int>(fc_cmd.param1), fc_cmd.correlation_id);
                     cmd_ok = fc.send_mode(static_cast<uint8_t>(fc_cmd.param1));
                     break;
                 case drone::ipc::FCCommandType::RTL:
-                    spdlog::info("[Comms] FC cmd: RTL corr={:#x}", fc_cmd.correlation_id);
+                    DRONE_LOG_INFO("[Comms] FC cmd: RTL corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok       = fc.send_mode(3);  // 3 = RTL
                     last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
                 case drone::ipc::FCCommandType::LAND:
-                    spdlog::info("[Comms] FC cmd: LAND corr={:#x}", fc_cmd.correlation_id);
+                    DRONE_LOG_INFO("[Comms] FC cmd: LAND corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok       = fc.send_mode(2);  // 2 = AUTO (Hold/Land)
                     last_traj_ts = UINT64_MAX;  // block stale trajectory from re-entering offboard
                     break;
@@ -147,9 +146,10 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
             }
             if (!cmd_ok) {
                 ++send_fail_count;
-                spdlog::warn("[Comms] FC command send FAILED: cmd={} seq={} "
-                             "(total failures: {})",
-                             static_cast<int>(fc_cmd.command), fc_cmd.sequence_id, send_fail_count);
+                DRONE_LOG_WARN("[Comms] FC command send FAILED: cmd={} seq={} "
+                               "(total failures: {})",
+                               static_cast<int>(fc_cmd.command), fc_cmd.sequence_id,
+                               send_fail_count);
             }
         }
 
@@ -163,9 +163,9 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
             if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z, yaw_deg)) {
                 ++traj_send_fail;
                 if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
-                    spdlog::warn("[Comms] Trajectory send failed (#{}) — "
-                                 "FC link may be degraded",
-                                 traj_send_fail);
+                    DRONE_LOG_WARN("[Comms] Trajectory send failed (#{}) — "
+                                   "FC link may be degraded",
+                                   traj_send_fail);
                 }
             }
         }
@@ -177,7 +177,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
 static void gcs_rx_thread(drone::hal::IGCSLink&                           gcs,
                           drone::ipc::IPublisher<drone::ipc::GCSCommand>& pub) {
     set_thread_params("gcs_rx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] gcs_rx thread started using {}", gcs.name());
+    DRONE_LOG_INFO("[Comms] gcs_rx thread started using {}", gcs.name());
 
     auto hb = drone::util::ScopedHeartbeat("gcs_rx", false);
 
@@ -198,8 +198,8 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                           gcs,
                 default: gcs_cmd.command = drone::ipc::GCSCommandType::NONE; break;
             }
             gcs_cmd.valid = true;
-            spdlog::info("[Comms] GCS cmd received: {} corr={:#x}",
-                         static_cast<int>(gcs_cmd.command), gcs_cmd.correlation_id);
+            DRONE_LOG_INFO("[Comms] GCS cmd received: {} corr={:#x}",
+                           static_cast<int>(gcs_cmd.command), gcs_cmd.correlation_id);
             pub.publish(gcs_cmd);
             drone::util::CorrelationContext::clear();
         }
@@ -213,7 +213,7 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                               gc
                           drone::ipc::ISubscriber<drone::ipc::MissionStatus>& status_sub,
                           drone::ipc::ISubscriber<drone::ipc::FCState>&       fc_sub) {
     set_thread_params("gcs_tx", 0, SCHED_OTHER, 0);
-    spdlog::info("[Comms] gcs_tx thread started using {}", gcs.name());
+    DRONE_LOG_INFO("[Comms] gcs_tx thread started using {}", gcs.name());
 
     auto hb = drone::util::ScopedHeartbeat("gcs_tx", false);
 
@@ -241,9 +241,9 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                               gc
                                 static_cast<uint8_t>(mission.state))) {
             ++telem_fail_count;
             if (telem_fail_count == 1 || telem_fail_count % 100 == 0) {
-                spdlog::warn("[Comms] GCS telemetry send failed (#{}) — "
-                             "GCS link may be down",
-                             telem_fail_count);
+                DRONE_LOG_WARN("[Comms] GCS telemetry send failed (#{}) — "
+                               "GCS link may be down",
+                               telem_fail_count);
             }
         }
 
@@ -261,14 +261,14 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::comms_schema()); rc != 0) {
             return rc;
         }
     }
 
-    spdlog::info("=== Comms process starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== Comms process starting (PID {}) ===", getpid());
 
     // ── Create links via HAL factory ────────────────────────
     auto fc_link    = drone::hal::create_fc_link(cfg, "comms.mavlink");
@@ -284,17 +284,17 @@ int main(int argc, char* argv[]) {
                           cfg.get<int>("comms.mavlink.baud_rate", 921600));
     }
     if (!fc_open_ok) {
-        spdlog::error("Failed to open FC link (backend: {})", fc_backend);
+        DRONE_LOG_ERROR("Failed to open FC link (backend: {})", fc_backend);
         return 1;
     }
 
     auto gcs_link = drone::hal::create_gcs_link(cfg, "comms.gcs");
     if (!gcs_link->open("0.0.0.0", cfg.get<int>("comms.gcs.udp_port", 14550))) {
-        spdlog::error("Failed to open GCS link");
+        DRONE_LOG_ERROR("Failed to open GCS link");
         return 1;
     }
 
-    spdlog::info("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
+    DRONE_LOG_INFO("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -308,7 +308,7 @@ int main(int argc, char* argv[]) {
     auto mission_upload_pub =
         bus.advertise<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
     if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready() || !mission_upload_pub->is_ready()) {
-        spdlog::error("Failed to create Comms publishers");
+        DRONE_LOG_ERROR("Failed to create Comms publishers");
         return 1;
     }
 
@@ -323,7 +323,7 @@ int main(int argc, char* argv[]) {
     auto fault_sub =
         bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
 
-    spdlog::info("Comms READY");
+    DRONE_LOG_INFO("Comms READY");
     drone::systemd::notify_ready();
 
     // ── Launch threads ──────────────────────────────────────
@@ -355,6 +355,6 @@ int main(int argc, char* argv[]) {
     gcs_link->close();
 
     drone::systemd::notify_stopping();
-    spdlog::info("=== Comms stopped ===");
+    DRONE_LOG_INFO("=== Comms stopped ===");
     return 0;
 }

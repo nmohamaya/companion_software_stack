@@ -18,6 +18,7 @@
 #ifdef HAVE_MAVSDK
 
 #include "hal/ifc_link.h"
+#include "util/ilogger.h"
 
 #include <atomic>
 #include <chrono>
@@ -30,7 +31,6 @@
 #include <mavsdk/plugins/action/action.h>
 #include <mavsdk/plugins/offboard/offboard.h>
 #include <mavsdk/plugins/telemetry/telemetry.h>
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -61,7 +61,7 @@ public:
     bool open(const std::string& port, int baud) override {
         std::lock_guard<std::mutex> lock(conn_mtx_);
         if (system_) {
-            spdlog::warn("[MavlinkFCLink] Already connected — call close() first");
+            DRONE_LOG_WARN("[MavlinkFCLink] Already connected — call close() first");
             return false;
         }
 
@@ -69,7 +69,7 @@ public:
         std::string uri       = port.empty() || port == "auto" ? "udp://:14540" : port;
         double      timeout_s = baud > 0 ? static_cast<double>(baud) / 1000.0 : 8.0;
 
-        spdlog::info("[MavlinkFCLink] Connecting to '{}' (timeout {:.1f}s)…", uri, timeout_s);
+        DRONE_LOG_INFO("[MavlinkFCLink] Connecting to '{}' (timeout {:.1f}s)…", uri, timeout_s);
 
         // Create MAVSDK instance.  Use GroundStation type so PX4 receives
         // GCS heartbeats and passes its "GCS connected" preflight check.
@@ -79,7 +79,7 @@ public:
 
         auto result = mavsdk_->add_any_connection(uri);
         if (result != mavsdk::ConnectionResult::Success) {
-            spdlog::error("[MavlinkFCLink] Connection failed: {}", connection_result_str(result));
+            DRONE_LOG_ERROR("[MavlinkFCLink] Connection failed: {}", connection_result_str(result));
             mavsdk_.reset();
             return false;
         }
@@ -87,7 +87,7 @@ public:
         // Wait for the first autopilot system
         auto maybe_system = mavsdk_->first_autopilot(timeout_s);
         if (!maybe_system) {
-            spdlog::error("[MavlinkFCLink] No autopilot found within {:.1f}s", timeout_s);
+            DRONE_LOG_ERROR("[MavlinkFCLink] No autopilot found within {:.1f}s", timeout_s);
             mavsdk_.reset();
             return false;
         }
@@ -106,14 +106,14 @@ public:
         constexpr float rtl_alt_m  = 5.0f;
         auto            rtl_result = action_->set_return_to_launch_altitude(rtl_alt_m);
         if (rtl_result == mavsdk::Action::Result::Success) {
-            spdlog::info("[MavlinkFCLink] RTL return altitude set to {} m", rtl_alt_m);
+            DRONE_LOG_INFO("[MavlinkFCLink] RTL return altitude set to {} m", rtl_alt_m);
         } else {
-            spdlog::warn("[MavlinkFCLink] Failed to set RTL altitude: {}",
-                         action_result_str(rtl_result));
+            DRONE_LOG_WARN("[MavlinkFCLink] Failed to set RTL altitude: {}",
+                           action_result_str(rtl_result));
         }
 
-        spdlog::info("[MavlinkFCLink] Connected to autopilot (sys_id={})",
-                     system_->get_system_id());
+        DRONE_LOG_INFO("[MavlinkFCLink] Connected to autopilot (sys_id={})",
+                       system_->get_system_id());
         return true;
     }
 
@@ -139,7 +139,7 @@ public:
         }
         offboard_active_.store(false, std::memory_order_release);
 
-        spdlog::info("[MavlinkFCLink] Closed");
+        DRONE_LOG_INFO("[MavlinkFCLink] Closed");
     }
 
     bool is_connected() const override {
@@ -166,8 +166,8 @@ public:
         // Must set an initial setpoint before starting offboard
         auto set_result = offboard_->set_velocity_ned(cmd);
         if (set_result != mavsdk::Offboard::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] set_velocity_ned failed: {}",
-                         offboard_result_str(set_result));
+            DRONE_LOG_WARN("[MavlinkFCLink] set_velocity_ned failed: {}",
+                           offboard_result_str(set_result));
             return false;
         }
 
@@ -175,16 +175,16 @@ public:
         if (!offboard_active_.load(std::memory_order_acquire)) {
             auto start_result = offboard_->start();
             if (start_result != mavsdk::Offboard::Result::Success) {
-                spdlog::warn("[MavlinkFCLink] Offboard start failed: {}",
-                             offboard_result_str(start_result));
+                DRONE_LOG_WARN("[MavlinkFCLink] Offboard start failed: {}",
+                               offboard_result_str(start_result));
                 return false;
             }
             offboard_active_.store(true, std::memory_order_release);
-            spdlog::info("[MavlinkFCLink] Offboard mode started");
+            DRONE_LOG_INFO("[MavlinkFCLink] Offboard mode started");
         }
 
-        spdlog::debug("[MavlinkFCLink] velocity cmd N={:.2f} E={:.2f} D={:.2f} yaw={:.1f}°", vx, vy,
-                      vz, yaw);
+        DRONE_LOG_DEBUG("[MavlinkFCLink] velocity cmd N={:.2f} E={:.2f} D={:.2f} yaw={:.1f}°", vx,
+                        vy, vz, yaw);
         return true;
     }
 
@@ -194,11 +194,11 @@ public:
 
         auto result = arm ? action_->arm() : action_->disarm();
         if (result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] {} failed: {}", arm ? "Arm" : "Disarm",
-                         action_result_str(result));
+            DRONE_LOG_WARN("[MavlinkFCLink] {} failed: {}", arm ? "Arm" : "Disarm",
+                           action_result_str(result));
             return false;
         }
-        spdlog::info("[MavlinkFCLink] {} successful", arm ? "Armed" : "Disarmed");
+        DRONE_LOG_INFO("[MavlinkFCLink] {} successful", arm ? "Armed" : "Disarmed");
         return true;
     }
 
@@ -208,14 +208,14 @@ public:
 
         auto set_result = action_->set_takeoff_altitude(altitude_m);
         if (set_result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] set_takeoff_altitude({:.1f}m) failed: {}", altitude_m,
-                         action_result_str(set_result));
+            DRONE_LOG_WARN("[MavlinkFCLink] set_takeoff_altitude({:.1f}m) failed: {}", altitude_m,
+                           action_result_str(set_result));
             return false;
         }
 
         auto result = action_->takeoff();
         if (result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] Takeoff failed: {}", action_result_str(result));
+            DRONE_LOG_WARN("[MavlinkFCLink] Takeoff failed: {}", action_result_str(result));
             return false;
         }
         // Stop offboard if it was active — takeoff uses Auto mode
@@ -223,7 +223,7 @@ public:
             offboard_->stop();
             offboard_active_.store(false, std::memory_order_release);
         }
-        spdlog::info("[MavlinkFCLink] Takeoff to {:.1f}m initiated", altitude_m);
+        DRONE_LOG_INFO("[MavlinkFCLink] Takeoff to {:.1f}m initiated", altitude_m);
         return true;
     }
 
@@ -254,13 +254,13 @@ public:
                 {
                     auto ob_result = offboard_->start();
                     if (ob_result != mavsdk::Offboard::Result::Success) {
-                        spdlog::warn("[MavlinkFCLink] Offboard start failed: {}",
-                                     offboard_result_str(ob_result));
+                        DRONE_LOG_WARN("[MavlinkFCLink] Offboard start failed: {}",
+                                       offboard_result_str(ob_result));
                         return false;
                     }
                 }
                 offboard_active_.store(true, std::memory_order_release);
-                spdlog::info("[MavlinkFCLink] Mode → Offboard (GUIDED)");
+                DRONE_LOG_INFO("[MavlinkFCLink] Mode → Offboard (GUIDED)");
                 return true;
             case 2:  // AUTO → Land
                 if (offboard_active_.load(std::memory_order_acquire)) {
@@ -276,15 +276,15 @@ public:
                 }
                 result = action_->return_to_launch();
                 break;
-            default: spdlog::warn("[MavlinkFCLink] Unknown mode {}", mode); return false;
+            default: DRONE_LOG_WARN("[MavlinkFCLink] Unknown mode {}", mode); return false;
         }
 
         if (result != mavsdk::Action::Result::Success) {
-            spdlog::warn("[MavlinkFCLink] Mode change ({}) failed: {}", mode,
-                         action_result_str(result));
+            DRONE_LOG_WARN("[MavlinkFCLink] Mode change ({}) failed: {}", mode,
+                           action_result_str(result));
             return false;
         }
-        spdlog::info("[MavlinkFCLink] Mode changed to {}", mode);
+        DRONE_LOG_INFO("[MavlinkFCLink] Mode changed to {}", mode);
         return true;
     }
 

@@ -10,11 +10,10 @@
 #endif
 
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <stdexcept>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::perception {
 
@@ -26,8 +25,8 @@ std::unique_ptr<IDetector> create_detector(const std::string& backend, const dro
         }
         return std::make_unique<OpenCvYoloDetector>("models/yolov8n.onnx");
 #else
-        spdlog::warn("[detector_factory] 'yolov8' backend requested but OpenCV "
-                     "not available — falling back to 'color_contour'");
+        DRONE_LOG_WARN("[detector_factory] 'yolov8' backend requested but OpenCV "
+                       "not available — falling back to 'color_contour'");
         if (cfg) {
             return std::make_unique<ColorContourDetector>(*cfg);
         }

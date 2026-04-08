@@ -4,12 +4,11 @@
 // Thread-safe: all mutable state guarded by mutex.
 #pragma once
 #include "hal/ifc_link.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <cmath>
 #include <mutex>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -19,7 +18,7 @@ public:
         std::lock_guard<std::mutex> lock(mtx_);
         (void)port;
         (void)baud;
-        spdlog::info("[SimulatedFCLink] Opened simulated link {}@{}", port, baud);
+        DRONE_LOG_INFO("[SimulatedFCLink] Opened simulated link {}@{}", port, baud);
         connected_  = true;
         start_time_ = std::chrono::steady_clock::now();
         return true;
@@ -28,7 +27,7 @@ public:
     void close() override {
         std::lock_guard<std::mutex> lock(mtx_);
         connected_ = false;
-        spdlog::info("[SimulatedFCLink] Closed");
+        DRONE_LOG_INFO("[SimulatedFCLink] Closed");
     }
 
     bool is_connected() const override {
@@ -39,7 +38,7 @@ public:
     bool send_trajectory(float vx, float vy, float vz, float yaw) override {
         std::lock_guard<std::mutex> lock(mtx_);
         if (!connected_) return false;
-        spdlog::debug(
+        DRONE_LOG_DEBUG(
             "[SimulatedFCLink] SET_POSITION_TARGET vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}", vx,
             vy, vz, yaw);
         last_vx_ = vx;
@@ -50,21 +49,21 @@ public:
 
     bool send_arm(bool arm) override {
         std::lock_guard<std::mutex> lock(mtx_);
-        spdlog::info("[SimulatedFCLink] {} command", arm ? "ARM" : "DISARM");
+        DRONE_LOG_INFO("[SimulatedFCLink] {} command", arm ? "ARM" : "DISARM");
         state_.armed = arm;
         return true;
     }
 
     bool send_mode(uint8_t mode) override {
         std::lock_guard<std::mutex> lock(mtx_);
-        spdlog::info("[SimulatedFCLink] MODE change to {}", mode);
+        DRONE_LOG_INFO("[SimulatedFCLink] MODE change to {}", mode);
         state_.flight_mode = mode;
         return true;
     }
 
     bool send_takeoff(float altitude_m) override {
         std::lock_guard<std::mutex> lock(mtx_);
-        spdlog::info("[SimulatedFCLink] TAKEOFF to {:.1f}m", altitude_m);
+        DRONE_LOG_INFO("[SimulatedFCLink] TAKEOFF to {:.1f}m", altitude_m);
         state_.altitude_rel = altitude_m;  // Simulate instant takeoff
         state_.flight_mode  = 2;           // AUTO/Takeoff
         return true;

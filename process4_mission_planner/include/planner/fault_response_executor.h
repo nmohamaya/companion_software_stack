@@ -10,11 +10,10 @@
 #include "planner/fault_manager.h"
 #include "planner/gcs_command_handler.h"
 #include "planner/mission_fsm.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <cstdint>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -38,10 +37,10 @@ public:
             fault.recommended_action < FaultAction::RTL)
             return;
 
-        spdlog::warn("[FaultMgr] Escalation: {} → {} (reason: {}) active_faults=[{}]",
-                     fault_action_name(last_fault_action_),
-                     fault_action_name(fault.recommended_action), fault.reason,
-                     drone::ipc::fault_flags_string(fault.active_faults));
+        DRONE_LOG_WARN("[FaultMgr] Escalation: {} → {} (reason: {}) active_faults=[{}]",
+                       fault_action_name(last_fault_action_),
+                       fault_action_name(fault.recommended_action), fault.reason,
+                       drone::ipc::fault_flags_string(fault.active_faults));
 
         switch (fault.recommended_action) {
             case FaultAction::WARN:
@@ -78,9 +77,9 @@ public:
     void log_new_faults(uint32_t active_faults) {
         uint32_t new_flags = active_faults & ~last_active_faults_;
         if (new_flags != 0) {
-            spdlog::warn("[FaultMgr] New faults: [{}] active_faults=[{}]",
-                         drone::ipc::fault_flags_string(new_flags),
-                         drone::ipc::fault_flags_string(active_faults));
+            DRONE_LOG_WARN("[FaultMgr] New faults: [{}] active_faults=[{}]",
+                           drone::ipc::fault_flags_string(new_flags),
+                           drone::ipc::fault_flags_string(active_faults));
         }
         last_active_faults_ = active_faults;
     }

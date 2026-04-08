@@ -9,6 +9,7 @@
 
 #include "planner/grid_planner_base.h"
 #include "planner/occupancy_grid_3d.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <array>
@@ -21,8 +22,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -61,13 +60,13 @@ protected:
 
         // Queue too large → reinitialise to avoid memory bloat
         if (initialized_ && U_.size() > 100000) {
-            spdlog::info("[D*Lite] Queue size {} > 100k — reinitialising", U_.size());
+            DRONE_LOG_INFO("[D*Lite] Queue size {} > 100k — reinitialising", U_.size());
             need_init = true;
         }
 
         // km_ too large → key recycling wastes iterations (drone moved far)
         if (initialized_ && km_ > 10.0f) {
-            spdlog::info("[D*Lite] km_={:.1f} > 10 — reinitialising to avoid key churn", km_);
+            DRONE_LOG_INFO("[D*Lite] km_={:.1f} > 10 — reinitialising to avoid key churn", km_);
             need_init = true;
         }
 
@@ -80,8 +79,8 @@ protected:
                 // Large change sets cause cascading invalidations that are more
                 // expensive than a fresh search.  Reinitialise above threshold.
                 if (changes.size() > 500) {
-                    spdlog::debug("[D*Lite] {} changes > threshold — reinitialising",
-                                  changes.size());
+                    DRONE_LOG_DEBUG("[D*Lite] {} changes > threshold — reinitialising",
+                                    changes.size());
                     initialize(start, goal);
                 } else {
                     for (const auto& [cell, is_occupied] : changes) {
@@ -109,11 +108,11 @@ protected:
                 .count();
 
         if (!ok || g(last_start_) >= kInf) {
-            spdlog::info("[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} "
-                         "queue={} occupied={} search={:.0f}ms",
-                         last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
-                         last_goal_.z, g(last_start_), U_.size(), grid_.occupied_count(),
-                         search_ms);
+            DRONE_LOG_INFO("[D*Lite] No path: start=({},{},{}) goal=({},{},{}) g(start)={:.0f} "
+                           "queue={} occupied={} search={:.0f}ms",
+                           last_start_.x, last_start_.y, last_start_.z, last_goal_.x, last_goal_.y,
+                           last_goal_.z, g(last_start_), U_.size(), grid_.occupied_count(),
+                           search_ms);
             return false;
         }
 
@@ -122,15 +121,15 @@ protected:
         if (path_ok && out_world_path.size() >= 2) {
             auto& first = out_world_path[1];  // first step (index 0 is start)
             auto& last  = out_world_path.back();
-            spdlog::info("[D*Lite] Path OK: {} pts, search={:.0f}ms, "
-                         "first=({:.0f},{:.0f},{:.0f}) last=({:.0f},{:.0f},{:.0f}) "
-                         "g(start)={:.0f} occupied={}",
-                         out_world_path.size(), search_ms, first[0], first[1], first[2], last[0],
-                         last[1], last[2], g(last_start_), grid_.occupied_count());
+            DRONE_LOG_INFO("[D*Lite] Path OK: {} pts, search={:.0f}ms, "
+                           "first=({:.0f},{:.0f},{:.0f}) last=({:.0f},{:.0f},{:.0f}) "
+                           "g(start)={:.0f} occupied={}",
+                           out_world_path.size(), search_ms, first[0], first[1], first[2], last[0],
+                           last[1], last[2], g(last_start_), grid_.occupied_count());
         } else {
-            spdlog::info("[D*Lite] Path extraction FAILED: search={:.0f}ms g(start)={:.1f} "
-                         "occupied={}",
-                         search_ms, g(last_start_), grid_.occupied_count());
+            DRONE_LOG_INFO("[D*Lite] Path extraction FAILED: search={:.0f}ms g(start)={:.1f} "
+                           "occupied={}",
+                           search_ms, g(last_start_), grid_.occupied_count());
         }
         return path_ok;
     }
@@ -277,7 +276,7 @@ private:
         // search stays at a single altitude level.  The velocity command handles Z.
         GridCell goal = goal_in;
         if (goal.z != start.z) {
-            spdlog::debug("[D*Lite] 2D mode: snapping goal Z {} → {}", goal.z, start.z);
+            DRONE_LOG_DEBUG("[D*Lite] 2D mode: snapping goal Z {} → {}", goal.z, start.z);
             goal.z = start.z;
         }
         last_goal_ = goal;
@@ -295,8 +294,8 @@ private:
         rhs_[goal] = 0.0f;
         queue_insert(goal, calculate_key(goal));
 
-        spdlog::info("[D*Lite] Init: start=({},{},{}) goal=({},{},{}) neighbors={}", start.x,
-                     start.y, start.z, goal.x, goal.y, goal.z, kNumNeighbors);
+        DRONE_LOG_INFO("[D*Lite] Init: start=({},{},{}) goal=({},{},{}) neighbors={}", start.x,
+                       start.y, start.z, goal.x, goal.y, goal.z, kNumNeighbors);
     }
 
     // ── Update vertex ────────────────────────────────────────
@@ -364,15 +363,15 @@ private:
 
             ++iterations;
             if (iterations > config_.max_iterations) {
-                spdlog::info("[D*Lite] Hit iteration limit {}", config_.max_iterations);
+                DRONE_LOG_INFO("[D*Lite] Hit iteration limit {}", config_.max_iterations);
                 break;
             }
 
             // Check wall-clock timeout every 64 iterations
             if (use_timeout && (iterations & 63) == 0) {
                 if (std::chrono::steady_clock::now() >= deadline) {
-                    spdlog::info("[D*Lite] Timeout after {} iterations ({:.1f}ms limit)",
-                                 iterations, config_.max_search_time_ms);
+                    DRONE_LOG_INFO("[D*Lite] Timeout after {} iterations ({:.1f}ms limit)",
+                                   iterations, config_.max_search_time_ms);
                     break;
                 }
             }
@@ -411,8 +410,8 @@ private:
             }
         }
 
-        spdlog::debug("[D*Lite] search: {} iters, queue={}, g(start)={:.0f}", iterations, U_.size(),
-                      g(last_start_));
+        DRONE_LOG_DEBUG("[D*Lite] search: {} iters, queue={}, g(start)={:.0f}", iterations,
+                        U_.size(), g(last_start_));
         return g(last_start_) < kInf;
     }
 
@@ -446,8 +445,8 @@ private:
 
             if (best_next == current) {
                 // No progress — path broken
-                spdlog::debug("[D*Lite] Path extraction stuck at ({},{},{})", current.x, current.y,
-                              current.z);
+                DRONE_LOG_DEBUG("[D*Lite] Path extraction stuck at ({},{},{})", current.x,
+                                current.y, current.z);
                 return false;
             }
 
@@ -456,11 +455,11 @@ private:
         }
 
         if (current != goal) {
-            spdlog::debug("[D*Lite] Path extraction hit step limit");
+            DRONE_LOG_DEBUG("[D*Lite] Path extraction hit step limit");
             return false;
         }
 
-        spdlog::debug("[D*Lite] Path found: {} waypoints", out.size());
+        DRONE_LOG_DEBUG("[D*Lite] Path found: {} waypoints", out.size());
         return out.size() >= 2;
     }
 

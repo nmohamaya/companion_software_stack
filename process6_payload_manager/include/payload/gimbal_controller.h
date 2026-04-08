@@ -2,11 +2,11 @@
 // Simulated gimbal + camera payload controller.
 
 #pragma once
+#include "util/ilogger.h"
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::payload {
 
@@ -21,7 +21,7 @@ struct GimbalState {
 class GimbalController {
 public:
     [[nodiscard]] bool init() {
-        spdlog::info("[Gimbal] Initialised (simulated)");
+        DRONE_LOG_INFO("[Gimbal] Initialised (simulated)");
         initialised_ = true;
         return true;
     }
@@ -54,19 +54,19 @@ public:
         auto ts = std::chrono::duration_cast<std::chrono::nanoseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count();
-        spdlog::info("[Gimbal] Image captured #{} pitch={:.1f} yaw={:.1f}", capture_count_,
-                     state_.pitch, state_.yaw);
+        DRONE_LOG_INFO("[Gimbal] Image captured #{} pitch={:.1f} yaw={:.1f}", capture_count_,
+                       state_.pitch, state_.yaw);
         return static_cast<uint64_t>(ts);
     }
 
     // Start / stop video recording (simulated)
     void start_recording() {
         recording_ = true;
-        spdlog::info("[Gimbal] Recording started");
+        DRONE_LOG_INFO("[Gimbal] Recording started");
     }
     void stop_recording() {
         recording_ = false;
-        spdlog::info("[Gimbal] Recording stopped");
+        DRONE_LOG_INFO("[Gimbal] Recording stopped");
     }
     [[nodiscard]] bool is_recording() const { return recording_; }
 

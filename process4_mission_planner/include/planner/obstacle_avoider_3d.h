@@ -16,13 +16,12 @@
 #include "ipc/ipc_types.h"
 #include "planner/iobstacle_avoider.h"
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <string>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -64,7 +63,7 @@ public:
         int       max_age_ms         = cfg.get<int>("mission_planner.obstacle_avoidance.max_age_ms",
                                                     default_max_age_ms);
         if (max_age_ms < 0) {
-            spdlog::warn("[ObstacleAvoider3D] max_age_ms ({}) < 0, clamping to 0", max_age_ms);
+            DRONE_LOG_WARN("[ObstacleAvoider3D] max_age_ms ({}) < 0, clamping to 0", max_age_ms);
             max_age_ms = 0;
         }
         config_.max_age_ns = static_cast<uint64_t>(max_age_ms) * 1'000'000ULL;
@@ -124,9 +123,9 @@ public:
                 total_rep_y -= (dy / dist) * repulsion;
                 total_rep_z -= (dz / dist) * repulsion * config_.vertical_gain;
 
-                spdlog::debug("[Avoider3D] Obstacle at ({:.1f},{:.1f},{:.1f}), "
-                              "dist={:.1f}m, rep={:.2f}",
-                              ox, oy, oz, dist, repulsion);
+                DRONE_LOG_DEBUG("[Avoider3D] Obstacle at ({:.1f},{:.1f},{:.1f}), "
+                                "dist={:.1f}m, rep={:.2f}",
+                                ox, oy, oz, dist, repulsion);
             }
         }
 

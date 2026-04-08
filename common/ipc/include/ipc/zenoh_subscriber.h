@@ -11,6 +11,7 @@
 
 #include "ipc/isubscriber.h"
 #include "ipc/zenoh_session.h"
+#include "util/ilogger.h"
 #include "util/latency_tracker.h"
 
 #include <algorithm>
@@ -23,7 +24,6 @@
 #include <type_traits>
 #include <utility>
 
-#include <spdlog/spdlog.h>
 #include <zenoh.hxx>
 
 namespace drone::ipc {
@@ -46,9 +46,10 @@ public:
             subscriber_.emplace(session.declare_subscriber(
                 zenoh::KeyExpr(key_expr), [this](zenoh::Sample& sample) { on_sample(sample); },
                 []() { /* on_drop — no-op */ }));
-            spdlog::info("[ZenohSubscriber] Subscribed to '{}'", key_expr);
+            DRONE_LOG_INFO("[ZenohSubscriber] Subscribed to '{}'", key_expr);
         } catch (const std::exception& e) {
-            spdlog::error("[ZenohSubscriber] Failed to subscribe to '{}': {}", key_expr, e.what());
+            DRONE_LOG_ERROR("[ZenohSubscriber] Failed to subscribe to '{}': {}", key_expr,
+                            e.what());
         }
     }
 
@@ -110,9 +111,9 @@ private:
         const auto& payload = sample.get_payload();
         auto        bytes   = payload.as_vector();
         if (bytes.size() != sizeof(T)) {
-            spdlog::warn("[ZenohSubscriber] Size mismatch on '{}': "
-                         "expected {} got {}",
-                         key_expr_, sizeof(T), bytes.size());
+            DRONE_LOG_WARN("[ZenohSubscriber] Size mismatch on '{}': "
+                           "expected {} got {}",
+                           key_expr_, sizeof(T), bytes.size());
             return;
         }
 
@@ -125,9 +126,9 @@ private:
             auto* dst  = reinterpret_cast<uint8_t*>(temp.get());
             std::copy(bytes.begin(), bytes.end(), dst);
             if (!temp->validate()) {
-                spdlog::warn("[ZenohSubscriber] Validation failed on '{}' — "
-                             "dropping message",
-                             key_expr_);
+                DRONE_LOG_WARN("[ZenohSubscriber] Validation failed on '{}' — "
+                               "dropping message",
+                               key_expr_);
                 return;
             }
             std::lock_guard<std::mutex> lock(data_mutex_);

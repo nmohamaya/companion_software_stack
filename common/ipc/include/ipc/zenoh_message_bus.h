@@ -26,12 +26,11 @@
 #include "ipc/zenoh_service_client.h"
 #include "ipc/zenoh_service_server.h"
 #include "ipc/zenoh_subscriber.h"
+#include "util/ilogger.h"
 
 #include <memory>
 #include <string>
 #include <unordered_map>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
@@ -39,7 +38,7 @@ namespace drone::ipc {
 /// The sole IPC backend — returned by MessageBusFactory for any backend name.
 class ZenohMessageBus {
 public:
-    ZenohMessageBus() { spdlog::info("[ZenohMessageBus] Created (Zenoh IPC backend)"); }
+    ZenohMessageBus() { DRONE_LOG_INFO("[ZenohMessageBus] Created (Zenoh IPC backend)"); }
 
     ~ZenohMessageBus() = default;
 
@@ -99,7 +98,7 @@ public:
     /// with the leading '/' stripped and '_' replaced by '/'.
     [[nodiscard]] static std::string to_key_expr(const std::string& name) {
         if (name.empty()) {
-            spdlog::warn("[ZenohMessageBus] to_key_expr() called with empty name");
+            DRONE_LOG_WARN("[ZenohMessageBus] to_key_expr() called with empty name");
             return "";
         }
 
@@ -135,7 +134,7 @@ public:
         for (auto& c : key) {
             if (c == '_') c = '/';
         }
-        spdlog::debug("[ZenohMessageBus] Unmapped topic '{}' → '{}'", name, key);
+        DRONE_LOG_DEBUG("[ZenohMessageBus] Unmapped topic '{}' → '{}'", name, key);
         return key;
     }
 

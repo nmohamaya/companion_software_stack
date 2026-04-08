@@ -11,6 +11,7 @@
 #ifdef HAVE_GAZEBO
 
 #include "hal/iimu_source.h"
+#include "util/ilogger.h"
 
 #include <atomic>
 #include <chrono>
@@ -19,7 +20,6 @@
 
 #include <gz/msgs/imu.pb.h>
 #include <gz/transport/Node.hh>
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -45,7 +45,7 @@ public:
             active_.store(false, std::memory_order_release);
         }
         node_.Unsubscribe(gz_topic_);
-        spdlog::info("[GazeboIMU] Shut down — unsubscribed from '{}'", gz_topic_);
+        DRONE_LOG_INFO("[GazeboIMU] Shut down — unsubscribed from '{}'", gz_topic_);
     }
 
     // Non-copyable, non-movable (owns gz::transport::Node)
@@ -59,7 +59,7 @@ public:
     /// @return true on successful subscription
     bool init(int rate_hz) override {
         if (active_.load(std::memory_order_acquire)) {
-            spdlog::warn("[GazeboIMU] Already initialised on '{}'", gz_topic_);
+            DRONE_LOG_WARN("[GazeboIMU] Already initialised on '{}'", gz_topic_);
             return false;
         }
 
@@ -68,13 +68,13 @@ public:
         bool subscribed = node_.Subscribe(gz_topic_, &GazeboIMUBackend::on_imu_msg, this);
 
         if (!subscribed) {
-            spdlog::error("[GazeboIMU] Failed to subscribe to '{}'", gz_topic_);
+            DRONE_LOG_ERROR("[GazeboIMU] Failed to subscribe to '{}'", gz_topic_);
             return false;
         }
 
         active_.store(true, std::memory_order_release);
-        spdlog::info("[GazeboIMU] Subscribed to '{}' (rate_hz={} informational)", gz_topic_,
-                     rate_hz_);
+        DRONE_LOG_INFO("[GazeboIMU] Subscribed to '{}' (rate_hz={} informational)", gz_topic_,
+                       rate_hz_);
         return true;
     }
 
@@ -137,11 +137,11 @@ private:
 
         uint64_t count = msg_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count == 1) {
-            spdlog::info("[GazeboIMU] First IMU message from '{}': "
-                         "accel=({:.3f}, {:.3f}, {:.3f}) "
-                         "gyro=({:.4f}, {:.4f}, {:.4f})",
-                         gz_topic_, r.accel.x(), r.accel.y(), r.accel.z(), r.gyro.x(), r.gyro.y(),
-                         r.gyro.z());
+            DRONE_LOG_INFO("[GazeboIMU] First IMU message from '{}': "
+                           "accel=({:.3f}, {:.3f}, {:.3f}) "
+                           "gyro=({:.4f}, {:.4f}, {:.4f})",
+                           gz_topic_, r.accel.x(), r.accel.y(), r.accel.z(), r.gyro.x(), r.gyro.y(),
+                           r.gyro.z());
         }
     }
 

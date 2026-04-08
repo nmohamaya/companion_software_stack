@@ -24,6 +24,7 @@
 #include "util/config.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/rate_clamp.h"
 #include "util/scoped_timer.h"
@@ -41,8 +42,6 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 using namespace drone::slam;
 
@@ -128,7 +127,7 @@ static std::atomic<bool> g_running{true};
 static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>& stereo_sub,
                                 drone::slam::IVIOBackend& backend, ImuRingBuffer& imu_buffer,
                                 PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running) {
-    spdlog::info("[VIOPipeline] Thread started using {}", backend.name());
+    DRONE_LOG_INFO("[VIOPipeline] Thread started using {}", backend.name());
 
     auto hb = drone::util::ScopedHeartbeat("vio_pipeline", true);
 
@@ -149,16 +148,16 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
         if (!got_stereo) {
             ++no_frame_count;
             if (no_frame_count == 1 || no_frame_count % 300 == 0) {
-                spdlog::warn("[VIOPipeline] No stereo frame received "
-                             "(#{} consecutive)",
-                             no_frame_count);
+                DRONE_LOG_WARN("[VIOPipeline] No stereo frame received "
+                               "(#{} consecutive)",
+                               no_frame_count);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;
         }
         // Reset no-frame counter on successful receive
         if (no_frame_count > 0) {
-            spdlog::info("[VIOPipeline] Stereo frames resumed after {} misses", no_frame_count);
+            DRONE_LOG_INFO("[VIOPipeline] Stereo frames resumed after {} misses", no_frame_count);
             no_frame_count = 0;
         }
 
@@ -196,12 +195,12 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
             if (diag.has_warnings()) {
                 diag.log_summary("VIOPipeline");
             } else if (frame_count % 300 == 0) {
-                spdlog::info("[VIOPipeline] Frame {}: pos=({:.2f}, {:.2f}, {:.2f}) "
-                             "health={} feat={} matches={} imu={}",
-                             frame_count, output.pose.position.x(), output.pose.position.y(),
-                             output.pose.position.z(), vio_health_name(output.health),
-                             output.num_features, output.num_stereo_matches,
-                             output.imu_samples_used);
+                DRONE_LOG_INFO("[VIOPipeline] Frame {}: pos=({:.2f}, {:.2f}, {:.2f}) "
+                               "health={} feat={} matches={} imu={}",
+                               frame_count, output.pose.position.x(), output.pose.position.y(),
+                               output.pose.position.z(), vio_health_name(output.health),
+                               output.num_features, output.num_stereo_matches,
+                               output.imu_samples_used);
             }
         } else {
             ++error_count;
@@ -211,24 +210,24 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
 
             // Rate-limit repeated error logging
             if (error_count % 100 == 1) {
-                spdlog::error("[VIOPipeline] Total errors so far: {} "
-                              "(last: {})",
-                              error_count, err.to_string());
+                DRONE_LOG_ERROR("[VIOPipeline] Total errors so far: {} "
+                                "(last: {})",
+                                error_count, err.to_string());
             }
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
-    spdlog::info("[VIOPipeline] Thread stopped — {} frames processed, {} errors", frame_count,
-                 error_count);
+    DRONE_LOG_INFO("[VIOPipeline] Thread stopped — {} frames processed, {} errors", frame_count,
+                   error_count);
 }
 
 // ── IMU reader thread (uses HAL IIMUSource) ─────────────────
 // Now pushes samples into the shared ImuRingBuffer instead of discarding.
 static void imu_reader_thread(drone::hal::IIMUSource& imu, ImuRingBuffer& imu_buffer,
                               std::atomic<bool>& running, int imu_rate_hz) {
-    spdlog::info("[IMUReader] Thread started using {} at {} Hz", imu.name(), imu_rate_hz);
+    DRONE_LOG_INFO("[IMUReader] Thread started using {} at {} Hz", imu.name(), imu_rate_hz);
     const int sleep_us = imu_rate_hz > 0 ? 1000000 / imu_rate_hz : 2500;
 
     auto hb = drone::util::ScopedHeartbeat("imu_reader", true);
@@ -251,15 +250,16 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu, ImuRingBuffer& imu_bu
             ++invalid_count;
             // Rate-limited warning for invalid readings
             if (invalid_count == 1 || invalid_count % 1000 == 0) {
-                spdlog::warn("[IMUReader] Invalid IMU reading #{} — "
-                             "sensor may not be ready",
-                             invalid_count);
+                DRONE_LOG_WARN("[IMUReader] Invalid IMU reading #{} — "
+                               "sensor may not be ready",
+                               invalid_count);
             }
         }
 
         std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
     }
-    spdlog::info("[IMUReader] Thread stopped — {} valid samples, {} invalid", count, invalid_count);
+    DRONE_LOG_INFO("[IMUReader] Thread stopped — {} valid samples, {} invalid", count,
+                   invalid_count);
 }
 
 // ── Pose publisher thread ───────────────────────────────────
@@ -267,7 +267,7 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose
                                   PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running,
                                   int publish_rate_hz,
                                   drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub) {
-    spdlog::info("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
+    DRONE_LOG_INFO("[PosePublisher] Thread started at {} Hz", publish_rate_hz);
 
     auto hb = drone::util::ScopedHeartbeat("pose_publisher", true);
 
@@ -305,7 +305,7 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));  // configurable
     }
-    spdlog::info("[PosePublisher] Thread stopped");
+    DRONE_LOG_INFO("[PosePublisher] Thread stopped");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -320,14 +320,14 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::slam_schema()); rc != 0) {
             return rc;
         }
     }
 
-    spdlog::info("=== SLAM/VIO/Nav process starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== SLAM/VIO/Nav process starting (PID {}) ===", getpid());
 
     // ── Create message bus ──────────────────────────────────
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -345,16 +345,16 @@ int main(int argc, char* argv[]) {
         if (ipc_backend == "shm") {
             // Should never happen — shm backend was removed, factory falls back
             // to Zenoh.  Treat as a warning, not a fatal error.
-            spdlog::warn("ipc_backend=shm is no longer supported; using Zenoh.");
+            DRONE_LOG_WARN("ipc_backend=shm is no longer supported; using Zenoh.");
         }
-        spdlog::warn("Stereo subscriber not yet connected "
-                     "(normal for Zenoh — data will arrive when publisher starts)");
+        DRONE_LOG_WARN("Stereo subscriber not yet connected "
+                       "(normal for Zenoh — data will arrive when publisher starts)");
     }
 
     // Create pose output publisher
     auto pose_pub = bus.advertise<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_pub->is_ready()) {
-        spdlog::error("Failed to create pose publisher");
+        DRONE_LOG_ERROR("Failed to create pose publisher");
         return 1;
     }
 
@@ -371,10 +371,10 @@ int main(int argc, char* argv[]) {
     // Create IMU via HAL factory
     auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
     if (!imu->init(imu_rate)) {
-        spdlog::error("Failed to initialise IMU source — check config");
+        DRONE_LOG_ERROR("Failed to initialise IMU source — check config");
         return 1;
     }
-    spdlog::info("IMU source: {} at {} Hz", imu->name(), imu_rate);
+    DRONE_LOG_INFO("IMU source: {} at {} Hz", imu->name(), imu_rate);
 
     // Create VIO backend via factory
     auto              vio_backend_name = cfg.get<std::string>("slam.vio.backend", "simulated");
@@ -398,10 +398,10 @@ int main(int argc, char* argv[]) {
     const double degraded_trace_max = cfg.get<double>("slam.vio.quality.degraded_trace_max", 1.0);
     auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic,
                                                sim_speed_mps, good_trace_max, degraded_trace_max);
-    spdlog::info("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",
-                 vio->name(), sim_speed_mps, good_trace_max, degraded_trace_max);
-    spdlog::info("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m", calib.fx,
-                 calib.fy, calib.cx, calib.cy, calib.baseline);
+    DRONE_LOG_INFO("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",
+                   vio->name(), sim_speed_mps, good_trace_max, degraded_trace_max);
+    DRONE_LOG_INFO("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m",
+                   calib.fx, calib.fy, calib.cx, calib.cy, calib.baseline);
 
     // Subscribe to trajectory commands for simulated VIO navigation.
     // Only the simulated backend uses trajectory targets — Gazebo/real backends
@@ -409,8 +409,8 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>> traj_sub;
     if (vio_backend_name == "simulated") {
         traj_sub = bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
-        spdlog::info("Subscribed to {} for simulated VIO target tracking",
-                     drone::ipc::topics::TRAJECTORY_CMD);
+        DRONE_LOG_INFO("Subscribed to {} for simulated VIO target tracking",
+                       drone::ipc::topics::TRAJECTORY_CMD);
     }
 
     // Subscribe to fault overrides for VIO quality injection
@@ -432,7 +432,7 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "slam_vio_nav",
                                                         watchdog);
 
-    spdlog::info("All SLAM/VIO threads started — READY");
+    DRONE_LOG_INFO("All SLAM/VIO threads started — READY");
     drone::systemd::notify_ready();
 
     while (g_running.load(std::memory_order_relaxed)) {
@@ -460,24 +460,24 @@ int main(int argc, char* argv[]) {
         // ── Periodic health report ──────────────────────────
         Pose p;
         if (pose_buffer.read(p)) {
-            spdlog::info("[HealthCheck] VIO pose: ({:.2f}, {:.2f}, {:.2f}) q={} health={}",
-                         p.position.x(), p.position.y(), p.position.z(), p.quality,
-                         vio_health_name(vio->health()));
+            DRONE_LOG_INFO("[HealthCheck] VIO pose: ({:.2f}, {:.2f}, {:.2f}) q={} health={}",
+                           p.position.x(), p.position.y(), p.position.z(), p.quality,
+                           vio_health_name(vio->health()));
         }
 
         // Report IMU buffer stats
         uint64_t drops = imu_ring_buffer.drop_count();
         if (drops > 0) {
-            spdlog::warn("[HealthCheck] IMU buffer drops: {} total", drops);
+            DRONE_LOG_WARN("[HealthCheck] IMU buffer drops: {} total", drops);
         }
     }
 
     drone::systemd::notify_stopping();
-    spdlog::info("Shutting down...");
+    DRONE_LOG_INFO("Shutting down...");
     t_vio.join();
     t_imu.join();
     t_publisher.join();
 
-    spdlog::info("=== SLAM/VIO/Nav process stopped ===");
+    DRONE_LOG_INFO("=== SLAM/VIO/Nav process stopped ===");
     return 0;
 }
