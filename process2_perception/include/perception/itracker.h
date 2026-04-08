@@ -1,9 +1,10 @@
 // process2_perception/include/perception/itracker.h
 // Abstract tracker interface — strategy pattern for multi-object tracking.
-// Concrete implementations: SortTracker (SORT), ByteTrackTracker (ByteTrack two-stage).
-// Issue #113 — Phase 1B.
+// Concrete implementation: ByteTrackTracker (two-stage IoU association).
+// Issue #113 — Phase 1B.  Issue #297 — Result<> factory cleanup.
 #pragma once
 #include "perception/types.h"
+#include "util/result.h"
 
 #include <memory>
 #include <string>
@@ -35,9 +36,10 @@ public:
 ///
 /// Instantiates the tracker type matching the given backend string.
 /// cfg is used to override tunable parameters only; the backend is selected
-/// explicitly by the caller (not read from config). Supported backends: "bytetrack" (default), "sort".
-/// Returns nullptr if backend name is not recognized.
-std::unique_ptr<ITracker> create_tracker(const std::string&   backend = "bytetrack",
-                                         const drone::Config* cfg     = nullptr);
+/// explicitly by the caller (not read from config).
+/// Supported backends: "bytetrack" (default).
+/// Unknown backends log a warning and fall back to ByteTrack with default params.
+[[nodiscard]] drone::util::Result<std::unique_ptr<ITracker>> create_tracker(
+    const std::string& backend = "bytetrack", const drone::Config* cfg = nullptr);
 
 }  // namespace drone::perception
