@@ -24,8 +24,10 @@
 //   drone::log::reset_logger();  // restore default
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <spdlog/fmt/fmt.h>
@@ -91,18 +93,29 @@ private:
 };
 
 // ── Global logger accessor ─────────────────────────────────
+// Thread safety: logger() is hot-path (called on every DRONE_LOG_*
+// invocation), so it uses an atomic load (acquire).  set_logger() and
+// reset_logger() are cold-path (startup / tests) and hold a mutex to
+// protect the owning unique_ptr.
 
 namespace detail {
 
+/// Mutex protecting the owning unique_ptr (cold-path only).
+inline std::mutex& logger_mutex() {
+    static std::mutex mtx;
+    return mtx;
+}
+
 /// Owning pointer to the user-installed logger (null = use default).
+/// Must hold logger_mutex() to read or write.
 inline std::unique_ptr<ILogger>& logger_owner() {
     static std::unique_ptr<ILogger> owner;
     return owner;
 }
 
-/// Raw pointer cache (null = use default SpdlogLogger).
-inline ILogger*& logger_ptr() {
-    static ILogger* ptr = nullptr;
+/// Atomic raw pointer cache for hot-path reads (null = use default).
+inline std::atomic<ILogger*>& logger_ptr() {
+    static std::atomic<ILogger*> ptr{nullptr};
     return ptr;
 }
 
@@ -115,24 +128,27 @@ inline ILogger& default_logger() {
 }  // namespace detail
 
 /// Get the active logger.  Never returns null.
-/// Hot-path cost: one function call + one pointer dereference.
+/// Hot-path cost: one atomic load (acquire) + one branch.
 inline ILogger& logger() {
-    auto* p = detail::logger_ptr();
+    auto* p = detail::logger_ptr().load(std::memory_order_acquire);
     if (p) return *p;
     return detail::default_logger();
 }
 
 /// Install a custom logger (e.g. CapturingLogger for tests).
 /// Pass nullptr or call reset_logger() to revert to default.
+/// Thread-safe: serialized by mutex, atomic store visible to all readers.
 inline void set_logger(std::unique_ptr<ILogger> l) {
+    std::lock_guard<std::mutex> lock(detail::logger_mutex());
     detail::logger_owner() = std::move(l);
-    detail::logger_ptr()   = detail::logger_owner().get();
+    detail::logger_ptr().store(detail::logger_owner().get(), std::memory_order_release);
 }
 
 /// Revert to the default SpdlogLogger.
 inline void reset_logger() {
+    std::lock_guard<std::mutex> lock(detail::logger_mutex());
     detail::logger_owner().reset();
-    detail::logger_ptr() = nullptr;
+    detail::logger_ptr().store(nullptr, std::memory_order_release);
 }
 
 }  // namespace drone::log

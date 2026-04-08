@@ -1,12 +1,8 @@
-# Agent Report — Issue #371: Remote Pipeline Monitoring
+# Agent Report — Issue #285: ILogger Interface + DRONE_LOG Macros
 
 ## Summary
 
-Implemented tmux session management and ntfy.sh push notifications for the multi-agent pipeline, enabling monitoring and checkpoint approval from any device (phone via SSH, tablet, another terminal).
-
-**Two complementary layers:**
-1. **tmux sessions** — Pipeline runs inside a named tmux session (`pipeline-<issue>`). User can detach, walk away, and reattach from any device.
-2. **ntfy.sh notifications** — Push notifications sent at each of the 5 checkpoints, on errors, and on completion. User gets a ping on their phone without watching the terminal.
+Implemented the ILogger abstraction layer (Epic #284, Sub-Epic A, Wave 1) that decouples all logging from spdlog. Created the interface, three implementations (SpdlogLogger, NullLogger, CapturingLogger), global thread-safe accessor, and DRONE_LOG_* convenience macros. Migrated all 69 existing files from direct `spdlog::*` calls to `DRONE_LOG_*` macros.
 
 ## Changes
 
@@ -14,88 +10,46 @@ Implemented tmux session management and ntfy.sh push notifications for the multi
 
 | File | Purpose |
 |------|---------|
-| `scripts/orchestrator/pipeline/notifications.py` | ntfy.sh notification module — `Notifier`, `NotifyConfig`, `NotifyEvent` |
-| `scripts/orchestrator/pipeline/tmux.py` | tmux session management — `TmuxSession`, `list_pipeline_sessions`, `session_status` |
-| `scripts/orchestrator/commands/pipeline_monitor.py` | `pipeline list/attach/status/kill` subcommands |
-| `tests/test_orchestrator/test_notifications.py` | 37 unit tests for notification module (config, validation, send, auth) |
-| `tests/test_orchestrator/test_tmux.py` | 29 unit tests for tmux module (launch, attach, exec_attach, list, status) |
-| `tests/test_orchestrator/test_checkpoint_notifications.py` | 11 integration tests for checkpoint + notification |
+| `common/util/include/util/ilogger.h` | ILogger interface, SpdlogLogger, global accessor, DRONE_LOG_* macros |
+| `common/util/include/util/null_logger.h` | No-op logger for benchmarking / disabled logging |
+| `common/util/include/util/capturing_logger.h` | Test logger that captures messages for assertions |
+| `common/util/include/util/spdlog_logger.h` | Convenience include header |
+| `tests/test_ilogger.cpp` | Unit tests for ILogger, all implementations, macros, global accessor |
 
-### Modified Files
+### Modified Files (69 files)
 
-| File | Changes |
-|------|---------|
-| `scripts/orchestrator/pipeline/checkpoints.py` | Added optional `notifier` param to all 5 checkpoint functions; sends notification at each checkpoint |
-| `scripts/orchestrator/commands/deploy_issue.py` | Added `--tmux` and `--notify` flags; tmux session wrapping; notifier creation and passing through pipeline |
-| `scripts/orchestrator/cli.py` | Added `--tmux`/`--notify` flags to `deploy-issue`; added `pipeline` subcommand group (list/attach/status/kill) |
+Mechanical replacement of `spdlog::info/warn/error/debug/critical(...)` with `DRONE_LOG_INFO/WARN/ERROR/DEBUG/CRITICAL(...)` across all processes and common libraries:
 
-## Usage
+- **common/hal/** — 11 files (gazebo backends, simulated backends, HAL factory)
+- **common/ipc/** — 10 files (Zenoh session, publisher, subscriber, service client/server, liveliness, network config, message bus factory)
+- **common/util/** — 8 files (config, diagnostic, latency tracker, process graph, rate clamp, realtime, sd_notify, thread watchdog)
+- **process1_video_capture/** — 1 file (main.cpp)
+- **process2_perception/** — 6 files (main, detector factory, fusion engine, UKF, color contour, YOLO)
+- **process3_slam_vio_nav/** — 3 files (main, VIO backend, IMU preintegrator)
+- **process4_mission_planner/** — 12 files (main, FSM, fault manager, geofence, planners, obstacle avoider, occupancy grid, GCS handler, state tick)
+- **process5_comms/** — 3 files (main, GCS link, MAVLink sim)
+- **process6_payload_manager/** — 2 files (main, gimbal controller)
+- **process7_system_monitor/** — 3 files (main, process manager, sys info)
+- **tools/** — 1 file (flight replay)
+- **tests/CMakeLists.txt** — added test_ilogger
 
-### tmux sessions
-```bash
-# Launch pipeline in tmux (detachable)
-python -m orchestrator deploy-issue 367 --pipeline --tmux
+## Design Decisions
 
-# Detach: Ctrl+B, D
-# Reattach from any device:
-tmux attach -t pipeline-367
-
-# List active pipelines
-python -m orchestrator pipeline list
-
-# Check status
-python -m orchestrator pipeline status 367
-
-# Attach to session
-python -m orchestrator pipeline attach 367
-
-# Kill session
-python -m orchestrator pipeline kill 367
-```
-
-### ntfy.sh notifications
-```bash
-# Via command line flag
-python -m orchestrator deploy-issue 367 --pipeline --notify drone-pipeline-nm
-
-# Via environment variable
-export NTFY_TOPIC=drone-pipeline-nm
-python -m orchestrator deploy-issue 367 --pipeline
-
-# Custom server (self-hosted)
-export NTFY_SERVER=https://ntfy.example.com
-export NTFY_TOPIC=my-topic
-```
-
-### Combined (recommended for on-the-move use)
-```bash
-python -m orchestrator deploy-issue 367 --pipeline --tmux --notify drone-pipeline-nm
-```
-
-## Architecture Decisions
-
-1. **Graceful degradation** — Notifications never block the pipeline. If ntfy.sh is unreachable or curl fails, it logs a warning and continues. tmux unavailability falls back to direct execution.
-
-2. **No new dependencies** — Uses only `curl` (for ntfy) and `tmux`, both standard on Linux. No Python packages needed.
-
-3. **Environment-based config** — `NTFY_TOPIC`, `NTFY_SERVER`, `NTFY_EVENTS` env vars allow persistent config without editing code.
-
-4. **Session naming convention** — `pipeline-<issue-number>` for predictable naming and easy scripting.
-
-5. **Layer 3 deferred** — Interactive ntfy responses (approve/reject from notification) intentionally deferred to a future phase per the issue spec.
+1. **Single `log(Level, string)` method** — simpler interface than per-level virtuals; macros handle the level dispatch
+2. **Atomic global accessor** — `logger()` uses `std::atomic<ILogger*>` with acquire/release for thread-safe hot-path reads; `set_logger()` holds a mutex to protect the owning `unique_ptr` (cold-path only)
+3. **Level-gated macros** — `DRONE_LOG_*` checks `should_log()` before calling `fmt::format()`, giving zero overhead on disabled levels
+4. **SpdlogLogger as default** — no code changes needed at startup; `LogConfig::init()` works unchanged
+5. **Phase 1 scope** — interface + implementations + migration only; no changes to LogConfig internals or JSON log sink
 
 ## Test Plan
 
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_notifications.py -v` — 37 tests
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_tmux.py -v` — 29 tests
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_checkpoint_notifications.py -v` — 11 tests
-- [ ] Existing tests still pass: `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/ -v`
-- [ ] Manual: `--notify` flag sends real notification to ntfy.sh topic
-- [ ] Manual: `--tmux` flag creates tmux session and attaches
-- [ ] C++ build unaffected (no C++ changes)
+- [ ] `mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" -DALLOW_INSECURE_ZENOH=ON && make -j$(nproc)` — zero warnings
+- [ ] `ctest --test-dir build --output-on-failure -j$(nproc)` — all pass, count >= 1259
+- [ ] `test_ilogger` tests pass (SpdlogLogger, NullLogger, CapturingLogger, global accessor, macros, level filtering)
+- [ ] clang-format clean
 
 ## Risks / Review Attention
 
-- **Low risk** — Python-only changes to the orchestrator; no C++ code modified, no ctest count change.
-- **External dependency** — ntfy.sh is a free service; self-hosting recommended for production use.
-- **tmux availability** — Falls back gracefully if tmux is not installed.
+- **Global mutable state** — `set_logger()` / `reset_logger()` mutate a process-wide singleton. Thread-safe via atomic + mutex, but callers should only call at startup or in test fixtures (never mid-flight).
+- **Large mechanical diff** — 69 files changed with `spdlog::*` → `DRONE_LOG_*` replacement. Low risk per file, but review should verify no accidental format string changes.
+- **spdlog still linked** — SpdlogLogger delegates to spdlog; the dependency isn't removed, just abstracted. Full removal is a future phase.
