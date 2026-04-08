@@ -67,3 +67,8 @@ scripts/orchestrator.egg-info/
 __pycache__/
 *.pyc
 .pipeline-state
+
+# graphify intermediate/generated files
+.graphify_*
+graphify-out/cache/
+graphify-out/graph.html
