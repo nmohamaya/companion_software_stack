@@ -11,6 +11,7 @@
 #include "ipc/ipc_types.h"
 #include "ipc/wire_format.h"
 #include "util/config_keys.h"
+#include "util/iclock.h"
 
 #include <algorithm>
 #include <atomic>
@@ -281,10 +282,7 @@ public:
 
         // Capture timestamp and push under the lock for monotonic ordering
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto                  now_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        const auto                  now_ns = drone::util::get_clock().now_ns();
         // Enforce monotonic: never go backwards
         last_timestamp_ns_                    = std::max(last_timestamp_ns_ + 1, now_ns);
         entry.header.wire_header.timestamp_ns = last_timestamp_ns_;

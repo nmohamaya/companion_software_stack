@@ -20,6 +20,7 @@
 //   bool ok = !diag.has_errors();
 #pragma once
 
+#include "util/iclock.h"
 #include "util/ilogger.h"
 
 #include <chrono>
@@ -177,11 +178,13 @@ private:
 class ScopedDiagTimer {
 public:
     ScopedDiagTimer(FrameDiagnostics& diag, std::string component)
-        : diag_(diag), component_(std::move(component)), start_(std::chrono::steady_clock::now()) {}
+        : diag_(diag)
+        , component_(std::move(component))
+        , start_ns_(drone::util::get_clock().now_ns()) {}
 
     ~ScopedDiagTimer() {
-        auto   end = std::chrono::steady_clock::now();
-        double ms  = std::chrono::duration<double, std::milli>(end - start_).count();
+        const double ms = static_cast<double>(drone::util::get_clock().now_ns() - start_ns_) /
+                          1'000'000.0;
         diag_.add_timing(component_, ms);
     }
 
@@ -189,9 +192,9 @@ public:
     ScopedDiagTimer& operator=(const ScopedDiagTimer&) = delete;
 
 private:
-    FrameDiagnostics&                     diag_;
-    std::string                           component_;
-    std::chrono::steady_clock::time_point start_;
+    FrameDiagnostics& diag_;
+    std::string       component_;
+    uint64_t          start_ns_;
 };
 
 }  // namespace drone::util

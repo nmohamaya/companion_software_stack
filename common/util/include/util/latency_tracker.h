@@ -14,6 +14,7 @@
 // main-loop thread, so no locking is needed.
 #pragma once
 
+#include "util/iclock.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -111,12 +112,8 @@ public:
 
     // ── Convenience: now_ns() for computing latency ──────────
 
-    /// Return the current steady_clock time in nanoseconds.
-    static uint64_t now_ns() {
-        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                         std::chrono::steady_clock::now().time_since_epoch())
-                                         .count());
-    }
+    /// Return the current time in nanoseconds via the global IClock.
+    static uint64_t now_ns() { return get_clock().now_ns(); }
 
     // ── Periodic logging helper ──────────────────────────────
 

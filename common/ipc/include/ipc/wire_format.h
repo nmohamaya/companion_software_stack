@@ -18,6 +18,8 @@
 // This header is backend-agnostic — included unconditionally.
 #pragma once
 
+#include "util/iclock.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -110,7 +112,7 @@ template<typename T>
     static_assert(std::is_trivially_copyable_v<T>, "wire_serialize requires trivially copyable T");
 
     if (ts_ns == 0) {
-        ts_ns = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        ts_ns = drone::util::get_clock().now_ns();
     }
 
     WireHeader hdr;

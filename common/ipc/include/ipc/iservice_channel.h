@@ -10,6 +10,8 @@
 // Production upgrade: SPSC ring in SHM, gRPC, DDS request-reply.
 #pragma once
 
+#include "util/iclock.h"
+
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -71,21 +73,22 @@ public:
     /// Default implementation polls in a spin-sleep loop.
     [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> await_response(
         uint64_t correlation_id, std::chrono::milliseconds timeout) {
-        auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
+        const auto deadline_ns =
+            drone::util::get_clock().now_ns() +
+            static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count());
+        while (drone::util::get_clock().now_ns() < deadline_ns) {
             if (auto resp = poll_response(correlation_id)) {
                 return resp;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            drone::util::get_clock().sleep_for_ms(1);
         }
         // Timed out
         ServiceResponse<Resp> timeout_resp;
         timeout_resp.correlation_id = correlation_id;
-        timeout_resp.timestamp_ns   = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                        std::chrono::steady_clock::now().time_since_epoch())
-                                        .count();
-        timeout_resp.status = ServiceStatus::TIMEOUT;
-        timeout_resp.valid  = true;
+        timeout_resp.timestamp_ns   = drone::util::get_clock().now_ns();
+        timeout_resp.status         = ServiceStatus::TIMEOUT;
+        timeout_resp.valid          = true;
         return timeout_resp;
     }
 };
