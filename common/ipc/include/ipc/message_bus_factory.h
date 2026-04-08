@@ -23,6 +23,7 @@
 #include "ipc/message_bus.h"
 #include "ipc/zenoh_network_config.h"
 #include "ipc/zenoh_session.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <memory>
@@ -73,13 +74,15 @@ inline MessageBus create_message_bus(const std::string& backend           = "zen
 template<typename ConfigT,
          typename = typename std::enable_if<!std::is_convertible<ConfigT, std::string>::value>::type>
 MessageBus create_message_bus(const ConfigT& cfg) {
-    const auto backend     = cfg.template get<std::string>("ipc_backend", "zenoh");
-    const auto shm_pool_mb = cfg.template get<std::size_t>("zenoh.shm_pool_size_mb", 0);
+    const auto backend     = cfg.template get<std::string>(drone::cfg_key::IPC_BACKEND, "zenoh");
+    const auto shm_pool_mb = cfg.template get<std::size_t>(drone::cfg_key::zenoh::SHM_POOL_SIZE_MB,
+                                                           0);
 
     std::string zenoh_json;
-    if (cfg.template get<bool>("zenoh.network.enabled", false)) {
-        auto net_cfg = ZenohNetworkConfig::from_app_config(cfg.section("zenoh.network"));
-        zenoh_json   = net_cfg.to_json();
+    if (cfg.template get<bool>(drone::cfg_key::zenoh::NETWORK_ENABLED, false)) {
+        auto net_cfg =
+            ZenohNetworkConfig::from_app_config(cfg.section(drone::cfg_key::zenoh::NETWORK));
+        zenoh_json = net_cfg.to_json();
     }
 
     return create_message_bus(backend, shm_pool_mb, zenoh_json);

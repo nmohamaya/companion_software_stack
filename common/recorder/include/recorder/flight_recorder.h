@@ -10,6 +10,7 @@
 
 #include "ipc/ipc_types.h"
 #include "ipc/wire_format.h"
+#include "util/config_keys.h"
 
 #include <algorithm>
 #include <atomic>
@@ -250,8 +251,10 @@ public:
     ///        recorder.output_dir (default /tmp/flight_logs)
     template<typename ConfigT>
     explicit FlightRecorder(const ConfigT& cfg)
-        : ring_buffer_(validated_max_bytes(cfg.template get<int>("recorder.max_size_mb", 64)))
-        , output_dir_(cfg.template get<std::string>("recorder.output_dir", "/tmp/flight_logs")) {}
+        : ring_buffer_(
+              validated_max_bytes(cfg.template get<int>(drone::cfg_key::recorder::MAX_SIZE_MB, 64)))
+        , output_dir_(cfg.template get<std::string>(drone::cfg_key::recorder::OUTPUT_DIR,
+                                                    "/tmp/flight_logs")) {}
 
     /// Record a message from a given topic.
     /// @tparam T  Trivially copyable IPC struct.

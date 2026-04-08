@@ -12,6 +12,7 @@
 
 #include "perception/detector_interface.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -139,24 +140,30 @@ public:
 
     /// Construct from config — reads HSV ranges, min_area, subsample and max_fps.
     explicit ColorContourDetector(const drone::Config& cfg) {
-        min_contour_area_ = cfg.get<int>("perception.detector.min_contour_area", 80);
-        max_detections_   = cfg.get<int>("perception.detector.max_detections", 20);
-        subsample_        = std::max(1, cfg.get<int>("perception.detector.subsample", 2));
-        max_fps_          = cfg.get<int>("perception.detector.max_fps", 0);
-        confidence_max_   = std::clamp(cfg.get<float>("perception.detector.confidence_max", 0.95f),
-                                       0.0f, 1.0f);
-        confidence_base_  = std::clamp(cfg.get<float>("perception.detector.confidence_base", 0.5f),
-                                       0.0f, 1.0f);
-        confidence_area_scale_ =
-            std::max(0.0f, cfg.get<float>("perception.detector.confidence_area_scale", 50.0f));
-        min_bbox_height_px_ = std::max(
-            0, cfg.get<int>("perception.detector.min_bbox_height_px", min_bbox_height_px_));
-        max_aspect_ratio_ = std::max(
-            0.0f, cfg.get<float>("perception.detector.max_aspect_ratio", max_aspect_ratio_));
+        min_contour_area_ = cfg.get<int>(drone::cfg_key::perception::detector::MIN_CONTOUR_AREA,
+                                         80);
+        max_detections_   = cfg.get<int>(drone::cfg_key::perception::detector::MAX_DETECTIONS, 20);
+        subsample_ = std::max(1, cfg.get<int>(drone::cfg_key::perception::detector::SUBSAMPLE, 2));
+        max_fps_   = cfg.get<int>(drone::cfg_key::perception::detector::MAX_FPS, 0);
+        confidence_max_ =
+            std::clamp(cfg.get<float>(drone::cfg_key::perception::detector::CONFIDENCE_MAX, 0.95f),
+                       0.0f, 1.0f);
+        confidence_base_ =
+            std::clamp(cfg.get<float>(drone::cfg_key::perception::detector::CONFIDENCE_BASE, 0.5f),
+                       0.0f, 1.0f);
+        confidence_area_scale_ = std::max(
+            0.0f,
+            cfg.get<float>(drone::cfg_key::perception::detector::CONFIDENCE_AREA_SCALE, 50.0f));
+        min_bbox_height_px_ =
+            std::max(0, cfg.get<int>(drone::cfg_key::perception::detector::MIN_BBOX_HEIGHT_PX,
+                                     min_bbox_height_px_));
+        max_aspect_ratio_ =
+            std::max(0.0f, cfg.get<float>(drone::cfg_key::perception::detector::MAX_ASPECT_RATIO,
+                                          max_aspect_ratio_));
 
         // Try to read custom color ranges from config
-        if (cfg.has("perception.detector.colors")) {
-            auto colors_json = cfg.section("perception.detector.colors");
+        if (cfg.has(drone::cfg_key::perception::detector::COLORS)) {
+            auto colors_json = cfg.section(drone::cfg_key::perception::detector::COLORS);
             for (const auto& [key, val] : colors_json.items()) {
                 HsvRange range;
                 range.h_min    = val.value("h_min", 0.0f);

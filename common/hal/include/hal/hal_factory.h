@@ -41,6 +41,7 @@
 #endif
 
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <memory>
@@ -53,7 +54,7 @@ namespace drone::hal {
 /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
 [[nodiscard]] inline std::unique_ptr<ICamera> create_camera(const drone::Config& cfg,
                                                             const std::string&   section) {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating camera '{}' backend='{}'", section, backend);
 
     if (backend == "simulated") {
@@ -61,7 +62,7 @@ namespace drone::hal {
     }
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
-        auto gz_topic = cfg.get<std::string>(section + ".gz_topic", "/camera");
+        auto gz_topic = cfg.get<std::string>(section + drone::cfg_key::hal::GZ_TOPIC, "/camera");
         return std::make_unique<GazeboCameraBackend>(gz_topic);
     }
 #endif
@@ -75,7 +76,7 @@ namespace drone::hal {
 /// @param section  Config path prefix (e.g. "comms.mavlink")
 [[nodiscard]] inline std::unique_ptr<IFCLink> create_fc_link(const drone::Config& cfg,
                                                              const std::string&   section) {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating FC link '{}' backend='{}'", section, backend);
 
     if (backend == "simulated") {
@@ -94,7 +95,7 @@ namespace drone::hal {
 /// @param section  Config path prefix (e.g. "comms.gcs")
 [[nodiscard]] inline std::unique_ptr<IGCSLink> create_gcs_link(const drone::Config& cfg,
                                                                const std::string&   section) {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating GCS link '{}' backend='{}'", section, backend);
 
     if (backend == "simulated") {
@@ -110,7 +111,7 @@ namespace drone::hal {
 /// @param section  Config path prefix (e.g. "payload_manager.gimbal")
 [[nodiscard]] inline std::unique_ptr<IGimbal> create_gimbal(const drone::Config& cfg,
                                                             const std::string&   section) {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating gimbal '{}' backend='{}'", section, backend);
 
     if (backend == "simulated") {
@@ -126,7 +127,7 @@ namespace drone::hal {
 /// @param section  Config path prefix (e.g. "slam.imu")
 [[nodiscard]] inline std::unique_ptr<IIMUSource> create_imu_source(const drone::Config& cfg,
                                                                    const std::string&   section) {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating IMU source '{}' backend='{}'", section, backend);
 
     if (backend == "simulated") {
@@ -134,7 +135,7 @@ namespace drone::hal {
     }
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
-        auto gz_topic = cfg.get<std::string>(section + ".gz_topic", "/imu");
+        auto gz_topic = cfg.get<std::string>(section + drone::cfg_key::hal::GZ_TOPIC, "/imu");
         auto imu      = std::make_unique<GazeboIMUBackend>(gz_topic);
         return imu;
     }
@@ -149,7 +150,7 @@ namespace drone::hal {
 /// @param section  Config path prefix (e.g. "perception.radar")
 [[nodiscard]] inline std::unique_ptr<IRadar> create_radar(
     const drone::Config& cfg, const std::string& section = "perception.radar") {
-    auto backend = cfg.get<std::string>(section + ".backend", "simulated");
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating radar '{}' backend='{}'", section, backend);
 
     if (backend == "simulated") {
