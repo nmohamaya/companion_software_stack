@@ -418,7 +418,13 @@ int main(int argc, char* argv[]) {
 
     // ── Create tracker from config ────────────────────────────
     std::string tracker_backend = cfg.get<std::string>("perception.tracker.backend", "bytetrack");
-    auto        tracker         = create_tracker(tracker_backend, &cfg);
+    auto        tracker_result  = create_tracker(tracker_backend, &cfg);
+    if (!tracker_result.is_ok()) {
+        spdlog::error("[Perception] Failed to create tracker: {}",
+                      tracker_result.error().message());
+        return 1;
+    }
+    auto tracker = std::move(tracker_result).value();
     spdlog::info("[Perception] Tracker  backend: {} ({})", tracker_backend, tracker->name());
 
     // ── Create fusion engine from config ────────────────────

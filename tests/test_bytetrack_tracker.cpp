@@ -265,10 +265,18 @@ TEST(ByteTrackConfig, DefaultParams) {
     EXPECT_EQ(params.min_hits, 3u);
 }
 
+TEST(ByteTrackConfig, FactoryReturnsResult) {
+    // Factory returns Result<> — verify Ok path
+    auto result = create_tracker("bytetrack");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "bytetrack");
+}
+
 TEST(ByteTrackConfig, FactoryWithNullConfig) {
     // Factory with nullptr config uses all defaults — should still work
-    auto tracker = create_tracker("bytetrack", nullptr);
-    ASSERT_NE(tracker, nullptr);
+    auto result = create_tracker("bytetrack", nullptr);
+    ASSERT_TRUE(result.is_ok());
+    auto tracker = std::move(result).value();
     EXPECT_EQ(tracker->name(), "bytetrack");
 
     // Verify it produces output with default params (min_hits=3)
@@ -285,8 +293,9 @@ TEST(ByteTrackConfig, NameReturnsBytetrack) {
 }
 
 TEST(ByteTrackConfig, FactoryCreatesBytetrack) {
-    auto tracker = create_tracker("bytetrack");
-    ASSERT_NE(tracker, nullptr);
+    auto result = create_tracker("bytetrack");
+    ASSERT_TRUE(result.is_ok());
+    auto tracker = std::move(result).value();
     EXPECT_EQ(tracker->name(), "bytetrack");
 
     // Verify it works
@@ -295,6 +304,9 @@ TEST(ByteTrackConfig, FactoryCreatesBytetrack) {
     EXPECT_EQ(out.objects.size(), 0u);
 }
 
-TEST(ByteTrackConfig, UnknownBackendThrows) {
-    EXPECT_THROW(create_tracker("nonexistent", nullptr), std::invalid_argument);
+TEST(ByteTrackConfig, UnknownBackendFallsBackToByteTrack) {
+    // Unknown backend should warn and fall back to ByteTrack, not throw
+    auto result = create_tracker("nonexistent", nullptr);
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "bytetrack");
 }
