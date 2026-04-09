@@ -4,5 +4,5 @@ target_include_directories(drone_ipc INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(drone_ipc INTERFACE zenohc::lib pthread)
+target_link_libraries(drone_ipc INTERFACE zenohc::lib pthread drone_util)
 target_compile_definitions(drone_ipc INTERFACE ZENOHCXX_ZENOHC)

@@ -23,6 +23,7 @@
 #include "util/config_validator.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -35,8 +36,6 @@
 #include <chrono>
 #include <cmath>
 #include <thread>
-
-#include <spdlog/spdlog.h>
 
 using namespace drone::planner;
 
@@ -75,7 +74,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::mission_planner_schema());
             rc != 0) {
@@ -83,7 +82,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== Mission Planner starting (PID {}) ===", getpid());
 
     // ── Create message bus (config-driven) ───────────────────
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -94,20 +93,20 @@ int main(int argc, char* argv[]) {
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_sub->is_connected()) {
-        spdlog::error("Cannot connect to SLAM pose");
+        DRONE_LOG_ERROR("Cannot connect to SLAM pose");
         return 1;
     }
 
     auto obj_sub =
         bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!obj_sub->is_connected()) {
-        spdlog::error("Cannot connect to detected objects");
+        DRONE_LOG_ERROR("Cannot connect to detected objects");
         return 1;
     }
 
     auto fc_state_sub = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
     if (!fc_state_sub->is_connected()) {
-        spdlog::error("Cannot connect to FC state — comms may not be running");
+        DRONE_LOG_ERROR("Cannot connect to FC state — comms may not be running");
         return 1;
     }
 
@@ -126,7 +125,7 @@ int main(int argc, char* argv[]) {
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() || !payload_pub->is_ready() ||
         !fc_cmd_pub->is_ready()) {
-        spdlog::error("Failed to create mission planner publishers");
+        DRONE_LOG_ERROR("Failed to create mission planner publishers");
         return 1;
     }
 
@@ -228,7 +227,7 @@ int main(int argc, char* argv[]) {
         "mission_planner.path_planner.snap_approach_bias", planner_cfg.snap_approach_bias);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
-    spdlog::info("Path planner: {}", path_planner->name());
+    DRONE_LOG_INFO("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
 
     // ── HD-map static obstacles ─────────────────────────────
@@ -239,7 +238,7 @@ int main(int argc, char* argv[]) {
                                                 "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
                                                            repulsive_gain, &cfg);
-    spdlog::info("Obstacle avoider: {}", avoider->name());
+    DRONE_LOG_INFO("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
     Geofence   geofence;
@@ -259,12 +258,12 @@ int main(int argc, char* argv[]) {
         geofence.set_altitude_tolerance(
             cfg.get<float>("mission_planner.geofence.altitude_tolerance_m", 0.5f));
         geofence.enable(true);
-        spdlog::info("Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m",
-                     vertices.size(), alt_floor, alt_ceiling,
-                     cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
+        DRONE_LOG_INFO("Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m",
+                       vertices.size(), alt_floor, alt_ceiling,
+                       cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
     } else {
-        spdlog::info("Geofence: disabled ({})",
-                     geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
+        DRONE_LOG_INFO("Geofence: disabled ({})",
+                       geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
     }
 
     // ── Create extracted subsystems ─────────────────────────
@@ -294,7 +293,7 @@ int main(int argc, char* argv[]) {
     // ── Create fault manager (config-driven thresholds) ────
     FaultManager fault_mgr(cfg);
 
-    spdlog::info("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
+    DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
 
     // ── Thread heartbeat + watchdog + health publisher ──────
@@ -351,13 +350,13 @@ int main(int argc, char* argv[]) {
                                  "ms old (threshold: " +
                                  std::to_string(kPoseStaleThresholdNs / 1'000'000) + "ms)");
             if (pose_stale_count == 1 || pose_stale_count % 50 == 0) {
-                spdlog::warn("[Planner] STALE POSE detected "
-                             "(#{}, age={:.0f}ms) — position may be unreliable!",
-                             pose_stale_count, age_ms);
+                DRONE_LOG_WARN("[Planner] STALE POSE detected "
+                               "(#{}, age={:.0f}ms) — position may be unreliable!",
+                               pose_stale_count, age_ms);
             }
         } else if (pose_stale_count > 0) {
-            spdlog::info("[Planner] Pose freshness restored after {} stale readings",
-                         pose_stale_count);
+            DRONE_LOG_INFO("[Planner] Pose freshness restored after {} stale readings",
+                           pose_stale_count);
             pose_stale_count = 0;
         }
 
@@ -374,7 +373,7 @@ int main(int argc, char* argv[]) {
                                                    fc_state.rel_alt);
                 fault_mgr.set_geofence_violation(fence_result.violated);
                 if (fence_result.violated) {
-                    spdlog::warn("Geofence: VIOLATED — {}", fence_result.message);
+                    DRONE_LOG_WARN("Geofence: VIOLATED — {}", fence_result.message);
                     diag.add_warning("Geofence", fence_result.message);
                 } else if (fence_result.margin_m < 0.0f &&
                            std::abs(fence_result.margin_m) < geofence.warning_margin()) {
@@ -445,6 +444,6 @@ int main(int argc, char* argv[]) {
     }
 
     drone::systemd::notify_stopping();
-    spdlog::info("=== Mission Planner stopped ===");
+    DRONE_LOG_INFO("=== Mission Planner stopped ===");
     return 0;
 }

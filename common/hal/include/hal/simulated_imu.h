@@ -2,11 +2,10 @@
 // Simulated IMU backend: generates noisy synthetic IMU readings.
 #pragma once
 #include "hal/iimu_source.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <random>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -15,7 +14,7 @@ public:
     bool init(int rate_hz) override {
         rate_hz_ = rate_hz;
         active_  = true;
-        spdlog::info("[SimulatedIMU] Initialised at {} Hz", rate_hz_);
+        DRONE_LOG_INFO("[SimulatedIMU] Initialised at {} Hz", rate_hz_);
         return true;
     }
 

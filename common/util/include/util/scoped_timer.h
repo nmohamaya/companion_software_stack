@@ -1,9 +1,9 @@
 // common/util/include/util/scoped_timer.h
 // RAII timer for performance monitoring — logs if exceeds threshold.
 #pragma once
-#include <chrono>
+#include "util/ilogger.h"
 
-#include <spdlog/spdlog.h>
+#include <chrono>
 
 class ScopedTimer {
 public:
@@ -14,9 +14,9 @@ public:
         auto   end = std::chrono::steady_clock::now();
         double ms  = std::chrono::duration<double, std::milli>(end - start_).count();
         if (warn_ms_ > 0.0 && ms > warn_ms_) {
-            spdlog::warn("{}: {:.2f} ms (limit: {:.1f} ms)", label_, ms, warn_ms_);
+            DRONE_LOG_WARN("{}: {:.2f} ms (limit: {:.1f} ms)", label_, ms, warn_ms_);
         } else {
-            spdlog::debug("{}: {:.2f} ms", label_, ms);
+            DRONE_LOG_DEBUG("{}: {:.2f} ms", label_, ms);
         }
     }
 

@@ -40,3 +40,24 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 - **Mode:** pipeline
 - **Fix iterations:** 0
 - **Status:** completed
+
+### 2026-04-08 | feature-infra-core | opus | PR #380
+- **Issue:** #285 — feat(#284-A1): ILogger interface + DRONE_LOG macros
+- **Branch:** feature/issue-285-feat284-a1-ilogger-interface--dronelog-m
+- **Mode:** pipeline
+- **Fix iterations:** 0
+- **Status:** completed
+
+### 2026-04-08 | feature-infra-core | opus | PR #382
+- **Issue:** #287 — refactor(#284-A3): Config key registry — centralized constexpr keys
+- **Branch:** feature/issue-287-refactor284-a3-config-key-registry--cent
+- **Mode:** pipeline
+- **Fix iterations:** 0
+- **Status:** completed
+
+### 2026-04-08 | feature-infra-core | opus | PR #383
+- **Issue:** #286 — feat(#284-A2): IClock interface + MockClock
+- **Branch:** feature/issue-286-feat284-a2-iclock-interface--mockclock
+- **Mode:** pipeline
+- **Fix iterations:** 0
+- **Status:** completed

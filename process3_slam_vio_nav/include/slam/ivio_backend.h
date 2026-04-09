@@ -22,6 +22,7 @@
 #include "slam/types.h"
 #include "slam/vio_types.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 
 #include <atomic>
 #include <chrono>
@@ -31,8 +32,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 // ── Gazebo ground-truth headers (only when building with Gazebo support) ──
 #ifdef HAVE_GAZEBO
@@ -287,8 +286,8 @@ private:
 
     void transition_health(VIOHealth new_health, const std::string& reason) {
         if (new_health != health_) {
-            spdlog::info("[VIO] Health: {} → {}{}", vio_health_name(health_),
-                         vio_health_name(new_health), reason.empty() ? "" : " (" + reason + ")");
+            DRONE_LOG_INFO("[VIO] Health: {} → {}{}", vio_health_name(health_),
+                           vio_health_name(new_health), reason.empty() ? "" : " (" + reason + ")");
             health_ = new_health;
         }
     }
@@ -353,9 +352,10 @@ public:
         : gz_topic_(std::move(gz_topic)), health_(VIOHealth::INITIALIZING) {
         bool ok = node_.Subscribe(gz_topic_, &GazeboVIOBackend::on_odom, this);
         if (!ok) {
-            spdlog::error("[GazeboVIOBackend] Failed to subscribe to '{}'", gz_topic_);
+            DRONE_LOG_ERROR("[GazeboVIOBackend] Failed to subscribe to '{}'", gz_topic_);
         } else {
-            spdlog::info("[GazeboVIOBackend] Subscribed to ground-truth odometry: '{}'", gz_topic_);
+            DRONE_LOG_INFO("[GazeboVIOBackend] Subscribed to ground-truth odometry: '{}'",
+                           gz_topic_);
         }
     }
 
@@ -479,10 +479,10 @@ public:
         , degraded_trace_max_(degraded_trace_max) {
         bool ok = node_.Subscribe(gz_topic_, &GazeboFullVIOBackend::on_odom, this);
         if (!ok) {
-            spdlog::error("[GazeboFullVIOBackend] Failed to subscribe to '{}'", gz_topic_);
+            DRONE_LOG_ERROR("[GazeboFullVIOBackend] Failed to subscribe to '{}'", gz_topic_);
         } else {
-            spdlog::info("[GazeboFullVIOBackend] Subscribed to ground-truth odometry: '{}'",
-                         gz_topic_);
+            DRONE_LOG_INFO("[GazeboFullVIOBackend] Subscribed to ground-truth odometry: '{}'",
+                           gz_topic_);
         }
     }
 
@@ -671,8 +671,8 @@ private:
     void transition_health(VIOHealth new_health, const std::string& reason) {
         VIOHealth current = health_.load(std::memory_order_acquire);
         if (new_health != current) {
-            spdlog::info("[VIO] Health: {} → {}{}", vio_health_name(current),
-                         vio_health_name(new_health), reason.empty() ? "" : " (" + reason + ")");
+            DRONE_LOG_INFO("[VIO] Health: {} → {}{}", vio_health_name(current),
+                           vio_health_name(new_health), reason.empty() ? "" : " (" + reason + ")");
             health_.store(new_health, std::memory_order_release);
         }
     }
@@ -726,15 +726,15 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     // Validate quality thresholds — good must be <= degraded for the
     // health state machine to make sense (NOMINAL < DEGRADED < LOST).
     if (good_trace_max < 0.0 || degraded_trace_max < 0.0) {
-        spdlog::warn("[VIOBackend] Negative quality thresholds (good={}, degraded={}) — "
-                     "clamping to defaults (0.1, 1.0)",
-                     good_trace_max, degraded_trace_max);
+        DRONE_LOG_WARN("[VIOBackend] Negative quality thresholds (good={}, degraded={}) — "
+                       "clamping to defaults (0.1, 1.0)",
+                       good_trace_max, degraded_trace_max);
         good_trace_max     = 0.1;
         degraded_trace_max = 1.0;
     } else if (good_trace_max > degraded_trace_max) {
-        spdlog::warn("[VIOBackend] good_trace_max ({}) > degraded_trace_max ({}) — "
-                     "swapping to preserve NOMINAL < DEGRADED ordering",
-                     good_trace_max, degraded_trace_max);
+        DRONE_LOG_WARN("[VIOBackend] good_trace_max ({}) > degraded_trace_max ({}) — "
+                       "swapping to preserve NOMINAL < DEGRADED ordering",
+                       good_trace_max, degraded_trace_max);
         std::swap(good_trace_max, degraded_trace_max);
     }
 

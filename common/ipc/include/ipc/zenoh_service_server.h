@@ -17,6 +17,7 @@
 
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_session.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
@@ -32,7 +33,6 @@
 #include <utility>
 #include <vector>
 
-#include <spdlog/spdlog.h>
 #include <zenoh.hxx>
 
 namespace drone::ipc {
@@ -72,16 +72,16 @@ public:
                     // Deserialise request payload
                     auto payload_opt = query.get_payload();
                     if (!payload_opt.has_value()) {
-                        spdlog::warn("[ZenohServiceServer] Query on '{}' "
-                                     "has no payload",
-                                     key_expr);
+                        DRONE_LOG_WARN("[ZenohServiceServer] Query on '{}' "
+                                       "has no payload",
+                                       key_expr);
                         return;
                     }
                     auto bytes = payload_opt->get().as_vector();
                     if (bytes.size() != sizeof(Req)) {
-                        spdlog::warn("[ZenohServiceServer] Payload size "
-                                     "mismatch on '{}': expected {} got {}",
-                                     key_expr, sizeof(Req), bytes.size());
+                        DRONE_LOG_WARN("[ZenohServiceServer] Payload size "
+                                       "mismatch on '{}': expected {} got {}",
+                                       key_expr, sizeof(Req), bytes.size());
                         return;
                     }
 
@@ -103,19 +103,19 @@ public:
                     std::lock_guard<std::mutex> lock(pending->mutex);
                     pending->queue.push_back({env, query.clone()});
 
-                    spdlog::debug("[ZenohServiceServer] Received query "
-                                  "cid={} on '{}'",
-                                  cid, key_expr);
+                    DRONE_LOG_DEBUG("[ZenohServiceServer] Received query "
+                                    "cid={} on '{}'",
+                                    cid, key_expr);
                 } catch (const std::exception& e) {
-                    spdlog::error("[ZenohServiceServer] Error in query "
-                                  "callback: {}",
-                                  e.what());
+                    DRONE_LOG_ERROR("[ZenohServiceServer] Error in query "
+                                    "callback: {}",
+                                    e.what());
                 }
             },
             // on_drop callback
             []() {}));
 
-        spdlog::info("[ZenohServiceServer] Queryable declared on '{}'", key_expr);
+        DRONE_LOG_INFO("[ZenohServiceServer] Queryable declared on '{}'", key_expr);
     }
 
     [[nodiscard]] std::optional<ServiceEnvelope<Req>> poll_request() override {
@@ -157,9 +157,9 @@ public:
             std::lock_guard<std::mutex> lock(outstanding_mutex_);
             auto                        it = outstanding_.find(correlation_id);
             if (it == outstanding_.end()) {
-                spdlog::warn("[ZenohServiceServer] No outstanding query for "
-                             "cid={}",
-                             correlation_id);
+                DRONE_LOG_WARN("[ZenohServiceServer] No outstanding query for "
+                               "cid={}",
+                               correlation_id);
                 return;
             }
             query_handle.emplace(std::move(it->second));
@@ -169,8 +169,8 @@ public:
         // Reply through the Zenoh query handle
         query_handle->reply(zenoh::KeyExpr(key_expr_), zenoh::Bytes(std::move(buf)));
 
-        spdlog::debug("[ZenohServiceServer] Sent response cid={} status={}", correlation_id,
-                      static_cast<int>(status));
+        DRONE_LOG_DEBUG("[ZenohServiceServer] Sent response cid={} status={}", correlation_id,
+                        static_cast<int>(status));
     }
 
 private:

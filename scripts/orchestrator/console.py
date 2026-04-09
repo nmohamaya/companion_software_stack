@@ -11,6 +11,7 @@ all 12 bash scripts.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Protocol
 
 
@@ -97,6 +98,108 @@ class Console:
         for role, tier, model in roles:
             self.print(f"{role:<28} {tier:<10} {model}")
         self.print("")
+
+
+class AutoConsole(Console):
+    """Console that auto-picks "forward" actions and logs all output to a file.
+
+    Used by ``--auto`` pipeline mode: the full FSM runs with all checkpoints,
+    but no interactive prompts block.  After completion the caller (e.g.
+    Claude Code acting as tech-lead) reads the log file to review and present
+    findings to the user.
+
+    Context-aware: tracks the most recent header() to determine which
+    checkpoint is active, then picks the correct "forward" action:
+      - CP1 (Changes Review):    "a" (accept)
+      - CP2 (Commit Approval):   "c" (commit)
+      - CP3 (PR Preview):        "c" (create) or "s" (skip if PR exists)
+      - CP4 (Review Findings):   "a" (accept)
+      - CP5 (Final Summary):     "d" (done)
+      - Pipeline Aborted:        "p" (preserve worktree)
+      - Tech-lead routing:       "a" (accept recommendation)
+      - Branch strategy:         "m" (main)
+      - Anything else:           the prompt's default value
+    """
+
+    # Map checkpoint header substring → forward action for generic prompts.
+    _CHECKPOINT_ACTIONS: dict[str, str] = {
+        "CHECKPOINT 1": "a",   # accept
+        "CHECKPOINT 2": "c",   # commit
+        "CHECKPOINT 3": "c",   # create PR
+        "CHECKPOINT 4": "a",   # accept findings
+        "CHECKPOINT 5": "d",   # done
+        "Pipeline Aborted": "p",  # preserve
+    }
+
+    # Prompt-specific overrides (checked before checkpoint context).
+    # Branch strategy defaults to "m" (main). Use --base to override:
+    #   --auto --base integration/epic-284
+    _PROMPT_ANSWERS: list[tuple[str, str]] = [
+        ("Your choice [a]", "a"),       # tech-lead routing default
+        ("Your choice [m]", "m"),       # branch strategy default
+        ("Abort pipeline?", "n"),       # don't confirm abort
+        ("New title", ""),              # keep existing PR title
+        ("Integration branch", ""),     # keep default name
+        ("Select branch", "1"),         # pick first integration branch
+    ]
+
+    def __init__(self, log_path: Path | None = None) -> None:
+        self._log_path = log_path
+        self._log_lines: list[str] = []
+        self._current_context: str = ""  # last header seen
+
+    def header(self, title: str) -> None:
+        super().header(title)
+        self._log_lines.append(f"=== {title} ===")
+        self._current_context = title
+
+    def print(self, msg: str, *, end: str = "\n") -> None:
+        super().print(msg, end=end)
+        self._log_lines.append(msg)
+
+    def prompt(self, msg: str, default: str = "") -> str:
+        # 1. Check prompt-specific overrides first
+        for substr, auto_val in self._PROMPT_ANSWERS:
+            if substr in msg:
+                answer = auto_val if auto_val else default
+                self._log_lines.append(f"[AUTO] {msg.strip()} → {answer!r}")
+                super().print(f"[AUTO] {msg.strip()} → {answer!r}")
+                return answer
+
+        # 2. Use checkpoint context for generic "Your choice:" prompts
+        if "Your choice" in msg:
+            for ctx_key, action in self._CHECKPOINT_ACTIONS.items():
+                if ctx_key in self._current_context:
+                    self._log_lines.append(
+                        f"[AUTO:{ctx_key}] {msg.strip()} → {action!r}"
+                    )
+                    super().print(
+                        f"[AUTO:{ctx_key}] {msg.strip()} → {action!r}"
+                    )
+                    return action
+
+        # 3. Fall back to prompt default
+        self._log_lines.append(f"[AUTO:default] {msg.strip()} → {default!r}")
+        super().print(f"[AUTO:default] {msg.strip()} → {default!r}")
+        return default
+
+    def confirm(self, msg: str, default: bool = False) -> bool:
+        # Auto-confirm forward actions (yes), deny destructive ones
+        result = default
+        self._log_lines.append(f"[AUTO-CONFIRM] {msg.strip()} → {result}")
+        super().print(f"[AUTO-CONFIRM] {msg.strip()} → {result}")
+        return result
+
+    @property
+    def log(self) -> str:
+        """Full captured output as a single string."""
+        return "\n".join(self._log_lines)
+
+    def flush_log(self) -> None:
+        """Write captured output to the log file (if configured)."""
+        if self._log_path:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_path.write_text(self.log)
 
 
 class TestConsole:

@@ -25,6 +25,7 @@
 
 #include "hal/iradar.h"
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <atomic>
@@ -37,7 +38,6 @@
 #include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/odometry.pb.h>
 #include <gz/transport/Node.hh>
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -79,25 +79,26 @@ public:
 
     bool init() override {
         if (active_.load(std::memory_order_acquire)) {
-            spdlog::warn("[GazeboRadar] Already initialised");
+            DRONE_LOG_WARN("[GazeboRadar] Already initialised");
             return false;
         }
 
         bool scan_ok = node_.Subscribe(scan_topic_, &GazeboRadarBackend::on_scan, this);
         if (!scan_ok) {
-            spdlog::error("[GazeboRadar] Failed to subscribe to scan topic '{}'", scan_topic_);
+            DRONE_LOG_ERROR("[GazeboRadar] Failed to subscribe to scan topic '{}'", scan_topic_);
             return false;
         }
 
         bool odom_ok = node_.Subscribe(odom_topic_, &GazeboRadarBackend::on_odom, this);
         if (!odom_ok) {
-            spdlog::error("[GazeboRadar] Failed to subscribe to odom topic '{}'", odom_topic_);
+            DRONE_LOG_ERROR("[GazeboRadar] Failed to subscribe to odom topic '{}'", odom_topic_);
             node_.Unsubscribe(scan_topic_);
             return false;
         }
 
         active_.store(true, std::memory_order_release);
-        spdlog::info("[GazeboRadar] Subscribed to scan='{}', odom='{}'", scan_topic_, odom_topic_);
+        DRONE_LOG_INFO("[GazeboRadar] Subscribed to scan='{}', odom='{}'", scan_topic_,
+                       odom_topic_);
         return true;
     }
 
@@ -109,8 +110,8 @@ public:
         }
         node_.Unsubscribe(scan_topic_);
         node_.Unsubscribe(odom_topic_);
-        spdlog::info("[GazeboRadar] Shut down — unsubscribed from '{}' and '{}'", scan_topic_,
-                     odom_topic_);
+        DRONE_LOG_INFO("[GazeboRadar] Shut down — unsubscribed from '{}' and '{}'", scan_topic_,
+                       odom_topic_);
     }
 
     drone::ipc::RadarDetectionList read() override {
@@ -291,8 +292,8 @@ private:
 
         uint64_t count = scan_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count == 1) {
-            spdlog::info("[GazeboRadar] First scan: {} rays, {} detections from '{}'", total_rays,
-                         list.num_detections, scan_topic_);
+            DRONE_LOG_INFO("[GazeboRadar] First scan: {} rays, {} detections from '{}'", total_rays,
+                           list.num_detections, scan_topic_);
         }
     }
 

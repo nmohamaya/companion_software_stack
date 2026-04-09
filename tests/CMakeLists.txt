@@ -117,6 +117,9 @@ add_drone_test(test_message_bus     test_message_bus.cpp)
 # ── JSON logging sink tests ──────────────────────────────────
 add_drone_test(test_json_log_sink   test_json_log_sink.cpp)
 
+# ── ILogger interface tests ─────────────────────────────────
+add_drone_test(test_ilogger         test_ilogger.cpp)
+
 # ── Correlation ID tests ─────────────────────────────────────
 add_drone_test(test_correlation     test_correlation.cpp)
 

@@ -14,13 +14,13 @@
 // main-loop thread, so no locking is needed.
 #pragma once
 
+#include "util/ilogger.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::util {
 
@@ -126,11 +126,11 @@ public:
         if (total_count_ < min_samples) return false;
 
         auto s = summary();
-        spdlog::info("[Latency] {} — n={}, p50={:.1f}µs, p90={:.1f}µs, "
-                     "p99={:.1f}µs, max={:.1f}µs, mean={:.1f}µs",
-                     topic_name, s.count, LatencySummary::to_us(s.p50_ns),
-                     LatencySummary::to_us(s.p90_ns), LatencySummary::to_us(s.p99_ns),
-                     LatencySummary::to_us(s.max_ns), s.mean_ns / 1000.0);
+        DRONE_LOG_INFO("[Latency] {} — n={}, p50={:.1f}µs, p90={:.1f}µs, "
+                       "p99={:.1f}µs, max={:.1f}µs, mean={:.1f}µs",
+                       topic_name, s.count, LatencySummary::to_us(s.p50_ns),
+                       LatencySummary::to_us(s.p90_ns), LatencySummary::to_us(s.p99_ns),
+                       LatencySummary::to_us(s.max_ns), s.mean_ns / 1000.0);
         reset();
         return true;
     }

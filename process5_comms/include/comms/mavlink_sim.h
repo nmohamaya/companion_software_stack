@@ -3,12 +3,12 @@
 // On real hardware this wraps serial / UDP MAVLink v2; here we stub it.
 
 #pragma once
+#include "util/ilogger.h"
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::comms {
 
@@ -31,7 +31,7 @@ public:
     [[nodiscard]] bool open(const std::string& port, int baud) {
         (void)port;
         (void)baud;
-        spdlog::info("[MavlinkSim] Opened simulated link {}@{}", port, baud);
+        DRONE_LOG_INFO("[MavlinkSim] Opened simulated link {}@{}", port, baud);
         connected_  = true;
         start_time_ = std::chrono::steady_clock::now();
         return true;
@@ -42,9 +42,9 @@ public:
     // Send trajectory command to FC (simulated)
     [[nodiscard]] bool send_trajectory(float vx, float vy, float vz, float yaw) {
         if (!connected_) return false;
-        spdlog::debug("[MavlinkSim] SET_POSITION_TARGET_LOCAL_NED "
-                      "vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}",
-                      vx, vy, vz, yaw);
+        DRONE_LOG_DEBUG("[MavlinkSim] SET_POSITION_TARGET_LOCAL_NED "
+                        "vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}",
+                        vx, vy, vz, yaw);
         last_cmd_vx_ = vx;
         last_cmd_vy_ = vy;
         last_cmd_vz_ = vz;
@@ -53,14 +53,14 @@ public:
 
     // Send arm / disarm
     [[nodiscard]] bool send_arm(bool arm) {
-        spdlog::info("[MavlinkSim] {} command sent", arm ? "ARM" : "DISARM");
+        DRONE_LOG_INFO("[MavlinkSim] {} command sent", arm ? "ARM" : "DISARM");
         heartbeat_.armed = arm;
         return true;
     }
 
     // Send mode change
     [[nodiscard]] bool send_mode(uint8_t mode) {
-        spdlog::info("[MavlinkSim] MODE change to {}", mode);
+        DRONE_LOG_INFO("[MavlinkSim] MODE change to {}", mode);
         heartbeat_.flight_mode = mode;
         return true;
     }

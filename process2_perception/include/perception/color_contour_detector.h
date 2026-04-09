@@ -12,6 +12,7 @@
 
 #include "perception/detector_interface.h"
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <array>
@@ -23,8 +24,6 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::perception {
 
@@ -177,10 +176,10 @@ public:
             init_default_colors();
         }
 
-        spdlog::info("[ColorContourDetector] {} color ranges, min_area={}, max_dets={}, "
-                     "subsample={}, max_fps={}",
-                     color_ranges_.size(), min_contour_area_, max_detections_, subsample_,
-                     max_fps_);
+        DRONE_LOG_INFO("[ColorContourDetector] {} color ranges, min_area={}, max_dets={}, "
+                       "subsample={}, max_fps={}",
+                       color_ranges_.size(), min_contour_area_, max_detections_, subsample_,
+                       max_fps_);
     }
 
     std::vector<Detection2D> detect(const uint8_t* frame_data, uint32_t width, uint32_t height,

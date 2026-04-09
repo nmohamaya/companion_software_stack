@@ -20,6 +20,8 @@
 // Implements Epic #25 issue #29 (Geofencing).
 #pragma once
 
+#include "util/ilogger.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -27,8 +29,6 @@
 #include <limits>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -84,8 +84,8 @@ public:
     void set_polygon(const std::vector<GeoVertex>& vertices) {
         polygon_ = vertices;
         if (polygon_.size() < 3) {
-            spdlog::warn("[Geofence] Polygon has {} vertices (need ≥3) — disabled",
-                         polygon_.size());
+            DRONE_LOG_WARN("[Geofence] Polygon has {} vertices (need ≥3) — disabled",
+                           polygon_.size());
             enabled_ = false;
         }
     }
@@ -110,13 +110,13 @@ public:
     /// Enable/disable the geofence.
     void enable(bool on = true) {
         if (on && polygon_.size() < 3) {
-            spdlog::error("[Geofence] Cannot enable — polygon has {} vertices", polygon_.size());
+            DRONE_LOG_ERROR("[Geofence] Cannot enable — polygon has {} vertices", polygon_.size());
             return;
         }
         enabled_ = on;
-        spdlog::info("[Geofence] {} ({} vertices, alt {:.0f}–{:.0f}m, margin {:.0f}m)",
-                     enabled_ ? "ENABLED" : "DISABLED", polygon_.size(), alt_floor_, alt_ceiling_,
-                     warning_margin_);
+        DRONE_LOG_INFO("[Geofence] {} ({} vertices, alt {:.0f}–{:.0f}m, margin {:.0f}m)",
+                       enabled_ ? "ENABLED" : "DISABLED", polygon_.size(), alt_floor_, alt_ceiling_,
+                       warning_margin_);
     }
 
     [[nodiscard]] bool is_enabled() const { return enabled_; }

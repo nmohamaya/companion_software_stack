@@ -4,11 +4,10 @@
 // Thread-safe: all mutable state guarded by mutex.
 #pragma once
 #include "hal/igcs_link.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <mutex>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -18,7 +17,7 @@ public:
         std::lock_guard<std::mutex> lock(mtx_);
         (void)addr;
         (void)port;
-        spdlog::info("[SimulatedGCSLink] Simulated UDP link {}:{}", addr, port);
+        DRONE_LOG_INFO("[SimulatedGCSLink] Simulated UDP link {}:{}", addr, port);
         connected_  = true;
         start_time_ = std::chrono::steady_clock::now();
         return true;
@@ -27,7 +26,7 @@ public:
     void close() override {
         std::lock_guard<std::mutex> lock(mtx_);
         connected_ = false;
-        spdlog::info("[SimulatedGCSLink] Closed");
+        DRONE_LOG_INFO("[SimulatedGCSLink] Closed");
     }
 
     bool is_connected() const override {
@@ -40,9 +39,9 @@ public:
         if (!connected_) return false;
         telem_count_++;
         if (telem_count_ % 50 == 0) {
-            spdlog::debug("[SimulatedGCSLink] Telemetry #{}: pos=({:.4f},{:.4f},{:.1f}) "
-                          "batt={:.0f}% state={}",
-                          telem_count_, lat, lon, alt, battery, state);
+            DRONE_LOG_DEBUG("[SimulatedGCSLink] Telemetry #{}: pos=({:.4f},{:.4f},{:.1f}) "
+                            "batt={:.0f}% state={}",
+                            telem_count_, lat, lon, alt, battery, state);
         }
         return true;
     }
@@ -64,7 +63,7 @@ public:
                     .count());
             cmd.valid = true;
             rtl_sent_ = true;
-            spdlog::info("[SimulatedGCSLink] Simulated RTL command from GCS");
+            DRONE_LOG_INFO("[SimulatedGCSLink] Simulated RTL command from GCS");
         }
         return cmd;
     }

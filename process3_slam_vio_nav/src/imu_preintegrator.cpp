@@ -11,8 +11,6 @@
 
 #include <cmath>
 
-#include <spdlog/spdlog.h>
-
 namespace drone::slam {
 
 // ── Exp map: so(3) → SO(3) ──────────────────────────────────

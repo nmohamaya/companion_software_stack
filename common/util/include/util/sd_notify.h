@@ -26,9 +26,10 @@
 #include <cstdint>
 
 #ifdef HAVE_SYSTEMD
+#include "util/ilogger.h"
+
 #include <string>
 
-#include <spdlog/spdlog.h>
 #include <systemd/sd-daemon.h>
 #endif
 
@@ -39,7 +40,7 @@ namespace drone::systemd {
 inline void notify_ready() {
 #ifdef HAVE_SYSTEMD
     sd_notify(0, "READY=1");
-    spdlog::info("[systemd] Notified READY=1");
+    DRONE_LOG_INFO("[systemd] Notified READY=1");
 #endif
 }
 
@@ -56,7 +57,7 @@ inline void notify_watchdog() {
 inline void notify_stopping() {
 #ifdef HAVE_SYSTEMD
     sd_notify(0, "STOPPING=1");
-    spdlog::info("[systemd] Notified STOPPING=1");
+    DRONE_LOG_INFO("[systemd] Notified STOPPING=1");
 #endif
 }
 

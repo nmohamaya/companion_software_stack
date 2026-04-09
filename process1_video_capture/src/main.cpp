@@ -11,6 +11,7 @@
 #include "util/config.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -26,15 +27,13 @@
 #include <cstring>
 #include <thread>
 
-#include <spdlog/spdlog.h>
-
 static std::atomic<bool> g_running{true};
 
 // ── Mission camera thread ───────────────────────────────────
 static void mission_cam_thread(drone::hal::ICamera&                            camera,
                                drone::ipc::IPublisher<drone::ipc::VideoFrame>& publisher,
                                std::atomic<bool>& running, int fps) {
-    spdlog::info("[MissionCam] Thread started using {} @ {}Hz", camera.name(), fps);
+    DRONE_LOG_INFO("[MissionCam] Thread started using {} @ {}Hz", camera.name(), fps);
 
     auto hb = drone::util::ScopedHeartbeat("mission_cam", true);
 
@@ -95,22 +94,22 @@ static void mission_cam_thread(drone::hal::ICamera&                            c
         if (diag.has_errors() || diag.has_warnings()) {
             diag.log_summary("MissionCam");
         } else if (seq % 300 == 0) {
-            spdlog::info("[MissionCam] Published frame #{} ({} drops, {} null-data)", seq,
-                         drop_count, null_data_count);
+            DRONE_LOG_INFO("[MissionCam] Published frame #{} ({} drops, {} null-data)", seq,
+                           drop_count, null_data_count);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
-    spdlog::info("[MissionCam] Thread stopped — {} frames, {} drops, {} null-data", seq, drop_count,
-                 null_data_count);
+    DRONE_LOG_INFO("[MissionCam] Thread stopped — {} frames, {} drops, {} null-data", seq,
+                   drop_count, null_data_count);
 }
 
 // ── Stereo camera thread ────────────────────────────────────
 static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera& right_cam,
                               drone::ipc::IPublisher<drone::ipc::StereoFrame>& publisher,
                               std::atomic<bool>& running, int fps) {
-    spdlog::info("[StereoCam] Thread started using {} + {} @ {}Hz", left_cam.name(),
-                 right_cam.name(), fps);
+    DRONE_LOG_INFO("[StereoCam] Thread started using {} + {} @ {}Hz", left_cam.name(),
+                   right_cam.name(), fps);
 
     auto hb = drone::util::ScopedHeartbeat("stereo_cam", true);
 
@@ -201,15 +200,15 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
                 diag.log_summary("StereoCam");
             }
         } else if (seq % 300 == 0) {
-            spdlog::info("[StereoCam] Published stereo pair #{} "
-                         "({} drops, {} sync warnings)",
-                         seq, drop_count, sync_warn_count);
+            DRONE_LOG_INFO("[StereoCam] Published stereo pair #{} "
+                           "({} drops, {} sync warnings)",
+                           seq, drop_count, sync_warn_count);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
     }
-    spdlog::info("[StereoCam] Thread stopped — {} pairs, {} drops, {} sync warnings", seq,
-                 drop_count, sync_warn_count);
+    DRONE_LOG_INFO("[StereoCam] Thread stopped — {} pairs, {} drops, {} sync warnings", seq,
+                   drop_count, sync_warn_count);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -224,7 +223,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::video_capture_schema());
             rc != 0) {
@@ -232,7 +231,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    spdlog::info("=== Video Capture process starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== Video Capture process starting (PID {}) ===", getpid());
 
     // ── Create cameras via HAL factory ──────────────────────
     auto       mission_cam = drone::hal::create_camera(cfg, "video_capture.mission_cam");
@@ -240,7 +239,7 @@ int main(int argc, char* argv[]) {
     const auto m_h         = cfg.get<uint32_t>("video_capture.mission_cam.height", 1080);
     const auto m_fps       = cfg.get<int>("video_capture.mission_cam.fps", 30);
     if (!mission_cam->open(m_w, m_h, m_fps)) {
-        spdlog::error("Failed to open mission camera ({}x{} @ {}fps)", m_w, m_h, m_fps);
+        DRONE_LOG_ERROR("Failed to open mission camera ({}x{} @ {}fps)", m_w, m_h, m_fps);
         return 1;
     }
 
@@ -250,12 +249,12 @@ int main(int argc, char* argv[]) {
     const auto s_h          = cfg.get<uint32_t>("video_capture.stereo_cam.height", 480);
     const auto s_fps        = cfg.get<int>("video_capture.stereo_cam.fps", 30);
     if (!stereo_left->open(s_w, s_h, s_fps) || !stereo_right->open(s_w, s_h, s_fps)) {
-        spdlog::error("Failed to open stereo cameras ({}x{} @ {}fps)", s_w, s_h, s_fps);
+        DRONE_LOG_ERROR("Failed to open stereo cameras ({}x{} @ {}fps)", s_w, s_h, s_fps);
         return 1;
     }
 
-    spdlog::info("Cameras: mission={}, stereo_l={}, stereo_r={}", mission_cam->name(),
-                 stereo_left->name(), stereo_right->name());
+    DRONE_LOG_INFO("Cameras: mission={}, stereo_l={}, stereo_r={}", mission_cam->name(),
+                   stereo_left->name(), stereo_right->name());
 
     // ── Create publishers via message bus factory ───────────
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -265,13 +264,13 @@ int main(int argc, char* argv[]) {
 
     auto mission_pub = bus.advertise<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
     if (!mission_pub->is_ready()) {
-        spdlog::error("Failed to create publisher: {}", drone::ipc::topics::VIDEO_MISSION_CAM);
+        DRONE_LOG_ERROR("Failed to create publisher: {}", drone::ipc::topics::VIDEO_MISSION_CAM);
         return 1;
     }
 
     auto stereo_pub = bus.advertise<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
     if (!stereo_pub->is_ready()) {
-        spdlog::error("Failed to create publisher: {}", drone::ipc::topics::VIDEO_STEREO_CAM);
+        DRONE_LOG_ERROR("Failed to create publisher: {}", drone::ipc::topics::VIDEO_STEREO_CAM);
         return 1;
     }
 
@@ -288,7 +287,7 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "video_capture",
                                                         watchdog);
 
-    spdlog::info("All threads started — video_capture is READY");
+    DRONE_LOG_INFO("All threads started — video_capture is READY");
     drone::systemd::notify_ready();
 
     // ── Main loop: periodic health log ──────────────────────
@@ -296,11 +295,11 @@ int main(int argc, char* argv[]) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
-        spdlog::info("[HealthCheck] video_capture alive");
+        DRONE_LOG_INFO("[HealthCheck] video_capture alive");
     }
 
     drone::systemd::notify_stopping();
-    spdlog::info("Shutting down...");
+    DRONE_LOG_INFO("Shutting down...");
     if (t_mission.joinable()) t_mission.join();
     if (t_stereo.joinable()) t_stereo.join();
 
@@ -308,6 +307,6 @@ int main(int argc, char* argv[]) {
     stereo_left->close();
     stereo_right->close();
 
-    spdlog::info("=== Video Capture process stopped ===");
+    DRONE_LOG_INFO("=== Video Capture process stopped ===");
     return 0;
 }

@@ -3,18 +3,17 @@
 // Mirrors the behaviour of payload/gimbal_controller.h behind the IGimbal interface.
 #pragma once
 #include "hal/igimbal.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
 class SimulatedGimbal : public IGimbal {
 public:
     bool init() override {
-        spdlog::info("[SimulatedGimbal] Initialised");
+        DRONE_LOG_INFO("[SimulatedGimbal] Initialised");
         initialised_ = true;
         return true;
     }
@@ -44,19 +43,19 @@ public:
         auto now = std::chrono::steady_clock::now();
         auto ts  = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
-        spdlog::info("[SimulatedGimbal] Image captured #{} pitch={:.1f} yaw={:.1f}", capture_count_,
-                     state_.pitch, state_.yaw);
+        DRONE_LOG_INFO("[SimulatedGimbal] Image captured #{} pitch={:.1f} yaw={:.1f}",
+                       capture_count_, state_.pitch, state_.yaw);
         return ts;
     }
 
     void start_recording() override {
         recording_ = true;
-        spdlog::info("[SimulatedGimbal] Recording started");
+        DRONE_LOG_INFO("[SimulatedGimbal] Recording started");
     }
 
     void stop_recording() override {
         recording_ = false;
-        spdlog::info("[SimulatedGimbal] Recording stopped");
+        DRONE_LOG_INFO("[SimulatedGimbal] Recording stopped");
     }
 
     bool is_recording() const override { return recording_; }

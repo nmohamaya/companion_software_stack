@@ -37,16 +37,22 @@ def handle_agent_work(
     *,
     prompt: str,
     interactive: bool = False,
+    auto: bool = False,
 ) -> str:
     """Launch the feature agent.
 
-    Both modes use launch_interactive_with_prompt() so the agent can
-    request tool permissions from the user when needed (e.g. git, bash).
-    The difference is just the prompt content — pipeline mode adds
-    autonomous instructions telling the agent to work without chatting.
+    Three launch strategies:
+      - interactive: launch_interactive_with_prompt (user chats live)
+      - pipeline: launch_interactive_with_prompt (user approves permissions)
+      - auto: launch_print with acceptEdits (no human in the loop)
     Returns "complete" when the agent exits.
     """
-    mode_label = "interactive" if interactive else "autonomous (writes AGENT_REPORT.md)"
+    if auto:
+        mode_label = "auto (print mode, acceptEdits)"
+    elif interactive:
+        mode_label = "interactive"
+    else:
+        mode_label = "autonomous (writes AGENT_REPORT.md)"
     io.header(f"Phase 1/5 — Agent Working ({state.agent_role})")
     io.print(f"  Model:  {state.model_tier}")
     io.print(f"  Issue:  #{state.issue_number} — {state.issue_title}")
@@ -56,15 +62,31 @@ def handle_agent_work(
         io.print(f"  CWD:    {worktree}")
     io.print("")
 
-    # Always use interactive launch so the agent can request permissions
-    # (git, bash, etc.) from the user when sandbox restrictions apply.
-    # In pipeline mode, the prompt itself contains autonomous instructions.
-    claude.launch_interactive_with_prompt(
-        model=state.model_tier,
-        agent=state.agent_role,
-        prompt=prompt,
-        cwd=worktree,
-    )
+    if auto:
+        # Auto mode: no human to approve permissions, use print mode with
+        # acceptEdits so the agent can write files and run commands.
+        # Log to .claude/pipeline-logs/ (NOT the worktree) to avoid
+        # polluting the git working tree with uncommitted files.
+        log_dir = Path(state.worktree_path).parents[1] / "pipeline-logs" if state.worktree_path else None
+        log_file = log_dir / f"agent-output-{state.issue_number}.log" if log_dir else None
+        if log_file:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+        claude.launch_print(
+            model=state.model_tier,
+            agent=state.agent_role,
+            prompt=prompt,
+            permission_mode="acceptEdits",
+            log_file=log_file,
+            cwd=worktree,
+        )
+    else:
+        # Interactive / pipeline: user approves permissions when needed.
+        claude.launch_interactive_with_prompt(
+            model=state.model_tier,
+            agent=state.agent_role,
+            prompt=prompt,
+            cwd=worktree,
+        )
     return "complete"
 
 
@@ -195,6 +217,11 @@ def handle_review(
 
     if not state.pr_number:
         io.fail("No PR number — skipping review agents.")
+        io.info(
+            "Review agents require a PR to comment on. "
+            "Create the PR manually and re-run reviews with:\n"
+            f"    python -m orchestrator deploy-review <PR_NUMBER>"
+        )
         return "no_pr", ""
 
     io.print(f"  Launching review agents for PR #{state.pr_number}...")
@@ -233,11 +260,12 @@ def handle_fix_and_revalidate(
     *,
     review_findings: str,
     interactive: bool = False,
+    auto: bool = False,
 ) -> str:
     """Fix review findings, re-validate, commit, and push.
 
     In interactive mode the user can guide the fix live.
-    In pipeline mode the agent auto-fixes autonomously.
+    In pipeline/auto mode the agent auto-fixes autonomously.
     Returns "complete" on success or "push_failed" if push fails.
     """
     io.header("Fixing Review Findings")
@@ -251,17 +279,24 @@ def handle_fix_and_revalidate(
     )
 
     worktree = Path(state.worktree_path) if state.worktree_path else None
-    mode_label = "interactive" if interactive else "autonomous"
+    mode_label = "auto" if auto else ("interactive" if interactive else "autonomous")
     io.print(f"  Launching feature agent to fix findings ({mode_label})...")
 
-    # Always use interactive launch so the agent can request permissions
-    # from the user when sandbox restrictions apply.
-    claude.launch_interactive_with_prompt(
-        model=state.model_tier,
-        agent=state.agent_role,
-        prompt=fix_prompt,
-        cwd=worktree,
-    )
+    if auto:
+        claude.launch_print(
+            model=state.model_tier,
+            agent=state.agent_role,
+            prompt=fix_prompt,
+            permission_mode="acceptEdits",
+            cwd=worktree,
+        )
+    else:
+        claude.launch_interactive_with_prompt(
+            model=state.model_tier,
+            agent=state.agent_role,
+            prompt=fix_prompt,
+            cwd=worktree,
+        )
 
     io.print("  Re-validating after fixes...")
     # Simplified validation

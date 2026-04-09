@@ -16,6 +16,7 @@
 #ifdef HAVE_GAZEBO
 
 #include "hal/icamera.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
@@ -28,7 +29,6 @@
 
 #include <gz/msgs/image.pb.h>
 #include <gz/transport/Node.hh>
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -56,7 +56,7 @@ public:
     bool open(uint32_t width, uint32_t height, int fps) override {
         std::lock_guard<std::mutex> lock(mtx_);
         if (open_) {
-            spdlog::warn("[GazeboCameraBackend] Already open — call close() first");
+            DRONE_LOG_WARN("[GazeboCameraBackend] Already open — call close() first");
             return false;
         }
 
@@ -77,13 +77,13 @@ public:
         bool subscribed = node_.Subscribe(gz_topic_, &GazeboCameraBackend::on_image, this);
 
         if (!subscribed) {
-            spdlog::error("[GazeboCameraBackend] Failed to subscribe to '{}'", gz_topic_);
+            DRONE_LOG_ERROR("[GazeboCameraBackend] Failed to subscribe to '{}'", gz_topic_);
             return false;
         }
 
         open_ = true;
-        spdlog::info("[GazeboCameraBackend] Subscribed to '{}' (expecting {}x{}@{}Hz)", gz_topic_,
-                     width_, height_, fps_);
+        DRONE_LOG_INFO("[GazeboCameraBackend] Subscribed to '{}' (expecting {}x{}@{}Hz)", gz_topic_,
+                       width_, height_, fps_);
         return true;
     }
 
@@ -98,7 +98,7 @@ public:
         // Wake any thread blocked in capture()
         cv_.notify_all();
 
-        spdlog::info("[GazeboCameraBackend] Closed (topic='{}')", gz_topic_);
+        DRONE_LOG_INFO("[GazeboCameraBackend] Closed (topic='{}')", gz_topic_);
     }
 
     CapturedFrame capture() override {
@@ -109,7 +109,7 @@ public:
         // Wait for a frame (with timeout)
         constexpr auto kTimeout = std::chrono::seconds(2);
         if (!cv_.wait_for(lock, kTimeout, [this] { return frame_ready_ || !open_; })) {
-            spdlog::warn("[GazeboCameraBackend] capture() timed out on '{}'", gz_topic_);
+            DRONE_LOG_WARN("[GazeboCameraBackend] capture() timed out on '{}'", gz_topic_);
             return frame;
         }
 
@@ -150,8 +150,8 @@ private:
         auto     pf     = msg.pixel_format_type();
         uint32_t src_ch = pixel_format_channels(pf);
         if (src_ch == 0) {
-            spdlog::warn("[GazeboCameraBackend] Unsupported pixel format {} on '{}'",
-                         static_cast<int>(pf), gz_topic_);
+            DRONE_LOG_WARN("[GazeboCameraBackend] Unsupported pixel format {} on '{}'",
+                           static_cast<int>(pf), gz_topic_);
             return;
         }
 
@@ -161,8 +161,8 @@ private:
         // Verify data size
         size_t expected_size = static_cast<size_t>(msg_w) * msg_h * src_ch;
         if (msg.data().size() < expected_size) {
-            spdlog::warn("[GazeboCameraBackend] Data size mismatch: got {} expected {} on '{}'",
-                         msg.data().size(), expected_size, gz_topic_);
+            DRONE_LOG_WARN("[GazeboCameraBackend] Data size mismatch: got {} expected {} on '{}'",
+                           msg.data().size(), expected_size, gz_topic_);
             return;
         }
 

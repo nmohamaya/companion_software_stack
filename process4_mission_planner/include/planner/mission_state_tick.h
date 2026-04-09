@@ -15,13 +15,12 @@
 #include "planner/mission_fsm.h"
 #include "planner/static_obstacle_layer.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/scoped_timer.h"
 
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -135,12 +134,12 @@ private:
         auto now_arm = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(now_arm - last_arm_time_).count() >=
             3) {
-            spdlog::info("[Planner] Sending ARM command");
+            DRONE_LOG_INFO("[Planner] Sending ARM command");
             send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
             last_arm_time_ = now_arm;
         }
         if (fc_state.armed) {
-            spdlog::info("[Planner] Vehicle armed — initiating takeoff");
+            DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
             fsm.on_takeoff();
             takeoff_sent_ = false;
         }
@@ -158,36 +157,36 @@ private:
         home_y_        = static_cast<float>(pose.translation[1]);
         home_z_        = 0.0f;
         home_recorded_ = true;
-        spdlog::info("[Planner] Home position recorded: ({:.1f}, {:.1f}, {:.1f})", home_x_, home_y_,
-                     home_z_);
+        DRONE_LOG_INFO("[Planner] Home position recorded: ({:.1f}, {:.1f}, {:.1f})", home_x_,
+                       home_y_, home_z_);
     }
 
     // ── TAKEOFF: send TAKEOFF, wait for altitude + home ─────────
     void tick_takeoff(MissionFSM&                fsm, const drone::ipc::Pose& /*pose*/,
                       const drone::ipc::FCState& fc_state, const FCSendFn& send_fc) {
         if (!takeoff_sent_) {
-            spdlog::info("[Planner] Sending TAKEOFF to {:.1f}m", config_.takeoff_alt_m);
+            DRONE_LOG_INFO("[Planner] Sending TAKEOFF to {:.1f}m", config_.takeoff_alt_m);
             send_fc(drone::ipc::FCCommandType::TAKEOFF, config_.takeoff_alt_m);
             takeoff_sent_ = true;
         }
         if (fc_state.rel_alt >= config_.takeoff_alt_m * 0.9f) {
             if (!home_recorded_) {
                 if (!home_warn_logged_) {
-                    spdlog::warn("[Planner] Takeoff altitude reached but no valid pose "
-                                 "received yet — deferring NAVIGATE until home is recorded");
+                    DRONE_LOG_WARN("[Planner] Takeoff altitude reached but no valid pose "
+                                   "received yet — deferring NAVIGATE until home is recorded");
                     home_warn_logged_ = true;
                 }
                 return;
             }
             if (config_.survey_duration_s > 0.0f) {
-                spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — SURVEY for {:.0f}s",
-                             fc_state.rel_alt, config_.survey_duration_s);
+                DRONE_LOG_INFO("[Planner] Takeoff complete (alt={:.1f}m) — SURVEY for {:.0f}s",
+                               fc_state.rel_alt, config_.survey_duration_s);
                 fsm.on_survey();
             } else {
-                spdlog::info("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE",
-                             fc_state.rel_alt);
+                DRONE_LOG_INFO("[Planner] Takeoff complete (alt={:.1f}m) — NAVIGATE",
+                               fc_state.rel_alt);
                 fsm.on_navigate();
-                spdlog::info("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
+                DRONE_LOG_INFO("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
             }
         }
     }
@@ -205,8 +204,8 @@ private:
             double qy = pose.quaternion[2], qz = pose.quaternion[3];
             survey_start_yaw_ = static_cast<float>(
                 std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
-            spdlog::info("[Survey] Start yaw={:.2f} rad, rotating at {:.2f} rad/s for {:.0f}s",
-                         survey_start_yaw_, config_.survey_yaw_rate, config_.survey_duration_s);
+            DRONE_LOG_INFO("[Survey] Start yaw={:.2f} rad, rotating at {:.2f} rad/s for {:.0f}s",
+                           survey_start_yaw_, config_.survey_yaw_rate, config_.survey_duration_s);
         }
 
         // Feed detections into the occupancy grid during survey
@@ -257,20 +256,20 @@ private:
         if (survey_log_tick_++ % 30 == 0) {
             int promoted = base ? base->grid().promoted_count() : 0;
             int static_n = base ? static_cast<int>(base->grid().static_count()) : 0;
-            spdlog::info("[Survey] {:.0f}/{:.0f}s — {} static cells ({} promoted), yaw_rate={:.2f}",
-                         elapsed_s, config_.survey_duration_s, static_n, promoted,
-                         config_.survey_yaw_rate);
+            DRONE_LOG_INFO(
+                "[Survey] {:.0f}/{:.0f}s — {} static cells ({} promoted), yaw_rate={:.2f}",
+                elapsed_s, config_.survey_duration_s, static_n, promoted, config_.survey_yaw_rate);
         }
 
         // Survey complete — transition to NAVIGATE
         if (elapsed_s >= config_.survey_duration_s) {
             int promoted = base ? base->grid().promoted_count() : 0;
             int static_n = base ? static_cast<int>(base->grid().static_count()) : 0;
-            spdlog::info("[Planner] Survey complete ({:.0f}s) — {} static obstacles ({} promoted)"
-                         " — NAVIGATE",
-                         elapsed_s, static_n, promoted);
+            DRONE_LOG_INFO("[Planner] Survey complete ({:.0f}s) — {} static obstacles ({} promoted)"
+                           " — NAVIGATE",
+                           elapsed_s, static_n, promoted);
             fsm.on_navigate();
-            spdlog::info("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
+            DRONE_LOG_INFO("[FSM] EXECUTING — navigating {} waypoints", fsm.total_waypoints());
         }
     }
 
@@ -289,8 +288,8 @@ private:
         // transition to IDLE rather than COLLISION_RECOVERY. Recovery is only
         // useful when triggered by proximity detection while still armed.
         if (flight_state_.nav_was_armed && !fc_state.armed) {
-            spdlog::warn("[Planner] Vehicle unexpectedly disarmed during navigation — "
-                         "cannot recover without motors, transitioning to IDLE");
+            DRONE_LOG_WARN("[Planner] Vehicle unexpectedly disarmed during navigation — "
+                           "cannot recover without motors, transitioning to IDLE");
             publish_stop_trajectory(traj_pub, correlation_id);
             flight_state_.nav_was_armed = fc_state.armed;
             fsm.on_landed();
@@ -306,7 +305,7 @@ private:
             bool        collision = obstacle_layer.check_collision(px, py, pz,
                                                                    std::chrono::steady_clock::now());
             if (collision && config_.collision_recovery_enabled) {
-                spdlog::info("[Planner] Proximity collision — entering COLLISION_RECOVERY");
+                DRONE_LOG_INFO("[Planner] Proximity collision — entering COLLISION_RECOVERY");
                 publish_stop_trajectory(traj_pub, correlation_id);
                 recovery_started_ = false;
                 fsm.on_collision_recovery();
@@ -344,8 +343,9 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
-            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by spdlog runtime level
-            if (spdlog::should_log(spdlog::level::debug) && debug_tick_++ % 10 == 0) {
+            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level
+            if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&
+                debug_tick_++ % 10 == 0) {
                 const float dpx        = static_cast<float>(pose.translation[0]);
                 const float dpy        = static_cast<float>(pose.translation[1]);
                 const float dpz        = static_cast<float>(pose.translation[2]);
@@ -361,14 +361,14 @@ private:
                 int         stat = base ? static_cast<int>(base->grid().static_count()) : -1;
                 int         prom = base ? base->grid().promoted_count() : -1;
                 bool        fb   = grid_planner && grid_planner->using_direct_fallback();
-                spdlog::debug("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
-                              " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
-                              " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
-                              " grid: occ={} static={} promoted={} fallback={}",
-                              dpx, dpy, dpz, fsm.current_wp_index() + 1, fsm.total_waypoints(),
-                              wp->x, wp->y, wp->z, dist_to_wp, planned.velocity_x,
-                              planned.velocity_y, planned.velocity_z, traj.velocity_x,
-                              traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb);
+                DRONE_LOG_DEBUG("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
+                                " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
+                                " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
+                                " grid: occ={} static={} promoted={} fallback={}",
+                                dpx, dpy, dpz, fsm.current_wp_index() + 1, fsm.total_waypoints(),
+                                wp->x, wp->y, wp->z, dist_to_wp, planned.velocity_x,
+                                planned.velocity_y, planned.velocity_z, traj.velocity_x,
+                                traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb);
             }
 
             traj_pub.publish(traj);
@@ -377,8 +377,8 @@ private:
             const float py = static_cast<float>(pose.translation[1]);
             const float pz = static_cast<float>(pose.translation[2]);
             if (fsm.waypoint_reached(px, py, pz, *wp) || fsm.waypoint_overshot(px, py, pz)) {
-                spdlog::info("[Planner] Waypoint {} {}!", fsm.current_wp_index() + 1,
-                             fsm.waypoint_overshot(px, py, pz) ? "overshot" : "reached");
+                DRONE_LOG_INFO("[Planner] Waypoint {} {}!", fsm.current_wp_index() + 1,
+                               fsm.waypoint_overshot(px, py, pz) ? "overshot" : "reached");
 
                 if (wp->trigger_payload) {
                     drone::ipc::PayloadCommand pay_cmd{};
@@ -392,7 +392,7 @@ private:
                 }
 
                 if (!fsm.advance_waypoint()) {
-                    spdlog::info("[Planner] Mission complete — RTL");
+                    DRONE_LOG_INFO("[Planner] Mission complete — RTL");
                     send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
                     publish_stop_trajectory(traj_pub, correlation_id);
                     flight_state_.rtl_start_time = std::chrono::steady_clock::now();
@@ -409,8 +409,8 @@ private:
                                  drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& traj_pub) {
         // Safety: abort recovery if disarmed or FC disconnected
         if (!fc_state.armed || !fc_state.connected) {
-            spdlog::warn("[Recovery] FC {} during recovery — aborting to IDLE",
-                         !fc_state.armed ? "disarmed" : "disconnected");
+            DRONE_LOG_WARN("[Recovery] FC {} during recovery — aborting to IDLE",
+                           !fc_state.armed ? "disarmed" : "disconnected");
             recovery_started_ = false;
             fsm.on_landed();
             return;
@@ -423,9 +423,9 @@ private:
             recovery_target_alt_ = static_cast<float>(pose.translation[2]) +
                                    config_.collision_climb_delta_m;
             recovery_started_ = true;
-            spdlog::info("[Recovery] Phase HOVER — holding position for {:.1f}s, "
-                         "then climbing to {:.1f}m",
-                         config_.collision_hover_duration_s, recovery_target_alt_);
+            DRONE_LOG_INFO("[Recovery] Phase HOVER — holding position for {:.1f}s, "
+                           "then climbing to {:.1f}m",
+                           config_.collision_hover_duration_s, recovery_target_alt_);
         }
 
         const float px        = static_cast<float>(pose.translation[0]);
@@ -458,8 +458,8 @@ private:
 
                 if (elapsed_s >= config_.collision_hover_duration_s) {
                     recovery_phase_ = RecoveryPhase::CLIMB;
-                    spdlog::info("[Recovery] Phase CLIMB — ascending {:.1f}m to {:.1f}m",
-                                 config_.collision_climb_delta_m, recovery_target_alt_);
+                    DRONE_LOG_INFO("[Recovery] Phase CLIMB — ascending {:.1f}m to {:.1f}m",
+                                   config_.collision_climb_delta_m, recovery_target_alt_);
                 }
                 break;
             }
@@ -482,9 +482,9 @@ private:
                 constexpr float kAltTolerance = 0.5f;
                 if (pz >= recovery_target_alt_ - kAltTolerance) {
                     recovery_phase_ = RecoveryPhase::REPLAN;
-                    spdlog::info("[Recovery] Phase REPLAN — altitude {:.1f}m reached, "
-                                 "resuming navigation",
-                                 pz);
+                    DRONE_LOG_INFO("[Recovery] Phase REPLAN — altitude {:.1f}m reached, "
+                                   "resuming navigation",
+                                   pz);
                 }
                 break;
             }
@@ -493,7 +493,7 @@ private:
                 if (grid_planner) {
                     grid_planner->invalidate_path();
                 }
-                spdlog::info("[Recovery] Complete — transitioning to NAVIGATE");
+                DRONE_LOG_INFO("[Recovery] Complete — transitioning to NAVIGATE");
                 recovery_started_ = false;
                 fsm.on_recovery_complete();
                 break;
@@ -505,7 +505,7 @@ private:
     void tick_rtl(MissionFSM& fsm, const drone::ipc::Pose& pose,
                   const drone::ipc::FCState& fc_state, const FCSendFn& send_fc) {
         if (flight_state_.nav_was_armed && !fc_state.armed) {
-            spdlog::warn("[Planner] Vehicle disarmed during RTL — mission IDLE");
+            DRONE_LOG_WARN("[Planner] Vehicle disarmed during RTL — mission IDLE");
             fsm.on_landed();
             return;
         }
@@ -519,8 +519,8 @@ private:
             float dy         = static_cast<float>(pose.translation[1]) - home_y_;
             float horiz_dist = std::sqrt(dx * dx + dy * dy);
             if (rtl_elapsed >= config_.rtl_min_dwell_s && horiz_dist < config_.rtl_acceptance_m) {
-                spdlog::info("[Planner] Near home ({:.1f}m, {}s in RTL) — sending LAND", horiz_dist,
-                             rtl_elapsed);
+                DRONE_LOG_INFO("[Planner] Near home ({:.1f}m, {}s in RTL) — sending LAND",
+                               horiz_dist, rtl_elapsed);
                 send_fc(drone::ipc::FCCommandType::LAND, 0.0f);
                 flight_state_.land_sent = true;
                 fsm.on_land();
@@ -531,7 +531,7 @@ private:
     // ── LAND: wait for touchdown ──────────────────────────────
     void tick_land(MissionFSM& fsm, const drone::ipc::FCState& fc_state) {
         if (fc_state.rel_alt < config_.landed_alt_m && flight_state_.land_sent) {
-            spdlog::info("[Planner] Landed (alt={:.2f}m) — mission IDLE", fc_state.rel_alt);
+            DRONE_LOG_INFO("[Planner] Landed (alt={:.2f}m) — mission IDLE", fc_state.rel_alt);
             fsm.on_landed();
             fault_exec_reset_ = true;
         }

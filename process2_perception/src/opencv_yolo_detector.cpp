@@ -3,10 +3,10 @@
 
 #include "perception/opencv_yolo_detector.h"
 
+#include "util/ilogger.h"
+
 #include <atomic>
 #include <chrono>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::perception {
 
@@ -39,16 +39,16 @@ void OpenCvYoloDetector::load_model(const std::string& model_path) {
         net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         model_loaded_ = true;
 
-        spdlog::info("[OpenCvYoloDetector] Model loaded: {} "
-                     "(conf={:.2f}, nms={:.2f}, input={})",
-                     model_path, confidence_threshold_, nms_threshold_, input_size_);
+        DRONE_LOG_INFO("[OpenCvYoloDetector] Model loaded: {} "
+                       "(conf={:.2f}, nms={:.2f}, input={})",
+                       model_path, confidence_threshold_, nms_threshold_, input_size_);
     } catch (const cv::Exception& e) {
-        spdlog::error("[OpenCvYoloDetector] Failed to load model '{}': {}", model_path, e.what());
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] Failed to load model '{}': {}", model_path, e.what());
         model_loaded_ = false;
     }
 #else
     (void)model_path;
-    spdlog::warn("[OpenCvYoloDetector] OpenCV not available — model not loaded");
+    DRONE_LOG_WARN("[OpenCvYoloDetector] OpenCV not available — model not loaded");
     model_loaded_ = false;
 #endif
 }
@@ -100,11 +100,11 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
     try {
         net_.forward(outputs, net_.getUnconnectedOutLayersNames());
     } catch (const cv::Exception& e) {
-        spdlog::error("[OpenCvYoloDetector] forward() failed: {}", e.what());
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] forward() failed: {}", e.what());
         return {};
     }
     if (outputs.empty()) {
-        spdlog::error("[OpenCvYoloDetector] forward() produced no outputs");
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] forward() produced no outputs");
         return {};
     }
 
@@ -192,9 +192,9 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
 
     static std::atomic<uint64_t> call_count{0};
     if (++call_count % 30 == 0) {
-        spdlog::info("[OpenCvYoloDetector] {} detections in {}ms "
-                     "(frame {}x{}, {} proposals after NMS)",
-                     detections.size(), ms, width, height, nms_indices.size());
+        DRONE_LOG_INFO("[OpenCvYoloDetector] {} detections in {}ms "
+                       "(frame {}x{}, {} proposals after NMS)",
+                       detections.size(), ms, width, height, nms_indices.size());
     }
 
     return detections;

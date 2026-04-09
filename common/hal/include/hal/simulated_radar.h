@@ -6,12 +6,11 @@
 
 #include "hal/iradar.h"
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
 #include <random>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -31,7 +30,7 @@ public:
 
     bool init() override {
         active_ = true;
-        spdlog::info(
+        DRONE_LOG_INFO(
             "[SimulatedRadar] Initialised (max_range={:.1f}m, targets={}, FoV={:.1f}x{:.1f} "
             "rad)",
             max_range_m_, num_targets_, fov_azimuth_rad_, fov_elevation_rad_);

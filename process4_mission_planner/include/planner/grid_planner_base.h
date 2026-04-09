@@ -14,6 +14,7 @@
 #include "planner/ipath_planner.h"
 #include "planner/mission_fsm.h"
 #include "planner/occupancy_grid_3d.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <array>
@@ -21,8 +22,6 @@
 #include <cmath>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -120,7 +119,7 @@ public:
         cached_path_.clear();
         path_index_ = 0;
         snap_valid_ = false;
-        spdlog::info("[Planner] Path cache invalidated — forcing full replan");
+        DRONE_LOG_INFO("[Planner] Path cache invalidated — forcing full replan");
     }
 
     /// Get the current obstacle grid (for diagnostics/testing).
@@ -157,8 +156,8 @@ public:
             GridCell pre_snap = goal;
             goal              = snap_goal(start, goal, target);
             if (goal != pre_snap) {
-                spdlog::info("[PlanBase] Goal snapped: ({},{},{}) → ({},{},{})", pre_snap.x,
-                             pre_snap.y, pre_snap.z, goal.x, goal.y, goal.z);
+                DRONE_LOG_INFO("[PlanBase] Goal snapped: ({},{},{}) → ({},{},{})", pre_snap.x,
+                               pre_snap.y, pre_snap.z, goal.x, goal.y, goal.z);
             }
 
             // ── Delegate to subclass search ──────────────────
@@ -180,18 +179,18 @@ public:
                 if (path_mag > 0.01f && goal_mag > 0.01f) {
                     dot = (path_dx * goal_dx + path_dy * goal_dy) / (path_mag * goal_mag);
                 }
-                spdlog::info("[PlanBase] Replan: path_dir=({:.1f},{:.1f}) goal_dir=({:.1f},{:.1f}) "
-                             "dot={:.2f} path_pts={} search={:.0f}ms",
-                             path_dx, path_dy, goal_dx, goal_dy, dot, search_path.size(),
-                             replan_ms);
+                DRONE_LOG_INFO(
+                    "[PlanBase] Replan: path_dir=({:.1f},{:.1f}) goal_dir=({:.1f},{:.1f}) "
+                    "dot={:.2f} path_pts={} search={:.0f}ms",
+                    path_dx, path_dy, goal_dx, goal_dy, dot, search_path.size(), replan_ms);
 
                 // Reject backward paths — when the first step points away from
                 // the goal (dot < 0) and we have a usable cached path, keep the
                 // old path rather than flying in the wrong direction (Issue #237).
                 if (dot < 0.0f && !cached_path_.empty()) {
-                    spdlog::warn("[PlanBase] Rejecting backward path (dot={:.2f}) — "
-                                 "keeping cached path ({} pts, idx {})",
-                                 dot, cached_path_.size(), path_index_);
+                    DRONE_LOG_WARN("[PlanBase] Rejecting backward path (dot={:.2f}) — "
+                                   "keeping cached path ({} pts, idx {})",
+                                   dot, cached_path_.size(), path_index_);
                     last_plan_time_ = now;  // wait for next replan cycle
                 } else {
                     cached_path_     = std::move(search_path);
@@ -205,16 +204,16 @@ public:
                     // a direct line which flies through obstacles.
                     direct_fallback_ = false;
                     last_plan_time_  = now;  // avoid hammering failed replans
-                    spdlog::warn("[PlanBase] Search failed — keeping last good path "
-                                 "({} pts, idx {}) (took {:.0f}ms)",
-                                 cached_path_.size(), path_index_, replan_ms);
+                    DRONE_LOG_WARN("[PlanBase] Search failed — keeping last good path "
+                                   "({} pts, idx {}) (took {:.0f}ms)",
+                                   cached_path_.size(), path_index_, replan_ms);
                 } else {
                     // No cached path at all — hover in place (zero velocity)
                     // rather than flying a direct line through obstacles.
                     direct_fallback_ = true;
-                    spdlog::warn("[PlanBase] Search failed, no cached path — "
-                                 "hovering in place (took {:.0f}ms)",
-                                 replan_ms);
+                    DRONE_LOG_WARN("[PlanBase] Search failed, no cached path — "
+                                   "hovering in place (took {:.0f}ms)",
+                                   replan_ms);
                 }
             }
         }
@@ -240,9 +239,9 @@ public:
             cmd.target_yaw = target.yaw;
 
             if (diag_tick_++ % 50 == 0) {
-                spdlog::warn("[PlanBase] HOVERING — no valid path to "
-                             "({:.1f},{:.1f},{:.1f}), vel=({:.2f},{:.2f},{:.2f})",
-                             target.x, target.y, target.z, smooth_vx_, smooth_vy_, smooth_vz_);
+                DRONE_LOG_WARN("[PlanBase] HOVERING — no valid path to "
+                               "({:.1f},{:.1f},{:.1f}), vel=({:.2f},{:.2f},{:.2f})",
+                               target.x, target.y, target.z, smooth_vx_, smooth_vy_, smooth_vz_);
             }
             return cmd;
         }
@@ -355,12 +354,12 @@ public:
 
         // Periodic diagnostic: velocity, path state, position
         if (diag_tick_++ % 50 == 0) {
-            spdlog::info("[PlanBase] pos=({:.1f},{:.1f},{:.1f}) vel=({:.2f},{:.2f},{:.2f}) "
-                         "raw=({:.2f},{:.2f},{:.2f}) path={}/{} fallback={} "
-                         "goal_xy=({:.1f},{:.1f})",
-                         px, py, pz, smooth_vx_, smooth_vy_, smooth_vz_, raw_vx, raw_vy, raw_vz,
-                         path_index_, cached_path_.size(), direct_fallback_ ? 1 : 0, goal_x,
-                         goal_y);
+            DRONE_LOG_INFO("[PlanBase] pos=({:.1f},{:.1f},{:.1f}) vel=({:.2f},{:.2f},{:.2f}) "
+                           "raw=({:.2f},{:.2f},{:.2f}) path={}/{} fallback={} "
+                           "goal_xy=({:.1f},{:.1f})",
+                           px, py, pz, smooth_vx_, smooth_vy_, smooth_vz_, raw_vx, raw_vy, raw_vz,
+                           path_index_, cached_path_.size(), direct_fallback_ ? 1 : 0, goal_x,
+                           goal_y);
         }
 
         return cmd;
@@ -447,9 +446,9 @@ private:
                     const float time_to_obs_s   = approach_dist_m / cruise_spd;
                     const float time_to_deflect = snap_dist_m / 3.0f;
                     if (time_to_obs_s - time_to_deflect < 0.5f) {
-                        spdlog::warn("[Planner] Snap {:.1f} m lateral but only {:.1f}s to "
-                                     "obstacle (need {:.1f}s) — tight margin",
-                                     snap_dist_m, time_to_obs_s, time_to_deflect);
+                        DRONE_LOG_WARN("[Planner] Snap {:.1f} m lateral but only {:.1f}s to "
+                                       "obstacle (need {:.1f}s) — tight margin",
+                                       snap_dist_m, time_to_obs_s, time_to_deflect);
                     }
                 }
             }
@@ -501,10 +500,10 @@ private:
                     std::sqrt(static_cast<float>((goal.x - orig_goal.x) * (goal.x - orig_goal.x) +
                                                  (goal.y - orig_goal.y) * (goal.y - orig_goal.y))) *
                     grid_.resolution();
-                spdlog::info("[Planner] WP({:.1f},{:.1f},{:.1f}) occupied — snapped lateral"
-                             " to ({:.1f},{:.1f},{:.1f}) offset={:.2f} m",
-                             target.x, target.y, target.z, snapped_world_x_, snapped_world_y_,
-                             snapped_world_z_, snap_dist);
+                DRONE_LOG_INFO("[Planner] WP({:.1f},{:.1f},{:.1f}) occupied — snapped lateral"
+                               " to ({:.1f},{:.1f},{:.1f}) offset={:.2f} m",
+                               target.x, target.y, target.z, snapped_world_x_, snapped_world_y_,
+                               snapped_world_z_, snap_dist);
             }
         } else if (snap_valid_) {
             goal = grid_.world_to_grid(snapped_world_x_, snapped_world_y_, snapped_world_z_);

@@ -15,6 +15,7 @@
 
 
 #include "ipc/zenoh_network_config.h"
+#include "util/ilogger.h"
 
 #include <cstddef>
 #include <memory>
@@ -24,7 +25,6 @@
 #include <string>
 #include <variant>
 
-#include <spdlog/spdlog.h>
 #include <zenoh.hxx>
 
 namespace drone::ipc {
@@ -60,13 +60,14 @@ public:
     void configure(const std::string& config_json = "") {
         std::lock_guard<std::mutex> lock(mutex_);
         if (session_.has_value()) {
-            spdlog::warn("[ZenohSession] configure() called after session "
-                         "already opened — ignoring");
+            DRONE_LOG_WARN("[ZenohSession] configure() called after session "
+                           "already opened — ignoring");
             return;
         }
         config_json_ = config_json;
         configured_  = true;
-        spdlog::info("[ZenohSession] Configured ({})", config_json.empty() ? "defaults" : "custom");
+        DRONE_LOG_INFO("[ZenohSession] Configured ({})",
+                       config_json.empty() ? "defaults" : "custom");
     }
 
     /// Configure network transport before first use.
@@ -76,17 +77,17 @@ public:
     void configure_network(const ZenohNetworkConfig& net_config) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (session_.has_value()) {
-            spdlog::warn("[ZenohSession] configure_network() called after "
-                         "session already opened — ignoring");
+            DRONE_LOG_WARN("[ZenohSession] configure_network() called after "
+                           "session already opened — ignoring");
             return;
         }
         config_json_     = net_config.to_json();
         network_enabled_ = true;
         configured_      = true;
-        spdlog::info("[ZenohSession] Network configured: mode={}, "
-                     "listen_eps={}, connect_eps={}",
-                     net_config.mode, net_config.listen_endpoints.size(),
-                     net_config.connect_endpoints.size());
+        DRONE_LOG_INFO("[ZenohSession] Network configured: mode={}, "
+                       "listen_eps={}, connect_eps={}",
+                       net_config.mode, net_config.listen_endpoints.size(),
+                       net_config.connect_endpoints.size());
     }
 
     /// Configure SHM pool size before first use.
@@ -95,12 +96,12 @@ public:
     void configure_shm(std::size_t pool_bytes) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (shm_provider_) {
-            spdlog::warn("[ZenohSession] configure_shm() called after SHM "
-                         "provider already created — ignoring");
+            DRONE_LOG_WARN("[ZenohSession] configure_shm() called after SHM "
+                           "provider already created — ignoring");
             return;
         }
         shm_pool_bytes_ = pool_bytes;
-        spdlog::info("[ZenohSession] SHM pool configured: {} bytes", pool_bytes);
+        DRONE_LOG_INFO("[ZenohSession] SHM pool configured: {} bytes", pool_bytes);
     }
 
     /// Get the underlying Zenoh session.  Opens lazily on first call.
@@ -164,18 +165,18 @@ private:
             auto config = zenoh::Config::create_default();
             session_.emplace(zenoh::Session::open(std::move(config)));
         }
-        spdlog::info("[ZenohSession] Session opened ({})",
-                     network_enabled_ ? "network-enabled" : "peer mode");
+        DRONE_LOG_INFO("[ZenohSession] Session opened ({})",
+                       network_enabled_ ? "network-enabled" : "peer mode");
     }
 
     void create_shm_provider() {
         try {
             shm_provider_ = std::make_unique<zenoh::PosixShmProvider>(shm_pool_bytes_);
-            spdlog::info("[ZenohSession] SHM provider created "
-                         "(pool={} MB)",
-                         shm_pool_bytes_ / (1024 * 1024));
+            DRONE_LOG_INFO("[ZenohSession] SHM provider created "
+                           "(pool={} MB)",
+                           shm_pool_bytes_ / (1024 * 1024));
         } catch (const std::exception& e) {
-            spdlog::error("[ZenohSession] Failed to create SHM provider: {}", e.what());
+            DRONE_LOG_ERROR("[ZenohSession] Failed to create SHM provider: {}", e.what());
         }
     }
 

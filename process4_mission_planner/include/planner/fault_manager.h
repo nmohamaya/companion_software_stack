@@ -14,14 +14,13 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <string>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -121,16 +120,16 @@ public:
             config_.vio_quality_rtl_threshold = static_cast<uint32_t>(std::clamp(rtl_q, 0, 3));
         }
 
-        spdlog::info("[FaultMgr] Thresholds: pose_stale={}ms, "
-                     "batt_warn={}%, batt_rtl={}%, batt_crit={}%, "
-                     "fc_lost={}ms, fc_rtl={}ms, loiter_esc={}s, "
-                     "vio_loiter_q<={}, vio_rtl_q<={}",
-                     config_.pose_stale_timeout_ns / 1'000'000, config_.battery_warn_percent,
-                     config_.battery_rtl_percent, config_.battery_crit_percent,
-                     config_.fc_link_lost_timeout_ns / 1'000'000,
-                     config_.fc_link_rtl_timeout_ns / 1'000'000,
-                     config_.loiter_escalation_timeout_ns / 1'000'000'000,
-                     config_.vio_quality_loiter_threshold, config_.vio_quality_rtl_threshold);
+        DRONE_LOG_INFO("[FaultMgr] Thresholds: pose_stale={}ms, "
+                       "batt_warn={}%, batt_rtl={}%, batt_crit={}%, "
+                       "fc_lost={}ms, fc_rtl={}ms, loiter_esc={}s, "
+                       "vio_loiter_q<={}, vio_rtl_q<={}",
+                       config_.pose_stale_timeout_ns / 1'000'000, config_.battery_warn_percent,
+                       config_.battery_rtl_percent, config_.battery_crit_percent,
+                       config_.fc_link_lost_timeout_ns / 1'000'000,
+                       config_.fc_link_rtl_timeout_ns / 1'000'000,
+                       config_.loiter_escalation_timeout_ns / 1'000'000'000,
+                       config_.vio_quality_loiter_threshold, config_.vio_quality_rtl_threshold);
     }
 
     /// Construct with explicit config (for unit tests).

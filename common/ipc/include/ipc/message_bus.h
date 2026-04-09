@@ -25,13 +25,12 @@
 #include "ipc/iservice_channel.h"
 #include "ipc/isubscriber.h"
 #include "ipc/zenoh_message_bus.h"
+#include "util/ilogger.h"
 
 #include <memory>
 #include <string>
 #include <type_traits>
 #include <variant>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
