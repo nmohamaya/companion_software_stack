@@ -73,10 +73,11 @@ public:
     /// Default implementation polls in a spin-sleep loop.
     [[nodiscard]] virtual std::optional<ServiceResponse<Resp>> await_response(
         uint64_t correlation_id, std::chrono::milliseconds timeout) {
-        const auto deadline_ns =
-            drone::util::get_clock().now_ns() +
-            static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count());
+        // Clamp negative timeouts to zero to prevent unsigned wraparound
+        const auto timeout_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count();
+        const auto deadline_ns = drone::util::get_clock().now_ns() +
+                                 static_cast<uint64_t>(std::max(int64_t{0}, timeout_ns));
         while (drone::util::get_clock().now_ns() < deadline_ns) {
             if (auto resp = poll_response(correlation_id)) {
                 return resp;

@@ -76,7 +76,7 @@ enum class WireMessageType : uint16_t {
 ///   [5]      flags            — reserved (0)
 ///   [6..7]   msg_type         — WireMessageType enum
 ///   [8..11]  payload_size     — size of payload following this header
-///   [12..19] timestamp_ns     — sender's steady_clock timestamp
+///   [12..19] timestamp_ns     — sender's timestamp via global clock (get_clock())
 ///   [20..23] sequence         — per-topic monotonic counter
 ///   [24..31] correlation_id   — cross-process trace ID (v2, 0 = none)
 struct __attribute__((packed)) WireHeader {
@@ -104,7 +104,7 @@ static_assert(std::is_trivially_copyable_v<WireHeader>, "WireHeader must be triv
 /// @param  msg       The message to serialize.
 /// @param  msg_type  Wire message type identifier.
 /// @param  seq       Sequence number (caller-managed per topic).
-/// @param  ts_ns     Timestamp in nanoseconds (0 = auto from steady_clock).
+/// @param  ts_ns     Timestamp in nanoseconds (0 = auto from get_clock()).
 template<typename T>
 [[nodiscard]] std::vector<uint8_t> wire_serialize(const T& msg, WireMessageType msg_type,
                                                   uint32_t seq = 0, uint64_t ts_ns = 0,

@@ -6,13 +6,16 @@
 // Tests use drone::util::set_clock() to inject MockClock.
 //
 // Implementations:
-//   - SteadyClock  (default, production)  — see steady_clock.h
+//   - SteadyClock  (default, production)  — defined below
 //   - MockClock    (tests, time control)  — see mock_clock.h
 //   - SimClock     (future Gazebo co-sim) — TBD
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace drone::util {
@@ -73,44 +76,57 @@ public:
 };
 
 // ── Global clock accessor ──────────────────────────────────────────
+//
+// Thread safety: get_clock() is hot-path (called on every timestamp
+// read), so it uses an atomic load (acquire).  set_clock() is cold-path
+// (startup / tests) and holds a mutex to protect ownership.
+//
+// SAFETY CONTRACT: set_clock() must only be called during single-threaded
+// startup or in test fixture setup/teardown (before/after worker threads
+// are running).  Calling it while other threads are actively reading the
+// clock is a data race on the pointed-to object's lifetime.
+// See issue #384 for a planned RCU-style fix.
 
 namespace detail {
 
-/// Returns a reference to the global clock pointer.
-/// Default-initializes to SteadyClock on first call.
-/// NOT thread-safe for set_clock() — call set_clock() once at startup
-/// before spawning worker threads.
-inline IClock*& global_clock_ptr() {
-    static SteadyClock default_clock;
-    static IClock*     ptr = &default_clock;
+/// Process-wide default SteadyClock instance.
+inline IClock& default_clock() {
+    static SteadyClock instance;
+    return instance;
+}
+
+/// Mutex protecting ownership transfer (cold-path only).
+inline std::mutex& clock_mutex() {
+    static std::mutex mtx;
+    return mtx;
+}
+
+/// Atomic raw pointer cache for hot-path reads (null = use default).
+inline std::atomic<IClock*>& clock_ptr() {
+    static std::atomic<IClock*> ptr{nullptr};
     return ptr;
 }
 
 }  // namespace detail
 
-/// Get the current global clock.
-/// Thread-safe for reads (after initialization).
-/// Returns SteadyClock by default.
+/// Get the current global clock.  Never returns null.
+/// Hot-path cost: one atomic load (acquire) + one branch.
 /// Named get_clock() to avoid conflict with POSIX clock() from <time.h>.
 [[nodiscard]] inline const IClock& get_clock() {
-    return *detail::global_clock_ptr();
+    auto* p = detail::clock_ptr().load(std::memory_order_acquire);
+    if (p) return *p;
+    return detail::default_clock();
 }
 
 /// Set the global clock.  Call once at startup or in test setup.
-/// NOT thread-safe — must be called before worker threads start,
-/// or inside a test fixture setUp() when no other threads are running.
+/// Thread-safe: serialized by mutex, atomic store visible to all readers.
 ///
 /// @param clk  Pointer to clock instance.  Caller retains ownership
 ///             and must ensure the clock outlives all users.
 ///             Pass nullptr to restore the default SteadyClock.
 inline void set_clock(IClock* clk) {
-    if (clk == nullptr) {
-        // Restore default
-        static SteadyClock default_clock;
-        detail::global_clock_ptr() = &default_clock;
-    } else {
-        detail::global_clock_ptr() = clk;
-    }
+    std::lock_guard<std::mutex> lock(detail::clock_mutex());
+    detail::clock_ptr().store(clk, std::memory_order_release);
 }
 
 }  // namespace drone::util

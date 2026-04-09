@@ -27,7 +27,7 @@ namespace drone::util {
 /// Non-zero default avoids edge cases where code checks "if (timestamp == 0)"
 /// to mean "uninitialized".
 ///
-/// advance_ms() / advance_ns() move time forward.  Time never goes backward.
+/// advance_ms() / advance_ns() move time forward.
 /// sleep_for_ms() advances time by the requested amount (no real blocking).
 ///
 /// Thread safety: now_ns() uses atomic load (acquire).  advance_*() uses
@@ -44,9 +44,9 @@ public:
 
     /// sleep_for_ms on MockClock advances simulated time (no real blocking).
     void sleep_for_ms(uint32_t ms) const override {
-        // const_cast is safe here: the mutable semantic of "advancing time"
-        // is intentional for MockClock — sleep should advance simulated time.
-        const_cast<MockClock*>(this)->advance_ms(ms);
+        // Advancing simulated time is the correct semantic for MockClock sleep.
+        // time_ns_ is mutable to support this const override.
+        time_ns_.fetch_add(static_cast<uint64_t>(ms) * 1'000'000ULL, std::memory_order_acq_rel);
     }
 
     /// Advance time by the given number of nanoseconds.
@@ -59,7 +59,8 @@ public:
     void advance_s(uint32_t s) { advance_ns(static_cast<uint64_t>(s) * 1'000'000'000ULL); }
 
     /// Set time to an absolute nanosecond value.
-    /// Must be >= current time (time never goes backward).
+    /// WARNING: does not enforce monotonicity — caller may set time backward
+    /// (useful for reset() in tests). Production code should only advance.
     void set_ns(uint64_t ns) { time_ns_.store(ns, std::memory_order_release); }
 
     /// Reset to the given time.  For use in test setUp().
@@ -68,24 +69,26 @@ public:
     }
 
 private:
-    std::atomic<uint64_t> time_ns_;
+    mutable std::atomic<uint64_t> time_ns_;
 };
 
-/// RAII guard that installs a MockClock and restores the default on destruction.
+/// RAII guard that installs a MockClock and restores the previous clock on destruction.
 /// Simplifies test fixtures:
 ///
 ///   TEST(Foo, Bar) {
 ///       drone::util::ScopedMockClock guard;
 ///       guard.mock().advance_ms(500);
 ///       // ... test code using drone::util::get_clock() ...
-///   }  // default SteadyClock restored
+///   }  // previous clock restored
 class ScopedMockClock {
 public:
     explicit ScopedMockClock(uint64_t initial_ns = 1'000'000'000ULL) : mock_(initial_ns) {
+        // Capture previous clock before installing mock.
+        previous_ = detail::clock_ptr().load(std::memory_order_acquire);
         set_clock(&mock_);
     }
 
-    ~ScopedMockClock() { set_clock(nullptr); }
+    ~ScopedMockClock() { set_clock(previous_); }
 
     ScopedMockClock(const ScopedMockClock&)            = delete;
     ScopedMockClock& operator=(const ScopedMockClock&) = delete;
@@ -97,6 +100,7 @@ public:
     [[nodiscard]] const MockClock& mock() const { return mock_; }
 
 private:
+    IClock*   previous_ = nullptr;
     MockClock mock_;
 };
 

@@ -184,8 +184,18 @@ TEST(GlobalClockTest, SetClockToMock) {
     // Restore default
     set_clock(nullptr);
 
-    // Now it should be steady_clock again (large value)
-    EXPECT_GT(get_clock().now_ns(), 1'000'000'000'000ULL);  // Should be way past 1 second
+    // Now it should be steady_clock again — verify with before/after window
+    const auto before_restore =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    const auto restored = get_clock().now_ns();
+    const auto after_restore =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    EXPECT_GE(restored, before_restore);
+    EXPECT_LE(restored, after_restore);
 }
 
 TEST(GlobalClockTest, SetClockNullRestoresDefault) {
@@ -194,8 +204,18 @@ TEST(GlobalClockTest, SetClockNullRestoresDefault) {
     EXPECT_EQ(get_clock().now_ns(), 1ULL);
 
     set_clock(nullptr);
-    // Default SteadyClock — should be a large number (current wall time)
-    EXPECT_GT(get_clock().now_ns(), 1'000'000'000ULL);
+    // Default SteadyClock — verify with before/after window
+    const auto before =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    const auto actual = get_clock().now_ns();
+    const auto after =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    EXPECT_GE(actual, before);
+    EXPECT_LE(actual, after);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -203,8 +223,19 @@ TEST(GlobalClockTest, SetClockNullRestoresDefault) {
 // ════════════════════════════════════════════════════════════════════
 
 TEST(ScopedMockClockTest, InstallsAndRestores) {
-    // Before scope: should be SteadyClock (large value)
-    EXPECT_GT(get_clock().now_ns(), 1'000'000'000'000ULL);
+    // Helper to read steady_clock as uint64_t nanoseconds.
+    auto steady_ns = []() {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
+    };
+
+    // Before scope: should be SteadyClock — verify with window
+    const auto before1 = steady_ns();
+    const auto val1    = get_clock().now_ns();
+    const auto after1  = steady_ns();
+    EXPECT_GE(val1, before1);
+    EXPECT_LE(val1, after1);
 
     {
         ScopedMockClock guard;
@@ -214,8 +245,12 @@ TEST(ScopedMockClockTest, InstallsAndRestores) {
         EXPECT_EQ(get_clock().now_ns(), 1'500'000'000ULL);
     }
 
-    // After scope: restored to SteadyClock
-    EXPECT_GT(get_clock().now_ns(), 1'000'000'000'000ULL);
+    // After scope: restored to SteadyClock — verify with window
+    const auto before2 = steady_ns();
+    const auto val2    = get_clock().now_ns();
+    const auto after2  = steady_ns();
+    EXPECT_GE(val2, before2);
+    EXPECT_LE(val2, after2);
 }
 
 TEST(ScopedMockClockTest, CustomInitialTime) {
@@ -245,7 +280,19 @@ TEST(IClockPolymorphismTest, VirtualDispatch) {
     const IClock& as_steady = steady;
 
     EXPECT_EQ(as_mock.now_ns(), 42ULL);
-    EXPECT_GT(as_steady.now_ns(), 1'000'000'000ULL);
+
+    // Verify SteadyClock via polymorphic ref with before/after window
+    const auto before_steady =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    const auto steady_val = as_steady.now_ns();
+    const auto after_steady =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count());
+    EXPECT_GE(steady_val, before_steady);
+    EXPECT_LE(steady_val, after_steady);
 }
 
 TEST(IClockPolymorphismTest, NowConvenienceMethod) {

@@ -8,7 +8,7 @@
 
 ## Summary
 
-Created the `IClock` abstract interface with `SteadyClock` (production) and `MockClock` (test) implementations, plus a global accessor `drone::util::get_clock()` with `set_clock()` for dependency injection. Migrated all `steady_clock::now()` calls in `common/util/`, `common/ipc/`, and `common/recorder/` to use the new IClock interface. Added 27 unit tests.
+Created the `IClock` abstract interface with `SteadyClock` (production) and `MockClock` (test) implementations, plus a global accessor `drone::util::get_clock()` with `set_clock()` for dependency injection. Migrated all `steady_clock::now()` calls in `common/util/`, `common/ipc/`, and `common/recorder/` to use the new IClock interface. Added 26 unit tests.
 
 ## Changes
 
@@ -17,7 +17,7 @@ Created the `IClock` abstract interface with `SteadyClock` (production) and `Moc
 |------|-------------|
 | `common/util/include/util/iclock.h` | IClock interface, SteadyClock impl, global `get_clock()`/`set_clock()` |
 | `common/util/include/util/mock_clock.h` | MockClock (manually advanceable), ScopedMockClock (RAII guard) |
-| `tests/test_iclock.cpp` | 27 unit tests covering all IClock functionality |
+| `tests/test_iclock.cpp` | 26 unit tests covering all IClock functionality |
 
 ### Modified Files (11 production, 1 build)
 | File | Change |
