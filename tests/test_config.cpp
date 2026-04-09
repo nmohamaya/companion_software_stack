@@ -144,14 +144,17 @@ TEST_F(ConfigTest, BoolValues) {
 TEST_F(ConfigTest, LoadDefaultConfigFile) {
     // Test loading the actual project default config
     drone::Config cfg;
-    // This may or may not succeed depending on CWD, so don't ASSERT
-    bool loaded = cfg.load("config/default.json");
-    if (loaded) {
-        EXPECT_EQ(cfg.get<std::string>("log_level", ""), "info");
-        EXPECT_EQ(cfg.get<int>("video_capture.mission_cam.width", 0), 1920);
-        EXPECT_EQ(cfg.get<int>("perception.tracker.min_hits", 0), 3);
-        EXPECT_EQ(cfg.get<int>("slam.vio_rate_hz", 0), 100);
-    }
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    bool loaded = cfg.load(config_path);
+    ASSERT_TRUE(loaded) << "config/default.json must be loadable at: " << config_path;
+    EXPECT_EQ(cfg.get<std::string>("log_level", ""), "info");
+    EXPECT_EQ(cfg.get<int>("video_capture.mission_cam.width", 0), 1920);
+    EXPECT_EQ(cfg.get<int>("perception.tracker.min_hits", 0), 3);
+    EXPECT_EQ(cfg.get<int>("slam.vio_rate_hz", 0), 100);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -330,8 +333,13 @@ TEST(ConfigKeyRegistryTest, HalSubKeys) {
 
 TEST_F(ConfigTest, ConfigKeysWorkWithDefaultJson) {
     drone::Config cfg;
-    bool          loaded = cfg.load("config/default.json");
-    ASSERT_TRUE(loaded) << "config/default.json must be loadable for key verification";
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    bool loaded = cfg.load(config_path);
+    ASSERT_TRUE(loaded) << "config/default.json must be loadable at: " << config_path;
     // Verify keys resolve the same values as the old string literals
     EXPECT_EQ(cfg.get<int>(drone::cfg_key::video_capture::mission_cam::WIDTH, 0), 1920);
     EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, ""), "zenoh");

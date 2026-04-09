@@ -71,6 +71,9 @@ add_drone_test(test_fusion_engine   test_fusion_engine.cpp
 
 # ── Config system tests ──────────────────────────────────────
 add_drone_test(test_config          test_config.cpp)
+target_compile_definitions(test_config PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
 
 # ── Config validator tests ───────────────────────────────────
 add_drone_test(test_config_validator test_config_validator.cpp)
