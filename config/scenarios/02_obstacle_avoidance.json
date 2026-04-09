@@ -14,7 +14,7 @@
             "overshoot_proximity_factor": 5.0,
             "cruise_speed_mps": 1.5,
             "survey_duration_s": 0,
-            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 0.5},
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 1.0},
             "obstacle_avoider": {"backend": "potential_field_3d"},
             "obstacle_avoidance": {
                 "min_distance_m": 2.0,
@@ -30,10 +30,11 @@
                 "inflation_radius_m": 2.0,
                 "dynamic_obstacle_ttl_s": 1.0,
                 "min_confidence": 0.4,
-                "promotion_hits": 0,
+                "promotion_hits": 8,
                 "min_promotion_depth_confidence": 0.8,
-                "max_static_cells": 0,
-                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=0: disables camera-only hit-count promotion. Radar-confirmed objects can still promote, but HD-map proximity suppression (Issue #389) prevents radar from duplicating cells near pre-mapped obstacles — only genuinely new obstacles promote. max_static_cells=0 (unlimited) is safe with HD-map suppression active."
+                "max_static_cells": 800,
+                "prediction_enabled": false,
+                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=8: filters transient detections (0.4s at 20Hz) before promoting to static. HD-map suppression (Issue #389) prevents duplicating cells near pre-mapped obstacles. max_static_cells=800 safety cap. prediction_enabled=false: camera-depth noise makes velocity extrapolation unreliable (Issue #340), and HD-map already provides obstacle positions."
             },
             "static_obstacles": [
                 {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 5.0, "_color": "RED"},
@@ -47,13 +48,13 @@
                 "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding obstacles"
             },
             "waypoints": [
-                {"x": 0,  "y": 18, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) ~3m east. Clear of inflation."},
-                {"x": 14, "y": 18, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": true,  "_comment": "Fly east — clear corridor. Payload trigger."},
-                {"x": 20, "y": 8,  "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) and BLUE(18,5) nearby."},
-                {"x": 8,  "y": 0,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly west — passes ORANGE(5,3), waypoint 5m clear."},
-                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home."}
+                {"x": -4, "y": 22, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) 10.6m away. Wide margin for promoted cells."},
+                {"x": 14, "y": 22, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": true,  "_comment": "Fly east — clear corridor north of obstacles. Payload trigger."},
+                {"x": 22, "y": 14, "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) 12.6m, BLUE(18,5) 9.8m."},
+                {"x": 14, "y": -4, "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly southwest — ORANGE(5,3) 11.4m, BLUE(18,5) 9.8m."},
+                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home — ORANGE(5,3) 5.8m away, outside promotion zone."}
             ],
-            "_comment_waypoints": "5 waypoints routing near all 4 obstacles. All WPs ≥5m from obstacle centres to avoid inflation-zone blockage."
+            "_comment_waypoints": "5 waypoints routing near all 4 obstacles. All WPs >8m from obstacle centres to account for HD-map footprint (4m) + runtime promoted cells (2-4m). Home WP at origin is 5.8m from ORANGE — acceptable since drone is landing."
         },
         "perception": {
             "detector": {

@@ -539,14 +539,31 @@ _report_grid_peaks() {
     echo "Occupancy Grid Peaks"
 
     local peaks
-    peaks=$(grep -a "\[DIAG\]" "$log" 2>/dev/null | awk -F'[= ]' '
+    # Parse grid data from two possible log formats:
+    #   New: [Grid] ... N dynamic, N static (promoted=N, hd_map=N, ...)
+    #   Old: [DIAG] ... occ=N static=N promoted=N
+    peaks=$(grep -aE "\[Grid\]|\[DIAG\].*occ=" "$log" 2>/dev/null | awk '
     BEGIN { max_occ=0; max_static=0; max_promoted=0 }
     {
+        dyn=0; sta=0; pro=0; occ=0
         for(i=1;i<=NF;i++) {
-            if($i=="occ" && $(i+1)+0>max_occ) max_occ=$(i+1)+0
-            if($i=="static" && $(i+1)+0>max_static) max_static=$(i+1)+0
-            if($i=="promoted" && $(i+1)+0>max_promoted) max_promoted=$(i+1)+0
+            # New [Grid] format: "N dynamic, N static (promoted=N, ...)"
+            if($(i+1)=="dynamic,") dyn=$i+0
+            if($(i+1)=="static")   sta=$i+0
+            # Both formats: key=value fields (strip parens/commas first)
+            gsub(/[(),]/,"",$i)
+            n=split($i,kv,"=")
+            if(n==2) {
+                if(kv[1]=="promoted") pro=kv[2]+0
+                if(kv[1]=="occ")      occ=kv[2]+0
+                if(kv[1]=="static")   sta=kv[2]+0
+            }
         }
+        # New format: occupied = dynamic + static; Old format: occ= already set
+        if(occ==0) occ=dyn+sta
+        if(occ>max_occ) max_occ=occ
+        if(sta>max_static) max_static=sta
+        if(pro>max_promoted) max_promoted=pro
     }
     END { printf "%d|%d|%d\n", max_occ, max_static, max_promoted }
     ' 2>/dev/null || echo "0|0|0")
