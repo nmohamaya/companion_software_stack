@@ -11,6 +11,7 @@
 #include "payload/auto_tracker.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
 #include "util/ilogger.h"
@@ -76,9 +77,10 @@ int main(int argc, char* argv[]) {
 
     // ── Auto-tracking: subscribe to detections + pose ──────
     drone::payload::AutoTrackConfig auto_track_cfg{};
-    auto_track_cfg.enabled = cfg.get<bool>("payload_manager.gimbal.auto_track.enabled", false);
+    auto_track_cfg.enabled =
+        cfg.get<bool>(drone::cfg_key::payload_manager::gimbal::auto_track::ENABLED, false);
     auto_track_cfg.min_confidence =
-        cfg.get<float>("payload_manager.gimbal.auto_track.min_confidence", 0.5f);
+        cfg.get<float>(drone::cfg_key::payload_manager::gimbal::auto_track::MIN_CONFIDENCE, 0.5f);
 
     auto detections_sub =
         bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
@@ -103,7 +105,7 @@ int main(int argc, char* argv[]) {
     // Manual command holdoff — suppress auto-tracking for a configurable duration
     // after the last manual command to avoid fighting the operator.
     const float manual_holdoff_s =
-        cfg.get<float>("payload_manager.gimbal.auto_track.manual_holdoff_s", 2.0f);
+        cfg.get<float>(drone::cfg_key::payload_manager::gimbal::auto_track::MANUAL_HOLDOFF_S, 2.0f);
     auto last_manual_cmd_time = std::chrono::steady_clock::time_point{};
 
     DRONE_LOG_INFO("Payload Manager READY");
@@ -113,7 +115,7 @@ int main(int argc, char* argv[]) {
     uint64_t capture_count = 0;
     uint64_t cmd_count     = 0;
 
-    const int   update_hz     = cfg.get<int>("payload_manager.update_rate_hz", 50);
+    const int   update_hz     = cfg.get<int>(drone::cfg_key::payload_manager::UPDATE_RATE_HZ, 50);
     const int   loop_sleep_ms = std::max(1, update_hz > 0 ? 1000 / update_hz : 20);
     const float dt            = loop_sleep_ms / 1000.0f;
 

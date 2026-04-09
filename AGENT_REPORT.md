@@ -1,55 +1,69 @@
-# Agent Report — Issue #285: ILogger Interface + DRONE_LOG Macros
+# Agent Report — Issue #287: Config Key Registry
 
 ## Summary
 
-Implemented the ILogger abstraction layer (Epic #284, Sub-Epic A, Wave 1) that decouples all logging from spdlog. Created the interface, three implementations (SpdlogLogger, NullLogger, CapturingLogger), global thread-safe accessor, and DRONE_LOG_* convenience macros. Migrated all 69 existing files from direct `spdlog::*` calls to `DRONE_LOG_*` macros.
+Created a centralized config key registry (`config_keys.h`) with `constexpr const char*` constants for every runtime config key, replacing 120+ scattered magic string literals across 17 files. Misspelled keys are now caught at compile time instead of silently falling back to defaults.
 
 ## Changes
 
-### New Files
+### Created
+- **`common/util/include/util/config_keys.h`** — Centralized constexpr config key registry
+  - 120+ keys organized by process/section namespace
+  - Follows the `ipc_types.h` topic names pattern (`drone::cfg_key::` namespace)
+  - Sections: top-level, zenoh, video_capture, perception, slam, mission_planner, comms, payload_manager, system_monitor, watchdog, recorder, hal
 
-| File | Purpose |
+### Modified (17 files)
+| File | Changes |
 |------|---------|
-| `common/util/include/util/ilogger.h` | ILogger interface, SpdlogLogger, global accessor, DRONE_LOG_* macros |
-| `common/util/include/util/null_logger.h` | No-op logger for benchmarking / disabled logging |
-| `common/util/include/util/capturing_logger.h` | Test logger that captures messages for assertions |
-| `common/util/include/util/spdlog_logger.h` | Convenience include header |
-| `tests/test_ilogger.cpp` | Unit tests for ILogger, all implementations, macros, global accessor |
-
-### Modified Files (69 files)
-
-Mechanical replacement of `spdlog::info/warn/error/debug/critical(...)` with `DRONE_LOG_INFO/WARN/ERROR/DEBUG/CRITICAL(...)` across all processes and common libraries:
-
-- **common/hal/** — 11 files (gazebo backends, simulated backends, HAL factory)
-- **common/ipc/** — 10 files (Zenoh session, publisher, subscriber, service client/server, liveliness, network config, message bus factory)
-- **common/util/** — 8 files (config, diagnostic, latency tracker, process graph, rate clamp, realtime, sd_notify, thread watchdog)
-- **process1_video_capture/** — 1 file (main.cpp)
-- **process2_perception/** — 6 files (main, detector factory, fusion engine, UKF, color contour, YOLO)
-- **process3_slam_vio_nav/** — 3 files (main, VIO backend, IMU preintegrator)
-- **process4_mission_planner/** — 12 files (main, FSM, fault manager, geofence, planners, obstacle avoider, occupancy grid, GCS handler, state tick)
-- **process5_comms/** — 3 files (main, GCS link, MAVLink sim)
-- **process6_payload_manager/** — 2 files (main, gimbal controller)
-- **process7_system_monitor/** — 3 files (main, process manager, sys info)
-- **tools/** — 1 file (flight replay)
-- **tests/CMakeLists.txt** — added test_ilogger
+| `process1_video_capture/src/main.cpp` | 6 key replacements (mission_cam, stereo_cam) |
+| `process2_perception/src/main.cpp` | 10 key replacements (detector, tracker, fusion, radar) |
+| `process2_perception/include/perception/color_contour_detector.h` | 10 key replacements |
+| `process2_perception/src/opencv_yolo_detector.cpp` | 4 key replacements |
+| `process3_slam_vio_nav/src/main.cpp` | 17 key replacements (ipc_backend, imu, vio, stereo) |
+| `process4_mission_planner/src/main.cpp` | 50+ key replacements (path_planner, occupancy_grid, geofence, collision_recovery, etc.) |
+| `process4_mission_planner/include/planner/obstacle_avoider_3d.h` | 8 key replacements |
+| `process4_mission_planner/include/planner/static_obstacle_layer.h` | 1 key replacement |
+| `process5_comms/src/main.cpp` | 7 key replacements (mavlink, gcs) |
+| `process6_payload_manager/src/main.cpp` | 4 key replacements (gimbal, auto_track) |
+| `process7_system_monitor/src/main.cpp` | 10 key replacements (thresholds, backend) |
+| `common/hal/include/hal/hal_factory.h` | `.backend` and `.gz_topic` → `hal::BACKEND`, `hal::GZ_TOPIC` |
+| `common/hal/include/hal/gazebo_radar.h` | 11 key replacements (radar params, noise) |
+| `common/hal/include/hal/simulated_radar.h` | 9 key replacements |
+| `common/ipc/include/ipc/message_bus_factory.h` | 3 key replacements (ipc_backend, zenoh) |
+| `common/recorder/include/recorder/flight_recorder.h` | 2 key replacements |
+| `tests/test_config.cpp` | Added 9 config key registry tests |
 
 ## Design Decisions
 
-1. **Single `log(Level, string)` method** — simpler interface than per-level virtuals; macros handle the level dispatch
-2. **Atomic global accessor** — `logger()` uses `std::atomic<ILogger*>` with acquire/release for thread-safe hot-path reads; `set_logger()` holds a mutex to protect the owning `unique_ptr` (cold-path only)
-3. **Level-gated macros** — `DRONE_LOG_*` checks `should_log()` before calling `fmt::format()`, giving zero overhead on disabled levels
-4. **SpdlogLogger as default** — no code changes needed at startup; `LogConfig::init()` works unchanged
-5. **Phase 1 scope** — interface + implementations + migration only; no changes to LogConfig internals or JSON log sink
+1. **Namespace structure** mirrors `config/default.json` hierarchy: `drone::cfg_key::mission_planner::path_planner::BACKEND`
+2. **HAL sub-keys** use a `.prefix` pattern (e.g., `hal::BACKEND = ".backend"`) for dynamic section composition — matches existing HAL factory pattern
+3. **Test-specific config keys** in test files were NOT replaced since they test the Config class itself with synthetic keys, not production config
+4. **Constexpr** enables compile-time detection of typos
 
-## Test Plan
+## Verification
 
-- [ ] `mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" -DALLOW_INSECURE_ZENOH=ON && make -j$(nproc)` — zero warnings
-- [ ] `ctest --test-dir build --output-on-failure -j$(nproc)` — all pass, count >= 1259
-- [ ] `test_ilogger` tests pass (SpdlogLogger, NullLogger, CapturingLogger, global accessor, macros, level filtering)
-- [ ] clang-format clean
+- [x] Build succeeds with `-Werror -Wall -Wextra` (zero warnings)
+- [x] All 120+ production config key string literals replaced
+- [x] Zero remaining raw config strings in process/common code (verified via grep)
+- [x] 9 new tests added for key value correctness and constexpr-ness
+- [ ] Test suite execution (persistent permission issues prevented running ctest/test binaries in this session — build confirms compilation correctness)
 
-## Risks / Review Attention
+## Test Additions
 
-- **Global mutable state** — `set_logger()` / `reset_logger()` mutate a process-wide singleton. Thread-safe via atomic + mutex, but callers should only call at startup or in test fixtures (never mid-flight).
-- **Large mechanical diff** — 69 files changed with `spdlog::*` → `DRONE_LOG_*` replacement. Low risk per file, but review should verify no accidental format string changes.
-- **spdlog still linked** — SpdlogLogger delegates to spdlog; the dependency isn't removed, just abstracted. Full removal is a future phase.
+Added to `tests/test_config.cpp`:
+- `ConfigKeyRegistryTest.TopLevelKeysMatchExpected`
+- `ConfigKeyRegistryTest.VideoCaptureSectionKeys`
+- `ConfigKeyRegistryTest.PerceptionDetectorKeys`
+- `ConfigKeyRegistryTest.SlamKeys`
+- `ConfigKeyRegistryTest.MissionPlannerKeys`
+- `ConfigKeyRegistryTest.CommsKeys`
+- `ConfigKeyRegistryTest.SystemMonitorKeys`
+- `ConfigKeyRegistryTest.HalSubKeys`
+- `ConfigTest.ConfigKeysWorkWithDefaultJson`
+- `ConfigKeyRegistryTest.KeysAreConstexpr`
+
+## Notes for Reviewer
+
+- This is a pure refactor — no behavioral changes. All string constants resolve to the exact same values as the literals they replace.
+- The HAL radar files (`gazebo_radar.h`, `simulated_radar.h`) are technically HAL implementation scope, but were updated since they contain config key string literals that benefit from centralization.
+- clang-format was not explicitly run due to permission issues, but the code follows the project's 100-char column, 4-space indent style.

@@ -25,6 +25,7 @@
 
 #include "hal/iradar.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -56,18 +57,24 @@ public:
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "perception.radar")
     explicit GazeboRadarBackend(const drone::Config& cfg, const std::string& section)
-        : max_range_m_(cfg.get<float>(section + ".max_range_m", 100.0f))
-        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad", 1.047f))
-        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 0.698f))
-        , ground_filter_alt_m_(cfg.get<float>(section + ".ground_filter_alt_m", 0.5f))
-        , false_alarm_rate_(cfg.get<float>(section + ".false_alarm_rate", 0.02f))
-        , scan_topic_(cfg.get<std::string>(section + ".gz_scan_topic", "/radar_lidar/scan"))
-        , odom_topic_(
-              cfg.get<std::string>(section + ".gz_odom_topic", "/model/x500_companion_0/odometry"))
-        , range_noise_(0.0f, cfg.get<float>(section + ".noise.range_std_m", 0.3f))
-        , azimuth_noise_(0.0f, cfg.get<float>(section + ".noise.azimuth_std_rad", 0.026f))
-        , elevation_noise_(0.0f, cfg.get<float>(section + ".noise.elevation_std_rad", 0.026f))
-        , velocity_noise_(0.0f, cfg.get<float>(section + ".noise.velocity_std_mps", 0.1f)) {}
+        : max_range_m_(cfg.get<float>(section + drone::cfg_key::hal::MAX_RANGE_M, 100.0f))
+        , fov_azimuth_rad_(cfg.get<float>(section + drone::cfg_key::hal::FOV_AZIMUTH_RAD, 1.047f))
+        , fov_elevation_rad_(
+              cfg.get<float>(section + drone::cfg_key::hal::FOV_ELEVATION_RAD, 0.698f))
+        , ground_filter_alt_m_(
+              cfg.get<float>(section + drone::cfg_key::hal::GROUND_FILTER_ALT_M, 0.5f))
+        , false_alarm_rate_(cfg.get<float>(section + drone::cfg_key::hal::FALSE_ALARM_RATE, 0.02f))
+        , scan_topic_(cfg.get<std::string>(section + drone::cfg_key::hal::GZ_SCAN_TOPIC,
+                                           "/radar_lidar/scan"))
+        , odom_topic_(cfg.get<std::string>(section + drone::cfg_key::hal::GZ_ODOM_TOPIC,
+                                           "/model/x500_companion_0/odometry"))
+        , range_noise_(0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_RANGE_STD_M, 0.3f))
+        , azimuth_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_AZIMUTH_STD_RAD, 0.026f))
+        , elevation_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_ELEVATION_STD_RAD, 0.026f))
+        , velocity_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_VELOCITY_STD_MPS, 0.1f)) {}
 
     ~GazeboRadarBackend() override { shutdown(); }
 

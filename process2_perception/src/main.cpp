@@ -17,6 +17,7 @@
 #include "perception/ukf_fusion_engine.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
 #include "util/ilogger.h"
@@ -411,12 +412,14 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Create detector from config ────────────────────────────
-    std::string detector_backend = cfg.get<std::string>("perception.detector.backend", "simulated");
-    auto        detector         = create_detector(detector_backend, &cfg);
+    std::string detector_backend =
+        cfg.get<std::string>(drone::cfg_key::perception::detector::BACKEND, "simulated");
+    auto detector = create_detector(detector_backend, &cfg);
     DRONE_LOG_INFO("[Perception] Detector backend: {} ({})", detector_backend, detector->name());
 
     // ── Create tracker from config ────────────────────────────
-    std::string tracker_backend = cfg.get<std::string>("perception.tracker.backend", "bytetrack");
+    std::string tracker_backend = cfg.get<std::string>(drone::cfg_key::perception::tracker::BACKEND,
+                                                       "bytetrack");
     auto        tracker_result  = create_tracker(tracker_backend, &cfg);
     if (!tracker_result.is_ok()) {
         DRONE_LOG_ERROR("[Perception] Failed to create tracker: {}",
@@ -428,29 +431,31 @@ int main(int argc, char* argv[]) {
 
     // ── Create fusion engine from config ────────────────────
     CalibrationData calib;
-    calib.camera_intrinsics         = Eigen::Matrix3f::Identity();
-    calib.camera_intrinsics(0, 0)   = cfg.get<float>("perception.fusion.fx", 500.0f);
-    calib.camera_intrinsics(1, 1)   = cfg.get<float>("perception.fusion.fy", 500.0f);
-    calib.camera_intrinsics(0, 2)   = cfg.get<float>("perception.fusion.cx", 960.0f);
-    calib.camera_intrinsics(1, 2)   = cfg.get<float>("perception.fusion.cy", 540.0f);
-    calib.camera_height_m           = cfg.get<float>("perception.fusion.camera_height_m", 1.5f);
-    calib.assumed_obstacle_height_m = cfg.get<float>("perception.fusion.assumed_obstacle_height_m",
-                                                     3.0f);
-    calib.depth_scale               = cfg.get<float>("perception.fusion.depth_scale", 0.7f);
+    calib.camera_intrinsics       = Eigen::Matrix3f::Identity();
+    calib.camera_intrinsics(0, 0) = cfg.get<float>(drone::cfg_key::perception::fusion::FX, 500.0f);
+    calib.camera_intrinsics(1, 1) = cfg.get<float>(drone::cfg_key::perception::fusion::FY, 500.0f);
+    calib.camera_intrinsics(0, 2) = cfg.get<float>(drone::cfg_key::perception::fusion::CX, 960.0f);
+    calib.camera_intrinsics(1, 2) = cfg.get<float>(drone::cfg_key::perception::fusion::CY, 540.0f);
+    calib.camera_height_m = cfg.get<float>(drone::cfg_key::perception::fusion::CAMERA_HEIGHT_M,
+                                           1.5f);
+    calib.assumed_obstacle_height_m =
+        cfg.get<float>(drone::cfg_key::perception::fusion::ASSUMED_OBSTACLE_HEIGHT_M, 3.0f);
+    calib.depth_scale = cfg.get<float>(drone::cfg_key::perception::fusion::DEPTH_SCALE, 0.7f);
 
-    std::string fusion_backend = cfg.get<std::string>("perception.fusion.backend", "camera_only");
+    std::string fusion_backend = cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND,
+                                                      "camera_only");
     auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);
     DRONE_LOG_INFO("[Perception] Fusion   backend: {} ({})", fusion_backend, fusion_engine->name());
 
     // ── Create radar HAL + publisher (optional) ────────────
-    bool radar_enabled = cfg.get<bool>("perception.radar.enabled", false);
+    bool radar_enabled = cfg.get<bool>(drone::cfg_key::perception::radar::ENABLED, false);
     std::unique_ptr<drone::hal::IRadar>                                     radar;
     std::unique_ptr<drone::ipc::IPublisher<drone::ipc::RadarDetectionList>> radar_pub;
-    int radar_update_rate_hz = cfg.get<int>("perception.radar.update_rate_hz", 20);
+    int radar_update_rate_hz = cfg.get<int>(drone::cfg_key::perception::radar::UPDATE_RATE_HZ, 20);
 
     if (radar_enabled) {
         try {
-            radar = drone::hal::create_radar(cfg, "perception.radar");
+            radar = drone::hal::create_radar(cfg, drone::cfg_key::perception::radar::SECTION);
             if (!radar->init()) {
                 DRONE_LOG_ERROR("[Radar] HAL init() failed — radar disabled");
                 radar.reset();
@@ -486,7 +491,8 @@ int main(int argc, char* argv[]) {
     auto radar_sub =
         bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
 
-    const int   fusion_rate_hz = std::clamp(cfg.get<int>("perception.fusion.rate_hz", 30), 1, 100);
+    const int fusion_rate_hz =
+        std::clamp(cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
                          std::ref(*fusion_engine), fusion_rate_hz);

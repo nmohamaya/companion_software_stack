@@ -22,6 +22,7 @@
 #include "slam/vio_types.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
 #include "util/ilogger.h"
@@ -340,7 +341,7 @@ int main(int argc, char* argv[]) {
     // With Zenoh, is_connected() only becomes true after the first sample
     // arrives; we cannot use it as a startup gate.  Log a warning and continue —
     // data will arrive once video_capture starts publishing.
-    const auto ipc_backend = cfg.get<std::string>("ipc_backend", "zenoh");
+    const auto ipc_backend = cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, "zenoh");
     if (!stereo_sub->is_connected()) {
         if (ipc_backend == "shm") {
             // Should never happen — shm backend was removed, factory falls back
@@ -365,11 +366,13 @@ int main(int argc, char* argv[]) {
     ImuRingBuffer imu_ring_buffer(2048);
 
     // ── Rate clamping (safety: prevent runaway loops or undersampling) ──
-    const int imu_rate = drone::util::clamp_imu_rate(cfg.get<int>("slam.imu_rate_hz", 400));
-    const int vio_rate = drone::util::clamp_vio_rate(cfg.get<int>("slam.vio_rate_hz", 100));
+    const int imu_rate =
+        drone::util::clamp_imu_rate(cfg.get<int>(drone::cfg_key::slam::IMU_RATE_HZ, 400));
+    const int vio_rate =
+        drone::util::clamp_vio_rate(cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 100));
 
     // Create IMU via HAL factory
-    auto imu = drone::hal::create_imu_source(cfg, "slam.imu");
+    auto imu = drone::hal::create_imu_source(cfg, drone::cfg_key::slam::imu::SECTION);
     if (!imu->init(imu_rate)) {
         DRONE_LOG_ERROR("Failed to initialise IMU source — check config");
         return 1;
@@ -377,25 +380,30 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("IMU source: {} at {} Hz", imu->name(), imu_rate);
 
     // Create VIO backend via factory
-    auto              vio_backend_name = cfg.get<std::string>("slam.vio.backend", "simulated");
-    auto              vio_gz_topic     = cfg.get<std::string>("slam.vio.gz_topic",
-                                                              "/model/x500_companion_0/odometry");
+    auto vio_backend_name = cfg.get<std::string>(drone::cfg_key::slam::vio::BACKEND, "simulated");
+    auto vio_gz_topic     = cfg.get<std::string>(drone::cfg_key::slam::vio::GZ_TOPIC,
+                                                 "/model/x500_companion_0/odometry");
     StereoCalibration calib;
-    calib.fx       = cfg.get<double>("slam.stereo.fx", 350.0);
-    calib.fy       = cfg.get<double>("slam.stereo.fy", 350.0);
-    calib.cx       = cfg.get<double>("slam.stereo.cx", 320.0);
-    calib.cy       = cfg.get<double>("slam.stereo.cy", 240.0);
-    calib.baseline = cfg.get<double>("slam.stereo.baseline", 0.12);
+    calib.fx       = cfg.get<double>(drone::cfg_key::slam::stereo::FX, 350.0);
+    calib.fy       = cfg.get<double>(drone::cfg_key::slam::stereo::FY, 350.0);
+    calib.cx       = cfg.get<double>(drone::cfg_key::slam::stereo::CX, 320.0);
+    calib.cy       = cfg.get<double>(drone::cfg_key::slam::stereo::CY, 240.0);
+    calib.baseline = cfg.get<double>(drone::cfg_key::slam::stereo::BASELINE, 0.12);
 
     ImuNoiseParams imu_params;
-    imu_params.gyro_noise_density  = cfg.get<double>("slam.imu.gyro_noise_density", 0.004);
-    imu_params.gyro_random_walk    = cfg.get<double>("slam.imu.gyro_random_walk", 2.2e-5);
-    imu_params.accel_noise_density = cfg.get<double>("slam.imu.accel_noise_density", 0.012);
-    imu_params.accel_random_walk   = cfg.get<double>("slam.imu.accel_random_walk", 8.0e-5);
+    imu_params.gyro_noise_density  = cfg.get<double>(drone::cfg_key::slam::imu::GYRO_NOISE_DENSITY,
+                                                     0.004);
+    imu_params.gyro_random_walk    = cfg.get<double>(drone::cfg_key::slam::imu::GYRO_RANDOM_WALK,
+                                                     2.2e-5);
+    imu_params.accel_noise_density = cfg.get<double>(drone::cfg_key::slam::imu::ACCEL_NOISE_DENSITY,
+                                                     0.012);
+    imu_params.accel_random_walk   = cfg.get<double>(drone::cfg_key::slam::imu::ACCEL_RANDOM_WALK,
+                                                     8.0e-5);
 
-    const float  sim_speed_mps      = cfg.get<float>("slam.vio.sim_speed_mps", 3.0f);
-    const double good_trace_max     = cfg.get<double>("slam.vio.quality.good_trace_max", 0.1);
-    const double degraded_trace_max = cfg.get<double>("slam.vio.quality.degraded_trace_max", 1.0);
+    const float  sim_speed_mps  = cfg.get<float>(drone::cfg_key::slam::vio::SIM_SPEED_MPS, 3.0f);
+    const double good_trace_max = cfg.get<double>(drone::cfg_key::slam::vio::GOOD_TRACE_MAX, 0.1);
+    const double degraded_trace_max = cfg.get<double>(drone::cfg_key::slam::vio::DEGRADED_TRACE_MAX,
+                                                      1.0);
     auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic,
                                                sim_speed_mps, good_trace_max, degraded_trace_max);
     DRONE_LOG_INFO("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "planner/grid_planner_base.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <chrono>
@@ -32,7 +33,7 @@ public:
     template<typename Config>
     void load(const Config& cfg, IGridPlanner* grid_planner) {
         obstacles_.clear();
-        auto obs_json = cfg.section("mission_planner.static_obstacles");
+        auto obs_json = cfg.section(drone::cfg_key::mission_planner::STATIC_OBSTACLES);
         if (obs_json.is_array() && !obs_json.empty()) {
             for (const auto& o : obs_json) {
                 StaticObstacleRecord rec{o.value("x", 0.0f), o.value("y", 0.0f),

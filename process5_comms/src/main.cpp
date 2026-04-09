@@ -14,6 +14,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
@@ -271,25 +272,26 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("=== Comms process starting (PID {}) ===", getpid());
 
     // ── Create links via HAL factory ────────────────────────
-    auto fc_link    = drone::hal::create_fc_link(cfg, "comms.mavlink");
-    auto fc_backend = cfg.get<std::string>("comms.mavlink.backend", "simulated");
+    auto fc_link    = drone::hal::create_fc_link(cfg, drone::cfg_key::comms::mavlink::SECTION);
+    auto fc_backend = cfg.get<std::string>(drone::cfg_key::comms::mavlink::BACKEND, "simulated");
     bool fc_open_ok = false;
     if (fc_backend == "mavlink") {
         // MavlinkFCLink: "port" = connection URI, "baud" = timeout_ms
-        fc_open_ok = fc_link->open(cfg.get<std::string>("comms.mavlink.uri", "udp://:14540"),
-                                   cfg.get<int>("comms.mavlink.timeout_ms", 8000));
-    } else {
         fc_open_ok =
-            fc_link->open(cfg.get<std::string>("comms.mavlink.serial_port", "/dev/ttyTHS1"),
-                          cfg.get<int>("comms.mavlink.baud_rate", 921600));
+            fc_link->open(cfg.get<std::string>(drone::cfg_key::comms::mavlink::URI, "udp://:14540"),
+                          cfg.get<int>(drone::cfg_key::comms::mavlink::TIMEOUT_MS, 8000));
+    } else {
+        fc_open_ok = fc_link->open(
+            cfg.get<std::string>(drone::cfg_key::comms::mavlink::SERIAL_PORT, "/dev/ttyTHS1"),
+            cfg.get<int>(drone::cfg_key::comms::mavlink::BAUD_RATE, 921600));
     }
     if (!fc_open_ok) {
         DRONE_LOG_ERROR("Failed to open FC link (backend: {})", fc_backend);
         return 1;
     }
 
-    auto gcs_link = drone::hal::create_gcs_link(cfg, "comms.gcs");
-    if (!gcs_link->open("0.0.0.0", cfg.get<int>("comms.gcs.udp_port", 14550))) {
+    auto gcs_link = drone::hal::create_gcs_link(cfg, drone::cfg_key::comms::gcs::SECTION);
+    if (!gcs_link->open("0.0.0.0", cfg.get<int>(drone::cfg_key::comms::gcs::UDP_PORT, 14550))) {
         DRONE_LOG_ERROR("Failed to open GCS link");
         return 1;
     }

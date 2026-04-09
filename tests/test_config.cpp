@@ -1,6 +1,7 @@
 // tests/test_config.cpp
 // Unit tests for the JSON configuration system.
 #include "util/config.h"
+#include "util/config_keys.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -143,14 +144,17 @@ TEST_F(ConfigTest, BoolValues) {
 TEST_F(ConfigTest, LoadDefaultConfigFile) {
     // Test loading the actual project default config
     drone::Config cfg;
-    // This may or may not succeed depending on CWD, so don't ASSERT
-    bool loaded = cfg.load("config/default.json");
-    if (loaded) {
-        EXPECT_EQ(cfg.get<std::string>("log_level", ""), "info");
-        EXPECT_EQ(cfg.get<int>("video_capture.mission_cam.width", 0), 1920);
-        EXPECT_EQ(cfg.get<int>("perception.tracker.min_hits", 0), 3);
-        EXPECT_EQ(cfg.get<int>("slam.vio_rate_hz", 0), 100);
-    }
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    bool loaded = cfg.load(config_path);
+    ASSERT_TRUE(loaded) << "config/default.json must be loadable at: " << config_path;
+    EXPECT_EQ(cfg.get<std::string>("log_level", ""), "info");
+    EXPECT_EQ(cfg.get<int>("video_capture.mission_cam.width", 0), 1920);
+    EXPECT_EQ(cfg.get<int>("perception.tracker.min_hits", 0), 3);
+    EXPECT_EQ(cfg.get<int>("slam.vio_rate_hz", 0), 100);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -267,4 +271,86 @@ TEST_F(ConfigTest, SymlinkConfigRejected) {
 
     // Cleanup
     std::filesystem::remove(link_path);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Config Key Registry (Issue #287)
+// ═══════════════════════════════════════════════════════════
+
+TEST(ConfigKeyRegistryTest, TopLevelKeysMatchExpected) {
+    EXPECT_STREQ(drone::cfg_key::LOG_LEVEL, "log_level");
+    EXPECT_STREQ(drone::cfg_key::IPC_BACKEND, "ipc_backend");
+}
+
+TEST(ConfigKeyRegistryTest, VideoCaptureSectionKeys) {
+    EXPECT_STREQ(drone::cfg_key::video_capture::mission_cam::SECTION, "video_capture.mission_cam");
+    EXPECT_STREQ(drone::cfg_key::video_capture::mission_cam::WIDTH,
+                 "video_capture.mission_cam.width");
+    EXPECT_STREQ(drone::cfg_key::video_capture::stereo_cam::FPS, "video_capture.stereo_cam.fps");
+}
+
+TEST(ConfigKeyRegistryTest, PerceptionDetectorKeys) {
+    EXPECT_STREQ(drone::cfg_key::perception::detector::BACKEND, "perception.detector.backend");
+    EXPECT_STREQ(drone::cfg_key::perception::detector::CONFIDENCE_THRESHOLD,
+                 "perception.detector.confidence_threshold");
+    EXPECT_STREQ(drone::cfg_key::perception::detector::COLORS, "perception.detector.colors");
+}
+
+TEST(ConfigKeyRegistryTest, SlamKeys) {
+    EXPECT_STREQ(drone::cfg_key::slam::VIO_RATE_HZ, "slam.vio_rate_hz");
+    EXPECT_STREQ(drone::cfg_key::slam::vio::BACKEND, "slam.vio.backend");
+    EXPECT_STREQ(drone::cfg_key::slam::stereo::BASELINE, "slam.stereo.baseline");
+    EXPECT_STREQ(drone::cfg_key::slam::imu::GYRO_NOISE_DENSITY, "slam.imu.gyro_noise_density");
+}
+
+TEST(ConfigKeyRegistryTest, MissionPlannerKeys) {
+    EXPECT_STREQ(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, "mission_planner.update_rate_hz");
+    EXPECT_STREQ(drone::cfg_key::mission_planner::path_planner::BACKEND,
+                 "mission_planner.path_planner.backend");
+    EXPECT_STREQ(drone::cfg_key::mission_planner::occupancy_grid::PROMOTION_HITS,
+                 "mission_planner.occupancy_grid.promotion_hits");
+    EXPECT_STREQ(drone::cfg_key::mission_planner::geofence::ENABLED,
+                 "mission_planner.geofence.enabled");
+    EXPECT_STREQ(drone::cfg_key::mission_planner::collision_recovery::CLIMB_DELTA_M,
+                 "mission_planner.collision_recovery.climb_delta_m");
+}
+
+TEST(ConfigKeyRegistryTest, CommsKeys) {
+    EXPECT_STREQ(drone::cfg_key::comms::mavlink::SECTION, "comms.mavlink");
+    EXPECT_STREQ(drone::cfg_key::comms::gcs::UDP_PORT, "comms.gcs.udp_port");
+}
+
+TEST(ConfigKeyRegistryTest, SystemMonitorKeys) {
+    EXPECT_STREQ(drone::cfg_key::system_monitor::BACKEND, "system_monitor.backend");
+    EXPECT_STREQ(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT,
+                 "system_monitor.thresholds.cpu_warn_percent");
+}
+
+TEST(ConfigKeyRegistryTest, HalSubKeys) {
+    EXPECT_STREQ(drone::cfg_key::hal::BACKEND, ".backend");
+    EXPECT_STREQ(drone::cfg_key::hal::GZ_TOPIC, ".gz_topic");
+}
+
+TEST_F(ConfigTest, ConfigKeysWorkWithDefaultJson) {
+    drone::Config cfg;
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    bool loaded = cfg.load(config_path);
+    ASSERT_TRUE(loaded) << "config/default.json must be loadable at: " << config_path;
+    // Verify keys resolve the same values as the old string literals
+    EXPECT_EQ(cfg.get<int>(drone::cfg_key::video_capture::mission_cam::WIDTH, 0), 1920);
+    EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, ""), "zenoh");
+    EXPECT_EQ(cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 0), 100);
+    EXPECT_EQ(cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 0), 10);
+    EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::perception::detector::BACKEND, ""), "simulated");
+}
+
+TEST(ConfigKeyRegistryTest, KeysAreConstexpr) {
+    // Verify constexpr-ness: pointer must be a compile-time constant
+    constexpr const char* key = drone::cfg_key::mission_planner::TAKEOFF_ALTITUDE_M;
+    static_assert(key != nullptr, "Config key must be constexpr non-null");
+    EXPECT_NE(key, nullptr);
 }

@@ -9,6 +9,7 @@
 #include "ipc/zenoh_liveliness.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
 #include "util/ilogger.h"
@@ -234,20 +235,23 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("=== Video Capture process starting (PID {}) ===", getpid());
 
     // ── Create cameras via HAL factory ──────────────────────
-    auto       mission_cam = drone::hal::create_camera(cfg, "video_capture.mission_cam");
-    const auto m_w         = cfg.get<uint32_t>("video_capture.mission_cam.width", 1920);
-    const auto m_h         = cfg.get<uint32_t>("video_capture.mission_cam.height", 1080);
-    const auto m_fps       = cfg.get<int>("video_capture.mission_cam.fps", 30);
+    auto mission_cam =
+        drone::hal::create_camera(cfg, drone::cfg_key::video_capture::mission_cam::SECTION);
+    const auto m_w   = cfg.get<uint32_t>(drone::cfg_key::video_capture::mission_cam::WIDTH, 1920);
+    const auto m_h   = cfg.get<uint32_t>(drone::cfg_key::video_capture::mission_cam::HEIGHT, 1080);
+    const auto m_fps = cfg.get<int>(drone::cfg_key::video_capture::mission_cam::FPS, 30);
     if (!mission_cam->open(m_w, m_h, m_fps)) {
         DRONE_LOG_ERROR("Failed to open mission camera ({}x{} @ {}fps)", m_w, m_h, m_fps);
         return 1;
     }
 
-    auto       stereo_left  = drone::hal::create_camera(cfg, "video_capture.stereo_cam");
-    auto       stereo_right = drone::hal::create_camera(cfg, "video_capture.stereo_cam");
-    const auto s_w          = cfg.get<uint32_t>("video_capture.stereo_cam.width", 640);
-    const auto s_h          = cfg.get<uint32_t>("video_capture.stereo_cam.height", 480);
-    const auto s_fps        = cfg.get<int>("video_capture.stereo_cam.fps", 30);
+    auto stereo_left =
+        drone::hal::create_camera(cfg, drone::cfg_key::video_capture::stereo_cam::SECTION);
+    auto stereo_right =
+        drone::hal::create_camera(cfg, drone::cfg_key::video_capture::stereo_cam::SECTION);
+    const auto s_w   = cfg.get<uint32_t>(drone::cfg_key::video_capture::stereo_cam::WIDTH, 640);
+    const auto s_h   = cfg.get<uint32_t>(drone::cfg_key::video_capture::stereo_cam::HEIGHT, 480);
+    const auto s_fps = cfg.get<int>(drone::cfg_key::video_capture::stereo_cam::FPS, 30);
     if (!stereo_left->open(s_w, s_h, s_fps) || !stereo_right->open(s_w, s_h, s_fps)) {
         DRONE_LOG_ERROR("Failed to open stereo cameras ({}x{} @ {}fps)", s_w, s_h, s_fps);
         return 1;
