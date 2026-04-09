@@ -3,7 +3,7 @@
 # Safety-Critical C++ Audit Script
 # Drone Companion Software Stack
 #
-# Scans production code against 28 safety rules from CLAUDE.md.
+# Scans production code against 29 safety rules from CLAUDE.md.
 # Run from repo root:  bash deploy/safety_audit.sh [report_path]
 #
 # Exit codes: 0 = all pass, 1 = violations found
@@ -43,6 +43,8 @@
 #        static_assert              16  Global mutable state
 #     6  volatile                   21  memory_order_relaxed
 #     7  goto
+#    30  Signed→unsigned casts on
+#        durations/sizes (warn)
 #
 #   PREFER rules (flagged as FAIL/WARN if missing):
 #    17  [[nodiscard]] on Result    24  override keyword
@@ -90,6 +92,13 @@
 #     but not perfectly — clang-tidy covers the remaining edge cases
 #   - Some PREFER rules use threshold heuristics (e.g., "at least 10
 #     = delete declarations") rather than exhaustive analysis
+#   - Integer conversion hazards (Rule 30) use keyword heuristics —
+#     can only catch casts near "timeout"/"duration"/"count" keywords.
+#     Cannot detect: unsigned subtraction underflow (a - b where a < b),
+#     timestamp addition overflow, duration multiplication overflow,
+#     or negative-count-to-size casts without keyword context.
+#     The review-memory-safety agent covers all 6 sub-patterns with
+#     full context-aware analysis.
 #   - For a complete static analysis, run clang-tidy-18 in addition
 #     to this script
 #
@@ -348,6 +357,25 @@ else
     log_warn 21 "memory_order_relaxed used" "$relaxed_count occurrences — verify each is justified"
     add_detail "### Rule 21: memory_order_relaxed (review needed)\n\`\`\`"
     add_detail "$(grep_prod 'memory_order_relaxed')"
+    add_detail "\`\`\`\n"
+fi
+
+# ── Rule 30: Integer conversion hazards (signed→unsigned) ──────
+# Detect static_cast<uint*> near timeout/duration/count/size keywords
+# without a preceding std::max clamp.  Grep-based approximation —
+# the review-memory-safety agent does the full context-aware check.
+# Sub-check A: static_cast<uint64_t> applied to chrono or timeout expressions
+signed_to_unsigned=$(grep_prod 'static_cast<uint64_t>\|static_cast<uint32_t>\|static_cast<size_t>' | grep -i 'timeout\|duration\|elapsed\|deadline\|sleep\|count()' | grep -v 'std::max\|std::clamp\|>= 0\|> 0\|//' || true)
+# Sub-check B: narrowing cast static_cast<uint32_t>(sizeof — rarely a problem but flag it
+narrowing_sizeof=$(grep_prod 'static_cast<uint32_t>(sizeof' | grep -v '//' || true)
+int_hazard_hits="$signed_to_unsigned$narrowing_sizeof"
+hits=$(count_lines "$int_hazard_hits")
+if [ "$hits" -eq 0 ]; then
+    log_pass 30 "No unguarded signed→unsigned casts" "Duration/size casts properly guarded"
+else
+    log_warn 30 "Possible signed→unsigned hazards" "$hits — verify clamp before cast"
+    add_detail "### Rule 30: Integer conversion hazards (review needed)\n\`\`\`"
+    add_detail "$int_hazard_hits"
     add_detail "\`\`\`\n"
 fi
 

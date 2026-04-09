@@ -13,6 +13,8 @@
 #include <numeric>
 #include <stdexcept>
 
+#include <spdlog/spdlog.h>
+
 namespace drone::perception {
 
 // ═══════════════════════════════════════════════════════════
@@ -221,9 +223,11 @@ HungarianSolver::Result HungarianSolver::solve(const std::vector<std::vector<dou
 // ═══════════════════════════════════════════════════════════
 // Tracker factory  (ITracker)
 // ═══════════════════════════════════════════════════════════
-std::unique_ptr<ITracker> create_tracker(const std::string&                    backend,
-                                         [[maybe_unused]] const drone::Config* cfg) {
-    if (backend == "bytetrack") {
+using TrackerResult = drone::util::Result<std::unique_ptr<ITracker>>;
+
+TrackerResult create_tracker(const std::string&                    backend,
+                             [[maybe_unused]] const drone::Config* cfg) {
+    auto make_bytetrack = [&]() -> std::unique_ptr<ITracker> {
         ByteTrackTracker::Params params;
         if (cfg) {
             params.high_conf_threshold = cfg->get<float>("perception.tracker.high_conf_threshold",
@@ -235,8 +239,16 @@ std::unique_ptr<ITracker> create_tracker(const std::string&                    b
             params.min_hits            = cfg->get<uint32_t>("perception.tracker.min_hits", 3);
         }
         return std::make_unique<ByteTrackTracker>(params);
+    };
+
+    if (backend == "bytetrack") {
+        return TrackerResult::ok(make_bytetrack());
     }
-    throw std::invalid_argument("Unknown tracker backend: " + backend);
+
+    // Unknown backend — warn and fall back to ByteTrack using the shared factory path.
+    spdlog::warn("[tracker_factory] Unknown tracker backend '{}' — falling back to bytetrack",
+                 backend);
+    return TrackerResult::ok(make_bytetrack());
 }
 
 }  // namespace drone::perception
