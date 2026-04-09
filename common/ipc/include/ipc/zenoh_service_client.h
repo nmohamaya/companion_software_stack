@@ -16,6 +16,7 @@
 
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_session.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <atomic>
@@ -29,7 +30,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <spdlog/spdlog.h>
 #include <zenoh.hxx>
 
 namespace drone::ipc {
@@ -53,7 +53,7 @@ public:
     /// @param timeout_ms  Timeout for the Zenoh GET operation in milliseconds.
     explicit ZenohServiceClient(const std::string& key_expr, uint64_t timeout_ms = 5000)
         : key_expr_(key_expr), timeout_ms_(timeout_ms) {
-        spdlog::info("[ZenohServiceClient] Created on '{}'", key_expr);
+        DRONE_LOG_INFO("[ZenohServiceClient] Created on '{}'", key_expr);
     }
 
     [[nodiscard]] uint64_t send_request(const Req& request) override {
@@ -82,18 +82,18 @@ public:
             [id, responses](zenoh::Reply& reply) {
                 try {
                     if (!reply.is_ok()) {
-                        spdlog::warn("[ZenohServiceClient] Got error reply "
-                                     "for cid={}",
-                                     id);
+                        DRONE_LOG_WARN("[ZenohServiceClient] Got error reply "
+                                       "for cid={}",
+                                       id);
                         return;
                     }
                     const auto& sample = reply.get_ok();
                     auto        bytes  = sample.get_payload().as_vector();
 
                     if (bytes.size() != sizeof(ServiceResponse<Resp>)) {
-                        spdlog::warn("[ZenohServiceClient] Reply size mismatch "
-                                     "for cid={}: expected {} got {}",
-                                     id, sizeof(ServiceResponse<Resp>), bytes.size());
+                        DRONE_LOG_WARN("[ZenohServiceClient] Reply size mismatch "
+                                       "for cid={}: expected {} got {}",
+                                       id, sizeof(ServiceResponse<Resp>), bytes.size());
                         return;
                     }
 
@@ -104,15 +104,15 @@ public:
                     std::lock_guard<std::mutex> lock(responses->mutex);
                     responses->queue.push_back(resp);
                 } catch (const std::exception& e) {
-                    spdlog::error("[ZenohServiceClient] Error in reply "
-                                  "callback: {}",
-                                  e.what());
+                    DRONE_LOG_ERROR("[ZenohServiceClient] Error in reply "
+                                    "callback: {}",
+                                    e.what());
                 }
             },
             // on_drop callback — called when all replies received
             []() {}, std::move(opts));
 
-        spdlog::debug("[ZenohServiceClient] Sent request cid={} on '{}'", id, key_expr_);
+        DRONE_LOG_DEBUG("[ZenohServiceClient] Sent request cid={} on '{}'", id, key_expr_);
         return id;
     }
 

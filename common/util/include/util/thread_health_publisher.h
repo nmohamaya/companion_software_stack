@@ -7,12 +7,12 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "util/iclock.h"
 #include "util/safe_name_copy.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstring>
 
 namespace drone::util {
@@ -76,10 +76,7 @@ public:
             }
         }
 
-        health.timestamp_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        health.timestamp_ns = get_clock().now_ns();
 
         pub_.publish(health);
     }

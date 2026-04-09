@@ -10,7 +10,7 @@
 //
 //   auto result = validate(cfg, schema);
 //   if (result.is_err()) {
-//       for (auto& msg : result.error()) spdlog::error("{}", msg);
+//       for (auto& msg : result.error()) DRONE_LOG_ERROR("{}", msg);
 //       return EXIT_FAILURE;
 //   }
 #pragma once
@@ -367,14 +367,14 @@ inline int validate_or_exit(const Config& cfg, const ConfigSchema& schema) {
         auto validation = validate(cfg, schema);
         if (!validation.is_ok()) {
             for (const auto& err : validation.error()) {
-                spdlog::error("[Config] {}", err);
+                DRONE_LOG_ERROR("[Config] {}", err);
             }
-            spdlog::error("Config validation failed — exiting");
+            DRONE_LOG_ERROR("Config validation failed — exiting");
             return 1;
         }
     } catch (const std::exception& ex) {
-        spdlog::error("Config validation error: {}", ex.what());
-        spdlog::error("Config validation failed — exiting");
+        DRONE_LOG_ERROR("Config validation error: {}", ex.what());
+        DRONE_LOG_ERROR("Config validation failed — exiting");
         return 1;
     }
     return 0;

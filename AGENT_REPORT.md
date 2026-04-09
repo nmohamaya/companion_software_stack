@@ -1,101 +1,83 @@
-# Agent Report — Issue #371: Remote Pipeline Monitoring
+# Agent Report — Issue #286: IClock Interface + MockClock
+
+**Epic:** #284 (Platform Modularity & Adaptability)
+**Sub-Epic:** A — Foundational Abstractions
+**Gap:** G2 — std::chrono::steady_clock hardcoded in 15+ files
+**Branch:** `feature/issue-286-feat284-a2-iclock-interface--mockclock`
+**Agent:** feature-infra-core
 
 ## Summary
 
-Implemented tmux session management and ntfy.sh push notifications for the multi-agent pipeline, enabling monitoring and checkpoint approval from any device (phone via SSH, tablet, another terminal).
-
-**Two complementary layers:**
-1. **tmux sessions** — Pipeline runs inside a named tmux session (`pipeline-<issue>`). User can detach, walk away, and reattach from any device.
-2. **ntfy.sh notifications** — Push notifications sent at each of the 5 checkpoints, on errors, and on completion. User gets a ping on their phone without watching the terminal.
+Created the `IClock` abstract interface with `SteadyClock` (production) and `MockClock` (test) implementations, plus a global accessor `drone::util::get_clock()` with `set_clock()` for dependency injection. Migrated all `steady_clock::now()` calls in `common/util/`, `common/ipc/`, and `common/recorder/` to use the new IClock interface. Added 26 unit tests.
 
 ## Changes
 
 ### New Files
+| File | Description |
+|------|-------------|
+| `common/util/include/util/iclock.h` | IClock interface, SteadyClock impl, global `get_clock()`/`set_clock()` |
+| `common/util/include/util/mock_clock.h` | MockClock (manually advanceable), ScopedMockClock (RAII guard) |
+| `tests/test_iclock.cpp` | 26 unit tests covering all IClock functionality |
 
-| File | Purpose |
-|------|---------|
-| `scripts/orchestrator/pipeline/notifications.py` | ntfy.sh notification module — `Notifier`, `NotifyConfig`, `NotifyEvent` |
-| `scripts/orchestrator/pipeline/tmux.py` | tmux session management — `TmuxSession`, `list_pipeline_sessions`, `session_status` |
-| `scripts/orchestrator/commands/pipeline_monitor.py` | `pipeline list/attach/status/kill` subcommands |
-| `tests/test_orchestrator/test_notifications.py` | 37 unit tests for notification module (config, validation, send, auth) |
-| `tests/test_orchestrator/test_tmux.py` | 29 unit tests for tmux module (launch, attach, exec_attach, list, status) |
-| `tests/test_orchestrator/test_checkpoint_notifications.py` | 11 integration tests for checkpoint + notification |
+### Modified Files (11 production, 1 build)
+| File | Change |
+|------|--------|
+| `common/util/include/util/thread_heartbeat.h` | `touch()` / `touch_with_grace()` → `get_clock().now_ns()` |
+| `common/util/include/util/thread_watchdog.h` | `scan_loop()` / `scan_once()` → `get_clock().now()`/`now_ns()` |
+| `common/util/include/util/thread_health_publisher.h` | timestamp → `get_clock().now_ns()` |
+| `common/util/include/util/scoped_timer.h` | start/elapsed/dtor → `get_clock().now_ns()` (no more time_point) |
+| `common/util/include/util/diagnostic.h` | `ScopedDiagTimer` → `get_clock().now_ns()` |
+| `common/util/include/util/latency_tracker.h` | `now_ns()` static → delegates to `get_clock().now_ns()` |
+| `common/ipc/include/ipc/wire_format.h` | `wire_serialize()` auto-timestamp → `get_clock().now_ns()` |
+| `common/ipc/include/ipc/iservice_channel.h` | `await_response()` deadline/timeout → IClock |
+| `common/ipc/include/ipc/zenoh_subscriber.h` | receive timestamp → `get_clock().now_ns()` |
+| `common/ipc/include/ipc/zenoh_service_server.h` | envelope/response timestamps → `get_clock().now_ns()` |
+| `common/recorder/include/recorder/flight_recorder.h` | record timestamp → `get_clock().now_ns()` |
+| `tests/CMakeLists.txt` | Register `test_iclock` test binary |
 
-### Modified Files
+## Design Decisions
 
-| File | Changes |
-|------|---------|
-| `scripts/orchestrator/pipeline/checkpoints.py` | Added optional `notifier` param to all 5 checkpoint functions; sends notification at each checkpoint |
-| `scripts/orchestrator/commands/deploy_issue.py` | Added `--tmux` and `--notify` flags; tmux session wrapping; notifier creation and passing through pipeline |
-| `scripts/orchestrator/cli.py` | Added `--tmux`/`--notify` flags to `deploy-issue`; added `pipeline` subcommand group (list/attach/status/kill) |
+1. **`get_clock()` not `clock()`** — POSIX `clock()` from `<time.h>` causes ambiguity errors in translation units that include both. Named `get_clock()` to avoid conflict.
 
-## Usage
+2. **Raw pointer for global accessor** — The global clock uses `IClock*` (not `shared_ptr`) because:
+   - Caller owns the clock lifetime (typically stack-allocated `MockClock` in tests)
+   - No ownership transfer — just a reference swap
+   - Zero overhead in the hot path (no ref counting)
 
-### tmux sessions
-```bash
-# Launch pipeline in tmux (detachable)
-python -m orchestrator deploy-issue 367 --pipeline --tmux
+3. **MockClock starts at 1 second** — Default initial time `1'000'000'000 ns` avoids edge cases where code checks `timestamp == 0` to mean "uninitialized".
 
-# Detach: Ctrl+B, D
-# Reattach from any device:
-tmux attach -t pipeline-367
+4. **`sleep_for_ms` on MockClock advances time** — Instead of real blocking, MockClock's `sleep_for_ms()` advances simulated time, enabling instant test execution.
 
-# List active pipelines
-python -m orchestrator pipeline list
+5. **`ScopedMockClock` RAII guard** — Automatically installs MockClock in constructor and restores SteadyClock in destructor, preventing test leakage.
 
-# Check status
-python -m orchestrator pipeline status 367
+6. **Not migrating HAL or process files** — HAL implementations (`common/hal/`) and process directories are outside this agent's scope. Those should be migrated by their respective feature agents in follow-up issues.
 
-# Attach to session
-python -m orchestrator pipeline attach 367
+## Files NOT Migrated (Out of Scope)
 
-# Kill session
-python -m orchestrator pipeline kill 367
-```
+The following files still use `steady_clock::now()` directly and should be migrated in follow-up work by their respective agents:
 
-### ntfy.sh notifications
-```bash
-# Via command line flag
-python -m orchestrator deploy-issue 367 --pipeline --notify drone-pipeline-nm
+- `common/hal/` — 12 occurrences across simulated/gazebo/mavlink backends
+- `process[1-7]_*/` — ~40 occurrences across all process directories
+- `tools/` — fault_injector and flight_replay (~4 occurrences)
+- `tests/` — test files using steady_clock for test timing (~20 occurrences, mostly appropriate)
 
-# Via environment variable
-export NTFY_TOPIC=drone-pipeline-nm
-python -m orchestrator deploy-issue 367 --pipeline
+## Test Coverage
 
-# Custom server (self-hosted)
-export NTFY_SERVER=https://ntfy.example.com
-export NTFY_TOPIC=my-topic
-```
+26 new tests in `test_iclock.cpp`:
+- **SteadyClockTest** (4): now_ns accuracy, now() time_point, now_seconds, monotonicity
+- **MockClockTest** (13): default init, custom init, advance_ns/ms/s, cumulative, set_ns, reset, sleep_for_ms, now() time_point, now_seconds, thread safety
+- **GlobalClockTest** (3): default is SteadyClock, set_clock to mock, null restores default
+- **ScopedMockClockTest** (3): install/restore, custom initial, sleep advances
+- **IClockPolymorphismTest** (3): virtual dispatch, now() convenience, now_seconds convenience
 
-### Combined (recommended for on-the-move use)
-```bash
-python -m orchestrator deploy-issue 367 --pipeline --tmux --notify drone-pipeline-nm
-```
+## Build Verification
 
-## Architecture Decisions
+- Build succeeded with `-Werror -Wall -Wextra` (zero warnings)
+- 57 test binaries produced including `test_iclock`
 
-1. **Graceful degradation** — Notifications never block the pipeline. If ntfy.sh is unreachable or curl fails, it logs a warning and continues. tmux unavailability falls back to direct execution.
+## Remaining Work for Follow-Up
 
-2. **No new dependencies** — Uses only `curl` (for ntfy) and `tmux`, both standard on Linux. No Python packages needed.
-
-3. **Environment-based config** — `NTFY_TOPIC`, `NTFY_SERVER`, `NTFY_EVENTS` env vars allow persistent config without editing code.
-
-4. **Session naming convention** — `pipeline-<issue-number>` for predictable naming and easy scripting.
-
-5. **Layer 3 deferred** — Interactive ntfy responses (approve/reject from notification) intentionally deferred to a future phase per the issue spec.
-
-## Test Plan
-
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_notifications.py -v` — 37 tests
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_tmux.py -v` — 29 tests
-- [ ] `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/test_checkpoint_notifications.py -v` — 11 tests
-- [ ] Existing tests still pass: `PYTHONPATH=scripts python -m pytest tests/test_orchestrator/ -v`
-- [ ] Manual: `--notify` flag sends real notification to ntfy.sh topic
-- [ ] Manual: `--tmux` flag creates tmux session and attaches
-- [ ] C++ build unaffected (no C++ changes)
-
-## Risks / Review Attention
-
-- **Low risk** — Python-only changes to the orchestrator; no C++ code modified, no ctest count change.
-- **External dependency** — ntfy.sh is a free service; self-hosting recommended for production use.
-- **tmux availability** — Falls back gracefully if tmux is not installed.
+1. **Migrate HAL files** → Assign to feature-perception, feature-nav, feature-integration agents
+2. **Migrate process files** → Assign to respective feature agents
+3. **Migrate tools/** → fault_injector, flight_replay
+4. **Documentation updates** — TESTS.md, PROGRESS.md, ROADMAP.md (blocked by test count verification)

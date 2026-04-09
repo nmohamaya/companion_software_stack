@@ -2,10 +2,9 @@
 // Finite State Machine for mission control.
 #pragma once
 #include "ipc/ipc_types.h"
+#include "util/ilogger.h"
 
 #include <string>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -70,7 +69,7 @@ public:
     void load_mission(const std::vector<Waypoint>& waypoints) {
         waypoints_  = waypoints;
         current_wp_ = 0;
-        spdlog::info("[FSM] Mission loaded: {} waypoints", waypoints_.size());
+        DRONE_LOG_INFO("[FSM] Mission loaded: {} waypoints", waypoints_.size());
     }
 
     [[nodiscard]] const Waypoint* current_waypoint() const {
@@ -113,7 +112,7 @@ public:
     [[nodiscard]] bool advance_waypoint() {
         if (current_wp_ + 1 < waypoints_.size()) {
             ++current_wp_;
-            spdlog::info("[FSM] Advanced to waypoint {}/{}", current_wp_ + 1, waypoints_.size());
+            DRONE_LOG_INFO("[FSM] Advanced to waypoint {}/{}", current_wp_ + 1, waypoints_.size());
             return true;
         }
         return false;  // mission complete
@@ -147,7 +146,7 @@ private:
     bool                  fault_triggered_ = false;
 
     void transition(MissionState new_state) {
-        spdlog::info("[FSM] {} → {}", state_name(state_), state_name(new_state));
+        DRONE_LOG_INFO("[FSM] {} → {}", state_name(state_), state_name(new_state));
         state_ = new_state;
     }
 };

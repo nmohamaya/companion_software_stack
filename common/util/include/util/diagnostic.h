@@ -20,12 +20,13 @@
 //   bool ok = !diag.has_errors();
 #pragma once
 
+#include "util/iclock.h"
+#include "util/ilogger.h"
+
 #include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::util {
 
@@ -114,32 +115,32 @@ public:
         return DiagSeverity::INFO;
     }
 
-    /// Log a structured summary via spdlog.
+    /// Log a structured summary via the ILogger abstraction.
     /// Called once per frame at the end of the pipeline.
     void log_summary(const std::string& pipeline_name = "VIO") const {
-        auto level = spdlog::level::info;
+        auto level = drone::log::Level::Info;
         if (has_fatal())
-            level = spdlog::level::critical;
+            level = drone::log::Level::Critical;
         else if (has_errors())
-            level = spdlog::level::err;
+            level = drone::log::Level::Error;
         else if (has_warnings())
-            level = spdlog::level::warn;
+            level = drone::log::Level::Warn;
 
-        spdlog::log(level, "[{}] Frame {} diagnostics: {} entries, {} errors, {} warnings",
-                    pipeline_name, frame_id_, entries_.size(), error_count_, warning_count_);
+        DRONE_LOG(level, "[{}] Frame {} diagnostics: {} entries, {} errors, {} warnings",
+                  pipeline_name, frame_id_, entries_.size(), error_count_, warning_count_);
 
         // Log each entry at appropriate level
         for (const auto& e : entries_) {
-            auto entry_level = spdlog::level::info;
+            auto entry_level = drone::log::Level::Info;
             switch (e.severity) {
-                case DiagSeverity::WARN: entry_level = spdlog::level::warn; break;
-                case DiagSeverity::ERROR: entry_level = spdlog::level::err; break;
-                case DiagSeverity::FATAL: entry_level = spdlog::level::critical; break;
+                case DiagSeverity::WARN: entry_level = drone::log::Level::Warn; break;
+                case DiagSeverity::ERROR: entry_level = drone::log::Level::Error; break;
+                case DiagSeverity::FATAL: entry_level = drone::log::Level::Critical; break;
                 default: break;  // DiagSeverity::INFO stays at info level
             }
 
-            spdlog::log(entry_level, "[{}] Frame {} [{}] {}: {}", pipeline_name, frame_id_,
-                        diag_severity_str(e.severity), e.component, e.message);
+            DRONE_LOG(entry_level, "[{}] Frame {} [{}] {}: {}", pipeline_name, frame_id_,
+                      diag_severity_str(e.severity), e.component, e.message);
         }
     }
 
@@ -177,11 +178,13 @@ private:
 class ScopedDiagTimer {
 public:
     ScopedDiagTimer(FrameDiagnostics& diag, std::string component)
-        : diag_(diag), component_(std::move(component)), start_(std::chrono::steady_clock::now()) {}
+        : diag_(diag)
+        , component_(std::move(component))
+        , start_ns_(drone::util::get_clock().now_ns()) {}
 
     ~ScopedDiagTimer() {
-        auto   end = std::chrono::steady_clock::now();
-        double ms  = std::chrono::duration<double, std::milli>(end - start_).count();
+        const double ms = static_cast<double>(drone::util::get_clock().now_ns() - start_ns_) /
+                          1'000'000.0;
         diag_.add_timing(component_, ms);
     }
 
@@ -189,9 +192,9 @@ public:
     ScopedDiagTimer& operator=(const ScopedDiagTimer&) = delete;
 
 private:
-    FrameDiagnostics&                     diag_;
-    std::string                           component_;
-    std::chrono::steady_clock::time_point start_;
+    FrameDiagnostics& diag_;
+    std::string       component_;
+    uint64_t          start_ns_;
 };
 
 }  // namespace drone::util

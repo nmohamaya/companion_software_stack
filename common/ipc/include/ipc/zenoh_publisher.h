@@ -12,6 +12,7 @@
 
 #include "ipc/ipublisher.h"
 #include "ipc/zenoh_session.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <atomic>
@@ -21,7 +22,6 @@
 #include <variant>
 #include <vector>
 
-#include <spdlog/spdlog.h>
 #include <zenoh.hxx>
 
 namespace drone::ipc {
@@ -40,11 +40,11 @@ public:
             auto& session = ZenohSession::instance().session();
             publisher_.emplace(session.declare_publisher(zenoh::KeyExpr(key_expr)));
             ready_ = true;
-            spdlog::info("[ZenohPublisher] Declared on '{}' "
-                         "(size={}, shm={})",
-                         key_expr, sizeof(T), sizeof(T) > kShmPublishThreshold ? "yes" : "no");
+            DRONE_LOG_INFO("[ZenohPublisher] Declared on '{}' "
+                           "(size={}, shm={})",
+                           key_expr, sizeof(T), sizeof(T) > kShmPublishThreshold ? "yes" : "no");
         } catch (const std::exception& e) {
-            spdlog::error("[ZenohPublisher] Failed to declare on '{}': {}", key_expr, e.what());
+            DRONE_LOG_ERROR("[ZenohPublisher] Failed to declare on '{}': {}", key_expr, e.what());
             ready_ = false;
         }
     }
@@ -95,9 +95,9 @@ private:
         auto  result = provider->alloc_gc_defrag_blocking(sizeof(T));
         auto* buf    = std::get_if<zenoh::ZShmMut>(&result);
         if (!buf) {
-            spdlog::warn("[ZenohPublisher] SHM alloc failed on '{}', "
-                         "falling back to bytes",
-                         key_expr_);
+            DRONE_LOG_WARN("[ZenohPublisher] SHM alloc failed on '{}', "
+                           "falling back to bytes",
+                           key_expr_);
             publish_bytes(msg);
             return;
         }

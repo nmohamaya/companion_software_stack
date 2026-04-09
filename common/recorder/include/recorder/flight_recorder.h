@@ -10,6 +10,8 @@
 
 #include "ipc/ipc_types.h"
 #include "ipc/wire_format.h"
+#include "util/config_keys.h"
+#include "util/iclock.h"
 
 #include <algorithm>
 #include <atomic>
@@ -250,8 +252,10 @@ public:
     ///        recorder.output_dir (default /tmp/flight_logs)
     template<typename ConfigT>
     explicit FlightRecorder(const ConfigT& cfg)
-        : ring_buffer_(validated_max_bytes(cfg.template get<int>("recorder.max_size_mb", 64)))
-        , output_dir_(cfg.template get<std::string>("recorder.output_dir", "/tmp/flight_logs")) {}
+        : ring_buffer_(
+              validated_max_bytes(cfg.template get<int>(drone::cfg_key::recorder::MAX_SIZE_MB, 64)))
+        , output_dir_(cfg.template get<std::string>(drone::cfg_key::recorder::OUTPUT_DIR,
+                                                    "/tmp/flight_logs")) {}
 
     /// Record a message from a given topic.
     /// @tparam T  Trivially copyable IPC struct.
@@ -278,10 +282,7 @@ public:
 
         // Capture timestamp and push under the lock for monotonic ordering
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto                  now_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        const auto                  now_ns = drone::util::get_clock().now_ns();
         // Enforce monotonic: never go backwards
         last_timestamp_ns_                    = std::max(last_timestamp_ns_ + 1, now_ns);
         entry.header.wire_header.timestamp_ns = last_timestamp_ns_;

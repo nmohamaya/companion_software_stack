@@ -3,11 +3,13 @@
 // ADR-004 Layer 1 — ThreadWatchdog.
 //
 // Runs a dedicated low-priority thread that periodically compares each
-// thread's last_touch_ns against steady_clock::now().  If the delta
+// thread's last_touch_ns against get_clock().now_ns().  If the delta
 // exceeds stuck_threshold and the thread has been touched at least once,
 // the stuck callback fires.
 #pragma once
 
+#include "util/iclock.h"
+#include "util/ilogger.h"
 #include "util/thread_heartbeat.h"
 
 #include <atomic>
@@ -17,8 +19,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::util {
 
@@ -86,9 +86,9 @@ private:
 
             // Sleep in small increments so we can exit quickly.
             // Use min(remaining, 50ms) so sub-50ms scan intervals are honored.
-            const auto deadline = std::chrono::steady_clock::now() + cfg_.scan_interval;
+            const auto deadline = get_clock().now() + cfg_.scan_interval;
             while (running_.load(std::memory_order_relaxed)) {
-                const auto now       = std::chrono::steady_clock::now();
+                const auto now       = get_clock().now();
                 auto       remaining = deadline - now;
                 if (remaining <= std::chrono::milliseconds::zero()) {
                     break;
@@ -102,10 +102,7 @@ private:
     }
 
     void scan_once() {
-        const auto now_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        const auto now_ns = get_clock().now_ns();
 
         const auto threshold_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(cfg_.stuck_threshold).count());
@@ -148,10 +145,10 @@ private:
                     }
                 }
                 if (!was_previously_stuck) {
-                    spdlog::error("[Watchdog] Thread '{}' stuck for {:.1f}s "
-                                  "(threshold: {:.1f}s, critical: {})",
-                                  beat.name, static_cast<double>(delta) / 1e9,
-                                  static_cast<double>(threshold_ns) / 1e9, beat.is_critical);
+                    DRONE_LOG_ERROR("[Watchdog] Thread '{}' stuck for {:.1f}s "
+                                    "(threshold: {:.1f}s, critical: {})",
+                                    beat.name, static_cast<double>(delta) / 1e9,
+                                    static_cast<double>(threshold_ns) / 1e9, beat.is_critical);
                 }
 
                 // Fire callback (outside cb_mutex_ to avoid deadlock)

@@ -13,11 +13,11 @@
 #pragma once
 
 
+#include "util/ilogger.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
@@ -218,16 +218,16 @@ struct ZenohNetworkConfig {
 
         // Warn if listening on all interfaces — potential security risk (#180)
         if (cfg.listen_address == "0.0.0.0" && !cfg.listen_endpoints.empty()) {
-            spdlog::warn("[ZenohNetworkConfig] Listening on 0.0.0.0 exposes "
-                         "unauthenticated IPC to the network. Use 127.0.0.1 "
-                         "or a specific interface for production.");
+            DRONE_LOG_WARN("[ZenohNetworkConfig] Listening on 0.0.0.0 exposes "
+                           "unauthenticated IPC to the network. Use 127.0.0.1 "
+                           "or a specific interface for production.");
         }
 
-        spdlog::info("[ZenohNetworkConfig] Loaded from app config: "
-                     "mode={}, listen={}, connect_eps={}, "
-                     "multicast={}, gossip={}",
-                     cfg.mode, cfg.listen_endpoints.empty() ? "none" : cfg.listen_endpoints[0],
-                     cfg.connect_endpoints.size(), cfg.multicast_scouting, cfg.gossip_scouting);
+        DRONE_LOG_INFO("[ZenohNetworkConfig] Loaded from app config: "
+                       "mode={}, listen={}, connect_eps={}, "
+                       "multicast={}, gossip={}",
+                       cfg.mode, cfg.listen_endpoints.empty() ? "none" : cfg.listen_endpoints[0],
+                       cfg.connect_endpoints.size(), cfg.multicast_scouting, cfg.gossip_scouting);
         return cfg;
     }
 };

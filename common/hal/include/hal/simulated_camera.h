@@ -2,12 +2,11 @@
 // Simulated camera backend: generates synthetic frames for testing.
 #pragma once
 #include "hal/icamera.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <thread>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -22,14 +21,15 @@ public:
         buffer_.resize(static_cast<size_t>(height_) * stride_, 0);
         open_ = true;
         seq_  = 0;
-        spdlog::info("[SimulatedCamera] Opened {}x{}@{}Hz ch={}", width_, height_, fps_, channels_);
+        DRONE_LOG_INFO("[SimulatedCamera] Opened {}x{}@{}Hz ch={}", width_, height_, fps_,
+                       channels_);
         return true;
     }
 
     void close() override {
         open_ = false;
         buffer_.clear();
-        spdlog::info("[SimulatedCamera] Closed");
+        DRONE_LOG_INFO("[SimulatedCamera] Closed");
     }
 
     CapturedFrame capture() override {

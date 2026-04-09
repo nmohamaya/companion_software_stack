@@ -11,6 +11,8 @@
 #include "recorder/flight_recorder.h"
 #include "recorder/replay_dispatch.h"
 #include "util/config.h"
+#include "util/ilogger.h"
+#include "util/log_config.h"
 
 #include <algorithm>
 #include <atomic>
@@ -22,8 +24,6 @@
 #include <iostream>
 #include <string>
 #include <thread>
-
-#include <spdlog/spdlog.h>
 
 static std::atomic<bool> g_running{true};
 
@@ -84,26 +84,26 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    spdlog::set_level(spdlog::level::info);
-    spdlog::info("Flight Replay starting: file={} speed={:.1f}x", logfile, speed);
+    LogConfig::init("flight_replay", LogConfig::resolve_log_dir());
+    DRONE_LOG_INFO("Flight Replay starting: file={} speed={:.1f}x", logfile, speed);
 
     // ── Read log file ────────────────────────────────────────
     auto log_result = drone::recorder::read_log_file(logfile);
     if (!log_result.success) {
-        spdlog::error("Failed to read log file: {}", logfile);
+        DRONE_LOG_ERROR("Failed to read log file: {}", logfile);
         return 1;
     }
     if (log_result.entries.empty()) {
-        spdlog::warn("Log file is empty: {}", logfile);
+        DRONE_LOG_WARN("Log file is empty: {}", logfile);
         return 0;
     }
 
-    spdlog::info("Loaded {} records from {}", log_result.entries.size(), logfile);
+    DRONE_LOG_INFO("Loaded {} records from {}", log_result.entries.size(), logfile);
 
     // ── Create message bus ───────────────────────────────────
     drone::Config cfg;
     if (!cfg.load(config_path)) {
-        spdlog::warn("Could not load config '{}' — using defaults", config_path);
+        DRONE_LOG_WARN("Could not load config '{}' — using defaults", config_path);
     }
     auto bus = drone::ipc::create_message_bus(cfg);
 
@@ -168,8 +168,8 @@ int main(int argc, char* argv[]) {
 
         // ── Validate wire version ────────────────────────────
         if (entry.header.wire_header.version != kWireVersion) {
-            spdlog::warn("Skipping record {} — wire version {} != current {}", i,
-                         entry.header.wire_header.version, kWireVersion);
+            DRONE_LOG_WARN("Skipping record {} — wire version {} != current {}", i,
+                           entry.header.wire_header.version, kWireVersion);
             continue;
         }
 
@@ -179,11 +179,11 @@ int main(int argc, char* argv[]) {
         if (result.dispatched) {
             ++replayed;
         } else {
-            spdlog::debug("Skipped record: topic='{}' type={} size={}", topic,
-                          static_cast<uint16_t>(result.msg_type), entry.payload.size());
+            DRONE_LOG_DEBUG("Skipped record: topic='{}' type={} size={}", topic,
+                            static_cast<uint16_t>(result.msg_type), entry.payload.size());
         }
     }
 
-    spdlog::info("Replay complete: {}/{} records published", replayed, entries.size());
+    DRONE_LOG_INFO("Replay complete: {}/{} records published", replayed, entries.size());
     return 0;
 }

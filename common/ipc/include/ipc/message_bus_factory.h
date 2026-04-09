@@ -23,12 +23,12 @@
 #include "ipc/message_bus.h"
 #include "ipc/zenoh_network_config.h"
 #include "ipc/zenoh_session.h"
+#include "util/config_keys.h"
+#include "util/ilogger.h"
 
 #include <memory>
 #include <string>
 #include <type_traits>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::ipc {
 
@@ -45,13 +45,13 @@ inline MessageBus create_message_bus(const std::string& backend           = "zen
                                      const std::string& zenoh_config_json = "") {
     if (backend != "zenoh") {
         if (backend == "shm") {
-            spdlog::error("[MessageBusFactory] The 'shm' backend has been removed. "
-                          "Please update config/default.json to use ipc_backend: \"zenoh\". "
-                          "Falling back to Zenoh.");
+            DRONE_LOG_ERROR("[MessageBusFactory] The 'shm' backend has been removed. "
+                            "Please update config/default.json to use ipc_backend: \"zenoh\". "
+                            "Falling back to Zenoh.");
         } else {
-            spdlog::error("[MessageBusFactory] Unknown backend '{}' — only 'zenoh' is "
-                          "currently supported. Falling back to Zenoh.",
-                          backend);
+            DRONE_LOG_ERROR("[MessageBusFactory] Unknown backend '{}' — only 'zenoh' is "
+                            "currently supported. Falling back to Zenoh.",
+                            backend);
         }
     }
 
@@ -62,7 +62,7 @@ inline MessageBus create_message_bus(const std::string& backend           = "zen
     if (shm_pool_mb > 0) {
         drone::ipc::ZenohSession::instance().configure_shm(shm_pool_mb * 1024 * 1024);
     }
-    spdlog::info("[MessageBusFactory] Selected backend: Zenoh");
+    DRONE_LOG_INFO("[MessageBusFactory] Selected backend: Zenoh");
     return MessageBus(std::make_unique<ZenohMessageBus>());
 }
 
@@ -74,13 +74,15 @@ inline MessageBus create_message_bus(const std::string& backend           = "zen
 template<typename ConfigT,
          typename = typename std::enable_if<!std::is_convertible<ConfigT, std::string>::value>::type>
 MessageBus create_message_bus(const ConfigT& cfg) {
-    const auto backend     = cfg.template get<std::string>("ipc_backend", "zenoh");
-    const auto shm_pool_mb = cfg.template get<std::size_t>("zenoh.shm_pool_size_mb", 0);
+    const auto backend     = cfg.template get<std::string>(drone::cfg_key::IPC_BACKEND, "zenoh");
+    const auto shm_pool_mb = cfg.template get<std::size_t>(drone::cfg_key::zenoh::SHM_POOL_SIZE_MB,
+                                                           0);
 
     std::string zenoh_json;
-    if (cfg.template get<bool>("zenoh.network.enabled", false)) {
-        auto net_cfg = ZenohNetworkConfig::from_app_config(cfg.section("zenoh.network"));
-        zenoh_json   = net_cfg.to_json();
+    if (cfg.template get<bool>(drone::cfg_key::zenoh::NETWORK_ENABLED, false)) {
+        auto net_cfg =
+            ZenohNetworkConfig::from_app_config(cfg.section(drone::cfg_key::zenoh::NETWORK));
+        zenoh_json = net_cfg.to_json();
     }
 
     return create_message_bus(backend, shm_pool_mb, zenoh_json);

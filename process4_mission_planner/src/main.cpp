@@ -20,9 +20,11 @@
 #include "planner/static_obstacle_layer.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -35,8 +37,6 @@
 #include <chrono>
 #include <cmath>
 #include <thread>
-
-#include <spdlog/spdlog.h>
 
 using namespace drone::planner;
 
@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::mission_planner_schema());
             rc != 0) {
@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    spdlog::info("=== Mission Planner starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== Mission Planner starting (PID {}) ===", getpid());
 
     // ── Create message bus (config-driven) ───────────────────
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -94,20 +94,20 @@ int main(int argc, char* argv[]) {
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_sub->is_connected()) {
-        spdlog::error("Cannot connect to SLAM pose");
+        DRONE_LOG_ERROR("Cannot connect to SLAM pose");
         return 1;
     }
 
     auto obj_sub =
         bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!obj_sub->is_connected()) {
-        spdlog::error("Cannot connect to detected objects");
+        DRONE_LOG_ERROR("Cannot connect to detected objects");
         return 1;
     }
 
     auto fc_state_sub = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
     if (!fc_state_sub->is_connected()) {
-        spdlog::error("Cannot connect to FC state — comms may not be running");
+        DRONE_LOG_ERROR("Cannot connect to FC state — comms may not be running");
         return 1;
     }
 
@@ -126,19 +126,21 @@ int main(int argc, char* argv[]) {
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() || !payload_pub->is_ready() ||
         !fc_cmd_pub->is_ready()) {
-        spdlog::error("Failed to create mission planner publishers");
+        DRONE_LOG_ERROR("Failed to create mission planner publishers");
         return 1;
     }
 
     // ── Load mission from config or use defaults ────────────
-    const float overshoot_proximity = cfg.get<float>("mission_planner.overshoot_proximity_factor",
-                                                     3.0f);
-    MissionFSM  fsm(overshoot_proximity);
-    auto        wp_json = cfg.section("mission_planner.waypoints");
+    const float overshoot_proximity =
+        cfg.get<float>(drone::cfg_key::mission_planner::OVERSHOOT_PROXIMITY_FACTOR, 3.0f);
+    MissionFSM fsm(overshoot_proximity);
+    auto       wp_json = cfg.section(drone::cfg_key::mission_planner::WAYPOINTS);
     if (wp_json.is_array() && !wp_json.empty()) {
         std::vector<Waypoint> waypoints;
-        const float default_radius = cfg.get<float>("mission_planner.acceptance_radius_m", 2.0f);
-        const float default_speed  = cfg.get<float>("mission_planner.cruise_speed_mps", 2.0f);
+        const float           default_radius =
+            cfg.get<float>(drone::cfg_key::mission_planner::ACCEPTANCE_RADIUS_M, 2.0f);
+        const float default_speed =
+            cfg.get<float>(drone::cfg_key::mission_planner::CRUISE_SPEED_MPS, 2.0f);
         for (const auto& w : wp_json) {
             waypoints.push_back({w.value("x", 0.0f), w.value("y", 0.0f), w.value("z", 5.0f),
                                  w.value("yaw", 0.0f), default_radius,
@@ -157,130 +159,155 @@ int main(int argc, char* argv[]) {
     fsm.on_arm();  // IDLE → PREFLIGHT
 
     // ── Create path planner and obstacle avoider strategies ──
-    const float takeoff_alt = cfg.get<float>("mission_planner.takeoff_altitude_m", 10.0f);
-    const float influence_radius =
-        cfg.get<float>("mission_planner.obstacle_avoidance.influence_radius_m", 5.0f);
-    const float repulsive_gain = cfg.get<float>("mission_planner.obstacle_avoidance.repulsive_gain",
-                                                2.0f);
-    const int   update_ms      = cfg.get<int>("mission_planner.update_rate_hz", 10);
-    const int   loop_sleep_ms  = std::max(1, update_ms > 0 ? 1000 / update_ms : 100);
+    const float takeoff_alt = cfg.get<float>(drone::cfg_key::mission_planner::TAKEOFF_ALTITUDE_M,
+                                             10.0f);
+    const float influence_radius = cfg.get<float>(
+        drone::cfg_key::mission_planner::obstacle_avoidance::INFLUENCE_RADIUS_M, 5.0f);
+    const float repulsive_gain =
+        cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::REPULSIVE_GAIN, 2.0f);
+    const int update_rate_hz = cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 10);
+    const int loop_sleep_ms  = std::max(1, update_rate_hz > 0 ? 1000 / update_rate_hz : 100);
 
-    auto planner_backend = cfg.get<std::string>("mission_planner.path_planner.backend",
-                                                "potential_field");
+    auto planner_backend = cfg.get<std::string>(
+        drone::cfg_key::mission_planner::path_planner::BACKEND, "potential_field");
     drone::planner::GridPlannerConfig planner_cfg;
-    planner_cfg.resolution_m       = cfg.get<float>("mission_planner.path_planner.resolution_m",
-                                                    planner_cfg.resolution_m);
-    planner_cfg.grid_extent_m      = cfg.get<float>("mission_planner.path_planner.grid_extent_m",
-                                                    planner_cfg.grid_extent_m);
-    planner_cfg.inflation_radius_m = cfg.get<float>(
-        "mission_planner.path_planner.inflation_radius_m", planner_cfg.inflation_radius_m);
-    planner_cfg.replan_interval_s = cfg.get<float>("mission_planner.path_planner.replan_interval_s",
-                                                   planner_cfg.replan_interval_s);
-    planner_cfg.path_speed_mps    = cfg.get<float>("mission_planner.path_planner.path_speed_mps",
-                                                   planner_cfg.path_speed_mps);
-    planner_cfg.smoothing_alpha   = cfg.get<float>("mission_planner.path_planner.smoothing_alpha",
-                                                   planner_cfg.smoothing_alpha);
-    planner_cfg.max_iterations    = cfg.get<int>("mission_planner.path_planner.max_iterations",
-                                                 planner_cfg.max_iterations);
-    planner_cfg.max_search_time_ms = cfg.get<float>(
-        "mission_planner.path_planner.max_search_time_ms", planner_cfg.max_search_time_ms);
-    planner_cfg.ramp_dist_m        = cfg.get<float>("mission_planner.path_planner.ramp_dist_m",
-                                                    planner_cfg.ramp_dist_m);
-    planner_cfg.min_speed_mps      = cfg.get<float>("mission_planner.path_planner.min_speed_mps",
-                                                    planner_cfg.min_speed_mps);
-    planner_cfg.snap_search_radius = cfg.get<int>("mission_planner.path_planner.snap_search_radius",
-                                                  planner_cfg.snap_search_radius);
+    planner_cfg.resolution_m = cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::RESOLUTION_M, planner_cfg.resolution_m);
+    planner_cfg.grid_extent_m = cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::GRID_EXTENT_M, planner_cfg.grid_extent_m);
+    planner_cfg.inflation_radius_m =
+        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::INFLATION_RADIUS_M,
+                       planner_cfg.inflation_radius_m);
+    planner_cfg.replan_interval_s =
+        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::REPLAN_INTERVAL_S,
+                       planner_cfg.replan_interval_s);
+    planner_cfg.path_speed_mps = cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::PATH_SPEED_MPS, planner_cfg.path_speed_mps);
+    planner_cfg.smoothing_alpha =
+        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SMOOTHING_ALPHA,
+                       planner_cfg.smoothing_alpha);
+    planner_cfg.max_iterations = cfg.get<int>(
+        drone::cfg_key::mission_planner::path_planner::MAX_ITERATIONS, planner_cfg.max_iterations);
+    planner_cfg.max_search_time_ms =
+        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::MAX_SEARCH_TIME_MS,
+                       planner_cfg.max_search_time_ms);
+    planner_cfg.ramp_dist_m = cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::RAMP_DIST_M, planner_cfg.ramp_dist_m);
+    planner_cfg.min_speed_mps = cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::MIN_SPEED_MPS, planner_cfg.min_speed_mps);
+    planner_cfg.snap_search_radius =
+        cfg.get<int>(drone::cfg_key::mission_planner::path_planner::SNAP_SEARCH_RADIUS,
+                     planner_cfg.snap_search_radius);
 
     // Occupancy-grid-specific settings: scenario configs use occupancy_grid.* keys
     // to configure these fields instead of the path_planner.* defaults.
-    planner_cfg.resolution_m       = cfg.get<float>("mission_planner.occupancy_grid.resolution_m",
-                                                    planner_cfg.resolution_m);
-    planner_cfg.inflation_radius_m = cfg.get<float>(
-        "mission_planner.occupancy_grid.inflation_radius_m", planner_cfg.inflation_radius_m);
-    planner_cfg.cell_ttl_s = cfg.get<float>("mission_planner.occupancy_grid.dynamic_obstacle_ttl_s",
-                                            planner_cfg.cell_ttl_s);
-    planner_cfg.min_confidence = cfg.get<float>("mission_planner.occupancy_grid.min_confidence",
-                                                planner_cfg.min_confidence);
-    planner_cfg.promotion_hits = cfg.get<int>("mission_planner.occupancy_grid.promotion_hits",
-                                              planner_cfg.promotion_hits);
-    planner_cfg.radar_promotion_hits =
-        static_cast<uint32_t>(cfg.get<int>("mission_planner.occupancy_grid.radar_promotion_hits",
-                                           static_cast<int>(planner_cfg.radar_promotion_hits)));
-    planner_cfg.min_promotion_depth_confidence =
-        cfg.get<float>("mission_planner.occupancy_grid.min_promotion_depth_confidence",
-                       planner_cfg.min_promotion_depth_confidence);
-    planner_cfg.max_static_cells = cfg.get<int>("mission_planner.occupancy_grid.max_static_cells",
-                                                planner_cfg.max_static_cells);
+    planner_cfg.resolution_m = cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::RESOLUTION_M, planner_cfg.resolution_m);
+    planner_cfg.inflation_radius_m =
+        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::INFLATION_RADIUS_M,
+                       planner_cfg.inflation_radius_m);
+    planner_cfg.cell_ttl_s =
+        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::DYNAMIC_OBSTACLE_TTL_S,
+                       planner_cfg.cell_ttl_s);
+    planner_cfg.min_confidence =
+        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::MIN_CONFIDENCE,
+                       planner_cfg.min_confidence);
+    planner_cfg.promotion_hits =
+        cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::PROMOTION_HITS,
+                     planner_cfg.promotion_hits);
+    planner_cfg.radar_promotion_hits = static_cast<uint32_t>(
+        cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::RADAR_PROMOTION_HITS,
+                     static_cast<int>(planner_cfg.radar_promotion_hits)));
+    planner_cfg.min_promotion_depth_confidence = cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::MIN_PROMOTION_DEPTH_CONFIDENCE,
+        planner_cfg.min_promotion_depth_confidence);
+    planner_cfg.max_static_cells =
+        cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::MAX_STATIC_CELLS,
+                     planner_cfg.max_static_cells);
     // Prediction config — under occupancy_grid.* for consistency with other grid params
-    planner_cfg.prediction_enabled = cfg.get<bool>(
-        "mission_planner.occupancy_grid.prediction_enabled", planner_cfg.prediction_enabled);
-    planner_cfg.prediction_dt_s = cfg.get<float>("mission_planner.occupancy_grid.prediction_dt_s",
-                                                 planner_cfg.prediction_dt_s);
-    planner_cfg.z_band_cells    = cfg.get<int>("mission_planner.path_planner.z_band_cells",
-                                               planner_cfg.z_band_cells);
-    planner_cfg.look_ahead_m    = cfg.get<float>("mission_planner.path_planner.look_ahead_m",
-                                                 planner_cfg.look_ahead_m);
-    planner_cfg.yaw_towards_travel = cfg.get<bool>(
-        "mission_planner.path_planner.yaw_towards_travel", planner_cfg.yaw_towards_travel);
-    planner_cfg.yaw_smoothing_rate = cfg.get<float>(
-        "mission_planner.path_planner.yaw_smoothing_rate", planner_cfg.yaw_smoothing_rate);
-    planner_cfg.snap_approach_bias = cfg.get<float>(
-        "mission_planner.path_planner.snap_approach_bias", planner_cfg.snap_approach_bias);
+    planner_cfg.prediction_enabled =
+        cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,
+                      planner_cfg.prediction_enabled);
+    planner_cfg.prediction_dt_s =
+        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_DT_S,
+                       planner_cfg.prediction_dt_s);
+    planner_cfg.z_band_cells = cfg.get<int>(
+        drone::cfg_key::mission_planner::path_planner::Z_BAND_CELLS, planner_cfg.z_band_cells);
+    planner_cfg.look_ahead_m = cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::LOOK_AHEAD_M, planner_cfg.look_ahead_m);
+    planner_cfg.yaw_towards_travel =
+        cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::YAW_TOWARDS_TRAVEL,
+                      planner_cfg.yaw_towards_travel);
+    planner_cfg.yaw_smoothing_rate =
+        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::YAW_SMOOTHING_RATE,
+                       planner_cfg.yaw_smoothing_rate);
+    planner_cfg.snap_approach_bias =
+        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS,
+                       planner_cfg.snap_approach_bias);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
-    spdlog::info("Path planner: {}", path_planner->name());
+    DRONE_LOG_INFO("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
 
     // ── HD-map static obstacles ─────────────────────────────
     StaticObstacleLayer obstacle_layer;
     obstacle_layer.load(cfg, grid_planner);
 
-    auto avoider_backend = cfg.get<std::string>("mission_planner.obstacle_avoider.backend",
-                                                "potential_field");
+    auto avoider_backend = cfg.get<std::string>(
+        drone::cfg_key::mission_planner::obstacle_avoider::BACKEND, "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
                                                            repulsive_gain, &cfg);
-    spdlog::info("Obstacle avoider: {}", avoider->name());
+    DRONE_LOG_INFO("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
     Geofence   geofence;
-    const bool geofence_cfg_enabled = cfg.get<bool>("mission_planner.geofence.enabled", true);
-    auto       fence_json           = cfg.section("mission_planner.geofence.polygon");
+    const bool geofence_cfg_enabled =
+        cfg.get<bool>(drone::cfg_key::mission_planner::geofence::ENABLED, true);
+    auto fence_json = cfg.section(drone::cfg_key::mission_planner::geofence::POLYGON);
     if (geofence_cfg_enabled && fence_json.is_array() && fence_json.size() >= 3) {
         std::vector<GeoVertex> vertices;
         for (const auto& v : fence_json) {
             vertices.push_back({v.value("x", 0.0f), v.value("y", 0.0f)});
         }
         geofence.set_polygon(vertices);
-        float alt_floor   = cfg.get<float>("mission_planner.geofence.altitude_floor_m", 0.0f);
-        float alt_ceiling = cfg.get<float>("mission_planner.geofence.altitude_ceiling_m", 120.0f);
+        float alt_floor =
+            cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M, 0.0f);
+        float alt_ceiling =
+            cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M, 120.0f);
         geofence.set_altitude_limits(alt_floor, alt_ceiling);
         geofence.set_warning_margin(
-            cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
+            cfg.get<float>(drone::cfg_key::mission_planner::geofence::WARNING_MARGIN_M, 5.0f));
         geofence.set_altitude_tolerance(
-            cfg.get<float>("mission_planner.geofence.altitude_tolerance_m", 0.5f));
+            cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_TOLERANCE_M, 0.5f));
         geofence.enable(true);
-        spdlog::info("Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m",
-                     vertices.size(), alt_floor, alt_ceiling,
-                     cfg.get<float>("mission_planner.geofence.warning_margin_m", 5.0f));
+        DRONE_LOG_INFO(
+            "Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m", vertices.size(),
+            alt_floor, alt_ceiling,
+            cfg.get<float>(drone::cfg_key::mission_planner::geofence::WARNING_MARGIN_M, 5.0f));
     } else {
-        spdlog::info("Geofence: disabled ({})",
-                     geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
+        DRONE_LOG_INFO("Geofence: disabled ({})",
+                       geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
     }
 
     // ── Create extracted subsystems ─────────────────────────
-    const float rtl_acceptance_m = cfg.get<float>("mission_planner.rtl_acceptance_radius_m", 1.5f);
-    const float landed_alt_m     = cfg.get<float>("mission_planner.landed_altitude_m", 0.5f);
-    const int   rtl_min_dwell_s  = cfg.get<int>("mission_planner.rtl_min_dwell_seconds", 5);
-    const float survey_duration  = cfg.get<float>("mission_planner.survey_duration_s", 0.0f);
-    const float survey_yaw_rate  = cfg.get<float>("mission_planner.survey_yaw_rate", 0.3f);
+    const float rtl_acceptance_m =
+        cfg.get<float>(drone::cfg_key::mission_planner::RTL_ACCEPTANCE_RADIUS_M, 1.5f);
+    const float landed_alt_m  = cfg.get<float>(drone::cfg_key::mission_planner::LANDED_ALTITUDE_M,
+                                               0.5f);
+    const int rtl_min_dwell_s = cfg.get<int>(drone::cfg_key::mission_planner::RTL_MIN_DWELL_SECONDS,
+                                             5);
+    const float survey_duration = cfg.get<float>(drone::cfg_key::mission_planner::SURVEY_DURATION_S,
+                                                 0.0f);
+    const float survey_yaw_rate = cfg.get<float>(drone::cfg_key::mission_planner::SURVEY_YAW_RATE,
+                                                 0.3f);
 
     // Collision recovery config (Issue #226)
     const bool collision_recovery_enabled =
-        cfg.get<bool>("mission_planner.collision_recovery.enabled", true);
+        cfg.get<bool>(drone::cfg_key::mission_planner::collision_recovery::ENABLED, true);
     const float collision_climb_delta =
-        cfg.get<float>("mission_planner.collision_recovery.climb_delta_m", 3.0f);
+        cfg.get<float>(drone::cfg_key::mission_planner::collision_recovery::CLIMB_DELTA_M, 3.0f);
     const float collision_hover_duration =
-        cfg.get<float>("mission_planner.collision_recovery.hover_duration_s", 2.0f);
+        cfg.get<float>(drone::cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S, 2.0f);
 
     MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s,
                                       survey_duration, survey_yaw_rate, collision_recovery_enabled,
@@ -294,7 +321,7 @@ int main(int argc, char* argv[]) {
     // ── Create fault manager (config-driven thresholds) ────
     FaultManager fault_mgr(cfg);
 
-    spdlog::info("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
+    DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
 
     // ── Thread heartbeat + watchdog + health publisher ──────
@@ -351,13 +378,13 @@ int main(int argc, char* argv[]) {
                                  "ms old (threshold: " +
                                  std::to_string(kPoseStaleThresholdNs / 1'000'000) + "ms)");
             if (pose_stale_count == 1 || pose_stale_count % 50 == 0) {
-                spdlog::warn("[Planner] STALE POSE detected "
-                             "(#{}, age={:.0f}ms) — position may be unreliable!",
-                             pose_stale_count, age_ms);
+                DRONE_LOG_WARN("[Planner] STALE POSE detected "
+                               "(#{}, age={:.0f}ms) — position may be unreliable!",
+                               pose_stale_count, age_ms);
             }
         } else if (pose_stale_count > 0) {
-            spdlog::info("[Planner] Pose freshness restored after {} stale readings",
-                         pose_stale_count);
+            DRONE_LOG_INFO("[Planner] Pose freshness restored after {} stale readings",
+                           pose_stale_count);
             pose_stale_count = 0;
         }
 
@@ -374,7 +401,7 @@ int main(int argc, char* argv[]) {
                                                    fc_state.rel_alt);
                 fault_mgr.set_geofence_violation(fence_result.violated);
                 if (fence_result.violated) {
-                    spdlog::warn("Geofence: VIOLATED — {}", fence_result.message);
+                    DRONE_LOG_WARN("Geofence: VIOLATED — {}", fence_result.message);
                     diag.add_warning("Geofence", fence_result.message);
                 } else if (fence_result.margin_m < 0.0f &&
                            std::abs(fence_result.margin_m) < geofence.warning_margin()) {
@@ -445,6 +472,6 @@ int main(int argc, char* argv[]) {
     }
 
     drone::systemd::notify_stopping();
-    spdlog::info("=== Mission Planner stopped ===");
+    DRONE_LOG_INFO("=== Mission Planner stopped ===");
     return 0;
 }

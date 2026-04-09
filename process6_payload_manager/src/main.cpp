@@ -11,8 +11,10 @@
 #include "payload/auto_tracker.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/realtime.h"
 #include "util/sd_notify.h"
@@ -24,8 +26,6 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
-
-#include <spdlog/spdlog.h>
 
 static std::atomic<bool> g_running{true};
 
@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::payload_manager_schema());
             rc != 0) {
@@ -47,15 +47,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    spdlog::info("=== Payload Manager starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== Payload Manager starting (PID {}) ===", getpid());
 
     // ── Init gimbal via HAL factory ─────────────────────────
     auto gimbal = drone::hal::create_gimbal(cfg, "payload_manager.gimbal");
     if (!gimbal->init()) {
-        spdlog::error("Failed to initialise gimbal ({})", gimbal->name());
+        DRONE_LOG_ERROR("Failed to initialise gimbal ({})", gimbal->name());
         return 1;
     }
-    spdlog::info("Gimbal: {}", gimbal->name());
+    DRONE_LOG_INFO("Gimbal: {}", gimbal->name());
 
     // ── Create message bus (config-driven: shm or zenoh) ───
     auto bus = drone::ipc::create_message_bus(cfg);
@@ -65,21 +65,22 @@ int main(int argc, char* argv[]) {
 
     auto cmd_sub = bus.subscribe<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
     if (!cmd_sub->is_connected()) {
-        spdlog::error("Cannot open payload commands channel");
+        DRONE_LOG_ERROR("Cannot open payload commands channel");
         return 1;
     }
 
     auto status_pub = bus.advertise<drone::ipc::PayloadStatus>(drone::ipc::topics::PAYLOAD_STATUS);
     if (!status_pub->is_ready()) {
-        spdlog::error("Failed to create payload status publisher");
+        DRONE_LOG_ERROR("Failed to create payload status publisher");
         return 1;
     }
 
     // ── Auto-tracking: subscribe to detections + pose ──────
     drone::payload::AutoTrackConfig auto_track_cfg{};
-    auto_track_cfg.enabled = cfg.get<bool>("payload_manager.gimbal.auto_track.enabled", false);
+    auto_track_cfg.enabled =
+        cfg.get<bool>(drone::cfg_key::payload_manager::gimbal::auto_track::ENABLED, false);
     auto_track_cfg.min_confidence =
-        cfg.get<float>("payload_manager.gimbal.auto_track.min_confidence", 0.5f);
+        cfg.get<float>(drone::cfg_key::payload_manager::gimbal::auto_track::MIN_CONFIDENCE, 0.5f);
 
     auto detections_sub =
         bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
@@ -87,13 +88,13 @@ int main(int argc, char* argv[]) {
 
     if (auto_track_cfg.enabled) {
         if (!detections_sub->is_connected()) {
-            spdlog::info("Auto-track: detections channel not yet connected (normal at startup)");
+            DRONE_LOG_INFO("Auto-track: detections channel not yet connected (normal at startup)");
         }
         if (!pose_sub->is_connected()) {
-            spdlog::info("Auto-track: pose channel not yet connected (normal at startup)");
+            DRONE_LOG_INFO("Auto-track: pose channel not yet connected (normal at startup)");
         }
-        spdlog::info("Gimbal auto-tracking ENABLED (min_confidence={:.2f})",
-                     auto_track_cfg.min_confidence);
+        DRONE_LOG_INFO("Gimbal auto-tracking ENABLED (min_confidence={:.2f})",
+                       auto_track_cfg.min_confidence);
     }
 
     // Latest detection list and pose (updated each cycle from IPC)
@@ -104,17 +105,17 @@ int main(int argc, char* argv[]) {
     // Manual command holdoff — suppress auto-tracking for a configurable duration
     // after the last manual command to avoid fighting the operator.
     const float manual_holdoff_s =
-        cfg.get<float>("payload_manager.gimbal.auto_track.manual_holdoff_s", 2.0f);
+        cfg.get<float>(drone::cfg_key::payload_manager::gimbal::auto_track::MANUAL_HOLDOFF_S, 2.0f);
     auto last_manual_cmd_time = std::chrono::steady_clock::time_point{};
 
-    spdlog::info("Payload Manager READY");
+    DRONE_LOG_INFO("Payload Manager READY");
     drone::systemd::notify_ready();
     uint64_t last_cmd_ts   = 0;
     uint64_t cycle_count   = 0;
     uint64_t capture_count = 0;
     uint64_t cmd_count     = 0;
 
-    const int   update_hz     = cfg.get<int>("payload_manager.update_rate_hz", 50);
+    const int   update_hz     = cfg.get<int>(drone::cfg_key::payload_manager::UPDATE_RATE_HZ, 50);
     const int   loop_sleep_ms = std::max(1, update_hz > 0 ? 1000 / update_hz : 20);
     const float dt            = loop_sleep_ms / 1000.0f;
 
@@ -151,16 +152,16 @@ int main(int argc, char* argv[]) {
                     auto img_id = gimbal->capture_image();
                     ++capture_count;
                     diag.add_metric("Camera", "capture_id", static_cast<double>(img_id));
-                    spdlog::info("[Payload] Captured image #{} (id={})", capture_count, img_id);
+                    DRONE_LOG_INFO("[Payload] Captured image #{} (id={})", capture_count, img_id);
                     break;
                 }
                 case drone::ipc::PayloadAction::CAMERA_START_VIDEO:
                     gimbal->start_recording();
-                    spdlog::info("[Payload] Started video recording");
+                    DRONE_LOG_INFO("[Payload] Started video recording");
                     break;
                 case drone::ipc::PayloadAction::CAMERA_STOP_VIDEO:
                     gimbal->stop_recording();
-                    spdlog::info("[Payload] Stopped video recording");
+                    DRONE_LOG_INFO("[Payload] Stopped video recording");
                     break;
                 default: break;
             }
@@ -231,6 +232,6 @@ int main(int argc, char* argv[]) {
     }
 
     drone::systemd::notify_stopping();
-    spdlog::info("=== Payload Manager stopped ===");
+    DRONE_LOG_INFO("=== Payload Manager stopped ===");
     return 0;
 }

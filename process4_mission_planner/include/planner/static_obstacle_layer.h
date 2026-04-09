@@ -7,13 +7,13 @@
 #pragma once
 
 #include "planner/grid_planner_base.h"
+#include "util/config_keys.h"
+#include "util/ilogger.h"
 
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <vector>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -33,7 +33,7 @@ public:
     template<typename Config>
     void load(const Config& cfg, IGridPlanner* grid_planner) {
         obstacles_.clear();
-        auto obs_json = cfg.section("mission_planner.static_obstacles");
+        auto obs_json = cfg.section(drone::cfg_key::mission_planner::STATIC_OBSTACLES);
         if (obs_json.is_array() && !obs_json.empty()) {
             for (const auto& o : obs_json) {
                 StaticObstacleRecord rec{o.value("x", 0.0f), o.value("y", 0.0f),
@@ -42,7 +42,8 @@ public:
                 if (grid_planner)
                     grid_planner->add_static_obstacle(rec.x, rec.y, rec.radius_m, rec.height_m);
             }
-            spdlog::info("[HD-map] Loaded {} static obstacles into planner grid", obs_json.size());
+            DRONE_LOG_INFO("[HD-map] Loaded {} static obstacles into planner grid",
+                           obs_json.size());
         }
     }
 
@@ -80,9 +81,9 @@ public:
                     if (obs.confirm_count >= 2) {
                         obs.confirmed          = true;
                         obs.first_confirmed_ns = now_ns;
-                        spdlog::info("[HD-map] Obstacle at ({:.1f},{:.1f}) CONFIRMED by camera "
-                                     "(world det ({:.2f},{:.2f},{:.2f}), dist={:.2f}m)",
-                                     obs.x, obs.y, wx, wy, wz, dist);
+                        DRONE_LOG_INFO("[HD-map] Obstacle at ({:.1f},{:.1f}) CONFIRMED by camera "
+                                       "(world det ({:.2f},{:.2f},{:.2f}), dist={:.2f}m)",
+                                       obs.x, obs.y, wx, wy, wz, dist);
                     }
                 }
             }
@@ -105,9 +106,9 @@ public:
             const float dy   = py - obs.y;
             const float dist = std::sqrt(dx * dx + dy * dy);
             if (dist < obs.radius_m + kCollisionMarginM && pz <= obs.height_m + kCollisionMarginM) {
-                spdlog::warn("[Planner] OBSTACLE COLLISION detected — drone {:.2f}m"
-                             " from obstacle at ({:.1f},{:.1f})",
-                             dist, obs.x, obs.y);
+                DRONE_LOG_WARN("[Planner] OBSTACLE COLLISION detected — drone {:.2f}m"
+                               " from obstacle at ({:.1f},{:.1f})",
+                               dist, obs.x, obs.y);
                 last_collision_warn_time_ = now;
                 return true;
             }
@@ -131,9 +132,9 @@ public:
             const float dy   = py - obs.y;
             const float dist = std::sqrt(dx * dx + dy * dy);
             if (dist < obs.radius_m + kApproachWarnM) {
-                spdlog::warn("[HD-map] Approaching UNCONFIRMED obstacle at ({:.1f},{:.1f}) "
-                             "dist={:.2f}m — camera has not verified this obstacle yet",
-                             obs.x, obs.y, dist);
+                DRONE_LOG_WARN("[HD-map] Approaching UNCONFIRMED obstacle at ({:.1f},{:.1f}) "
+                               "dist={:.2f}m — camera has not verified this obstacle yet",
+                               obs.x, obs.y, dist);
                 last_unconfirmed_approach_warn_ = now;
                 return true;
             }

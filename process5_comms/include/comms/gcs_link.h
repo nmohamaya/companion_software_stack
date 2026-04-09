@@ -2,12 +2,12 @@
 // Simulated Ground Control Station link (UDP telemetry).
 
 #pragma once
+#include "util/ilogger.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::comms {
 
@@ -33,7 +33,7 @@ public:
     [[nodiscard]] bool open(const std::string& addr, int port) {
         (void)addr;
         (void)port;
-        spdlog::info("[GCSLink] Simulated UDP link {}:{}", addr, port);
+        DRONE_LOG_INFO("[GCSLink] Simulated UDP link {}:{}", addr, port);
         connected_  = true;
         start_time_ = std::chrono::steady_clock::now();
         return true;
@@ -47,9 +47,9 @@ public:
         if (!connected_) return false;
         telem_count_++;
         if (telem_count_ % 50 == 0) {
-            spdlog::debug("[GCSLink] Telemetry #{}: pos=({:.4f},{:.4f},{:.1f}) "
-                          "batt={:.0f}% state={}",
-                          telem_count_, lat, lon, alt, battery, state);
+            DRONE_LOG_DEBUG("[GCSLink] Telemetry #{}: pos=({:.4f},{:.4f},{:.1f}) "
+                            "batt={:.0f}% state={}",
+                            telem_count_, lat, lon, alt, battery, state);
         }
         return true;
     }
@@ -67,7 +67,7 @@ public:
                 std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
             msg.valid = true;
             rtl_sent_ = true;
-            spdlog::info("[GCSLink] Simulated RTL command from GCS");
+            DRONE_LOG_INFO("[GCSLink] Simulated RTL command from GCS");
         }
         return msg;
     }

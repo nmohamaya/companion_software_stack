@@ -2,6 +2,7 @@
 // JSON configuration system for all processes.
 // Loads a JSON file and provides typed access to keys with defaults.
 #pragma once
+#include "util/ilogger.h"
 #include "util/result.h"
 
 #include <filesystem>
@@ -9,7 +10,6 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
 #include <sys/stat.h>
 
 namespace drone {
@@ -31,7 +31,7 @@ public:
         // Security checks (#184): reject symlinks and world-writable configs
         std::error_code ec;
         if (std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec))) {
-            spdlog::error("Config path is a symbolic link — refusing to load: {}", path);
+            DRONE_LOG_ERROR("Config path is a symbolic link — refusing to load: {}", path);
             data_ = nlohmann::json::object();
             return util::VoidResult::err(util::Error(util::ErrorCode::InvalidValue,
                                                      "Config path is a symbolic link: " + path));
@@ -39,22 +39,22 @@ public:
 
         struct stat st {};
         if (::stat(path.c_str(), &st) == 0 && (st.st_mode & S_IWOTH)) {
-            spdlog::warn("Config file is world-writable — potential security risk: {}", path);
+            DRONE_LOG_WARN("Config file is world-writable — potential security risk: {}", path);
         }
 
         std::ifstream ifs(path);
         if (!ifs.is_open()) {
-            spdlog::warn("Config file not found: {} — using defaults", path);
+            DRONE_LOG_WARN("Config file not found: {} — using defaults", path);
             data_ = nlohmann::json::object();
             return util::VoidResult::err(
                 util::Error(util::ErrorCode::FileNotFound, "Config file not found: " + path));
         }
         try {
             data_ = nlohmann::json::parse(ifs);
-            spdlog::info("Config loaded from: {}", path);
+            DRONE_LOG_INFO("Config loaded from: {}", path);
             return util::VoidResult::ok();
         } catch (const nlohmann::json::parse_error& e) {
-            spdlog::error("Config parse error in {}: {}", path, e.what());
+            DRONE_LOG_ERROR("Config parse error in {}: {}", path, e.what());
             data_ = nlohmann::json::object();
             return util::VoidResult::err(
                 util::Error(util::ErrorCode::ParseError,

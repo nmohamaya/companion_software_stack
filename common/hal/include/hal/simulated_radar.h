@@ -6,12 +6,12 @@
 
 #include "hal/iradar.h"
 #include "util/config.h"
+#include "util/config_keys.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
 #include <random>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -19,19 +19,23 @@ class SimulatedRadar : public IRadar {
 public:
     /// Construct with config; all tunables read from the given section.
     explicit SimulatedRadar(const drone::Config& cfg, const std::string& section)
-        : max_range_m_(cfg.get<float>(section + ".max_range_m", 100.0f))
-        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad", 1.047f))
-        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 0.262f))
-        , false_alarm_rate_(cfg.get<float>(section + ".false_alarm_rate", 0.02f))
-        , num_targets_(cfg.get<int>(section + ".num_targets", 3))
-        , range_noise_(0.0f, cfg.get<float>(section + ".noise.range_std_m", 0.3f))
-        , azimuth_noise_(0.0f, cfg.get<float>(section + ".noise.azimuth_std_rad", 0.026f))
-        , elevation_noise_(0.0f, cfg.get<float>(section + ".noise.elevation_std_rad", 0.026f))
-        , velocity_noise_(0.0f, cfg.get<float>(section + ".noise.velocity_std_mps", 0.1f)) {}
+        : max_range_m_(cfg.get<float>(section + drone::cfg_key::hal::MAX_RANGE_M, 100.0f))
+        , fov_azimuth_rad_(cfg.get<float>(section + drone::cfg_key::hal::FOV_AZIMUTH_RAD, 1.047f))
+        , fov_elevation_rad_(
+              cfg.get<float>(section + drone::cfg_key::hal::FOV_ELEVATION_RAD, 0.262f))
+        , false_alarm_rate_(cfg.get<float>(section + drone::cfg_key::hal::FALSE_ALARM_RATE, 0.02f))
+        , num_targets_(cfg.get<int>(section + drone::cfg_key::hal::NUM_TARGETS, 3))
+        , range_noise_(0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_RANGE_STD_M, 0.3f))
+        , azimuth_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_AZIMUTH_STD_RAD, 0.026f))
+        , elevation_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_ELEVATION_STD_RAD, 0.026f))
+        , velocity_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_VELOCITY_STD_MPS, 0.1f)) {}
 
     bool init() override {
         active_ = true;
-        spdlog::info(
+        DRONE_LOG_INFO(
             "[SimulatedRadar] Initialised (max_range={:.1f}m, targets={}, FoV={:.1f}x{:.1f} "
             "rad)",
             max_range_m_, num_targets_, fov_azimuth_rad_, fov_elevation_rad_);

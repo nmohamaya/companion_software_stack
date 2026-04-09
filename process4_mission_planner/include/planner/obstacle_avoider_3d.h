@@ -16,13 +16,13 @@
 #include "ipc/ipc_types.h"
 #include "planner/iobstacle_avoider.h"
 #include "util/config.h"
+#include "util/config_keys.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <string>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::planner {
 
@@ -48,28 +48,34 @@ public:
 
     /// Config-driven constructor — reads all avoider params from drone::Config.
     explicit ObstacleAvoider3D(const drone::Config& cfg) {
-        config_.influence_radius_m = cfg.get<float>(
-            "mission_planner.obstacle_avoidance.influence_radius_m", config_.influence_radius_m);
-        config_.repulsive_gain = cfg.get<float>("mission_planner.obstacle_avoidance.repulsive_gain",
-                                                config_.repulsive_gain);
-        config_.max_correction_mps = cfg.get<float>(
-            "mission_planner.obstacle_avoidance.max_correction_mps", config_.max_correction_mps);
-        config_.min_confidence = cfg.get<float>("mission_planner.obstacle_avoidance.min_confidence",
-                                                config_.min_confidence);
-        config_.prediction_dt_s = cfg.get<float>(
-            "mission_planner.obstacle_avoidance.prediction_dt_s", config_.prediction_dt_s);
-        config_.vertical_gain = cfg.get<float>("mission_planner.obstacle_avoidance.vertical_gain",
-                                               config_.vertical_gain);
+        config_.influence_radius_m =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::INFLUENCE_RADIUS_M,
+                           config_.influence_radius_m);
+        config_.repulsive_gain =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::REPULSIVE_GAIN,
+                           config_.repulsive_gain);
+        config_.max_correction_mps =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MAX_CORRECTION_MPS,
+                           config_.max_correction_mps);
+        config_.min_confidence =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_CONFIDENCE,
+                           config_.min_confidence);
+        config_.prediction_dt_s =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::PREDICTION_DT_S,
+                           config_.prediction_dt_s);
+        config_.vertical_gain =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::VERTICAL_GAIN,
+                           config_.vertical_gain);
         const int default_max_age_ms = static_cast<int>(config_.max_age_ns / 1'000'000ULL);
-        int       max_age_ms         = cfg.get<int>("mission_planner.obstacle_avoidance.max_age_ms",
-                                                    default_max_age_ms);
+        int       max_age_ms         = cfg.get<int>(
+            drone::cfg_key::mission_planner::obstacle_avoidance::MAX_AGE_MS, default_max_age_ms);
         if (max_age_ms < 0) {
-            spdlog::warn("[ObstacleAvoider3D] max_age_ms ({}) < 0, clamping to 0", max_age_ms);
+            DRONE_LOG_WARN("[ObstacleAvoider3D] max_age_ms ({}) < 0, clamping to 0", max_age_ms);
             max_age_ms = 0;
         }
         config_.max_age_ns = static_cast<uint64_t>(max_age_ms) * 1'000'000ULL;
-        config_.path_aware = cfg.get<bool>("mission_planner.obstacle_avoidance.path_aware",
-                                           config_.path_aware);
+        config_.path_aware = cfg.get<bool>(
+            drone::cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE, config_.path_aware);
     }
 
     drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
@@ -124,9 +130,9 @@ public:
                 total_rep_y -= (dy / dist) * repulsion;
                 total_rep_z -= (dz / dist) * repulsion * config_.vertical_gain;
 
-                spdlog::debug("[Avoider3D] Obstacle at ({:.1f},{:.1f},{:.1f}), "
-                              "dist={:.1f}m, rep={:.2f}",
-                              ox, oy, oz, dist, repulsion);
+                DRONE_LOG_DEBUG("[Avoider3D] Obstacle at ({:.1f},{:.1f},{:.1f}), "
+                                "dist={:.1f}m, rep={:.2f}",
+                                ox, oy, oz, dist, repulsion);
             }
         }
 

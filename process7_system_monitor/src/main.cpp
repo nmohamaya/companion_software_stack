@@ -10,8 +10,10 @@
 #include "monitor/sys_info.h"
 #include "util/arg_parser.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/config_validator.h"
 #include "util/diagnostic.h"
+#include "util/ilogger.h"
 #include "util/log_config.h"
 #include "util/process_graph.h"
 #include "util/restart_policy.h"
@@ -31,7 +33,6 @@
 #include <thread>
 #include <unordered_map>
 
-#include <spdlog/spdlog.h>
 #include <unistd.h>
 
 static std::atomic<bool> g_running{true};
@@ -45,7 +46,7 @@ int main(int argc, char* argv[]) {
 
     drone::Config cfg;
     if (!cfg.load(args.config_path)) {
-        spdlog::warn("Running with default configuration; failed to load '{}'", args.config_path);
+        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
     } else {
         if (int rc = drone::util::validate_or_exit(cfg, drone::util::system_monitor_schema());
             rc != 0) {
@@ -53,13 +54,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    spdlog::info("=== System Monitor starting (PID {}) ===", getpid());
+    DRONE_LOG_INFO("=== System Monitor starting (PID {}) ===", getpid());
 
     // ── Supervised mode: fork+exec child processes ──────────
     std::unique_ptr<drone::monitor::ProcessManager> supervisor;
     drone::util::ProcessGraph                       process_graph;
     if (args.supervised) {
-        spdlog::info("[Supervisor] Mode ENABLED — will fork+exec child processes");
+        DRONE_LOG_INFO("[Supervisor] Mode ENABLED — will fork+exec child processes");
 
         // Resolve binary directory from our own /proc/self/exe
         char        self_path[1024] = {};
@@ -86,7 +87,7 @@ int main(int argc, char* argv[]) {
         if (args.json_logs) extra_args += "--json-logs ";
 
         // Load per-process configs from "watchdog.processes" section
-        auto proc_section = cfg.section("watchdog.processes");
+        auto proc_section = cfg.section(drone::cfg_key::watchdog::PROCESSES);
 
         // Default process list (if config section is absent or empty)
         static const std::vector<std::string> default_process_names = {
@@ -113,7 +114,7 @@ int main(int argc, char* argv[]) {
             }
         } else {
             // Fallback: use defaults with hardcoded policies
-            spdlog::info("[Supervisor] No watchdog.processes config — using defaults");
+            DRONE_LOG_INFO("[Supervisor] No watchdog.processes config — using defaults");
             for (const auto& name : default_process_names) {
                 drone::util::ProcessConfig pc;
                 pc.name   = name;
@@ -142,8 +143,8 @@ int main(int argc, char* argv[]) {
 
         bool graph_valid = process_graph.validate();
         if (!graph_valid) {
-            spdlog::error("[Supervisor] ProcessGraph validation failed — disabling "
-                          "cascade logic and using default launch order");
+            DRONE_LOG_ERROR("[Supervisor] ProcessGraph validation failed — disabling "
+                            "cascade logic and using default launch order");
             // Rebuild with populate_defaults() so launch_order() still works
             process_graph = drone::util::ProcessGraph{};
             for (const auto& pc : process_configs) {
@@ -155,7 +156,7 @@ int main(int argc, char* argv[]) {
         // Register processes in topological launch order
         auto launch_order = process_graph.launch_order();
         if (launch_order.empty()) {
-            spdlog::warn("[Supervisor] Empty launch order — falling back to config order");
+            DRONE_LOG_WARN("[Supervisor] Empty launch order — falling back to config order");
             for (const auto& pc : process_configs) {
                 launch_order.push_back(pc.name);
             }
@@ -181,17 +182,17 @@ int main(int argc, char* argv[]) {
 
         supervisor->set_death_callback([](const char* name, int exit_code, int signal_num) {
             if (signal_num > 0) {
-                spdlog::error("[Supervisor] {} killed by signal {} ({})", name, signal_num,
-                              strsignal(signal_num));
+                DRONE_LOG_ERROR("[Supervisor] {} killed by signal {} ({})", name, signal_num,
+                                strsignal(signal_num));
             } else {
-                spdlog::error("[Supervisor] {} exited with code {}", name, exit_code);
+                DRONE_LOG_ERROR("[Supervisor] {} exited with code {}", name, exit_code);
             }
         });
 
         // Launch all children in topological order
         supervisor->launch_all();
-        spdlog::info("[Supervisor] All child processes launched (order: {})",
-                     fmt::join(launch_order, " → "));
+        DRONE_LOG_INFO("[Supervisor] All child processes launched (order: {})",
+                       fmt::join(launch_order, " → "));
     }
 
     // ── Create message bus (config-driven: shm or zenoh) ───
@@ -202,7 +203,7 @@ int main(int argc, char* argv[]) {
 
     auto health_pub = bus.advertise<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
     if (!health_pub->is_ready()) {
-        spdlog::error("Failed to create system health publisher");
+        DRONE_LOG_ERROR("Failed to create system health publisher");
         return 1;
     }
 
@@ -227,7 +228,7 @@ int main(int argc, char* argv[]) {
 
     drone::ipc::LivelinessMonitor liveliness_monitor(
         [liveness](const std::string& proc) {
-            spdlog::info("[SysMon] Process ALIVE: {}", proc);
+            DRONE_LOG_INFO("[SysMon] Process ALIVE: {}", proc);
             auto now_ns =
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
@@ -236,7 +237,7 @@ int main(int argc, char* argv[]) {
             liveness->events.push_back({proc, true, now_ns});
         },
         [liveness](const std::string& proc) {
-            spdlog::error("[SysMon] Process DIED: {}", proc);
+            DRONE_LOG_ERROR("[SysMon] Process DIED: {}", proc);
             auto now_ns =
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
@@ -252,14 +253,14 @@ int main(int argc, char* argv[]) {
     };
     std::unordered_map<std::string, ProcessState> process_alive_map;
 
-    spdlog::info("System Monitor READY");
+    DRONE_LOG_INFO("System Monitor READY");
 
     // ── systemd readiness + watchdog ─────────────────────────────
     drone::systemd::notify_ready();
     if (drone::systemd::watchdog_enabled()) {
         auto wdog_us = drone::systemd::watchdog_usec();
-        spdlog::info("[systemd] Watchdog active: interval={}us ({}s)", wdog_us,
-                     wdog_us / 1'000'000);
+        DRONE_LOG_INFO("[systemd] Watchdog active: interval={}us ({}s)", wdog_us,
+                       wdog_us / 1'000'000);
     }
 
     // ── Thread heartbeat + watchdog + health publisher ──────
@@ -271,26 +272,35 @@ int main(int argc, char* argv[]) {
                                                                "system_monitor", watchdog);
 
     // Config-driven thresholds
-    const float cpu_warn  = cfg.get<float>("system_monitor.thresholds.cpu_warn_percent", 90.0f);
-    const float mem_warn  = cfg.get<float>("system_monitor.thresholds.mem_warn_percent", 90.0f);
-    const float temp_warn = cfg.get<float>("system_monitor.thresholds.temp_warn_c", 80.0f);
-    const float temp_crit = cfg.get<float>("system_monitor.thresholds.temp_crit_c", 95.0f);
-    const float batt_warn = cfg.get<float>("system_monitor.thresholds.battery_warn_percent", 20.0f);
-    const float batt_crit = cfg.get<float>("system_monitor.thresholds.battery_crit_percent", 10.0f);
-    const float disk_crit = cfg.get<float>("system_monitor.thresholds.disk_crit_percent", 98.0f);
-    const int   disk_check_s  = cfg.get<int>("system_monitor.disk_check_interval_s", 10);
-    const int   update_rate   = cfg.get<int>("system_monitor.update_rate_hz", 1);
-    const int   loop_sleep_ms = std::max(1, update_rate > 0 ? 1000 / update_rate : 1000);
+    const float cpu_warn =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT, 90.0f);
+    const float mem_warn =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT, 90.0f);
+    const float temp_warn = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_WARN_C,
+                                           80.0f);
+    const float temp_crit = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_CRIT_C,
+                                           95.0f);
+    const float batt_warn =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT, 20.0f);
+    const float batt_crit =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT, 10.0f);
+    const float disk_crit =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::DISK_CRIT_PERCENT, 98.0f);
+    const int disk_check_s  = cfg.get<int>(drone::cfg_key::system_monitor::DISK_CHECK_INTERVAL_S,
+                                           10);
+    const int update_rate   = cfg.get<int>(drone::cfg_key::system_monitor::UPDATE_RATE_HZ, 1);
+    const int loop_sleep_ms = std::max(1, update_rate > 0 ? 1000 / update_rate : 1000);
 
     // Convert disk check interval from seconds to ticks (calls)
     const int disk_interval_ticks = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
 
     // Create process monitor via strategy factory (backend from config)
-    const std::string monitor_backend = cfg.get<std::string>("system_monitor.backend", "linux");
-    auto              monitor         = drone::monitor::create_process_monitor(
+    const std::string monitor_backend =
+        cfg.get<std::string>(drone::cfg_key::system_monitor::BACKEND, "linux");
+    auto monitor = drone::monitor::create_process_monitor(
         monitor_backend, cpu_warn, mem_warn, temp_warn, temp_crit, disk_crit, batt_warn, batt_crit,
         disk_interval_ticks);
-    spdlog::info("Process monitor: {}", monitor->name());
+    DRONE_LOG_INFO("Process monitor: {}", monitor->name());
 
     // Optional fault-injection override subscriber.
     auto fault_sub =
@@ -386,7 +396,7 @@ int main(int argc, char* argv[]) {
             else if (health.thermal_zone == 3)
                 status_str = "CRITICAL";
 
-            spdlog::info(
+            DRONE_LOG_INFO(
                 "[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}°C "
                 "DISK={:.0f}% BATT={:.0f}% thermal_zone={} stack={} => {}",
                 health.cpu_usage_percent, health.memory_usage_percent, health.cpu_temp_c,
@@ -414,11 +424,11 @@ int main(int argc, char* argv[]) {
     // ── Shutdown ─────────────────────────────────────────────
     drone::systemd::notify_stopping();
     if (supervisor) {
-        spdlog::info("[Supervisor] Stopping all child processes...");
+        DRONE_LOG_INFO("[Supervisor] Stopping all child processes...");
         supervisor->stop_all();
-        spdlog::info("[Supervisor] All children stopped");
+        DRONE_LOG_INFO("[Supervisor] All children stopped");
     }
 
-    spdlog::info("=== System Monitor stopped ===");
+    DRONE_LOG_INFO("=== System Monitor stopped ===");
     return 0;
 }

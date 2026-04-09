@@ -13,10 +13,10 @@
 // Bug fix (issue #129): position_3d correctly uses pinhole unproject.
 #include "perception/fusion_engine.h"
 
+#include "util/ilogger.h"
+
 #include <algorithm>
 #include <cmath>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::perception {
 

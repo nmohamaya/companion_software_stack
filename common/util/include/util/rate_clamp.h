@@ -4,10 +4,10 @@
 // from misconfigured JSON.
 #pragma once
 
+#include "util/ilogger.h"
+
 #include <algorithm>
 #include <string_view>
-
-#include <spdlog/spdlog.h>
 
 namespace drone::util {
 
@@ -24,8 +24,8 @@ constexpr int kVioRateMaxHz = 1000;
 inline int clamp_rate(int raw_hz, int min_hz, int max_hz, std::string_view label) {
     int clamped = std::clamp(raw_hz, min_hz, max_hz);
     if (clamped != raw_hz) {
-        spdlog::warn("{} rate {} Hz out of range [{}, {}] — clamped to {} Hz", label, raw_hz,
-                     min_hz, max_hz, clamped);
+        DRONE_LOG_WARN("{} rate {} Hz out of range [{}, {}] — clamped to {} Hz", label, raw_hz,
+                       min_hz, max_hz, clamped);
     }
     return clamped;
 }

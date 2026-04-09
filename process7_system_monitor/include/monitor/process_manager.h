@@ -23,6 +23,7 @@
 #pragma once
 
 #include "util/correlation.h"
+#include "util/ilogger.h"
 #include "util/process_graph.h"
 #include "util/restart_policy.h"
 #include "util/safe_name_copy.h"
@@ -42,7 +43,6 @@
 
 #include <dirent.h>
 #include <signal.h>
-#include <spdlog/spdlog.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -145,7 +145,7 @@ public:
     bool launch(const char* name) {
         auto* proc = find(name);
         if (!proc) {
-            spdlog::error("[Supervisor] Unknown process: {}", name);
+            DRONE_LOG_ERROR("[Supervisor] Unknown process: {}", name);
             return false;
         }
         return launch_one(*proc);
@@ -187,7 +187,7 @@ public:
         // SIGKILL stragglers
         for (auto& proc : processes_) {
             if (proc.state == ProcessState::RUNNING && proc.pid > 0) {
-                spdlog::warn("[Supervisor] SIGKILL {} (PID {})", proc.name, proc.pid);
+                DRONE_LOG_WARN("[Supervisor] SIGKILL {} (PID {})", proc.name, proc.pid);
                 ::kill(proc.pid, SIGKILL);
             }
         }
@@ -236,9 +236,9 @@ public:
                         proc.thermal_deferred       = true;
                         proc.thermal_defer_start_ns = now_ns;
                         auto cid                    = drone::util::CorrelationContext::generate();
-                        spdlog::warn("[Supervisor] RESTART_DEFERRED_THERMAL process={} "
-                                     "thermal_zone={} thermal_gate={} cid={:#018x}",
-                                     proc.name, thermal_zone_, policy.thermal_gate, cid);
+                        DRONE_LOG_WARN("[Supervisor] RESTART_DEFERRED_THERMAL process={} "
+                                       "thermal_zone={} thermal_gate={} cid={:#018x}",
+                                       proc.name, thermal_zone_, policy.thermal_gate, cid);
                     }
 
                     // Force restart after max deferral timeout (#183)
@@ -247,10 +247,10 @@ public:
                         uint64_t limit_ns = static_cast<uint64_t>(policy.max_thermal_defer_s) *
                                             1'000'000'000ULL;
                         if (defer_ns >= limit_ns) {
-                            spdlog::error("[Supervisor] THERMAL_DEFERRAL_TIMEOUT process={} "
-                                          "deferred_for={}s max={}s — forcing restart",
-                                          proc.name, defer_ns / 1'000'000'000ULL,
-                                          policy.max_thermal_defer_s);
+                            DRONE_LOG_ERROR("[Supervisor] THERMAL_DEFERRAL_TIMEOUT process={} "
+                                            "deferred_for={}s max={}s — forcing restart",
+                                            proc.name, defer_ns / 1'000'000'000ULL,
+                                            policy.max_thermal_defer_s);
                             proc.thermal_deferred       = false;
                             proc.thermal_defer_start_ns = 0;
                             // Fall through to backoff check below
@@ -265,19 +265,19 @@ public:
                 // Clear thermal deferral flag if temperature dropped
                 if (proc.thermal_deferred) {
                     proc.thermal_deferred = false;
-                    spdlog::info("[Supervisor] Thermal cleared for {} — restart proceeding",
-                                 proc.name);
+                    DRONE_LOG_INFO("[Supervisor] Thermal cleared for {} — restart proceeding",
+                                   proc.name);
                 }
 
                 uint64_t backoff_ns = compute_backoff_ns(proc, policy);
                 if (now_ns - proc.last_restart_ns >= backoff_ns) {
                     auto     cid      = drone::util::CorrelationContext::generate();
                     uint32_t delay_ms = policy.backoff_ms(proc.restart_count);
-                    spdlog::warn("[Supervisor] PROCESS_RESTART process={} attempt={}/{} "
-                                 "backoff_ms={} exit_code={} signal={} cid={:#018x}",
-                                 proc.name, proc.restart_count + 1, policy.max_restarts, delay_ms,
-                                 proc.last_exit_code,
-                                 proc.was_signaled ? strsignal(proc.last_signal) : "none", cid);
+                    DRONE_LOG_WARN("[Supervisor] PROCESS_RESTART process={} attempt={}/{} "
+                                   "backoff_ms={} exit_code={} signal={} cid={:#018x}",
+                                   proc.name, proc.restart_count + 1, policy.max_restarts, delay_ms,
+                                   proc.last_exit_code,
+                                   proc.was_signaled ? strsignal(proc.last_signal) : "none", cid);
                     launch_one(proc);
                 }
                 continue;  // Skip cooldown check for just-launched processes
@@ -290,8 +290,8 @@ public:
                 uint64_t cooldown_ns = static_cast<uint64_t>(policy.cooldown_window_s) *
                                        1'000'000'000ULL;
                 if (stable_ns >= cooldown_ns) {
-                    spdlog::info("[Supervisor] {} stable for {}s — resetting restart counter",
-                                 proc.name, policy.cooldown_window_s);
+                    DRONE_LOG_INFO("[Supervisor] {} stable for {}s — resetting restart counter",
+                                   proc.name, policy.cooldown_window_s);
                     proc.restart_count = 0;
                 }
             }
@@ -312,14 +312,14 @@ public:
                 proc->last_exit_code = WEXITSTATUS(status);
                 proc->was_signaled   = false;
                 proc->last_signal    = 0;
-                spdlog::error("[Supervisor] {} (PID {}) exited with code {}", proc->name, pid,
-                              proc->last_exit_code);
+                DRONE_LOG_ERROR("[Supervisor] {} (PID {}) exited with code {}", proc->name, pid,
+                                proc->last_exit_code);
             } else if (WIFSIGNALED(status)) {
                 proc->last_exit_code = -1;
                 proc->was_signaled   = true;
                 proc->last_signal    = WTERMSIG(status);
-                spdlog::error("[Supervisor] {} (PID {}) killed by signal {} ({})", proc->name, pid,
-                              proc->last_signal, strsignal(proc->last_signal));
+                DRONE_LOG_ERROR("[Supervisor] {} (PID {}) killed by signal {} ({})", proc->name,
+                                pid, proc->last_signal, strsignal(proc->last_signal));
             }
 
             proc->pid = -1;
@@ -345,10 +345,10 @@ public:
             if (proc->restart_count >= policy.max_restarts) {
                 proc->state = ProcessState::FAILED;
                 auto cid    = drone::util::CorrelationContext::generate();
-                spdlog::error("[Supervisor] PROCESS_FAILED process={} restarts_exhausted={} "
-                              "stack_status={} cid={:#018x}",
-                              proc->name, policy.max_restarts,
-                              drone::util::to_string(compute_stack_status()), cid);
+                DRONE_LOG_ERROR("[Supervisor] PROCESS_FAILED process={} restarts_exhausted={} "
+                                "stack_status={} cid={:#018x}",
+                                proc->name, policy.max_restarts,
+                                drone::util::to_string(compute_stack_status()), cid);
             } else {
                 proc->state = ProcessState::RESTARTING;
                 auto now_ns =
@@ -443,8 +443,8 @@ private:
         auto targets = graph_->cascade_targets(dead_process);
         if (targets.empty()) return;
 
-        spdlog::info("[Supervisor] Cascade from {} — stopping: {}", dead_process,
-                     fmt::join(targets, ", "));
+        DRONE_LOG_INFO("[Supervisor] Cascade from {} — stopping: {}", dead_process,
+                       fmt::join(targets, ", "));
 
         for (const auto& target_name : targets) {
             auto* target = find(target_name.c_str());
@@ -480,7 +480,7 @@ private:
 
         pid_t pid = ::fork();
         if (pid < 0) {
-            spdlog::error("[Supervisor] fork() failed for {}: {}", proc.name, strerror(errno));
+            DRONE_LOG_ERROR("[Supervisor] fork() failed for {}: {}", proc.name, strerror(errno));
             return false;
         }
 
@@ -522,7 +522,7 @@ private:
         proc.thermal_defer_start_ns = 0;
         proc.blocked_by[0]          = '\0';
 
-        spdlog::info("[Supervisor] Launched {} (PID {})", proc.name, pid);
+        DRONE_LOG_INFO("[Supervisor] Launched {} (PID {})", proc.name, pid);
         return true;
     }
 
@@ -533,7 +533,7 @@ private:
             return false;
         }
 
-        spdlog::info("[Supervisor] Stopping {} (PID {})", proc.name, proc.pid);
+        DRONE_LOG_INFO("[Supervisor] Stopping {} (PID {})", proc.name, proc.pid);
         ::kill(proc.pid, SIGTERM);
 
         // Poll for exit
@@ -544,14 +544,14 @@ private:
             if (result == proc.pid) {
                 proc.pid   = -1;
                 proc.state = ProcessState::STOPPED;
-                spdlog::info("[Supervisor] {} stopped gracefully", proc.name);
+                DRONE_LOG_INFO("[Supervisor] {} stopped gracefully", proc.name);
                 return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{50});
         }
 
         // Force kill
-        spdlog::warn("[Supervisor] {} did not exit — sending SIGKILL", proc.name);
+        DRONE_LOG_WARN("[Supervisor] {} did not exit — sending SIGKILL", proc.name);
         ::kill(proc.pid, SIGKILL);
         ::waitpid(proc.pid, nullptr, 0);
         proc.pid   = -1;

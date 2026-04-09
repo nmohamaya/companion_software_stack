@@ -25,6 +25,8 @@
 
 #include "hal/iradar.h"
 #include "util/config.h"
+#include "util/config_keys.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <atomic>
@@ -37,7 +39,6 @@
 #include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/odometry.pb.h>
 #include <gz/transport/Node.hh>
-#include <spdlog/spdlog.h>
 
 namespace drone::hal {
 
@@ -56,18 +57,24 @@ public:
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "perception.radar")
     explicit GazeboRadarBackend(const drone::Config& cfg, const std::string& section)
-        : max_range_m_(cfg.get<float>(section + ".max_range_m", 100.0f))
-        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad", 1.047f))
-        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 0.698f))
-        , ground_filter_alt_m_(cfg.get<float>(section + ".ground_filter_alt_m", 0.5f))
-        , false_alarm_rate_(cfg.get<float>(section + ".false_alarm_rate", 0.02f))
-        , scan_topic_(cfg.get<std::string>(section + ".gz_scan_topic", "/radar_lidar/scan"))
-        , odom_topic_(
-              cfg.get<std::string>(section + ".gz_odom_topic", "/model/x500_companion_0/odometry"))
-        , range_noise_(0.0f, cfg.get<float>(section + ".noise.range_std_m", 0.3f))
-        , azimuth_noise_(0.0f, cfg.get<float>(section + ".noise.azimuth_std_rad", 0.026f))
-        , elevation_noise_(0.0f, cfg.get<float>(section + ".noise.elevation_std_rad", 0.026f))
-        , velocity_noise_(0.0f, cfg.get<float>(section + ".noise.velocity_std_mps", 0.1f)) {}
+        : max_range_m_(cfg.get<float>(section + drone::cfg_key::hal::MAX_RANGE_M, 100.0f))
+        , fov_azimuth_rad_(cfg.get<float>(section + drone::cfg_key::hal::FOV_AZIMUTH_RAD, 1.047f))
+        , fov_elevation_rad_(
+              cfg.get<float>(section + drone::cfg_key::hal::FOV_ELEVATION_RAD, 0.698f))
+        , ground_filter_alt_m_(
+              cfg.get<float>(section + drone::cfg_key::hal::GROUND_FILTER_ALT_M, 0.5f))
+        , false_alarm_rate_(cfg.get<float>(section + drone::cfg_key::hal::FALSE_ALARM_RATE, 0.02f))
+        , scan_topic_(cfg.get<std::string>(section + drone::cfg_key::hal::GZ_SCAN_TOPIC,
+                                           "/radar_lidar/scan"))
+        , odom_topic_(cfg.get<std::string>(section + drone::cfg_key::hal::GZ_ODOM_TOPIC,
+                                           "/model/x500_companion_0/odometry"))
+        , range_noise_(0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_RANGE_STD_M, 0.3f))
+        , azimuth_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_AZIMUTH_STD_RAD, 0.026f))
+        , elevation_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_ELEVATION_STD_RAD, 0.026f))
+        , velocity_noise_(
+              0.0f, cfg.get<float>(section + drone::cfg_key::hal::NOISE_VELOCITY_STD_MPS, 0.1f)) {}
 
     ~GazeboRadarBackend() override { shutdown(); }
 
@@ -79,25 +86,26 @@ public:
 
     bool init() override {
         if (active_.load(std::memory_order_acquire)) {
-            spdlog::warn("[GazeboRadar] Already initialised");
+            DRONE_LOG_WARN("[GazeboRadar] Already initialised");
             return false;
         }
 
         bool scan_ok = node_.Subscribe(scan_topic_, &GazeboRadarBackend::on_scan, this);
         if (!scan_ok) {
-            spdlog::error("[GazeboRadar] Failed to subscribe to scan topic '{}'", scan_topic_);
+            DRONE_LOG_ERROR("[GazeboRadar] Failed to subscribe to scan topic '{}'", scan_topic_);
             return false;
         }
 
         bool odom_ok = node_.Subscribe(odom_topic_, &GazeboRadarBackend::on_odom, this);
         if (!odom_ok) {
-            spdlog::error("[GazeboRadar] Failed to subscribe to odom topic '{}'", odom_topic_);
+            DRONE_LOG_ERROR("[GazeboRadar] Failed to subscribe to odom topic '{}'", odom_topic_);
             node_.Unsubscribe(scan_topic_);
             return false;
         }
 
         active_.store(true, std::memory_order_release);
-        spdlog::info("[GazeboRadar] Subscribed to scan='{}', odom='{}'", scan_topic_, odom_topic_);
+        DRONE_LOG_INFO("[GazeboRadar] Subscribed to scan='{}', odom='{}'", scan_topic_,
+                       odom_topic_);
         return true;
     }
 
@@ -109,8 +117,8 @@ public:
         }
         node_.Unsubscribe(scan_topic_);
         node_.Unsubscribe(odom_topic_);
-        spdlog::info("[GazeboRadar] Shut down — unsubscribed from '{}' and '{}'", scan_topic_,
-                     odom_topic_);
+        DRONE_LOG_INFO("[GazeboRadar] Shut down — unsubscribed from '{}' and '{}'", scan_topic_,
+                       odom_topic_);
     }
 
     drone::ipc::RadarDetectionList read() override {
@@ -291,8 +299,8 @@ private:
 
         uint64_t count = scan_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count == 1) {
-            spdlog::info("[GazeboRadar] First scan: {} rays, {} detections from '{}'", total_rays,
-                         list.num_detections, scan_topic_);
+            DRONE_LOG_INFO("[GazeboRadar] First scan: {} rays, {} detections from '{}'", total_rays,
+                           list.num_detections, scan_topic_);
         }
     }
 

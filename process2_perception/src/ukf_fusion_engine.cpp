@@ -5,6 +5,7 @@
 
 #include "perception/fusion_engine.h"
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +13,6 @@
 
 #include <Eigen/Cholesky>
 #include <Eigen/LU>
-#include <spdlog/spdlog.h>
 
 namespace drone::perception {
 
@@ -459,12 +459,12 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
     , radar_enabled_(radar_enabled)
     , dormant_merge_radius_m_(dormant_merge_radius_m)
     , max_dormant_(max_dormant) {
-    spdlog::info("[UKF] radar_enabled={}, negate_azimuth={}, ground_filter_enabled={}, "
-                 "ground_filter_alt_m={:.2f}, altitude_gate_m={:.1f}, gate_threshold={:.1f}, "
-                 "dormant_merge_radius={:.1f}m, max_dormant={}",
-                 radar_enabled_, radar_cfg_.negate_azimuth, radar_cfg_.ground_filter_enabled,
-                 radar_cfg_.min_object_altitude_m, radar_cfg_.altitude_gate_m,
-                 radar_cfg_.gate_threshold, dormant_merge_radius_m_, max_dormant_);
+    DRONE_LOG_INFO("[UKF] radar_enabled={}, negate_azimuth={}, ground_filter_enabled={}, "
+                   "ground_filter_alt_m={:.2f}, altitude_gate_m={:.1f}, gate_threshold={:.1f}, "
+                   "dormant_merge_radius={:.1f}m, max_dormant={}",
+                   radar_enabled_, radar_cfg_.negate_azimuth, radar_cfg_.ground_filter_enabled,
+                   radar_cfg_.min_object_altitude_m, radar_cfg_.altitude_gate_m,
+                   radar_cfg_.gate_threshold, dormant_merge_radius_m_, max_dormant_);
 }
 
 UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
@@ -648,9 +648,9 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
             // S is not positive-definite even after regularization — treat as
             // association failure (return no-match) rather than using a permissive
             // diagonal approximation that could underestimate Mahalanobis distance.
-            spdlog::warn("[UKF] S-matrix LLT failed for radar-only track {:#x}, skipping "
-                         "association",
-                         ukf.track_id);
+            DRONE_LOG_WARN("[UKF] S-matrix LLT failed for radar-only track {:#x}, skipping "
+                           "association",
+                           ukf.track_id);
             return false;
         }
         // Widen coarse range gate to 3σ of S(0,0) (range innovation variance).
@@ -767,10 +767,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 }
             }
             if (filtered > 0) {
-                spdlog::debug("[UKF] Ground filter: rejected {}/{} radar detections "
-                              "(alt < {:.1f}m)",
-                              filtered, radar_dets_.num_detections,
-                              radar_cfg_.min_object_altitude_m);
+                DRONE_LOG_DEBUG("[UKF] Ground filter: rejected {}/{} radar detections "
+                                "(alt < {:.1f}m)",
+                                filtered, radar_dets_.num_detections,
+                                radar_cfg_.min_object_altitude_m);
             }
         }
 
@@ -853,8 +853,8 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     }
                     adopted         = true;
                     radar_init_used = true;  // treat as radar-confirmed for dormant
-                    spdlog::info("[UKF] Camera adopt: track {} ← radar-only {:#x}", trk.track_id,
-                                 best_radar_tid);
+                    DRONE_LOG_INFO("[UKF] Camera adopt: track {} ← radar-only {:#x}", trk.track_id,
+                                   best_radar_tid);
                 }
             }
 
@@ -895,9 +895,9 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     }
                     if (best_range > 0.0f) {
                         radar_matched[best_radar_idx] = true;  // reserve detection
-                        spdlog::info("[UKF] Radar-init: track {} cam_depth={:.1f}m → "
-                                     "radar_range={:.1f}m",
-                                     trk.track_id, depth, best_range);
+                        DRONE_LOG_INFO("[UKF] Radar-init: track {} cam_depth={:.1f}m → "
+                                       "radar_range={:.1f}m",
+                                       trk.track_id, depth, best_range);
                         depth           = best_range;
                         radar_init_used = true;
                     }
@@ -932,22 +932,22 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                         dobs.world_pos    = (1.0f - alpha) * dobs.world_pos + alpha * world_pos;
                         dobs.last_seen_ns = tracked.timestamp_ns;
                         track_to_dormant_[trk.track_id] = didx;
-                        spdlog::info("[UKF] Re-ID: track {} → dormant #{} at ({:.1f},{:.1f}), "
-                                     "obs={}, dist={:.1f}m",
-                                     trk.track_id, didx, dobs.world_pos.x(), dobs.world_pos.y(),
-                                     dobs.observations,
-                                     (world_pos.head<2>() - dobs.world_pos.head<2>()).norm());
+                        DRONE_LOG_INFO("[UKF] Re-ID: track {} → dormant #{} at ({:.1f},{:.1f}), "
+                                       "obs={}, dist={:.1f}m",
+                                       trk.track_id, didx, dobs.world_pos.x(), dobs.world_pos.y(),
+                                       dobs.observations,
+                                       (world_pos.head<2>() - dobs.world_pos.head<2>()).norm());
                     } else {
                         // New obstacle — create dormant entry
                         if (static_cast<int>(dormant_obstacles_.size()) < max_dormant_) {
                             dormant_obstacles_.push_back({world_pos, 1, tracked.timestamp_ns});
                             track_to_dormant_[trk.track_id] =
                                 static_cast<int>(dormant_obstacles_.size()) - 1;
-                            spdlog::info("[UKF] New obstacle: track {} → dormant #{} at "
-                                         "({:.1f},{:.1f})",
-                                         trk.track_id,
-                                         static_cast<int>(dormant_obstacles_.size()) - 1,
-                                         world_pos.x(), world_pos.y());
+                            DRONE_LOG_INFO("[UKF] New obstacle: track {} → dormant #{} at "
+                                           "({:.1f},{:.1f})",
+                                           trk.track_id,
+                                           static_cast<int>(dormant_obstacles_.size()) - 1,
+                                           world_pos.x(), world_pos.y());
                         }
                     }
                 }
@@ -1066,18 +1066,18 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 dobs.world_pos    = (1.0f - alpha) * dobs.world_pos + alpha * world_pos;
                 dobs.last_seen_ns = tracked.timestamp_ns;
                 track_to_dormant_[trk.track_id] = didx;
-                spdlog::info("[UKF] Re-ID (late radar): track {} → dormant #{} at "
-                             "({:.1f},{:.1f}), obs={}, dist={:.1f}m",
-                             trk.track_id, didx, dobs.world_pos.x(), dobs.world_pos.y(),
-                             dobs.observations,
-                             (world_pos.head<2>() - dobs.world_pos.head<2>()).norm());
+                DRONE_LOG_INFO("[UKF] Re-ID (late radar): track {} → dormant #{} at "
+                               "({:.1f},{:.1f}), obs={}, dist={:.1f}m",
+                               trk.track_id, didx, dobs.world_pos.x(), dobs.world_pos.y(),
+                               dobs.observations,
+                               (world_pos.head<2>() - dobs.world_pos.head<2>()).norm());
             } else if (static_cast<int>(dormant_obstacles_.size()) < max_dormant_) {
                 dormant_obstacles_.push_back({world_pos, 1, tracked.timestamp_ns});
                 track_to_dormant_[trk.track_id] = static_cast<int>(dormant_obstacles_.size()) - 1;
-                spdlog::info("[UKF] New obstacle (late radar): track {} → dormant #{} "
-                             "at ({:.1f},{:.1f})",
-                             trk.track_id, static_cast<int>(dormant_obstacles_.size()) - 1,
-                             world_pos.x(), world_pos.y());
+                DRONE_LOG_INFO("[UKF] New obstacle (late radar): track {} → dormant #{} "
+                               "at ({:.1f},{:.1f})",
+                               trk.track_id, static_cast<int>(dormant_obstacles_.size()) - 1,
+                               world_pos.x(), world_pos.y());
             }
         }
 
@@ -1241,15 +1241,16 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     dobs.world_pos         = (1.0f - alpha) * dobs.world_pos + alpha * world_pos;
                     dobs.last_seen_ns      = output.timestamp_ns;
                     track_to_dormant_[rid] = didx;
-                    spdlog::info("[UKF] Re-ID (radar-only): {:#x} → dormant #{} at ({:.1f},{:.1f})",
-                                 rid, didx, dobs.world_pos.x(), dobs.world_pos.y());
+                    DRONE_LOG_INFO(
+                        "[UKF] Re-ID (radar-only): {:#x} → dormant #{} at ({:.1f},{:.1f})", rid,
+                        didx, dobs.world_pos.x(), dobs.world_pos.y());
                 } else if (static_cast<int>(dormant_obstacles_.size()) < max_dormant_) {
                     dormant_obstacles_.push_back({world_pos, 1, output.timestamp_ns});
                     track_to_dormant_[rid] = static_cast<int>(dormant_obstacles_.size()) - 1;
-                    spdlog::info("[UKF] New obstacle (radar-only): {:#x} → dormant #{} at "
-                                 "({:.1f},{:.1f})",
-                                 rid, static_cast<int>(dormant_obstacles_.size()) - 1,
-                                 world_pos.x(), world_pos.y());
+                    DRONE_LOG_INFO("[UKF] New obstacle (radar-only): {:#x} → dormant #{} at "
+                                   "({:.1f},{:.1f})",
+                                   rid, static_cast<int>(dormant_obstacles_.size()) - 1,
+                                   world_pos.x(), world_pos.y());
                 }
             }
 
@@ -1385,9 +1386,9 @@ std::unique_ptr<IFusionEngine> create_fusion_engine(const std::string&     backe
                     cfg->get<int>("perception.fusion.radar.promotion_hits",
                                   static_cast<int>(radar_cfg.radar_only_promotion_hits)));
                 if (raw_promotion < 1) {
-                    spdlog::warn("[UKF] radar promotion_hits={} invalid (must be >= 1), clamping "
-                                 "to 1",
-                                 raw_promotion);
+                    DRONE_LOG_WARN("[UKF] radar promotion_hits={} invalid (must be >= 1), clamping "
+                                   "to 1",
+                                   raw_promotion);
                     radar_cfg.radar_only_promotion_hits = 1;
                 }
             }

@@ -4,9 +4,10 @@
 // ThreadHeartbeatRegistry: process-global registry of thread heartbeats.
 // ScopedHeartbeat: RAII convenience wrapper.
 //
-// Hot-path cost: one steady_clock read + one atomic_store(relaxed) per touch().
+// Hot-path cost: one get_clock().now_ns() + one atomic_store(relaxed) per touch().
 #pragma once
 
+#include "util/iclock.h"
 #include "util/safe_name_copy.h"
 
 #include <algorithm>
@@ -130,13 +131,10 @@ public:
     }
 
     /// Touch the heartbeat — called every loop iteration.
-    /// Cost: one steady_clock::now() + one atomic_store(relaxed).
+    /// Cost: one get_clock().now_ns() + one atomic_store(relaxed).
     void touch(size_t handle) {
         if (handle >= kMaxThreads) return;
-        const auto now = std::chrono::steady_clock::now().time_since_epoch();
-        const auto ns  = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
-        beats_[handle].last_touch_ns.store(ns, std::memory_order_relaxed);
+        beats_[handle].last_touch_ns.store(get_clock().now_ns(), std::memory_order_relaxed);
     }
 
     /// Touch with a grace period — bumps timestamp to now + grace.
@@ -144,11 +142,10 @@ public:
     /// After the operation completes, call touch() to resume normal cadence.
     void touch_with_grace(size_t handle, std::chrono::milliseconds grace) {
         if (handle >= kMaxThreads) return;
-        const auto now    = std::chrono::steady_clock::now().time_since_epoch();
-        const auto future = now + grace;
-        const auto ns     = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(future).count());
-        beats_[handle].last_touch_ns.store(ns, std::memory_order_relaxed);
+        const auto grace_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(grace).count());
+        beats_[handle].last_touch_ns.store(get_clock().now_ns() + grace_ns,
+                                           std::memory_order_relaxed);
     }
 
     /// Snapshot all registered heartbeats (deep copy of atomics).
