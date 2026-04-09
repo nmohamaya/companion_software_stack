@@ -149,7 +149,8 @@ namespace drone::hal {
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "perception.radar")
 [[nodiscard]] inline std::unique_ptr<IRadar> create_radar(
-    const drone::Config& cfg, const std::string& section = "perception.radar") {
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::radar::SECTION) {
     auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
     DRONE_LOG_INFO("[HAL] Creating radar '{}' backend='{}'", section, backend);
 

@@ -331,19 +331,17 @@ TEST(ConfigKeyRegistryTest, HalSubKeys) {
 TEST_F(ConfigTest, ConfigKeysWorkWithDefaultJson) {
     drone::Config cfg;
     bool          loaded = cfg.load("config/default.json");
-    if (loaded) {
-        // Verify keys resolve the same values as the old string literals
-        EXPECT_EQ(cfg.get<int>(drone::cfg_key::video_capture::mission_cam::WIDTH, 0), 1920);
-        EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, ""), "zenoh");
-        EXPECT_EQ(cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 0), 100);
-        EXPECT_EQ(cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 0), 10);
-        EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::perception::detector::BACKEND, ""),
-                  "simulated");
-    }
+    ASSERT_TRUE(loaded) << "config/default.json must be loadable for key verification";
+    // Verify keys resolve the same values as the old string literals
+    EXPECT_EQ(cfg.get<int>(drone::cfg_key::video_capture::mission_cam::WIDTH, 0), 1920);
+    EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, ""), "zenoh");
+    EXPECT_EQ(cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 0), 100);
+    EXPECT_EQ(cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 0), 10);
+    EXPECT_EQ(cfg.get<std::string>(drone::cfg_key::perception::detector::BACKEND, ""), "simulated");
 }
 
 TEST(ConfigKeyRegistryTest, KeysAreConstexpr) {
-    // Verify constexpr-ness: these must compile as array sizes
+    // Verify constexpr-ness: pointer must be a compile-time constant
     constexpr const char* key = drone::cfg_key::mission_planner::TAKEOFF_ALTITUDE_M;
     static_assert(key != nullptr, "Config key must be constexpr non-null");
     EXPECT_NE(key, nullptr);

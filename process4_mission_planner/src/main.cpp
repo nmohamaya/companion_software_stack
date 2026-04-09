@@ -165,8 +165,8 @@ int main(int argc, char* argv[]) {
         drone::cfg_key::mission_planner::obstacle_avoidance::INFLUENCE_RADIUS_M, 5.0f);
     const float repulsive_gain =
         cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::REPULSIVE_GAIN, 2.0f);
-    const int update_ms     = cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 10);
-    const int loop_sleep_ms = std::max(1, update_ms > 0 ? 1000 / update_ms : 100);
+    const int update_rate_hz = cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 10);
+    const int loop_sleep_ms  = std::max(1, update_rate_hz > 0 ? 1000 / update_rate_hz : 100);
 
     auto planner_backend = cfg.get<std::string>(
         drone::cfg_key::mission_planner::path_planner::BACKEND, "potential_field");
