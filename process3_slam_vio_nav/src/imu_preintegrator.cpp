@@ -9,8 +9,6 @@
 
 #include "slam/imu_preintegrator.h"
 
-#include "util/ilogger.h"
-
 #include <cmath>
 
 namespace drone::slam {

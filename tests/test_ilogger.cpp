@@ -32,13 +32,18 @@ TEST(ILoggerTest, DefaultLoggerIsSpdlog) {
 }
 
 TEST(ILoggerTest, SpdlogLoggerShouldLogRespectsLevel) {
+    // Set spdlog level explicitly for deterministic test behavior.
+    auto prev_level = spdlog::default_logger()->level();
+    spdlog::set_level(spdlog::level::info);
+
     drone::log::SpdlogLogger logger;
-    // spdlog default level is info, so debug should be filtered.
-    // (Depends on runtime config, but by default spdlog is at info level.)
+    EXPECT_FALSE(logger.should_log(drone::log::Level::Debug));
     EXPECT_TRUE(logger.should_log(drone::log::Level::Info));
     EXPECT_TRUE(logger.should_log(drone::log::Level::Warn));
     EXPECT_TRUE(logger.should_log(drone::log::Level::Error));
     EXPECT_TRUE(logger.should_log(drone::log::Level::Critical));
+
+    spdlog::set_level(prev_level);  // Restore
 }
 
 // ═══════════════════════════════════════════════════════════════

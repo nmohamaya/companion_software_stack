@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace drone::log {
@@ -36,7 +37,9 @@ public:
     /// Minimum level to capture (default: Debug — capture everything).
     explicit CapturingLogger(Level min_level = Level::Debug) : min_level_(min_level) {}
 
-    void log(Level level, const std::string& msg) override { messages_.push_back({level, msg}); }
+    void log(Level level, std::string_view msg) override {
+        messages_.push_back({level, std::string(msg)});
+    }
 
     [[nodiscard]] bool should_log(Level level) const override { return level >= min_level_; }
 

@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
@@ -52,7 +53,7 @@ public:
     virtual ~ILogger() = default;
 
     /// Emit a log message at the given severity level.
-    virtual void log(Level level, const std::string& msg) = 0;
+    virtual void log(Level level, std::string_view msg) = 0;
 
     /// Check if a message at this level would be emitted.
     /// Used by macros to skip fmt::format when the level is disabled.
@@ -71,7 +72,7 @@ public:
 /// This is the default when no custom logger is installed.
 class SpdlogLogger final : public ILogger {
 public:
-    void log(Level level, const std::string& msg) override {
+    void log(Level level, std::string_view msg) override {
         spdlog::log(to_spdlog_level(level), "{}", msg);
     }
 
@@ -97,6 +98,12 @@ private:
 // invocation), so it uses an atomic load (acquire).  set_logger() and
 // reset_logger() are cold-path (startup / tests) and hold a mutex to
 // protect the owning unique_ptr.
+//
+// SAFETY CONTRACT: set_logger() / reset_logger() must only be called
+// during single-threaded startup or in test fixture setup/teardown
+// (before/after worker threads are running).  Calling them while other
+// threads are actively logging is a use-after-free.  See issue #384
+// for a planned RCU-style fix that eliminates this constraint.
 
 namespace detail {
 
@@ -199,8 +206,10 @@ inline void reset_logger() {
 
 // ── Generic level macro (for dynamic level selection) ──────
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define DRONE_LOG(level, ...)                                                              \
-    do {                                                                                   \
-        auto& _drone_lg_ = ::drone::log::logger();                                         \
-        if (_drone_lg_.should_log(level)) _drone_lg_.log(level, fmt::format(__VA_ARGS__)); \
+#define DRONE_LOG(level, ...)                                      \
+    do {                                                           \
+        const auto _drone_lvl_ = (level);                          \
+        auto&      _drone_lg_  = ::drone::log::logger();           \
+        if (_drone_lg_.should_log(_drone_lvl_))                    \
+            _drone_lg_.log(_drone_lvl_, fmt::format(__VA_ARGS__)); \
     } while (0)

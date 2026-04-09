@@ -12,6 +12,7 @@
 #include "recorder/replay_dispatch.h"
 #include "util/config.h"
 #include "util/ilogger.h"
+#include "util/log_config.h"
 
 #include <algorithm>
 #include <atomic>
@@ -83,7 +84,7 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    spdlog::set_level(spdlog::level::info);
+    LogConfig::init("flight_replay", LogConfig::resolve_log_dir());
     DRONE_LOG_INFO("Flight Replay starting: file={} speed={:.1f}x", logfile, speed);
 
     // ── Read log file ────────────────────────────────────────

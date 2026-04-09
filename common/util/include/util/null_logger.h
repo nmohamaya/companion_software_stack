@@ -17,7 +17,7 @@ namespace drone::log {
 /// Logger that discards all messages.  Zero allocation, zero I/O.
 class NullLogger final : public ILogger {
 public:
-    void log(Level /*level*/, const std::string& /*msg*/) override {
+    void log(Level /*level*/, std::string_view /*msg*/) override {
         // Intentionally empty.
     }
 
