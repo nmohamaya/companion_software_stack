@@ -558,3 +558,95 @@ TSAN_OPTIONS="halt_on_error=1" ./bin/test_thread_heartbeat         # 25/25 passe
 - When using a counter atomic (`count_`) to gate visibility of array slots, ensure all non-atomic fields in the slot are fully written **before** any synchronisation point that makes the slot visible to readers. Prefer a per-slot `initialized` flag with release/acquire over relying on the counter alone.
 - Run TSAN locally before pushing multi-threaded code: `cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -O0" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"`
 - This also resolves Issue #99 (tech debt: CAS race — per-slot ready flag).
+
+---
+
+## CI-010: PR #380 merge conflict — `create_tracker` Result<> vs DRONE_LOG macros
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-04-09 |
+| **Branch** | `feature/issue-285-feat284-a1-ilogger-interface--dronelog-m` |
+| **PR** | #380 |
+| **Affected file** | `process2_perception/src/main.cpp` |
+| **CI status** | `DIRTY` / `CONFLICTING` — GitHub blocked merging |
+
+### Symptoms
+
+GitHub showed PR #380 as "This branch has conflicts that must be resolved" with `mergeable: CONFLICTING`. The conflict was in `process2_perception/src/main.cpp` at the tracker creation code.
+
+### Root Cause
+
+PR #375 (merged to main via PR #297) changed `create_tracker()` to return `Result<>` with error handling (`tracker_result.is_ok()`, `spdlog::error`). Meanwhile PR #380 (ILogger) replaced all `spdlog::info/error` calls with `DRONE_LOG_INFO/DRONE_LOG_ERROR` macros. Both PRs touched the same lines.
+
+### Fix Applied
+
+Merged `origin/main` into the feature branch and resolved the conflict: kept the `Result<>` error handling from main, used `DRONE_LOG_ERROR`/`DRONE_LOG_INFO` macros from the ILogger branch.
+
+Also discovered `test_ilogger.cpp` was not wired into `tests/CMakeLists.txt` — added `add_drone_test(test_ilogger test_ilogger.cpp)`.
+
+### Prevention
+
+- When branching for long-lived feature work, rebase/merge main frequently
+- Pipeline agents should merge main before pushing review fixes
+- Agent pipelines that touch the same process files should coordinate via the integration branch pattern
+
+---
+
+## CI-011: PR #382 test failure — `ConfigKeysWorkWithDefaultJson` can't find config file in CI
+
+| Field | Value |
+|---|---|
+| **Date** | 2026-04-09 |
+| **Branch** | `feature/issue-287-refactor284-a3-config-key-registry--cent` |
+| **PR** | #382 |
+| **Affected test** | `ConfigTest.ConfigKeysWorkWithDefaultJson` |
+| **CI matrix** | All build variants (default, asan, tsan, ubsan, coverage) |
+
+### Symptoms
+
+```
+[warning] Config file not found: config/default.json — using defaults
+test_config.cpp:334: Failure
+Value of: loaded
+  Actual: false
+  Expected: true
+config/default.json must be loadable for key verification
+```
+
+Only 1 test failed across all 5 build variants, but it caused all to report FAILURE.
+
+### Root Cause
+
+The test at line 333 used `ASSERT_TRUE(cfg.load("config/default.json"))` with a relative path. CI runs `ctest` from the `build/` directory, so `config/default.json` resolves to `build/config/default.json` which doesn't exist. The existing `LoadDefaultConfigFile` test at line 148 already handled this correctly by treating a missing file as acceptable (`if (loaded) { ... }`).
+
+### Fix Applied
+
+Added `PROJECT_CONFIG_DIR` compile definition to `test_config` target (same pattern already used by `test_config_validator` and `test_restart_policy`):
+
+```cmake
+target_compile_definitions(test_config PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+```
+
+Updated both `LoadDefaultConfigFile` and `ConfigKeysWorkWithDefaultJson` to use the absolute path:
+```cpp
+#ifdef PROJECT_CONFIG_DIR
+    std::string config_path = std::string(PROJECT_CONFIG_DIR) + "/default.json";
+#else
+    std::string config_path = "config/default.json";
+#endif
+    bool loaded = cfg.load(config_path);
+    ASSERT_TRUE(loaded) << "config/default.json must be loadable at: " << config_path;
+```
+
+Tests now run and validate in CI — no skipping, actual coverage.
+
+**Initial incorrect fix:** Used `GTEST_SKIP()` which silently skipped validation in CI. Corrected after recognising the project already had the `PROJECT_CONFIG_DIR` pattern.
+
+### Prevention
+
+- Tests that load project files must use `PROJECT_CONFIG_DIR` (or similar CMake compile definition) to construct absolute paths — never rely on CWD being the repo root
+- `GTEST_SKIP()` is only appropriate for **genuinely optional** capabilities (e.g., Zenoh SHM where the library feature isn't compiled in). Don't use it to paper over path resolution issues
+- Check existing test targets for established patterns before inventing a new approach
