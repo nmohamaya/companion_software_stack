@@ -343,6 +343,7 @@ After pushing review-fix commits, update the PR body right away. Don't wait to b
 - `docs/design/perception_design.md` — P2 pipeline detail
 - `docs/design/hardening-design.md` — Watchdog and systemd integration
 - `docs/guides/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
+- `docs/guides/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
 - `docs/tracking/BUG_FIXES.md` — 29 documented bugs fixed (good reference for common pitfalls)
 - `docs/adr/` — Architecture Decision Records
 - `docs/design/API.md` — IPC message type reference
