@@ -221,6 +221,137 @@ TEST(OccupancyGrid3DTest, SuppressionDisabledWhenPromotionOff) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// HD-map proximity suppression (Issue #389)
+// Radar-confirmed detections near HD-map obstacles must NOT promote.
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, HdMapSuppressesRadarPromotion) {
+    // HD-map obstacle at (5,5) r=1.0m. With resolution=1.0m and inflation=0.5m,
+    // r_cells = ceil(1.0/1.0) + 1 = 2, so footprint covers (3,3)→(7,7) in XY.
+    // Place radar detection at (8,5) — just OUTSIDE the footprint but adjacent
+    // to hd_map_cell (7,5). This exercises near_hd_map_cell_() specifically.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/0,
+                         /*radar_promo=*/3);
+    grid.add_static_obstacle(5.0f, 5.0f, 1.0f, 3.0f);
+    size_t static_after_hdmap = grid.static_count();
+    EXPECT_GT(grid.hd_map_cell_count(), 0u);
+
+    // Radar-confirmed object just outside HD-map footprint (grid cell 8,5)
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 8.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 2.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].radar_update_count = 10;
+    objects.objects[0].estimated_radius_m = 0.0f;
+    drone::ipc::Pose pose{};
+
+    for (int i = 0; i < 20; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    // Static count should NOT have grown — near_hd_map_cell_() suppressed promotion.
+    EXPECT_EQ(grid.static_count(), static_after_hdmap);
+}
+
+TEST(OccupancyGrid3DTest, HdMapAllowsRadarPromotionFarAway) {
+    // HD-map obstacle at (5,5), radar-confirmed detection at (15,15) — far away.
+    // Promotion should proceed normally — this is a genuinely new obstacle.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/0,
+                         /*radar_promo=*/3);
+    grid.add_static_obstacle(5.0f, 5.0f, 1.0f, 3.0f);
+    size_t static_after_hdmap = grid.static_count();
+
+    // Radar-confirmed object far from HD-map
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 15.0f;
+    objects.objects[0].position_y         = 15.0f;
+    objects.objects[0].position_z         = 2.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].radar_update_count = 10;
+    objects.objects[0].estimated_radius_m = 0.0f;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    // Static count should grow — new obstacle promoted via radar
+    EXPECT_GT(grid.static_count(), static_after_hdmap);
+}
+
+TEST(OccupancyGrid3DTest, NoHdMapRadarPromotionUnchanged) {
+    // No HD-map — radar-confirmed detections should promote as before.
+    // Regression test: ensure the HD-map check doesn't break normal flow.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/0,
+                         /*radar_promo=*/3);
+    EXPECT_EQ(grid.hd_map_cell_count(), 0u);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 2.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].radar_update_count = 10;
+    objects.objects[0].estimated_radius_m = 0.0f;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    // Should promote — no HD-map to suppress it
+    EXPECT_GT(grid.static_count(), 0u);
+}
+
+TEST(OccupancyGrid3DTest, HdMapAdjacentCellAlsoSuppressed) {
+    // HD-map obstacle at (5,5) r=0.5m. With resolution=1.0m and inflation=0.5m,
+    // r_cells = ceil(0.5/1.0) + 1 = 2, so footprint covers (3,3)→(7,7) in XY.
+    // Place detection at (8,6) — outside the footprint but diagonally adjacent
+    // to hd_map_cell (7,5). near_hd_map_cell_() checks ±1 in x and y, so
+    // (7,5) is at dx=-1,dy=-1 from (8,6) — within the 3x3 neighborhood.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/0,
+                         /*radar_promo=*/3);
+    grid.add_static_obstacle(5.0f, 5.0f, 0.5f, 3.0f);
+    size_t static_after_hdmap = grid.static_count();
+
+    // Detection at (8,6) — outside footprint, diagonally adjacent to HD-map edge
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 8.0f;
+    objects.objects[0].position_y         = 6.0f;
+    objects.objects[0].position_z         = 2.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].radar_update_count = 10;
+    objects.objects[0].estimated_radius_m = 0.0f;
+    drone::ipc::Pose pose{};
+
+    for (int i = 0; i < 10; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    // Promotion suppressed — near_hd_map_cell_() catches diagonal adjacency
+    EXPECT_EQ(grid.static_count(), static_after_hdmap);
+}
+
+TEST(OccupancyGrid3DTest, HdMapCellCountMatchesStaticCount) {
+    // hd_map_cell_count() should match hd_map_static_count() after loading.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/0);
+    grid.add_static_obstacle(5.0f, 5.0f, 1.0f, 3.0f);
+    EXPECT_EQ(grid.hd_map_cell_count(), grid.hd_map_static_count());
+    EXPECT_EQ(grid.hd_map_cell_count(), grid.static_count());
+
+    // After clear_static(), both should be zero
+    grid.clear_static();
+    EXPECT_EQ(grid.hd_map_cell_count(), 0u);
+    EXPECT_EQ(grid.hd_map_static_count(), 0u);
+}
+
+// ═════════════════════════════════════════════════════════════
 // GridCellHash + factory tests (ported from test_astar_planner.cpp)
 // ═════════════════════════════════════════════════════════════
 
