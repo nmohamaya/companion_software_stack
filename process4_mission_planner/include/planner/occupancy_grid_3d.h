@@ -135,6 +135,7 @@ public:
     /// Clear only the static HD-map obstacle layer.
     void clear_static() {
         static_occupied_.clear();
+        hd_map_cells_.clear();
         hd_map_static_count_ = 0;
     }
 
@@ -160,6 +161,7 @@ public:
                             if (inserted) {
                                 changed_cells_.push_back({c, true});
                             }
+                            hd_map_cells_.insert(c);
                         }
                     }
                 }
@@ -198,11 +200,20 @@ public:
             // Known-obstacle suppression: split into two behaviours.
             // 1. Dynamic cells are ALWAYS created (close-range detections
             //    during navigation are more accurate than survey positions).
-            // 2. Promotion is SUPPRESSED near existing static cells to
-            //    prevent parallax from growing runaway walls of promoted
-            //    cells that block D* Lite paths (Issue #237).
+            // 2. Promotion is SUPPRESSED near known obstacles to prevent
+            //    runaway walls of promoted cells that block D* Lite paths.
+            //
+            // Two suppression checks (Issue #389):
+            //  a) Near HD-map cells — always suppress (both radar and camera
+            //     promotion). Radar-confirmed detections near known obstacles
+            //     are redundant confirmations that saturate the grid.
+            //  b) Near any static cell — suppress camera-only promotion
+            //     (original Issue #237 behaviour).
             bool skip_promotion = false;
-            if (promotion_hits_ > 0 && near_static_cell_(center)) {
+            if (!hd_map_cells_.empty() && near_hd_map_cell_(center)) {
+                ++suppressed;
+                skip_promotion = true;
+            } else if (promotion_hits_ > 0 && near_static_cell_(center)) {
                 ++suppressed;
                 skip_promotion = true;
             }
@@ -350,6 +361,7 @@ public:
     [[nodiscard]] int    promoted_count() const { return promoted_count_; }
     [[nodiscard]] int    max_static_cells() const { return max_static_cells_; }
     [[nodiscard]] size_t hd_map_static_count() const { return hd_map_static_count_; }
+    [[nodiscard]] size_t hd_map_cell_count() const { return hd_map_cells_.size(); }
     /// Cumulative count of objects that had velocity-based prediction applied
     /// across all calls to update_from_objects() (lifetime counter, never reset).
     [[nodiscard]] int  total_predictions_applied() const { return total_predictions_applied_; }
@@ -384,6 +396,20 @@ private:
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
                 if (static_occupied_.count({center.x + dx, center.y + dy, center.z}) > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Check if a cell is near an HD-map (pre-loaded) static obstacle.
+    /// Used to suppress radar promotion near known obstacles — those detections
+    /// are redundant confirmations that would otherwise saturate the grid (Issue #389).
+    [[nodiscard]] bool near_hd_map_cell_(const GridCell& center) const {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (hd_map_cells_.count({center.x + dx, center.y + dy, center.z}) > 0) {
                     return true;
                 }
             }
@@ -491,6 +517,9 @@ private:
     // HD-map layer: permanent cells loaded from scenario config at startup.
     // Never expire — represent known world geometry.
     std::unordered_set<GridCell, GridCellHash> static_occupied_;
+    // Subset of static_occupied_ that came from add_static_obstacle() (HD-map).
+    // Used to suppress radar promotion near known obstacles (Issue #389).
+    std::unordered_set<GridCell, GridCellHash> hd_map_cells_;
     // Camera-confirmation layer: cells observed by perception, expire after TTL.
     // Refreshed each detection cycle; also catches unexpected/dynamic obstacles.
     std::unordered_map<GridCell, uint64_t, GridCellHash> occupied_;

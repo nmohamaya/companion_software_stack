@@ -33,7 +33,7 @@
                 "promotion_hits": 0,
                 "min_promotion_depth_confidence": 0.8,
                 "max_static_cells": 0,
-                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=0: HD-map has all 4 obstacles pre-mapped, no runtime promotion needed. min_promotion_depth_confidence=0.8: blocks camera-only ground features (Tier 1-4: 0.01-0.7) while allowing radar-confirmed (1.0) to promote if promotion_hits were enabled. Dynamic detections still create temporary cells (TTL=1s) for real-time avoidance."
+                "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=0: disables camera-only hit-count promotion. Radar-confirmed objects can still promote, but HD-map proximity suppression (Issue #389) prevents radar from duplicating cells near pre-mapped obstacles — only genuinely new obstacles promote. max_static_cells=0 (unlimited) is safe with HD-map suppression active."
             },
             "static_obstacles": [
                 {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 5.0, "_color": "RED"},

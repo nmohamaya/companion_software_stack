@@ -687,13 +687,22 @@ _report_vio_stats() {
     stereo_frames=$(grep -ac "StereoMatcher: num_matches" "$log" 2>/dev/null | tail -1)
     imu_frames=$(grep -ac "ImuPreintegrator: total_dt" "$log" 2>/dev/null | tail -1)
 
+    # GazeboVIOBackend uses ground-truth odometry and emits HealthCheck lines
+    # instead of Frame diagnostics — count those as pose updates
+    local healthcheck_frames
+    healthcheck_frames=$(grep -ac "HealthCheck.*VIO pose" "$log" 2>/dev/null | tail -1)
+
     local imu_warnings
     imu_warnings=$(grep -ac "ImuPreintegrator.*WARN" "$log" 2>/dev/null | tail -1)
     local imu_gaps
     imu_gaps=$(grep -ac "IMU data gap" "$log" 2>/dev/null | tail -1)
 
     echo "  Backend             : ${vio_backend}"
-    echo "  VIO frames          : ${total_frames}"
+    if [[ "$vio_backend" == "GazeboVIOBackend" ]] || grep -qa "GazeboVIOBackend" "$log" 2>/dev/null; then
+        echo "  Pose updates (1Hz)  : ${healthcheck_frames}"
+    else
+        echo "  VIO frames          : ${total_frames}"
+    fi
     echo "  Feature extraction  : ${feature_frames} frames"
     echo "  Stereo matching     : ${stereo_frames} frames"
     echo "  IMU pre-integration : ${imu_frames} frames"
@@ -702,7 +711,13 @@ _report_vio_stats() {
     echo ""
     echo "  Observations:"
 
-    if (( total_frames == 0 )); then
+    if [[ "$vio_backend" == "GazeboVIOBackend" ]] || grep -qa "GazeboVIOBackend" "$log" 2>/dev/null; then
+        if (( healthcheck_frames > 0 )); then
+            echo "  - Gazebo ground-truth odometry active (${healthcheck_frames} health checks)"
+        else
+            echo "  - Gazebo ground-truth backend configured but no health checks — pipeline may not be running"
+        fi
+    elif (( total_frames == 0 )); then
         echo "  - No VIO frames processed — pipeline may not be running"
     else
         if (( feature_frames > 0 )); then
