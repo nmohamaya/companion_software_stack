@@ -11,6 +11,7 @@
 
 #include "ipc/isubscriber.h"
 #include "ipc/zenoh_session.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
 #include "util/latency_tracker.h"
 
@@ -132,19 +133,13 @@ private:
                 return;
             }
             std::lock_guard<std::mutex> lock(data_mutex_);
-            latest_msg_ = *temp;
-            timestamp_ns_ =
-                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                          std::chrono::steady_clock::now().time_since_epoch())
-                                          .count());
+            latest_msg_   = *temp;
+            timestamp_ns_ = drone::util::get_clock().now_ns();
         } else {
             std::lock_guard<std::mutex> lock(data_mutex_);
             auto*                       dst = reinterpret_cast<uint8_t*>(&latest_msg_);
             std::copy(bytes.begin(), bytes.end(), dst);
-            timestamp_ns_ =
-                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                          std::chrono::steady_clock::now().time_since_epoch())
-                                          .count());
+            timestamp_ns_ = drone::util::get_clock().now_ns();
         }
 
         seq_.fetch_add(1, std::memory_order_relaxed);

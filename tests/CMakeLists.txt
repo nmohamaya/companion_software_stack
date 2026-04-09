@@ -81,6 +81,9 @@ target_compile_definitions(test_config_validator PRIVATE
     PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
 )
 
+# ── IClock interface tests ───────────────────────────────────
+add_drone_test(test_iclock           test_iclock.cpp)
+
 # ── Result<T,E> type tests ───────────────────────────────────
 add_drone_test(test_result          test_result.cpp)
 

@@ -17,6 +17,7 @@
 
 #include "ipc/iservice_channel.h"
 #include "ipc/zenoh_session.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -92,12 +93,9 @@ public:
                     // Build envelope
                     ServiceEnvelope<Req> env;
                     env.correlation_id = cid;
-                    env.timestamp_ns   = static_cast<uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch())
-                            .count());
-                    env.valid   = true;
-                    env.payload = req;
+                    env.timestamp_ns   = drone::util::get_clock().now_ns();
+                    env.valid          = true;
+                    env.payload        = req;
 
                     // Clone query handle and enqueue
                     std::lock_guard<std::mutex> lock(pending->mutex);
@@ -139,13 +137,10 @@ public:
         // Build response envelope
         ServiceResponse<Resp> resp;
         resp.correlation_id = correlation_id;
-        resp.timestamp_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
-        resp.status  = status;
-        resp.valid   = true;
-        resp.payload = response;
+        resp.timestamp_ns   = drone::util::get_clock().now_ns();
+        resp.status         = status;
+        resp.valid          = true;
+        resp.payload        = response;
 
         // Serialise
         const auto*          ptr = reinterpret_cast<const uint8_t*>(&resp);
