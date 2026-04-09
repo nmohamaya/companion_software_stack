@@ -12,6 +12,7 @@
 
 #include "util/iclock.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>

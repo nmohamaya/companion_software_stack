@@ -2,7 +2,6 @@
 // Linux system information gathering from /proc and /sys.
 
 #pragma once
-#include "util/ilogger.h"
 
 #include <array>
 #include <chrono>

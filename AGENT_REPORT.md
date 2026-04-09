@@ -63,7 +63,7 @@ The following files still use `steady_clock::now()` directly and should be migra
 
 ## Test Coverage
 
-27 new tests in `test_iclock.cpp`:
+26 new tests in `test_iclock.cpp`:
 - **SteadyClockTest** (4): now_ns accuracy, now() time_point, now_seconds, monotonicity
 - **MockClockTest** (13): default init, custom init, advance_ns/ms/s, cumulative, set_ns, reset, sleep_for_ms, now() time_point, now_seconds, thread safety
 - **GlobalClockTest** (3): default is SteadyClock, set_clock to mock, null restores default

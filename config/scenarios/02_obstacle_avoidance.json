@@ -54,7 +54,7 @@
                 {"x": 14, "y": -4, "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly southwest — ORANGE(5,3) 11.4m, BLUE(18,5) 9.8m."},
                 {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home — ORANGE(5,3) 5.8m away, outside promotion zone."}
             ],
-            "_comment_waypoints": "5 waypoints routing near all 4 obstacles. All WPs >8m from obstacle centres to account for HD-map footprint (4m) + runtime promoted cells (2-4m). Home WP at origin is 5.8m from ORANGE — acceptable since drone is landing."
+            "_comment_waypoints": "5 waypoints routing near all 4 obstacles. Navigation WPs >8m from obstacle centres to account for HD-map footprint (4m) + runtime promoted cells (2-4m). Home WP (0,0) is 5.8m from ORANGE — acceptable since drone is landing."
         },
         "perception": {
             "detector": {
