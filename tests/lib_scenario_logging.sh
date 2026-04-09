@@ -676,7 +676,7 @@ _report_vio_stats() {
 
     # Only report if VIO pipeline logs are present
     local vio_backend
-    vio_backend=$(grep -aoP 'GazeboFullVIOBackend|VIOBackend' "$log" 2>/dev/null | head -1)
+    vio_backend=$(grep -aoP 'GazeboFullVIOBackend|GazeboVIOBackend|VIOBackend' "$log" 2>/dev/null | head -1)
     [[ -z "$vio_backend" ]] && return  # no VIO data — skip section
 
     echo "VIO Pipeline"

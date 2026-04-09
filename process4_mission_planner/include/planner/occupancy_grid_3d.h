@@ -132,7 +132,7 @@ public:
         hit_count_.clear();
     }
 
-    /// Clear only the static HD-map obstacle layer.
+    /// Clear all static obstacles (both HD-map and runtime-promoted).
     void clear_static() {
         static_occupied_.clear();
         hd_map_cells_.clear();
@@ -150,7 +150,7 @@ public:
         GridCell base    = world_to_grid(wx, wy, 0.0f);
         int      r_cells = static_cast<int>(std::ceil(radius_m / resolution_)) + inflation_cells_;
         int      h_cells = static_cast<int>(std::ceil(height_m / resolution_)) + inflation_cells_;
-        size_t   before  = static_occupied_.size();
+        const size_t before = static_occupied_.size();
         for (int dz = -inflation_cells_; dz <= h_cells; ++dz)
             for (int dy = -r_cells; dy <= r_cells; ++dy)
                 for (int dx = -r_cells; dx <= r_cells; ++dx) {
@@ -166,7 +166,9 @@ public:
                     }
                 }
         const size_t added = static_occupied_.size() - before;
-        hd_map_static_count_ += added;
+        // Derive HD-map count from hd_map_cells_ (authoritative) so the
+        // two can never diverge — even if overlapping HD-map obstacles share cells.
+        hd_map_static_count_ = hd_map_cells_.size();
         spdlog::info("[HD-map] Static obstacle at ({:.1f},{:.1f}) r={:.1f}m h={:.1f}m "
                      "-> {} new cells (total static: {})",
                      wx, wy, radius_m, height_m, added, static_occupied_.size());

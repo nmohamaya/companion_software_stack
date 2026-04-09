@@ -226,8 +226,10 @@ TEST(OccupancyGrid3DTest, SuppressionDisabledWhenPromotionOff) {
 // ═════════════════════════════════════════════════════════════
 
 TEST(OccupancyGrid3DTest, HdMapSuppressesRadarPromotion) {
-    // HD-map obstacle at (5,5), radar-confirmed detection at same location.
-    // Promotion should be suppressed — HD-map already covers it.
+    // HD-map obstacle at (5,5) r=1.0m. With resolution=1.0m and inflation=0.5m,
+    // r_cells = ceil(1.0/1.0) + 1 = 2, so footprint covers (3,3)→(7,7) in XY.
+    // Place radar detection at (8,5) — just OUTSIDE the footprint but adjacent
+    // to hd_map_cell (7,5). This exercises near_hd_map_cell_() specifically.
     OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
                          /*min_conf=*/0.3f, /*promotion_hits=*/0,
                          /*radar_promo=*/3);
@@ -235,10 +237,10 @@ TEST(OccupancyGrid3DTest, HdMapSuppressesRadarPromotion) {
     size_t static_after_hdmap = grid.static_count();
     EXPECT_GT(grid.hd_map_cell_count(), 0u);
 
-    // Radar-confirmed object at same position (radar_update_count >= 3)
+    // Radar-confirmed object just outside HD-map footprint (grid cell 8,5)
     drone::ipc::DetectedObjectList objects{};
     objects.num_objects                   = 1;
-    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_x         = 8.0f;
     objects.objects[0].position_y         = 5.0f;
     objects.objects[0].position_z         = 2.0f;
     objects.objects[0].confidence         = 0.9f;
@@ -250,10 +252,7 @@ TEST(OccupancyGrid3DTest, HdMapSuppressesRadarPromotion) {
     for (int i = 0; i < 20; ++i) {
         grid.update_from_objects(objects, pose);
     }
-    // Static count should NOT have grown — radar promotion suppressed near HD-map.
-    // Dynamic count may be 0 if all inflated cells overlap with existing HD-map
-    // static cells (static layer takes priority). The key assertion is that
-    // static_count did NOT grow from radar promotion.
+    // Static count should NOT have grown — near_hd_map_cell_() suppressed promotion.
     EXPECT_EQ(grid.static_count(), static_after_hdmap);
 }
 
@@ -308,19 +307,22 @@ TEST(OccupancyGrid3DTest, NoHdMapRadarPromotionUnchanged) {
 }
 
 TEST(OccupancyGrid3DTest, HdMapAdjacentCellAlsoSuppressed) {
-    // Detection 1 cell away from HD-map obstacle should also be suppressed.
-    // The near_hd_map_cell_ check uses a 3x3 neighborhood.
+    // HD-map obstacle at (5,5) r=0.5m. With resolution=1.0m and inflation=0.5m,
+    // r_cells = ceil(0.5/1.0) + 1 = 2, so footprint covers (3,3)→(7,7) in XY.
+    // Place detection at (8,6) — outside the footprint but diagonally adjacent
+    // to hd_map_cell (7,5). near_hd_map_cell_() checks ±1 in x and y, so
+    // (7,5) is at dx=-1,dy=-1 from (8,6) — within the 3x3 neighborhood.
     OccupancyGrid3D grid(1.0f, 20.0f, 0.5f, /*ttl=*/3.0f,
                          /*min_conf=*/0.3f, /*promotion_hits=*/0,
                          /*radar_promo=*/3);
     grid.add_static_obstacle(5.0f, 5.0f, 0.5f, 3.0f);
     size_t static_after_hdmap = grid.static_count();
 
-    // Detection 1m away (1 grid cell on 1m grid) — parallax offset
+    // Detection at (8,6) — outside footprint, diagonally adjacent to HD-map edge
     drone::ipc::DetectedObjectList objects{};
     objects.num_objects                   = 1;
-    objects.objects[0].position_x         = 6.0f;
-    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_x         = 8.0f;
+    objects.objects[0].position_y         = 6.0f;
     objects.objects[0].position_z         = 2.0f;
     objects.objects[0].confidence         = 0.9f;
     objects.objects[0].depth_confidence   = 1.0f;
@@ -331,7 +333,7 @@ TEST(OccupancyGrid3DTest, HdMapAdjacentCellAlsoSuppressed) {
     for (int i = 0; i < 10; ++i) {
         grid.update_from_objects(objects, pose);
     }
-    // Promotion suppressed — adjacent to HD-map cell
+    // Promotion suppressed — near_hd_map_cell_() catches diagonal adjacency
     EXPECT_EQ(grid.static_count(), static_after_hdmap);
 }
 
