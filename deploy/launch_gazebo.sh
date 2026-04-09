@@ -14,7 +14,7 @@
 #
 # Prerequisites:
 #   - PX4-Autopilot built for SITL (make px4_sitl_default)
-#   - Gazebo Harmonic installed
+#   - Gazebo Ionic (or Harmonic) installed
 #   - MAVSDK 2.x installed
 #   - Companion stack built with -DHAVE_MAVSDK -DHAVE_GAZEBO
 set -euo pipefail
@@ -95,6 +95,15 @@ if command -v nvidia-smi &>/dev/null; then
         export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
     fi
 fi
+
+# ── Gazebo transport discovery ───────────────────────────────
+# gz-transport uses UDP multicast for process discovery.  On machines with
+# multiple network interfaces (VPN, Docker bridges, etc.) the multicast
+# packets can be sent on the wrong interface, causing `gz topic -l` to
+# return nothing even though the server is running.  Force localhost so
+# that PX4, Gazebo server, GUI client, and `gz service` all discover
+# each other reliably.  Override with GZ_IP env var if needed.
+export GZ_IP="${GZ_IP:-127.0.0.1}"
 
 # Register custom model path so PX4/Gazebo can find x500_companion
 export GZ_SIM_RESOURCE_PATH="${PROJECT_DIR}/sim/models:${PX4_DIR}/Tools/simulation/gz/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
@@ -216,6 +225,7 @@ if [[ "$HEADLESS" -eq 0 ]]; then
         XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
         PATH="/usr/bin:/usr/local/bin:/bin" \
         GZ_SIM_RESOURCE_PATH="${GZ_SIM_RESOURCE_PATH}" \
+        GZ_IP="${GZ_IP}" \
         gz sim -g --gui-config "$GUI_CONFIG" \
         > "${LOG_DIR}/gz_gui.log" 2>&1 &
     GUI_PID=$!
@@ -230,6 +240,7 @@ if [[ "$HEADLESS" -eq 0 ]]; then
         env -i \
             HOME="$HOME" \
             PATH="/usr/bin:/usr/local/bin:/bin" \
+            GZ_IP="${GZ_IP}" \
             gz service -s /gui/follow/offset \
             --reqtype gz.msgs.Vector3d \
             --reptype gz.msgs.Boolean \
@@ -240,6 +251,7 @@ if [[ "$HEADLESS" -eq 0 ]]; then
         env -i \
             HOME="$HOME" \
             PATH="/usr/bin:/usr/local/bin:/bin" \
+            GZ_IP="${GZ_IP}" \
             gz service -s /gui/follow \
             --reqtype gz.msgs.StringMsg \
             --reptype gz.msgs.Boolean \

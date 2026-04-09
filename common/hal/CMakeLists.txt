@@ -20,7 +20,7 @@ endif()
 if(GAZEBO_FOUND)
     target_compile_definitions(drone_hal INTERFACE HAVE_GAZEBO)
     target_link_libraries(drone_hal INTERFACE
-        gz-transport13::core
-        gz-msgs10::core
+        gz-transport${GZ_TRANSPORT_VER}::core
+        gz-msgs${GZ_MSGS_VER}::core
     )
 endif()

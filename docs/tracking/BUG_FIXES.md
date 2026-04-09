@@ -1276,6 +1276,38 @@ Also **1 Process config test** (`ProcessConfig::LoadFromDefaultJsonFile`) had th
 
 ---
 
+### Fix #51 — Gazebo SITL Broken After Ubuntu System Update (Multi-Version Conflict + Transport Discovery)
+
+**Date:** 2026-04-09
+**Severity:** Critical (all Gazebo SITL scenarios blocked)
+**Files:** `CMakeLists.txt`, `common/hal/CMakeLists.txt`, `deploy/launch_gazebo.sh`
+
+**Bug:** An Ubuntu system update installed three Gazebo versions simultaneously (gz-sim8/Harmonic, gz-sim9/Ionic, gz-sim10) causing two cascading failures:
+
+1. **Protobuf ABI collision:** Multiple gz-msgs versions (10, 11, 12) registered identical `.proto` descriptor files (`gz/msgs/time.proto` etc.), causing `File already exists in database` errors and `abort()` in `__cxa_call_terminate`.
+2. **After cleanup to Ionic-only:** gz-transport14 uses UDP multicast for inter-process discovery. On machines with multiple network interfaces (NordVPN `nordlynx`, Docker bridges `veth*`, `br-*`), multicast packets were sent on the wrong interface. `gz topic -l` returned nothing even though the server was running and had registered services internally. PX4 polled `/world/test_world/scene/info` 30 times, timed out, and the entire stack cascaded down.
+3. **Library linkage:** Companion stack was built against gz-transport13/gz-msgs10 (Harmonic), but after cleanup only gz-transport14/gz-msgs11 (Ionic) remained. Binaries failed with `error while loading shared libraries: libgz-transport13.so.13: cannot open shared object file`.
+
+**Root cause analysis:**
+- Ubuntu `apt upgrade` pulled in new Gazebo meta-packages without removing old ones
+- **Installing NordVPN** created a `nordlynx` virtual network interface. gz-transport14 multicast discovery defaults to the first non-loopback interface, which became the NordVPN tunnel instead of the real LAN. Combined with Docker bridge interfaces (`veth*`, `br-*`), multicast packets never reached localhost where Gazebo and PX4 were both running
+- CMakeLists.txt hardcoded `gz-transport13` / `gz-msgs10` with no fallback
+
+**Fix (3 parts):**
+1. **Purged all Gazebo packages**, reinstalled only `gz-ionic` for a clean single-version install
+2. **Set `GZ_IP=127.0.0.1`** in `deploy/launch_gazebo.sh` to force gz-transport multicast discovery to use localhost. Also propagated to `env -i` blocks for GUI client and `gz service` calls that strip the environment
+3. **Made CMake multi-version aware:** Try gz-transport14/gz-msgs11 (Ionic) first, fall back to gz-transport13/gz-msgs10 (Harmonic). HAL CMakeLists uses `${GZ_TRANSPORT_VER}` / `${GZ_MSGS_VER}` variables instead of hardcoded version numbers
+
+**Found by:** Manual testing — Gazebo SITL scenarios all failed after Ubuntu system update
+**Verified by:** `GZ_IP=127.0.0.1 gz topic -l` returns all expected topics; clean build links against gz-transport14
+
+**Prevention:**
+- Pin Gazebo version in CI and dev setup scripts (e.g., `sudo apt-mark hold gz-ionic`)
+- Document required Gazebo version in `deploy/README.md`
+- Consider adding a CMake check that warns if multiple gz-sim versions are detected
+
+---
+
 ## CI / Tooling
 
 ---
