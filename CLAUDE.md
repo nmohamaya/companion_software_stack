@@ -289,6 +289,7 @@ This is a **safety-critical drone software stack**. Use appropriate C++ construc
 - Unscoped `enum` — use `enum class` for type safety
 - Unbounded recursion
 - Global mutable state outside of explicitly documented singletons
+- **Unguarded signed→unsigned casts on durations/sizes/counts** — negative `int64_t` cast to `uint64_t` wraps to ~2^64, causing infinite waits or massive allocations. Always clamp: `static_cast<uint64_t>(std::max(int64_t{0}, val))`. Also watch for unsigned subtraction underflow (`a - b` where `a < b`) and timestamp addition overflow (`now + offset` near max)
 
 **Constructs to PREFER:**
 - `[[nodiscard]]` on all functions returning `Result<T,E>` or error codes

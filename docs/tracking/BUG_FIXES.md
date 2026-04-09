@@ -2112,3 +2112,128 @@ if (dist > 0.01f) {
 **Found by:** Issue #228 investigation — discovered during root cause analysis of why tuning parameters had no effect.
 
 **Regression tests:** `GridPlannerConfig_CellTTL_PassedToGrid`, `OccupancyGrid_MinConfidence_Configurable`, `OccupancyGrid_DefaultMinConfidence_IsZeroPointThree` in `test_dstar_lite_planner.cpp`.
+
+---
+
+## Wave 1 Review Fixes (2026-04-09)
+
+---
+
+### Fix #46 — Negative Timeout Wraps to ~584 Years via Signed→Unsigned Cast (#286)
+
+**Date:** 2026-04-09
+**Severity:** High
+**File:** `common/ipc/include/ipc/iservice_channel.h`
+
+**Bug:** `IServiceClient::await_response()` accepts `std::chrono::milliseconds timeout` (signed), then computes `deadline_ns = get_clock().now_ns() + static_cast<uint64_t>(timeout_ns)`. If `timeout` is negative (e.g., from a subtraction that went negative), the `static_cast<uint64_t>` wraps `-1` to `18'446'744'073'709'551'615` (~584 years in nanoseconds). The function hangs forever instead of timing out immediately.
+
+**Root Cause:** No guard on the sign of the duration before casting to unsigned. `std::chrono::milliseconds` is signed (`int64_t` rep), and arithmetic can produce negative values. The implicit contract "timeout is always positive" was not enforced.
+
+**Fix:** Clamp the signed nanosecond count to zero before casting:
+```cpp
+const auto timeout_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count();
+const auto deadline_ns =
+    drone::util::get_clock().now_ns() +
+    static_cast<uint64_t>(std::max(int64_t{0}, timeout_ns));
+```
+
+**Lessons learned:**
+1. **Every signed→unsigned cast on a duration, timeout, size, or count needs a clamp guard.** This is now a P2 check in the review-memory-safety agent.
+2. Related patterns: unsigned subtraction underflow (`a - b` where `a < b`), timestamp addition overflow (`now + offset` near uint64_t max).
+3. Added to CLAUDE.md "Constructs to AVOID" and review-memory-safety.md P2 checklist.
+
+**Found by:** PR #383 review — concurrency review agent flagged the cast.
+
+---
+
+### Fix #47 — DRONE_LOG Generic Macro Evaluates Level Expression Twice (#285)
+
+**Date:** 2026-04-09
+**Severity:** Medium
+**File:** `common/util/include/util/ilogger.h`
+
+**Bug:** The `DRONE_LOG(level, ...)` generic macro used `level` directly in both the `should_log()` check and the `log()` call. If `level` is an expression with side effects (e.g., a function call), it would be evaluated twice — once for the check, once for the log.
+
+**Root Cause:** Macro did not capture the level in a local variable before use.
+
+**Fix:** Capture level and logger reference in local variables inside a `do { ... } while(0)` block:
+```cpp
+#define DRONE_LOG(level, ...)                                      \
+    do {                                                           \
+        const auto _drone_lvl_ = (level);                          \
+        auto&      _drone_lg_  = ::drone::log::logger();           \
+        if (_drone_lg_.should_log(_drone_lvl_))                    \
+            _drone_lg_.log(_drone_lvl_, fmt::format(__VA_ARGS__)); \
+    } while (0)
+```
+
+**Found by:** PR #380 review — Copilot flagged double evaluation.
+
+---
+
+### Fix #48 — ScopedMockClock Restores nullptr Instead of Previous Clock (#286)
+
+**Date:** 2026-04-09
+**Severity:** Medium
+**File:** `common/util/include/util/mock_clock.h`
+
+**Bug:** `ScopedMockClock` destructor called `set_clock(nullptr)`, which restores the default `SteadyClock`. If two `ScopedMockClock` guards were nested, the inner guard's destructor would discard the outer mock clock instead of restoring it. Nested mock clocks in test fixtures would silently break.
+
+**Root Cause:** The destructor assumed the previous clock was always the default. No previous-clock capture was implemented.
+
+**Fix:** Capture the previous clock pointer in the constructor and restore it in the destructor:
+```cpp
+explicit ScopedMockClock(uint64_t initial_ns = 1'000'000'000ULL) : mock_(initial_ns) {
+    previous_ = detail::clock_ptr().load(std::memory_order_acquire);
+    set_clock(&mock_);
+}
+~ScopedMockClock() { set_clock(previous_); }
+```
+
+**Found by:** PR #383 review — memory safety agent flagged the missing previous-clock capture.
+
+---
+
+### Fix #49 — IClock Tests Flaky Due to Absolute Epoch Magnitude Assertions (#286)
+
+**Date:** 2026-04-09
+**Severity:** Low
+**File:** `tests/test_iclock.cpp`
+
+**Bug:** Five tests asserted `EXPECT_GT(get_clock().now_ns(), 1'000'000'000'000ULL)` (>1 trillion ns) to verify the default SteadyClock was active. `steady_clock` measures time since an unspecified epoch — on some systems this is boot time, which on a freshly booted CI runner could be below 1 trillion ns. Tests would flake on fast-rebooting containers.
+
+**Root Cause:** Tests assumed steady_clock epoch produces values larger than a fixed threshold. The C++ standard only guarantees monotonicity, not a minimum epoch value.
+
+**Fix:** Replaced all 5 assertions with a before/after window pattern:
+```cpp
+const auto before = steady_ns();
+const auto val    = get_clock().now_ns();
+const auto after  = steady_ns();
+EXPECT_GE(val, before);
+EXPECT_LE(val, after);
+```
+
+**Lessons learned:**
+1. Never assert absolute magnitude of `steady_clock::now()` — its epoch is implementation-defined.
+2. The before/after window pattern is both correct and more informative (proves the value came from steady_clock, not just "is large").
+
+**Found by:** PR #383 review — unit test agent flagged the fragile assertions.
+
+---
+
+### Fix #50 — flight_replay Uses Raw spdlog Instead of LogConfig (#285)
+
+**Date:** 2026-04-09
+**Severity:** Low
+**File:** `tools/flight_replay/main.cpp`
+
+**Bug:** `flight_replay` called `spdlog::set_level(spdlog::level::info)` directly instead of using the stack's `LogConfig::init()`. This bypassed the structured logging pipeline (JSON log sink, log directory rotation, process-named logger) and created an inconsistency where flight_replay's logs were formatted differently from the rest of the stack.
+
+**Root Cause:** The tool was written before `LogConfig` existed and was never updated.
+
+**Fix:** Replaced `spdlog::set_level(spdlog::level::info)` with:
+```cpp
+LogConfig::init("flight_replay", LogConfig::resolve_log_dir());
+```
+
+**Found by:** PR #380 review — flagged as raw spdlog usage bypassing ILogger abstraction.

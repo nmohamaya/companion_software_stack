@@ -37,6 +37,13 @@ For every file in the diff, check each item. Flag violations with severity.
 - [ ] **`reinterpret_cast` only for IPC wire-format** — never on safety-relevant data
 - [ ] **Default member initializers** on all struct/class fields
 - [ ] **Fixed-width integer types** (`uint32_t`, `int16_t`) for protocol/wire data
+- [ ] **No integer conversion hazards** — 6 sub-patterns to check:
+  - (a) **Signed→unsigned cast on durations/sizes/counts** — `static_cast<uint64_t>(signed_val)` wraps negative to ~2^64. Fix: `std::max(int64_t{0}, val)` before cast
+  - (b) **Unsigned subtraction underflow** — `uint64_t a - b` where `a < b` wraps to huge value. Fix: check `a >= b` before subtracting
+  - (c) **Narrowing cast on sizes** — `static_cast<uint32_t>(uint64_t_val)` silently truncates. Fix: assert value fits or use `gsl::narrow_cast`
+  - (d) **Duration multiplication overflow** — `ms * 1'000'000ULL` overflows if ms exceeds ~18'446s for uint64_t. Fix: validate input range
+  - (e) **Timestamp arithmetic overflow** — `now_ns + timeout_ns` near uint64_t max wraps past zero. Fix: check for overflow before addition
+  - (f) **Negative count→unsigned size** — `static_cast<size_t>(negative_count)` causes massive allocation. Fix: clamp or reject negative
 
 ### P3 — Medium (fix in follow-up)
 - [ ] **`override`** on all virtual overrides
