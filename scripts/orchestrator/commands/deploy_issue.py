@@ -1,14 +1,19 @@
 """Deploy issue command — fetch, route, worktree, launch.
 
 Replaces deploy-issue.sh (1316 lines).
-Three modes:
+Four modes:
   - Interactive (default): Tech-lead orchestrated pipeline, agent runs
     interactively — user can chat with it and guide modifications live.
   - Pipeline (--pipeline): Tech-lead orchestrated pipeline, agent runs
     autonomously (print mode) — for when you're on the move.
+  - Auto (--auto): Like pipeline but auto-approves all checkpoints and
+    logs output to .claude/pipeline-logs/issue-<N>.log.  Designed for
+    orchestration by Claude Code acting as tech-lead — the human reviews
+    the collected output afterward.
   - Headless (--headless): Fire-and-forget, no checkpoints, no tech-lead.
 
-Both interactive and pipeline use the same 12-state FSM with 5 checkpoints.
+Interactive, pipeline, and auto all use the same 12-state FSM with 5
+checkpoints.
 
 Optional enhancements (--tmux, --notify):
   - --tmux: run the pipeline inside a named tmux session for remote attach
@@ -23,7 +28,7 @@ import sys
 from pathlib import Path
 
 from orchestrator.config import get_role, resolve_project_dir
-from orchestrator.console import Console
+from orchestrator.console import AutoConsole, Console
 from orchestrator.context import format_context, gather_context
 from orchestrator.git import Git
 from orchestrator.github import GitHub
@@ -161,6 +166,7 @@ def run(
     claude: Claude | None = None,
     pipeline: bool = False,
     headless: bool = False,
+    auto: bool = False,
     skip_tech_lead: bool = False,
     base_branch: str = "main",
     dry_run: bool = False,
@@ -173,14 +179,30 @@ def run(
     with 5 checkpoints and tech-lead orchestration. The difference:
       - Interactive: agent runs interactively, user can chat and guide live.
       - Pipeline: agent runs autonomously (print mode), for on-the-move use.
+      - Auto: like pipeline but auto-approves all checkpoints and logs output
+        to a file. Designed for orchestration by Claude Code acting as
+        tech-lead — the human reviews the collected output afterward.
       - Headless: fire-and-forget, no FSM, no checkpoints, no tech-lead.
 
     Optional:
       - use_tmux: wrap pipeline in a named tmux session for remote attach.
       - notify_topic: ntfy.sh topic for push notifications at checkpoints.
     """
+    # --auto implies --pipeline (autonomous agent, no interactive chat)
+    if auto:
+        pipeline = True
+
     if io is None:
-        io = Console()
+        if auto:
+            log_path = (
+                resolve_project_dir()
+                / ".claude"
+                / "pipeline-logs"
+                / f"issue-{issue_number}.log"
+            )
+            io = AutoConsole(log_path=log_path)
+        else:
+            io = Console()
     project_dir = resolve_project_dir()
     if git is None:
         git = Git(project_dir)
@@ -383,7 +405,7 @@ def run(
             # This will be populated by tech-lead routing if available
             break
 
-    return _run_pipeline(
+    result = _run_pipeline(
         io=io,
         git=git,
         github=github,
@@ -403,9 +425,16 @@ def run(
         is_bug=triage.is_bug,
         prompt=prompt,
         interactive=interactive,
+        auto=auto,
         tech_lead=tech_lead,
         notifier=notifier,
     )
+
+    # Flush auto-mode log so the caller can read it after completion
+    if isinstance(io, AutoConsole):
+        io.flush_log()
+
+    return result
 
 
 def _run_pipeline(
@@ -429,6 +458,7 @@ def _run_pipeline(
     is_bug: bool,
     prompt: str,
     interactive: bool = True,
+    auto: bool = False,
     tech_lead: TechLead | None = None,
     notifier: Notifier | None = None,
 ) -> int:
@@ -436,13 +466,28 @@ def _run_pipeline(
 
     interactive=True: agent runs interactively (user can chat).
     interactive=False: agent runs in print mode (autonomous).
+    auto=True: like pipeline but uses launch_print with acceptEdits
+               (no human in the loop for permissions).
     tech_lead: if provided, used for advisory review at CP1 and CP4.
     notifier: if provided, sends push notifications at each checkpoint.
     """
 
-    # Check for resume state
+    # Check for resume state (auto mode always starts fresh)
     state_file = project_dir / ".pipeline-state"
     resumed = False
+    if auto and state_file.exists():
+        state_file.unlink()
+        io.info("Auto mode: ignoring saved state, starting fresh")
+
+    # Clean stale agent artifacts in worktree (from prior runs or other issues)
+    if auto and not resumed:
+        stale_report = worktree_dir / "AGENT_REPORT.md"
+        stale_log = worktree_dir / "agent-output.log"
+        for stale in (stale_report, stale_log):
+            if stale.exists():
+                stale.unlink()
+                io.info(f"Cleaned stale {stale.name}")
+
     if state_file.exists():
         loaded = PipelineStateData.load(state_file)
         # Don't resume from terminal states (ABORT/CLEANUP) — start fresh
@@ -496,6 +541,7 @@ def _run_pipeline(
     validation_output = ""
     validation_passed = True
     review_findings = ""
+    cp3_retries = 0  # Prevent infinite CP3 loop in auto mode
 
     # FSM loop
     while True:
@@ -533,6 +579,7 @@ def _run_pipeline(
                 state, io, claude,
                 prompt=agent_prompt,
                 interactive=interactive,
+                auto=auto,
             )
 
         elif current == PipelineState.CP1_REVIEW:
@@ -619,7 +666,16 @@ def _run_pipeline(
                             io.warn("Could not set milestone on PR")
                 except Exception as e:
                     io.fail(f"Failed to create PR: {e}")
-                    action = "edit"  # re-show preview
+                    cp3_retries += 1
+                    if auto and cp3_retries >= 3:
+                        io.warn("Auto mode: PR creation failed 3 times, skipping to review")
+                        action = "skip"
+                    elif auto:
+                        # Go back to PR_CREATE to re-push before retrying
+                        io.info("Auto mode: returning to push step before retry")
+                        action = "back"  # CP3 → back → CP2 → commit → PR_CREATE
+                    else:
+                        action = "edit"  # re-show preview for human
             elif action == "update" and state.pr_number:
                 try:
                     github.pr_edit(
@@ -647,6 +703,7 @@ def _run_pipeline(
                 state, io, claude, wt_git, build,
                 review_findings=review_findings,
                 interactive=interactive,
+                auto=auto,
             )
 
         elif current == PipelineState.CP5_FINAL:

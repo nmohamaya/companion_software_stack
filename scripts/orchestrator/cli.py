@@ -50,6 +50,7 @@ def _cmd_deploy_issue(args: argparse.Namespace) -> int:
         args.issue,
         pipeline=args.pipeline,
         headless=args.headless,
+        auto=args.auto,
         skip_tech_lead=args.skip_tech_lead,
         base_branch=args.base,
         dry_run=args.dry_run,
@@ -191,6 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("issue", type=int, help="Issue number")
     p.add_argument("--pipeline", action="store_true",
                    help="Pipeline mode (agent works autonomously, for on-the-move use)")
+    p.add_argument("--auto", action="store_true",
+                   help="Auto mode (like --pipeline but auto-approves checkpoints, "
+                        "logs to file for tech-lead review)")
     p.add_argument("--headless", action="store_true",
                    help="Headless mode (fire-and-forget, no checkpoints)")
     p.add_argument("--skip-tech-lead", action="store_true",
