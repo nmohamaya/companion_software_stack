@@ -61,3 +61,10 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 - **Mode:** pipeline
 - **Fix iterations:** 0
 - **Status:** completed
+
+### 2026-04-10 | feature-nav | claude-opus-4-6 | PR #397
+- **Issue:** #394 — fix(#394): D* Lite snap offset exceeding acceptance_radius
+- **Branch:** fix/issue-394-snap-offset-acceptance-radius
+- **Mode:** skill (/deploy-issue)
+- **Fix iterations:** 2 (review fixes + re-review fixes)
+- **Status:** completed
