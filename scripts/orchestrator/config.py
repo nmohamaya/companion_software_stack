@@ -33,7 +33,7 @@ class RoleConfig:
 
 
 # ── Agent Roster ───────────────────────────────────────────────────────────
-# 17 roles across 4 categories: feature (5), review (8), test (2), ops (1), lead (1)
+# 17 roles across 5 categories: feature (5), review (8), test (2), ops (1), lead (1)
 
 ROLES: dict[str, RoleConfig] = {
     # Orchestration

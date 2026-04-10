@@ -36,17 +36,21 @@ Display: issue title, labels, state. If the issue is closed, warn the user and a
 
 **Step 1.2 — Triage labels → agent role**
 
-Route the issue to an agent role using this label priority system:
+Route the issue to an agent role using the label routing from `scripts/orchestrator/config.py` (`LABEL_ROUTING` + `LABEL_DIRECT_ROLES`):
 
-| Priority | Labels | Role |
-|----------|--------|------|
-| P3 (highest) | `perception`, `detection`, `tracking`, `fusion` | `feature-perception` |
-| P3 | `nav-planning`, `mission`, `slam`, `vio`, `path-planning` | `feature-nav` |
-| P3 | `comms`, `fc-link`, `gcs`, `gimbal`, `payload`, `monitor` | `feature-integration` |
-| P3 | `ipc`, `config`, `util`, `common`, `modularity` | `feature-infra-core` |
-| P2 | `infrastructure`, `ci`, `deploy`, `systemd`, `cross-compile` | `feature-infra-platform` |
-| Direct | `audit`, `security-audit` | `review-security` |
-| Direct | `test`, `test-coverage` | `test-unit` |
+| Priority | Labels (from `LABEL_ROUTING`) | Role |
+|----------|-------------------------------|------|
+| P3 (highest) | `perception`, `domain:perception` | `feature-perception` |
+| P3 | `nav-planning`, `domain:nav` | `feature-nav` |
+| P3 | `comms`, `domain:comms` | `feature-integration` |
+| P3 | `ipc` | `feature-infra-core` |
+| P2 | `integration`, `domain:integration` | `feature-integration` |
+| P2 | `common`, `infra`, `infrastructure`, `modularity`, `domain:infra-core` | `feature-infra-core` |
+| P1 | `platform`, `deploy`, `ci`, `bsp`, `domain:infra-platform` | `feature-infra-platform` |
+| Direct | `safety-audit` | `review-memory-safety` |
+| Direct | `security-audit` | `review-security` |
+| Direct | `test-coverage` | `test-unit` |
+| Direct | `cross-domain` | `tech-lead` |
 
 Also detect: `bug` label → set `is_bug=true` (affects branch prefix: `fix/` vs `feature/`).
 
@@ -67,17 +71,21 @@ Ask: "Branch to **main** or an **integration branch**?"
 
 If integration: check for existing integration branches with `git branch -r --list 'origin/integration/*'` and let the user pick or create a new one.
 
-**Step 1.4 — Create branch and worktree**
+**Step 1.4 — Create branch**
 
 ```bash
+# Fetch latest remote state to avoid branching from stale local refs
+git fetch origin
+
 # Branch naming
 branch_name="<fix|feature>/issue-<N>-<slug>"  # slug from title, max 40 chars
+base_ref="origin/<base_branch>"               # always use origin/ to avoid stale local ref
 
-# Create branch from base
-git checkout -b "$branch_name" "<base_branch>"
+# Create branch from remote base
+git checkout -b "$branch_name" "$base_ref"
 ```
 
-Note: we work directly on the branch rather than in a separate worktree since we're in the current session.
+Note: The feature agent in Phase 2 runs in an **isolated worktree** (via `isolation: "worktree"`) so it cannot interfere with the current checkout. After the agent completes, its changes are merged back in Step 2.5.
 
 ---
 
@@ -138,10 +146,21 @@ Wait for the agent to complete.
 
 **Step 2.4 — Read results**
 
-After the agent completes, read `AGENT_REPORT.md` from the agent's worktree (the path is returned by the Agent tool). Also run:
+After the agent completes, read `AGENT_REPORT.md` from the agent's worktree (the path is returned by the Agent tool).
+
+**Step 2.5 — Integrate worktree changes**
+
+The Agent tool with `isolation: "worktree"` returns the worktree path and branch. Merge the agent's changes into the working branch:
+
 ```bash
-git diff --stat <base_branch>...HEAD
+# The agent committed to its worktree branch — merge those commits into our branch
+git merge <agent_worktree_branch> --no-edit
+
+# Verify the merge succeeded
+git diff --stat origin/<base_branch>...HEAD
 ```
+
+If the merge has conflicts (unlikely since the worktree branched from our branch), resolve them and commit. Copy `AGENT_REPORT.md` from the worktree to the current directory if not already present after merge.
 
 ---
 

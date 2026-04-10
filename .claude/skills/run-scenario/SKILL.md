@@ -6,7 +6,7 @@ argument-hint: "<scenario-number|all|--list> [--compare <run1> <run2>] [--gui] [
 
 # /run-scenario — Scenario Integration Test Runner with Analysis
 
-Run Gazebo SITL scenario tests and provide structured analysis of results. This skill wraps `tests/run_scenario_gazebo.sh` with intelligent monitoring, result parsing, failure diagnosis, and cross-run comparison.
+Run scenario integration tests and provide structured analysis of results. This skill wraps `tests/run_scenario.sh` (Tier 1 simulated + Tier 2 Gazebo) and `tests/run_scenario_gazebo.sh` (Tier 2 Gazebo-only) with intelligent monitoring, result parsing, failure diagnosis, and cross-run comparison.
 
 ## Arguments
 
@@ -61,15 +61,29 @@ If any check fails, report and ask whether to proceed or fix first.
 
 ### Step 3: Launch Scenario
 
-Run the scenario using the existing script:
+Choose the correct script based on tier:
 
+**Single scenario (any tier):**
 ```bash
+# Tier 1 (simulated, no Gazebo needed):
+./tests/run_scenario.sh config/scenarios/<number>_<name>.json [--verbose]
+
+# Tier 2 (Gazebo SITL required):
 ./tests/run_scenario_gazebo.sh config/scenarios/<number>_<name>.json [--gui] [--verbose]
 ```
 
-If running `--all` or `--tier`:
+Check the scenario JSON's `scenario.tier` field to determine which script to use. Tier 1 scenarios have `"requires_gazebo": false`, Tier 2 have `"requires_gazebo": true`.
+
+**Running multiple scenarios (`--all` or `--tier`):**
 ```bash
+# All Tier 1 scenarios (no Gazebo):
+./tests/run_scenario.sh --all --tier 1
+
+# All Tier 2 scenarios (Gazebo):
 ./tests/run_scenario_gazebo.sh --all [--gui]
+
+# All tiers:
+./tests/run_scenario.sh --all --tier 1 && ./tests/run_scenario_gazebo.sh --all [--gui]
 ```
 
 **Monitoring during execution:**

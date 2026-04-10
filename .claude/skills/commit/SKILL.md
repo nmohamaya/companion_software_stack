@@ -41,12 +41,16 @@ If format issues are found:
 2. Offer to auto-fix: `clang-format-18 -i <files>`
 3. If user accepts, format and re-stage the fixed files
 
-**Sensitive file check** — scan staged files for secrets patterns:
+**Sensitive file check** — scan staged filenames AND diff content for secrets:
 ```bash
+# Check filenames for known secret file patterns
 git diff --cached --name-only | grep -iE '\.env|credential|secret|\.pem|\.key|token'
+
+# Check staged diff content for hardcoded secrets (passwords, API keys, tokens)
+git diff --cached -U0 | grep -iE 'password\s*=|api_key\s*=|secret\s*=|token\s*=|-----BEGIN' | head -20
 ```
 
-If found, warn the user and ask for explicit confirmation before proceeding.
+If either check finds matches, warn the user with the specific matches and ask for explicit confirmation before proceeding.
 
 **Test count check** (only if test files changed) — if any files in `tests/` are staged:
 ```bash
@@ -90,8 +94,9 @@ EOF
 Run `git status` to confirm the commit succeeded and show the result.
 
 If the commit fails due to a pre-commit hook:
-- Read the hook output
+- Read the hook output to understand what failed
 - Fix the issue (usually formatting)
-- Re-stage and create a **NEW** commit (do NOT amend — amending after a hook failure modifies the PREVIOUS commit)
+- Re-stage the fixed files and re-run `git commit` with the same message
+- Note: a failed hook means no commit was created, so `--amend` would modify the previous unrelated commit — only use `--amend` if a commit already exists and you explicitly want to update it
 
 If the user provided arguments, use them as context: $ARGUMENTS

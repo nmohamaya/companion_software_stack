@@ -6,7 +6,7 @@ argument-hint: "[--target <jetson-orin|localhost>] [--quick] [--section <name>]"
 
 # /production-readiness — Pre-Deployment Audit
 
-Comprehensive production readiness assessment before deploying to hardware. Checks 10 categories covering build, safety, security, performance, configuration, documentation, dependencies, debug code, systemd, and scenario tests.
+Comprehensive production readiness assessment before deploying to hardware. Checks 11 categories covering build, safety, test coverage, sanitizers, security, performance, configuration, debug code, systemd, scenario tests, and dependencies.
 
 **This is the final gate before code goes on a real drone.** Every finding is either BLOCKING (must fix) or ADVISORY (should fix, document risk if not).
 
@@ -188,7 +188,7 @@ ls config/customers/
 
 Check for debug/diagnostic code that should be gated or removed before production.
 
-Search for known debug patterns (from `project_production_debug_cleanup.md` memory):
+Search for known debug patterns:
 
 ```bash
 # DIAG logging that should be disabled in Release

@@ -59,10 +59,17 @@ def run(
         io.print(f"  {t}")
     io.print("")
 
+    io.print("Pass 2 agents to launch:")
+    for p2 in routing.pass2_reviewers:
+        io.print(f"  {p2}")
+    io.print("")
+
     if dry_run:
         io.warn(
             f"DRY RUN — would launch {len(routing.reviewers)} reviewers + "
-            f"{len(routing.testers)} test agents for PR #{pr_number}"
+            f"{len(routing.testers)} test agents (pass 1) + "
+            f"{len(routing.pass2_reviewers)} quality agents (pass 2) "
+            f"for PR #{pr_number}"
         )
         io.print("")
         io.print("Routing reasons:")
@@ -118,16 +125,16 @@ def run(
         f"Report: scenario results, regressions, config issues."
     )
 
-    # 4. Launch all agents
-    all_agents = routing.reviewers + routing.testers
+    # 4. Launch Pass 1 agents (safety & correctness)
+    pass1_agents = routing.reviewers + routing.testers
     session_dir = project_dir / "tasks" / "sessions"
     session_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M")
 
-    io.print(f"Launching {len(all_agents)} agents in parallel...")
+    io.print(f"Pass 1: Launching {len(pass1_agents)} agents in parallel...")
 
-    agent_configs = []
-    for agent in all_agents:
+    pass1_configs = []
+    for agent in pass1_agents:
         role_config = ROLES[agent]
         if agent == "test-unit":
             prompt = test_unit_prompt
@@ -137,7 +144,7 @@ def run(
             prompt = review_prompt
 
         log_file = session_dir / f"{timestamp}-review-pr{pr_number}-{agent}.log"
-        agent_configs.append({
+        pass1_configs.append({
             "agent": agent,
             "model": role_config.model,
             "prompt": prompt,
@@ -145,55 +152,127 @@ def run(
         })
         io.print(f"  Launching {agent} (log: {log_file.name})")
 
-    # Run agents with asyncio
-    results = asyncio.run(_launch_agents(agent_configs))
+    pass1_results = asyncio.run(_launch_agents(pass1_configs))
 
     io.print("")
     failed = 0
-    for agent, success in results.items():
+    for agent, success in pass1_results.items():
         if success:
             io.pass_(agent)
         else:
             io.warn(f"{agent} exited with non-zero status")
             failed += 1
 
-    # 5. Consolidate findings
+    # 5. Collect Pass 1 findings for Pass 2 context
+    pass1_findings_parts: list[str] = []
+    for cfg in pass1_configs:
+        log_file = cfg["log_file"]
+        if log_file.exists() and log_file.stat().st_size > 0:
+            content = log_file.read_text()
+            lines = content.splitlines()[-100:]
+            pass1_findings_parts.append(
+                f"--- {cfg['agent']} ---\n" + "\n".join(lines)
+            )
+    pass1_findings = "\n\n".join(pass1_findings_parts)
+
+    # 6. Launch Pass 2 agents (quality & contracts) with Pass 1 context
+    pass2_configs: list[dict] = []
+    if routing.pass2_reviewers:
+        io.print("")
+        io.print(
+            f"Pass 2: Launching {len(routing.pass2_reviewers)} agents "
+            f"in parallel (with Pass 1 findings as context)..."
+        )
+
+        pass2_prompt = (
+            f"Review PR #{pr_number} (Pass 2 — quality & contracts).\n\n"
+            f"Changed files:\n{diff_files}\n\n"
+            f"Diff (first 500 lines):\n{diff_truncated}\n\n"
+            f"## Pass 1 Findings (from safety & correctness reviewers)\n\n"
+            f"{pass1_findings}\n\n"
+            f"Your job: provide a quality/contract review focused on your "
+            f"domain. Build on Pass 1 findings — don't duplicate them. "
+            f"Post findings as a structured list with file:line, severity "
+            f"(P1-P4), and fix suggestion."
+        )
+
+        for agent in routing.pass2_reviewers:
+            role_config = ROLES[agent]
+            log_file = (
+                session_dir / f"{timestamp}-review-pr{pr_number}-{agent}.log"
+            )
+            pass2_configs.append({
+                "agent": agent,
+                "model": role_config.model,
+                "prompt": pass2_prompt,
+                "log_file": log_file,
+            })
+            io.print(f"  Launching {agent} (log: {log_file.name})")
+
+        pass2_results = asyncio.run(_launch_agents(pass2_configs))
+
+        io.print("")
+        for agent, success in pass2_results.items():
+            if success:
+                io.pass_(agent)
+            else:
+                io.warn(f"{agent} exited with non-zero status")
+                failed += 1
+
+    # 7. Consolidate findings from both passes
+    all_configs = pass1_configs + pass2_configs
     io.print("")
     io.print("Consolidating findings...")
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sections = [
-        f"## Automated Safety Review — PR #{pr_number}\n",
-        f"**Review agents:** {' '.join(routing.reviewers)}",
-        f"**Test agents:** {' '.join(routing.testers)}",
+        f"## Automated Two-Pass Review — PR #{pr_number}\n",
+        f"**Pass 1 (safety & correctness):** {' '.join(pass1_agents)}",
+        f"**Pass 2 (quality & contracts):** "
+        f"{' '.join(routing.pass2_reviewers)}",
         f"**Date:** {date_str}\n",
         "---\n",
-        "# Safety Review Findings\n",
+        "# Pass 1: Safety & Correctness Findings\n",
     ]
 
-    for cfg in agent_configs:
+    for cfg in pass1_configs:
         agent = cfg["agent"]
         log_file = cfg["log_file"]
         sections.append(f"### {agent}\n")
         if log_file.exists() and log_file.stat().st_size > 0:
             content = log_file.read_text()
-            # Take last 200 lines
             lines = content.splitlines()[-200:]
             sections.append("\n".join(lines))
         else:
             sections.append("_No output captured._")
         sections.append("")
 
+    if pass2_configs:
+        sections.append("---\n")
+        sections.append("# Pass 2: Quality & Contract Findings\n")
+
+        for cfg in pass2_configs:
+            agent = cfg["agent"]
+            log_file = cfg["log_file"]
+            sections.append(f"### {agent}\n")
+            if log_file.exists() and log_file.stat().st_size > 0:
+                content = log_file.read_text()
+                lines = content.splitlines()[-200:]
+                sections.append("\n".join(lines))
+            else:
+                sections.append("_No output captured._")
+            sections.append("")
+
     sections.append("---")
     sections.append(
         f"_Generated by orchestrator deploy-review — "
-        f"{len(routing.reviewers)} reviewers + "
-        f"{len(routing.testers)} test agents_"
+        f"{len(pass1_agents)} pass 1 + "
+        f"{len(routing.pass2_reviewers)} pass 2 agents_"
     )
 
     consolidated = "\n".join(sections)
 
-    # 6. Post as PR comment
+    # 8. Post as PR comment
     io.print(f"Posting consolidated review to PR #{pr_number}...")
     try:
         github.pr_comment(pr_number, consolidated)
@@ -201,16 +280,16 @@ def run(
     except Exception:
         io.fail("Could not post review comment")
         io.print("Logs:")
-        for cfg in agent_configs:
+        for cfg in all_configs:
             io.print(f"  {cfg['log_file']}")
         return 1
 
     io.print("")
     io.print("Review complete")
-    io.print(f"  PR:        #{pr_number}")
-    io.print(f"  Reviewers: {len(routing.reviewers)}")
-    io.print(f"  Testers:   {len(routing.testers)}")
-    io.print(f"  Failed:    {failed}")
+    io.print(f"  PR:          #{pr_number}")
+    io.print(f"  Pass 1:      {len(pass1_agents)} agents")
+    io.print(f"  Pass 2:      {len(routing.pass2_reviewers)} agents")
+    io.print(f"  Failed:      {failed}")
 
     return 0
 

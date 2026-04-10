@@ -817,6 +817,11 @@ In addition to the shell-based orchestrator commands, the pipeline is available 
 | `/deploy-issue <N>` | Full pipeline inline — routing, agent work, 5 checkpoints, two-pass review, PR creation |
 | `/deploy-issue <N> --base integration/epic-XXX` | Same but targeting an integration branch |
 | `/commit` | Smart commit with format check, sensitive file detection, test count verification |
+| `/review-pr <N>` | Two-pass domain-aware code review on a PR with severity-tagged findings |
+| `/update-docs` | Auto-generate documentation updates for tracking files, design docs, and README |
+| `/create-issue <type>: <title>` | Structured issue filing with domain detection, auto-labeling, and code context |
+| `/run-scenario <N\|all>` | Gazebo SITL scenario runner with structured analysis and failure diagnosis |
+| `/production-readiness` | 11-section pre-deployment audit (build, safety, security, tests, config, etc.) |
 
 ### Skills vs Orchestrator
 

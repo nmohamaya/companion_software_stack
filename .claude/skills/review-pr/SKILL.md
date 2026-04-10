@@ -42,11 +42,11 @@ Examine the diff to determine which Pass 1 agents to launch:
 **Always launch:**
 - `review-memory-safety`
 - `review-security`
+- `test-unit`
 
 **Conditionally launch (check diff content):**
 - `review-concurrency` — if diff contains `std::atomic`, `std::mutex`, `std::thread`, `lock_guard`, `condition_variable`, `memory_order`
 - `review-fault-recovery` — if diff touches `process4_*`, `process5_*`, `process7_*`, `watchdog`, `fault`, `recovery`
-- `test-unit` — if diff touches files in `tests/` or adds new public APIs that should have tests
 - `test-scenario` — if diff touches `common/ipc/`, `common/hal/`, `config/scenarios/`, Gazebo configs
 
 If `--focus` was specified, prioritize that domain's agent and reduce others to a quick scan.
@@ -57,6 +57,7 @@ Review Routing:
   Pass 1 (safety & correctness):
     - review-memory-safety (always)
     - review-security (always)
+    - test-unit (always)
     - review-concurrency (triggered: diff contains "std::atomic")
   Pass 2 (quality & contracts):
     - review-test-quality (always)
