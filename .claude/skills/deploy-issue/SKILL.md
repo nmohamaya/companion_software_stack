@@ -90,9 +90,29 @@ Read these files if they exist (skip if missing):
 - `tasks/agent-changelog.md` — recent completed work
 - `.claude/shared-context/domain-knowledge.md` — non-obvious pitfalls
 
-**Step 2.2 — Spawn feature agent**
+**Step 2.2 — Confirm feature agent launch**
 
-Use the Agent tool to spawn the routed agent:
+Present the agent that will be launched and ask for approval:
+
+```
+═══ Agent Launch — Feature Implementation ═══
+
+Agent:    <routed-role> (e.g., feature-perception)
+Model:    Opus
+Task:     Implement issue #<N> — <title>
+Isolation: worktree (separate git worktree)
+
+This agent will: implement the issue, write tests, build, and produce AGENT_REPORT.md.
+```
+
+User choices:
+- **launch** → spawn the agent (proceed to Step 2.3)
+- **skip** → skip the feature agent entirely. The user wants to implement manually. Jump straight to CP1 with an empty diff (user will make changes themselves during the "changes" flow at CP1).
+- **override \<role\>** → launch a different agent role instead (e.g., user wants `feature-nav` instead of `feature-integration`)
+
+**Step 2.3 — Spawn feature agent**
+
+Only if the user approved in Step 2.2. Use the Agent tool:
 
 ```
 Agent(
@@ -116,7 +136,7 @@ The prompt must include:
 
 Wait for the agent to complete.
 
-**Step 2.3 — Read results**
+**Step 2.4 — Read results**
 
 After the agent completes, read `AGENT_REPORT.md` from the agent's worktree (the path is returned by the Agent tool). Also run:
 ```bash
@@ -216,37 +236,76 @@ After creating: check for existing open PR for same branch first (`gh pr list --
 
 ### PHASE 5: Review [TWO PASSES]
 
-**Pass 1 — Safety & Correctness** [PARALLEL]
+**Step 5.1 — Build review roster and get approval**
 
-Get the PR diff and determine which reviewers to launch:
+Get the PR diff and determine which reviewers are applicable:
 
-Always launch:
-- `review-memory-safety`
-- `review-security`
-- `test-unit`
+**Pass 1 — Safety & Correctness** (always recommended):
+- `review-memory-safety` — RAII, ownership, lifetimes
+- `review-security` — input validation, auth, TLS
+- `test-unit` — GTest coverage, test count verification
 
-Conditionally launch (check diff content):
+**Pass 1 — Conditional** (recommended based on diff content):
 - `review-concurrency` — if diff contains `std::atomic`, `std::mutex`, `std::thread`, `lock_guard`, `memory_order`
 - `review-fault-recovery` — if diff touches `process4_*`, `process5_*`, `process7_*`, `watchdog`, `fault`, `health`
 - `test-scenario` — if diff touches `common/ipc/`, `common/hal/`, `config/scenarios/`, Gazebo configs
 
-Spawn all Pass 1 agents in **parallel** using multiple Agent tool calls in a single message. Each agent receives:
+**Pass 2 — Quality & Contracts** (always recommended, runs after Pass 1):
+- `review-test-quality` — tests exercise new code paths, assertions meaningful
+- `review-api-contract` — docstrings match impl, data consistency
+- `review-code-quality` — dead code, DRY violations, complexity, naming
+- `review-performance` — unnecessary copies, allocation in hot paths, O(n²)
+
+Present the full roster for approval:
+
+```
+═══ Review Agent Roster ═══
+
+--- Pass 1: Safety & Correctness ---
+  [1] review-memory-safety    RECOMMENDED   RAII, ownership, lifetimes
+  [2] review-security         RECOMMENDED   Input validation, auth, TLS
+  [3] test-unit               RECOMMENDED   GTest coverage, test count
+  [4] review-concurrency      CONDITIONAL   Diff contains std::atomic usage
+  [5] review-fault-recovery   NOT TRIGGERED Diff does not touch P4/P5/P7/watchdog
+
+--- Pass 2: Quality & Contracts (runs after Pass 1) ---
+  [6] review-test-quality     RECOMMENDED   Tests exercise new paths
+  [7] review-api-contract     RECOMMENDED   Docstrings, data consistency
+  [8] review-code-quality     RECOMMENDED   Dead code, DRY, complexity
+  [9] review-performance      RECOMMENDED   Copies, allocation, hot paths
+
+Launch: [1] [2] [3] [4] [6] [7] [8] [9]  (8 agents, ~5 min)
+Skipped: [5] (not triggered)
+```
+
+User choices:
+- **launch all** → launch all recommended/conditional agents as shown
+- **skip \<numbers\>** → skip specific agents (e.g., `skip 4 9` to skip concurrency and performance). The skipped agents will not run and their findings will show as "SKIPPED" in the report.
+- **only \<numbers\>** → launch only the specified agents (e.g., `only 1 2 3` for safety-only review)
+- **skip all** → skip the entire review phase, go directly to CP5
+
+**Step 5.2 — Launch Pass 1 agents** [PARALLEL]
+
+Spawn all **approved** Pass 1 agents in **parallel** using multiple Agent tool calls in a single message. Each agent receives:
 - The PR diff (or summary of changed files with key snippets)
 - Instructions to report findings with severity (P1/P2/P3) and file:line references
 
-Collect all Pass 1 results.
+Collect all Pass 1 results. Report progress as agents complete:
+```
+  ✓ review-memory-safety    complete (0 P1, 1 P2, 2 P3)
+  ✓ review-security         complete (0 P1, 0 P2, 1 P3)
+  ⏳ test-unit              running...
+```
 
-**Pass 2 — Quality & Contracts** [PARALLEL, after Pass 1]
+**Step 5.3 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
 
-Spawn these agents in parallel, providing Pass 1 findings as context:
-- `review-test-quality` — validates tests exercise new code paths, assertions are meaningful
-- `review-api-contract` — validates docstrings, data consistency, code completeness
-- `review-code-quality` — catches dead code, DRY violations, complexity, naming issues
-- `review-performance` — catches unnecessary copies, allocation in hot paths, algorithmic complexity
+Spawn all **approved** Pass 2 agents in parallel, providing Pass 1 findings as context:
+- Each Pass 2 agent receives the merged Pass 1 findings so it can build on them
+- Skipped Pass 2 agents show as "SKIPPED" in the final report
 
 Collect Pass 2 results.
 
-**Merge findings** from both passes into a combined report.
+**Step 5.4 — Merge findings** from both passes into a combined report. Mark skipped agents clearly.
 
 ### CP4: Review Findings [INTERACTIVE]
 
@@ -254,8 +313,18 @@ Collect Pass 2 results.
 ═══ CHECKPOINT 4/5 — Review Findings ═══
 
 --- Review Summary ---
-Pass 1 (Safety & Correctness): 3 agents, 0 P1, 2 P2, 5 P3
-Pass 2 (Quality & Contracts):  4 agents, 0 P1, 1 P2, 3 P3
+Pass 1 (Safety & Correctness): 3 ran, 1 skipped, 0 P1, 2 P2, 5 P3
+Pass 2 (Quality & Contracts):  3 ran, 1 skipped, 0 P1, 1 P2, 3 P3
+
+--- Agent Status ---
+  ✓ review-memory-safety    0 P1, 1 P2, 3 P3
+  ✓ review-security         0 P1, 0 P2, 1 P3
+  ✓ test-unit               0 P1, 1 P2, 1 P3
+  ⊘ review-concurrency      SKIPPED (user)
+  ✓ review-test-quality     0 P1, 1 P2, 2 P3
+  ✓ review-api-contract     0 P1, 0 P2, 1 P3
+  ✓ review-code-quality     0 P1, 0 P2, 0 P3
+  ⊘ review-performance      SKIPPED (user)
 
 --- P2 Issues ---
 1. [review-memory-safety] occupancy_grid_3d.h:142 — unguarded signed→unsigned cast on cell_count
@@ -267,11 +336,13 @@ Pass 2 (Quality & Contracts):  4 agents, 0 P1, 1 P2, 3 P3
 
 --- Tech-Lead Assessment ---
 Recommendation: fix (2 P2 issues are worth addressing before merge)
+Note: 2 agents were skipped by user — those review areas are uncovered.
 ```
 
 User choices:
 - **accept** → proceed to CP5 (findings are acceptable as-is)
 - **fix** → spawn feature agent with findings, then re-validate, commit, push, and re-run reviews (FIX LOOP → back to Phase 5)
+- **fix \<numbers\>** → fix only specific issues by number (e.g., `fix 1 3`), accept the rest as-is
 - **back** → return to CP3
 - **reject** → go to ABORT
 
