@@ -207,6 +207,16 @@ class TestRouteReviewAgents:
     def test_reasons_populated(self):
         routing = route_review_agents("+ std::atomic<bool> flag;")
         assert "review-memory-safety" in routing.reasons
-        assert routing.reasons["review-memory-safety"] == "always"
+        assert routing.reasons["review-memory-safety"] == "always (pass 1)"
         assert "review-concurrency" in routing.reasons
         assert "atomic" in routing.reasons["review-concurrency"]
+
+    def test_pass2_reviewers_always_populated(self):
+        routing = route_review_agents("+ int x = 5;")
+        assert len(routing.pass2_reviewers) == 4
+        assert "review-test-quality" in routing.pass2_reviewers
+        assert "review-api-contract" in routing.pass2_reviewers
+        assert "review-code-quality" in routing.pass2_reviewers
+        assert "review-performance" in routing.pass2_reviewers
+        for agent in routing.pass2_reviewers:
+            assert "pass 2" in routing.reasons[agent]
