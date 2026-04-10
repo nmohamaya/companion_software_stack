@@ -343,6 +343,10 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
+            // Cache the GridPlannerBase downcast once per tick — grid_planner never
+            // changes type, so a single cast covers diagnostics and snap access.
+            auto* gpb = dynamic_cast<GridPlannerBase*>(grid_planner);
+
             // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level
             if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&
                 debug_tick_++ % 10 == 0) {
@@ -356,11 +360,10 @@ private:
                 float       dist_to_wp = std::sqrt((dpx - wp->x) * (dpx - wp->x) +
                                                    (dpy - wp->y) * (dpy - wp->y) +
                                                    (dpz - wp->z) * (dpz - wp->z));
-                auto*       base       = dynamic_cast<GridPlannerBase*>(grid_planner);
-                int         occ  = base ? static_cast<int>(base->grid().occupied_count()) : -1;
-                int         stat = base ? static_cast<int>(base->grid().static_count()) : -1;
-                int         prom = base ? base->grid().promoted_count() : -1;
-                bool        fb   = grid_planner && grid_planner->using_direct_fallback();
+                int         occ        = gpb ? static_cast<int>(gpb->grid().occupied_count()) : -1;
+                int         stat       = gpb ? static_cast<int>(gpb->grid().static_count()) : -1;
+                int         prom       = gpb ? gpb->grid().promoted_count() : -1;
+                bool        fb         = grid_planner && grid_planner->using_direct_fallback();
                 DRONE_LOG_DEBUG("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
                                 " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
                                 " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
@@ -381,14 +384,14 @@ private:
             // (because it was occupied), check acceptance against the snapped
             // position — otherwise the drone reaches the navigation target but
             // can never satisfy the radius check.  See Issue #394.
-            auto*        base     = dynamic_cast<GridPlannerBase*>(grid_planner);
-            const float* snap_xyz = (base && base->has_snapped_goal()) ? base->snapped_goal_xyz()
-                                                                       : nullptr;
+            const std::array<float, 3>* snap_xyz =
+                (gpb && gpb->has_snapped_goal()) ? &gpb->snapped_goal_xyz() : nullptr;
 
-            if (fsm.waypoint_reached(px, py, pz, *wp, snap_xyz) ||
-                fsm.waypoint_overshot(px, py, pz)) {
+            const bool reached  = fsm.waypoint_reached(px, py, pz, *wp, snap_xyz);
+            const bool overshot = fsm.waypoint_overshot(px, py, pz);
+            if (reached || overshot) {
                 DRONE_LOG_INFO("[Planner] Waypoint {} {}!", fsm.current_wp_index() + 1,
-                               fsm.waypoint_overshot(px, py, pz) ? "overshot" : "reached");
+                               overshot ? "overshot" : "reached");
 
                 if (wp->trigger_payload) {
                     drone::ipc::PayloadCommand pay_cmd{};

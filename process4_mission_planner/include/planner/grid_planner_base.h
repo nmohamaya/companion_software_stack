@@ -125,10 +125,10 @@ public:
     /// Whether the planner has snapped the current goal to an alternate position.
     [[nodiscard]] bool has_snapped_goal() const { return snap_valid_; }
 
-    /// Get the snapped world-frame position (valid only when has_snapped_goal() is true).
-    /// Returns a pointer to a float[3] array {x, y, z}.  The pointer is stable
-    /// until the next call to plan() or invalidate_path().
-    [[nodiscard]] const float* snapped_goal_xyz() const { return snapped_xyz_; }
+    /// Get the snapped world-frame position {x, y, z}.
+    /// Values are updated on each call to plan(). Only meaningful when
+    /// has_snapped_goal() returns true. The acceptance radius remains wp.radius.
+    [[nodiscard]] const std::array<float, 3>& snapped_goal_xyz() const { return snapped_xyz_; }
 
     /// Get the current obstacle grid (for diagnostics/testing).
     [[nodiscard]] const OccupancyGrid3D& grid() const { return grid_; }
@@ -255,8 +255,8 @@ public:
         }
 
         // ── Follow path or go direct ────────────────────────
-        float goal_x = snap_valid_ ? snapped_world_x_ : target.x;
-        float goal_y = snap_valid_ ? snapped_world_y_ : target.y;
+        float goal_x = snap_valid_ ? snapped_xyz_[0] : target.x;
+        float goal_y = snap_valid_ ? snapped_xyz_[1] : target.y;
 
         if (!cached_path_.empty() && path_index_ < cached_path_.size()) {
             if (config_.look_ahead_m > 0.0f) {
@@ -498,13 +498,7 @@ private:
             }
 
             if (snapped) {
-                auto wc                 = grid_.grid_to_world(goal);
-                snapped_world_x_        = wc[0];
-                snapped_world_y_        = wc[1];
-                snapped_world_z_        = wc[2];
-                snapped_xyz_[0]         = wc[0];
-                snapped_xyz_[1]         = wc[1];
-                snapped_xyz_[2]         = wc[2];
+                snapped_xyz_            = grid_.grid_to_world(goal);
                 snap_valid_             = true;
                 last_snap_static_count_ = current_static;
                 const float snap_dist =
@@ -513,11 +507,11 @@ private:
                     grid_.resolution();
                 DRONE_LOG_INFO("[Planner] WP({:.1f},{:.1f},{:.1f}) occupied — snapped lateral"
                                " to ({:.1f},{:.1f},{:.1f}) offset={:.2f} m",
-                               target.x, target.y, target.z, snapped_world_x_, snapped_world_y_,
-                               snapped_world_z_, snap_dist);
+                               target.x, target.y, target.z, snapped_xyz_[0], snapped_xyz_[1],
+                               snapped_xyz_[2], snap_dist);
             }
         } else if (snap_valid_) {
-            goal = grid_.world_to_grid(snapped_world_x_, snapped_world_y_, snapped_world_z_);
+            goal = grid_.world_to_grid(snapped_xyz_[0], snapped_xyz_[1], snapped_xyz_[2]);
         }
 
         return goal;
@@ -572,12 +566,13 @@ private:
     bool                                  direct_fallback_ = false;
     std::chrono::steady_clock::time_point last_plan_time_{};
 
-    // Cached snapped goal
-    float  last_target_x_ = 1e9f, last_target_y_ = 1e9f, last_target_z_ = 1e9f;
-    float  snapped_world_x_ = 0.0f, snapped_world_y_ = 0.0f, snapped_world_z_ = 0.0f;
-    float  snapped_xyz_[3] = {0.0f, 0.0f, 0.0f};  // public-facing snap position (Issue #394)
-    bool   snap_valid_     = false;
-    size_t last_snap_static_count_ = 0;  // for snap cache invalidation on grid changes
+    // Cached snapped goal — single source of truth for snapped world position.
+    // Valid when snap_valid_ is true.  Written in snap_goal(), read by plan()
+    // path-following and externally via snapped_goal_xyz().
+    float                last_target_x_ = 1e9f, last_target_y_ = 1e9f, last_target_z_ = 1e9f;
+    std::array<float, 3> snapped_xyz_ = {0.0f, 0.0f, 0.0f};
+    bool                 snap_valid_  = false;
+    size_t last_snap_static_count_    = 0;  // for snap cache invalidation on grid changes
 
     // Velocity smoothing state
     float smooth_vx_ = 0.0f;

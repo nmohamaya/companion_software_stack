@@ -4,6 +4,7 @@
 #include "ipc/ipc_types.h"
 #include "util/ilogger.h"
 
+#include <array>
 #include <string>
 
 namespace drone::planner {
@@ -60,15 +61,15 @@ public:
     void on_recovery_complete() { transition(MissionState::NAVIGATE); }
 
     /// Check if waypoint is reached (within acceptance radius).
-    /// When a planner snaps the goal to avoid occupied cells, the snapped
-    /// world position should be passed so the acceptance check uses the
-    /// actual navigation target rather than the original (possibly
-    /// unreachable) waypoint position.  See Issue #394.
+    /// When a planner snaps the goal to avoid occupied cells, pass the snapped
+    /// world position so the acceptance check uses the actual navigation target
+    /// rather than the original (possibly unreachable) waypoint position.
+    /// The acceptance radius is always wp.radius regardless of snap.  See Issue #394.
     [[nodiscard]] bool waypoint_reached(float px, float py, float pz, const Waypoint& wp,
-                                        const float* snapped_xyz = nullptr) const {
-        const float tx = snapped_xyz ? snapped_xyz[0] : wp.x;
-        const float ty = snapped_xyz ? snapped_xyz[1] : wp.y;
-        const float tz = snapped_xyz ? snapped_xyz[2] : wp.z;
+                                        const std::array<float, 3>* snapped_xyz = nullptr) const {
+        const float tx = snapped_xyz ? (*snapped_xyz)[0] : wp.x;
+        const float ty = snapped_xyz ? (*snapped_xyz)[1] : wp.y;
+        const float tz = snapped_xyz ? (*snapped_xyz)[2] : wp.z;
         const float dx = px - tx, dy = py - ty, dz = pz - tz;
         return (dx * dx + dy * dy + dz * dz) < (wp.radius * wp.radius);
     }

@@ -225,10 +225,10 @@ TEST(MissionFSMTest, WaypointReachedAtSnappedPosition) {
 
     // Snapped position at (16, -2, 5) — 6.32m from original.
     // Without snap override, drone at snapped position would NOT satisfy radius.
-    const float snap_xyz[3] = {16.0f, -2.0f, 5.0f};
+    const std::array<float, 3> snap_xyz = {16.0f, -2.0f, 5.0f};
 
     // Drone at the snapped position — should be reached when snap is provided
-    EXPECT_TRUE(fsm.waypoint_reached(16.0f, -2.0f, 5.0f, wp, snap_xyz));
+    EXPECT_TRUE(fsm.waypoint_reached(16.0f, -2.0f, 5.0f, wp, &snap_xyz));
 
     // Same position without snap override — should NOT be reached (6.32m > 3.0m)
     EXPECT_FALSE(fsm.waypoint_reached(16.0f, -2.0f, 5.0f, wp, nullptr));
@@ -240,11 +240,11 @@ TEST(MissionFSMTest, WaypointReachedAtSnappedPosition) {
 TEST(MissionFSMTest, WaypointNotReachedFarFromBothOriginalAndSnapped) {
     MissionFSM fsm;
 
-    Waypoint    wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
-    const float snap_xyz[3] = {16.0f, -2.0f, 5.0f};
+    Waypoint                   wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+    const std::array<float, 3> snap_xyz = {16.0f, -2.0f, 5.0f};
 
     // Drone at (30, 30, 5) — far from both original and snapped positions
-    EXPECT_FALSE(fsm.waypoint_reached(30.0f, 30.0f, 5.0f, wp, snap_xyz));
+    EXPECT_FALSE(fsm.waypoint_reached(30.0f, 30.0f, 5.0f, wp, &snap_xyz));
 }
 
 TEST(MissionFSMTest, WaypointReachedNoSnapNormalBehavior) {
@@ -263,12 +263,12 @@ TEST(MissionFSMTest, WaypointReachedNoSnapNormalBehavior) {
 TEST(MissionFSMTest, WaypointReachedWithinRadiusOfSnap) {
     MissionFSM fsm;
 
-    Waypoint    wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
-    const float snap_xyz[3] = {16.0f, 0.0f, 5.0f};
+    Waypoint                   wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+    const std::array<float, 3> snap_xyz = {16.0f, 0.0f, 5.0f};
 
     // Drone 2.5m from snapped position — within 3.0m radius
-    EXPECT_TRUE(fsm.waypoint_reached(18.0f, 1.0f, 5.0f, wp, snap_xyz));
+    EXPECT_TRUE(fsm.waypoint_reached(18.0f, 1.0f, 5.0f, wp, &snap_xyz));
 
     // Drone 4.0m from snapped position — outside 3.0m radius
-    EXPECT_FALSE(fsm.waypoint_reached(20.0f, 0.0f, 5.0f, wp, snap_xyz));
+    EXPECT_FALSE(fsm.waypoint_reached(20.0f, 0.0f, 5.0f, wp, &snap_xyz));
 }

@@ -446,14 +446,14 @@ occlusion recovery, config/factory integration.
 
 ## P4 — Mission Planner
 
-### test_mission_fsm.cpp — 15 tests
+### test_mission_fsm.cpp — 19 tests
 
 **What it tests:** `MissionFSM` state machine — the core flight mission
 lifecycle.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionFSMTest` | 15 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → survey → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor, SURVEY state transition |
+| `MissionFSMTest` | 19 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → survey → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor, SURVEY state transition, snap offset acceptance (Issue #394: snapped position, far-from-both, no-snap fallback, within-radius boundary) |
 
 **Key files under test:** `planner/mission_fsm.h`
 
