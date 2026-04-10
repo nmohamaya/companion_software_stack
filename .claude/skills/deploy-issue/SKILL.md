@@ -191,12 +191,48 @@ User choices:
 
 ### PHASE 3: Validate & Commit
 
-**Step 3.1 — Validation** [PARALLEL where possible]
+**Step 3.1 — Validation (8-check hallucination detector)** [PARALLEL where possible]
 
-Run these checks (use parallel Bash calls where possible):
-1. Build: `bash deploy/build.sh` (verify exit code 0, zero warnings)
-2. Format: Find changed C++ files and check with `clang-format-18 --dry-run --Werror`
-3. Test count: `ctest -N --test-dir build | grep "Total Tests:"` — compare against baseline in `tests/TESTS.md`
+Run these checks. Checks 1-3 are BLOCKING (must pass to commit). Checks 4-8 are WARNING (report but don't block).
+
+**BLOCKING checks:**
+
+1. **Build** — `bash deploy/build.sh` (verify exit code 0, zero warnings)
+2. **Format** — Find changed C++ files and check with `clang-format-18 --dry-run --Werror`
+3. **Test count** — `ctest -N --test-dir build | grep "Total Tests:"` — compare against baseline in `tests/TESTS.md`
+
+**Hallucination detection checks (WARNING):**
+
+4. **Include verification** — Scan the diff for new `#include "..."` directives. For each, verify the header file exists in the repo (skip system/third-party prefixes: `zenoh/`, `Eigen/`, `opencv2/`, `gz/`, `mavsdk/`, `spdlog/`, `nlohmann/`, `gtest/`, `gmock/`).
+```bash
+git diff origin/<base_branch>...HEAD | grep '^\+.*#include "' | sed 's/.*#include "//;s/".*//' | sort -u
+```
+For each include, search the project dirs (`common/`, `process[1-7]_*/`, `tests/`) for the file.
+
+5. **AGENT_REPORT.md vs actual diff** — If AGENT_REPORT.md exists, extract its "Changed files" table and compare against `git diff --name-only origin/<base_branch>...HEAD`. Flag:
+   - Files listed in report but NOT in the diff (phantom changes — agent claimed to change a file it didn't)
+   - Files in the diff but NOT in the report (undocumented changes — agent forgot to report)
+
+6. **Config key consistency** — Search the diff for new `cfg.get<>()` or `cfg_key::` references. For each new config key, verify it exists in `config/default.json`. Agents commonly add code that reads a config key but forget to add the default value.
+```bash
+# Find new config key references in the diff
+git diff origin/<base_branch>...HEAD | grep '^\+' | grep -oE 'cfg\.get<[^>]*>\("[^"]*"' | sed 's/.*"//;s/".*//' | sort -u
+
+# Cross-reference against default.json
+```
+
+7. **Symbol resolution** — For new function calls or class references added in the diff, spot-check that the symbols actually exist. Focus on:
+   - New `#include` files → do the functions used from those headers exist?
+   - New class instantiations → does the constructor signature match?
+   - New method calls on existing classes → does the method exist?
+
+   This is a best-effort heuristic check. Use `grep -r` to verify key symbols. Don't exhaustively check every line — focus on non-trivial additions (new classes, factory calls, HAL interfaces).
+
+8. **Diff sanity** — Check the overall diff for red flags:
+   - Files >1000 lines added in a single commit (may indicate generated/copied code)
+   - Deleted files that are still `#include`d elsewhere
+   - Test files that don't contain any `TEST` or `TEST_F` macros (phantom test files)
+   - `.cpp` files added but not included in any `CMakeLists.txt`
 
 ### CP2: Commit Approval [INTERACTIVE]
 
@@ -204,11 +240,20 @@ Run these checks (use parallel Bash calls where possible):
 ═══ CHECKPOINT 2/5 — Commit Approval ═══
 
 --- Validation Results ---
-Build:      PASS (zero warnings)
-Format:     PASS
-Test count: 1259 (expected 1259) ✓
+[BLOCKING]
+Build:          PASS (zero warnings)
+Format:         PASS
+Test count:     1259 (expected 1259) ✓
 
-[If any failures, show details and warn]
+[HALLUCINATION CHECKS]
+Includes:       PASS (3 new includes, all resolved)
+Report vs diff: WARN (report lists config_validator.h but not in diff)
+Config keys:    PASS (2 new keys, both in default.json)
+Symbol check:   PASS (spot-checked 4 symbols)
+Diff sanity:    PASS
+
+[If any BLOCKING checks fail, recommend going back to CP1]
+[If any hallucination checks WARN, show details and recommend review]
 ```
 
 User choices:
