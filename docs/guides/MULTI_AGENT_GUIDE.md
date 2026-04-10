@@ -1,10 +1,10 @@
 # Multi-Agent Pipeline Guide
 
-This guide explains how the 13-agent pipeline works, how to use it, and how agents coordinate with each other and GitHub.
+This guide explains how the 17-agent pipeline works, how to use it, and how agents coordinate with each other and GitHub.
 
 ## How It Works
 
-The pipeline applies **Amdahl's Law** to software verification: feature agents produce code in parallel, but more importantly, 4 review agents + 2 test agents verify every PR in parallel. The only serial step is the tech lead's merge decision — minimizing the serial fraction that limits speedup.
+The pipeline applies **Amdahl's Law** to software verification: feature agents produce code in parallel, but more importantly, up to 10 verification agents verify every PR in **two parallel passes** — Pass 1 for safety & correctness (3-6 agents), Pass 2 for quality & contracts (4 agents). The only serial step is the tech lead's merge decision — minimizing the serial fraction that limits speedup.
 
 ```
                           ┌──────────────────────────────────────────────────────┐
@@ -32,12 +32,14 @@ The pipeline applies **Amdahl's Law** to software verification: feature agents p
               │  └──────────────────────┬──────────────────────────────┘  │
               │                         │ PR created                      │
               │  ┌──────────────────────▼──────────────────────────────┐  │
-              │  │           REVIEW AGENTS (verify in parallel)        │  │
-              │  │  memory-safety │ concurrency │ fault │ security     │  │
+              │  │     PASS 1: SAFETY & CORRECTNESS (parallel)        │  │
+              │  │  memory-safety │ concurrency │ fault │ security    │  │
+              │  │  unit-test     │ scenario-test                     │  │
               │  └──────────────────────┬──────────────────────────────┘  │
               │  ┌──────────────────────▼──────────────────────────────┐  │
-              │  │            TEST AGENTS (verify in parallel)         │  │
-              │  │            unit-test  │  scenario-test              │  │
+              │  │     PASS 2: QUALITY & CONTRACTS (parallel)         │  │
+              │  │  test-quality │ api-contract │ code-quality │ perf │  │
+              │  │  (receives Pass 1 findings as context)             │  │
               │  └──────────────────────┬──────────────────────────────┘  │
               │                         │                                 │
               └─────────────────────────┼─────────────────────────────────┘
@@ -72,20 +74,30 @@ flowchart TD
     FIC -->|creates PR| PR
     FIP -->|creates PR| PR
 
-    PR -->|orchestrator deploy-review| Review{Route by diff content}
-    Review -->|always| RMS2[review-memory-safety]
-    Review -->|always| RS2[review-security]
-    Review -->|always| TU2[test-unit]
-    Review -->|atomics/mutex| RC[review-concurrency]
-    Review -->|watchdog/P4/P5/P7| RF[review-fault-recovery]
-    Review -->|IPC/HAL/Gazebo| TS[test-scenario]
+    PR -->|orchestrator deploy-review| Pass1{Pass 1: Safety & Correctness}
+    Pass1 -->|always| RMS2[review-memory-safety]
+    Pass1 -->|always| RS2[review-security]
+    Pass1 -->|always| TU2[test-unit]
+    Pass1 -->|atomics/mutex| RC[review-concurrency]
+    Pass1 -->|watchdog/P4/P5/P7| RF[review-fault-recovery]
+    Pass1 -->|IPC/HAL/Gazebo| TS[test-scenario]
 
-    RMS2 -->|comments| PR
-    RS2 -->|comments| PR
-    TU2 -->|comments| PR
-    RC -->|comments| PR
-    RF -->|comments| PR
-    TS -->|comments| PR
+    RMS2 -->|findings| Pass2{Pass 2: Quality & Contracts}
+    RS2 -->|findings| Pass2
+    TU2 -->|findings| Pass2
+    RC -->|findings| Pass2
+    RF -->|findings| Pass2
+    TS -->|findings| Pass2
+
+    Pass2 -->|always| RTQ[review-test-quality]
+    Pass2 -->|always| RAC[review-api-contract]
+    Pass2 -->|always| RCQ[review-code-quality]
+    Pass2 -->|always| RP[review-performance]
+
+    RTQ -->|comments| PR
+    RAC -->|comments| PR
+    RCQ -->|comments| PR
+    RP -->|comments| PR
 
     PR -->|all reviews pass| TL2[tech-lead]
     TL2 -->|orchestrator validate| Merge[Merge to main]
@@ -109,23 +121,46 @@ flowchart TD
     IB -->|"all sub-issues merged + CI green"| Main
 ```
 
-## The 13-Agent Roster
+## The 17-Agent Roster
 
-| # | Role | Model | Type | Scope |
-|---|------|-------|------|-------|
-| 1 | `tech-lead` | Opus | Orchestrator | Routing, merge decisions, coordination |
-| 2 | `feature-perception` | Opus | Feature | P1/P2, camera/detector HAL |
-| 3 | `feature-nav` | Opus | Feature | P3/P4, planner/avoider HAL |
-| 4 | `feature-integration` | Opus | Feature | P5/P6/P7, IPC, HAL backends |
-| 5 | `feature-infra-core` | Opus | Feature | common/, CMake, config |
-| 6 | `feature-infra-platform` | Opus | Feature | deploy/, CI, boards/, certification |
-| 7 | `review-memory-safety` | Opus | Review (read-only) | RAII, ownership, lifetimes |
-| 8 | `review-concurrency` | Opus | Review (read-only) | Races, atomics, deadlocks |
-| 9 | `review-fault-recovery` | Opus | Review (read-only) | Watchdog, degradation |
-| 10 | `review-security` | Opus | Review (read-only) | Input validation, auth, TLS |
-| 11 | `test-unit` | Sonnet | Test | GTest, coverage delta (tests/ only) |
-| 12 | `test-scenario` | Sonnet | Test | Gazebo SITL, integration (tests/ only) |
-| 13 | `ops-github` | Haiku | Operations | Issue triage, milestones, board |
+### Production Agents (write code)
+
+| # | Role | Model | Scope |
+|---|------|-------|-------|
+| 1 | `tech-lead` | Opus | Routing, merge decisions, coordination |
+| 2 | `feature-perception` | Opus | P1/P2, camera/detector HAL |
+| 3 | `feature-nav` | Opus | P3/P4, planner/avoider HAL |
+| 4 | `feature-integration` | Opus | P5/P6/P7, IPC, HAL backends |
+| 5 | `feature-infra-core` | Opus | common/, CMake, config |
+| 6 | `feature-infra-platform` | Opus | deploy/, CI, boards/, certification |
+
+### Pass 1 — Safety & Correctness (read-only, parallel)
+
+| # | Role | Model | Trigger | Focus |
+|---|------|-------|---------|-------|
+| 7 | `review-memory-safety` | Opus | Always | RAII, ownership, lifetimes |
+| 8 | `review-concurrency` | Opus | If atomics/mutex/thread in diff | Races, atomics, deadlocks |
+| 9 | `review-fault-recovery` | Opus | If P4/P5/P7/watchdog in diff | Watchdog, degradation |
+| 10 | `review-security` | Opus | Always | Input validation, auth, TLS |
+| 11 | `test-unit` | Sonnet | Always | GTest, coverage delta (tests/ only) |
+| 12 | `test-scenario` | Sonnet | If IPC/HAL/Gazebo in diff | Gazebo SITL, integration (tests/ only) |
+
+### Pass 2 — Quality & Contracts (read-only, parallel after Pass 1)
+
+These agents always run and receive Pass 1 findings as context, allowing them to verify that flagged code has adequate test coverage, accurate documentation, and acceptable quality.
+
+| # | Role | Model | Focus |
+|---|------|-------|-------|
+| 13 | `review-test-quality` | Opus | Tests exercise new code paths, assertions meaningful, boundary conditions |
+| 14 | `review-api-contract` | Sonnet | Docstrings match implementation, data consistency, naming accuracy |
+| 15 | `review-code-quality` | Sonnet | Dead code, DRY violations, complexity, naming, unnecessary abstractions |
+| 16 | `review-performance` | Sonnet | Unnecessary copies, allocation in hot paths, algorithmic complexity |
+
+### Operations Agent
+
+| # | Role | Model | Focus |
+|---|------|-------|-------|
+| 17 | `ops-github` | Haiku | Issue triage, milestones, board |
 
 ### Agent Boundaries
 
@@ -161,7 +196,7 @@ gh auth login
 export PYTHONPATH=scripts     # Add to .bashrc / .zshrc to make permanent
 
 # 5. Verify agent definitions exist
-ls .claude/agents/    # Should show 13 .md files
+ls .claude/agents/    # Should show 17 .md files
 
 # 6. Verify shared context exists
 ls .claude/shared-context/   # Should show domain-knowledge.md, project-status.md
@@ -171,7 +206,7 @@ bash deploy/build.sh
 
 # 8. Test the setup with a dry run
 python -m orchestrator deploy-issue 123 --dry-run    # Shows routing without launching
-python -m orchestrator list                          # Shows all 13 agent roles
+python -m orchestrator list                          # Shows all 17 agent roles
 ```
 
 ### What's Included in the Repo
@@ -202,7 +237,8 @@ Each agent invocation consumes API tokens charged to **your** Claude account. Ro
 - Feature agent (Opus): ~$1-5 per issue depending on complexity
 - Review agent (Opus): ~$0.50-2 per PR review
 - Test agent (Sonnet): ~$0.25-1 per test run
-- Pipeline mode: runs 1 feature + 2-6 review/test agents = ~$3-10 per issue
+- Pass 2 review agent (Sonnet): ~$0.25-1 per review
+- Pipeline mode: runs 1 feature + 3-6 Pass 1 + 4 Pass 2 agents = ~$5-15 per issue
 
 Use `--dry-run` on any script to preview what would be launched without spending tokens.
 
@@ -265,7 +301,7 @@ python -m orchestrator deploy-review 456 --dry-run
 python -m orchestrator deploy-review 456 --all
 ```
 
-Review agents launch in parallel and post a consolidated comment on the PR when done. Monitor progress in a separate terminal:
+Review agents launch in two passes and post a consolidated comment on the PR when done. Monitor progress in a separate terminal:
 
 ```bash
 # Watch log sizes grow (see which agents are still working)
@@ -321,7 +357,7 @@ gh pr create --base integration/epic-357
 python -m orchestrator deploy-review <pr-number>
 ```
 
-This launches review agents in parallel (memory-safety, security, + conditional concurrency/fault-recovery based on diff content). Monitor them:
+This launches review agents in two passes — Pass 1 (safety: memory-safety, security, + conditional concurrency/fault-recovery) then Pass 2 (quality: test-quality, api-contract, code-quality, performance with Pass 1 findings). Monitor them:
 
 ```bash
 # In a separate terminal — watch progress
@@ -648,15 +684,16 @@ Issue fetch + label routing (automated)
 │   Options: [c]reate / [e]dit / [b]ack / [a]bort     │
 └─────────────────────┬───────────────────────────────┘
                       ▼
-  orchestrator deploy-review runs (automated: 2-4 review agents + 1-2 test agents in parallel)
+  Pass 1 runs (automated: 3-6 safety & correctness agents in parallel)
+  Pass 2 runs (automated: 4 quality & contract agents in parallel, with Pass 1 findings)
                       │
 ┌─────────────────────▼───────────────────────────────┐
 │ CP4: Review & Test Findings                          │
-│   You see: P1-P4 findings from review agents         │
-│            (memory-safety, security, +conditional     │
-│            concurrency, fault-recovery)               │
-│            + test agent results (build, test pass/    │
-│            fail, test count vs baseline, coverage)    │
+│   You see: Merged findings from both passes          │
+│   Pass 1: memory-safety, security, +conditional      │
+│           concurrency, fault-recovery, test agents    │
+│   Pass 2: test-quality, api-contract, code-quality,  │
+│           performance (informed by Pass 1 findings)   │
 │   Options: [a]ccept / [f]ix / [b]ack / [r]eject     │
 └─────────────────────┬───────────────────────────────┘
                       ▼
@@ -725,17 +762,26 @@ $ python -m orchestrator deploy-issue 315 --pipeline --base integration/epic-300
   Your choice: c
   PR created: https://github.com/.../pull/361
 
-  Deploying review agents... (4 agents in parallel)
+  Deploying review agents...
+  Pass 1 (safety & correctness): 4 agents in parallel
   DONE  review-memory-safety
   DONE  review-security
   DONE  review-concurrency
   DONE  review-fault-recovery
+  Pass 2 (quality & contracts): 4 agents in parallel
+  DONE  review-test-quality
+  DONE  review-api-contract
+  DONE  review-code-quality
+  DONE  review-performance
 
 ═══════════════════════════════════════════════════════
-  CHECKPOINT 4/5 — Safety Review Findings
+  CHECKPOINT 4/5 — Review Findings (2 passes)
 ═══════════════════════════════════════════════════════
+  Pass 1: 0 P1, 2 P2, 1 P3
+  Pass 2: 0 P1, 1 P2, 2 P3
   P1: validate() never checks version field (2 findings)
   P2: Missing default member initializers (1 finding)
+  P2: Test doesn't exercise new validation path (1 finding)
   P3: Positional aggregate init fragile (1 finding)
   [a] accept  [f] fix  [b] back  [r] reject
   Your choice: f
@@ -756,6 +802,61 @@ $ python -m orchestrator deploy-issue 315 --pipeline --base integration/epic-300
   Pipeline Complete
   PR: https://github.com/.../pull/361
   Next step: Review and merge the PR in GitHub UI.
+```
+
+---
+
+## Claude Code Skills (Interactive Pipeline)
+
+In addition to the shell-based orchestrator commands, the pipeline is available as **Claude Code skills** that run inline in your current session. This provides a more natural interactive experience where Claude acts as tech-lead directly in the conversation.
+
+### Available Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `/deploy-issue <N>` | Full pipeline inline — routing, agent work, 5 checkpoints, two-pass review, PR creation |
+| `/deploy-issue <N> --base integration/epic-XXX` | Same but targeting an integration branch |
+| `/commit` | Smart commit with format check, sensitive file detection, test count verification |
+
+### Skills vs Orchestrator
+
+| Capability | Orchestrator (`python -m orchestrator`) | Skills (`/deploy-issue`) |
+|-----------|----------------------------------------|--------------------------|
+| Agent launch | `claude` subprocess | Agent tool (inline) |
+| Checkpoints | Console I/O prompts | Conversation (natural) |
+| Tech-lead | Separate Claude process | Current session IS tech-lead |
+| Two-pass reviews | Same routing | Same routing |
+| Auto mode | `--auto` (no human) | N/A (always interactive) |
+| Headless mode | `--headless` | N/A |
+| tmux wrapping | `--tmux` | N/A (IDE native) |
+| Mobile monitoring | `--notify <topic>` | N/A |
+
+**When to use which:**
+- **Skills**: interactive development in IDE/CLI — you're at your desk, want real-time conversation
+- **Orchestrator**: unattended/CI use, remote monitoring via tmux+SSH, auto mode for batch processing
+
+### Example
+
+```
+User: /deploy-issue 299 --base integration/epic-284
+
+Claude: Fetching issue #299...
+  Title: Add multi-class height priors for depth estimation
+  Labels: [perception, enhancement]
+
+  Routing Recommendation:
+    Role: feature-perception
+    Priority: P3 (specific domain match)
+  Accept? [yes]
+
+User: yes
+
+Claude: Spawning feature-perception agent in isolated worktree...
+  [agent works...]
+
+  ═══ CHECKPOINT 1/5 — Changes Review ═══
+  [presents AGENT_REPORT.md + diff stat]
+  Recommendation: accept
 ```
 
 ---

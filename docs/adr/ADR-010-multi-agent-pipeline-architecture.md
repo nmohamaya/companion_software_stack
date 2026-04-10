@@ -1,18 +1,18 @@
 # ADR-010: Multi-Agent Pipeline Architecture
 
 **Status:** Accepted
-**Date:** 2026-04-06 (updated 2026-04-07)
-**Issue:** #357, #360
+**Date:** 2026-04-06 (updated 2026-04-09)
+**Issue:** #357, #360, #381, #392
 
 ## Context
 
 The project uses 15+ git worktrees for concurrent AI agent work (ADR-005), but has no formal agent role definitions, coordination layer, boundary enforcement, or session management. As the team scales, **Amdahl's Law** tells us the bottleneck isn't code production — it's verification. In safety-critical drone software, you can't relax quality gates to increase throughput.
 
-**The Amdahl's Law insight:** If S is the serial fraction of the pipeline, maximum speedup with N agents is `1 / (S + (1-S)/N)`. By parallelizing verification (4 review agents + 2 test agents running simultaneously) and keeping the serial fraction to just the human's checkpoint decisions, we minimize S and maximize throughput without sacrificing quality.
+**The Amdahl's Law insight:** If S is the serial fraction of the pipeline, maximum speedup with N agents is `1 / (S + (1-S)/N)`. By parallelizing verification (Pass 1: 4 review + 2 test agents, Pass 2: 4 quality agents — up to 10 agents running in parallel phases) and keeping the serial fraction to just the human's checkpoint decisions, we minimize S and maximize throughput without sacrificing quality.
 
 ## Decision
 
-Implement a **13-agent pipeline** with formal role definitions, orchestration scripts, CI integration, shared state coordination, and a guided pipeline mode with human checkpoints.
+Implement a **17-agent pipeline** with formal role definitions, orchestration scripts, CI integration, shared state coordination, a guided pipeline mode with human checkpoints, and a **two-pass review architecture** where quality/contract agents receive safety agent findings as context.
 
 ### Agent Roster
 
@@ -27,22 +27,48 @@ Implement a **13-agent pipeline** with formal role definitions, orchestration sc
 | 5 | `feature-infra-core` | Opus | common/, CMake, config (Epic #284 + #300 A-B) |
 | 6 | `feature-infra-platform` | Opus | deploy/, CI, boards/ (Epic #300 C-E) |
 
-#### Verification Agents (review + test in parallel)
+#### Pass 1 — Safety & Correctness Agents (parallel, read-only)
 
-| # | Role | Model | Access | Focus |
-|---|------|-------|--------|-------|
-| 7 | `review-memory-safety` | Opus | Read-only | RAII, ownership, lifetimes |
-| 8 | `review-concurrency` | Opus | Read-only | Races, atomics, deadlocks |
-| 9 | `review-fault-recovery` | Opus | Read-only | Watchdog, degradation, restart |
-| 10 | `review-security` | Opus | Read-only | Input validation, auth, TLS |
-| 11 | `test-unit` | Sonnet | tests/ only | Build, run tests, verify count vs baseline |
-| 12 | `test-scenario` | Sonnet | tests/ only | Gazebo SITL scenario integration |
+| # | Role | Model | Trigger | Focus |
+|---|------|-------|---------|-------|
+| 7 | `review-memory-safety` | Opus | Always | RAII, ownership, lifetimes |
+| 8 | `review-concurrency` | Opus | If atomics/mutex/thread in diff | Races, atomics, deadlocks |
+| 9 | `review-fault-recovery` | Opus | If P4/P5/P7/watchdog in diff | Watchdog, degradation, restart |
+| 10 | `review-security` | Opus | Always | Input validation, auth, TLS |
+| 11 | `test-unit` | Sonnet | Always | Build, run tests, verify count vs baseline |
+| 12 | `test-scenario` | Sonnet | If IPC/HAL/Gazebo in diff | Gazebo SITL scenario integration |
+
+#### Pass 2 — Quality & Contracts Agents (parallel after Pass 1, read-only)
+
+These agents run **after** Pass 1 completes and receive Pass 1 findings as context. This allows them to verify that flagged code paths have adequate test coverage, accurate documentation, and acceptable quality.
+
+| # | Role | Model | Focus |
+|---|------|-------|-------|
+| 13 | `review-test-quality` | Opus | Tests exercise new code paths, assertions meaningful, boundary conditions |
+| 14 | `review-api-contract` | Sonnet | Docstrings match implementation, data consistency, naming accuracy |
+| 15 | `review-code-quality` | Sonnet | Dead code, DRY violations, complexity, naming, unnecessary abstractions |
+| 16 | `review-performance` | Sonnet | Unnecessary copies, allocation in hot paths, algorithmic complexity, cache efficiency |
 
 #### Operations Agent
 
 | # | Role | Model | Access | Focus |
 |---|------|-------|--------|-------|
-| 13 | `ops-github` | Haiku | gh CLI only | Auto-triage unlabeled issues, milestones, stale cleanup |
+| 17 | `ops-github` | Haiku | gh CLI only | Auto-triage unlabeled issues, milestones, stale cleanup |
+
+### Claude Code Skills Integration (Issue #381)
+
+In addition to the shell-based orchestrator, the pipeline is also available as **Claude Code skills** that run inline in the current session. This provides a more interactive experience where Claude acts as tech-lead directly in the conversation.
+
+| Skill | Purpose |
+|-------|---------|
+| `/deploy-issue <N>` | Full pipeline inline — routing, agent work, review, PR creation |
+| `/commit` | Smart commit with format check, test count verification |
+
+Skills use the `Agent` tool with `subagent_type` and `isolation: "worktree"` to spawn agents — replacing `claude` subprocess calls. The two-pass review architecture is the same; the difference is that results are presented interactively in the conversation rather than written to log files.
+
+**Skills vs Orchestrator:**
+- Skills: interactive, inline, Claude is tech-lead — for developer use in IDE/CLI
+- Orchestrator: `--auto`, `--headless`, `--pipeline` — for CI/unattended/tmux use
 
 ### Launch Modes
 
@@ -98,7 +124,7 @@ git push + PR created
   ↓
 [CP3] Human previews PR
   ↓
-deploy-review.sh launches in parallel:
+Pass 1 — Safety & Correctness (parallel):
   ├─ review-memory-safety  (always)
   ├─ review-security       (always)
   ├─ review-concurrency    (if atomics/mutexes/threads in diff)
@@ -106,7 +132,13 @@ deploy-review.sh launches in parallel:
   ├─ test-unit             (always — build, run tests, verify count)
   └─ test-scenario         (if IPC/HAL/Gazebo configs in diff)
   ↓
-Consolidated review + test results posted as PR comment
+Pass 2 — Quality & Contracts (parallel, receives Pass 1 findings):
+  ├─ review-test-quality   (always — tests exercise new paths?)
+  ├─ review-api-contract   (always — docstrings match impl?)
+  ├─ review-code-quality   (always — dead code, DRY, complexity?)
+  └─ review-performance    (always — copies, allocation, O(n²)?)
+  ↓
+Consolidated review + test results from both passes posted as PR comment
   ↓
 [CP4] Human reviews findings
   ↓ (if fix needed: feature agent fixes → re-runs all agents → back to CP4)
@@ -144,9 +176,11 @@ Every agent (auto + pipeline) is instructed to update before completing:
 - `docs/tracking/ROADMAP.md` — mark issue done
 - `docs/tracking/BUG_FIXES.md` — bug fix entry
 
-### Review Routing
+### Review Routing (Two-Pass Architecture)
 
-Not all reviewers on every PR — routing is based on diff content:
+Reviews use a two-pass architecture. Pass 1 agents are diff-routed; Pass 2 agents always run and receive Pass 1 findings as context.
+
+**Pass 1 — Safety & Correctness** (parallel, diff-routed):
 
 | Change touches... | Agents triggered |
 |-------------------|-----------------|
@@ -154,6 +188,15 @@ Not all reviewers on every PR — routing is based on diff content:
 | `std::atomic`, `mutex`, `thread`, `lock_guard` | + concurrency |
 | P4/P5/P7, watchdog, fault handling | + fault-recovery |
 | IPC topics, HAL backends, Gazebo configs | + test-scenario |
+
+**Pass 2 — Quality & Contracts** (parallel, always-on, after Pass 1):
+
+| Agent | Focus | Uses Pass 1 findings to... |
+|-------|-------|---------------------------|
+| review-test-quality | Tests exercise new code paths? | Verify flagged code has test coverage |
+| review-api-contract | Docstrings match implementation? | Check safety-flagged APIs have accurate docs |
+| review-code-quality | Dead code, DRY, complexity? | Check if flagged patterns repeat elsewhere |
+| review-performance | Copies, allocation, O(n^2)? | Check if safety fixes introduced perf regressions |
 
 ### Ops-GitHub Integration
 
@@ -194,11 +237,11 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 
 ### Negative
 
-- **13 agent definitions** to maintain — role files may drift from actual capabilities
+- **17 agent definitions** to maintain — role files may drift from actual capabilities
 - **Orchestration complexity** — 12+ scripts add operational surface area
 - **Boundary enforcement is advisory** — agents can work outside their scope when necessary (by design)
 - **Shared context files can go stale** — `project-status.md` requires human updates each session
-- **Token costs** — full pipeline (1 feature + 2-6 review/test agents) costs ~$3-10 per issue
+- **Token costs** — full pipeline (1 feature + 3-6 Pass 1 + 4 Pass 2 agents) costs ~$5-15 per issue
 
 ### Risks
 
@@ -222,7 +265,7 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 ## References
 
 - ADR-005: Parallel Agent Git Worktree Strategy
-- `.claude/agents/` — All 13 role definitions
+- `.claude/agents/` — All 17 role definitions
 - `.claude/shared-context/` — Project status and domain knowledge
 - `scripts/` — Orchestration scripts
 - `docs/guides/MULTI_AGENT_GUIDE.md` — Full usage guide with setup, walkthrough, and examples

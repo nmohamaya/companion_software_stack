@@ -363,7 +363,7 @@ Scenario integration tests: `tests/run_scenario.sh` (8 JSON configs in `config/s
 
 ## Multi-Agent Pipeline (ADR-010)
 
-This project uses a **13-agent pipeline** orchestrated via Claude Agent SDK. See `docs/adr/ADR-010-multi-agent-pipeline-architecture.md` for the full architecture decision record.
+This project uses a **17-agent pipeline** orchestrated via Claude Agent SDK with a **two-pass review architecture**. See `docs/adr/ADR-010-multi-agent-pipeline-architecture.md` for the full architecture decision record.
 
 ### Agent Roster
 
@@ -375,13 +375,17 @@ This project uses a **13-agent pipeline** orchestrated via Claude Agent SDK. See
 | 4 | `feature-integration` | Opus | P5/P6/P7, IPC, HAL backends |
 | 5 | `feature-infra-core` | Opus | common/, CMake, config |
 | 6 | `feature-infra-platform` | Opus | deploy/, CI, boards/, certification |
-| 7 | `review-memory-safety` | Opus | RAII, ownership, lifetimes (read-only) |
-| 8 | `review-concurrency` | Opus | Races, atomics, deadlocks (read-only) |
-| 9 | `review-fault-recovery` | Opus | Watchdog, degradation (read-only) |
-| 10 | `review-security` | Opus | Input validation, auth, TLS (read-only) |
-| 11 | `test-unit` | Sonnet | GTest, coverage delta (tests/ only) |
-| 12 | `test-scenario` | Sonnet | Gazebo SITL, integration (tests/ only) |
-| 13 | `ops-github` | Haiku | Issue triage, milestones, board (gh CLI) |
+| 7 | `review-memory-safety` | Opus | RAII, ownership, lifetimes (Pass 1, read-only) |
+| 8 | `review-concurrency` | Opus | Races, atomics, deadlocks (Pass 1, read-only) |
+| 9 | `review-fault-recovery` | Opus | Watchdog, degradation (Pass 1, read-only) |
+| 10 | `review-security` | Opus | Input validation, auth, TLS (Pass 1, read-only) |
+| 11 | `test-unit` | Sonnet | GTest, coverage delta (Pass 1, tests/ only) |
+| 12 | `test-scenario` | Sonnet | Gazebo SITL, integration (Pass 1, tests/ only) |
+| 13 | `review-test-quality` | Opus | Tests exercise new paths, assertions meaningful (Pass 2, read-only) |
+| 14 | `review-api-contract` | Sonnet | Docstrings match impl, data consistency (Pass 2, read-only) |
+| 15 | `review-code-quality` | Sonnet | Dead code, DRY, complexity, naming (Pass 2, read-only) |
+| 16 | `review-performance` | Sonnet | Copies, allocation, hot paths, O(n^2) (Pass 2, read-only) |
+| 17 | `ops-github` | Haiku | Issue triage, milestones, board (gh CLI) |
 
 ### Quick Commands
 
@@ -421,9 +425,9 @@ python3 -m orchestrator dashboard                     # team-wide (default)
 python3 -m orchestrator dashboard feature-perception  # per-agent
 ```
 
-### Review Routing
+### Review Routing (Two-Pass)
 
-Not all reviewers run on every PR — routing is by diff content:
+**Pass 1 — Safety & Correctness** (parallel, diff-routed):
 
 | Change touches... | Agents triggered |
 |-------------------|-----------------|
@@ -431,6 +435,11 @@ Not all reviewers run on every PR — routing is by diff content:
 | `std::atomic`, `mutex`, `thread` | + Concurrency |
 | P4/P5/P7, watchdog, fault handling | + Fault Recovery |
 | IPC, HAL, Gazebo configs | + Scenario Test |
+
+**Pass 2 — Quality & Contracts** (parallel after Pass 1, always-on):
+
+All 4 agents run on every PR and receive Pass 1 findings as context:
+Test Quality, API Contract, Code Quality, Performance
 
 ### Shared State
 

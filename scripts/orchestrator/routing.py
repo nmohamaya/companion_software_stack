@@ -114,69 +114,95 @@ def branch_name_for_issue(number: int, title: str, is_bug: bool) -> str:
 
 @dataclass
 class ReviewRouting:
-    """Result of review agent routing decision."""
+    """Result of review agent routing decision.
+
+    Two-pass architecture:
+      Pass 1 (safety & correctness): reviewers + testers — run in parallel
+      Pass 2 (quality & contracts): pass2_reviewers — run after Pass 1,
+        receive Pass 1 findings as context
+    """
 
     reviewers: list[str] = field(default_factory=list)
     testers: list[str] = field(default_factory=list)
+    pass2_reviewers: list[str] = field(default_factory=list)
     reasons: dict[str, str] = field(default_factory=dict)
+
+
+# Pass 2 agents always run (they need Pass 1 findings as input)
+PASS2_REVIEW_AGENTS: list[str] = [
+    "review-test-quality",
+    "review-api-contract",
+    "review-code-quality",
+    "review-performance",
+]
 
 
 def route_review_agents(diff: str, force_all: bool = False) -> ReviewRouting:
     """Determine which review and test agents to launch based on PR diff.
 
-    Always includes: review-memory-safety, review-security, test-unit.
-    Conditionally adds:
-      - review-concurrency: if diff contains atomic/mutex/thread patterns
-      - review-fault-recovery: if diff touches P4/P5/P7 or watchdog/fault code
-      - test-scenario: if diff touches IPC/HAL/Gazebo configs
+    Pass 1 — Safety & Correctness (parallel):
+      Always: review-memory-safety, review-security, test-unit.
+      Conditional:
+        - review-concurrency: if diff contains atomic/mutex/thread patterns
+        - review-fault-recovery: if diff touches P4/P5/P7 or watchdog/fault code
+        - test-scenario: if diff touches IPC/HAL/Gazebo configs
+
+    Pass 2 — Quality & Contracts (parallel, after Pass 1):
+      Always: review-test-quality, review-api-contract, review-code-quality,
+              review-performance.
+      These agents receive Pass 1 findings as context.
     """
     routing = ReviewRouting()
 
-    # Always-on reviewers
+    # ── Pass 1: Always-on reviewers ───────────────────────────────────────
     routing.reviewers = ["review-memory-safety", "review-security"]
-    routing.reasons["review-memory-safety"] = "always"
-    routing.reasons["review-security"] = "always"
+    routing.reasons["review-memory-safety"] = "always (pass 1)"
+    routing.reasons["review-security"] = "always (pass 1)"
 
-    # Always-on testers
+    # Pass 1: Always-on testers
     routing.testers = ["test-unit"]
-    routing.reasons["test-unit"] = "always"
+    routing.reasons["test-unit"] = "always (pass 1)"
 
     if force_all:
         routing.reviewers.extend(["review-concurrency", "review-fault-recovery"])
         routing.testers.append("test-scenario")
-        routing.reasons["review-concurrency"] = "forced (--all)"
-        routing.reasons["review-fault-recovery"] = "forced (--all)"
-        routing.reasons["test-scenario"] = "forced (--all)"
-        return routing
+        routing.reasons["review-concurrency"] = "forced (--all, pass 1)"
+        routing.reasons["review-fault-recovery"] = "forced (--all, pass 1)"
+        routing.reasons["test-scenario"] = "forced (--all, pass 1)"
+    else:
+        # Conditional: concurrency
+        for pattern in REVIEW_CONCURRENCY_PATTERNS:
+            if re.search(pattern, diff):
+                if "review-concurrency" not in routing.reviewers:
+                    routing.reviewers.append("review-concurrency")
+                    routing.reasons["review-concurrency"] = (
+                        f"diff contains '{pattern}' pattern (pass 1)"
+                    )
+                break
 
-    # Conditional: concurrency
-    for pattern in REVIEW_CONCURRENCY_PATTERNS:
-        if re.search(pattern, diff):
-            if "review-concurrency" not in routing.reviewers:
-                routing.reviewers.append("review-concurrency")
-                routing.reasons["review-concurrency"] = (
-                    f"diff contains '{pattern}' pattern"
-                )
-            break
+        # Conditional: fault recovery
+        for pattern in REVIEW_FAULT_RECOVERY_PATTERNS:
+            if re.search(pattern, diff):
+                if "review-fault-recovery" not in routing.reviewers:
+                    routing.reviewers.append("review-fault-recovery")
+                    routing.reasons["review-fault-recovery"] = (
+                        f"diff touches '{pattern}' pattern (pass 1)"
+                    )
+                break
 
-    # Conditional: fault recovery
-    for pattern in REVIEW_FAULT_RECOVERY_PATTERNS:
-        if re.search(pattern, diff):
-            if "review-fault-recovery" not in routing.reviewers:
-                routing.reviewers.append("review-fault-recovery")
-                routing.reasons["review-fault-recovery"] = (
-                    f"diff touches '{pattern}' pattern"
-                )
-            break
+        # Conditional: scenario tests
+        for pattern in REVIEW_SCENARIO_PATTERNS:
+            if re.search(pattern, diff):
+                if "test-scenario" not in routing.testers:
+                    routing.testers.append("test-scenario")
+                    routing.reasons["test-scenario"] = (
+                        f"diff touches '{pattern}' pattern (pass 1)"
+                    )
+                break
 
-    # Conditional: scenario tests
-    for pattern in REVIEW_SCENARIO_PATTERNS:
-        if re.search(pattern, diff):
-            if "test-scenario" not in routing.testers:
-                routing.testers.append("test-scenario")
-                routing.reasons["test-scenario"] = (
-                    f"diff touches '{pattern}' pattern"
-                )
-            break
+    # ── Pass 2: Quality & Contracts (always-on) ──────────────────────────
+    routing.pass2_reviewers = list(PASS2_REVIEW_AGENTS)
+    for agent in PASS2_REVIEW_AGENTS:
+        routing.reasons[agent] = "always (pass 2, receives pass 1 findings)"
 
     return routing
