@@ -126,8 +126,9 @@ public:
     [[nodiscard]] bool has_snapped_goal() const { return snap_valid_; }
 
     /// Get the snapped world-frame position {x, y, z}.
-    /// Values are updated on each call to plan(). Only meaningful when
-    /// has_snapped_goal() returns true. The acceptance radius remains wp.radius.
+    /// Updated when a replan occurs; remains stable between replan cycles as
+    /// long as the goal is unchanged. Only meaningful when has_snapped_goal()
+    /// returns true. The acceptance radius remains wp.radius.
     [[nodiscard]] const std::array<float, 3>& snapped_goal_xyz() const { return snapped_xyz_; }
 
     /// Get the current obstacle grid (for diagnostics/testing).

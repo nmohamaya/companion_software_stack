@@ -34,7 +34,7 @@ The fix passes the snapped world position through to `waypoint_reached()` so the
 | `WaypointReachedAtSnappedPosition` | Drone at snapped position (6.32m from original) is "reached" when snap override provided; NOT reached without override |
 | `WaypointNotReachedFarFromBothOriginalAndSnapped` | Drone far from both positions is not reached even with snap override |
 | `WaypointReachedNoSnapNormalBehavior` | Null snap pointer preserves original behavior |
-| `WaypointReachedWithinRadiusOfSnap` | Boundary testing: within/outside acceptance radius of snapped position |
+| `WaypointReachedWithinRadiusOfSnap` | Radius threshold: verifies acceptance at and beyond the snap radius boundary |
 
 ## Build Verification
 
