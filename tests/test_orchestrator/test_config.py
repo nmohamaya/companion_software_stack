@@ -24,8 +24,8 @@ from orchestrator.config import (
 class TestRoleConfig:
     """Test the role configuration registry."""
 
-    def test_all_13_roles_defined(self):
-        assert len(ROLES) == 13
+    def test_all_17_roles_defined(self):
+        assert len(ROLES) == 17
 
     def test_all_roles_list_matches_dict(self):
         assert ALL_ROLES == list(ROLES.keys())
@@ -56,11 +56,11 @@ class TestTierCategories:
 
     def test_opus_roles(self):
         opus = [r for r, c in ROLES.items() if c.tier == ModelTier.OPUS]
-        assert len(opus) == 10  # 1 lead + 5 feature + 4 review
+        assert len(opus) == 11  # 1 lead + 5 feature + 5 review (pass 1 + test-quality)
 
     def test_sonnet_roles(self):
         sonnet = [r for r, c in ROLES.items() if c.tier == ModelTier.SONNET]
-        assert len(sonnet) == 2  # test-unit, test-scenario
+        assert len(sonnet) == 5  # test-unit, test-scenario, api-contract, code-quality, performance
 
     def test_haiku_roles(self):
         haiku = [r for r, c in ROLES.items() if c.tier == ModelTier.HAIKU]
@@ -71,7 +71,7 @@ class TestTierCategories:
         assert all(r.startswith("feature-") for r in FEATURE_ROLES)
 
     def test_review_roles(self):
-        assert len(REVIEW_ROLES) == 4
+        assert len(REVIEW_ROLES) == 8  # 4 pass 1 + 4 pass 2
         assert all(r.startswith("review-") for r in REVIEW_ROLES)
 
     def test_test_roles(self):

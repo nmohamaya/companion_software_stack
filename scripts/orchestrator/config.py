@@ -33,7 +33,7 @@ class RoleConfig:
 
 
 # ── Agent Roster ───────────────────────────────────────────────────────────
-# 13 roles across 4 categories: feature (5), review (4), test (2), ops (1), lead (1)
+# 17 roles across 5 categories: feature (5), review (8), test (2), ops (1), lead (1)
 
 ROLES: dict[str, RoleConfig] = {
     # Orchestration
@@ -68,6 +68,19 @@ ROLES: dict[str, RoleConfig] = {
     ),
     "review-security": RoleConfig(
         "review-security", "claude-opus-4-6", ModelTier.OPUS, read_only=True
+    ),
+    # Pass 2 review agents (run after Pass 1, receive Pass 1 findings as context)
+    "review-test-quality": RoleConfig(
+        "review-test-quality", "claude-opus-4-6", ModelTier.OPUS, read_only=True
+    ),
+    "review-api-contract": RoleConfig(
+        "review-api-contract", "claude-sonnet-4-6", ModelTier.SONNET, read_only=True
+    ),
+    "review-code-quality": RoleConfig(
+        "review-code-quality", "claude-sonnet-4-6", ModelTier.SONNET, read_only=True
+    ),
+    "review-performance": RoleConfig(
+        "review-performance", "claude-sonnet-4-6", ModelTier.SONNET, read_only=True
     ),
     # Test agents
     "test-unit": RoleConfig(
