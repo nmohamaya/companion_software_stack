@@ -1,12 +1,15 @@
-"""Session validation command — 5-check post-session hallucination detector.
+"""Session validation command — 8-check post-session hallucination detector.
 
 Replaces validate-session.sh (304 lines).
-Checks: build, test count, test execution, includes, diff sanity.
+Checks: build, test count, test execution, includes, diff sanity,
+        config key consistency, symbol resolution, diff sanity (extended).
 """
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from pathlib import Path
 
 from orchestrator.build import BuildSystem
@@ -24,7 +27,7 @@ def run(
     *,
     branch: str = "",
 ) -> int:
-    """Run 5-check post-session validation.
+    """Run 8-check post-session validation.
 
     Returns 0 on pass/warn, 1 on failure.
     """
@@ -64,7 +67,7 @@ def run(
         fail_count += 1
 
     # ── 1. Build verification ──────────────────────────────────────────
-    io.print("[1/5] Build verification")
+    io.print("[1/8] Build verification")
     if not build.has_build_dir():
         fail("No build/ directory — run cmake first")
     else:
@@ -82,7 +85,7 @@ def run(
     io.print("")
 
     # ── 2. Test count ───────────────────────────────────────────────────
-    io.print("[2/5] Test count verification")
+    io.print("[2/8] Test count verification")
     actual = build.test_count() if build.has_build_dir() else 0
     expected = build.expected_test_count()
 
@@ -97,7 +100,7 @@ def run(
     io.print("")
 
     # ── 3. Test execution ───────────────────────────────────────────────
-    io.print("[3/5] Test execution")
+    io.print("[3/8] Test execution")
     if not build.has_build_dir():
         fail("Cannot run tests — no build directory")
     else:
@@ -117,7 +120,7 @@ def run(
     io.print("")
 
     # ── 4. Include verification ─────────────────────────────────────────
-    io.print("[4/5] Include verification")
+    io.print("[4/8] Include verification")
     try:
         diff = git.diff_full("main", branch)
         new_includes = re.findall(r'^\+.*#include\s+"([^"]+)"', diff, re.MULTILINE)
@@ -163,7 +166,7 @@ def run(
     io.print("")
 
     # ── 5. Diff sanity ──────────────────────────────────────────────────
-    io.print("[5/5] Diff sanity")
+    io.print("[5/8] Diff sanity")
     try:
         prs = github.pr_list_for_branch(branch)
         if not prs:
@@ -191,6 +194,203 @@ def run(
                 warn("PR body is empty")
     except Exception:
         warn("Could not check PR diff sanity")
+    io.print("")
+
+    # ── 6. Config key consistency ─────────────────────────────────────
+    io.print("[6/8] Config key consistency")
+    try:
+        diff = git.diff_full("main", branch)
+        # Find new cfg.get<> calls in added lines
+        new_keys: list[str] = []
+        for line in diff.splitlines():
+            if not line.startswith("+"):
+                continue
+            # Match cfg.get<Type>("key" or cfg.get<Type>("section.key"
+            for m in re.finditer(r'cfg\.get<[^>]*>\(\s*"([^"]+)"', line):
+                new_keys.append(m.group(1))
+            # Match cfg_key:: constants used as get arguments
+            for m in re.finditer(r'cfg_key::(\w+)::(\w+)', line):
+                new_keys.append(f"{m.group(1)}.{m.group(2)}")
+
+        if not new_keys:
+            pass_("No new config key references in diff")
+        else:
+            new_keys = sorted(set(new_keys))
+            # Load default.json and check keys exist
+            default_json = project_dir / "config" / "default.json"
+            missing_keys: list[str] = []
+            if default_json.exists():
+                try:
+                    config_data = json.loads(default_json.read_text())
+                    for key in new_keys:
+                        parts = key.split(".")
+                        node = config_data
+                        found = True
+                        for part in parts:
+                            if isinstance(node, dict) and part in node:
+                                node = node[part]
+                            else:
+                                found = False
+                                break
+                        if not found:
+                            missing_keys.append(key)
+                except json.JSONDecodeError:
+                    warn("Could not parse config/default.json")
+                    missing_keys = []
+
+            if not missing_keys:
+                pass_(
+                    f"All {len(new_keys)} config key(s) found in default.json"
+                )
+            else:
+                warn(
+                    f"{len(missing_keys)} config key(s) not in default.json:"
+                )
+                for mk in missing_keys:
+                    io.print(f"    - {mk}")
+    except Exception:
+        warn("Could not check config key consistency")
+    io.print("")
+
+    # ── 7. Symbol resolution (spot-check) ─────────────────────────────
+    io.print("[7/8] Symbol resolution (spot-check)")
+    try:
+        diff = git.diff_full("main", branch)
+        # Find new class instantiations and method calls on common types
+        # Focus on make_unique/make_shared — common hallucination points
+        phantom_symbols: list[str] = []
+        new_instantiations: list[str] = []
+        for line in diff.splitlines():
+            if not line.startswith("+"):
+                continue
+            # std::make_unique<ClassName> or std::make_shared<ClassName>
+            for m in re.finditer(
+                r'(?:make_unique|make_shared)<(\w+)>', line
+            ):
+                new_instantiations.append(m.group(1))
+
+        new_instantiations = sorted(set(new_instantiations))
+        if new_instantiations:
+            # Spot-check: grep for class/struct definitions
+            search_dirs = [
+                str(project_dir / d)
+                for d in (
+                    "common", "process1_video_capture",
+                    "process2_perception", "process3_slam_vio_nav",
+                    "process4_mission_planner", "process5_comms",
+                    "process6_payload_manager", "process7_system_monitor",
+                )
+                if (project_dir / d).exists()
+            ]
+            for sym in new_instantiations[:10]:  # cap at 10 checks
+                # Skip standard library / third-party types
+                if sym in (
+                    "string", "vector", "mutex", "thread",
+                    "promise", "future",
+                ):
+                    continue
+                result = subprocess.run(
+                    ["grep", "-rl", f"class {sym}", *search_dirs],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if not result.stdout.strip():
+                    # Also check for struct
+                    result2 = subprocess.run(
+                        ["grep", "-rl", f"struct {sym}", *search_dirs],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if not result2.stdout.strip():
+                        phantom_symbols.append(sym)
+
+        if not new_instantiations:
+            pass_("No new class instantiations to verify")
+        elif not phantom_symbols:
+            pass_(
+                f"Spot-checked {len(new_instantiations)} instantiation(s) "
+                f"— all resolve"
+            )
+        else:
+            warn(
+                f"{len(phantom_symbols)} class(es) not found in codebase:"
+            )
+            for ps in phantom_symbols:
+                io.print(f"    - {ps}")
+    except Exception:
+        warn("Could not run symbol resolution check")
+    io.print("")
+
+    # ── 8. Extended diff sanity ───────────────────────────────────────
+    io.print("[8/8] Extended diff sanity")
+    try:
+        changed_files = git.diff_name_only("main", branch)
+        issues: list[str] = []
+
+        # 8a. Test files without TEST macros
+        new_test_files = [
+            f for f in changed_files
+            if f.startswith("tests/") and f.endswith(".cpp")
+        ]
+        for tf in new_test_files:
+            tf_path = project_dir / tf
+            if tf_path.exists():
+                content = tf_path.read_text()
+                if "TEST(" not in content and "TEST_F(" not in content:
+                    issues.append(
+                        f"Test file {tf} has no TEST/TEST_F macros"
+                    )
+
+        # 8b. New .cpp files not in any CMakeLists.txt
+        new_cpp = [
+            f for f in changed_files
+            if f.endswith(".cpp") and not f.startswith("tests/")
+        ]
+        for cpp_file in new_cpp:
+            basename = Path(cpp_file).name
+            # Search CMakeLists.txt in the file's directory and parent
+            cpp_dir = project_dir / Path(cpp_file).parent
+            found_in_cmake = False
+            for cmake_dir in (cpp_dir, cpp_dir.parent):
+                cmake_path = cmake_dir / "CMakeLists.txt"
+                if cmake_path.exists() and basename in cmake_path.read_text():
+                    found_in_cmake = True
+                    break
+            if not found_in_cmake:
+                issues.append(
+                    f"New source {cpp_file} not found in CMakeLists.txt"
+                )
+
+        # 8c. Deleted files still included elsewhere
+        diff = git.diff_full("main", branch)
+        deleted_files = re.findall(
+            r'^--- a/(.+)\n\+\+\+ /dev/null', diff, re.MULTILINE
+        )
+        for df in deleted_files:
+            header_name = Path(df).name
+            if header_name.endswith(".h"):
+                result = subprocess.run(
+                    ["grep", "-rl", f'#include.*{header_name}',
+                     str(project_dir / "common"),
+                     str(project_dir / "tests")],
+                    capture_output=True, text=True, timeout=10,
+                )
+                # Exclude the deleted file itself from matches
+                remaining = [
+                    l for l in result.stdout.strip().splitlines()
+                    if l and df not in l
+                ]
+                if remaining:
+                    issues.append(
+                        f"Deleted {df} still #included in: "
+                        f"{', '.join(Path(r).name for r in remaining[:3])}"
+                    )
+
+        if not issues:
+            pass_("Extended diff sanity checks passed")
+        else:
+            for issue in issues:
+                warn(issue)
+    except Exception:
+        warn("Could not run extended diff sanity checks")
     io.print("")
 
     # ── Verdict ─────────────────────────────────────────────────────────

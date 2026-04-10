@@ -213,7 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="Show routing without launching")
 
     # ── validate ───────────────────────────────────────────────────────
-    p = sub.add_parser("validate", help="Post-session hallucination detector")
+    p = sub.add_parser("validate", help="8-check post-session hallucination detector")
     p.add_argument("--branch", default="", help="Branch to validate")
 
     # ── session ────────────────────────────────────────────────────────
