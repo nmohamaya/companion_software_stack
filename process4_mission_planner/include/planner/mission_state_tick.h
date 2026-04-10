@@ -376,7 +376,17 @@ private:
             const float px = static_cast<float>(pose.translation[0]);
             const float py = static_cast<float>(pose.translation[1]);
             const float pz = static_cast<float>(pose.translation[2]);
-            if (fsm.waypoint_reached(px, py, pz, *wp) || fsm.waypoint_overshot(px, py, pz)) {
+
+            // When the planner snapped the goal away from the original waypoint
+            // (because it was occupied), check acceptance against the snapped
+            // position — otherwise the drone reaches the navigation target but
+            // can never satisfy the radius check.  See Issue #394.
+            auto*        base     = dynamic_cast<GridPlannerBase*>(grid_planner);
+            const float* snap_xyz = (base && base->has_snapped_goal()) ? base->snapped_goal_xyz()
+                                                                       : nullptr;
+
+            if (fsm.waypoint_reached(px, py, pz, *wp, snap_xyz) ||
+                fsm.waypoint_overshot(px, py, pz)) {
                 DRONE_LOG_INFO("[Planner] Waypoint {} {}!", fsm.current_wp_index() + 1,
                                fsm.waypoint_overshot(px, py, pz) ? "overshot" : "reached");
 

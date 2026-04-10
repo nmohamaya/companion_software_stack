@@ -122,6 +122,14 @@ public:
         DRONE_LOG_INFO("[Planner] Path cache invalidated — forcing full replan");
     }
 
+    /// Whether the planner has snapped the current goal to an alternate position.
+    [[nodiscard]] bool has_snapped_goal() const { return snap_valid_; }
+
+    /// Get the snapped world-frame position (valid only when has_snapped_goal() is true).
+    /// Returns a pointer to a float[3] array {x, y, z}.  The pointer is stable
+    /// until the next call to plan() or invalidate_path().
+    [[nodiscard]] const float* snapped_goal_xyz() const { return snapped_xyz_; }
+
     /// Get the current obstacle grid (for diagnostics/testing).
     [[nodiscard]] const OccupancyGrid3D& grid() const { return grid_; }
 
@@ -494,6 +502,9 @@ private:
                 snapped_world_x_        = wc[0];
                 snapped_world_y_        = wc[1];
                 snapped_world_z_        = wc[2];
+                snapped_xyz_[0]         = wc[0];
+                snapped_xyz_[1]         = wc[1];
+                snapped_xyz_[2]         = wc[2];
                 snap_valid_             = true;
                 last_snap_static_count_ = current_static;
                 const float snap_dist =
@@ -564,7 +575,8 @@ private:
     // Cached snapped goal
     float  last_target_x_ = 1e9f, last_target_y_ = 1e9f, last_target_z_ = 1e9f;
     float  snapped_world_x_ = 0.0f, snapped_world_y_ = 0.0f, snapped_world_z_ = 0.0f;
-    bool   snap_valid_             = false;
+    float  snapped_xyz_[3] = {0.0f, 0.0f, 0.0f};  // public-facing snap position (Issue #394)
+    bool   snap_valid_     = false;
     size_t last_snap_static_count_ = 0;  // for snap cache invalidation on grid changes
 
     // Velocity smoothing state

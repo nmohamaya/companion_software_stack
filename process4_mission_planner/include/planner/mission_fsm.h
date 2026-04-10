@@ -60,8 +60,16 @@ public:
     void on_recovery_complete() { transition(MissionState::NAVIGATE); }
 
     /// Check if waypoint is reached (within acceptance radius).
-    [[nodiscard]] bool waypoint_reached(float px, float py, float pz, const Waypoint& wp) const {
-        float dx = px - wp.x, dy = py - wp.y, dz = pz - wp.z;
+    /// When a planner snaps the goal to avoid occupied cells, the snapped
+    /// world position should be passed so the acceptance check uses the
+    /// actual navigation target rather than the original (possibly
+    /// unreachable) waypoint position.  See Issue #394.
+    [[nodiscard]] bool waypoint_reached(float px, float py, float pz, const Waypoint& wp,
+                                        const float* snapped_xyz = nullptr) const {
+        const float tx = snapped_xyz ? snapped_xyz[0] : wp.x;
+        const float ty = snapped_xyz ? snapped_xyz[1] : wp.y;
+        const float tz = snapped_xyz ? snapped_xyz[2] : wp.z;
+        const float dx = px - tx, dy = py - ty, dz = pz - tz;
         return (dx * dx + dy * dy + dz * dz) < (wp.radius * wp.radius);
     }
 
