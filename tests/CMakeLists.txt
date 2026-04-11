@@ -299,3 +299,6 @@ add_drone_test(test_gimbal_auto_tracker test_gimbal_auto_tracker.cpp)
 # ── TopicResolver tests (Issue #289) ─────────────────────
 add_drone_test(test_topic_resolver  test_topic_resolver.cpp
     PROPERTIES RESOURCE_LOCK "zenoh_session")
+
+# ── EventBus tests (Issue #293) ─────────────────────────
+add_drone_test(test_event_bus       test_event_bus.cpp)
