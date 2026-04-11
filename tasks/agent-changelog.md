@@ -18,6 +18,15 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 
 ## Log
 
+### 2026-04-11 | tech-lead (wave) | opus | PR #401
+
+**Task:** Epic #284 Wave 2 — ISysInfo abstraction (#290), TopicResolver + vehicle_id (#289), per-process CMake enable options (#288)
+**Files:** isys_info.h, linux_sys_info.h, jetson_sys_info.h, mock_sys_info.h, sys_info_factory.h, topic_resolver.h, iprocess_monitor.h, config_validator.h, config_keys.h, CMakeLists.txt (root + tests), main.cpp (P7), test_system_monitor.cpp, test_topic_resolver.cpp, test_process_interfaces.cpp
+**Tests:** 130 added, 1389 total passing (baseline: 1259)
+**Safety issues found:** Signed→unsigned underflow on MemInfo/DiskInfo (fixed), statvfs overflow on 64-bit (fixed), unguarded thermal zone rescan (fixed)
+**Hallucination flags:** PASS
+**Notes:** 3-issue wave on integration branch. Two-pass review ran twice (round 1: 15 findings, round 2: 20 findings, all fixed). Copilot review: 18 comments, 4 additional fixes. Key patterns: MonitorThresholds struct replacing positional floats, ISysInfo DI with const refs, kZoneNotFound cache sentinel.
+
 ### 2026-04-06 | feature-infra-platform | opus | PR #359
 
 **Task:** Issue #358 — Enable multi-developer GitHub collaboration
