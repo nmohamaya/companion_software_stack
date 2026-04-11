@@ -426,7 +426,7 @@ Before presenting CP4, check for existing review comments from Copilot or other 
 gh api repos/<owner>/<repo>/pulls/<N>/comments --jq '.[].body' | head -50
 ```
 
-Include any actionable bot comments in the CP4 findings presentation.
+**Important:** Bot comments overlap ~60% with our review agents. Present only the **net-new** findings that our agents missed — don't duplicate. From experience, bots catch edge cases like: transitive include dependencies, missing filesystem I/O caching in loops, config validator coverage gaps, and comment/docstring accuracy. Fold unique findings into the combined report rather than treating them as a separate review pass.
 
 **Step 5.6 — Post findings to PR**
 
@@ -537,9 +537,12 @@ If the user chooses to abort at any checkpoint:
 - **Push failures**: If push fails, go back to CP2 (commit step), not loop within push
 - **Review agent timeout**: If an agent takes too long, report which agents completed and which are pending. Present partial results and ask the user how to proceed.
 - **Base branch verification**: If `--base` specifies an integration branch, verify it exists with `git branch -r --list 'origin/<base>'`
-- **Context window management**: A full pipeline with 2 review rounds generates ~50K+ tokens of agent output. To avoid context exhaustion:
+- **Context window management**: A full pipeline with 2 review rounds generates ~50K+ tokens of agent output. Multi-round reviews (fix → re-review → fix) are the primary cause of context exhaustion. Mitigations:
   - Cap all review agent prompts to request results "under 200 words if clean"
   - When reading agent task outputs, extract only the final summary — do not read full JSONL task files
+  - After each review round, **drop raw agent output** from working context — keep only the deduplicated finding list and fix status
+  - Before starting a re-review round, compact all prior round details into a single summary block (e.g., "Round 1: 15 findings, all fixed in commit abc123")
   - Summarize findings concisely at each checkpoint rather than including full agent output verbatim
+- **Fix rounds introduce new findings**: Fixes frequently create new issues (observed: 33% more findings in round 2 vs round 1). Always re-run both Pass 1 AND Pass 2 after fixes — never skip to CP5. Budget for at least 2 review rounds when planning context.
 
 If the user provided arguments, use them as context: $ARGUMENTS

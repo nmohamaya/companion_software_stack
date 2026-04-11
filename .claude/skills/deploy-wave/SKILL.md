@@ -278,16 +278,18 @@ Spawn Pass 2 review agents with Pass 1 findings as context.
 
 **Step 4.5 — Check bot/CI comments**
 
-Check all per-issue PRs for Copilot/bot review comments:
+Check all per-issue PRs AND the merge PR for Copilot/bot review comments:
 ```bash
-for pr_number in <all_pr_numbers>; do
+for pr_number in <all_pr_numbers> <merge_pr_number>; do
   gh api repos/<owner>/<repo>/pulls/$pr_number/comments --jq '.[].body'
 done
 ```
 
+**Important:** Bot comments overlap ~60% with our review agents. Present only the **net-new** findings that our agents missed. From experience, bots catch edge cases like: transitive include dependencies, missing filesystem I/O caching in loops, config validator coverage gaps, and comment/docstring accuracy. Don't treat bot comments as a separate review pass — fold unique findings into the combined report.
+
 **Step 4.6 — Post findings**
 
-Post the merged review findings as a comment on **each per-issue PR**.
+**Always** post the merged review findings as a comment on the **merge PR** — do not wait to be asked. This creates an audit trail. Optionally post on per-issue PRs if findings are issue-specific.
 
 ### Wave Review Checkpoint
 
@@ -312,7 +314,7 @@ Pass 2: <N> agents, <P1> findings, <P2> findings
 
 User choices:
 - **accept** → proceed to Phase 5
-- **fix** → fix issues, re-validate, re-review (loop back to Phase 3 for affected issues only)
+- **fix** → fix issues, re-validate, re-review. **Always re-run BOTH Pass 1 AND Pass 2** — fixes frequently introduce new issues (observed: round 2 found 33% more findings than round 1). Loop back to Step 4.2 (roster approval), not Phase 3.
 - **abort** → stop
 
 ---
@@ -371,6 +373,13 @@ User choices:
 - **Partial wave**: If the user aborts mid-wave, the completed per-issue PRs remain on the integration branch. The wave can be resumed later by re-running with the remaining issues and `--base` pointing to the existing integration branch.
 - **Single issue wave**: If only one issue number is provided, the skill degrades gracefully to essentially `/deploy-issue` with an integration branch. Still useful for consistency.
 - **Existing integration branch**: Check `git branch -r --list 'origin/integration/epic-<N>*'` before creating. If one exists, offer to reuse it (pick up where a prior wave left off).
-- **Context window management**: A full wave with 3 issues + 2-pass review generates significant context. Cap all agent outputs to 200 words. Summarize per-issue results before starting the next issue. If context gets tight, summarize earlier issues aggressively.
+- **Context window management**: A full wave with 3 issues + 2-pass review generates significant context. Multi-round reviews (fix → re-review → fix) are the primary cause of context exhaustion. Mitigations:
+  - Cap all review agent prompts to request results "under 200 words if clean"
+  - After each review round, **drop raw agent output** from working context — keep only the deduplicated finding list and fix status
+  - Summarize per-issue results before starting the next issue
+  - Before starting a re-review round, compact all prior round details into a single summary block (e.g., "Round 1: 15 findings, all fixed in commit abc123")
+  - If the wave has 3+ issues and the user requests a fix round, warn that a second re-review may push context limits
+  - Do NOT read full JSONL task files — extract only final summaries from agent outputs
+- **Fix rounds introduce new findings**: Fixes frequently create new issues (observed: 33% more findings in round 2 vs round 1). Always re-run both Pass 1 AND Pass 2 after fixes — never skip to CP5. Budget for at least 2 review rounds when planning context.
 
 If the user provided arguments, use them as context: $ARGUMENTS
