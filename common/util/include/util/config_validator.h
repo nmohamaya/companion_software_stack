@@ -349,7 +349,7 @@ inline ConfigSchema payload_manager_schema() {
 inline ConfigSchema system_monitor_schema() {
     auto s = common_schema();
     s.required_section("system_monitor");
-    s.optional<std::string>("system_monitor.platform");
+    s.optional<std::string>("system_monitor.platform").one_of({"linux", "jetson", "mock"});
     s.required<int>("system_monitor.update_rate_hz").range(1, 100);
     s.optional<double>("system_monitor.thresholds.cpu_warn_percent").range(0.0, 100.0);
     s.optional<double>("system_monitor.thresholds.mem_warn_percent").range(0.0, 100.0);

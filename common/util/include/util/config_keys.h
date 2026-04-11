@@ -276,8 +276,8 @@ inline constexpr const char* MANUAL_HOLDOFF_S =
 // P7 — System Monitor
 // ═══════════════════════════════════════════════════════════
 namespace system_monitor {
-inline constexpr const char* SECTION               = "system_monitor";
-inline constexpr const char* BACKEND               = "system_monitor.backend";
+inline constexpr const char* SECTION = "system_monitor";
+/// Platform ISysInfo backend. One of "linux", "jetson", "mock".
 inline constexpr const char* PLATFORM              = "system_monitor.platform";
 inline constexpr const char* UPDATE_RATE_HZ        = "system_monitor.update_rate_hz";
 inline constexpr const char* DISK_CHECK_INTERVAL_S = "system_monitor.disk_check_interval_s";

@@ -22,7 +22,7 @@ public:
     /// Jetson-specific: scan thermal zones for the CPU sensor (tegra_tsensor).
     /// Caches the zone index after first discovery to avoid 16+ open() calls per tick.
     /// Falls back to generic zone0 if the CPU zone is not found.
-    [[nodiscard]] float read_cpu_temp() override {
+    [[nodiscard]] float read_cpu_temp() const override {
         // Use cached zone index if already discovered
         if (cached_cpu_zone_idx_ >= 0) {
             return read_thermal_zone(cached_cpu_zone_idx_);

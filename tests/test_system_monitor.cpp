@@ -210,7 +210,8 @@ TEST(ISysInfo, ComputeCpuUsageFreeFunction) {
     now.user = 200;
     now.idle = 100;
 
-    // delta_total = 300 - 200 = 100, delta_active = 100 - 0 = 100
+    // prev.total()=200, now.total()=300, delta_total=100
+    // All delta is active (idle unchanged), so usage=100%
     float usage = drone::util::compute_cpu_usage(prev, now);
     EXPECT_NEAR(usage, 100.0f, 0.1f);
 }
@@ -317,7 +318,12 @@ TEST(ProcessMonitor, MockSysInfoWarningThreshold) {
     mock.injected_cpu_times = {};
 
     // cpu_warn=90, mem_warn=90, temp_warn=80, temp_crit=95
-    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+    drone::monitor::MonitorThresholds th;
+    th.cpu_warn  = 90.0f;
+    th.mem_warn  = 90.0f;
+    th.temp_warn = 80.0f;
+    th.temp_crit = 95.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     // Now inject high temperature (above warn but below crit)
     mock.injected_cpu_temp                = 85.0f;
@@ -332,7 +338,12 @@ TEST(ProcessMonitor, MockSysInfoCriticalThreshold) {
     drone::util::MockSysInfo mock;
     mock.injected_cpu_times = {};
 
-    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+    drone::monitor::MonitorThresholds th;
+    th.cpu_warn  = 90.0f;
+    th.mem_warn  = 90.0f;
+    th.temp_warn = 80.0f;
+    th.temp_crit = 95.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     // Inject critical temperature
     mock.injected_cpu_temp                = 100.0f;
@@ -348,18 +359,40 @@ TEST(ProcessMonitor, MockSysInfoBatteryWarning) {
     mock.injected_cpu_times = {};
 
     // batt_warn=20, batt_crit=10
-    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f, 98.0f, 20.0f,
-                                                10.0f);
+    drone::monitor::MonitorThresholds th;
+    th.batt_warn = 20.0f;
+    th.batt_crit = 10.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     mock.injected_cpu_temp                = 40.0f;
     mock.injected_meminfo.usage_percent   = 30.0f;
     mock.injected_disk_info.usage_percent = 10.0f;
 
-    // Set low battery
+    // Set low battery (below warn but above crit)
     monitor.set_battery_percent(15.0f);
 
     auto health = monitor.collect();
     EXPECT_EQ(health.thermal_zone, 2u);  // WARNING due to battery < 20
+}
+
+TEST(ProcessMonitor, MockSysInfoBatteryCritical) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+
+    drone::monitor::MonitorThresholds th;
+    th.batt_warn = 20.0f;
+    th.batt_crit = 10.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
+
+    mock.injected_cpu_temp                = 40.0f;
+    mock.injected_meminfo.usage_percent   = 30.0f;
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    // Set critically low battery (below batt_crit)
+    monitor.set_battery_percent(5.0f);
+
+    auto health = monitor.collect();
+    EXPECT_EQ(health.thermal_zone, 3u);  // CRITICAL due to battery < 10
 }
 
 TEST(ProcessMonitor, MockSysInfoCpuWarningThreshold) {
@@ -368,7 +401,9 @@ TEST(ProcessMonitor, MockSysInfoCpuWarningThreshold) {
     // Initial CPU: all zeros
     mock.injected_cpu_times = {};
     // cpu_warn=90
-    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+    drone::monitor::MonitorThresholds th;
+    th.cpu_warn = 90.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     // Inject CPU that will produce >90% usage (95% active out of total)
     mock.injected_cpu_times.user          = 950;
@@ -385,7 +420,9 @@ TEST(ProcessMonitor, MockSysInfoMemWarningThreshold) {
     drone::util::MockSysInfo mock;
     mock.injected_cpu_times = {};
     // mem_warn=90
-    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+    drone::monitor::MonitorThresholds th;
+    th.mem_warn = 90.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     mock.injected_meminfo.usage_percent   = 95.0f;  // above warn
     mock.injected_cpu_temp                = 40.0f;
@@ -398,8 +435,11 @@ TEST(ProcessMonitor, MockSysInfoMemWarningThreshold) {
 TEST(ProcessMonitor, MockSysInfoDiskCriticalThreshold) {
     drone::util::MockSysInfo mock;
     mock.injected_cpu_times = {};
-    // disk_crit=98
-    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f, 98.0f);
+    // disk_crit=98, disk_interval=1 to ensure disk is always read
+    drone::monitor::MonitorThresholds th;
+    th.disk_crit     = 98.0f;
+    th.disk_interval = 1;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     mock.injected_cpu_temp                = 40.0f;
     mock.injected_meminfo.usage_percent   = 30.0f;
@@ -413,7 +453,10 @@ TEST(ProcessMonitor, MockSysInfoDiskUsageAsserted) {
     drone::util::MockSysInfo mock;
     mock.injected_cpu_times = {};
 
-    drone::monitor::LinuxProcessMonitor monitor(mock);
+    // Explicit disk_interval=1 to guarantee disk is read every tick
+    drone::monitor::MonitorThresholds th;
+    th.disk_interval = 1;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
 
     mock.injected_cpu_temp                = 40.0f;
     mock.injected_meminfo.usage_percent   = 30.0f;
@@ -423,4 +466,28 @@ TEST(ProcessMonitor, MockSysInfoDiskUsageAsserted) {
 
     auto health = monitor.collect();
     EXPECT_FLOAT_EQ(health.disk_usage_percent, 30.0f);
+}
+
+TEST(ProcessMonitor, OverlappingThresholdsPickHighestSeverity) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+
+    // CPU warning AND temperature critical — result should be zone=3
+    drone::monitor::MonitorThresholds th;
+    th.cpu_warn  = 90.0f;
+    th.temp_warn = 80.0f;
+    th.temp_crit = 95.0f;
+    drone::monitor::LinuxProcessMonitor monitor(mock, th);
+
+    // Inject CPU >90% usage and temp >95 crit
+    mock.injected_cpu_times.user          = 950;
+    mock.injected_cpu_times.idle          = 50;
+    mock.injected_cpu_temp                = 100.0f;  // above crit
+    mock.injected_meminfo.usage_percent   = 30.0f;
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    auto health = monitor.collect();
+    // Both CPU warning (zone=2) and temp critical (zone=3) triggered;
+    // sequential logic ensures the higher severity wins.
+    EXPECT_EQ(health.thermal_zone, 3u);
 }

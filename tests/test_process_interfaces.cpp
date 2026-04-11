@@ -21,20 +21,29 @@ using namespace drone::monitor;
 
 TEST(ProcessMonitorTest, FactoryCreatesLinux) {
     drone::util::LinuxSysInfo sys;
-    auto                      pm = create_process_monitor(sys, "linux");
+    auto                      pm = create_process_monitor(sys);
     EXPECT_NE(pm, nullptr);
 }
 
-TEST(ProcessMonitorTest, FactoryFallsBackOnUnknown) {
+TEST(ProcessMonitorTest, FactoryCreatesWithDefaultThresholds) {
     drone::util::LinuxSysInfo sys;
-    auto                      pm = create_process_monitor(sys, "windows_nt");
+    auto                      pm = create_process_monitor(sys);
+    EXPECT_NE(pm, nullptr);
+    EXPECT_EQ(pm->name(), "LinuxProcessMonitor");
+}
+
+TEST(ProcessMonitorTest, FactoryCreatesWithCustomThresholds) {
+    drone::util::LinuxSysInfo         sys;
+    drone::monitor::MonitorThresholds th;
+    th.cpu_warn = 80.0f;
+    auto pm     = create_process_monitor(sys, th);
     EXPECT_NE(pm, nullptr);
     EXPECT_EQ(pm->name(), "LinuxProcessMonitor");
 }
 
 TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
     drone::util::LinuxSysInfo sys;
-    auto                      pm = create_process_monitor(sys, "linux");
+    auto                      pm = create_process_monitor(sys);
 
     auto health = pm->collect();
 
@@ -54,7 +63,7 @@ TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
 
 TEST(ProcessMonitorTest, ThermalZonePopulated) {
     drone::util::LinuxSysInfo sys;
-    auto                      pm     = create_process_monitor(sys, "linux");
+    auto                      pm     = create_process_monitor(sys);
     auto                      health = pm->collect();
 
     // thermal_zone should be one of 0=normal, 1=warm, 2=hot, 3=critical
@@ -63,7 +72,7 @@ TEST(ProcessMonitorTest, ThermalZonePopulated) {
 
 TEST(ProcessMonitorTest, ImplementsInterface) {
     drone::util::LinuxSysInfo sys;
-    auto                      pm    = create_process_monitor(sys, "linux");
+    auto                      pm    = create_process_monitor(sys);
     IProcessMonitor*          iface = pm.get();
     EXPECT_NE(iface, nullptr);
 
@@ -73,7 +82,7 @@ TEST(ProcessMonitorTest, ImplementsInterface) {
 
 TEST(ProcessMonitorTest, MultipleSamples) {
     drone::util::LinuxSysInfo sys;
-    auto                      pm = create_process_monitor(sys, "linux");
+    auto                      pm = create_process_monitor(sys);
     for (int i = 0; i < 3; ++i) {
         auto health = pm->collect();
         EXPECT_GE(health.cpu_usage_percent, 0.0f);

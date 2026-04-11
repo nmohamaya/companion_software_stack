@@ -18,15 +18,17 @@ public:
 
     // ── ISysInfo interface ─────────────────────────────────────
 
-    [[nodiscard]] CpuTimes read_cpu_times() override { return injected_cpu_times; }
+    [[nodiscard]] CpuTimes read_cpu_times() const override { return injected_cpu_times; }
 
-    [[nodiscard]] MemInfo read_meminfo() override { return injected_meminfo; }
+    [[nodiscard]] MemInfo read_meminfo() const override { return injected_meminfo; }
 
-    [[nodiscard]] float read_cpu_temp() override { return injected_cpu_temp; }
+    [[nodiscard]] float read_cpu_temp() const override { return injected_cpu_temp; }
 
-    [[nodiscard]] DiskInfo read_disk_usage() override { return injected_disk_info; }
+    [[nodiscard]] DiskInfo read_disk_usage() const override { return injected_disk_info; }
 
-    [[nodiscard]] bool is_process_alive(pid_t /*pid*/) override { return injected_process_alive; }
+    [[nodiscard]] bool is_process_alive(pid_t /*pid*/) const override {
+        return injected_process_alive;
+    }
 
     [[nodiscard]] std::string name() const override { return "MockSysInfo"; }
 };

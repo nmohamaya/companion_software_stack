@@ -272,28 +272,29 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher thread_health_publisher(*thread_health_pub_ch,
                                                                "system_monitor", watchdog);
 
-    // Config-driven thresholds
-    const float cpu_warn =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT, 90.0f);
-    const float mem_warn =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT, 90.0f);
-    const float temp_warn = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_WARN_C,
-                                           80.0f);
-    const float temp_crit = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_CRIT_C,
-                                           95.0f);
-    const float batt_warn =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT, 20.0f);
-    const float batt_crit =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT, 10.0f);
-    const float disk_crit =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::DISK_CRIT_PERCENT, 98.0f);
-    const int disk_check_s  = cfg.get<int>(drone::cfg_key::system_monitor::DISK_CHECK_INTERVAL_S,
-                                           10);
+    // Config-driven thresholds (collected into MonitorThresholds struct)
     const int update_rate   = cfg.get<int>(drone::cfg_key::system_monitor::UPDATE_RATE_HZ, 1);
     const int loop_sleep_ms = std::max(1, update_rate > 0 ? 1000 / update_rate : 1000);
+    const int disk_check_s  = cfg.get<int>(drone::cfg_key::system_monitor::DISK_CHECK_INTERVAL_S,
+                                           10);
 
+    drone::monitor::MonitorThresholds thresholds;
+    thresholds.cpu_warn =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT, 90.0f);
+    thresholds.mem_warn =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT, 90.0f);
+    thresholds.temp_warn = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_WARN_C,
+                                          80.0f);
+    thresholds.temp_crit = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_CRIT_C,
+                                          95.0f);
+    thresholds.disk_crit =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::DISK_CRIT_PERCENT, 98.0f);
+    thresholds.batt_warn =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT, 20.0f);
+    thresholds.batt_crit =
+        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT, 10.0f);
     // Convert disk check interval from seconds to ticks (calls)
-    const int disk_interval_ticks = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
+    thresholds.disk_interval = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
 
     // Create platform-specific ISysInfo (linux, jetson, mock)
     const std::string platform = cfg.get<std::string>(drone::cfg_key::system_monitor::PLATFORM,
@@ -301,12 +302,8 @@ int main(int argc, char* argv[]) {
     auto              sys_info = drone::util::create_sys_info(platform);
     DRONE_LOG_INFO("Platform sys_info: {} (config='{}')", sys_info->name(), platform);
 
-    // Create process monitor via strategy factory (backend from config)
-    const std::string monitor_backend =
-        cfg.get<std::string>(drone::cfg_key::system_monitor::BACKEND, "linux");
-    auto monitor = drone::monitor::create_process_monitor(
-        *sys_info, monitor_backend, cpu_warn, mem_warn, temp_warn, temp_crit, disk_crit, batt_warn,
-        batt_crit, disk_interval_ticks);
+    // Create process monitor — platform differences are handled by ISysInfo injection
+    auto monitor = drone::monitor::create_process_monitor(*sys_info, thresholds);
     DRONE_LOG_INFO("Process monitor: {}", monitor->name());
 
     // Optional fault-injection override subscriber.

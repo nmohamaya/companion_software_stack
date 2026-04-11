@@ -58,7 +58,8 @@ inline constexpr float kFallbackCpuTempC = 42.0f;
 // ═══════════════════════════════════════════════════════════
 
 /// Compute CPU usage percentage from two CpuTimes samples.
-/// Returns 0.0f if samples are identical or if prev > now (counter wrap).
+/// Returns 0.0f if total delta is zero or negative (counter wrap).
+/// Active delta is clamped to zero if it underflows (partial counter wrap).
 [[nodiscard]] inline float compute_cpu_usage(const CpuTimes& prev, const CpuTimes& now) {
     if (now.total() <= prev.total()) return 0.0f;
     const uint64_t dt = now.total() - prev.total();
@@ -77,23 +78,23 @@ public:
     ISysInfo()                           = default;
     ISysInfo(const ISysInfo&)            = delete;
     ISysInfo& operator=(const ISysInfo&) = delete;
-    ISysInfo(ISysInfo&&)                 = default;
-    ISysInfo& operator=(ISysInfo&&)      = default;
+    ISysInfo(ISysInfo&&)                 = delete;
+    ISysInfo& operator=(ISysInfo&&)      = delete;
 
     /// Read aggregate CPU times from the platform.
-    [[nodiscard]] virtual CpuTimes read_cpu_times() = 0;
+    [[nodiscard]] virtual CpuTimes read_cpu_times() const = 0;
 
     /// Read memory information from the platform.
-    [[nodiscard]] virtual MemInfo read_meminfo() = 0;
+    [[nodiscard]] virtual MemInfo read_meminfo() const = 0;
 
     /// Read CPU temperature in degrees Celsius.
-    [[nodiscard]] virtual float read_cpu_temp() = 0;
+    [[nodiscard]] virtual float read_cpu_temp() const = 0;
 
     /// Read root filesystem disk usage.
-    [[nodiscard]] virtual DiskInfo read_disk_usage() = 0;
+    [[nodiscard]] virtual DiskInfo read_disk_usage() const = 0;
 
     /// Check whether a given PID is alive.
-    [[nodiscard]] virtual bool is_process_alive(pid_t pid) = 0;
+    [[nodiscard]] virtual bool is_process_alive(pid_t pid) const = 0;
 
     /// Human-readable name for logging.
     [[nodiscard]] virtual std::string name() const = 0;

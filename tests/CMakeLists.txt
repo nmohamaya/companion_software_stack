@@ -30,6 +30,8 @@ function(add_drone_test TEST_NAME)
         ${PROJECT_SOURCE_DIR}/process7_system_monitor/include
     )
     target_link_libraries(${TEST_NAME} PRIVATE drone_hal)
+    # MockSysInfo and other test-only implementations are gated behind DRONE_ENABLE_MOCK
+    target_compile_definitions(${TEST_NAME} PRIVATE DRONE_ENABLE_MOCK)
     if(ARG_PROPERTIES)
         gtest_discover_tests(${TEST_NAME} PROPERTIES ${ARG_PROPERTIES})
     else()

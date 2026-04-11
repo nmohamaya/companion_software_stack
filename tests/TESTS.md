@@ -125,7 +125,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
 | [IPC — TopicResolver](#ipc--topicresolver) | 1 | 17 | Vehicle_id namespace resolution, validation, Zenoh pub/sub round-trip |
-| **Total** | **57 C++ + 5 shell** | **1386 + 42 + 250+** | |
+| **Total** | **57 C++ + 5 shell** | **1389 + 42 + 250+** | |
 
 ---
 
@@ -1244,4 +1244,4 @@ pytest test suite, separate from the C++ GTest suite tracked by ctest.
 
 ---
 
-*Last updated: April 2026 — 1386 C++ unit tests across 57 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #401 (Epic #284 Wave 2): ISysInfo platform abstraction, TopicResolver + vehicle_id, CMake enable options (+127 tests from 1259). All 1386 C++ tests passing.*
+*Last updated: April 2026 — 1386 C++ unit tests across 57 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #401 (Epic #284 Wave 2): ISysInfo platform abstraction, TopicResolver + vehicle_id, CMake enable options (+127 tests from 1259). All 1389 C++ tests passing (re-review fixes: +3 tests for battery critical, overlapping thresholds, custom MonitorThresholds).*

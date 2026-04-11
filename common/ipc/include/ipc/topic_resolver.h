@@ -55,13 +55,21 @@ public:
     }
 
     /// Resolve a base topic name to a namespaced topic.
-    /// @param base_topic  The base topic (must start with '/', e.g. "/slam_pose").
-    /// @return  Namespaced topic, or base_topic unchanged if no vehicle_id.
+    /// @param base_topic  The base topic (e.g. "/slam_pose").
+    /// @return  Namespaced topic "/<vehicle_id>/<base>", or base_topic unchanged if no vehicle_id.
+    ///          If base_topic lacks a leading '/', a separator is inserted automatically.
     [[nodiscard]] std::string resolve(const std::string& base_topic) const {
         if (vehicle_id_.empty()) {
             return base_topic;
         }
-        return "/" + vehicle_id_ + base_topic;
+        // Ensure a '/' separator between vehicle_id and base_topic
+        if (base_topic.empty()) {
+            return "/" + vehicle_id_;
+        }
+        if (base_topic[0] == '/') {
+            return "/" + vehicle_id_ + base_topic;
+        }
+        return "/" + vehicle_id_ + "/" + base_topic;
     }
 
     /// Returns the configured vehicle_id (empty string if none).

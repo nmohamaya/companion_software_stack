@@ -4,6 +4,10 @@
 // This header now delegates to the ISysInfo abstraction in common/util.
 // It preserves backward-compatible free functions and re-exports POD types
 // into the drone::monitor namespace so existing callers need no changes.
+//
+// DEPRECATED: These free functions always use real /proc reads and bypass
+// ISysInfo dependency injection.  New code should inject ISysInfo directly.
+// Tests should use MockSysInfo rather than calling these free functions.
 
 #pragma once
 

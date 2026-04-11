@@ -58,10 +58,9 @@ TEST(TopicResolverTest, PreservesLeadingSlash) {
 }
 
 TEST(TopicResolverTest, TopicWithoutLeadingSlash) {
-    // Without a leading slash, the result is /<vehicle_id><base_topic>
-    // (no extra separator inserted). All IPC topics should start with '/'.
+    // Without a leading slash, resolve() inserts a '/' separator automatically.
     TopicResolver resolver("drone1");
-    EXPECT_EQ(resolver.resolve("topic"), "/drone1topic");
+    EXPECT_EQ(resolver.resolve("topic"), "/drone1/topic");
 }
 
 TEST(TopicResolverTest, EmptyBaseTopic) {
