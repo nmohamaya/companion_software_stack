@@ -44,10 +44,12 @@ add_drone_test(test_spsc_ring       test_spsc_ring.cpp)
 add_drone_test(test_triple_buffer   test_triple_buffer.cpp)
 
 # ── Kalman tracker tests ─────────────────────────────────────
+if(ENABLE_PROCESS_PERCEPTION)
 add_drone_test(test_kalman_tracker  test_kalman_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/bytetrack_tracker.cpp
 )
+endif()
 
 # ── Mission FSM tests ────────────────────────────────────────
 add_drone_test(test_mission_fsm     test_mission_fsm.cpp)
@@ -62,12 +64,14 @@ add_drone_test(test_geofence        test_geofence.cpp)
 add_drone_test(test_obstacle_avoider_3d test_obstacle_avoider_3d.cpp)
 
 # ── Fusion engine tests ──────────────────────────────────────
+if(ENABLE_PROCESS_PERCEPTION)
 add_drone_test(test_fusion_engine   test_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/ukf_fusion_engine.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/bytetrack_tracker.cpp
 )
+endif()
 
 # ── Config system tests ──────────────────────────────────────
 add_drone_test(test_config          test_config.cpp)
@@ -187,6 +191,7 @@ if(ENABLE_SYSTEMD)
 endif()
 
 # ── SimulatedDetector tests (Issue #253) ────────────────────
+if(ENABLE_PROCESS_PERCEPTION)
 add_drone_test(test_simulated_detector test_simulated_detector.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/simulated_detector.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/detector_factory.cpp
@@ -211,6 +216,7 @@ if(OPENCV_FOUND)
     target_link_libraries(test_opencv_yolo_detector PRIVATE ${OpenCV_LIBS})
     target_compile_definitions(test_opencv_yolo_detector PRIVATE HAS_OPENCV=1)
 endif()
+endif()
 
 # ── Diagnostic Collector tests ──────────────────────────────
 add_drone_test(test_diagnostic      test_diagnostic.cpp)
@@ -222,6 +228,7 @@ add_drone_test(test_feature_extractor test_feature_extractor.cpp)
 add_drone_test(test_stereo_matcher  test_stereo_matcher.cpp)
 
 # ── IMU Pre-integrator tests ────────────────────────────────
+if(ENABLE_PROCESS_SLAM_VIO_NAV)
 add_drone_test(test_imu_preintegrator test_imu_preintegrator.cpp
     ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
 )
@@ -230,6 +237,7 @@ add_drone_test(test_imu_preintegrator test_imu_preintegrator.cpp
 add_drone_test(test_vio_backend     test_vio_backend.cpp
     ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
 )
+endif()
 
 # ── Static Obstacle Layer tests (Issue #154) ───────────────
 add_drone_test(test_static_obstacle_layer test_static_obstacle_layer.cpp)
@@ -244,10 +252,12 @@ add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
 add_drone_test(test_fault_response_executor test_fault_response_executor.cpp)
 
 # ── ByteTrack Tracker tests (Issue #163) ────────────────────
+if(ENABLE_PROCESS_PERCEPTION)
 add_drone_test(test_bytetrack_tracker test_bytetrack_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/kalman_tracker.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/bytetrack_tracker.cpp
 )
+endif()
 
 # ── D* Lite Path Planner tests (Issue #158) ────────────────
 add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
