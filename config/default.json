@@ -2,6 +2,7 @@
     "_comment": "Default configuration for Drone Companion Stack",
     "log_level": "info",
     "ipc_backend": "zenoh",
+    "vehicle_id": "",
 
     "zenoh": {
         "_comment": "Zenoh IPC settings",

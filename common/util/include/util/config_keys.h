@@ -15,6 +15,7 @@ namespace drone::cfg_key {
 // ═══════════════════════════════════════════════════════════
 inline constexpr const char* LOG_LEVEL   = "log_level";
 inline constexpr const char* IPC_BACKEND = "ipc_backend";
+inline constexpr const char* VEHICLE_ID  = "vehicle_id";
 
 // ═══════════════════════════════════════════════════════════
 // Zenoh IPC settings

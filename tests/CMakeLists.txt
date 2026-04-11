@@ -293,3 +293,7 @@ target_include_directories(test_replay_dispatch PRIVATE
 add_drone_test(test_collision_recovery test_collision_recovery.cpp)
 # ── Gimbal Auto-Tracker tests (Issue #257) ────────────────
 add_drone_test(test_gimbal_auto_tracker test_gimbal_auto_tracker.cpp)
+
+# ── TopicResolver tests (Issue #289) ─────────────────────
+add_drone_test(test_topic_resolver  test_topic_resolver.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
