@@ -1,5 +1,10 @@
-// tests/test_system_monitor.cpp — Tests for sys_info.h functions
+// tests/test_system_monitor.cpp — Tests for sys_info.h functions and ISysInfo abstraction
+#include "monitor/iprocess_monitor.h"
 #include "monitor/sys_info.h"
+#include "util/isys_info.h"
+#include "util/linux_sys_info.h"
+#include "util/mock_sys_info.h"
+#include "util/sys_info_factory.h"
 
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -7,17 +12,17 @@
 using namespace drone::monitor;
 
 // ═══════════════════════════════════════════════════════════
-// CpuTimes
+// CpuTimes (backward-compatible free function tests)
 // ═══════════════════════════════════════════════════════════
 
 TEST(SysInfo, CpuTimesDefaultsZero) {
-    CpuTimes t{};
+    drone::util::CpuTimes t{};
     EXPECT_EQ(t.total(), 0u);
     EXPECT_EQ(t.active(), 0u);
 }
 
 TEST(SysInfo, CpuTimesTotalAndActive) {
-    CpuTimes t{};
+    drone::util::CpuTimes t{};
     t.user    = 100;
     t.nice    = 10;
     t.system  = 50;
@@ -38,19 +43,19 @@ TEST(SysInfo, ReadCpuTimesReturnsNonZero) {
 }
 
 TEST(SysInfo, ComputeCpuUsageZeroDelta) {
-    CpuTimes prev{}, now{};
-    float    usage = compute_cpu_usage(prev, now);
+    drone::util::CpuTimes prev{}, now{};
+    float                 usage = compute_cpu_usage(prev, now);
     EXPECT_FLOAT_EQ(usage, 0.0f);
 }
 
 TEST(SysInfo, ComputeCpuUsageKnownValues) {
-    CpuTimes prev{};
+    drone::util::CpuTimes prev{};
     prev.user   = 100;
     prev.system = 50;
     prev.idle   = 200;
     prev.iowait = 50;
 
-    CpuTimes now{};
+    drone::util::CpuTimes now{};
     now.user   = 200;
     now.system = 100;
     now.idle   = 250;
@@ -64,7 +69,7 @@ TEST(SysInfo, ComputeCpuUsageKnownValues) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// MemInfo
+// MemInfo (backward-compatible free function tests)
 // ═══════════════════════════════════════════════════════════
 
 TEST(SysInfo, ReadMeminfoReturnsNonZero) {
@@ -76,7 +81,7 @@ TEST(SysInfo, ReadMeminfoReturnsNonZero) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Temperature
+// Temperature (backward-compatible free function tests)
 // ═══════════════════════════════════════════════════════════
 
 TEST(SysInfo, ReadCpuTempReasonable) {
@@ -87,7 +92,7 @@ TEST(SysInfo, ReadCpuTempReasonable) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Disk
+// Disk (backward-compatible free function tests)
 // ═══════════════════════════════════════════════════════════
 
 TEST(SysInfo, ReadDiskUsage) {
@@ -99,7 +104,7 @@ TEST(SysInfo, ReadDiskUsage) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Process watchdog
+// Process watchdog (backward-compatible free function tests)
 // ═══════════════════════════════════════════════════════════
 
 TEST(SysInfo, CurrentProcessIsAlive) {
@@ -114,4 +119,223 @@ TEST(SysInfo, InvalidPidNotAlive) {
 TEST(SysInfo, NonexistentPidNotAlive) {
     // PID 99999999 almost certainly doesn't exist
     EXPECT_FALSE(is_process_alive(99999999));
+}
+
+// ═══════════════════════════════════════════════════════════
+// ISysInfo interface — LinuxSysInfo
+// ═══════════════════════════════════════════════════════════
+
+TEST(ISysInfo, LinuxSysInfoName) {
+    drone::util::LinuxSysInfo sys;
+    EXPECT_EQ(sys.name(), "LinuxSysInfo");
+}
+
+TEST(ISysInfo, LinuxSysInfoReadCpuTimesNonZero) {
+    drone::util::LinuxSysInfo sys;
+    auto                      t = sys.read_cpu_times();
+    EXPECT_GT(t.total(), 0u);
+}
+
+TEST(ISysInfo, LinuxSysInfoReadMeminfoNonZero) {
+    drone::util::LinuxSysInfo sys;
+    auto                      m = sys.read_meminfo();
+    EXPECT_GT(m.total_kb, 0u);
+}
+
+TEST(ISysInfo, LinuxSysInfoReadCpuTempReasonable) {
+    drone::util::LinuxSysInfo sys;
+    float                     temp = sys.read_cpu_temp();
+    EXPECT_GE(temp, -20.0f);
+    EXPECT_LE(temp, 120.0f);
+}
+
+TEST(ISysInfo, LinuxSysInfoIsProcessAlive) {
+    drone::util::LinuxSysInfo sys;
+    EXPECT_TRUE(sys.is_process_alive(getpid()));
+    EXPECT_FALSE(sys.is_process_alive(0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// ISysInfo interface — MockSysInfo
+// ═══════════════════════════════════════════════════════════
+
+TEST(ISysInfo, MockSysInfoName) {
+    drone::util::MockSysInfo mock;
+    EXPECT_EQ(mock.name(), "MockSysInfo");
+}
+
+TEST(ISysInfo, MockSysInfoReturnsInjectedValues) {
+    drone::util::MockSysInfo mock;
+
+    // Inject CPU times
+    mock.injected_cpu_times.user   = 500;
+    mock.injected_cpu_times.system = 200;
+    mock.injected_cpu_times.idle   = 300;
+    auto cpu                       = mock.read_cpu_times();
+    EXPECT_EQ(cpu.user, 500u);
+    EXPECT_EQ(cpu.system, 200u);
+    EXPECT_EQ(cpu.idle, 300u);
+
+    // Inject memory info
+    mock.injected_meminfo.total_kb      = 16'000'000;
+    mock.injected_meminfo.available_kb  = 8'000'000;
+    mock.injected_meminfo.usage_percent = 50.0f;
+    auto mem                            = mock.read_meminfo();
+    EXPECT_EQ(mem.total_kb, 16'000'000u);
+    EXPECT_FLOAT_EQ(mem.usage_percent, 50.0f);
+
+    // Inject temperature
+    mock.injected_cpu_temp = 65.5f;
+    EXPECT_FLOAT_EQ(mock.read_cpu_temp(), 65.5f);
+
+    // Inject disk info
+    mock.injected_disk_info.total_mb      = 500'000;
+    mock.injected_disk_info.free_mb       = 250'000;
+    mock.injected_disk_info.usage_percent = 50.0f;
+    auto disk                             = mock.read_disk_usage();
+    EXPECT_EQ(disk.total_mb, 500'000u);
+    EXPECT_FLOAT_EQ(disk.usage_percent, 50.0f);
+
+    // Inject process alive
+    mock.injected_process_alive = false;
+    EXPECT_FALSE(mock.is_process_alive(1234));
+}
+
+TEST(ISysInfo, MockSysInfoComputeCpuUsage) {
+    drone::util::MockSysInfo mock;
+
+    drone::util::CpuTimes prev{};
+    prev.user = 100;
+    prev.idle = 100;
+
+    drone::util::CpuTimes now{};
+    now.user = 200;
+    now.idle = 100;
+
+    // delta_total = 300 - 200 = 100, delta_active = 100 - 0 = 100
+    float usage = mock.compute_cpu_usage(prev, now);
+    EXPECT_NEAR(usage, 100.0f, 0.1f);
+}
+
+// ═══════════════════════════════════════════════════════════
+// ISysInfo factory
+// ═══════════════════════════════════════════════════════════
+
+TEST(ISysInfo, FactoryCreatesLinux) {
+    auto sys = drone::util::create_sys_info("linux");
+    ASSERT_NE(sys, nullptr);
+    EXPECT_EQ(sys->name(), "LinuxSysInfo");
+}
+
+TEST(ISysInfo, FactoryCreatesJetson) {
+    auto sys = drone::util::create_sys_info("jetson");
+    ASSERT_NE(sys, nullptr);
+    EXPECT_EQ(sys->name(), "JetsonSysInfo");
+}
+
+TEST(ISysInfo, FactoryCreatesMock) {
+    auto sys = drone::util::create_sys_info("mock");
+    ASSERT_NE(sys, nullptr);
+    EXPECT_EQ(sys->name(), "MockSysInfo");
+}
+
+TEST(ISysInfo, FactoryFallbackToLinux) {
+    auto sys = drone::util::create_sys_info("unknown_platform");
+    ASSERT_NE(sys, nullptr);
+    EXPECT_EQ(sys->name(), "LinuxSysInfo");
+}
+
+// ═══════════════════════════════════════════════════════════
+// LinuxProcessMonitor with MockSysInfo — deterministic health
+// ═══════════════════════════════════════════════════════════
+
+TEST(ProcessMonitor, MockSysInfoDeterministicHealth) {
+    drone::util::MockSysInfo mock;
+
+    // Set up initial CPU times (constructor reads once for prev_cpu_)
+    mock.injected_cpu_times.user   = 100;
+    mock.injected_cpu_times.system = 50;
+    mock.injected_cpu_times.idle   = 200;
+
+    drone::monitor::LinuxProcessMonitor monitor(mock);
+
+    // Now inject "after" CPU times for the first collect()
+    mock.injected_cpu_times.user   = 200;
+    mock.injected_cpu_times.system = 100;
+    mock.injected_cpu_times.idle   = 250;
+
+    // Inject memory: 50% usage
+    mock.injected_meminfo.total_kb      = 16'000'000;
+    mock.injected_meminfo.available_kb  = 8'000'000;
+    mock.injected_meminfo.usage_percent = 50.0f;
+
+    // Inject temperature: normal
+    mock.injected_cpu_temp = 55.0f;
+
+    // Inject disk: 30% usage
+    mock.injected_disk_info.total_mb      = 500'000;
+    mock.injected_disk_info.free_mb       = 350'000;
+    mock.injected_disk_info.usage_percent = 30.0f;
+
+    auto health = monitor.collect();
+
+    // CPU usage: delta_total = (200+100+250) - (100+50+200) = 200
+    //            delta_active = 200 - 50 - 0 = 150 => 75%
+    EXPECT_NEAR(health.cpu_usage_percent, 75.0f, 0.5f);
+    EXPECT_FLOAT_EQ(health.memory_usage_percent, 50.0f);
+    EXPECT_FLOAT_EQ(health.cpu_temp_c, 55.0f);
+    EXPECT_FLOAT_EQ(health.disk_usage_percent, 30.0f);
+    EXPECT_EQ(health.thermal_zone, 0u);  // all normal
+}
+
+TEST(ProcessMonitor, MockSysInfoWarningThreshold) {
+    drone::util::MockSysInfo mock;
+
+    // CPU times: 0 initially
+    mock.injected_cpu_times = {};
+
+    // cpu_warn=90, mem_warn=90, temp_warn=80, temp_crit=95
+    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+
+    // Now inject high temperature (above warn but below crit)
+    mock.injected_cpu_temp                = 85.0f;
+    mock.injected_meminfo.usage_percent   = 50.0f;
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    auto health = monitor.collect();
+    EXPECT_EQ(health.thermal_zone, 2u);  // WARNING due to temp > 80
+}
+
+TEST(ProcessMonitor, MockSysInfoCriticalThreshold) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+
+    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+
+    // Inject critical temperature
+    mock.injected_cpu_temp                = 100.0f;
+    mock.injected_meminfo.usage_percent   = 50.0f;
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    auto health = monitor.collect();
+    EXPECT_EQ(health.thermal_zone, 3u);  // CRITICAL due to temp > 95
+}
+
+TEST(ProcessMonitor, MockSysInfoBatteryWarning) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+
+    // batt_warn=20, batt_crit=10
+    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f, 98.0f, 20.0f,
+                                                10.0f);
+
+    mock.injected_cpu_temp                = 40.0f;
+    mock.injected_meminfo.usage_percent   = 30.0f;
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    // Set low battery
+    monitor.set_battery_percent(15.0f);
+
+    auto health = monitor.collect();
+    EXPECT_GE(health.thermal_zone, 2u);  // WARNING due to battery < 20
 }

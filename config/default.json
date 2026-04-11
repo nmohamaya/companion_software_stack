@@ -246,6 +246,7 @@
     },
 
     "system_monitor": {
+        "platform": "linux",
         "update_rate_hz": 1,
         "disk_check_interval_s": 10,
         "thresholds": {

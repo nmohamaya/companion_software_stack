@@ -6,6 +6,7 @@
 // Path planner tests moved to test_dstar_lite_planner.cpp (Issue #207).
 // Obstacle avoider tests moved to test_obstacle_avoider_3d.cpp (Issue #207).
 #include "monitor/iprocess_monitor.h"
+#include "util/linux_sys_info.h"
 
 #include <memory>
 #include <vector>
@@ -19,16 +20,19 @@ using namespace drone::monitor;
 // ═══════════════════════════════════════════════════════════
 
 TEST(ProcessMonitorTest, FactoryCreatesLinux) {
-    auto pm = create_process_monitor("linux");
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys, "linux");
     EXPECT_NE(pm, nullptr);
 }
 
 TEST(ProcessMonitorTest, FactoryThrowsOnUnknown) {
-    EXPECT_THROW(create_process_monitor("windows_nt"), std::runtime_error);
+    drone::util::LinuxSysInfo sys;
+    EXPECT_THROW(create_process_monitor(sys, "windows_nt"), std::runtime_error);
 }
 
 TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
-    auto pm = create_process_monitor("linux");
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys, "linux");
 
     auto health = pm->collect();
 
@@ -47,16 +51,18 @@ TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
 }
 
 TEST(ProcessMonitorTest, ThermalZonePopulated) {
-    auto pm     = create_process_monitor("linux");
-    auto health = pm->collect();
+    drone::util::LinuxSysInfo sys;
+    auto                      pm     = create_process_monitor(sys, "linux");
+    auto                      health = pm->collect();
 
     // thermal_zone should be one of 0=normal, 1=warm, 2=hot, 3=critical
     EXPECT_LE(health.thermal_zone, 3u);
 }
 
 TEST(ProcessMonitorTest, ImplementsInterface) {
-    auto             pm    = create_process_monitor("linux");
-    IProcessMonitor* iface = pm.get();
+    drone::util::LinuxSysInfo sys;
+    auto                      pm    = create_process_monitor(sys, "linux");
+    IProcessMonitor*          iface = pm.get();
     EXPECT_NE(iface, nullptr);
 
     auto health = iface->collect();
@@ -64,7 +70,8 @@ TEST(ProcessMonitorTest, ImplementsInterface) {
 }
 
 TEST(ProcessMonitorTest, MultipleSamples) {
-    auto pm = create_process_monitor("linux");
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys, "linux");
     for (int i = 0; i < 3; ++i) {
         auto health = pm->collect();
         EXPECT_GE(health.cpu_usage_percent, 0.0f);

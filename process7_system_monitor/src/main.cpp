@@ -20,6 +20,7 @@
 #include "util/safe_name_copy.h"
 #include "util/sd_notify.h"
 #include "util/signal_handler.h"
+#include "util/sys_info_factory.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -294,12 +295,18 @@ int main(int argc, char* argv[]) {
     // Convert disk check interval from seconds to ticks (calls)
     const int disk_interval_ticks = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
 
+    // Create platform-specific ISysInfo (linux, jetson, mock)
+    const std::string platform = cfg.get<std::string>(drone::cfg_key::system_monitor::PLATFORM,
+                                                      "linux");
+    auto              sys_info = drone::util::create_sys_info(platform);
+    DRONE_LOG_INFO("Platform sys_info: {} (config='{}')", sys_info->name(), platform);
+
     // Create process monitor via strategy factory (backend from config)
     const std::string monitor_backend =
         cfg.get<std::string>(drone::cfg_key::system_monitor::BACKEND, "linux");
     auto monitor = drone::monitor::create_process_monitor(
-        monitor_backend, cpu_warn, mem_warn, temp_warn, temp_crit, disk_crit, batt_warn, batt_crit,
-        disk_interval_ticks);
+        *sys_info, monitor_backend, cpu_warn, mem_warn, temp_warn, temp_crit, disk_crit, batt_warn,
+        batt_crit, disk_interval_ticks);
     DRONE_LOG_INFO("Process monitor: {}", monitor->name());
 
     // Optional fault-injection override subscriber.

@@ -9,6 +9,7 @@
 
 #include "ipc/ipc_types.h"
 #include "monitor/sys_info.h"
+#include "util/isys_info.h"
 
 #include <chrono>
 #include <memory>
@@ -33,12 +34,13 @@ public:
 };
 
 // ─────────────────────────────────────────────────────────────
-// Linux process monitor — reads from /proc and /sys.
+// Linux process monitor — reads from /proc and /sys via ISysInfo.
 // This is the current behaviour extracted into a strategy object.
 // ─────────────────────────────────────────────────────────────
 
 class LinuxProcessMonitor final : public IProcessMonitor {
 public:
+    /// @param sys_info    Platform abstraction for system metrics.
     /// @param cpu_warn    CPU % threshold for WARNING status.
     /// @param mem_warn    Memory % threshold for WARNING status.
     /// @param temp_warn   Temperature (C) threshold for WARNING status.
@@ -47,10 +49,12 @@ public:
     /// @param batt_warn   Battery % threshold for WARNING status.
     /// @param batt_crit   Battery % threshold for CRITICAL status.
     /// @param disk_interval  Check disk every N calls to reduce popen overhead.
-    LinuxProcessMonitor(float cpu_warn = 90.0f, float mem_warn = 90.0f, float temp_warn = 80.0f,
-                        float temp_crit = 95.0f, float disk_crit = 98.0f, float batt_warn = 20.0f,
-                        float batt_crit = 10.0f, int disk_interval = 10)
-        : cpu_warn_(cpu_warn)
+    LinuxProcessMonitor(drone::util::ISysInfo& sys_info, float cpu_warn = 90.0f,
+                        float mem_warn = 90.0f, float temp_warn = 80.0f, float temp_crit = 95.0f,
+                        float disk_crit = 98.0f, float batt_warn = 20.0f, float batt_crit = 10.0f,
+                        int disk_interval = 10)
+        : sys_info_(sys_info)
+        , cpu_warn_(cpu_warn)
         , mem_warn_(mem_warn)
         , temp_warn_(temp_warn)
         , temp_crit_(temp_crit)
@@ -58,26 +62,26 @@ public:
         , batt_warn_(batt_warn)
         , batt_crit_(batt_crit)
         , disk_interval_(disk_interval) {
-        prev_cpu_ = read_cpu_times();
+        prev_cpu_ = sys_info_.read_cpu_times();
     }
 
     drone::ipc::SystemHealth collect() override {
         ++tick_;
 
         // CPU
-        auto  now_cpu   = read_cpu_times();
-        float cpu_usage = compute_cpu_usage(prev_cpu_, now_cpu);
+        auto  now_cpu   = sys_info_.read_cpu_times();
+        float cpu_usage = sys_info_.compute_cpu_usage(prev_cpu_, now_cpu);
         prev_cpu_       = now_cpu;
 
         // Memory
-        auto mem = read_meminfo();
+        auto mem = sys_info_.read_meminfo();
 
         // Temperature
-        float temp = read_cpu_temp();
+        float temp = sys_info_.read_cpu_temp();
 
         // Disk (periodically)
         if (tick_ % disk_interval_ == 1) {
-            disk_ = read_disk_usage();
+            disk_ = sys_info_.read_disk_usage();
         }
 
         // Build health struct
@@ -118,24 +122,27 @@ public:
     void set_battery_percent(float battery) override { battery_ = battery; }
 
 private:
-    float cpu_warn_, mem_warn_, temp_warn_, temp_crit_;
-    float disk_crit_, batt_warn_, batt_crit_;
-    int   disk_interval_;
+    drone::util::ISysInfo& sys_info_;
+    float                  cpu_warn_, mem_warn_, temp_warn_, temp_crit_;
+    float                  disk_crit_, batt_warn_, batt_crit_;
+    int                    disk_interval_;
 
-    CpuTimes prev_cpu_;
-    DiskInfo disk_{};
-    float    battery_ = 100.0f;
-    uint32_t tick_    = 0;
+    drone::util::CpuTimes prev_cpu_;
+    drone::util::DiskInfo disk_{};
+    float                 battery_ = 100.0f;
+    uint32_t              tick_    = 0;
 };
 
 /// Factory — creates the appropriate monitor based on config.
+/// @param sys_info  Platform abstraction (caller owns lifetime).
 inline std::unique_ptr<IProcessMonitor> create_process_monitor(
-    const std::string& backend = "linux", float cpu_warn = 90.0f, float mem_warn = 90.0f,
-    float temp_warn = 80.0f, float temp_crit = 95.0f, float disk_crit = 98.0f,
-    float batt_warn = 20.0f, float batt_crit = 10.0f, int disk_interval = 10) {
-    if (backend == "linux") {
-        return std::make_unique<LinuxProcessMonitor>(cpu_warn, mem_warn, temp_warn, temp_crit,
-                                                     disk_crit, batt_warn, batt_crit,
+    drone::util::ISysInfo& sys_info, const std::string& backend = "linux", float cpu_warn = 90.0f,
+    float mem_warn = 90.0f, float temp_warn = 80.0f, float temp_crit = 95.0f,
+    float disk_crit = 98.0f, float batt_warn = 20.0f, float batt_crit = 10.0f,
+    int disk_interval = 10) {
+    if (backend == "linux" || backend == "jetson") {
+        return std::make_unique<LinuxProcessMonitor>(sys_info, cpu_warn, mem_warn, temp_warn,
+                                                     temp_crit, disk_crit, batt_warn, batt_crit,
                                                      disk_interval);
     }
     throw std::runtime_error("Unknown process monitor: " + backend);
