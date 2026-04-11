@@ -271,6 +271,16 @@ inline ConfigSchema common_schema() {
     s.optional<std::string>("log_level")
         .one_of({"trace", "debug", "info", "warn", "error", "critical"});
     s.optional<std::string>("ipc_backend").one_of({"zenoh"});  // "shm" removed in PR #151
+    // vehicle_id must match TopicResolver's allowed chars: [a-zA-Z0-9_-] or empty
+    s.optional<std::string>("vehicle_id")
+        .satisfies(
+            [](const std::string& id) {
+                return std::all_of(id.begin(), id.end(), [](char c) {
+                    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                           (c >= '0' && c <= '9') || c == '_' || c == '-';
+                });
+            },
+            "must be alphanumeric, dash, or underscore only (or empty)");
     return s;
 }
 
@@ -349,6 +359,7 @@ inline ConfigSchema payload_manager_schema() {
 inline ConfigSchema system_monitor_schema() {
     auto s = common_schema();
     s.required_section("system_monitor");
+    s.optional<std::string>("system_monitor.platform").one_of({"linux", "jetson", "mock"});
     s.required<int>("system_monitor.update_rate_hz").range(1, 100);
     s.optional<double>("system_monitor.thresholds.cpu_warn_percent").range(0.0, 100.0);
     s.optional<double>("system_monitor.thresholds.mem_warn_percent").range(0.0, 100.0);

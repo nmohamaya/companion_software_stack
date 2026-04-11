@@ -124,7 +124,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
-| **Total** | **56 C++ + 5 shell** | **1259 + 42 + 250+** | |
+| [IPC — TopicResolver](#ipc--topicresolver) | 1 | 17 | Vehicle_id namespace resolution, validation, Zenoh pub/sub round-trip |
+| **Total** | **57 C++ + 5 shell** | **1389 + 42 + 250+** | |
 
 ---
 
@@ -602,7 +603,7 @@ factory registration.
 
 ## P7 — System Monitor
 
-### test_system_monitor.cpp — 11 tests
+### test_system_monitor.cpp — 27 tests
 
 **What it tests:** System resource monitoring via Linux `/proc` filesystem.
 
@@ -964,7 +965,7 @@ explicitly guard against this.
 
 ## Cross-Cutting Interfaces
 
-### test_process_interfaces.cpp — 10 tests
+### test_process_interfaces.cpp — 6 tests
 
 **What it tests:** Internal strategy interfaces used across multiple
 processes — tested via their simulated backends.
@@ -1230,4 +1231,17 @@ pytest test suite, separate from the C++ GTest suite tracked by ctest.
 
 ---
 
-*Last updated: April 2026 — 1259 C++ unit tests across 56 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #374 (Issue #371): remote pipeline monitoring — tmux sessions, ntfy.sh notifications, security hardening. PR #346 (Issue #345): bbox ground-feature filters, depth confidence gating, radar orphan tuning, CW/CCW survey rotation, scenario 26 VIO validation, clamp penalty fix, stop trajectory fix, wire version validation (+21 tests from 1238). All 1259 C++ tests passing.*
+## IPC — TopicResolver
+
+### test_topic_resolver.cpp — 17 tests
+
+| Suite | Tests | What it covers |
+|-------|-------|----------------|
+| `TopicResolverTest` | 13 | Empty/non-empty vehicle_id, prefix behavior, leading slash, move construction, **vehicle_id validation** (rejects slashes, spaces, dots; accepts dash/underscore) |
+| `TopicResolverBusTest` | 4 | Default resolver, set_topic_resolver persistence, namespaced Zenoh pub/sub round-trip, multi-namespace isolation |
+
+**RESOURCE_LOCK:** `zenoh_session` (bus tests open Zenoh sessions)
+
+---
+
+*Last updated: April 2026 — 1386 C++ unit tests across 57 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #401 (Epic #284 Wave 2): ISysInfo platform abstraction, TopicResolver + vehicle_id, CMake enable options (+127 tests from 1259). All 1389 C++ tests passing (re-review fixes: +3 tests for battery critical, overlapping thresholds, custom MonitorThresholds).*

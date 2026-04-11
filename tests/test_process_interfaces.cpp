@@ -6,6 +6,7 @@
 // Path planner tests moved to test_dstar_lite_planner.cpp (Issue #207).
 // Obstacle avoider tests moved to test_obstacle_avoider_3d.cpp (Issue #207).
 #include "monitor/iprocess_monitor.h"
+#include "util/linux_sys_info.h"
 
 #include <memory>
 #include <vector>
@@ -19,16 +20,30 @@ using namespace drone::monitor;
 // ═══════════════════════════════════════════════════════════
 
 TEST(ProcessMonitorTest, FactoryCreatesLinux) {
-    auto pm = create_process_monitor("linux");
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys);
     EXPECT_NE(pm, nullptr);
 }
 
-TEST(ProcessMonitorTest, FactoryThrowsOnUnknown) {
-    EXPECT_THROW(create_process_monitor("windows_nt"), std::runtime_error);
+TEST(ProcessMonitorTest, FactoryCreatesWithDefaultThresholds) {
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys);
+    EXPECT_NE(pm, nullptr);
+    EXPECT_EQ(pm->name(), "LinuxProcessMonitor");
+}
+
+TEST(ProcessMonitorTest, FactoryCreatesWithCustomThresholds) {
+    drone::util::LinuxSysInfo         sys;
+    drone::monitor::MonitorThresholds th;
+    th.cpu_warn = 80.0f;
+    auto pm     = create_process_monitor(sys, th);
+    EXPECT_NE(pm, nullptr);
+    EXPECT_EQ(pm->name(), "LinuxProcessMonitor");
 }
 
 TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
-    auto pm = create_process_monitor("linux");
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys);
 
     auto health = pm->collect();
 
@@ -47,16 +62,18 @@ TEST(ProcessMonitorTest, CollectReturnsValidHealth) {
 }
 
 TEST(ProcessMonitorTest, ThermalZonePopulated) {
-    auto pm     = create_process_monitor("linux");
-    auto health = pm->collect();
+    drone::util::LinuxSysInfo sys;
+    auto                      pm     = create_process_monitor(sys);
+    auto                      health = pm->collect();
 
-    // thermal_zone should be one of 0=normal, 1=warm, 2=hot, 3=critical
+    // thermal_zone: 0=normal, 2=warning, 3=critical (1 is reserved/unused)
     EXPECT_LE(health.thermal_zone, 3u);
 }
 
 TEST(ProcessMonitorTest, ImplementsInterface) {
-    auto             pm    = create_process_monitor("linux");
-    IProcessMonitor* iface = pm.get();
+    drone::util::LinuxSysInfo sys;
+    auto                      pm    = create_process_monitor(sys);
+    IProcessMonitor*          iface = pm.get();
     EXPECT_NE(iface, nullptr);
 
     auto health = iface->collect();
@@ -64,7 +81,8 @@ TEST(ProcessMonitorTest, ImplementsInterface) {
 }
 
 TEST(ProcessMonitorTest, MultipleSamples) {
-    auto pm = create_process_monitor("linux");
+    drone::util::LinuxSysInfo sys;
+    auto                      pm = create_process_monitor(sys);
     for (int i = 0; i < 3; ++i) {
         auto health = pm->collect();
         EXPECT_GE(health.cpu_usage_percent, 0.0f);

@@ -321,7 +321,7 @@ TEST(ConfigKeyRegistryTest, CommsKeys) {
 }
 
 TEST(ConfigKeyRegistryTest, SystemMonitorKeys) {
-    EXPECT_STREQ(drone::cfg_key::system_monitor::BACKEND, "system_monitor.backend");
+    EXPECT_STREQ(drone::cfg_key::system_monitor::PLATFORM, "system_monitor.platform");
     EXPECT_STREQ(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT,
                  "system_monitor.thresholds.cpu_warn_percent");
 }

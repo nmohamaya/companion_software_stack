@@ -2,6 +2,7 @@
     "_comment": "Default configuration for Drone Companion Stack",
     "log_level": "info",
     "ipc_backend": "zenoh",
+    "vehicle_id": "",
 
     "zenoh": {
         "_comment": "Zenoh IPC settings",
@@ -246,6 +247,7 @@
     },
 
     "system_monitor": {
+        "platform": "linux",
         "update_rate_hz": 1,
         "disk_check_interval_s": 10,
         "thresholds": {

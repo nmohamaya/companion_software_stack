@@ -15,6 +15,9 @@ namespace drone::cfg_key {
 // ═══════════════════════════════════════════════════════════
 inline constexpr const char* LOG_LEVEL   = "log_level";
 inline constexpr const char* IPC_BACKEND = "ipc_backend";
+/// Multi-vehicle namespace prefix. Must be [a-zA-Z0-9_-] or empty (no prefix).
+/// When set, all IPC topics are namespaced under "/<vehicle_id>/...".
+inline constexpr const char* VEHICLE_ID = "vehicle_id";
 
 // ═══════════════════════════════════════════════════════════
 // Zenoh IPC settings
@@ -273,8 +276,9 @@ inline constexpr const char* MANUAL_HOLDOFF_S =
 // P7 — System Monitor
 // ═══════════════════════════════════════════════════════════
 namespace system_monitor {
-inline constexpr const char* SECTION               = "system_monitor";
-inline constexpr const char* BACKEND               = "system_monitor.backend";
+inline constexpr const char* SECTION = "system_monitor";
+/// Platform ISysInfo backend. One of "linux", "jetson", "mock".
+inline constexpr const char* PLATFORM              = "system_monitor.platform";
 inline constexpr const char* UPDATE_RATE_HZ        = "system_monitor.update_rate_hz";
 inline constexpr const char* DISK_CHECK_INTERVAL_S = "system_monitor.disk_check_interval_s";
 
