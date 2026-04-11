@@ -4,6 +4,7 @@
 #include "ipc/ipc_types.h"
 #include "util/ilogger.h"
 
+#include <array>
 #include <string>
 
 namespace drone::planner {
@@ -60,9 +61,31 @@ public:
     void on_recovery_complete() { transition(MissionState::NAVIGATE); }
 
     /// Check if waypoint is reached (within acceptance radius).
-    [[nodiscard]] bool waypoint_reached(float px, float py, float pz, const Waypoint& wp) const {
-        float dx = px - wp.x, dy = py - wp.y, dz = pz - wp.z;
-        return (dx * dx + dy * dy + dz * dz) < (wp.radius * wp.radius);
+    /// When a planner snaps the goal to avoid occupied cells, pass the snapped
+    /// world position so the acceptance check uses the actual navigation target
+    /// rather than the original (possibly unreachable) waypoint position.
+    /// Checks BOTH the original and snapped positions — the waypoint is reached
+    /// if the drone is within acceptance radius of either.  This handles both
+    /// the snap-overshoot case (#394) and the unreachable-snap case where the
+    /// drone reaches the original position but D* can't pathfind to the snap.
+    /// The acceptance radius is always wp.radius regardless of snap.
+    [[nodiscard]] bool waypoint_reached(float px, float py, float pz, const Waypoint& wp,
+                                        const std::array<float, 3>* snapped_xyz = nullptr) const {
+        const float r_sq = wp.radius * wp.radius;
+
+        // Always check original waypoint position
+        const float odx = px - wp.x, ody = py - wp.y, odz = pz - wp.z;
+        if ((odx * odx + ody * ody + odz * odz) < r_sq) return true;
+
+        // Also check snapped position if provided
+        if (snapped_xyz) {
+            const float sdx = px - (*snapped_xyz)[0];
+            const float sdy = py - (*snapped_xyz)[1];
+            const float sdz = pz - (*snapped_xyz)[2];
+            if ((sdx * sdx + sdy * sdy + sdz * sdz) < r_sq) return true;
+        }
+
+        return false;
     }
 
     /// Load a simple mission (list of waypoints).

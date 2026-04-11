@@ -234,6 +234,15 @@ git diff origin/<base_branch>...HEAD | grep '^\+' | grep -oE 'cfg\.get<[^>]*>\("
    - Test files that don't contain any `TEST` or `TEST_F` macros (phantom test files)
    - `.cpp` files added but not included in any `CMakeLists.txt`
 
+9. **Safety guide compliance** — Scan the diff for patterns that violate the safety-critical C++ practices in CLAUDE.md:
+   - Raw owning pointers (`new`/`delete`) or `const float*` where `const std::array<float,N>*` or `std::span` is appropriate
+   - `memcpy`/`memset`/`memmove` instead of `std::copy`/`std::fill`/value semantics
+   - `std::shared_ptr` in safety-critical paths (acceptable for external library contracts)
+   - C-style casts, uninitialized variables, `using namespace` in headers
+   - Unguarded signed→unsigned casts on durations/sizes/counts
+   
+   This catches safety guide violations before a full review round. Flag as WARNING.
+
 ### CP2: Commit Approval [INTERACTIVE]
 
 ```
@@ -371,6 +380,20 @@ Collect Pass 2 results.
 
 **Step 5.4 — Merge findings** from both passes into a combined report. Mark skipped agents clearly.
 
+**Step 5.5 — Check for bot/CI review comments**
+
+Before presenting CP4, check for existing review comments from Copilot or other bots on the PR:
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<N>/comments --jq '.[].body' | head -50
+```
+
+Include any actionable bot comments in the CP4 findings presentation.
+
+**Step 5.6 — Post findings to PR**
+
+**Always** post the merged review findings as a PR comment — do not wait to be asked. Use a structured format with agent status table, P1/P2 details, and tech-lead assessment. This creates an audit trail on the PR.
+
 ### CP4: Review Findings [INTERACTIVE]
 
 ```
@@ -405,8 +428,8 @@ Note: 2 agents were skipped by user — those review areas are uncovered.
 
 User choices:
 - **accept** → proceed to CP5 (findings are acceptable as-is)
-- **fix** → spawn feature agent with findings, then re-validate, commit, push, and re-run reviews (FIX LOOP → back to Phase 5)
-- **fix \<numbers\>** → fix only specific issues by number (e.g., `fix 1 3`), accept the rest as-is
+- **fix** → spawn feature agent with findings, then re-validate, commit, push, and **re-run the FULL Phase 5 review (BOTH Pass 1 AND Pass 2)**. This is mandatory — do NOT skip Pass 2 or go directly to CP5 after fixes. The fix loop always returns to Step 5.1 (roster approval).
+- **fix \<numbers\>** → fix only specific issues by number (e.g., `fix 1 3`), accept the rest as-is. Still re-runs full Phase 5.
 - **back** → return to CP3
 - **reject** → go to ABORT
 
@@ -471,10 +494,14 @@ If the user chooses to abort at any checkpoint:
 
 ## Edge Cases
 
-- **Stale artifacts**: Before spawning the feature agent, check for and remove any existing `AGENT_REPORT.md` in the worktree from prior runs
+- **Stale artifacts**: Before spawning the feature agent, check for and remove any existing `AGENT_REPORT.md` in the worktree from prior runs. Also note: `AGENT_REPORT.md` from prior issues may exist in the base branch — after merge, verify the report content matches the current issue, not a stale one.
 - **Duplicate PRs**: Before creating a PR, check `gh pr list --head <branch> --state open` — if one exists, offer to update instead of creating a duplicate
 - **Push failures**: If push fails, go back to CP2 (commit step), not loop within push
 - **Review agent timeout**: If an agent takes too long, report which agents completed and which are pending. Present partial results and ask the user how to proceed.
 - **Base branch verification**: If `--base` specifies an integration branch, verify it exists with `git branch -r --list 'origin/<base>'`
+- **Context window management**: A full pipeline with 2 review rounds generates ~50K+ tokens of agent output. To avoid context exhaustion:
+  - Cap all review agent prompts to request results "under 200 words if clean"
+  - When reading agent task outputs, extract only the final summary — do not read full JSONL task files
+  - Summarize findings concisely at each checkpoint rather than including full agent output verbatim
 
 If the user provided arguments, use them as context: $ARGUMENTS

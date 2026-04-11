@@ -209,3 +209,75 @@ TEST(MissionFSMTest, NextWaypointAccessor) {
     EXPECT_TRUE(fsm.advance_waypoint());
     EXPECT_EQ(fsm.next_waypoint(), nullptr);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Snap offset acceptance — Issue #394
+// When the planner snaps a waypoint to avoid occupied cells,
+// waypoint_reached() must check against the snapped position,
+// not the original (possibly unreachable) waypoint.
+// ═══════════════════════════════════════════════════════════
+
+TEST(MissionFSMTest, WaypointReachedAtSnappedPosition) {
+    MissionFSM fsm;
+
+    // Original WP at (10, 0, 5) with acceptance_radius = 3.0m
+    Waypoint wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+
+    // Snapped position at (16, -2, 5) — 6.32m from original.
+    // Without snap override, drone at snapped position would NOT satisfy radius.
+    const std::array<float, 3> snap_xyz = {16.0f, -2.0f, 5.0f};
+
+    // Drone at the snapped position — should be reached when snap is provided
+    EXPECT_TRUE(fsm.waypoint_reached(16.0f, -2.0f, 5.0f, wp, &snap_xyz));
+
+    // Same position without snap override — should NOT be reached (6.32m > 3.0m)
+    EXPECT_FALSE(fsm.waypoint_reached(16.0f, -2.0f, 5.0f, wp, nullptr));
+
+    // Also verify the original waypoint check still works without snap
+    EXPECT_TRUE(fsm.waypoint_reached(10.0f, 0.0f, 5.0f, wp, nullptr));
+
+    // Drone near ORIGINAL position with snap provided — OR logic means
+    // the waypoint is still reached even though the drone isn't near the snap.
+    // This is the unreachable-snap regression case: D* can't pathfind to snap,
+    // but the drone is close to the original WP position.
+    EXPECT_TRUE(fsm.waypoint_reached(10.0f, 0.0f, 5.0f, wp, &snap_xyz));
+}
+
+TEST(MissionFSMTest, WaypointNotReachedFarFromBothOriginalAndSnapped) {
+    MissionFSM fsm;
+
+    Waypoint                   wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+    const std::array<float, 3> snap_xyz = {16.0f, -2.0f, 5.0f};
+
+    // Drone at (30, 30, 5) — far from both original and snapped positions
+    EXPECT_FALSE(fsm.waypoint_reached(30.0f, 30.0f, 5.0f, wp, &snap_xyz));
+}
+
+TEST(MissionFSMTest, WaypointReachedExplicitNullSnapMatchesDefault) {
+    MissionFSM fsm;
+
+    // Contract: explicit nullptr snap must behave identically to omitting the parameter
+    Waypoint wp{10.0f, 20.0f, 5.0f, 0.0f, 1.0f, 2.0f, false};
+
+    EXPECT_EQ(fsm.waypoint_reached(10.0f, 20.0f, 5.0f, wp, nullptr),
+              fsm.waypoint_reached(10.0f, 20.0f, 5.0f, wp));
+
+    EXPECT_EQ(fsm.waypoint_reached(15.0f, 25.0f, 5.0f, wp, nullptr),
+              fsm.waypoint_reached(15.0f, 25.0f, 5.0f, wp));
+}
+
+TEST(MissionFSMTest, WaypointReachedWithinRadiusOfSnap) {
+    MissionFSM fsm;
+
+    Waypoint                   wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+    const std::array<float, 3> snap_xyz = {16.0f, 0.0f, 5.0f};
+
+    // Drone ~2.24m from snapped position (√(2²+1²)) — within 3.0m radius
+    EXPECT_TRUE(fsm.waypoint_reached(18.0f, 1.0f, 5.0f, wp, &snap_xyz));
+
+    // Drone exactly at radius boundary (3.0m) — strict < means NOT reached
+    EXPECT_FALSE(fsm.waypoint_reached(19.0f, 0.0f, 5.0f, wp, &snap_xyz));
+
+    // Drone 4.0m from snapped position — outside 3.0m radius
+    EXPECT_FALSE(fsm.waypoint_reached(20.0f, 0.0f, 5.0f, wp, &snap_xyz));
+}

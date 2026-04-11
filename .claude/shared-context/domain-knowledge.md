@@ -133,6 +133,9 @@ Pipeline notifications sent via ntfy.sh include issue numbers, PR URLs, branch n
 ### DIAG logging must use spdlog::debug
 All per-tick and high-frequency diagnostic logging must use `spdlog::debug`, never `spdlog::info`. Gate with `spdlog::should_log()` to avoid string formatting overhead. PR #355 fixed this for `mission_state_tick.h`.
 
+### D* Lite z-band collapse under grid congestion (color_contour artifact)
+When `color_contour` produces noisy detections near an obstacle (occupied oscillates 5→696→1 in seconds), D* can fail to find paths at the flight altitude z-plane and drop to z=0 (ground level). At z=0 the grid has fewer occupied cells — creating a false passage through the obstacle's physical location. Observed in scenario 18 (perception_avoidance) Run 3 on 2026-04-11: drone was commanded through the green object at ground level. This is a **simulation-only issue** that resolves with a proper perception pipeline (YOLOv8, real radar, or depth-based detection) because the occupied cell oscillation disappears with stable detections. Do NOT add `z_band_cells` constraints or altitude floors to work around this — fix the perception pipeline instead.
+
 ### Don't fix code bugs by changing config
 When a test fails or behavior is wrong, investigate the root cause in code first. Never adjust config thresholds to mask a code bug — it will resurface in production with real sensors.
 

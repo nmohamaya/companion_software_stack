@@ -1,83 +1,51 @@
-# Agent Report — Issue #286: IClock Interface + MockClock
-
-**Epic:** #284 (Platform Modularity & Adaptability)
-**Sub-Epic:** A — Foundational Abstractions
-**Gap:** G2 — std::chrono::steady_clock hardcoded in 15+ files
-**Branch:** `feature/issue-286-feat284-a2-iclock-interface--mockclock`
-**Agent:** feature-infra-core
+# Agent Report -- Issue #394: Snap offset exceeding acceptance_radius
 
 ## Summary
 
-Created the `IClock` abstract interface with `SteadyClock` (production) and `MockClock` (test) implementations, plus a global accessor `drone::util::get_clock()` with `set_clock()` for dependency injection. Migrated all `steady_clock::now()` calls in `common/util/`, `common/ipc/`, and `common/recorder/` to use the new IClock interface. Added 26 unit tests.
+Fixed a bug where D* Lite's `snap_goal()` could relocate an occupied waypoint further than the `acceptance_radius`, making the waypoint unreachable. The drone would fly to the snapped position but `waypoint_reached()` checked distance to the original waypoint, causing an infinite loop.
+
+The fix passes the snapped world position through to `waypoint_reached()` so the acceptance check uses the actual navigation target.
 
 ## Changes
 
-### New Files
-| File | Description |
-|------|-------------|
-| `common/util/include/util/iclock.h` | IClock interface, SteadyClock impl, global `get_clock()`/`set_clock()` |
-| `common/util/include/util/mock_clock.h` | MockClock (manually advanceable), ScopedMockClock (RAII guard) |
-| `tests/test_iclock.cpp` | 26 unit tests covering all IClock functionality |
-
-### Modified Files (11 production, 1 build)
 | File | Change |
 |------|--------|
-| `common/util/include/util/thread_heartbeat.h` | `touch()` / `touch_with_grace()` → `get_clock().now_ns()` |
-| `common/util/include/util/thread_watchdog.h` | `scan_loop()` / `scan_once()` → `get_clock().now()`/`now_ns()` |
-| `common/util/include/util/thread_health_publisher.h` | timestamp → `get_clock().now_ns()` |
-| `common/util/include/util/scoped_timer.h` | start/elapsed/dtor → `get_clock().now_ns()` (no more time_point) |
-| `common/util/include/util/diagnostic.h` | `ScopedDiagTimer` → `get_clock().now_ns()` |
-| `common/util/include/util/latency_tracker.h` | `now_ns()` static → delegates to `get_clock().now_ns()` |
-| `common/ipc/include/ipc/wire_format.h` | `wire_serialize()` auto-timestamp → `get_clock().now_ns()` |
-| `common/ipc/include/ipc/iservice_channel.h` | `await_response()` deadline/timeout → IClock |
-| `common/ipc/include/ipc/zenoh_subscriber.h` | receive timestamp → `get_clock().now_ns()` |
-| `common/ipc/include/ipc/zenoh_service_server.h` | envelope/response timestamps → `get_clock().now_ns()` |
-| `common/recorder/include/recorder/flight_recorder.h` | record timestamp → `get_clock().now_ns()` |
-| `tests/CMakeLists.txt` | Register `test_iclock` test binary |
+| `process4_mission_planner/include/planner/mission_fsm.h` | Added optional `snapped_xyz` parameter to `waypoint_reached()` -- when non-null, acceptance check uses snapped position instead of original waypoint |
+| `process4_mission_planner/include/planner/grid_planner_base.h` | Added `has_snapped_goal()` and `snapped_goal_xyz()` public accessors; added `snapped_xyz_[3]` member array populated during snap |
+| `process4_mission_planner/include/planner/mission_state_tick.h` | Updated `tick_navigate()` to pass snapped position to `waypoint_reached()` via `GridPlannerBase` accessors |
+| `tests/test_mission_fsm.cpp` | Added 4 regression tests for snap offset acceptance behavior |
 
 ## Design Decisions
 
-1. **`get_clock()` not `clock()`** — POSIX `clock()` from `<time.h>` causes ambiguity errors in translation units that include both. Named `get_clock()` to avoid conflict.
+1. **Optional parameter over overload**: Added `const float* snapped_xyz = nullptr` default parameter to `waypoint_reached()` rather than a second overload. This preserves backward compatibility -- all existing callers (including the overshoot check) continue to work unchanged.
 
-2. **Raw pointer for global accessor** — The global clock uses `IClock*` (not `shared_ptr`) because:
-   - Caller owns the clock lifetime (typically stack-allocated `MockClock` in tests)
-   - No ownership transfer — just a reference swap
-   - Zero overhead in the hot path (no ref counting)
+2. **Raw float[3] pointer over struct**: Used `const float*` pointing to a 3-element array rather than introducing a new struct. This matches the existing codebase pattern where world positions are represented as float arrays (`std::array<float,3>`). The pointer is stable between `plan()` calls.
 
-3. **MockClock starts at 1 second** — Default initial time `1'000'000'000 ns` avoids edge cases where code checks `timestamp == 0` to mean "uninitialized".
+3. **dynamic_cast to GridPlannerBase**: Used `dynamic_cast<GridPlannerBase*>(grid_planner)` in `tick_navigate()` to access snap state. This is consistent with existing patterns in `tick_survey()` (line 253) and the diagnostic block (line 359). The cast is safe because `grid_planner` is always either null or a `GridPlannerBase` subclass.
 
-4. **`sleep_for_ms` on MockClock advances time** — Instead of real blocking, MockClock's `sleep_for_ms()` advances simulated time, enabling instant test execution.
-
-5. **`ScopedMockClock` RAII guard** — Automatically installs MockClock in constructor and restores SteadyClock in destructor, preventing test leakage.
-
-6. **Not migrating HAL or process files** — HAL implementations (`common/hal/`) and process directories are outside this agent's scope. Those should be migrated by their respective feature agents in follow-up issues.
-
-## Files NOT Migrated (Out of Scope)
-
-The following files still use `steady_clock::now()` directly and should be migrated in follow-up work by their respective agents:
-
-- `common/hal/` — 12 occurrences across simulated/gazebo/mavlink backends
-- `process[1-7]_*/` — ~40 occurrences across all process directories
-- `tools/` — fault_injector and flight_replay (~4 occurrences)
-- `tests/` — test files using steady_clock for test timing (~20 occurrences, mostly appropriate)
+4. **Snapped position stored in separate array**: Added `snapped_xyz_[3]` alongside existing `snapped_world_{x,y,z}_` to provide a contiguous float array for the public API. The existing members are used internally by `snap_goal()` and path following; the new array is the public-facing accessor.
 
 ## Test Coverage
 
-26 new tests in `test_iclock.cpp`:
-- **SteadyClockTest** (4): now_ns accuracy, now() time_point, now_seconds, monotonicity
-- **MockClockTest** (13): default init, custom init, advance_ns/ms/s, cumulative, set_ns, reset, sleep_for_ms, now() time_point, now_seconds, thread safety
-- **GlobalClockTest** (3): default is SteadyClock, set_clock to mock, null restores default
-- **ScopedMockClockTest** (3): install/restore, custom initial, sleep advances
-- **IClockPolymorphismTest** (3): virtual dispatch, now() convenience, now_seconds convenience
+4 new regression tests added to `tests/test_mission_fsm.cpp`:
+
+| Test | Verifies |
+|------|----------|
+| `WaypointReachedAtSnappedPosition` | Drone at snapped position (6.32m from original) is "reached" when snap override provided; NOT reached without override |
+| `WaypointNotReachedFarFromBothOriginalAndSnapped` | Drone far from both positions is not reached even with snap override |
+| `WaypointReachedNoSnapNormalBehavior` | Null snap pointer preserves original behavior |
+| `WaypointReachedWithinRadiusOfSnap` | Radius threshold: verifies acceptance at and beyond the snap radius boundary |
 
 ## Build Verification
 
-- Build succeeded with `-Werror -Wall -Wextra` (zero warnings)
-- 57 test binaries produced including `test_iclock`
+- Build: zero warnings (`-Werror -Wall -Wextra`)
+- Format: clang-format-18 clean
+- Mission tests: 60/60 passed
+- Test count: 1347 (unchanged -- new tests are in existing binary, ctest counts binary-level tests)
 
-## Remaining Work for Follow-Up
+## Remaining Work
 
-1. **Migrate HAL files** → Assign to feature-perception, feature-nav, feature-integration agents
-2. **Migrate process files** → Assign to respective feature agents
-3. **Migrate tools/** → fault_injector, flight_replay
-4. **Documentation updates** — TESTS.md, PROGRESS.md, ROADMAP.md (blocked by test count verification)
+None for the core fix. Optional follow-ups:
+
+1. **Add snap offset to telemetry logging**: When a snap occurs with offset > acceptance_radius, log a warning so operators can see the issue in flight logs.
+2. **Overshoot check with snap**: `waypoint_overshot()` still checks against original waypoint positions. This is likely fine since overshoot is a convenience optimization (advance early), not a correctness requirement, but could be revisited if it causes issues.

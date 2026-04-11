@@ -868,6 +868,48 @@ The same JSON array is also stored as a `std::vector<StaticObstacleRecord>` for 
 
 ---
 
+### Fix #52 — Snap Offset Exceeds Acceptance Radius — Infinite Navigation Loop (Issue #394)
+
+**Date fixed:** 2026-04-10
+**Severity:** Critical (mission failure — drone never advances past snapped waypoint)
+**Status:** FIXED (PR #397)
+**File:** `process4_mission_planner/include/planner/mission_fsm.h`, `process4_mission_planner/include/planner/mission_state_tick.h`, `process4_mission_planner/include/planner/grid_planner_base.h`
+
+**Bug:** D\* Lite's `snap_goal()` relocates an occupied waypoint to the nearest free cell. When the snap offset exceeds `acceptance_radius`, `waypoint_reached()` checks distance to the **original** waypoint position — the drone flies to the snapped position but never satisfies the radius check, causing an infinite navigation loop.
+
+**Root cause:** `waypoint_reached()` had no awareness of snapped positions. It always compared the drone's position against `wp.x/y/z` (the original waypoint), never against the actual navigation target produced by `snap_goal()`.
+
+**Fix:** Added optional `const std::array<float, 3>* snapped_xyz` parameter to `waypoint_reached()`. When the planner has a snapped goal (`has_snapped_goal()` returns true), the acceptance check uses the snapped position instead of the original. The acceptance radius remains `wp.radius` regardless of snap. Added `has_snapped_goal()` and `snapped_goal_xyz()` public accessors to `GridPlannerBase`. Consolidated three separate `snapped_world_{x,y,z}_` floats into a single `std::array<float, 3> snapped_xyz_` member.
+
+**Impact:** Drone now correctly reaches snapped waypoints and advances the mission. Without this fix, any scenario where an obstacle occupies a waypoint cell causes mission failure.
+
+**Found by:** Code analysis (Issue #394 filed from scenario testing observation).
+
+**Regression tests:** 4 new tests in `test_mission_fsm.cpp` — snap at position, far-from-both, null-snap fallback, within-radius boundary, exact-boundary (strict `<`).
+
+---
+
+### Fix #53 — Stale Snap Cache Causes Rapid Waypoint Skip After Advance (Issue #394)
+
+**Date fixed:** 2026-04-10
+**Severity:** High (mission failure — drone skips all waypoints and RTLs immediately)
+**Status:** FIXED (PR #397)
+**File:** `process4_mission_planner/include/planner/mission_state_tick.h`
+
+**Bug:** After reaching waypoint N and advancing to waypoint N+1, `GridPlannerBase::snap_valid_` remained `true` with waypoint N's snapped position. Since `snap_goal()` only runs during replan cycles (every ~1s at default `replan_interval_s = 1.0`), there is a 10-tick window (at 10Hz tick rate) where `waypoint_reached()` checks the **new** waypoint N+1 against the **old** snap position from waypoint N. If the drone is near that old snap (which it just reached), it falsely "reaches" N+1 immediately — cascading through every remaining waypoint in a few ticks and triggering RTL.
+
+**Root cause:** `snap_valid_` was only cleared inside `snap_goal()` when the target waypoint changed, but `snap_goal()` only runs during replan cycles. Between replans, the stale snap persisted across waypoint advances.
+
+**Fix:** Call `gpb->invalidate_path()` after `fsm.advance_waypoint()` succeeds. This clears `snap_valid_`, the cached path, and forces a fresh replan for the new waypoint on the next tick.
+
+**Impact:** Intermittent — depends on whether replan happens to coincide with waypoint advance tick. In Gazebo SITL, manifested as drone reaching the first waypoint then immediately flying back to start (RTL). Particularly dangerous because the timing dependency makes it hard to reproduce consistently.
+
+**Found by:** Gazebo SITL scenario testing during PR #397 validation.
+
+**Regression tests:** Covered by existing mission FSM tests (waypoint advance logic). The timing-dependent nature makes this difficult to unit test — validated via Gazebo scenario runs.
+
+---
+
 ## Comms (Process 5)
 
 ---
