@@ -6,11 +6,11 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstring>
 #include <string>
 #include <thread>
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 using namespace drone::ipc;
 

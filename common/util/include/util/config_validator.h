@@ -271,6 +271,16 @@ inline ConfigSchema common_schema() {
     s.optional<std::string>("log_level")
         .one_of({"trace", "debug", "info", "warn", "error", "critical"});
     s.optional<std::string>("ipc_backend").one_of({"zenoh"});  // "shm" removed in PR #151
+    // vehicle_id must match TopicResolver's allowed chars: [a-zA-Z0-9_-] or empty
+    s.optional<std::string>("vehicle_id")
+        .satisfies(
+            [](const std::string& id) {
+                return std::all_of(id.begin(), id.end(), [](char c) {
+                    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                           (c >= '0' && c <= '9') || c == '_' || c == '-';
+                });
+            },
+            "must be alphanumeric, dash, or underscore only (or empty)");
     return s;
 }
 

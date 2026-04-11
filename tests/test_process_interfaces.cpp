@@ -66,7 +66,7 @@ TEST(ProcessMonitorTest, ThermalZonePopulated) {
     auto                      pm     = create_process_monitor(sys);
     auto                      health = pm->collect();
 
-    // thermal_zone should be one of 0=normal, 1=warm, 2=hot, 3=critical
+    // thermal_zone: 0=normal, 2=warning, 3=critical (1 is reserved/unused)
     EXPECT_LE(health.thermal_zone, 3u);
 }
 

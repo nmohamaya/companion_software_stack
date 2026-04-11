@@ -21,10 +21,14 @@ class JetsonSysInfo final : public LinuxSysInfo {
 public:
     /// Jetson-specific: scan thermal zones for the CPU sensor (tegra_tsensor).
     /// Caches the zone index after first discovery to avoid 16+ open() calls per tick.
-    /// Falls back to generic zone0 if the CPU zone is not found.
+    /// Also caches "not found" (kZoneNotFound) so we don't rescan every tick on
+    /// non-Jetson hardware where the CPU zone name doesn't match.
     [[nodiscard]] float read_cpu_temp() const override {
-        // Use cached zone index if already discovered
-        if (cached_cpu_zone_idx_ >= 0) {
+        // Use cached result: either a found zone index or "not found" sentinel
+        if (cached_cpu_zone_idx_ != kZoneUncached) {
+            if (cached_cpu_zone_idx_ == kZoneNotFound) {
+                return LinuxSysInfo::read_cpu_temp();
+            }
             return read_thermal_zone(cached_cpu_zone_idx_);
         }
 
@@ -47,14 +51,17 @@ public:
             }
         }
 
-        // Fallback: use generic zone0 (same as LinuxSysInfo)
+        // Cache "not found" to avoid rescan on every tick
+        cached_cpu_zone_idx_ = kZoneNotFound;
         return LinuxSysInfo::read_cpu_temp();
     }
 
     [[nodiscard]] std::string name() const override { return "JetsonSysInfo"; }
 
 private:
-    mutable int cached_cpu_zone_idx_ = -1;
+    static constexpr int kZoneUncached        = -1;
+    static constexpr int kZoneNotFound        = -2;
+    mutable int          cached_cpu_zone_idx_ = kZoneUncached;
 
     [[nodiscard]] static float read_thermal_zone(int zone_idx) {
         char temp_path[128];
