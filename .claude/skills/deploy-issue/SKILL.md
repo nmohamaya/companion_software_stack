@@ -98,9 +98,49 @@ Read these files if they exist (skip if missing):
 - `tasks/agent-changelog.md` — recent completed work
 - `.claude/shared-context/domain-knowledge.md` — non-obvious pitfalls
 
-**Step 2.2 — Confirm feature agent launch**
+**Step 2.2 — Tech-lead planning (MANDATORY)**
 
-Present the agent that will be launched and ask for approval:
+Before spawning any feature agent, **you (as tech-lead) must plan the implementation**. Enter plan mode and produce a concrete implementation plan. This is critical — the feature agent receives your plan as its spec, not the raw issue body.
+
+Planning steps:
+1. Read the issue body carefully — understand acceptance criteria and constraints
+2. Read the relevant source files — identify what needs to change, where, and how
+3. Check for related code patterns — how similar features were implemented
+4. Read `domain-knowledge.md` for non-obvious pitfalls in the affected area
+5. Identify the specific files to create/modify, the approach, and the test strategy
+6. Consider edge cases, backwards compatibility, and safety implications
+
+Present the plan to the user:
+
+```
+═══ Implementation Plan — Issue #<N> ═══
+
+Approach: <1-2 sentence summary of the implementation strategy>
+
+Files to modify:
+  - <file_path> — <what changes and why>
+  - <file_path> — <what changes and why>
+
+New files:
+  - <file_path> — <purpose>
+
+Test strategy:
+  - <what tests to add/modify>
+
+Edge cases / risks:
+  - <anything non-obvious>
+
+Estimated scope: <small / medium / large>
+```
+
+User choices:
+- **approve** → proceed to agent launch (Step 2.3)
+- **modify** → user adjusts the plan, then re-present
+- **skip agent** → skip the feature agent entirely. The user wants to implement manually. Jump straight to CP1 with an empty diff (user will make changes themselves during the "changes" flow at CP1).
+
+**Step 2.3 — Confirm and spawn feature agent**
+
+Only after the plan is approved. Present the agent launch and ask for final confirmation:
 
 ```
 ═══ Agent Launch — Feature Implementation ═══
@@ -109,18 +149,14 @@ Agent:    <routed-role> (e.g., feature-perception)
 Model:    Opus
 Task:     Implement issue #<N> — <title>
 Isolation: worktree (separate git worktree)
-
-This agent will: implement the issue, write tests, build, and produce AGENT_REPORT.md.
+Plan:     <approved plan from Step 2.2>
 ```
 
 User choices:
-- **launch** → spawn the agent (proceed to Step 2.3)
-- **skip** → skip the feature agent entirely. The user wants to implement manually. Jump straight to CP1 with an empty diff (user will make changes themselves during the "changes" flow at CP1).
+- **launch** → spawn the agent
 - **override \<role\>** → launch a different agent role instead (e.g., user wants `feature-nav` instead of `feature-integration`)
 
-**Step 2.3 — Spawn feature agent**
-
-Only if the user approved in Step 2.2. Use the Agent tool:
+Use the Agent tool:
 
 ```
 Agent(
@@ -132,15 +168,17 @@ Agent(
 ```
 
 The prompt must include:
-1. The full issue body
-2. Cross-agent context from Step 2.1
-3. These pipeline instructions:
-   - Implement the issue fully (code, tests, build verification)
+1. **Your implementation plan from Step 2.2** — this is the primary spec. Be specific: name files, functions, patterns to follow, and the exact approach. The agent should execute your plan, not re-derive the architecture.
+2. The full issue body (for context and acceptance criteria)
+3. Cross-agent context from Step 2.1
+4. These pipeline instructions:
+   - Implement the issue following the plan above
    - Run `bash deploy/build.sh` and verify zero warnings
    - Run tests with `./tests/run_tests.sh` and verify pass rate
    - Update documentation as required by DEVELOPMENT_WORKFLOW.md
    - When done, write `AGENT_REPORT.md` in the worktree root with: Summary, Changes (table of files), Design Decisions, Test Coverage, Build Verification, Remaining Work
    - Do NOT create a PR or push — leave changes as local commits
+   - If you deviate from the plan, document why in AGENT_REPORT.md
 
 Wait for the agent to complete.
 
