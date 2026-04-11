@@ -24,6 +24,7 @@
 #include "ipc/ipublisher.h"
 #include "ipc/iservice_channel.h"
 #include "ipc/isubscriber.h"
+#include "ipc/topic_resolver.h"
 #include "ipc/zenoh_message_bus.h"
 #include "util/ilogger.h"
 
@@ -83,9 +84,10 @@ public:
     /// @return  Owning publisher — ready to call publish().
     template<typename T>
     [[nodiscard]] std::unique_ptr<IPublisher<T>> advertise(const std::string& topic) {
+        const auto resolved = resolver_.resolve(topic);
         return std::visit(
             [&](auto& b) -> std::unique_ptr<IPublisher<T>> {
-                return b->template advertise<T>(topic);
+                return b->template advertise<T>(resolved);
             },
             impl_);
     }
@@ -99,9 +101,10 @@ public:
     [[nodiscard]] std::unique_ptr<ISubscriber<T>> subscribe(const std::string& topic,
                                                             int                max_retries = 50,
                                                             int                retry_ms    = 200) {
+        const auto resolved = resolver_.resolve(topic);
         return std::visit(
             [&](auto& b) -> std::unique_ptr<ISubscriber<T>> {
-                return b->template subscribe<T>(topic, max_retries, retry_ms);
+                return b->template subscribe<T>(resolved, max_retries, retry_ms);
             },
             impl_);
     }
@@ -119,9 +122,10 @@ public:
     template<typename Req, typename Resp>
     [[nodiscard]] std::unique_ptr<IServiceClient<Req, Resp>> create_client(
         const std::string& service, uint64_t timeout_ms = 5000) {
+        const auto resolved = resolver_.resolve(service);
         return std::visit(
             [&](auto& b) -> std::unique_ptr<IServiceClient<Req, Resp>> {
-                return b->template create_client<Req, Resp>(service, timeout_ms);
+                return b->template create_client<Req, Resp>(resolved, timeout_ms);
             },
             impl_);
     }
@@ -130,9 +134,10 @@ public:
     template<typename Req, typename Resp>
     [[nodiscard]] std::unique_ptr<IServiceServer<Req, Resp>> create_server(
         const std::string& service) {
+        const auto resolved = resolver_.resolve(service);
         return std::visit(
             [&](auto& b) -> std::unique_ptr<IServiceServer<Req, Resp>> {
-                return b->template create_server<Req, Resp>(service);
+                return b->template create_server<Req, Resp>(resolved);
             },
             impl_);
     }
@@ -158,8 +163,17 @@ public:
         return std::holds_alternative<std::unique_ptr<ZenohMessageBus>>(impl_);
     }
 
+    // ─── Topic Resolver ──────────────────────────────────────
+
+    /// Set the topic resolver (for vehicle_id namespacing).
+    void set_topic_resolver(TopicResolver resolver) { resolver_ = std::move(resolver); }
+
+    /// Returns the current topic resolver.
+    [[nodiscard]] const TopicResolver& topic_resolver() const { return resolver_; }
+
 private:
     detail::BusVariant impl_;
+    TopicResolver      resolver_;
 };
 
 }  // namespace drone::ipc

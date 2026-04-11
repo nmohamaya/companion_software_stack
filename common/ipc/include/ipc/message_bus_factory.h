@@ -85,7 +85,16 @@ MessageBus create_message_bus(const ConfigT& cfg) {
         zenoh_json = net_cfg.to_json();
     }
 
-    return create_message_bus(backend, shm_pool_mb, zenoh_json);
+    auto bus = create_message_bus(backend, shm_pool_mb, zenoh_json);
+
+    // Apply vehicle_id topic namespacing if configured
+    const auto vehicle_id = cfg.template get<std::string>(drone::cfg_key::VEHICLE_ID, "");
+    if (!vehicle_id.empty()) {
+        bus.set_topic_resolver(TopicResolver(vehicle_id));
+        DRONE_LOG_INFO("[MessageBusFactory] Vehicle ID: '{}' — topics namespaced", vehicle_id);
+    }
+
+    return bus;
 }
 
 }  // namespace drone::ipc
