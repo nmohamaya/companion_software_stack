@@ -25,9 +25,11 @@ TEST(ProcessMonitorTest, FactoryCreatesLinux) {
     EXPECT_NE(pm, nullptr);
 }
 
-TEST(ProcessMonitorTest, FactoryThrowsOnUnknown) {
+TEST(ProcessMonitorTest, FactoryFallsBackOnUnknown) {
     drone::util::LinuxSysInfo sys;
-    EXPECT_THROW(create_process_monitor(sys, "windows_nt"), std::runtime_error);
+    auto                      pm = create_process_monitor(sys, "windows_nt");
+    EXPECT_NE(pm, nullptr);
+    EXPECT_EQ(pm->name(), "LinuxProcessMonitor");
 }
 
 TEST(ProcessMonitorTest, CollectReturnsValidHealth) {

@@ -30,11 +30,9 @@ inline drone::util::CpuTimes read_cpu_times() {
     return sys.read_cpu_times();
 }
 
-inline float compute_cpu_usage(const drone::util::CpuTimes& prev,
-                               const drone::util::CpuTimes& now) {
-    LinuxSysInfo sys;
-    return sys.compute_cpu_usage(prev, now);
-}
+// compute_cpu_usage: use drone::util::compute_cpu_usage() directly.
+// The free function in isys_info.h includes the underflow guard.
+using drone::util::compute_cpu_usage;
 
 inline drone::util::MemInfo read_meminfo() {
     LinuxSysInfo sys;

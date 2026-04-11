@@ -5,10 +5,14 @@
 // disk, battery) and produces a health summary.  Swapping the
 // implementation lets us move from Linux /proc to Jetson-specific APIs,
 // DBUS, or a remote health aggregator.
+//
+// thermal_zone is a composite system status field (not purely thermal):
+//   0 = normal, 2 = warning (CPU/mem/temp/battery), 3 = critical (temp/disk/battery).
+//   Zone 1 is reserved for future "warm" status and currently unused.
 #pragma once
 
 #include "ipc/ipc_types.h"
-#include "monitor/sys_info.h"
+#include "util/ilogger.h"
 #include "util/isys_info.h"
 
 #include <chrono>
@@ -24,13 +28,13 @@ public:
 
     /// Collect current system health metrics.
     /// @return A filled SystemHealth struct.
-    virtual drone::ipc::SystemHealth collect() = 0;
+    [[nodiscard]] virtual drone::ipc::SystemHealth collect() = 0;
 
     /// Incorporate external battery level into the next health reading.
     virtual void set_battery_percent(float /*battery*/) {}
 
     /// Human-readable name for logging.
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -48,7 +52,7 @@ public:
     /// @param disk_crit   Disk % threshold for CRITICAL status.
     /// @param batt_warn   Battery % threshold for WARNING status.
     /// @param batt_crit   Battery % threshold for CRITICAL status.
-    /// @param disk_interval  Check disk every N calls to reduce popen overhead.
+    /// @param disk_interval  Check disk every N calls to reduce overhead.
     LinuxProcessMonitor(drone::util::ISysInfo& sys_info, float cpu_warn = 90.0f,
                         float mem_warn = 90.0f, float temp_warn = 80.0f, float temp_crit = 95.0f,
                         float disk_crit = 98.0f, float batt_warn = 20.0f, float batt_crit = 10.0f,
@@ -65,12 +69,12 @@ public:
         prev_cpu_ = sys_info_.read_cpu_times();
     }
 
-    drone::ipc::SystemHealth collect() override {
+    [[nodiscard]] drone::ipc::SystemHealth collect() override {
         ++tick_;
 
-        // CPU
+        // CPU — use shared free function with underflow guard
         auto  now_cpu   = sys_info_.read_cpu_times();
-        float cpu_usage = sys_info_.compute_cpu_usage(prev_cpu_, now_cpu);
+        float cpu_usage = drone::util::compute_cpu_usage(prev_cpu_, now_cpu);
         prev_cpu_       = now_cpu;
 
         // Memory
@@ -95,15 +99,18 @@ public:
         health.cpu_temp_c           = temp;
         health.max_temp_c           = temp;
         health.disk_usage_percent   = disk_.usage_percent;
-        health.power_watts          = battery_ * 0.16f;  // rough estimate
 
-        // Thermal zone (overall status)
-        health.thermal_zone = 0;  // normal
+        static constexpr float kBatteryToPowerCoeff = 0.16f;
+        health.power_watts                          = battery_ * kBatteryToPowerCoeff;
+
+        // Composite status (thermal_zone):
+        //   0 = normal, 2 = warning, 3 = critical
+        health.thermal_zone = 0;
         if (cpu_usage > cpu_warn_ || mem.usage_percent > mem_warn_ || temp > temp_warn_) {
-            health.thermal_zone = 2;  // hot
+            health.thermal_zone = 2;
         }
         if (temp > temp_crit_ || disk_.usage_percent > disk_crit_) {
-            health.thermal_zone = 3;  // critical
+            health.thermal_zone = 3;
         }
         // Battery thresholds
         if (battery_ < batt_warn_) {
@@ -116,15 +123,19 @@ public:
         return health;
     }
 
-    std::string name() const override { return "LinuxProcessMonitor"; }
+    [[nodiscard]] std::string name() const override { return "LinuxProcessMonitor"; }
 
-    /// Incorporate battery level into the health reading.
     void set_battery_percent(float battery) override { battery_ = battery; }
 
 private:
     drone::util::ISysInfo& sys_info_;
-    float                  cpu_warn_, mem_warn_, temp_warn_, temp_crit_;
-    float                  disk_crit_, batt_warn_, batt_crit_;
+    float                  cpu_warn_;
+    float                  mem_warn_;
+    float                  temp_warn_;
+    float                  temp_crit_;
+    float                  disk_crit_;
+    float                  batt_warn_;
+    float                  batt_crit_;
     int                    disk_interval_;
 
     drone::util::CpuTimes prev_cpu_;
@@ -135,17 +146,19 @@ private:
 
 /// Factory — creates the appropriate monitor based on config.
 /// @param sys_info  Platform abstraction (caller owns lifetime).
-inline std::unique_ptr<IProcessMonitor> create_process_monitor(
+/// Unknown backends log a warning and fall back to LinuxProcessMonitor.
+[[nodiscard]] inline std::unique_ptr<IProcessMonitor> create_process_monitor(
     drone::util::ISysInfo& sys_info, const std::string& backend = "linux", float cpu_warn = 90.0f,
     float mem_warn = 90.0f, float temp_warn = 80.0f, float temp_crit = 95.0f,
     float disk_crit = 98.0f, float batt_warn = 20.0f, float batt_crit = 10.0f,
     int disk_interval = 10) {
-    if (backend == "linux" || backend == "jetson") {
-        return std::make_unique<LinuxProcessMonitor>(sys_info, cpu_warn, mem_warn, temp_warn,
-                                                     temp_crit, disk_crit, batt_warn, batt_crit,
-                                                     disk_interval);
+    if (backend != "linux" && backend != "jetson") {
+        DRONE_LOG_WARN("[ProcessMonitorFactory] Unknown backend '{}' — falling back to "
+                       "LinuxProcessMonitor",
+                       backend);
     }
-    throw std::runtime_error("Unknown process monitor: " + backend);
+    return std::make_unique<LinuxProcessMonitor>(sys_info, cpu_warn, mem_warn, temp_warn, temp_crit,
+                                                 disk_crit, batt_warn, batt_crit, disk_interval);
 }
 
 }  // namespace drone::monitor

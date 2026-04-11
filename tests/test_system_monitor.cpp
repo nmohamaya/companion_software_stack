@@ -201,9 +201,7 @@ TEST(ISysInfo, MockSysInfoReturnsInjectedValues) {
     EXPECT_FALSE(mock.is_process_alive(1234));
 }
 
-TEST(ISysInfo, MockSysInfoComputeCpuUsage) {
-    drone::util::MockSysInfo mock;
-
+TEST(ISysInfo, ComputeCpuUsageFreeFunction) {
     drone::util::CpuTimes prev{};
     prev.user = 100;
     prev.idle = 100;
@@ -213,8 +211,32 @@ TEST(ISysInfo, MockSysInfoComputeCpuUsage) {
     now.idle = 100;
 
     // delta_total = 300 - 200 = 100, delta_active = 100 - 0 = 100
-    float usage = mock.compute_cpu_usage(prev, now);
+    float usage = drone::util::compute_cpu_usage(prev, now);
     EXPECT_NEAR(usage, 100.0f, 0.1f);
+}
+
+TEST(ISysInfo, ComputeCpuUsageUnderflowGuard) {
+    // Simulate counter wrap: prev > now
+    drone::util::CpuTimes prev{};
+    prev.user = 500;
+    prev.idle = 500;
+
+    drone::util::CpuTimes now{};
+    now.user = 100;
+    now.idle = 100;
+
+    // prev.total() > now.total() — must clamp to 0, not underflow
+    float usage = drone::util::compute_cpu_usage(prev, now);
+    EXPECT_FLOAT_EQ(usage, 0.0f);
+}
+
+TEST(ISysInfo, ComputeCpuUsageIdenticalSamples) {
+    drone::util::CpuTimes t{};
+    t.user = 100;
+    t.idle = 200;
+
+    float usage = drone::util::compute_cpu_usage(t, t);
+    EXPECT_FLOAT_EQ(usage, 0.0f);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -337,5 +359,68 @@ TEST(ProcessMonitor, MockSysInfoBatteryWarning) {
     monitor.set_battery_percent(15.0f);
 
     auto health = monitor.collect();
-    EXPECT_GE(health.thermal_zone, 2u);  // WARNING due to battery < 20
+    EXPECT_EQ(health.thermal_zone, 2u);  // WARNING due to battery < 20
+}
+
+TEST(ProcessMonitor, MockSysInfoCpuWarningThreshold) {
+    drone::util::MockSysInfo mock;
+
+    // Initial CPU: all zeros
+    mock.injected_cpu_times = {};
+    // cpu_warn=90
+    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+
+    // Inject CPU that will produce >90% usage (95% active out of total)
+    mock.injected_cpu_times.user          = 950;
+    mock.injected_cpu_times.idle          = 50;
+    mock.injected_cpu_temp                = 40.0f;  // normal temp
+    mock.injected_meminfo.usage_percent   = 30.0f;  // normal mem
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    auto health = monitor.collect();
+    EXPECT_EQ(health.thermal_zone, 2u);  // WARNING due to CPU > 90%
+}
+
+TEST(ProcessMonitor, MockSysInfoMemWarningThreshold) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+    // mem_warn=90
+    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f);
+
+    mock.injected_meminfo.usage_percent   = 95.0f;  // above warn
+    mock.injected_cpu_temp                = 40.0f;
+    mock.injected_disk_info.usage_percent = 10.0f;
+
+    auto health = monitor.collect();
+    EXPECT_EQ(health.thermal_zone, 2u);  // WARNING due to mem > 90%
+}
+
+TEST(ProcessMonitor, MockSysInfoDiskCriticalThreshold) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+    // disk_crit=98
+    drone::monitor::LinuxProcessMonitor monitor(mock, 90.0f, 90.0f, 80.0f, 95.0f, 98.0f);
+
+    mock.injected_cpu_temp                = 40.0f;
+    mock.injected_meminfo.usage_percent   = 30.0f;
+    mock.injected_disk_info.usage_percent = 99.0f;  // above crit
+
+    auto health = monitor.collect();
+    EXPECT_EQ(health.thermal_zone, 3u);  // CRITICAL due to disk > 98%
+}
+
+TEST(ProcessMonitor, MockSysInfoDiskUsageAsserted) {
+    drone::util::MockSysInfo mock;
+    mock.injected_cpu_times = {};
+
+    drone::monitor::LinuxProcessMonitor monitor(mock);
+
+    mock.injected_cpu_temp                = 40.0f;
+    mock.injected_meminfo.usage_percent   = 30.0f;
+    mock.injected_disk_info.total_mb      = 500'000;
+    mock.injected_disk_info.free_mb       = 350'000;
+    mock.injected_disk_info.usage_percent = 30.0f;
+
+    auto health = monitor.collect();
+    EXPECT_FLOAT_EQ(health.disk_usage_percent, 30.0f);
 }

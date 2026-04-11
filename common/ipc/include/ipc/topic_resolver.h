@@ -7,16 +7,35 @@
 //
 // Empty vehicle_id (the default) produces IDENTICAL behavior to
 // pre-TopicResolver code — no prefix, no behavioral change.
+//
+// vehicle_id must be alphanumeric, dash, or underscore only — no
+// slashes, spaces, or special characters that could collide with
+// Zenoh key-expression syntax.
 #pragma once
 
+#include <algorithm>
+#include <stdexcept>
 #include <string>
 
 namespace drone::ipc {
+
+/// Validate that a vehicle_id contains only safe characters.
+/// Valid: [a-zA-Z0-9_-]. Empty string is always valid (means no prefix).
+[[nodiscard]] inline bool is_valid_vehicle_id(const std::string& id) {
+    return std::all_of(id.begin(), id.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '-';
+    });
+}
 
 /// Resolves IPC topic names with optional vehicle_id prefix.
 ///
 /// Empty vehicle_id = no prefix = fully backward compatible.
 /// Non-empty vehicle_id prepends "/<vehicle_id>" to every topic.
+///
+/// vehicle_id is validated at construction: only [a-zA-Z0-9_-] allowed.
+/// Invalid characters throw std::invalid_argument (caught at startup,
+/// not in the hot path).
 ///
 /// Example:
 ///   TopicResolver r("drone42");
@@ -27,10 +46,16 @@ namespace drone::ipc {
 ///   r_default.resolve("/slam_pose") -> "/slam_pose"  (unchanged)
 class TopicResolver {
 public:
-    explicit TopicResolver(std::string vehicle_id = "") : vehicle_id_(std::move(vehicle_id)) {}
+    explicit TopicResolver(std::string vehicle_id = "") : vehicle_id_(std::move(vehicle_id)) {
+        if (!vehicle_id_.empty() && !is_valid_vehicle_id(vehicle_id_)) {
+            throw std::invalid_argument(
+                "vehicle_id must be alphanumeric, dash, or underscore only; got: '" + vehicle_id_ +
+                "'");
+        }
+    }
 
     /// Resolve a base topic name to a namespaced topic.
-    /// @param base_topic  The base topic (e.g. "/slam_pose").
+    /// @param base_topic  The base topic (must start with '/', e.g. "/slam_pose").
     /// @return  Namespaced topic, or base_topic unchanged if no vehicle_id.
     [[nodiscard]] std::string resolve(const std::string& base_topic) const {
         if (vehicle_id_.empty()) {

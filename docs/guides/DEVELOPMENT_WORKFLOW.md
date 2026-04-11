@@ -1046,6 +1046,64 @@ python3 -m orchestrator cleanup --dry-run
 
 Removes branches already merged into `main` and their associated worktrees. Interactive — prompts for confirmation before deleting.
 
+## Troubleshooting: Git Worktrees
+
+### Stale Agent Worktrees Blocking Branch Creation
+
+**Symptom:** `git checkout -b feature/issue-XXX-desc` fails with `fatal: a branch named 'feature/issue-XXX-desc' already exists` or `fatal: 'feature/issue-XXX-desc' is already checked out at '/path/to/worktree'`.
+
+**Root cause:** When Claude Code Agent tool spawns subagents with `isolation: "worktree"`, it creates temporary worktrees under `.claude/worktrees/agent-<hash>/`. If an agent run is rejected, fails, or times out, the worktree directory may persist even though the work was discarded. Git tracks these worktrees in `.git/worktrees/` and considers the branch "in use" — preventing re-creation or checkout of that branch name anywhere.
+
+**Diagnosis:**
+
+```bash
+# List all active worktrees — look for agent-* entries
+git worktree list
+
+# Check if a specific branch is held by a worktree
+git worktree list | grep "feature/issue-XXX"
+```
+
+**Resolution:**
+
+```bash
+# 1. Remove the stale worktree directory
+rm -rf .claude/worktrees/agent-<hash>
+
+# 2. Prune git's worktree tracking (removes entries pointing to deleted dirs)
+git worktree prune
+
+# 3. If the branch itself is stale (no useful commits), delete it
+git branch -D feature/issue-XXX-desc
+
+# 4. Now you can re-create the branch
+git checkout -b feature/issue-XXX-desc origin/main
+```
+
+**Prevention:**
+
+- After a failed or rejected agent run, always check `git worktree list` for leftover entries
+- The `/deploy-issue` and `/deploy-wave` skills should clean up worktrees on ABORT — if they don't, file it as a bug
+- VS Code's Source Control panel may show stale worktrees in the sidebar — this is a visual indicator that cleanup is needed
+
+### Agent Worktree Changes Not Surviving Copy
+
+**Symptom:** After a subagent completes work in its worktree, copying tracked files back to the main repo shows them unchanged (identical to the base branch). New untracked files copy correctly.
+
+**Root cause:** Git worktrees share the same object store. When the agent modifies a tracked file but doesn't commit, the changes exist only as uncommitted working tree modifications. Switching branches or copying between worktrees loses these in-flight changes because `git checkout` restores the committed state.
+
+**Resolution:**
+
+- For **new files** (untracked): `cp` from the worktree works fine
+- For **modified tracked files**: either merge the agent's commit via `git merge <agent-branch>`, or apply the modifications manually using the Edit tool after reading the agent's version
+- Best practice: ensure the agent **commits** its changes before the orchestrator attempts to integrate them
+
+### Worktrees Visible in VS Code Source Control
+
+**Symptom:** VS Code shows multiple `agent-*` repositories in the Source Control sidebar, cluttering the UI.
+
+**Resolution:** Same as "Stale Agent Worktrees" above — `rm -rf` the worktree directories and run `git worktree prune`. VS Code will refresh the sidebar automatically.
+
 ---
 
 > **Living Document:** This workflow document is meant to evolve with the project.

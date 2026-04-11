@@ -8,7 +8,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <string>
 
 #include <sys/types.h>  // pid_t
@@ -29,8 +28,10 @@ struct CpuTimes {
     uint64_t softirq{0};
     uint64_t steal{0};
 
-    uint64_t total() const { return user + nice + system + idle + iowait + irq + softirq + steal; }
-    uint64_t active() const { return total() - idle - iowait; }
+    [[nodiscard]] uint64_t total() const {
+        return user + nice + system + idle + iowait + irq + softirq + steal;
+    }
+    [[nodiscard]] uint64_t active() const { return total() - idle - iowait; }
 };
 
 struct MemInfo {
@@ -44,6 +45,26 @@ struct DiskInfo {
     uint64_t free_mb{0};
     float    usage_percent{0.0f};
 };
+
+// ═══════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════
+
+/// Fallback CPU temperature when no thermal zone is readable (e.g. containers).
+inline constexpr float kFallbackCpuTempC = 42.0f;
+
+// ═══════════════════════════════════════════════════════════
+// Free function — shared CPU usage computation with underflow guard
+// ═══════════════════════════════════════════════════════════
+
+/// Compute CPU usage percentage from two CpuTimes samples.
+/// Returns 0.0f if samples are identical or if prev > now (counter wrap).
+[[nodiscard]] inline float compute_cpu_usage(const CpuTimes& prev, const CpuTimes& now) {
+    if (now.total() <= prev.total()) return 0.0f;
+    const uint64_t dt = now.total() - prev.total();
+    const uint64_t da = (now.active() >= prev.active()) ? (now.active() - prev.active()) : 0;
+    return 100.0f * static_cast<float>(da) / static_cast<float>(dt);
+}
 
 // ═══════════════════════════════════════════════════════════
 // ISysInfo — platform abstraction interface
@@ -60,35 +81,22 @@ public:
     ISysInfo& operator=(ISysInfo&&)      = default;
 
     /// Read aggregate CPU times from the platform.
-    virtual CpuTimes read_cpu_times() = 0;
-
-    /// Compute CPU usage percentage from two samples.
-    virtual float compute_cpu_usage(const CpuTimes& prev, const CpuTimes& now) = 0;
+    [[nodiscard]] virtual CpuTimes read_cpu_times() = 0;
 
     /// Read memory information from the platform.
-    virtual MemInfo read_meminfo() = 0;
+    [[nodiscard]] virtual MemInfo read_meminfo() = 0;
 
     /// Read CPU temperature in degrees Celsius.
-    virtual float read_cpu_temp() = 0;
+    [[nodiscard]] virtual float read_cpu_temp() = 0;
 
     /// Read root filesystem disk usage.
-    virtual DiskInfo read_disk_usage() = 0;
+    [[nodiscard]] virtual DiskInfo read_disk_usage() = 0;
 
     /// Check whether a given PID is alive.
-    virtual bool is_process_alive(pid_t pid) = 0;
+    [[nodiscard]] virtual bool is_process_alive(pid_t pid) = 0;
 
     /// Human-readable name for logging.
-    virtual std::string name() const = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
 };
-
-// ═══════════════════════════════════════════════════════════
-// Factory — creates the appropriate ISysInfo based on platform string.
-// Declared here, defined in isys_info_factory.h (after all impls).
-// ═══════════════════════════════════════════════════════════
-
-/// Create a platform-specific ISysInfo implementation.
-/// @param platform  One of "linux", "jetson", or "mock".
-/// @return Owning pointer to ISysInfo implementation.
-std::unique_ptr<ISysInfo> create_sys_info(const std::string& platform);
 
 }  // namespace drone::util

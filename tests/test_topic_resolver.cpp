@@ -95,6 +95,27 @@ static std::string unique_topic(const char* base) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Vehicle ID validation (negative tests)
+// ═══════════════════════════════════════════════════════════
+
+TEST(TopicResolverTest, RejectsSlashInVehicleId) {
+    EXPECT_THROW(TopicResolver("a/b"), std::invalid_argument);
+}
+
+TEST(TopicResolverTest, RejectsSpaceInVehicleId) {
+    EXPECT_THROW(TopicResolver("drone 1"), std::invalid_argument);
+}
+
+TEST(TopicResolverTest, RejectsDotInVehicleId) {
+    EXPECT_THROW(TopicResolver("../admin"), std::invalid_argument);
+}
+
+TEST(TopicResolverTest, AcceptsDashAndUnderscore) {
+    TopicResolver r("drone-42_alpha");
+    EXPECT_EQ(r.resolve("/topic"), "/drone-42_alpha/topic");
+}
+
+// ═══════════════════════════════════════════════════════════
 // MessageBus integration: default resolver (no prefix)
 // ═══════════════════════════════════════════════════════════
 
