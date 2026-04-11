@@ -411,6 +411,13 @@ private:
                     flight_state_.rtl_start_time = std::chrono::steady_clock::now();
                     flight_state_.nav_was_armed  = true;
                     fsm.on_rtl();
+                } else if (gpb) {
+                    // Invalidate snap cache on waypoint advance — the snap from
+                    // the previous waypoint must not carry over to the next one.
+                    // Without this, waypoint_reached() checks the new waypoint
+                    // against the old snap position until the next replan cycle
+                    // (~1s), causing false "reached" and rapid advancement.
+                    gpb->invalidate_path();
                 }
             }
         }

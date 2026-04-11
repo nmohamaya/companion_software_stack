@@ -235,6 +235,12 @@ TEST(MissionFSMTest, WaypointReachedAtSnappedPosition) {
 
     // Also verify the original waypoint check still works without snap
     EXPECT_TRUE(fsm.waypoint_reached(10.0f, 0.0f, 5.0f, wp, nullptr));
+
+    // Drone near ORIGINAL position with snap provided — OR logic means
+    // the waypoint is still reached even though the drone isn't near the snap.
+    // This is the unreachable-snap regression case: D* can't pathfind to snap,
+    // but the drone is close to the original WP position.
+    EXPECT_TRUE(fsm.waypoint_reached(10.0f, 0.0f, 5.0f, wp, &snap_xyz));
 }
 
 TEST(MissionFSMTest, WaypointNotReachedFarFromBothOriginalAndSnapped) {
