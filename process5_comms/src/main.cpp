@@ -325,6 +325,14 @@ int main(int argc, char* argv[]) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
+
+        // Log IPC latency summaries
+        traj_sub->log_latency_if_due(100);
+        fc_cmd_sub->log_latency_if_due(100);
+        pose_sub->log_latency_if_due(100);
+        mission_sub->log_latency_if_due(100);
+        fc_sub->log_latency_if_due(100);
+        if (fault_sub) fault_sub->log_latency_if_due(100);
     }
 
     // Notify systemd BEFORE joining threads — join may take time and

@@ -210,6 +210,9 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
             }
         }
 
+        // Log IPC latency periodically
+        stereo_sub.log_latency_if_due(100);
+
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
@@ -451,6 +454,10 @@ int main(int argc, char* argv[]) {
                            p.position.x(), p.position.y(), p.position.z(), p.quality,
                            vio_health_name(vio->health()));
         }
+
+        // Log IPC latency summaries
+        if (traj_sub) traj_sub->log_latency_if_due(100);
+        fault_sub->log_latency_if_due(100);
 
         // Report IMU buffer stats
         uint64_t drops = imu_ring_buffer.drop_count();

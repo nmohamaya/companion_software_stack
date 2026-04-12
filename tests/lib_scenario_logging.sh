@@ -230,6 +230,9 @@ generate_run_report() {
         # ── VIO Pipeline ──
         _report_vio_stats "$slam_log"
 
+        # ── IPC Latency ──
+        _report_ipc_latency "$run_dir"
+
         # ── Fault Events ──
         _report_fault_events "$mp_log"
 
@@ -756,6 +759,29 @@ _report_vio_stats() {
             echo "  - ${imu_gaps} IMU data gap(s) — Gazebo timing artifact (non-critical)"
         fi
     fi
+    echo ""
+}
+
+_report_ipc_latency() {
+    local run_dir="$1"
+    echo "IPC Latency"
+
+    local latency_lines
+    latency_lines=$(grep -ah '\[Latency\]' "$run_dir"/*.log 2>/dev/null | sort -t'—' -k2 || true)
+
+    if [[ -z "$latency_lines" ]]; then
+        echo "  (no latency data found in logs)"
+        echo ""
+        return
+    fi
+
+    # Parse and display: [Latency] topic — n=N, p50=Xus, p90=Xus, p99=Xus, max=Xus, mean=Xus
+    while IFS= read -r line; do
+        local topic stats
+        topic=$(echo "$line" | sed 's/.*\[Latency\] //;s/ —.*//')
+        stats=$(echo "$line" | sed 's/.*— //')
+        printf "  %-35s %s\n" "$topic" "$stats"
+    done <<< "$latency_lines"
     echo ""
 }
 

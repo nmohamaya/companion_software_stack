@@ -25,6 +25,10 @@ public:
 
     /// Returns the topic/channel name this subscriber reads from.
     [[nodiscard]] virtual const std::string& topic_name() const = 0;
+
+    /// Log latency summary if enough samples have been collected.
+    /// Default: no-op (returns false). ZenohSubscriber overrides with real tracking.
+    virtual bool log_latency_if_due(size_t /*min_samples*/ = 100) const { return false; }
 };
 
 }  // namespace drone::ipc

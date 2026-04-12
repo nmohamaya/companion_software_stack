@@ -98,7 +98,7 @@ public:
     [[nodiscard]] drone::util::LatencyTracker& latency_tracker() const { return latency_tracker_; }
 
     /// Log latency summary if enough samples have been collected.
-    bool log_latency_if_due(size_t min_samples = 100) const {
+    bool log_latency_if_due(size_t min_samples = 100) const override {
         if (!track_latency_) return false;
         return latency_tracker_.log_summary_if_due(key_expr_, min_samples);
     }
