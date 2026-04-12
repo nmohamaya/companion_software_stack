@@ -637,26 +637,21 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 | MAVSDK | >= 2.12 | MAVLink FC link (`MavlinkFCLink`) | Build from source (see docs) | Optional (`HAVE_MAVSDK`) |
 | Gazebo Harmonic | -- | Camera/IMU/odometry simulation backends | `apt install gz-harmonic` | Optional (`HAVE_GAZEBO`) |
 
-### Licensing Notes
+### License
 
-**YOLOv8 AGPL 3.0 (Important for Deployment)**
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL 3.0)** — see [LICENSE](LICENSE).
 
-The optional YOLOv8n model (`models/yolov8n.onnx`, downloaded on demand) is licensed under **AGPL 3.0** by Ultralytics.
+**What this means:**
+- You can freely use, modify, and distribute this software
+- If you deploy a modified version (including over a network), you must open-source your modifications under AGPL 3.0
+- A **commercial license** is available for organizations that need proprietary use — see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)
 
-**AGPL 3.0 requires source code disclosure to end-users if you distribute or deploy the software.**
+**Dependency licenses:**
+- **Zenoh** — EPL 2.0 (permissive for linking; copyleft only if you modify Zenoh itself)
+- **YOLOv8n** (optional) — AGPL 3.0 by Ultralytics (compatible with our AGPL 3.0; for commercial YOLOv8 use, contact Ultralytics)
+- All other dependencies (spdlog, Eigen3, nlohmann-json, GTest) are MIT/BSD/MPL — fully compatible
 
-**If using YOLOv8 in production, choose one:**
-1. **Obtain a [commercial Ultralytics license](https://ultralytics.com/license)** (recommended for commercial deployment)
-2. **Use `ColorContourDetector` instead** — project-original HSV-based detector, no license constraint
-3. **Replace with a permissively-licensed model** (e.g., YOLO-World, custom model trained on your data)
-
-During development with simulated backends, YOLOv8 is optional and the license constraint does not apply.
-
-**Zenoh EPL 2.0**
-
-Zenoh is licensed under **EPL 2.0** (Eclipse Public License 2.0), which is permissive but copyleft-lite. Since this stack only *links* Zenoh without modifying it, EPL 2.0 compliance is straightforward. If you modify Zenoh itself, you must disclose those changes under EPL 2.0.
-
-For full license details, see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+For full dependency license details, see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## Development Workflow
 
