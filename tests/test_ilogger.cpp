@@ -7,6 +7,7 @@
 #include "util/capturing_logger.h"
 #include "util/ilogger.h"
 #include "util/null_logger.h"
+#include "util/spdlog_logger.h"
 
 #include <memory>
 #include <string>

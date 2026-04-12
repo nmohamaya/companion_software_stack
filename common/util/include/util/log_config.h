@@ -1,10 +1,15 @@
 // common/util/include/util/log_config.h
 // Logging initialisation using spdlog.
+//
+// After configuring spdlog sinks and levels, installs a SpdlogLogger as the
+// global ILogger so that all DRONE_LOG_* macros route through spdlog.
 #pragma once
 #include "util/ilogger.h"
 #include "util/json_log_sink.h"
+#include "util/spdlog_logger.h"
 
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 #include <spdlog/sinks/rotating_file_sink.h>
@@ -58,6 +63,11 @@ inline void init(const std::string& process_name, const std::string& log_dir,
             logger->set_level(spdlog::level::info);
 
         spdlog::set_default_logger(logger);
+
+        // Install SpdlogLogger as the global ILogger so DRONE_LOG_* macros
+        // route through the spdlog logger we just configured.
+        drone::log::set_logger(std::make_unique<drone::log::SpdlogLogger>());
+
         DRONE_LOG_INFO("Logger '{}' initialised — level={}, json={}", process_name, level_str,
                        json_mode ? "on" : "off");
     } catch (const spdlog::spdlog_ex& ex) {

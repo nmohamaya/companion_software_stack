@@ -6,7 +6,9 @@
 //   - Global accessor: drone::log::logger() / set_logger()
 //   - DRONE_LOG_DEBUG/INFO/WARN/ERROR/CRITICAL macros (fmt-style)
 //
-// Default implementation: SpdlogLogger (delegates to spdlog default logger).
+// Default fallback: StderrFallbackLogger (writes to stderr, no spdlog needed).
+// Production logger: SpdlogLogger (in spdlog_logger.h) — installed via
+//   init_process() / LogConfig::init() during startup.
 // Test implementations: NullLogger, CapturingLogger (separate headers).
 //
 // Usage:
@@ -26,13 +28,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 
-#include <spdlog/fmt/fmt.h>
-#include <spdlog/spdlog.h>
+#include <fmt/format.h>
 
 namespace drone::log {
 
@@ -67,29 +69,21 @@ public:
     ILogger& operator=(ILogger&&)      = delete;
 };
 
-// ── SpdlogLogger (default) ─────────────────────────────────
-/// Production logger that delegates to spdlog's default logger.
-/// This is the default when no custom logger is installed.
-class SpdlogLogger final : public ILogger {
+// ── StderrFallbackLogger ───────────────────────────────────
+/// Minimal fallback logger that writes to stderr.  Used as the
+/// default before SpdlogLogger is installed via init_process().
+/// Has no dependency on spdlog — keeps ilogger.h decoupled.
+class StderrFallbackLogger final : public ILogger {
 public:
     void log(Level level, std::string_view msg) override {
-        spdlog::log(to_spdlog_level(level), "{}", msg);
+        static constexpr const char* kLevelNames[] = {"DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"};
+        const auto                   idx           = static_cast<uint8_t>(level);
+        const char*                  name          = (idx < 5) ? kLevelNames[idx] : "UNKNOWN";
+        std::fprintf(stderr, "[%s] %.*s\n", name, static_cast<int>(msg.size()), msg.data());
     }
 
-    [[nodiscard]] bool should_log(Level level) const override {
-        return spdlog::should_log(to_spdlog_level(level));
-    }
-
-private:
-    static spdlog::level::level_enum to_spdlog_level(Level level) {
-        switch (level) {
-            case Level::Debug: return spdlog::level::debug;
-            case Level::Info: return spdlog::level::info;
-            case Level::Warn: return spdlog::level::warn;
-            case Level::Error: return spdlog::level::err;
-            case Level::Critical: return spdlog::level::critical;
-        }
-        return spdlog::level::info;  // unreachable, but silences -Wreturn-type
+    [[nodiscard]] bool should_log(Level /*level*/) const override {
+        return true;  // Fallback logger emits everything.
     }
 };
 
@@ -126,9 +120,10 @@ inline std::atomic<ILogger*>& logger_ptr() {
     return ptr;
 }
 
-/// Process-wide default SpdlogLogger instance.
+/// Process-wide fallback logger (stderr).  Used when no SpdlogLogger
+/// has been installed yet (before init_process) or after reset_logger().
 inline ILogger& default_logger() {
-    static SpdlogLogger instance;
+    static StderrFallbackLogger instance;
     return instance;
 }
 
@@ -142,8 +137,8 @@ inline ILogger& logger() {
     return detail::default_logger();
 }
 
-/// Install a custom logger (e.g. CapturingLogger for tests).
-/// Pass nullptr or call reset_logger() to revert to default.
+/// Install a custom logger (e.g. SpdlogLogger, CapturingLogger).
+/// Pass nullptr or call reset_logger() to revert to fallback.
 /// Thread-safe: serialized by mutex, atomic store visible to all readers.
 inline void set_logger(std::unique_ptr<ILogger> l) {
     std::lock_guard<std::mutex> lock(detail::logger_mutex());
@@ -151,7 +146,7 @@ inline void set_logger(std::unique_ptr<ILogger> l) {
     detail::logger_ptr().store(detail::logger_owner().get(), std::memory_order_release);
 }
 
-/// Revert to the default SpdlogLogger.
+/// Revert to the StderrFallbackLogger.
 inline void reset_logger() {
     std::lock_guard<std::mutex> lock(detail::logger_mutex());
     detail::logger_owner().reset();
