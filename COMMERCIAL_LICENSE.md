@@ -31,6 +31,7 @@ For organizations that need to use this software **without the AGPL 3.0 copyleft
 
 For commercial licensing inquiries, please contact:
 
+- **LinkedIn:** [Naveen Mohanan](https://www.linkedin.com/in/naveen-mohanan)
 - **GitHub:** [@nmohamaya](https://github.com/nmohamaya)
 - **Repository:** [companion_software_stack](https://github.com/nmohamaya/companion_software_stack)
 
