@@ -19,6 +19,10 @@
 
 namespace drone::util {
 
+/// Jetson-specific ISysInfo — inherits LinuxSysInfo, overrides CPU thermal zone.
+/// Thread safety: NOT thread-safe — single-thread use only (see ISysInfo).
+/// The atomic cached_cpu_zone_idx_ is safe for concurrent reads after first
+/// write, but the mutable ifstreams are not protected.
 class JetsonSysInfo final : public LinuxSysInfo {
 public:
     /// Jetson-specific: scan thermal zones for the CPU sensor (tegra_tsensor).

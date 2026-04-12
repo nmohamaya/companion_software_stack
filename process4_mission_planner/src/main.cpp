@@ -446,12 +446,12 @@ int main(int argc, char* argv[]) {
         }
 
         // Log IPC latency summaries
-        pose_sub->log_latency_if_due(100);
-        obj_sub->log_latency_if_due(100);
-        fc_state_sub->log_latency_if_due(100);
-        if (gcs_sub) gcs_sub->log_latency_if_due(100);
-        if (mission_upload_sub) mission_upload_sub->log_latency_if_due(100);
-        if (health_sub) health_sub->log_latency_if_due(100);
+        pose_sub->log_latency_if_due();
+        obj_sub->log_latency_if_due();
+        fc_state_sub->log_latency_if_due();
+        if (gcs_sub) gcs_sub->log_latency_if_due();
+        if (mission_upload_sub) mission_upload_sub->log_latency_if_due();
+        if (health_sub) health_sub->log_latency_if_due();
 
         ++loop_tick;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));

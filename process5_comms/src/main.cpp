@@ -327,12 +327,12 @@ int main(int argc, char* argv[]) {
         health_publisher.publish_snapshot();
 
         // Log IPC latency summaries
-        traj_sub->log_latency_if_due(100);
-        fc_cmd_sub->log_latency_if_due(100);
-        pose_sub->log_latency_if_due(100);
-        mission_sub->log_latency_if_due(100);
-        fc_sub->log_latency_if_due(100);
-        if (fault_sub) fault_sub->log_latency_if_due(100);
+        traj_sub->log_latency_if_due();
+        fc_cmd_sub->log_latency_if_due();
+        pose_sub->log_latency_if_due();
+        mission_sub->log_latency_if_due();
+        fc_sub->log_latency_if_due();
+        if (fault_sub) fault_sub->log_latency_if_due();
     }
 
     // Notify systemd BEFORE joining threads — join may take time and

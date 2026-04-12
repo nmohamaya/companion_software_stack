@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace drone::util {
@@ -69,16 +70,18 @@ public:
     }
 
     /// Compute summary statistics over the current window.
-    /// Sorts a copy of the internal buffer — O(n log n).
+    /// Sorts a snapshot in the pre-allocated scratch buffer — O(n log n),
+    /// zero heap allocation after the first call.
     /// Must not be called concurrently with record() or reset().
     [[nodiscard]] LatencySummary summary() const {
         LatencySummary s;
         size_t         n = std::min(total_count_, samples_.size());
         if (n == 0) return s;
 
-        // Take a snapshot of the ring buffer
-        std::vector<uint64_t> sorted(samples_.begin(), samples_.begin() + n);
-        std::sort(sorted.begin(), sorted.end());
+        // Reuse scratch buffer to avoid per-call heap allocation
+        sort_scratch_.assign(samples_.begin(), samples_.begin() + n);
+        std::sort(sort_scratch_.begin(), sort_scratch_.end());
+        const auto& sorted = sort_scratch_;
 
         s.count       = total_count_;
         s.window_size = n;
@@ -119,7 +122,7 @@ public:
 
     /// Log a summary line if enough samples have been collected.
     /// Returns true if a summary was logged (and the tracker was reset).
-    bool log_summary_if_due(const std::string& topic_name, size_t min_samples = 10) {
+    bool log_summary_if_due(std::string_view topic_name, size_t min_samples = 10) {
         if (total_count_ < min_samples) return false;
 
         auto s = summary();
@@ -133,10 +136,11 @@ public:
     }
 
 private:
-    size_t                mask_;             ///< Bitmask for power-of-2 ring indexing.
-    std::vector<uint64_t> samples_;          ///< Ring buffer of latency samples (ns).
-    size_t                write_pos_   = 0;  ///< Next write position (wraps via mask_).
-    size_t                total_count_ = 0;  ///< Total samples recorded (may exceed capacity).
+    size_t                mask_;                  ///< Bitmask for power-of-2 ring indexing.
+    std::vector<uint64_t> samples_;               ///< Ring buffer of latency samples (ns).
+    size_t                write_pos_   = 0;       ///< Next write position (wraps via mask_).
+    size_t                total_count_ = 0;       ///< Total samples recorded (may exceed capacity).
+    mutable std::vector<uint64_t> sort_scratch_;  ///< Reusable scratch for summary() sort.
 
     /// Round up to next power of two.
     static size_t next_power_of_two(size_t n) {

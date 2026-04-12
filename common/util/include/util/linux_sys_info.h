@@ -17,6 +17,8 @@
 
 namespace drone::util {
 
+/// Standard Linux ISysInfo — reads /proc and /sys via cached file handles.
+/// Thread safety: NOT thread-safe — single-thread use only (see ISysInfo).
 class LinuxSysInfo : public ISysInfo {
 public:
     [[nodiscard]] CpuTimes read_cpu_times() const override {
@@ -57,8 +59,8 @@ public:
     }
 
     [[nodiscard]] float read_cpu_temp() const override {
-        // Try cached handle first (set after first successful open)
-        if (cached_thermal_.is_open()) {
+        // Reuse cached handle if a path was previously discovered
+        if (cached_thermal_path_ != nullptr) {
             if (rewind_or_open(cached_thermal_, cached_thermal_path_)) {
                 int millideg = 0;
                 cached_thermal_ >> millideg;
@@ -72,8 +74,7 @@ public:
             "/sys/class/thermal/thermal_zone0/temp",
         };
         for (const auto* path : paths) {
-            cached_thermal_.open(path);
-            if (cached_thermal_.is_open()) {
+            if (rewind_or_open(cached_thermal_, path)) {
                 cached_thermal_path_ = path;
                 int millideg         = 0;
                 cached_thermal_ >> millideg;
@@ -113,7 +114,8 @@ public:
 protected:
     /// Rewind a cached ifstream to the beginning, or (re)open it on failure.
     /// Returns true if the stream is ready for reading.
-    static bool rewind_or_open(std::ifstream& stream, const char* path) {
+    /// @note Not thread-safe — caller must ensure single-threaded access.
+    bool rewind_or_open(std::ifstream& stream, const char* path) const {
         if (stream.is_open()) {
             stream.clear();
             stream.seekg(0);

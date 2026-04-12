@@ -205,9 +205,9 @@ int main(int argc, char* argv[]) {
         }
 
         // Log IPC latency summaries
-        cmd_sub->log_latency_if_due(100);
-        detections_sub->log_latency_if_due(100);
-        pose_sub->log_latency_if_due(100);
+        cmd_sub->log_latency_if_due();
+        detections_sub->log_latency_if_due();
+        pose_sub->log_latency_if_due();
 
         ++cycle_count;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));

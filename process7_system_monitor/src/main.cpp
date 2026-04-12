@@ -411,8 +411,8 @@ int main(int argc, char* argv[]) {
         thread_health_publisher.publish_snapshot();
 
         // Log IPC latency summaries
-        if (fc_sub) fc_sub->log_latency_if_due(100);
-        if (fault_sub) fault_sub->log_latency_if_due(100);
+        if (fc_sub) fc_sub->log_latency_if_due();
+        if (fault_sub) fault_sub->log_latency_if_due();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

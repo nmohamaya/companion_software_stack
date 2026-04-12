@@ -355,7 +355,7 @@ TEST(ZenohSubscriberBranch, TopicName) {
 TEST(ZenohSubscriberBranch, LogLatencyIfDueNoSamples) {
     ZenohSubscriber<Pose> sub("drone/test/cov_latency_nosamp", true);
     // No messages received yet → should return false (not enough samples)
-    EXPECT_FALSE(sub.log_latency_if_due(100));
+    EXPECT_FALSE(sub.log_latency_if_due());
 }
 
 // ═══════════════════════════════════════════════════════════

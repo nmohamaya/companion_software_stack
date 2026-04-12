@@ -28,6 +28,8 @@ public:
 
     /// Log latency summary if enough samples have been collected.
     /// Default: no-op (returns false). ZenohSubscriber overrides with real tracking.
+    /// @return true if a summary was logged. Return value is informational
+    ///         (fire-and-forget pattern) — not [[nodiscard]].
     virtual bool log_latency_if_due(size_t /*min_samples*/ = 100) const { return false; }
 };
 

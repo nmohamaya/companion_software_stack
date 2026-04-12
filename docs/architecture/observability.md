@@ -134,8 +134,8 @@ Log a periodic summary in your health-check loop:
 ```cpp
 while (g_running.load(std::memory_order_relaxed)) {
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    video_sub->log_latency_if_due(100);   // log after ≥100 samples
-    det_sub->log_latency_if_due(100);
+    video_sub->log_latency_if_due();   // log after ≥100 samples
+    det_sub->log_latency_if_due();
 }
 ```
 

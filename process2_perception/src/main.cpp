@@ -72,7 +72,7 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
                                output_queue.write_count());
             }
             // Log IPC latency periodically
-            video_sub.log_latency_if_due(100);
+            video_sub.log_latency_if_due();
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
@@ -505,8 +505,8 @@ int main(int argc, char* argv[]) {
         health_publisher.publish_snapshot();
 
         // Log IPC latency summaries
-        pose_sub->log_latency_if_due(100);
-        radar_sub->log_latency_if_due(100);
+        pose_sub->log_latency_if_due();
+        radar_sub->log_latency_if_due();
 
         DRONE_LOG_INFO("[HealthCheck] perception alive");
     }
