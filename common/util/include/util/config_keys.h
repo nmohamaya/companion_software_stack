@@ -318,6 +318,8 @@ inline constexpr const char* SECTION = "system_monitor";
 inline constexpr const char* PLATFORM              = "system_monitor.platform";
 inline constexpr const char* UPDATE_RATE_HZ        = "system_monitor.update_rate_hz";
 inline constexpr const char* DISK_CHECK_INTERVAL_S = "system_monitor.disk_check_interval_s";
+/// Battery-to-power linear coefficient (watts per %).
+inline constexpr const char* POWER_COEFF = "system_monitor.power_coeff";
 
 namespace thresholds {
 inline constexpr const char* CPU_WARN_PERCENT = "system_monitor.thresholds.cpu_warn_percent";

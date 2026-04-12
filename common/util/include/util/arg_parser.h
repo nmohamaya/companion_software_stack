@@ -25,7 +25,9 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
             std::printf("  --sim              Run in simulation mode\n");
             std::printf("  --json-logs        Emit structured JSON log lines\n");
             std::printf("  --supervised       P7: fork+exec child processes (supervisor mode)\n");
-            std::printf("  --skip-validation  Skip config schema validation (development only)\n");
+#ifndef NDEBUG
+            std::printf("  --skip-validation  Skip config schema validation (Debug builds only)\n");
+#endif
             std::printf("  --help             Show this help\n");
         } else if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             args.config_path = argv[++i];
@@ -38,7 +40,17 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
         } else if (std::strcmp(argv[i], "--supervised") == 0) {
             args.supervised = true;
         } else if (std::strcmp(argv[i], "--skip-validation") == 0) {
+            // Security guard: --skip-validation bypasses all config schema checks,
+            // so it is disabled in Release/production builds (NDEBUG is defined by
+            // CMake -DCMAKE_BUILD_TYPE=Release). Only Debug builds honour the flag.
+            // Use case: development iteration where config is intentionally partial.
+#ifdef NDEBUG
+            std::fprintf(stderr,
+                         "[WARN] --skip-validation ignored in Release builds (recompile with "
+                         "-DCMAKE_BUILD_TYPE=Debug to enable)\n");
+#else
             args.skip_validation = true;
+#endif
         }
     }
     return args;

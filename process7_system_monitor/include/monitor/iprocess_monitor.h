@@ -27,14 +27,16 @@ namespace drone::monitor {
 // ─────────────────────────────────────────────────────────────
 
 struct MonitorThresholds {
-    float cpu_warn{90.0f};    ///< CPU % threshold for WARNING status.
-    float mem_warn{90.0f};    ///< Memory % threshold for WARNING status.
-    float temp_warn{80.0f};   ///< Temperature (C) threshold for WARNING status.
-    float temp_crit{95.0f};   ///< Temperature (C) threshold for CRITICAL status.
-    float disk_crit{98.0f};   ///< Disk % threshold for CRITICAL status.
-    float batt_warn{20.0f};   ///< Battery % threshold for WARNING status.
-    float batt_crit{10.0f};   ///< Battery % threshold for CRITICAL status.
-    int   disk_interval{10};  ///< Check disk every N calls to reduce overhead.
+    float cpu_warn{90.0f};     ///< CPU % threshold for WARNING status.
+    float mem_warn{90.0f};     ///< Memory % threshold for WARNING status.
+    float temp_warn{80.0f};    ///< Temperature (C) threshold for WARNING status.
+    float temp_crit{95.0f};    ///< Temperature (C) threshold for CRITICAL status.
+    float disk_crit{98.0f};    ///< Disk % threshold for CRITICAL status.
+    float batt_warn{20.0f};    ///< Battery % threshold for WARNING status.
+    float batt_crit{10.0f};    ///< Battery % threshold for CRITICAL status.
+    float power_coeff{0.16f};  ///< Battery-to-power linear coefficient (watts per %).
+    int   disk_interval{
+        10};  ///< Check disk every N ticks (= disk_check_interval_s * update_rate_hz).
 };
 
 /// Abstract system health monitor.
@@ -99,9 +101,7 @@ public:
         health.disk_usage_percent   = disk_.usage_percent;
 
         // Battery-to-power estimate (linear approximation).
-        // TODO(config): source from cfg_key when a real power sensor is available.
-        static constexpr float kBatteryToPowerCoeff = 0.16f;
-        health.power_watts                          = battery_ * kBatteryToPowerCoeff;
+        health.power_watts = battery_ * thresholds_.power_coeff;
 
         // Composite status (thermal_zone):
         //   0 = normal, 2 = warning, 3 = critical

@@ -1,7 +1,7 @@
 // common/util/include/util/spdlog_logger.h
 // Production ILogger implementation that delegates to spdlog.
 //
-// Separated from ilogger.h (Issue #385) so that the 60+ files including
+// Separated from ilogger.h (Issue #384) so that the 60+ files including
 // ilogger.h do not transitively depend on spdlog headers.
 //
 // Include this header only where SpdlogLogger is explicitly constructed:
@@ -20,7 +20,7 @@ namespace drone::log {
 
 // ── Level conversion ───────────────────────────────────────
 /// Map drone::log::Level to spdlog::level::level_enum.
-inline spdlog::level::level_enum to_spdlog_level(Level level) {
+[[nodiscard]] inline spdlog::level::level_enum to_spdlog_level(Level level) {
     switch (level) {
         case Level::Debug: return spdlog::level::debug;
         case Level::Info: return spdlog::level::info;

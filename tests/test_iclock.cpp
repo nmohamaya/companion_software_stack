@@ -184,7 +184,7 @@ TEST(GlobalClockTest, SetClockToMock) {
     EXPECT_EQ(get_clock().now_ns(), 52'000'000ULL);
 
     // Restore default
-    set_clock(nullptr);
+    reset_clock();
 
     // Now it should be steady_clock again — verify with before/after window
     const auto before_restore =
@@ -205,7 +205,7 @@ TEST(GlobalClockTest, SetClockNullRestoresDefault) {
     set_clock(&mock);
     EXPECT_EQ(get_clock().now_ns(), 1ULL);
 
-    set_clock(nullptr);
+    reset_clock();
     // Default SteadyClock — verify with before/after window
     const auto before =
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -329,7 +329,7 @@ TEST(ClockRCUTest, SetClockOwningOverload) {
     EXPECT_EQ(get_clock().now_ns(), 52'000'000ULL);
 
     // Restore default.
-    set_clock(nullptr);
+    reset_clock();
 }
 
 TEST(ClockRCUTest, OldClockSurvivesAfterReplacement) {
@@ -351,7 +351,7 @@ TEST(ClockRCUTest, OldClockSurvivesAfterReplacement) {
     EXPECT_EQ(ptr1->now_ns(), 150ULL);
 
     // Restore default.
-    set_clock(nullptr);
+    reset_clock();
 }
 
 TEST(ClockRCUTest, ConcurrentClockAccessDuringSwap) {
@@ -380,11 +380,10 @@ TEST(ClockRCUTest, ConcurrentClockAccessDuringSwap) {
 
     start.store(true, std::memory_order_release);
 
-    // Writer thread: swap clocks repeatedly using the non-owning overload
-    // (stack-allocated MockClocks).
-    MockClock clocks[2]{MockClock(1'000'000ULL), MockClock(2'000'000ULL)};
+    // Writer thread: swap clocks repeatedly using the OWNING overload
+    // to exercise the RCU retirement path (retired_clocks vector).
     for (int i = 0; i < kIterations; ++i) {
-        set_clock(&clocks[i % 2]);
+        set_clock(std::make_unique<MockClock>(static_cast<uint64_t>(i + 1) * 1'000ULL));
     }
 
     stop.store(true, std::memory_order_release);
@@ -393,6 +392,6 @@ TEST(ClockRCUTest, ConcurrentClockAccessDuringSwap) {
     }
 
     // Restore default.
-    set_clock(nullptr);
+    reset_clock();
     // If we get here without crash/TSAN flag, the test passes.
 }

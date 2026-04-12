@@ -34,6 +34,12 @@ inline std::unique_ptr<ISysInfo> create_sys_info(const std::string& platform) {
     if (platform == "mock") {
         return std::make_unique<MockSysInfo>();
     }
+#else
+    if (platform == "mock") {
+        DRONE_LOG_ERROR("[SysInfoFactory] platform='mock' requires DRONE_ENABLE_MOCK build flag "
+                        "— falling back to LinuxSysInfo");
+        return std::make_unique<LinuxSysInfo>();
+    }
 #endif
     DRONE_LOG_WARN("[SysInfoFactory] Unknown platform '{}' — falling back to LinuxSysInfo",
                    platform);

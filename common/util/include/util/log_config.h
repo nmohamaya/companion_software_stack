@@ -8,6 +8,7 @@
 #include "util/json_log_sink.h"
 #include "util/spdlog_logger.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>

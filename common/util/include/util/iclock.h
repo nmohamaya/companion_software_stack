@@ -51,12 +51,12 @@ public:
         return static_cast<double>(now_ns()) / 1'000'000'000.0;
     }
 
-protected:
+    // Non-copyable, non-movable (held via unique_ptr).
     IClock()                         = default;
-    IClock(const IClock&)            = default;
-    IClock& operator=(const IClock&) = default;
-    IClock(IClock&&)                 = default;
-    IClock& operator=(IClock&&)      = default;
+    IClock(const IClock&)            = delete;
+    IClock& operator=(const IClock&) = delete;
+    IClock(IClock&&)                 = delete;
+    IClock& operator=(IClock&&)      = delete;
 };
 
 // ── SteadyClock — production default ───────────────────────────────
@@ -159,6 +159,17 @@ inline void set_clock(IClock* clk) {
     }
     // No ownership transfer — clock_owner remains null.
     detail::clock_ptr().store(clk, std::memory_order_release);
+}
+
+/// Revert to the default SteadyClock.
+/// The previous owned clock is retired (kept alive) to prevent use-after-free.
+inline void reset_clock() {
+    std::lock_guard<std::mutex> lock(detail::clock_mutex());
+    // Retire the old owned clock — do NOT destroy it.
+    if (detail::clock_owner()) {
+        detail::retired_clocks().push_back(std::move(detail::clock_owner()));
+    }
+    detail::clock_ptr().store(nullptr, std::memory_order_release);
 }
 
 }  // namespace drone::util

@@ -124,12 +124,18 @@ TEST(ProcessContext, ParsedArgsPreserved) {
     EXPECT_TRUE(ctx.args.json_logs);
 }
 
-// ── Test: --skip-validation flag is parsed ──────────────────
+// ── Test: --skip-validation flag is parsed (Debug builds only) ──
+// These tests are gated behind #ifndef NDEBUG because --skip-validation is
+// a security-sensitive flag that is intentionally disabled in Release builds.
+// In Release, the flag is silently ignored (args.skip_validation stays false),
+// so tests that assert it becomes true would fail. Run with Debug build to test.
+#ifndef NDEBUG
 TEST(ProcessContext, SkipValidationFlagParsed) {
     ArgvBuilder argv_builder({"test_process", "--skip-validation"});
     auto        args = parse_args(argv_builder.argc(), argv_builder.argv(), "test");
     EXPECT_TRUE(args.skip_validation);
 }
+#endif
 
 TEST(ProcessContext, SkipValidationFlagDefaultFalse) {
     ArgvBuilder argv_builder({"test_process"});
@@ -137,7 +143,8 @@ TEST(ProcessContext, SkipValidationFlagDefaultFalse) {
     EXPECT_FALSE(args.skip_validation);
 }
 
-// ── Test: --skip-validation skips config schema enforcement ──
+// ── Test: --skip-validation skips config schema enforcement (Debug only) ──
+#ifndef NDEBUG
 TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
     std::atomic<bool> running{true};
 
@@ -169,7 +176,7 @@ TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
     std::remove(tmp_path.c_str());
 }
 
-// ── Test: --skip-validation is preserved in ProcessContext ───
+// ── Test: --skip-validation is preserved in ProcessContext (Debug only) ───
 TEST(ProcessContext, SkipValidationPreservedInContext) {
     std::atomic<bool> running{true};
     ArgvBuilder       argv_builder({"test_process", "--skip-validation"});
@@ -180,3 +187,4 @@ TEST(ProcessContext, SkipValidationPreservedInContext) {
     ASSERT_TRUE(result.is_ok());
     EXPECT_TRUE(result.value().args.skip_validation);
 }
+#endif  // NDEBUG

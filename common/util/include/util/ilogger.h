@@ -80,7 +80,9 @@ public:
         static constexpr const char* kLevelNames[] = {"DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"};
         const auto                   idx           = static_cast<uint8_t>(level);
         const char*                  name          = (idx < 5) ? kLevelNames[idx] : "UNKNOWN";
-        std::fprintf(stderr, "[%s] %.*s\n", name, static_cast<int>(msg.size()), msg.data());
+        std::fprintf(stderr, "[%s] ", name);
+        std::fwrite(msg.data(), 1, msg.size(), stderr);
+        std::fputc('\n', stderr);
     }
 
     [[nodiscard]] bool should_log(Level /*level*/) const override {

@@ -438,6 +438,7 @@ inline ConfigSchema system_monitor_schema() {
     s.optional<std::string>(cfg_key::system_monitor::PLATFORM).one_of({"linux", "jetson", "mock"});
     s.required<int>(cfg_key::system_monitor::UPDATE_RATE_HZ).range(1, 100);
     s.optional<int>(cfg_key::system_monitor::DISK_CHECK_INTERVAL_S).range(1, 3600);
+    s.optional<double>(cfg_key::system_monitor::POWER_COEFF).range(0.0, 10.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT).range(0.0, 100.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT).range(0.0, 100.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::TEMP_WARN_C).range(0.0, 200.0);
@@ -451,7 +452,7 @@ inline ConfigSchema system_monitor_schema() {
 // ── validate_or_exit() — validate and log errors ───────────
 // Returns 0 on success, 1 on validation failure (logs errors via spdlog).
 // Catches exceptions from malformed configs (defense-in-depth).
-inline int validate_or_exit(const Config& cfg, const ConfigSchema& schema) {
+[[nodiscard]] inline int validate_or_exit(const Config& cfg, const ConfigSchema& schema) {
     try {
         auto validation = validate(cfg, schema);
         if (!validation.is_ok()) {

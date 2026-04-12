@@ -280,6 +280,7 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT, 20.0f);
     thresholds.batt_crit =
         ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT, 10.0f);
+    thresholds.power_coeff = ctx.cfg.get<float>(drone::cfg_key::system_monitor::POWER_COEFF, 0.16f);
     // Convert disk check interval from seconds to ticks (calls)
     thresholds.disk_interval = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
 
