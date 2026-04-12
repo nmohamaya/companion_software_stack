@@ -92,9 +92,6 @@ docs/legacy/
 docs/guides/work_instructions.md
 docs/guides/DESIGN_RATIONALE.md
 
-# Tests (full suite stays private)
-tests/
-
 # Multi-agent orchestrator (independent IP)
 scripts/orchestrator/
 scripts/orchestrator.egg-info/
