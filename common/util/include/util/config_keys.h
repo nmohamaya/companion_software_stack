@@ -32,6 +32,7 @@ inline constexpr const char* NETWORK_ENABLED  = "zenoh.network.enabled";
 // P1 — Video Capture
 // ═══════════════════════════════════════════════════════════
 namespace video_capture {
+inline constexpr const char* SECTION = "video_capture";
 
 namespace mission_cam {
 inline constexpr const char* SECTION = "video_capture.mission_cam";
@@ -55,6 +56,7 @@ inline constexpr const char* FPS     = "video_capture.stereo_cam.fps";
 // P2 — Perception
 // ═══════════════════════════════════════════════════════════
 namespace perception {
+inline constexpr const char* SECTION = "perception";
 
 namespace detector {
 inline constexpr const char* SECTION               = "perception.detector";
@@ -76,8 +78,11 @@ inline constexpr const char* INPUT_SIZE            = "perception.detector.input_
 }  // namespace detector
 
 namespace tracker {
-inline constexpr const char* SECTION = "perception.tracker";
-inline constexpr const char* BACKEND = "perception.tracker.backend";
+inline constexpr const char* SECTION              = "perception.tracker";
+inline constexpr const char* BACKEND              = "perception.tracker.backend";
+inline constexpr const char* MAX_AGE              = "perception.tracker.max_age";
+inline constexpr const char* MIN_HITS             = "perception.tracker.min_hits";
+inline constexpr const char* MAX_ASSOCIATION_COST = "perception.tracker.max_association_cost";
 }  // namespace tracker
 
 namespace radar {
@@ -107,8 +112,16 @@ inline constexpr const char* DEPTH_SCALE = "perception.fusion.depth_scale";
 // P3 — SLAM / VIO / Navigation
 // ═══════════════════════════════════════════════════════════
 namespace slam {
-inline constexpr const char* IMU_RATE_HZ = "slam.imu_rate_hz";
-inline constexpr const char* VIO_RATE_HZ = "slam.vio_rate_hz";
+inline constexpr const char* SECTION                 = "slam";
+inline constexpr const char* IMU_RATE_HZ             = "slam.imu_rate_hz";
+inline constexpr const char* VIO_RATE_HZ             = "slam.vio_rate_hz";
+inline constexpr const char* VISUAL_FRONTEND_RATE_HZ = "slam.visual_frontend_rate_hz";
+
+namespace keyframe {
+inline constexpr const char* MIN_PARALLAX_PX   = "slam.keyframe.min_parallax_px";
+inline constexpr const char* MIN_TRACKED_RATIO = "slam.keyframe.min_tracked_ratio";
+inline constexpr const char* MAX_TIME_SEC      = "slam.keyframe.max_time_sec";
+}  // namespace keyframe
 
 namespace vio {
 inline constexpr const char* SECTION            = "slam.vio";
@@ -196,6 +209,7 @@ inline constexpr const char* PREDICTION_DT_S = "mission_planner.occupancy_grid.p
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {
+inline constexpr const char* MIN_DISTANCE_M = "mission_planner.obstacle_avoidance.min_distance_m";
 inline constexpr const char* INFLUENCE_RADIUS_M =
     "mission_planner.obstacle_avoidance.influence_radius_m";
 inline constexpr const char* REPULSIVE_GAIN = "mission_planner.obstacle_avoidance.repulsive_gain";
@@ -231,23 +245,37 @@ inline constexpr const char* HOVER_DURATION_S =
 }  // namespace mission_planner
 
 // ═══════════════════════════════════════════════════════════
+// Fault Manager (used by P4)
+// ═══════════════════════════════════════════════════════════
+namespace fault_manager {
+inline constexpr const char* POSE_STALE_TIMEOUT_MS = "fault_manager.pose_stale_timeout_ms";
+inline constexpr const char* BATTERY_WARN_PERCENT  = "fault_manager.battery_warn_percent";
+inline constexpr const char* BATTERY_CRIT_PERCENT  = "fault_manager.battery_crit_percent";
+}  // namespace fault_manager
+
+// ═══════════════════════════════════════════════════════════
 // P5 — Comms
 // ═══════════════════════════════════════════════════════════
 namespace comms {
+inline constexpr const char* SECTION = "comms";
 
 namespace mavlink {
-inline constexpr const char* SECTION     = "comms.mavlink";
-inline constexpr const char* BACKEND     = "comms.mavlink.backend";
-inline constexpr const char* URI         = "comms.mavlink.uri";
-inline constexpr const char* TIMEOUT_MS  = "comms.mavlink.timeout_ms";
-inline constexpr const char* SERIAL_PORT = "comms.mavlink.serial_port";
-inline constexpr const char* BAUD_RATE   = "comms.mavlink.baud_rate";
+inline constexpr const char* SECTION           = "comms.mavlink";
+inline constexpr const char* BACKEND           = "comms.mavlink.backend";
+inline constexpr const char* URI               = "comms.mavlink.uri";
+inline constexpr const char* TIMEOUT_MS        = "comms.mavlink.timeout_ms";
+inline constexpr const char* SERIAL_PORT       = "comms.mavlink.serial_port";
+inline constexpr const char* BAUD_RATE         = "comms.mavlink.baud_rate";
+inline constexpr const char* HEARTBEAT_RATE_HZ = "comms.mavlink.heartbeat_rate_hz";
+inline constexpr const char* TX_RATE_HZ        = "comms.mavlink.tx_rate_hz";
+inline constexpr const char* RX_RATE_HZ        = "comms.mavlink.rx_rate_hz";
 }  // namespace mavlink
 
 namespace gcs {
-inline constexpr const char* SECTION  = "comms.gcs";
-inline constexpr const char* BACKEND  = "comms.gcs.backend";
-inline constexpr const char* UDP_PORT = "comms.gcs.udp_port";
+inline constexpr const char* SECTION           = "comms.gcs";
+inline constexpr const char* BACKEND           = "comms.gcs.backend";
+inline constexpr const char* UDP_PORT          = "comms.gcs.udp_port";
+inline constexpr const char* TELEMETRY_RATE_HZ = "comms.gcs.telemetry_rate_hz";
 }  // namespace gcs
 
 }  // namespace comms
@@ -256,11 +284,15 @@ inline constexpr const char* UDP_PORT = "comms.gcs.udp_port";
 // P6 — Payload Manager
 // ═══════════════════════════════════════════════════════════
 namespace payload_manager {
+inline constexpr const char* SECTION        = "payload_manager";
 inline constexpr const char* UPDATE_RATE_HZ = "payload_manager.update_rate_hz";
 
 namespace gimbal {
-inline constexpr const char* SECTION = "payload_manager.gimbal";
-inline constexpr const char* BACKEND = "payload_manager.gimbal.backend";
+inline constexpr const char* SECTION           = "payload_manager.gimbal";
+inline constexpr const char* BACKEND           = "payload_manager.gimbal.backend";
+inline constexpr const char* MAX_SLEW_RATE_DPS = "payload_manager.gimbal.max_slew_rate_dps";
+inline constexpr const char* PITCH_MIN_DEG     = "payload_manager.gimbal.pitch_min_deg";
+inline constexpr const char* PITCH_MAX_DEG     = "payload_manager.gimbal.pitch_max_deg";
 
 namespace auto_track {
 inline constexpr const char* ENABLED        = "payload_manager.gimbal.auto_track.enabled";
