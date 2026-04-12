@@ -1098,6 +1098,30 @@ git checkout -b feature/issue-XXX-desc origin/main
 - For **modified tracked files**: either merge the agent's commit via `git merge <agent-branch>`, or apply the modifications manually using the Edit tool after reading the agent's version
 - Best practice: ensure the agent **commits** its changes before the orchestrator attempts to integrate them
 
+### Agent Worktree Missing Prior Wave Work
+
+**Symptom:** A feature agent in a `/deploy-wave` run fails to compile because it can't find files created by a prior issue in the same wave (e.g., Issue 2 needs a header that Issue 1 created). The agent cherry-picks or re-creates the file, causing merge conflicts.
+
+**Root cause:** `isolation: "worktree"` creates a worktree branching from the repo's default branch (`origin/main`), not from the local integration branch. If prior wave work hasn't been pushed to the remote, the agent's worktree won't have it.
+
+**Resolution:**
+
+1. **Always push the integration branch before spawning an agent:**
+
+   ```bash
+   git push origin <integration_branch>
+   ```
+
+2. **Tell the agent to merge the integration branch as its first step:**
+
+   ```bash
+   git fetch origin && git merge origin/<integration_branch> --no-edit
+   ```
+
+3. The `/deploy-wave` and `/deploy-issue` skills include this step (Step 3.2 and Step 2.3 respectively), but if you're spawning agents manually, remember to do it.
+
+**Prevention:** The deploy skills now include a mandatory push step before agent spawn. If you see an agent cherry-picking commits from another branch, it's a sign the integration branch wasn't pushed first.
+
 ### Worktrees Visible in VS Code Source Control
 
 **Symptom:** VS Code shows multiple `agent-*` repositories in the Source Control sidebar, cluttering the UI.

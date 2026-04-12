@@ -180,7 +180,19 @@ Read these files if they exist (skip if missing):
 - `tasks/agent-changelog.md` — recent completed work
 - `.claude/shared-context/domain-knowledge.md` — non-obvious pitfalls
 
-### Step 3.2 — Spawn feature agent
+### Step 3.2 — Push integration branch before spawning agents
+
+**IMPORTANT:** Before spawning any feature agent, push the integration branch so the agent's worktree has all prior work:
+
+```bash
+git push origin <integration_branch>
+```
+
+This is critical because `isolation: "worktree"` branches from the repo's default branch, not from whatever branch you're on locally. If prior issues in the wave added files the next agent needs (e.g., Issue 1 creates an interface that Issue 2 uses), the agent won't have them unless they're on the remote.
+
+Tell the agent in its prompt to `git fetch origin && git merge origin/<integration_branch> --no-edit` at the start to pick up prior wave work.
+
+### Step 3.3 — Spawn feature agent
 
 Use the Agent tool with the **approved plan for this specific issue** as the primary spec:
 
@@ -194,6 +206,7 @@ Agent(
 ```
 
 Pipeline instructions for the agent:
+- **First:** `git fetch origin && git merge origin/<integration_branch> --no-edit` to get prior wave work
 - Implement the issue following the plan
 - The integration branch is `<branch_name>` — your worktree branches from it
 - Run `bash deploy/build.sh` and verify zero warnings

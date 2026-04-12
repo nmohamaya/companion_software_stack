@@ -138,7 +138,17 @@ User choices:
 - **modify** → user adjusts the plan, then re-present
 - **skip agent** → skip the feature agent entirely. The user wants to implement manually. Jump straight to CP1 with an empty diff (user will make changes themselves during the "changes" flow at CP1).
 
-**Step 2.3 — Confirm and spawn feature agent**
+**Step 2.3 — Push branch before spawning agent**
+
+**IMPORTANT:** Before spawning the feature agent, push the current branch so the agent's worktree can access it:
+
+```bash
+git push -u origin <branch_name>
+```
+
+This is critical because `isolation: "worktree"` creates a worktree from the repo's default branch, not from your local branch. If you've made local commits (e.g., from prior fix rounds), the agent won't have them unless they're on the remote. Tell the agent in its prompt to `git fetch origin && git merge origin/<branch_name> --no-edit` as its first step.
+
+**Step 2.4 — Confirm and spawn feature agent**
 
 Only after the plan is approved. Present the agent launch and ask for final confirmation:
 
@@ -172,6 +182,7 @@ The prompt must include:
 2. The full issue body (for context and acceptance criteria)
 3. Cross-agent context from Step 2.1
 4. These pipeline instructions:
+   - **First:** `git fetch origin && git merge origin/<branch_name> --no-edit` to get the latest branch state
    - Implement the issue following the plan above
    - Run `bash deploy/build.sh` and verify zero warnings
    - Run tests with `./tests/run_tests.sh` and verify pass rate
