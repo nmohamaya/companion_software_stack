@@ -28,7 +28,7 @@
 static std::atomic<bool> g_running{true};
 
 static void signal_handler(int /*sig*/) {
-    g_running.store(false, std::memory_order_relaxed);
+    g_running.store(false, std::memory_order_seq_cst);
 }
 
 static void print_usage(const char* prog) {
@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
     auto        wall_base = std::chrono::steady_clock::now();
     std::size_t replayed  = 0;
 
-    for (std::size_t i = 0; i < entries.size() && g_running.load(std::memory_order_relaxed); ++i) {
+    for (std::size_t i = 0; i < entries.size() && g_running.load(std::memory_order_acquire); ++i) {
         const auto& entry     = entries[i];
         const auto  record_ts = entry.header.wire_header.timestamp_ns;
         const auto  topic     = entry.topic_name;

@@ -26,11 +26,12 @@ public:
     /// non-Jetson hardware where the CPU zone name doesn't match.
     [[nodiscard]] float read_cpu_temp() const override {
         // Use cached result: either a found zone index or "not found" sentinel
-        if (cached_cpu_zone_idx_ != kZoneUncached) {
-            if (cached_cpu_zone_idx_ == kZoneNotFound) {
+        const int cached = cached_cpu_zone_idx_.load(std::memory_order_acquire);
+        if (cached != kZoneUncached) {
+            if (cached == kZoneNotFound) {
                 return LinuxSysInfo::read_cpu_temp();
             }
-            return read_thermal_zone(cached_cpu_zone_idx_);
+            return read_thermal_zone(cached);
         }
 
         // First call: scan up to 16 thermal zones for the CPU-specific sensor
@@ -47,13 +48,13 @@ public:
             // Jetson Orin CPU thermal zone names
             if (zone_type == "CPU-therm" || zone_type == "cpu-therm" ||
                 zone_type == "Tdiode_tegra") {
-                cached_cpu_zone_idx_ = i;
+                cached_cpu_zone_idx_.store(i, std::memory_order_release);
                 return read_thermal_zone(i);
             }
         }
 
         // Cache "not found" to avoid rescan on every tick
-        cached_cpu_zone_idx_ = kZoneNotFound;
+        cached_cpu_zone_idx_.store(kZoneNotFound, std::memory_order_release);
         return LinuxSysInfo::read_cpu_temp();
     }
 
