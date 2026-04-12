@@ -10,6 +10,10 @@ Run the full development pipeline for a GitHub issue within the current Claude C
 
 **This replaces the `python -m orchestrator deploy-issue` subprocess workflow.** Instead of launching a separate `claude` process, everything happens inline in this conversation.
 
+## Session Continuity
+
+If this skill was already loaded earlier in the conversation (e.g., from a prior invocation or context compaction), the Skill tool call may fail with "Unknown skill." In that case, **immediately acknowledge to the user**: "The deploy-issue skill is already active in this session — I'll continue with your arguments." Then proceed to execute the pipeline with the provided arguments. Never leave the user with silence.
+
 ## Arguments
 
 Parse `$ARGUMENTS` to extract:

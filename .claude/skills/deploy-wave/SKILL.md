@@ -10,6 +10,10 @@ Deploy a wave of related issues from an epic. Plans all issues upfront as a batc
 
 **This is the orchestrator for multi-issue waves.** It replaces running `/deploy-issue` N times by adding wave-level planning and combined review — catching cross-issue conflicts and shared-interface problems before they compound.
 
+## Session Continuity
+
+If this skill was already loaded earlier in the conversation (e.g., from a prior invocation or context compaction), the Skill tool call may fail with "Unknown skill." In that case, **immediately acknowledge to the user**: "The deploy-wave skill is already active in this session — I'll continue with your arguments." Then proceed to execute the pipeline with the provided arguments. Never leave the user with silence.
+
 ## Arguments
 
 Parse `$ARGUMENTS` to extract:
