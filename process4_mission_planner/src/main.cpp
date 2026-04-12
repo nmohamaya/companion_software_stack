@@ -320,7 +320,7 @@ int main(int argc, char* argv[]) {
     uint64_t           pose_stale_count      = 0;
     uint64_t           loop_tick             = 0;
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
         drone::systemd::notify_watchdog();
         drone::util::FrameDiagnostics diag(loop_tick);

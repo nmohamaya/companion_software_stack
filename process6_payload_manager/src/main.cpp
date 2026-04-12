@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     uint32_t                           health_tick = 0;
 
     // ── Main loop (configurable control rate) ───────────────
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(payload_hb.handle());
         drone::systemd::notify_watchdog();
         drone::util::FrameDiagnostics diag(cycle_count);

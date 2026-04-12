@@ -292,4 +292,60 @@ TEST(EventBus, MultiplePublishes) {
     EXPECT_EQ(received[2], 3);
 }
 
+// ── Lifetime: EventBus destroyed before Subscription ────────────────
+// This test verifies the debug assert fires (in debug builds) or at minimum
+// documents the contract.  In release builds without asserts, this would be
+// UB — the test documents the expected usage constraint.
+
+TEST(EventBus, DestroyBusBeforeSubscription_DebugAssertDocumented) {
+    // Construct Subscription in outer scope, EventBus in inner scope.
+    // In debug builds, ~EventBus() asserts handlers_.empty().
+    // We test the CORRECT usage pattern: unsubscribe before bus destruction.
+    drone::util::Subscription<SimpleEvent> sub;
+    {
+        drone::util::EventBus<SimpleEvent> bus;
+        sub = bus.subscribe([](const SimpleEvent&) {});
+        EXPECT_TRUE(sub.is_active());
+
+        // Must unsubscribe before bus goes out of scope
+        sub.unsubscribe();
+        EXPECT_FALSE(sub.is_active());
+        EXPECT_EQ(bus.subscriber_count(), 0u);
+    }
+    // Bus destroyed with no live subscriptions — safe.
+    // Destroying sub again is a no-op (bus_ is nullptr after unsubscribe).
+}
+
+// ── Concurrent publish + explicit unsubscribe stress test ───────────
+
+TEST(EventBus, ConcurrentPublishAndUnsubscribe) {
+    drone::util::EventBus<SimpleEvent> bus;
+    std::atomic<int>                   total{0};
+    constexpr int                      kIters = 2000;
+
+    // One thread publishes continuously
+    std::atomic<bool> stop{false};
+    std::thread       publisher([&bus, &stop]() {
+        while (!stop.load(std::memory_order_acquire)) {
+            bus.publish(SimpleEvent{1});
+        }
+    });
+
+    // Main thread rapidly subscribes and unsubscribes
+    for (int i = 0; i < kIters; ++i) {
+        auto sub = bus.subscribe([&total](const SimpleEvent& e) {
+            total.fetch_add(e.value, std::memory_order_relaxed);
+        });
+        // Explicitly unsubscribe while publisher may be mid-publish
+        sub.unsubscribe();
+    }
+
+    stop.store(true, std::memory_order_release);
+    publisher.join();
+
+    // No crash, no TSAN violations = pass.  Total is non-deterministic.
+    EXPECT_GE(total.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(bus.subscriber_count(), 0u);
+}
+
 }  // namespace

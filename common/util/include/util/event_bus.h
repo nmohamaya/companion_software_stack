@@ -5,16 +5,26 @@
 // without a full reactive framework.  IPC remains pull-based (correct for real-time).
 //
 // Thread safety:
-//   - subscribe(), unsubscribe (via Subscription destructor), and publish()
+//   - subscribe(), publish(), and remove_handler() (via Subscription destructor)
 //     are all safe to call concurrently from any thread.
-//   - publish() uses copy-on-write: copies the handler list under lock, then
-//     iterates the copy outside the lock.  This allows publish-from-within-handler
-//     (re-entrancy) and unsubscribe-during-iteration without deadlock.
+//   - publish() uses snapshot-copy: copies the handler list under lock on every
+//     call, then iterates the copy outside the lock.  This allows publish-from-
+//     within-handler (re-entrancy) and unsubscribe-during-iteration without deadlock.
+//
+// Lifetime contract:
+//   The EventBus MUST outlive all Subscription objects derived from it.
+//   Destroying an EventBus while Subscriptions still exist is undefined behavior.
+//   In debug builds, ~EventBus() asserts that all subscriptions have been released.
+//
+// Subscription is NOT thread-safe — a single Subscription must be accessed from
+// one thread at a time (or externally synchronized).  This is consistent with
+// RAII tokens being stack-local or owned by a single component.
 //
 // Concurrency tier: std::mutex (non-hot-path shared state).
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -29,6 +39,9 @@ class EventBus;
 
 /// RAII subscription token.  Automatically unsubscribes on destruction.
 /// Move-only — copying would create double-unsubscribe bugs.
+///
+/// NOT thread-safe: a single Subscription instance must be accessed from one
+/// thread at a time (typical for stack-local RAII tokens).
 template<typename Event>
 class Subscription {
 public:
@@ -60,6 +73,7 @@ public:
     [[nodiscard]] bool is_active() const { return bus_ != nullptr; }
 
     /// Explicitly unsubscribe (also called by destructor).
+    /// NOT thread-safe — must not be called concurrently on the same Subscription.
     void unsubscribe() {
         if (bus_) {
             bus_->remove_handler(id_);
@@ -79,6 +93,9 @@ private:
 
 /// Lightweight typed event bus for intra-process composition.
 ///
+/// Lifetime: The EventBus MUST outlive all Subscription tokens derived from it.
+/// In debug builds, the destructor asserts that all subscriptions have been released.
+///
 /// Usage:
 ///   struct ObstacleDetected { float distance_m; };
 ///   EventBus<ObstacleDetected> bus;
@@ -89,8 +106,14 @@ private:
 template<typename Event>
 class EventBus {
 public:
-    EventBus()  = default;
-    ~EventBus() = default;
+    EventBus() = default;
+
+    ~EventBus() {
+        // All Subscriptions must be destroyed before the EventBus.
+        // If this fires, a Subscription outlived its bus — fix the ownership.
+        assert(handlers_.empty() && "EventBus destroyed with live subscriptions — "
+                                    "all Subscription tokens must be destroyed first");
+    }
 
     // Non-copyable, non-movable (subscriptions hold raw pointer to bus).
     EventBus(const EventBus&)            = delete;
@@ -100,7 +123,9 @@ public:
 
     /// Subscribe a handler.  Returns an RAII Subscription token that
     /// automatically unsubscribes when destroyed or moved-from.
+    /// The handler must be non-empty (callable).
     [[nodiscard]] Subscription<Event> subscribe(std::function<void(const Event&)> handler) {
+        assert(handler && "subscribe() called with empty handler");
         std::lock_guard<std::mutex> lock(mutex_);
         const uint64_t              id = next_id_++;
         handlers_.push_back({id, std::move(handler)});
@@ -110,7 +135,10 @@ public:
     /// Publish an event to all current subscribers.
     /// Safe to call from within a handler (re-entrant) and from any thread.
     void publish(const Event& event) {
-        // Copy-on-write: snapshot handler list under lock, iterate outside.
+        // Snapshot-copy: copy handler list under lock, iterate outside.
+        // This is O(N) per publish where N = subscriber count.  Acceptable for
+        // non-hot-path usage.  For hot paths, consider shared_mutex or a
+        // generation-counter optimization to skip the copy when unchanged.
         std::vector<HandlerEntry> snapshot;
         {
             std::lock_guard<std::mutex> lock(mutex_);

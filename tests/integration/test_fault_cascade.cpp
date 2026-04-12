@@ -1,14 +1,17 @@
 // tests/integration/test_fault_cascade.cpp
-// Integration tests: fault cascade scenarios via shared IPC bus.
+// Integration tests: fault-related IPC wire format and message flow.
 //
-// Tests multi-process fault propagation patterns:
-//   - FC disconnect → fault detection → state change
-//   - Perception death → system health update → planner reaction
-//   - Battery low → escalation chain
+// Tests that fault-related IPC messages can be published and received
+// correctly through the shared Zenoh bus:
+//   - FC disconnect messages (FCState → MissionStatus)
+//   - System health messages (SystemHealth with fault flags)
+//   - Battery status messages
 //
-// These tests verify the IPC message flow that carries fault information
-// across process boundaries.  They do not instantiate full process main()
-// loops — instead they simulate the IPC messages each process would send.
+// NOTE: These tests validate IPC wire format and pub/sub plumbing for fault
+// messages — they do NOT instantiate real fault detection logic (FaultManager,
+// MissionFSM).  A bug in fault escalation code would not be caught here.
+// For actual fault logic coverage, see test_fault_manager.cpp and
+// test_fault_response_executor.cpp.
 //
 // See: Issue #292 (Epic #284 — Platform Modularity)
 #include "integration/integration_harness.h"

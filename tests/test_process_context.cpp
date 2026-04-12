@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -55,10 +56,9 @@ TEST(ProcessContext, ValidConfigProducesContext) {
     auto result = drone::util::init_process(argv_builder.argc(), argv_builder.argv(), "test_proc",
                                             running, drone::util::common_schema());
 
-    // May fail if config file not found in CI — skip gracefully
-    if (!result.is_ok()) {
-        GTEST_SKIP() << "Config file not found (expected in CI without config)";
-    }
+    // PROJECT_CONFIG_DIR is set at compile time — config should always be found.
+    // If init_process fails here it's a real bug, not a skip condition.
+    ASSERT_TRUE(result.is_ok()) << "init_process() failed with config at: " << config_path;
 
     auto& ctx = result.value();
     EXPECT_EQ(ctx.process_name, "test_proc");
@@ -104,9 +104,9 @@ TEST(ProcessContext, RunningFlagReference) {
     auto& ctx = result.value();
 
     // Verify the reference points to our flag
-    EXPECT_TRUE(ctx.running.load(std::memory_order_relaxed));
-    running.store(false, std::memory_order_relaxed);
-    EXPECT_FALSE(ctx.running.load(std::memory_order_relaxed));
+    EXPECT_TRUE(ctx.running.load(std::memory_order_acquire));
+    running.store(false, std::memory_order_release);
+    EXPECT_FALSE(ctx.running.load(std::memory_order_acquire));
 }
 
 // ── Test: parsed args are preserved ─────────────────────────

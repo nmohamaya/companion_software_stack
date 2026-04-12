@@ -39,7 +39,7 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
 
     auto hb = drone::util::ScopedHeartbeat("fc_rx", true);
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto hb = fc.receive_state();
 
@@ -97,7 +97,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
     uint64_t send_fail_count = 0;
     uint64_t traj_send_fail  = 0;
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         // ── Handle FC commands (arm, takeoff, mode) ─────────
         drone::ipc::FCCommand fc_cmd{};
@@ -175,7 +175,7 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                           gcs,
 
     auto hb = drone::util::ScopedHeartbeat("gcs_rx", false);
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto msg = gcs.poll_command();
         if (msg.valid) {
@@ -214,12 +214,12 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                               gc
     uint64_t telem_fail_count = 0;
 
     // Wait for subscribers to connect
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         if (pose_sub.is_connected() && status_sub.is_connected() && fc_sub.is_connected()) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::Pose          pose{};
         drone::ipc::MissionStatus mission{};
@@ -321,11 +321,15 @@ int main(int argc, char* argv[]) {
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "comms", watchdog);
 
     // ── Main loop: health publishing (replaces bare join) ─
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
     }
+
+    // Notify systemd BEFORE joining threads — join may take time and
+    // systemd would otherwise exceed WatchdogSec and SIGKILL us.
+    drone::systemd::notify_stopping();
 
     t1.join();
     t2.join();
@@ -334,8 +338,6 @@ int main(int argc, char* argv[]) {
 
     fc_link->close();
     gcs_link->close();
-
-    drone::systemd::notify_stopping();
     DRONE_LOG_INFO("=== Comms stopped ===");
     return 0;
 }

@@ -422,14 +422,14 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("All SLAM/VIO threads started — READY");
     drone::systemd::notify_ready();
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::systemd::notify_watchdog();
 
         // ── Forward trajectory targets to VIO backend ────────
         // Poll at ~100 Hz so the simulated VIO tracks waypoint targets promptly.
         // Only active for simulated backend — Gazebo/real backends ignore targets.
         if (traj_sub) {
-            for (int i = 0; i < 100 && g_running.load(std::memory_order_relaxed); ++i) {
+            for (int i = 0; i < 100 && g_running.load(std::memory_order_acquire); ++i) {
                 drone::ipc::TrajectoryCmd traj_cmd{};
                 if (traj_sub->receive(traj_cmd) && traj_cmd.valid) {
                     vio->set_trajectory_target(traj_cmd.target_x, traj_cmd.target_y,

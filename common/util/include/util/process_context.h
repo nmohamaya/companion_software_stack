@@ -16,7 +16,7 @@
 //       auto& pc = ctx.value();
 //
 //       // ... domain-specific wiring using pc.cfg and pc.bus ...
-//       while (g_running.load(std::memory_order_relaxed)) { ... }
+//       while (g_running.load(std::memory_order_acquire)) { ... }
 //       drone::systemd::notify_stopping();
 //       return 0;
 //   }
@@ -85,7 +85,8 @@ private:
 ///   1. parse_args()
 ///   2. SignalHandler::install()
 ///   3. LogConfig::init()
-///   4. Config::load() + validate_or_exit()
+///   4. Config::load(); if loading succeeds, validate_or_exit(); if config is
+///      missing, log a warning and continue with defaults (validation skipped)
 ///   5. create_message_bus()
 ///   6. LivelinessToken declaration
 ///

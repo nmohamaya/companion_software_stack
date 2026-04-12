@@ -11,6 +11,7 @@
 
 #include "util/linux_sys_info.h"
 
+#include <atomic>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -59,9 +60,9 @@ public:
     [[nodiscard]] std::string name() const override { return "JetsonSysInfo"; }
 
 private:
-    static constexpr int kZoneUncached        = -1;
-    static constexpr int kZoneNotFound        = -2;
-    mutable int          cached_cpu_zone_idx_ = kZoneUncached;
+    static constexpr int     kZoneUncached = -1;
+    static constexpr int     kZoneNotFound = -2;
+    mutable std::atomic<int> cached_cpu_zone_idx_{kZoneUncached};
 
     [[nodiscard]] static float read_thermal_zone(int zone_idx) {
         char temp_path[128];

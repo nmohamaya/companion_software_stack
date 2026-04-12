@@ -497,7 +497,7 @@ int main(int argc, char* argv[]) {
     drone::systemd::notify_ready();
 
     // ── Main loop ───────────────────────────────────────────
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();

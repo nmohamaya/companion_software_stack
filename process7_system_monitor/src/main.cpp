@@ -40,6 +40,15 @@ int main(int argc, char* argv[]) {
     auto& ctx = ctx_result.value();
 
     // ── Supervised mode: fork+exec child processes ──────────
+    //
+    // WARNING: init_process() above creates a Zenoh session (background threads,
+    // mutexes, SHM). fork() below duplicates mutex state but NOT threads — Zenoh
+    // internal mutexes may be locked forever in the child. Current mitigation:
+    // child calls close_fds_above(2) + execvp() immediately, never touching Zenoh.
+    // This is safe in practice but NOT safe per POSIX (async-signal-unsafe calls
+    // between fork and exec are UB). Proper fix: split init_process() into
+    // pre-fork (args+config+logging) and post-fork (bus+liveliness) phases.
+    // TODO(#284): defer Zenoh session creation until after fork+exec in supervised mode.
     std::unique_ptr<drone::monitor::ProcessManager> supervisor;
     drone::util::ProcessGraph                       process_graph;
     if (ctx.args.supervised) {
@@ -291,7 +300,7 @@ int main(int argc, char* argv[]) {
     uint32_t tick = 0;
 
     // ── Main loop (1 Hz) ────────────────────────────────────
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(health_hb.handle());
         drone::systemd::notify_watchdog();
         tick++;
@@ -368,12 +377,23 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // ── Supervisor tick: reap zombies, detect deaths, restart ─
+        // Must run BEFORE publish so stack_status/total_restarts are current.
+        if (supervisor) {
+            supervisor->set_thermal_zone(health.thermal_zone);
+            supervisor->tick();
+            health.stack_status   = static_cast<uint8_t>(supervisor->compute_stack_status());
+            health.total_restarts = supervisor->total_restarts();
+        }
+
         health_pub->publish(health);
 
         // Log summary
         if (tick % 5 == 0) {
             const char* status_str = "NOMINAL";
-            if (health.thermal_zone == 2)
+            if (health.thermal_zone == 1)
+                status_str = "ELEVATED";
+            else if (health.thermal_zone == 2)
                 status_str = "WARNING";
             else if (health.thermal_zone == 3)
                 status_str = "CRITICAL";
@@ -388,17 +408,6 @@ int main(int argc, char* argv[]) {
         }
 
         thread_health_publisher.publish_snapshot();
-
-        // ── Supervisor tick: reap zombies, detect deaths, restart ─
-        if (supervisor) {
-            // Feed current thermal zone to supervisor for thermal gating
-            supervisor->set_thermal_zone(health.thermal_zone);
-            supervisor->tick();
-
-            // Update stack status and total restarts in health struct
-            health.stack_status   = static_cast<uint8_t>(supervisor->compute_stack_status());
-            health.total_restarts = supervisor->total_restarts();
-        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

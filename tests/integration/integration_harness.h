@@ -49,14 +49,11 @@ namespace drone::test {
 ///   - Config loaded from default.json with test overrides via config().
 class IntegrationTestHarness {
 public:
-    IntegrationTestHarness()
-        : scoped_clock_()
-        , capturing_logger_(new drone::log::CapturingLogger())
-        , capturing_logger_ptr_(capturing_logger_)
-        , bus_(drone::ipc::create_message_bus("zenoh")) {
-        // Install capturing logger (takes ownership).
-        drone::log::set_logger(std::unique_ptr<drone::log::CapturingLogger>(capturing_logger_));
-        capturing_logger_ = nullptr;  // ownership transferred, use capturing_logger_ptr_
+    IntegrationTestHarness() : scoped_clock_(), bus_(drone::ipc::create_message_bus("zenoh")) {
+        // Create capturing logger via make_unique, stash raw pointer, then transfer ownership.
+        auto logger           = std::make_unique<drone::log::CapturingLogger>();
+        capturing_logger_ptr_ = logger.get();
+        drone::log::set_logger(std::move(logger));
 
         // Load default config (best-effort — tests may override).
 #ifdef PROJECT_CONFIG_DIR
@@ -66,6 +63,8 @@ public:
 
     ~IntegrationTestHarness() {
         // Restore default logger (ScopedMockClock restores clock automatically).
+        // Null out raw pointer BEFORE reset — reset_logger() destroys the CapturingLogger.
+        capturing_logger_ptr_ = nullptr;
         drone::log::reset_logger();
     }
 
@@ -116,8 +115,7 @@ public:
 
 private:
     drone::util::ScopedMockClock scoped_clock_;
-    drone::log::CapturingLogger* capturing_logger_     = nullptr;  // pre-transfer pointer
-    drone::log::CapturingLogger* capturing_logger_ptr_ = nullptr;  // valid after transfer
+    drone::log::CapturingLogger* capturing_logger_ptr_ = nullptr;  // non-owning, valid until dtor
     drone::ipc::MessageBus       bus_;
     drone::Config                cfg_;
 };
