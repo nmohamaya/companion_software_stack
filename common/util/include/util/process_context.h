@@ -56,11 +56,14 @@ struct ProcessContext {
     // Parsed command-line args
     ParsedArgs args;
 
-    // Non-copyable, movable
-    ProcessContext(ProcessContext&&) noexcept            = default;
-    ProcessContext& operator=(ProcessContext&&) noexcept = default;
-    ProcessContext(const ProcessContext&)                = delete;
-    ProcessContext& operator=(const ProcessContext&)     = delete;
+    // Non-copyable, move-constructible only.
+    // Move-assignment is deleted because `running` is a reference member
+    // (references cannot be rebound). The defaulted move-assign would be
+    // implicitly deleted by the compiler anyway — we make it explicit.
+    ProcessContext(ProcessContext&&) noexcept        = default;
+    ProcessContext& operator=(ProcessContext&&)      = delete;
+    ProcessContext(const ProcessContext&)            = delete;
+    ProcessContext& operator=(const ProcessContext&) = delete;
 
 private:
     friend Result<ProcessContext, int> init_process(int argc, char* argv[], const std::string& name,

@@ -392,7 +392,7 @@ int main(int argc, char* argv[]) {
         if (tick % 5 == 0) {
             const char* status_str = "NOMINAL";
             if (health.thermal_zone == 1)
-                status_str = "ELEVATED";
+                status_str = "WARM";
             else if (health.thermal_zone == 2)
                 status_str = "WARNING";
             else if (health.thermal_zone == 3)

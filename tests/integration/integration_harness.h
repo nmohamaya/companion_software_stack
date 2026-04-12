@@ -49,12 +49,17 @@ namespace drone::test {
 ///   - Config loaded from default.json with test overrides via config().
 class IntegrationTestHarness {
 public:
-    IntegrationTestHarness() : scoped_clock_(), bus_(drone::ipc::create_message_bus("zenoh")) {
-        // Create capturing logger via make_unique, stash raw pointer, then transfer ownership.
-        auto logger           = std::make_unique<drone::log::CapturingLogger>();
-        capturing_logger_ptr_ = logger.get();
-        drone::log::set_logger(std::move(logger));
-
+    /// Construction order matters:
+    ///   1. ScopedMockClock (no threads, safe first)
+    ///   2. CapturingLogger installed via install_logger() — MUST happen before bus
+    ///   3. MessageBus (Zenoh spawns background threads that may log)
+    ///   4. Config loaded in body (best-effort)
+    ///
+    /// Member init list order matches declaration order (C++ standard requirement).
+    IntegrationTestHarness()
+        : scoped_clock_()
+        , capturing_logger_ptr_(install_logger())
+        , bus_(drone::ipc::create_message_bus("zenoh")) {
         // Load default config (best-effort — tests may override).
 #ifdef PROJECT_CONFIG_DIR
         cfg_.load(std::string(PROJECT_CONFIG_DIR) + "/default.json");
@@ -62,7 +67,8 @@ public:
     }
 
     ~IntegrationTestHarness() {
-        // Restore default logger (ScopedMockClock restores clock automatically).
+        // Destruction order: bus_ destroyed first (stops Zenoh threads),
+        // then we can safely reset the logger with no concurrent log calls.
         // Null out raw pointer BEFORE reset — reset_logger() destroys the CapturingLogger.
         capturing_logger_ptr_ = nullptr;
         drone::log::reset_logger();
@@ -114,6 +120,18 @@ public:
     }
 
 private:
+    /// Install a CapturingLogger as the global logger and return the raw pointer.
+    /// Called from the member initializer list to ensure the logger is active
+    /// before the Zenoh MessageBus is created (Zenoh spawns background threads
+    /// that may log during session creation).
+    static drone::log::CapturingLogger* install_logger() {
+        auto  logger = std::make_unique<drone::log::CapturingLogger>();
+        auto* ptr    = logger.get();
+        drone::log::set_logger(std::move(logger));
+        return ptr;
+    }
+
+    // Declaration order = initialization order. Logger MUST be installed before bus.
     drone::util::ScopedMockClock scoped_clock_;
     drone::log::CapturingLogger* capturing_logger_ptr_ = nullptr;  // non-owning, valid until dtor
     drone::ipc::MessageBus       bus_;
