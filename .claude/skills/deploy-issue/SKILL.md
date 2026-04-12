@@ -433,11 +433,13 @@ Before presenting CP4, check for existing review comments from Copilot or other 
 gh api repos/<owner>/<repo>/pulls/<N>/comments --jq '.[].body' | head -50
 ```
 
-Include any actionable bot comments in the CP4 findings presentation.
+Categorize each bot comment as: **already fixed** (by our agents), **worth fixing** (net-new), or **false positive** (with reason). Include actionable findings in the CP4 presentation.
 
 **Step 5.6 — Post findings to PR**
 
 **Always** post the merged review findings as a PR comment — do not wait to be asked. Use a structured format with agent status table, P1/P2 details, and tech-lead assessment. This creates an audit trail on the PR.
+
+After all fixes are applied, **also post a Copilot triage table** summarizing what was already fixed by our agents, what was fixed from Copilot, and what was a false positive (with reasons). This documents the value-add of each review layer.
 
 ### CP4: Review Findings [INTERACTIVE]
 

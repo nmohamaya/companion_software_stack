@@ -291,9 +291,11 @@ for pr_number in <all_pr_numbers>; do
 done
 ```
 
+Categorize each bot comment as: **already fixed** (by our agents), **worth fixing** (net-new), or **false positive** (with reason). Include actionable findings in the checkpoint presentation.
+
 **Step 4.6 — Post findings**
 
-Post the merged review findings as a comment on **each per-issue PR**.
+Post the merged review findings as a comment on the **merge PR**. After all fixes are applied, **also post a Copilot triage table** summarizing what was already fixed by our agents, what was fixed from Copilot, and what was a false positive (with reasons). This documents the value-add of each review layer and creates a full audit trail.
 
 ### Wave Review Checkpoint
 
@@ -378,5 +380,6 @@ User choices:
 - **Single issue wave**: If only one issue number is provided, the skill degrades gracefully to essentially `/deploy-issue` with an integration branch. Still useful for consistency.
 - **Existing integration branch**: Check `git branch -r --list 'origin/integration/epic-<N>*'` before creating. If one exists, offer to reuse it (pick up where a prior wave left off).
 - **Context window management**: A full wave with 3 issues + 2-pass review generates significant context. Cap all agent outputs to 200 words. Summarize per-issue results before starting the next issue. If context gets tight, summarize earlier issues aggressively.
+- **Empty per-issue PR**: If an issue's files were committed as part of a bulk operation (e.g., user's gitignore changes, re-tracking commits), the per-issue feature branch may show an empty diff against integration. In that case, skip the per-issue PR for that issue — note it in the wave summary and ensure the changes are covered by the merge PR.
 
 If the user provided arguments, use them as context: $ARGUMENTS
