@@ -60,10 +60,55 @@ tasks/sessions/*.log
 .claude/plans/
 .claude/worktrees/
 
-# Security and license documentation (local-only)
-docs/SECURITY.md
-docs/LICENSE_AUDIT.md
+# ── Private / Local-Only ────────────────────────────────────────────
+# Everything below stays out of the public repo for IP protection,
+# security, or internal-use reasons. See the open-source plan for
+# the full classification rationale.
+
+# Security and compliance documentation
+docs/architecture/SECURITY.md
+docs/tracking/LICENSE_AUDIT.md
+
+# Proprietary algorithm design docs (P2/P3/P4)
+docs/design/perception_design.md
+docs/design/slam_vio_nav_design.md
+docs/design/mission_planner_design.md
+
+# Internal strategy and gap analysis
+docs/architecture/STRATEGIC_PLAN.md
+docs/architecture/MAKE_OR_BUY.md
+docs/architecture/PRODUCTION_READINESS.md
+
+# Internal tracking (progress, roadmap, bugs, CI)
+docs/tracking/
+
+# Debug investigation notes
+docs/debug/
+
+# Legacy design documents
+docs/legacy/
+
+# Internal design rationale & work instructions
+docs/guides/work_instructions.md
+docs/guides/DESIGN_RATIONALE.md
+
+# Tests (full suite stays private)
+tests/
+
+# Multi-agent orchestrator (independent IP)
+scripts/orchestrator/
 scripts/orchestrator.egg-info/
+
+# Agent profiles, skills, shared context (methodology IP)
+.claude/agents/
+.claude/skills/
+.claude/shared-context/
+.claude/settings.json
+
+# Internal work tracking
+tasks/
+
+# Python artifacts
 __pycache__/
 *.pyc
 .pipeline-state
