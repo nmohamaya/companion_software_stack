@@ -290,21 +290,43 @@ inline ConfigSchema video_capture_schema() {
     s.required<int>("video_capture.mission_cam.width").range(1, 7680);
     s.required<int>("video_capture.mission_cam.height").range(1, 4320);
     s.required<int>("video_capture.mission_cam.fps").range(1, 240);
+    s.optional<std::string>("video_capture.mission_cam.backend")
+        .one_of({"simulated", "v4l2", "libargus", "gazebo"});
     s.optional<int>("video_capture.stereo_cam.width").range(1, 7680);
     s.optional<int>("video_capture.stereo_cam.height").range(1, 4320);
     s.optional<int>("video_capture.stereo_cam.fps").range(1, 240);
+    s.optional<std::string>("video_capture.stereo_cam.backend")
+        .one_of({"simulated", "v4l2", "libargus", "gazebo"});
     return s;
 }
 
 inline ConfigSchema perception_schema() {
     auto s = common_schema();
     s.required_section("perception");
+    // Detector
     s.optional<double>("perception.detector.confidence_threshold").range(0.0, 1.0);
     s.optional<double>("perception.detector.nms_threshold").range(0.0, 1.0);
     s.optional<int>("perception.detector.max_detections").range(1, 10000);
+    s.optional<int>("perception.detector.min_contour_area").range(0, 100000);
+    s.optional<int>("perception.detector.subsample").range(1, 16);
+    s.optional<int>("perception.detector.max_fps").range(0, 1000);
+    s.optional<double>("perception.detector.confidence_max").range(0.0, 1.0);
+    s.optional<double>("perception.detector.confidence_base").range(0.0, 1.0);
+    s.optional<double>("perception.detector.confidence_area_scale").range(0.0, 10000.0);
+    s.optional<int>("perception.detector.min_bbox_height_px").range(1, 10000);
+    s.optional<double>("perception.detector.max_aspect_ratio").range(0.1, 100.0);
+    // Tracker
     s.optional<int>("perception.tracker.max_age").range(1, 1000);
     s.optional<int>("perception.tracker.min_hits").range(1, 100);
     s.optional<double>("perception.tracker.max_association_cost").range(0.0, 10000.0);
+    s.optional<double>("perception.tracker.high_conf_threshold").range(0.0, 1.0);
+    s.optional<double>("perception.tracker.low_conf_threshold").range(0.0, 1.0);
+    s.optional<double>("perception.tracker.max_iou_cost").range(0.0, 1.0);
+    // Radar
+    s.optional<bool>("perception.radar.enabled");
+    s.optional<int>("perception.radar.update_rate_hz").range(1, 1000);
+    // Fusion
+    s.optional<int>("perception.fusion.rate_hz").range(1, 1000);
     return s;
 }
 
@@ -317,6 +339,9 @@ inline ConfigSchema slam_schema() {
     s.optional<double>("slam.keyframe.min_parallax_px").range(0.0, 1000.0);
     s.optional<double>("slam.keyframe.min_tracked_ratio").range(0.0, 1.0);
     s.optional<double>("slam.keyframe.max_time_sec").range(0.001, 60.0);
+    // VIO quality thresholds
+    s.optional<double>("slam.vio.quality.good_trace_max").range(0.0, 100.0);
+    s.optional<double>("slam.vio.quality.degraded_trace_max").range(0.0, 100.0);
     return s;
 }
 
@@ -327,7 +352,42 @@ inline ConfigSchema mission_planner_schema() {
     s.required<double>("mission_planner.takeoff_altitude_m").range(0.5, 500.0);
     s.optional<double>("mission_planner.acceptance_radius_m").range(0.1, 100.0);
     s.optional<double>("mission_planner.cruise_speed_mps").range(0.1, 50.0);
+    s.optional<double>("mission_planner.rtl_acceptance_radius_m").range(0.1, 100.0);
+    s.optional<double>("mission_planner.landed_altitude_m").range(0.0, 50.0);
+    s.optional<int>("mission_planner.rtl_min_dwell_seconds").range(0, 600);
+    // Path planner
+    s.optional<double>("mission_planner.path_planner.ramp_dist_m").range(0.0, 100.0);
+    s.optional<double>("mission_planner.path_planner.min_speed_mps").range(0.0, 50.0);
+    s.optional<int>("mission_planner.path_planner.snap_search_radius").range(1, 100);
+    s.optional<double>("mission_planner.path_planner.yaw_smoothing_rate").range(0.0, 1.0);
+    s.optional<double>("mission_planner.path_planner.snap_approach_bias").range(0.0, 1.0);
+    // Occupancy grid
+    s.optional<double>("mission_planner.occupancy_grid.resolution_m").range(0.01, 10.0);
+    s.optional<double>("mission_planner.occupancy_grid.inflation_radius_m").range(0.0, 50.0);
+    s.optional<double>("mission_planner.occupancy_grid.dynamic_obstacle_ttl_s").range(0.0, 60.0);
+    s.optional<double>("mission_planner.occupancy_grid.min_confidence").range(0.0, 1.0);
+    s.optional<double>("mission_planner.occupancy_grid.min_promotion_depth_confidence")
+        .range(0.0, 1.0);
+    s.optional<int>("mission_planner.occupancy_grid.max_static_cells").range(0, 1000000);
+    s.optional<bool>("mission_planner.occupancy_grid.prediction_enabled");
+    s.optional<double>("mission_planner.occupancy_grid.prediction_dt_s").range(0.0, 60.0);
+    // Obstacle avoidance
     s.optional<double>("mission_planner.obstacle_avoidance.min_distance_m").range(0.1, 100.0);
+    s.optional<double>("mission_planner.obstacle_avoidance.influence_radius_m").range(0.1, 100.0);
+    s.optional<double>("mission_planner.obstacle_avoidance.repulsive_gain").range(0.0, 100.0);
+    s.optional<double>("mission_planner.obstacle_avoidance.max_correction_mps").range(0.0, 50.0);
+    s.optional<double>("mission_planner.obstacle_avoidance.min_confidence").range(0.0, 1.0);
+    s.optional<double>("mission_planner.obstacle_avoidance.prediction_dt_s").range(0.0, 60.0);
+    s.optional<int>("mission_planner.obstacle_avoidance.max_age_ms").range(0, 60000);
+    // Geofence
+    s.optional<double>("mission_planner.geofence.altitude_floor_m").range(-1000.0, 10000.0);
+    s.optional<double>("mission_planner.geofence.altitude_ceiling_m").range(0.0, 10000.0);
+    s.optional<double>("mission_planner.geofence.warning_margin_m").range(0.0, 1000.0);
+    s.optional<double>("mission_planner.geofence.altitude_tolerance_m").range(0.0, 100.0);
+    // Collision recovery
+    s.optional<bool>("mission_planner.collision_recovery.enabled");
+    s.optional<double>("mission_planner.collision_recovery.climb_delta_m").range(0.0, 100.0);
+    s.optional<double>("mission_planner.collision_recovery.hover_duration_s").range(0.0, 60.0);
     // fault_manager section
     s.optional<int>("fault_manager.pose_stale_timeout_ms").range(1, 60000);
     s.optional<double>("fault_manager.battery_warn_percent").range(1.0, 100.0);
@@ -341,6 +401,8 @@ inline ConfigSchema comms_schema() {
     s.optional<int>("comms.mavlink.heartbeat_rate_hz").range(1, 100);
     s.optional<int>("comms.mavlink.tx_rate_hz").range(1, 1000);
     s.optional<int>("comms.mavlink.rx_rate_hz").range(1, 1000);
+    s.optional<int>("comms.mavlink.timeout_ms").range(1, 60000);
+    s.optional<int>("comms.mavlink.baud_rate").range(1200, 4000000);
     s.optional<int>("comms.gcs.udp_port").range(1, 65535);
     s.optional<int>("comms.gcs.telemetry_rate_hz").range(1, 100);
     return s;
@@ -353,6 +415,10 @@ inline ConfigSchema payload_manager_schema() {
     s.optional<double>("payload_manager.gimbal.max_slew_rate_dps").range(0.1, 1000.0);
     s.optional<double>("payload_manager.gimbal.pitch_min_deg").range(-180.0, 0.0);
     s.optional<double>("payload_manager.gimbal.pitch_max_deg").range(0.0, 180.0);
+    s.optional<double>("payload_manager.gimbal.yaw_min_deg").range(-360.0, 0.0);
+    s.optional<double>("payload_manager.gimbal.yaw_max_deg").range(0.0, 360.0);
+    s.optional<bool>("payload_manager.gimbal.auto_track.enabled");
+    s.optional<double>("payload_manager.gimbal.auto_track.min_confidence").range(0.0, 1.0);
     return s;
 }
 
@@ -361,12 +427,14 @@ inline ConfigSchema system_monitor_schema() {
     s.required_section("system_monitor");
     s.optional<std::string>("system_monitor.platform").one_of({"linux", "jetson", "mock"});
     s.required<int>("system_monitor.update_rate_hz").range(1, 100);
+    s.optional<int>("system_monitor.disk_check_interval_s").range(1, 3600);
     s.optional<double>("system_monitor.thresholds.cpu_warn_percent").range(0.0, 100.0);
     s.optional<double>("system_monitor.thresholds.mem_warn_percent").range(0.0, 100.0);
     s.optional<double>("system_monitor.thresholds.temp_warn_c").range(0.0, 200.0);
     s.optional<double>("system_monitor.thresholds.temp_crit_c").range(0.0, 200.0);
     s.optional<double>("system_monitor.thresholds.battery_warn_percent").range(0.0, 100.0);
     s.optional<double>("system_monitor.thresholds.battery_crit_percent").range(0.0, 100.0);
+    s.optional<double>("system_monitor.thresholds.disk_crit_percent").range(0.0, 100.0);
     return s;
 }
 

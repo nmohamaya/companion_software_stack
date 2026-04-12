@@ -5,12 +5,13 @@
 #include <string>
 
 struct ParsedArgs {
-    std::string config_path = "config/default.json";
-    std::string log_level   = "info";
-    bool        help        = false;
-    bool        simulation  = false;
-    bool        json_logs   = false;
-    bool        supervised  = false;  // P7 only: fork+exec child processes
+    std::string config_path     = "config/default.json";
+    std::string log_level       = "info";
+    bool        help            = false;
+    bool        simulation      = false;
+    bool        json_logs       = false;
+    bool        supervised      = false;  // P7 only: fork+exec child processes
+    bool        skip_validation = false;  // Skip config schema validation at startup
 };
 
 inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
@@ -24,6 +25,7 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
             std::printf("  --sim              Run in simulation mode\n");
             std::printf("  --json-logs        Emit structured JSON log lines\n");
             std::printf("  --supervised       P7: fork+exec child processes (supervisor mode)\n");
+            std::printf("  --skip-validation  Skip config schema validation (development only)\n");
             std::printf("  --help             Show this help\n");
         } else if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             args.config_path = argv[++i];
@@ -35,6 +37,8 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
             args.json_logs = true;
         } else if (std::strcmp(argv[i], "--supervised") == 0) {
             args.supervised = true;
+        } else if (std::strcmp(argv[i], "--skip-validation") == 0) {
+            args.skip_validation = true;
         }
     }
     return args;
