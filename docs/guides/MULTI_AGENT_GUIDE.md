@@ -1258,6 +1258,20 @@ Once all P1/P2 findings are addressed, merge the PR in GitHub.
 
 10. **No rollback automation.** If an agent's merged PR introduces a regression, there's no automated revert. Standard git revert workflows apply.
 
+11. **Review agents have blind spots in cross-file consistency.** Our two-pass review architecture (9 agents) catches most safety, correctness, and quality issues, but has documented gaps. Data from Wave 3 (Epic #284): out of 30 Copilot comments, our agents had already fixed 12, 15 were false positives, and **3 were net-new findings our agents missed** (~10% unique hit rate). The gaps fall into specific categories:
+
+    **What our agents miss:**
+    - **C++ implicit semantics**: Implicitly-deleted special member functions (e.g., `= default` on move-assignment with reference members compiles but is silently deleted). Requires language-lawyer knowledge beyond what focused review agents check.
+    - **Member initialization order**: Construction sequencing bugs where member A must be initialized before member B due to threading (e.g., logger must be installed before Zenoh bus creation because Zenoh spawns threads that may log). Agents check RAII and null-safety but not init-list ordering.
+    - **Cross-file enum/string consistency**: When a status string is added in one file but the canonical enum definitions live in another file, agents don't cross-reference to verify terminology matches (e.g., "ELEVATED" vs "WARM" for thermal_zone==1).
+    - **RAII false positive gap**: Pattern-matching reviewers (including Copilot) frequently flag RAII guard variables as "unused" because they don't model non-trivial destructors. Our agents don't make this mistake, but Copilot generated 10 false positives from this in a single PR.
+
+    **Mitigation:** The deploy-issue and deploy-wave skills include a Copilot triage step that checks bot review comments before CP4. This catches the ~10% of findings that are genuinely net-new. The triage table (already-fixed / net-new / false-positive) is posted to the PR for audit trail.
+
+    **What to watch for in future agent improvements:**
+    - A dedicated `review-cpp-semantics` agent could check implicit deletions, initialization order, and cross-file enum consistency
+    - Alternatively, expanding `review-api-contract` scope to include C++ special member function correctness and cross-file constant consistency
+
 ## Future Improvements
 
 1. **Distributed agent execution.** Run agents on multiple machines or cloud instances, coordinated through GitHub as the source of truth. Each machine pulls issues, creates worktrees, and pushes PRs independently.

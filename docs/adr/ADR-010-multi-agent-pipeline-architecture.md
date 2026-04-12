@@ -249,6 +249,7 @@ Two infra agents are needed because Epic #284 (Modularity, 13 issues) requires c
 - **Review routing heuristics** may miss edge cases (e.g., concurrency bug in a file that doesn't contain "mutex")
 - **Dashboard metrics** depend on consistent commit message formatting
 - **Double context injection** if new launch paths are added without understanding the deploy-issue.sh/start-agent.sh split
+- **Review agents miss cross-file consistency** — C++ implicit semantics (silently-deleted special members), member init ordering bugs, and cross-file enum/string mismatches fall outside all 9 review agents' focused scopes. Measured at ~10% miss rate vs Copilot (Wave 3 data: 3/30 comments were net-new). Mitigated by Copilot triage step in deploy skills.
 
 ## Alternatives Considered
 
