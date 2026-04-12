@@ -8,8 +8,11 @@
 #include "util/ilogger.h"
 #include "util/null_logger.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -249,4 +252,103 @@ TEST(ILoggerTest, LevelOrdering) {
     EXPECT_LT(static_cast<uint8_t>(L::Info), static_cast<uint8_t>(L::Warn));
     EXPECT_LT(static_cast<uint8_t>(L::Warn), static_cast<uint8_t>(L::Error));
     EXPECT_LT(static_cast<uint8_t>(L::Error), static_cast<uint8_t>(L::Critical));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RCU-style retirement (Issue #384)
+// ═══════════════════════════════════════════════════════════════
+
+TEST(ILoggerRCUTest, OldLoggerSurvivesAfterSetLogger) {
+    // The old logger must remain callable after set_logger() replaces it,
+    // because the retirement vector keeps it alive.
+    LoggerGuard guard;
+
+    auto  cap1 = std::make_unique<drone::log::CapturingLogger>();
+    auto* ptr1 = cap1.get();
+    drone::log::set_logger(std::move(cap1));
+
+    DRONE_LOG_INFO("msg1");
+    EXPECT_EQ(ptr1->count(), 1u);
+
+    // Replace with a second logger — ptr1 should still be alive (retired).
+    auto  cap2 = std::make_unique<drone::log::CapturingLogger>();
+    auto* ptr2 = cap2.get();
+    drone::log::set_logger(std::move(cap2));
+
+    // The old logger (ptr1) must still be callable — not destroyed.
+    EXPECT_EQ(ptr1->count(), 1u);
+    ptr1->log(drone::log::Level::Info, "still alive");
+    EXPECT_EQ(ptr1->count(), 2u);
+
+    // New logger works too.
+    DRONE_LOG_INFO("msg2");
+    EXPECT_EQ(ptr2->count(), 1u);
+}
+
+TEST(ILoggerRCUTest, OldLoggerSurvivesAfterResetLogger) {
+    LoggerGuard guard;
+
+    auto  cap = std::make_unique<drone::log::CapturingLogger>();
+    auto* ptr = cap.get();
+    drone::log::set_logger(std::move(cap));
+
+    DRONE_LOG_INFO("before reset");
+    EXPECT_EQ(ptr->count(), 1u);
+
+    // Reset to default — old logger must survive (retired).
+    drone::log::reset_logger();
+
+    // The old logger (ptr) must still be callable.
+    EXPECT_EQ(ptr->count(), 1u);
+    ptr->log(drone::log::Level::Info, "still alive after reset");
+    EXPECT_EQ(ptr->count(), 2u);
+}
+
+TEST(ILoggerRCUTest, ConcurrentLoggerAccessDuringSwap) {
+    // Stress test: multiple threads call logger() while another thread
+    // swaps loggers.  Must not crash or trigger TSAN/ASAN.
+    //
+    // Uses NullLogger (thread-safe, no-op) rather than CapturingLogger
+    // (not thread-safe) since we are testing the swap mechanism, not
+    // the logger implementation.
+    LoggerGuard guard;
+
+    constexpr int kIterations = 5000;
+    constexpr int kReaders    = 4;
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+
+    // Reader threads: continuously call logger() and invoke should_log().
+    // NullLogger::should_log() returns false, so log() is never called.
+    std::vector<std::thread> readers;
+    readers.reserve(kReaders);
+    for (int i = 0; i < kReaders; ++i) {
+        readers.emplace_back([&] {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            while (!stop.load(std::memory_order_acquire)) {
+                auto& lg = drone::log::logger();
+                // Exercise the pointer dereference — the key safety property.
+                auto can_log = lg.should_log(drone::log::Level::Debug);
+                (void)can_log;
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+
+    // Writer thread: swap loggers repeatedly.
+    for (int i = 0; i < kIterations; ++i) {
+        drone::log::set_logger(std::make_unique<drone::log::NullLogger>());
+    }
+
+    stop.store(true, std::memory_order_release);
+    for (auto& t : readers) {
+        t.join();
+    }
+
+    // If we get here without crash/TSAN flag, the test passes.
+    drone::log::reset_logger();
 }
