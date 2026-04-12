@@ -31,7 +31,7 @@ private:
     static void handler(int sig) {
         // Only async-signal-safe operations here
         if (s_running_) {
-            s_running_->store(false, std::memory_order_relaxed);
+            s_running_->store(false, std::memory_order_seq_cst);
         }
         const char*           msg = "Signal received, shutting down...\n";
         [[maybe_unused]] auto r   = write(STDOUT_FILENO, msg, 35);

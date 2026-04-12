@@ -208,8 +208,14 @@ After the agent completes:
 
 1. Read `AGENT_REPORT.md`
 2. Merge agent worktree changes into the integration branch
-3. Run validation (build + format + test count — same as deploy-issue Phase 3)
-4. Run hallucination checks (includes, report vs diff, config keys, symbols — same as deploy-issue)
+3. **Clean up the agent worktree immediately** — remove the worktree and delete its local branch:
+   ```bash
+   git worktree remove .claude/worktrees/<agent-id> --force
+   git branch -D worktree-<agent-id>
+   ```
+   Do this right after merging, not at the end of the wave. Stale worktrees pollute the VS Code source control panel and risk accidental commits to dead branches.
+4. Run validation (build + format + test count — same as deploy-issue Phase 3)
+5. Run hallucination checks (includes, report vs diff, config keys, symbols — same as deploy-issue)
 
 ### Step 3.4 — Per-issue checkpoint
 

@@ -3,23 +3,17 @@
 // watchdog.  Publishes SystemHealth.
 
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
 #include "ipc/zenoh_liveliness.h"
 #include "monitor/iprocess_monitor.h"
 #include "monitor/process_manager.h"
 #include "monitor/sys_info.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/process_graph.h"
 #include "util/restart_policy.h"
 #include "util/safe_name_copy.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/sys_info_factory.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
@@ -39,28 +33,25 @@
 static std::atomic<bool> g_running{true};
 
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "system_monitor");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("system_monitor", LogConfig::resolve_log_dir(), args.log_level, args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::system_monitor_schema());
-            rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== System Monitor starting (PID {}) ===", getpid());
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "system_monitor", g_running,
+                                                drone::util::system_monitor_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // ── Supervised mode: fork+exec child processes ──────────
+    //
+    // WARNING: init_process() above creates a Zenoh session (background threads,
+    // mutexes, SHM). fork() below duplicates mutex state but NOT threads — Zenoh
+    // internal mutexes may be locked forever in the child. Current mitigation:
+    // child calls close_fds_above(2) + execvp() immediately, never touching Zenoh.
+    // This is safe in practice but NOT safe per POSIX (async-signal-unsafe calls
+    // between fork and exec are UB). Proper fix: split init_process() into
+    // pre-fork (args+config+logging) and post-fork (bus+liveliness) phases.
+    // TODO(#284): defer Zenoh session creation until after fork+exec in supervised mode.
     std::unique_ptr<drone::monitor::ProcessManager> supervisor;
     drone::util::ProcessGraph                       process_graph;
-    if (args.supervised) {
+    if (ctx.args.supervised) {
         DRONE_LOG_INFO("[Supervisor] Mode ENABLED — will fork+exec child processes");
 
         // Resolve binary directory from our own /proc/self/exe
@@ -78,17 +69,17 @@ int main(int argc, char* argv[]) {
 
         // Build extra args string (pass through config, log-level, etc.)
         std::string extra_args;
-        if (args.config_path != "config/default.json") {
-            extra_args += "--config " + args.config_path + " ";
+        if (ctx.args.config_path != "config/default.json") {
+            extra_args += "--config " + ctx.args.config_path + " ";
         }
-        if (args.log_level != "info") {
-            extra_args += "--log-level " + args.log_level + " ";
+        if (ctx.args.log_level != "info") {
+            extra_args += "--log-level " + ctx.args.log_level + " ";
         }
-        if (args.simulation) extra_args += "--sim ";
-        if (args.json_logs) extra_args += "--json-logs ";
+        if (ctx.args.simulation) extra_args += "--sim ";
+        if (ctx.args.json_logs) extra_args += "--json-logs ";
 
         // Load per-process configs from "watchdog.processes" section
-        auto proc_section = cfg.section(drone::cfg_key::watchdog::PROCESSES);
+        auto proc_section = ctx.cfg.section(drone::cfg_key::watchdog::PROCESSES);
 
         // Default process list (if config section is absent or empty)
         static const std::vector<std::string> default_process_names = {
@@ -163,7 +154,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Build name → config lookup
+        // Build name -> config lookup
         std::unordered_map<std::string, const drone::util::ProcessConfig*> config_map;
         for (const auto& pc : process_configs) {
             config_map[pc.name] = &pc;
@@ -193,23 +184,19 @@ int main(int argc, char* argv[]) {
         // Launch all children in topological order
         supervisor->launch_all();
         DRONE_LOG_INFO("[Supervisor] All child processes launched (order: {})",
-                       fmt::join(launch_order, " → "));
+                       fmt::join(launch_order, " -> "));
     }
 
-    // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("system_monitor");
-
-    auto health_pub = bus.advertise<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
+    // ── IPC channels ────────────────────────────────────────
+    auto health_pub =
+        ctx.bus.advertise<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
     if (!health_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create system health publisher");
         return 1;
     }
 
     // ── Optional: subscribe to FC state for battery info ────
-    auto fc_sub = bus.subscribe_optional<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto fc_sub = ctx.bus.subscribe_optional<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
 
     // ── Process health monitoring via liveliness tokens ─────
     // Critical processes: if these die, flag critical_failure.
@@ -247,7 +234,7 @@ int main(int argc, char* argv[]) {
             liveness->events.push_back({proc, false, now_ns});
         });
 
-    // Local map: process name → (alive, last_seen_ns)
+    // Local map: process name -> (alive, last_seen_ns)
     struct ProcessState {
         bool     alive        = false;
         uint64_t last_seen_ns = 0;
@@ -267,38 +254,38 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        health_hb = drone::util::ScopedHeartbeat("health_loop", false);
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub_ch =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_SYSTEM_MONITOR);
+    auto                        thread_health_pub_ch = ctx.bus.advertise<drone::ipc::ThreadHealth>(
+        drone::ipc::topics::THREAD_HEALTH_SYSTEM_MONITOR);
     drone::util::ThreadHealthPublisher thread_health_publisher(*thread_health_pub_ch,
                                                                "system_monitor", watchdog);
 
     // Config-driven thresholds (collected into MonitorThresholds struct)
-    const int update_rate   = cfg.get<int>(drone::cfg_key::system_monitor::UPDATE_RATE_HZ, 1);
+    const int update_rate   = ctx.cfg.get<int>(drone::cfg_key::system_monitor::UPDATE_RATE_HZ, 1);
     const int loop_sleep_ms = std::max(1, update_rate > 0 ? 1000 / update_rate : 1000);
-    const int disk_check_s  = cfg.get<int>(drone::cfg_key::system_monitor::DISK_CHECK_INTERVAL_S,
-                                           10);
+    const int disk_check_s = ctx.cfg.get<int>(drone::cfg_key::system_monitor::DISK_CHECK_INTERVAL_S,
+                                              10);
 
     drone::monitor::MonitorThresholds thresholds;
     thresholds.cpu_warn =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT, 90.0f);
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT, 90.0f);
     thresholds.mem_warn =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT, 90.0f);
-    thresholds.temp_warn = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_WARN_C,
-                                          80.0f);
-    thresholds.temp_crit = cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_CRIT_C,
-                                          95.0f);
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT, 90.0f);
+    thresholds.temp_warn =
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_WARN_C, 80.0f);
+    thresholds.temp_crit =
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::TEMP_CRIT_C, 95.0f);
     thresholds.disk_crit =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::DISK_CRIT_PERCENT, 98.0f);
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::DISK_CRIT_PERCENT, 98.0f);
     thresholds.batt_warn =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT, 20.0f);
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT, 20.0f);
     thresholds.batt_crit =
-        cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT, 10.0f);
+        ctx.cfg.get<float>(drone::cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT, 10.0f);
     // Convert disk check interval from seconds to ticks (calls)
     thresholds.disk_interval = std::max(1, disk_check_s * (update_rate > 0 ? update_rate : 1));
 
     // Create platform-specific ISysInfo (linux, jetson, mock)
-    const std::string platform = cfg.get<std::string>(drone::cfg_key::system_monitor::PLATFORM,
-                                                      "linux");
+    const std::string platform = ctx.cfg.get<std::string>(drone::cfg_key::system_monitor::PLATFORM,
+                                                          "linux");
     auto              sys_info = drone::util::create_sys_info(platform);
     DRONE_LOG_INFO("Platform sys_info: {} (config='{}')", sys_info->name(), platform);
 
@@ -308,12 +295,12 @@ int main(int argc, char* argv[]) {
 
     // Optional fault-injection override subscriber.
     auto fault_sub =
-        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
+        ctx.bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
 
     uint32_t tick = 0;
 
     // ── Main loop (1 Hz) ────────────────────────────────────
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(health_hb.handle());
         drone::systemd::notify_watchdog();
         tick++;
@@ -390,18 +377,29 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // ── Supervisor tick: reap zombies, detect deaths, restart ─
+        // Must run BEFORE publish so stack_status/total_restarts are current.
+        if (supervisor) {
+            supervisor->set_thermal_zone(health.thermal_zone);
+            supervisor->tick();
+            health.stack_status   = static_cast<uint8_t>(supervisor->compute_stack_status());
+            health.total_restarts = supervisor->total_restarts();
+        }
+
         health_pub->publish(health);
 
         // Log summary
         if (tick % 5 == 0) {
             const char* status_str = "NOMINAL";
-            if (health.thermal_zone == 2)
+            if (health.thermal_zone == 1)
+                status_str = "WARM";
+            else if (health.thermal_zone == 2)
                 status_str = "WARNING";
             else if (health.thermal_zone == 3)
                 status_str = "CRITICAL";
 
             DRONE_LOG_INFO(
-                "[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}°C "
+                "[SysMon] CPU={:.1f}% MEM={:.1f}% TEMP={:.1f}C "
                 "DISK={:.0f}% BATT={:.0f}% thermal_zone={} stack={} => {}",
                 health.cpu_usage_percent, health.memory_usage_percent, health.cpu_temp_c,
                 health.disk_usage_percent, battery, health.thermal_zone,
@@ -410,17 +408,6 @@ int main(int argc, char* argv[]) {
         }
 
         thread_health_publisher.publish_snapshot();
-
-        // ── Supervisor tick: reap zombies, detect deaths, restart ─
-        if (supervisor) {
-            // Feed current thermal zone to supervisor for thermal gating
-            supervisor->set_thermal_zone(health.thermal_zone);
-            supervisor->tick();
-
-            // Update stack status and total restarts in health struct
-            health.stack_status   = static_cast<uint8_t>(supervisor->compute_stack_status());
-            health.total_restarts = supervisor->total_restarts();
-        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

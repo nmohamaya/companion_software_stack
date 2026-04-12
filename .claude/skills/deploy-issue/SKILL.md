@@ -200,6 +200,13 @@ git diff --stat origin/<base_branch>...HEAD
 
 If the merge has conflicts (unlikely since the worktree branched from our branch), resolve them and commit. Copy `AGENT_REPORT.md` from the worktree to the current directory if not already present after merge.
 
+**Clean up the agent worktree immediately after merging:**
+```bash
+git worktree remove .claude/worktrees/<agent-id> --force
+git branch -D worktree-<agent-id>
+```
+Do this right after merging, not at the end of the pipeline. Stale worktrees pollute the VS Code source control panel and risk accidental commits to dead branches.
+
 ---
 
 ### CP1: Changes Review [INTERACTIVE]

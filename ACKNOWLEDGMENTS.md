@@ -30,15 +30,15 @@ All implementations are original — no source code was copied from reference im
 
 ### License Compatibility Notes
 
+**This project is licensed under AGPL 3.0.** All dependencies are compatible.
+
 **Zenoh EPL 2.0**
 
 Eclipse Zenoh is the **primary IPC backend** for the stack. EPL 2.0 (Eclipse Public License 2.0) is a permissive open-source license with weak copyleft:
-- ✅ **Compatible with BSD 3-Clause** — the stack's license
-- ✅ **Linking only** — this stack links Zenoh without modifying it, so copyleft does not activate
-- ⚠️ **If you modify Zenoh** — modifications must be disclosed under EPL 2.0
-- ✅ **Alternative available** — POSIX SHM backend (`ipc_backend: "shm"` in config) has no external dependencies and is EPL-free
 
-**For unencumbered deployment**, you can build with `HAVE_ZENOH=OFF` and use the POSIX SHM IPC backend instead. All stack features remain available.
+- Compatible with AGPL 3.0
+- This stack links Zenoh without modifying it, so copyleft does not activate
+- If you modify Zenoh itself, those modifications must be disclosed under EPL 2.0
 
 ## ML Models
 
@@ -46,35 +46,10 @@ Eclipse Zenoh is the **primary IPC backend** for the stack. EPL 2.0 (Eclipse Pub
 |-------|--------|---------|-------|
 | YOLOv8n ONNX | [Ultralytics](https://github.com/ultralytics/ultralytics) | **AGPL 3.0** | Optional — disabled without `HAS_OPENCV`. See license note below. |
 
-### YOLOv8 AGPL 3.0 License Note
+### YOLOv8 AGPL 3.0
 
-The YOLOv8n model weights are licensed under **AGPL 3.0** by Ultralytics. 
+The YOLOv8n model weights are licensed under **AGPL 3.0** by Ultralytics. This is fully compatible with the project's AGPL 3.0 license.
 
-**What AGPL 3.0 Means:**
-- AGPL 3.0 is a **copyleft license** — if you distribute or deploy software using YOLOv8, you must provide source code access to end-users with reciprocal rights
-- Unlike permissive licenses (MIT, BSD), you cannot use YOLOv8 in commercial closed-source products without disclosure or a commercial license
+The model file is `.gitignore`'d and downloaded on demand — it is **not distributed** with this source code. During development with simulated backends (`HAS_OPENCV=OFF`), YOLOv8 is completely optional.
 
-**Deployment Options:**
-
-1. **Use `ColorContourDetector`** (Recommended for proprietary deployment)
-   - Project-original HSV-based object detector, no license constraint
-   - Pure C++, no external dependencies
-   - Suitable for simple color-based detection use cases
-
-2. **Obtain a [commercial Ultralytics license](https://ultralytics.com/license)**
-   - Exempts you from AGPL 3.0 requirements
-   - Recommended for commercial drone products
-
-3. **Substitute a permissively-licensed model**
-   - Use YOLO-World, Roboflow-hosted models, or train your own on your data
-   - Ensure license compatibility with BSD 3-Clause
-
-4. **Open-source deployment**
-   - If your product is open-source, AGPL 3.0 is compatible (you already disclose source)
-
-**Build & Development:**
-- The model file is `.gitignore`'d and downloaded on demand — it is **not distributed** with this source code
-- During development with simulated backends (`HAS_OPENCV=OFF`), YOLOv8 is completely optional
-- CI tests validate both paths (with and without OpenCV/YOLOv8)
-
-**Recommendation:** For new deployments, use `ColorContourDetector` or a permissively-licensed alternative to avoid AGPL licensing obligations.
+**For commercial license holders:** If you are using this project under a commercial license (see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)), note that YOLOv8 is separately licensed by Ultralytics. You will need a [commercial Ultralytics license](https://ultralytics.com/license) as well, or use `ColorContourDetector` (project-original, no external license constraints).

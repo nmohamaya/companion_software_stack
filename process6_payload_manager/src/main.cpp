@@ -6,19 +6,12 @@
 
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
 #include "payload/auto_tracker.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/realtime.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -30,46 +23,30 @@
 static std::atomic<bool> g_running{true};
 
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "payload_manager");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("payload_manager", LogConfig::resolve_log_dir(), args.log_level,
-                    args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::payload_manager_schema());
-            rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== Payload Manager starting (PID {}) ===", getpid());
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "payload_manager", g_running,
+                                                drone::util::payload_manager_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // ── Init gimbal via HAL factory ─────────────────────────
-    auto gimbal = drone::hal::create_gimbal(cfg, "payload_manager.gimbal");
+    auto gimbal = drone::hal::create_gimbal(ctx.cfg, "payload_manager.gimbal");
     if (!gimbal->init()) {
         DRONE_LOG_ERROR("Failed to initialise gimbal ({})", gimbal->name());
         return 1;
     }
     DRONE_LOG_INFO("Gimbal: {}", gimbal->name());
 
-    // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("payload_manager");
-
-    auto cmd_sub = bus.subscribe<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
+    // ── IPC channels ────────────────────────────────────────
+    auto cmd_sub =
+        ctx.bus.subscribe<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
     if (!cmd_sub->is_connected()) {
         DRONE_LOG_ERROR("Cannot open payload commands channel");
         return 1;
     }
 
-    auto status_pub = bus.advertise<drone::ipc::PayloadStatus>(drone::ipc::topics::PAYLOAD_STATUS);
+    auto status_pub =
+        ctx.bus.advertise<drone::ipc::PayloadStatus>(drone::ipc::topics::PAYLOAD_STATUS);
     if (!status_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create payload status publisher");
         return 1;
@@ -78,13 +55,13 @@ int main(int argc, char* argv[]) {
     // ── Auto-tracking: subscribe to detections + pose ──────
     drone::payload::AutoTrackConfig auto_track_cfg{};
     auto_track_cfg.enabled =
-        cfg.get<bool>(drone::cfg_key::payload_manager::gimbal::auto_track::ENABLED, false);
-    auto_track_cfg.min_confidence =
-        cfg.get<float>(drone::cfg_key::payload_manager::gimbal::auto_track::MIN_CONFIDENCE, 0.5f);
+        ctx.cfg.get<bool>(drone::cfg_key::payload_manager::gimbal::auto_track::ENABLED, false);
+    auto_track_cfg.min_confidence = ctx.cfg.get<float>(
+        drone::cfg_key::payload_manager::gimbal::auto_track::MIN_CONFIDENCE, 0.5f);
 
     auto detections_sub =
-        bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
-    auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+        ctx.bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
+    auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
 
     if (auto_track_cfg.enabled) {
         if (!detections_sub->is_connected()) {
@@ -104,8 +81,8 @@ int main(int argc, char* argv[]) {
 
     // Manual command holdoff — suppress auto-tracking for a configurable duration
     // after the last manual command to avoid fighting the operator.
-    const float manual_holdoff_s =
-        cfg.get<float>(drone::cfg_key::payload_manager::gimbal::auto_track::MANUAL_HOLDOFF_S, 2.0f);
+    const float manual_holdoff_s = ctx.cfg.get<float>(
+        drone::cfg_key::payload_manager::gimbal::auto_track::MANUAL_HOLDOFF_S, 2.0f);
     auto last_manual_cmd_time = std::chrono::steady_clock::time_point{};
 
     DRONE_LOG_INFO("Payload Manager READY");
@@ -115,21 +92,21 @@ int main(int argc, char* argv[]) {
     uint64_t capture_count = 0;
     uint64_t cmd_count     = 0;
 
-    const int   update_hz     = cfg.get<int>(drone::cfg_key::payload_manager::UPDATE_RATE_HZ, 50);
+    const int   update_hz = ctx.cfg.get<int>(drone::cfg_key::payload_manager::UPDATE_RATE_HZ, 50);
     const int   loop_sleep_ms = std::max(1, update_hz > 0 ? 1000 / update_hz : 20);
     const float dt            = loop_sleep_ms / 1000.0f;
 
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        payload_hb = drone::util::ScopedHeartbeat("payload_loop", false);
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_PAYLOAD_MANAGER);
+    auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
+        drone::ipc::topics::THREAD_HEALTH_PAYLOAD_MANAGER);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "payload_manager",
                                                         watchdog);
     uint32_t                           health_tick = 0;
 
     // ── Main loop (configurable control rate) ───────────────
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(payload_hb.handle());
         drone::systemd::notify_watchdog();
         drone::util::FrameDiagnostics diag(cycle_count);

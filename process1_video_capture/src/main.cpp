@@ -5,18 +5,11 @@
 
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -216,42 +209,31 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
 // main()
 // ═══════════════════════════════════════════════════════════
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "video_capture");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("video_capture", LogConfig::resolve_log_dir(), args.log_level, args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::video_capture_schema());
-            rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== Video Capture process starting (PID {}) ===", getpid());
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "video_capture", g_running,
+                                                drone::util::video_capture_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // ── Create cameras via HAL factory ──────────────────────
     auto mission_cam =
-        drone::hal::create_camera(cfg, drone::cfg_key::video_capture::mission_cam::SECTION);
-    const auto m_w   = cfg.get<uint32_t>(drone::cfg_key::video_capture::mission_cam::WIDTH, 1920);
-    const auto m_h   = cfg.get<uint32_t>(drone::cfg_key::video_capture::mission_cam::HEIGHT, 1080);
-    const auto m_fps = cfg.get<int>(drone::cfg_key::video_capture::mission_cam::FPS, 30);
+        drone::hal::create_camera(ctx.cfg, drone::cfg_key::video_capture::mission_cam::SECTION);
+    const auto m_w = ctx.cfg.get<uint32_t>(drone::cfg_key::video_capture::mission_cam::WIDTH, 1920);
+    const auto m_h = ctx.cfg.get<uint32_t>(drone::cfg_key::video_capture::mission_cam::HEIGHT,
+                                           1080);
+    const auto m_fps = ctx.cfg.get<int>(drone::cfg_key::video_capture::mission_cam::FPS, 30);
     if (!mission_cam->open(m_w, m_h, m_fps)) {
         DRONE_LOG_ERROR("Failed to open mission camera ({}x{} @ {}fps)", m_w, m_h, m_fps);
         return 1;
     }
 
     auto stereo_left =
-        drone::hal::create_camera(cfg, drone::cfg_key::video_capture::stereo_cam::SECTION);
+        drone::hal::create_camera(ctx.cfg, drone::cfg_key::video_capture::stereo_cam::SECTION);
     auto stereo_right =
-        drone::hal::create_camera(cfg, drone::cfg_key::video_capture::stereo_cam::SECTION);
-    const auto s_w   = cfg.get<uint32_t>(drone::cfg_key::video_capture::stereo_cam::WIDTH, 640);
-    const auto s_h   = cfg.get<uint32_t>(drone::cfg_key::video_capture::stereo_cam::HEIGHT, 480);
-    const auto s_fps = cfg.get<int>(drone::cfg_key::video_capture::stereo_cam::FPS, 30);
+        drone::hal::create_camera(ctx.cfg, drone::cfg_key::video_capture::stereo_cam::SECTION);
+    const auto s_w = ctx.cfg.get<uint32_t>(drone::cfg_key::video_capture::stereo_cam::WIDTH, 640);
+    const auto s_h = ctx.cfg.get<uint32_t>(drone::cfg_key::video_capture::stereo_cam::HEIGHT, 480);
+    const auto s_fps = ctx.cfg.get<int>(drone::cfg_key::video_capture::stereo_cam::FPS, 30);
     if (!stereo_left->open(s_w, s_h, s_fps) || !stereo_right->open(s_w, s_h, s_fps)) {
         DRONE_LOG_ERROR("Failed to open stereo cameras ({}x{} @ {}fps)", s_w, s_h, s_fps);
         return 1;
@@ -260,19 +242,16 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("Cameras: mission={}, stereo_l={}, stereo_r={}", mission_cam->name(),
                    stereo_left->name(), stereo_right->name());
 
-    // ── Create publishers via message bus factory ───────────
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("video_capture");
-
-    auto mission_pub = bus.advertise<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
+    // ── Create publishers ───────────────────────────────────
+    auto mission_pub =
+        ctx.bus.advertise<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
     if (!mission_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create publisher: {}", drone::ipc::topics::VIDEO_MISSION_CAM);
         return 1;
     }
 
-    auto stereo_pub = bus.advertise<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
+    auto stereo_pub =
+        ctx.bus.advertise<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
     if (!stereo_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create publisher: {}", drone::ipc::topics::VIDEO_STEREO_CAM);
         return 1;
@@ -286,8 +265,8 @@ int main(int argc, char* argv[]) {
 
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_VIDEO_CAPTURE);
+    auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
+        drone::ipc::topics::THREAD_HEALTH_VIDEO_CAPTURE);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "video_capture",
                                                         watchdog);
 
@@ -295,7 +274,7 @@ int main(int argc, char* argv[]) {
     drone::systemd::notify_ready();
 
     // ── Main loop: periodic health log ──────────────────────
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();

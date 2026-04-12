@@ -299,3 +299,41 @@ add_drone_test(test_gimbal_auto_tracker test_gimbal_auto_tracker.cpp)
 # ── TopicResolver tests (Issue #289) ─────────────────────
 add_drone_test(test_topic_resolver  test_topic_resolver.cpp
     PROPERTIES RESOURCE_LOCK "zenoh_session")
+
+# ── ProcessContext tests (Issue #291) ────────────────────
+add_drone_test(test_process_context test_process_context.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
+target_compile_definitions(test_process_context PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
+# ── EventBus tests (Issue #293) ─────────────────────────
+add_drone_test(test_event_bus       test_event_bus.cpp)
+
+# ═══════════════════════════════════════════════════════════
+# Integration tests (Issue #292 — Epic #284 Platform Modularity)
+# ═══════════════════════════════════════════════════════════
+# These tests use the IntegrationTestHarness (shared MessageBus,
+# MockClock, CapturingLogger) to test multi-process IPC flows
+# in a single test binary.  Zenoh RESOURCE_LOCK prevents parallel
+# session exhaustion.
+
+add_drone_test(test_integration_ipc_roundtrip
+    integration/test_ipc_roundtrip.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
+target_include_directories(test_integration_ipc_roundtrip PRIVATE
+    ${PROJECT_SOURCE_DIR}/tests
+)
+target_compile_definitions(test_integration_ipc_roundtrip PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
+add_drone_test(test_integration_fault_cascade
+    integration/test_fault_cascade.cpp
+    PROPERTIES RESOURCE_LOCK "zenoh_session")
+target_include_directories(test_integration_fault_cascade PRIVATE
+    ${PROJECT_SOURCE_DIR}/tests
+)
+target_compile_definitions(test_integration_fault_cascade PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)

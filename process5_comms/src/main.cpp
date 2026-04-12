@@ -10,19 +10,12 @@
 
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/realtime.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -46,7 +39,7 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
 
     auto hb = drone::util::ScopedHeartbeat("fc_rx", true);
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto hb = fc.receive_state();
 
@@ -104,7 +97,7 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
     uint64_t send_fail_count = 0;
     uint64_t traj_send_fail  = 0;
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         // ── Handle FC commands (arm, takeoff, mode) ─────────
         drone::ipc::FCCommand fc_cmd{};
@@ -182,7 +175,7 @@ static void gcs_rx_thread(drone::hal::IGCSLink&                           gcs,
 
     auto hb = drone::util::ScopedHeartbeat("gcs_rx", false);
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         auto msg = gcs.poll_command();
         if (msg.valid) {
@@ -221,12 +214,12 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                               gc
     uint64_t telem_fail_count = 0;
 
     // Wait for subscribers to connect
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         if (pose_sub.is_connected() && status_sub.is_connected() && fc_sub.is_connected()) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::Pose          pose{};
         drone::ipc::MissionStatus mission{};
@@ -254,76 +247,62 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                               gc
 
 // ═══════════════════════════════════════════════════════════
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "comms");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("comms", LogConfig::resolve_log_dir(), args.log_level, args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::comms_schema()); rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== Comms process starting (PID {}) ===", getpid());
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "comms", g_running,
+                                                drone::util::comms_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // ── Create links via HAL factory ────────────────────────
-    auto fc_link    = drone::hal::create_fc_link(cfg, drone::cfg_key::comms::mavlink::SECTION);
-    auto fc_backend = cfg.get<std::string>(drone::cfg_key::comms::mavlink::BACKEND, "simulated");
+    auto fc_link    = drone::hal::create_fc_link(ctx.cfg, drone::cfg_key::comms::mavlink::SECTION);
+    auto fc_backend = ctx.cfg.get<std::string>(drone::cfg_key::comms::mavlink::BACKEND,
+                                               "simulated");
     bool fc_open_ok = false;
     if (fc_backend == "mavlink") {
         // MavlinkFCLink: "port" = connection URI, "baud" = timeout_ms
-        fc_open_ok =
-            fc_link->open(cfg.get<std::string>(drone::cfg_key::comms::mavlink::URI, "udp://:14540"),
-                          cfg.get<int>(drone::cfg_key::comms::mavlink::TIMEOUT_MS, 8000));
+        fc_open_ok = fc_link->open(
+            ctx.cfg.get<std::string>(drone::cfg_key::comms::mavlink::URI, "udp://:14540"),
+            ctx.cfg.get<int>(drone::cfg_key::comms::mavlink::TIMEOUT_MS, 8000));
     } else {
         fc_open_ok = fc_link->open(
-            cfg.get<std::string>(drone::cfg_key::comms::mavlink::SERIAL_PORT, "/dev/ttyTHS1"),
-            cfg.get<int>(drone::cfg_key::comms::mavlink::BAUD_RATE, 921600));
+            ctx.cfg.get<std::string>(drone::cfg_key::comms::mavlink::SERIAL_PORT, "/dev/ttyTHS1"),
+            ctx.cfg.get<int>(drone::cfg_key::comms::mavlink::BAUD_RATE, 921600));
     }
     if (!fc_open_ok) {
         DRONE_LOG_ERROR("Failed to open FC link (backend: {})", fc_backend);
         return 1;
     }
 
-    auto gcs_link = drone::hal::create_gcs_link(cfg, drone::cfg_key::comms::gcs::SECTION);
-    if (!gcs_link->open("0.0.0.0", cfg.get<int>(drone::cfg_key::comms::gcs::UDP_PORT, 14550))) {
+    auto gcs_link = drone::hal::create_gcs_link(ctx.cfg, drone::cfg_key::comms::gcs::SECTION);
+    if (!gcs_link->open("0.0.0.0", ctx.cfg.get<int>(drone::cfg_key::comms::gcs::UDP_PORT, 14550))) {
         DRONE_LOG_ERROR("Failed to open GCS link");
         return 1;
     }
 
     DRONE_LOG_INFO("FC link: {}, GCS link: {}", fc_link->name(), gcs_link->name());
 
-    // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("comms");
-
     // ── Publishers ──────────────────────────────────────────
-    auto fc_pub      = bus.advertise<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
-    auto gcs_cmd_pub = bus.advertise<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
+    auto fc_pub      = ctx.bus.advertise<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto gcs_cmd_pub = ctx.bus.advertise<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
     auto mission_upload_pub =
-        bus.advertise<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
+        ctx.bus.advertise<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
     if (!fc_pub->is_ready() || !gcs_cmd_pub->is_ready() || !mission_upload_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create Comms publishers");
         return 1;
     }
 
     // ── Subscribers ─────────────────────────────────────────
-    auto traj_sub    = bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
-    auto fc_cmd_sub  = bus.subscribe<drone::ipc::FCCommand>(drone::ipc::topics::FC_COMMANDS);
-    auto pose_sub    = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
-    auto mission_sub = bus.subscribe<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
-    auto fc_sub      = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto traj_sub =
+        ctx.bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
+    auto fc_cmd_sub = ctx.bus.subscribe<drone::ipc::FCCommand>(drone::ipc::topics::FC_COMMANDS);
+    auto pose_sub   = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+    auto mission_sub =
+        ctx.bus.subscribe<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
+    auto fc_sub = ctx.bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
 
     // ── Subscribe to fault overrides (optional — may not be publishing yet) ──
     auto fault_sub =
-        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
+        ctx.bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
 
     DRONE_LOG_INFO("Comms READY");
     drone::systemd::notify_ready();
@@ -338,15 +317,19 @@ int main(int argc, char* argv[]) {
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_COMMS);
+        ctx.bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_COMMS);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "comms", watchdog);
 
     // ── Main loop: health publishing (replaces bare join) ─
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
     }
+
+    // Notify systemd BEFORE joining threads — join may take time and
+    // systemd would otherwise exceed WatchdogSec and SIGKILL us.
+    drone::systemd::notify_stopping();
 
     t1.join();
     t2.join();
@@ -355,8 +338,6 @@ int main(int argc, char* argv[]) {
 
     fc_link->close();
     gcs_link->close();
-
-    drone::systemd::notify_stopping();
     DRONE_LOG_INFO("=== Comms stopped ===");
     return 0;
 }

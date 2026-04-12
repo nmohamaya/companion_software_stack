@@ -18,14 +18,14 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 
 ## Log
 
-### 2026-04-11 | tech-lead (wave) | opus | PR #401
+### 2026-04-12 | tech-lead (deploy-wave) | opus | PR #404
 
-**Task:** Epic #284 Wave 2 — ISysInfo abstraction (#290), TopicResolver + vehicle_id (#289), per-process CMake enable options (#288)
-**Files:** isys_info.h, linux_sys_info.h, jetson_sys_info.h, mock_sys_info.h, sys_info_factory.h, topic_resolver.h, iprocess_monitor.h, config_validator.h, config_keys.h, CMakeLists.txt (root + tests), main.cpp (P7), test_system_monitor.cpp, test_topic_resolver.cpp, test_process_interfaces.cpp
-**Tests:** 130 added, 1389 total passing (baseline: 1259)
-**Safety issues found:** Signed→unsigned underflow on MemInfo/DiskInfo (fixed), statvfs overflow on 64-bit (fixed), unguarded thermal zone rescan (fixed)
+**Task:** Epic #284 Wave 3 — Composition & Testing (#293 EventBus, #291 ProcessBuilder, #292 Integration Harness)
+**Files:** common/util/include/util/event_bus.h, common/util/include/util/process_context.h, common/util/include/util/signal_handler.h, common/util/include/util/isys_info.h, common/util/include/util/jetson_sys_info.h, common/util/include/util/linux_sys_info.h, common/util/include/util/mock_sys_info.h, common/util/include/util/sys_info_factory.h, process[1-7]_*/src/main.cpp, tests/test_event_bus.cpp, tests/test_process_context.cpp, tests/test_process_interfaces.cpp, tests/test_system_monitor.cpp, tests/integration/integration_harness.h
+**Tests:** 33 added, 1429 total passing (baseline: 1396)
+**Safety issues found:** ARM64 memory ordering (relaxed→seq_cst/acquire on g_running), EventBus lifetime contract undocumented, fork-after-Zenoh risk in P7 (deferred)
 **Hallucination flags:** PASS
-**Notes:** 3-issue wave on integration branch. Two-pass review ran twice (round 1: 15 findings, round 2: 20 findings, all fixed). Copilot review: 18 comments, 4 additional fixes. Key patterns: MonitorThresholds struct replacing positional floats, ISysInfo DI with const refs, kZoneNotFound cache sentinel.
+**Notes:** Two-pass review × 2 rounds (9 agents each), 22 findings fixed. Per-issue PRs: #402 (#293), #403 (#291). #292 changes included in wave merge commit. Follow-ups: fork-after-Zenoh, config path sanitization, ThreadWatchdog DRY.
 
 ### 2026-04-06 | feature-infra-platform | opus | PR #359
 

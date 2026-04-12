@@ -15,22 +15,15 @@
 
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
 #include "slam/ivio_backend.h"
 #include "slam/types.h"
 #include "slam/vio_types.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/rate_clamp.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -313,35 +306,19 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose
 // main()
 // ═══════════════════════════════════════════════════════════
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "slam_vio_nav");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("slam_vio_nav", LogConfig::resolve_log_dir(), args.log_level, args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::slam_schema()); rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== SLAM/VIO/Nav process starting (PID {}) ===", getpid());
-
-    // ── Create message bus ──────────────────────────────────
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("slam_vio_nav");
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "slam_vio_nav", g_running,
+                                                drone::util::slam_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // Subscribe to stereo camera from Process 1
-    auto stereo_sub = bus.subscribe<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
+    auto stereo_sub =
+        ctx.bus.subscribe<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
     // With Zenoh, is_connected() only becomes true after the first sample
     // arrives; we cannot use it as a startup gate.  Log a warning and continue —
     // data will arrive once video_capture starts publishing.
-    const auto ipc_backend = cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, "zenoh");
+    const auto ipc_backend = ctx.cfg.get<std::string>(drone::cfg_key::IPC_BACKEND, "zenoh");
     if (!stereo_sub->is_connected()) {
         if (ipc_backend == "shm") {
             // Should never happen — shm backend was removed, factory falls back
@@ -353,7 +330,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Create pose output publisher
-    auto pose_pub = bus.advertise<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+    auto pose_pub = ctx.bus.advertise<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create pose publisher");
         return 1;
@@ -367,12 +344,12 @@ int main(int argc, char* argv[]) {
 
     // ── Rate clamping (safety: prevent runaway loops or undersampling) ──
     const int imu_rate =
-        drone::util::clamp_imu_rate(cfg.get<int>(drone::cfg_key::slam::IMU_RATE_HZ, 400));
+        drone::util::clamp_imu_rate(ctx.cfg.get<int>(drone::cfg_key::slam::IMU_RATE_HZ, 400));
     const int vio_rate =
-        drone::util::clamp_vio_rate(cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 100));
+        drone::util::clamp_vio_rate(ctx.cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 100));
 
     // Create IMU via HAL factory
-    auto imu = drone::hal::create_imu_source(cfg, drone::cfg_key::slam::imu::SECTION);
+    auto imu = drone::hal::create_imu_source(ctx.cfg, drone::cfg_key::slam::imu::SECTION);
     if (!imu->init(imu_rate)) {
         DRONE_LOG_ERROR("Failed to initialise IMU source — check config");
         return 1;
@@ -380,30 +357,32 @@ int main(int argc, char* argv[]) {
     DRONE_LOG_INFO("IMU source: {} at {} Hz", imu->name(), imu_rate);
 
     // Create VIO backend via factory
-    auto vio_backend_name = cfg.get<std::string>(drone::cfg_key::slam::vio::BACKEND, "simulated");
-    auto vio_gz_topic     = cfg.get<std::string>(drone::cfg_key::slam::vio::GZ_TOPIC,
-                                                 "/model/x500_companion_0/odometry");
+    auto vio_backend_name = ctx.cfg.get<std::string>(drone::cfg_key::slam::vio::BACKEND,
+                                                     "simulated");
+    auto vio_gz_topic     = ctx.cfg.get<std::string>(drone::cfg_key::slam::vio::GZ_TOPIC,
+                                                     "/model/x500_companion_0/odometry");
     StereoCalibration calib;
-    calib.fx       = cfg.get<double>(drone::cfg_key::slam::stereo::FX, 350.0);
-    calib.fy       = cfg.get<double>(drone::cfg_key::slam::stereo::FY, 350.0);
-    calib.cx       = cfg.get<double>(drone::cfg_key::slam::stereo::CX, 320.0);
-    calib.cy       = cfg.get<double>(drone::cfg_key::slam::stereo::CY, 240.0);
-    calib.baseline = cfg.get<double>(drone::cfg_key::slam::stereo::BASELINE, 0.12);
+    calib.fx       = ctx.cfg.get<double>(drone::cfg_key::slam::stereo::FX, 350.0);
+    calib.fy       = ctx.cfg.get<double>(drone::cfg_key::slam::stereo::FY, 350.0);
+    calib.cx       = ctx.cfg.get<double>(drone::cfg_key::slam::stereo::CX, 320.0);
+    calib.cy       = ctx.cfg.get<double>(drone::cfg_key::slam::stereo::CY, 240.0);
+    calib.baseline = ctx.cfg.get<double>(drone::cfg_key::slam::stereo::BASELINE, 0.12);
 
     ImuNoiseParams imu_params;
-    imu_params.gyro_noise_density  = cfg.get<double>(drone::cfg_key::slam::imu::GYRO_NOISE_DENSITY,
-                                                     0.004);
-    imu_params.gyro_random_walk    = cfg.get<double>(drone::cfg_key::slam::imu::GYRO_RANDOM_WALK,
-                                                     2.2e-5);
-    imu_params.accel_noise_density = cfg.get<double>(drone::cfg_key::slam::imu::ACCEL_NOISE_DENSITY,
-                                                     0.012);
-    imu_params.accel_random_walk   = cfg.get<double>(drone::cfg_key::slam::imu::ACCEL_RANDOM_WALK,
-                                                     8.0e-5);
+    imu_params.gyro_noise_density =
+        ctx.cfg.get<double>(drone::cfg_key::slam::imu::GYRO_NOISE_DENSITY, 0.004);
+    imu_params.gyro_random_walk = ctx.cfg.get<double>(drone::cfg_key::slam::imu::GYRO_RANDOM_WALK,
+                                                      2.2e-5);
+    imu_params.accel_noise_density =
+        ctx.cfg.get<double>(drone::cfg_key::slam::imu::ACCEL_NOISE_DENSITY, 0.012);
+    imu_params.accel_random_walk = ctx.cfg.get<double>(drone::cfg_key::slam::imu::ACCEL_RANDOM_WALK,
+                                                       8.0e-5);
 
-    const float  sim_speed_mps  = cfg.get<float>(drone::cfg_key::slam::vio::SIM_SPEED_MPS, 3.0f);
-    const double good_trace_max = cfg.get<double>(drone::cfg_key::slam::vio::GOOD_TRACE_MAX, 0.1);
-    const double degraded_trace_max = cfg.get<double>(drone::cfg_key::slam::vio::DEGRADED_TRACE_MAX,
-                                                      1.0);
+    const float  sim_speed_mps = ctx.cfg.get<float>(drone::cfg_key::slam::vio::SIM_SPEED_MPS, 3.0f);
+    const double good_trace_max = ctx.cfg.get<double>(drone::cfg_key::slam::vio::GOOD_TRACE_MAX,
+                                                      0.1);
+    const double degraded_trace_max =
+        ctx.cfg.get<double>(drone::cfg_key::slam::vio::DEGRADED_TRACE_MAX, 1.0);
     auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic,
                                                sim_speed_mps, good_trace_max, degraded_trace_max);
     DRONE_LOG_INFO("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",
@@ -416,14 +395,14 @@ int main(int argc, char* argv[]) {
     // get pose from actual sensors and ignore set_trajectory_target().
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>> traj_sub;
     if (vio_backend_name == "simulated") {
-        traj_sub = bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
+        traj_sub = ctx.bus.subscribe<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
         DRONE_LOG_INFO("Subscribed to {} for simulated VIO target tracking",
                        drone::ipc::topics::TRAJECTORY_CMD);
     }
 
     // Subscribe to fault overrides for VIO quality injection
     auto fault_sub =
-        bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
+        ctx.bus.subscribe_optional<drone::ipc::FaultOverrides>(drone::ipc::topics::FAULT_OVERRIDES);
 
     // Launch threads
     std::thread t_vio(vio_pipeline_thread, std::ref(*stereo_sub), std::ref(*vio),
@@ -436,21 +415,21 @@ int main(int argc, char* argv[]) {
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_SLAM_VIO_NAV);
+        ctx.bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_SLAM_VIO_NAV);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "slam_vio_nav",
                                                         watchdog);
 
     DRONE_LOG_INFO("All SLAM/VIO threads started — READY");
     drone::systemd::notify_ready();
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_acquire)) {
         drone::systemd::notify_watchdog();
 
         // ── Forward trajectory targets to VIO backend ────────
         // Poll at ~100 Hz so the simulated VIO tracks waypoint targets promptly.
         // Only active for simulated backend — Gazebo/real backends ignore targets.
         if (traj_sub) {
-            for (int i = 0; i < 100 && g_running.load(std::memory_order_relaxed); ++i) {
+            for (int i = 0; i < 100 && g_running.load(std::memory_order_acquire); ++i) {
                 drone::ipc::TrajectoryCmd traj_cmd{};
                 if (traj_sub->receive(traj_cmd) && traj_cmd.valid) {
                     vio->set_trajectory_target(traj_cmd.target_x, traj_cmd.target_y,
