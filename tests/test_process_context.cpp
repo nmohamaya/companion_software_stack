@@ -127,9 +127,10 @@ TEST(ProcessContext, ParsedArgsPreserved) {
 
 // ── Test: --skip-validation flag is parsed (Debug builds only) ──
 // Gated behind #ifndef NDEBUG because --skip-validation is a security-sensitive
-// flag intentionally disabled in Release builds. In Release, the flag is ignored
+// flag intentionally disabled in non-Debug builds (CMake defines NDEBUG for
+// Release, RelWithDebInfo, MinSizeRel). In those builds, the flag is ignored
 // with a stderr warning (args.skip_validation stays false), so tests that assert
-// it becomes true would fail. Run with Debug/RelWithDebInfo build to test.
+// it becomes true would fail. Run with -DCMAKE_BUILD_TYPE=Debug to test.
 #ifndef NDEBUG
 TEST(ProcessContext, SkipValidationFlagParsed) {
     ArgvBuilder argv_builder({"test_process", "--skip-validation"});
@@ -145,8 +146,8 @@ TEST(ProcessContext, SkipValidationFlagDefaultFalse) {
 }
 
 // ── Test: --skip-validation skips config schema enforcement (Debug only) ──
-// Gated behind #ifndef NDEBUG: --skip-validation is ignored in Release builds
-// (NDEBUG defined by CMake -DCMAKE_BUILD_TYPE=Release), so the "skip" path
+// Gated behind #ifndef NDEBUG: --skip-validation is ignored in non-Debug builds
+// (CMake defines NDEBUG for Release, RelWithDebInfo, MinSizeRel), so the "skip" path
 // cannot be exercised. These tests only compile and run in Debug builds.
 #ifndef NDEBUG
 TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
@@ -183,7 +184,7 @@ TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
 #endif  // NDEBUG
 
 // ── Test: --skip-validation is preserved in ProcessContext (Debug only) ──
-// Gated behind #ifndef NDEBUG: the flag is ignored in Release builds.
+// Gated behind #ifndef NDEBUG: the flag is ignored in non-Debug builds.
 #ifndef NDEBUG
 TEST(ProcessContext, SkipValidationPreservedInContext) {
     std::atomic<bool> running{true};

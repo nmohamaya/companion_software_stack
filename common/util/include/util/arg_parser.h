@@ -42,12 +42,12 @@ inline ParsedArgs parse_args(int argc, char* argv[], const char* process_name) {
             args.supervised = true;
         } else if (std::strcmp(argv[i], "--skip-validation") == 0) {
             // Security guard: --skip-validation bypasses all config schema checks,
-            // so it is disabled in Release/production builds (NDEBUG is defined by
-            // CMake -DCMAKE_BUILD_TYPE=Release). Only Debug builds honour the flag.
-            // Use case: development iteration where config is intentionally partial.
+            // so it is disabled in non-Debug builds (CMake defines NDEBUG for
+            // Release, RelWithDebInfo, and MinSizeRel). Only Debug builds honour
+            // the flag.  Use case: dev iteration where config is intentionally partial.
 #ifdef NDEBUG
             std::fprintf(stderr,
-                         "[WARN] --skip-validation ignored in Release builds (recompile with "
+                         "[WARN] --skip-validation ignored in non-Debug builds (recompile with "
                          "-DCMAKE_BUILD_TYPE=Debug to enable)\n");
 #else
             args.skip_validation = true;
