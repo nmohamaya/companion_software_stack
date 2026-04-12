@@ -71,6 +71,8 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
                 DRONE_LOG_INFO("[Inference] Processed {} frames (writes={})", frame_count,
                                output_queue.write_count());
             }
+            // Log IPC latency periodically
+            video_sub.log_latency_if_due();
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
@@ -304,6 +306,10 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                 DRONE_LOG_INFO("[Fusion] {} cycles, {} fused objects this frame", fusion_count,
                                fused.objects.size());
             }
+
+            // Log IPC latency from the thread that owns receive()
+            pose_sub.log_latency_if_due();
+            radar_sub.log_latency_if_due();
         }
 
         // Rate-limited sleep — reset next_tick if we fell behind to avoid
@@ -501,6 +507,7 @@ int main(int argc, char* argv[]) {
         drone::systemd::notify_watchdog();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
+
         DRONE_LOG_INFO("[HealthCheck] perception alive");
     }
 

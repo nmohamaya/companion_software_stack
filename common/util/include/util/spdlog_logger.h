@@ -37,7 +37,13 @@ namespace drone::log {
 class SpdlogLogger final : public ILogger {
 public:
     void log(Level level, std::string_view msg) override {
-        spdlog::log(to_spdlog_level(level), "{}", msg);
+        // Bypass spdlog's fmt formatter — the message is already formatted
+        // by DRONE_LOG_* macros (via fmt::format) before reaching here.
+        // Using the string_view_t overload avoids double-format overhead.
+        auto* logger = spdlog::default_logger_raw();
+        if (logger) {
+            logger->log(to_spdlog_level(level), spdlog::string_view_t(msg.data(), msg.size()));
+        }
     }
 
     [[nodiscard]] bool should_log(Level level) const override {

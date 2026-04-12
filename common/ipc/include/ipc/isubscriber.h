@@ -3,6 +3,7 @@
 // Decouples process code from the concrete transport (Zenoh, DDS, etc.)
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -25,6 +26,12 @@ public:
 
     /// Returns the topic/channel name this subscriber reads from.
     [[nodiscard]] virtual const std::string& topic_name() const = 0;
+
+    /// Log latency summary if enough samples have been collected.
+    /// Default: no-op (returns false). ZenohSubscriber overrides with real tracking.
+    /// @return true if a summary was logged. Return value is informational
+    ///         (fire-and-forget pattern) — not [[nodiscard]].
+    virtual bool log_latency_if_due(size_t /*min_samples*/ = 100) const { return false; }
 };
 
 }  // namespace drone::ipc

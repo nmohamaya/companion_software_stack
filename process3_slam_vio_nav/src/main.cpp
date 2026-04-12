@@ -210,6 +210,9 @@ static void vio_pipeline_thread(drone::ipc::ISubscriber<drone::ipc::StereoFrame>
             }
         }
 
+        // Log IPC latency periodically
+        stereo_sub.log_latency_if_due();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
@@ -297,6 +300,10 @@ static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose
 
             pose_pub.publish(shm_pose);
         }
+
+        // Log IPC latency from the thread that owns fault_sub.receive()
+        fault_sub.log_latency_if_due();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));  // configurable
     }
     DRONE_LOG_INFO("[PosePublisher] Thread stopped");
@@ -451,6 +458,10 @@ int main(int argc, char* argv[]) {
                            p.position.x(), p.position.y(), p.position.z(), p.quality,
                            vio_health_name(vio->health()));
         }
+
+        // Log IPC latency (traj_sub is received in this thread; fault_sub is
+        // logged from pose_publisher_thread which owns its receive() calls)
+        if (traj_sub) traj_sub->log_latency_if_due();
 
         // Report IMU buffer stats
         uint64_t drops = imu_ring_buffer.drop_count();

@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace drone::util {
@@ -59,7 +60,9 @@ public:
     /// @param capacity  Ring buffer size (rounded up to power-of-two internally).
     ///                  Larger = more accurate percentiles, more memory.
     explicit LatencyTracker(size_t capacity = 1024)
-        : mask_(next_power_of_two(capacity) - 1), samples_(mask_ + 1, 0) {}
+        : mask_(next_power_of_two(capacity) - 1), samples_(mask_ + 1, 0) {
+        sort_scratch_.reserve(mask_ + 1);
+    }
 
     /// Record a single latency sample.  O(1), no allocation.
     void record(uint64_t latency_ns) {
@@ -69,16 +72,21 @@ public:
     }
 
     /// Compute summary statistics over the current window.
-    /// Sorts a copy of the internal buffer — O(n log n).
+    /// Sorts a snapshot in the pre-reserved scratch buffer — O(n log n),
+    /// zero heap allocation (scratch reserved to capacity in ctor).
     /// Must not be called concurrently with record() or reset().
     [[nodiscard]] LatencySummary summary() const {
         LatencySummary s;
         size_t         n = std::min(total_count_, samples_.size());
         if (n == 0) return s;
 
-        // Take a snapshot of the ring buffer
-        std::vector<uint64_t> sorted(samples_.begin(), samples_.begin() + n);
-        std::sort(sorted.begin(), sorted.end());
+        // Reuse scratch buffer to avoid per-call heap allocation.
+        // Safe for both cases: (a) ring hasn't wrapped → samples[0..n) are
+        // the only written slots, (b) ring has wrapped → all capacity slots
+        // are valid and n == capacity, so we copy the full buffer.
+        sort_scratch_.assign(samples_.begin(), samples_.begin() + n);
+        std::sort(sort_scratch_.begin(), sort_scratch_.end());
+        const auto& sorted = sort_scratch_;
 
         s.count       = total_count_;
         s.window_size = n;
@@ -98,6 +106,8 @@ public:
     }
 
     /// Reset all samples and counters for the next reporting window.
+    /// sort_scratch_ is intentionally not cleared — its allocation is kept
+    /// to avoid re-allocation on the next summary() call.
     void reset() {
         std::fill(samples_.begin(), samples_.end(), 0);
         write_pos_   = 0;
@@ -119,7 +129,7 @@ public:
 
     /// Log a summary line if enough samples have been collected.
     /// Returns true if a summary was logged (and the tracker was reset).
-    bool log_summary_if_due(const std::string& topic_name, size_t min_samples = 10) {
+    bool log_summary_if_due(std::string_view topic_name, size_t min_samples = 100) {
         if (total_count_ < min_samples) return false;
 
         auto s = summary();
@@ -133,10 +143,11 @@ public:
     }
 
 private:
-    size_t                mask_;             ///< Bitmask for power-of-2 ring indexing.
-    std::vector<uint64_t> samples_;          ///< Ring buffer of latency samples (ns).
-    size_t                write_pos_   = 0;  ///< Next write position (wraps via mask_).
-    size_t                total_count_ = 0;  ///< Total samples recorded (may exceed capacity).
+    size_t                mask_;                  ///< Bitmask for power-of-2 ring indexing.
+    std::vector<uint64_t> samples_;               ///< Ring buffer of latency samples (ns).
+    size_t                write_pos_   = 0;       ///< Next write position (wraps via mask_).
+    size_t                total_count_ = 0;       ///< Total samples recorded (may exceed capacity).
+    mutable std::vector<uint64_t> sort_scratch_;  ///< Reusable scratch for summary() sort.
 
     /// Round up to next power of two.
     static size_t next_power_of_two(size_t n) {

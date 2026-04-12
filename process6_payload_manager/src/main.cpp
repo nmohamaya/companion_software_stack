@@ -204,6 +204,11 @@ int main(int argc, char* argv[]) {
             diag.log_summary("PayloadManager");
         }
 
+        // Log IPC latency summaries
+        cmd_sub->log_latency_if_due();
+        detections_sub->log_latency_if_due();
+        pose_sub->log_latency_if_due();
+
         ++cycle_count;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }

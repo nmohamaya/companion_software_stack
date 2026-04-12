@@ -71,6 +71,12 @@ inline constexpr float kFallbackCpuTempC = 42.0f;
 // ISysInfo — platform abstraction interface
 // ═══════════════════════════════════════════════════════════
 
+/// Platform abstraction for system health queries.
+///
+/// Thread safety: implementations are NOT thread-safe.  All read methods
+/// must be called from a single thread (the P7 monitor loop in practice).
+/// Implementations use mutable cached file handles for performance, which
+/// are not guarded by any synchronisation primitive.
 class ISysInfo {
 public:
     virtual ~ISysInfo() = default;

@@ -1328,6 +1328,31 @@ camera->open("/dev/video0");  // return value ignored!
 `[[nodiscard]]`.  When a return value is intentionally ignored (rare), use
 `(void)` cast with a comment explaining why.
 
+**Exception — fire-and-forget side-effect methods:** Some methods return a
+diagnostic `bool` that is *informational*, not an error code.  If **every**
+call site intentionally discards the return, `[[nodiscard]]` adds noise
+(`(void)` casts at every site) without safety benefit.  In these cases, omit
+`[[nodiscard]]` and document the fire-and-forget intent:
+
+```cpp
+/// Log latency summary if enough samples have been collected.
+/// @return true if a summary was logged. Return value is informational
+///         (fire-and-forget pattern) — not [[nodiscard]].
+virtual bool log_latency_if_due(size_t min_samples = 100) const { return false; }
+```
+
+**When to apply this exception (all must be true):**
+
+1. The return value is purely diagnostic ("did I do X?"), not an error or status
+   that affects correctness.
+2. Every existing and foreseeable call site discards the return.
+3. Ignoring the return cannot cause data loss, resource leak, or incorrect
+   program state.
+
+If in doubt, add `[[nodiscard]]` — the `(void)` cast cost is low and makes the
+intentional discard explicit.  This exception is for high-frequency patterns
+(e.g., 24+ call sites in main loops) where the cast would obscure readability.
+
 ---
 
 ## 4. Systems Programming Concepts
