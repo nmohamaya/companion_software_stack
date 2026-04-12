@@ -86,10 +86,11 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, systemd integration, foundation hardening |
 | [ipc-key-expressions.md](docs/architecture/ipc-key-expressions.md) | Zenoh topic naming convention and complete channel table |
 | [process-health-monitoring.md](docs/architecture/process-health-monitoring.md) | Zenoh liveliness tokens for crash detection |
-| **Guides** | |
+| **Guides & Testing** | |
 | [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
 | [CPP_PATTERNS_GUIDE.md](docs/guides/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
 | [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) | Branching, PRs, CI, review process |
+| [TESTS.md](tests/TESTS.md) | Full test inventory with suites, counts, and run instructions |
 | **Multi-Agent Pipeline** | |
 | [MULTI_AGENT_GUIDE.md](docs/guides/MULTI_AGENT_GUIDE.md) | Multi-agent AI pipeline: setup, deployment, review, pipeline mode |
 | [ADR-010](docs/adr/ADR-010-multi-agent-pipeline-architecture.md) | Architecture decision record for the multi-agent pipeline |
