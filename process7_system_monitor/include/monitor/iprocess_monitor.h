@@ -12,10 +12,10 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
 #include "util/isys_info.h"
 
-#include <chrono>
 #include <memory>
 #include <string>
 
@@ -90,10 +90,7 @@ public:
 
         // Build health struct
         drone::ipc::SystemHealth health{};
-        health.timestamp_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        health.timestamp_ns         = drone::util::get_clock().now_ns();
         health.cpu_usage_percent    = cpu_usage;
         health.memory_usage_percent = mem.usage_percent;
         health.cpu_temp_c           = temp;
@@ -104,7 +101,7 @@ public:
         health.power_watts = battery_ * thresholds_.power_coeff;
 
         // Composite status (thermal_zone):
-        //   0 = normal, 2 = warning, 3 = critical
+        //   0 = normal, 2 = warning, 3 = critical (zone 1 reserved, never assigned)
         health.thermal_zone = 0;
         if (cpu_usage > thresholds_.cpu_warn || mem.usage_percent > thresholds_.mem_warn ||
             temp > thresholds_.temp_warn) {

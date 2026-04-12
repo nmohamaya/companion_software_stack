@@ -86,8 +86,10 @@ public:
 // clock, the OLD clock is moved into a retirement vector rather than
 // destroyed.  This eliminates use-after-free: any thread that loaded the
 // old pointer via get_clock() can safely finish its operation even if
-// another thread concurrently swaps the clock.  The cost is a few leaked
-// clock objects (2-3 per process lifetime max), which is negligible.
+// another thread concurrently swaps the clock.  The cost is process-lifetime
+// retention of retired clock objects; memory growth is unbounded with respect
+// to the number of swaps, but acceptable because clock replacement is a rare
+// cold-path operation (startup / tests), not steady-state.
 
 namespace detail {
 
@@ -123,6 +125,14 @@ inline std::atomic<IClock*>& clock_ptr() {
     return ptr;
 }
 
+/// Retire the currently owned clock (if any) into the retirement vector.
+/// Must be called under clock_mutex().
+inline void retire_owner() {
+    if (clock_owner()) {
+        retired_clocks().push_back(std::move(clock_owner()));
+    }
+}
+
 }  // namespace detail
 
 /// Get the current global clock.  Never returns null.
@@ -139,24 +149,19 @@ inline std::atomic<IClock*>& clock_ptr() {
 /// The previous clock is retired (kept alive) to prevent use-after-free.
 inline void set_clock(std::unique_ptr<IClock> clk) {
     std::lock_guard<std::mutex> lock(detail::clock_mutex());
-    // Retire the old clock — do NOT destroy it.
-    if (detail::clock_owner()) {
-        detail::retired_clocks().push_back(std::move(detail::clock_owner()));
-    }
+    detail::retire_owner();
     detail::clock_owner() = std::move(clk);
     detail::clock_ptr().store(detail::clock_owner().get(), std::memory_order_release);
 }
 
 /// Set the global clock (non-owning overload for stack-allocated clocks).
 /// The caller retains ownership and must ensure the clock outlives all users.
-/// Pass nullptr to restore the default SteadyClock.
+/// Pass nullptr to clear the override; get_clock() will fall back to SteadyClock.
+/// Equivalent to reset_clock() when clk == nullptr.
 /// The previous owned clock (if any) is retired, not destroyed.
 inline void set_clock(IClock* clk) {
     std::lock_guard<std::mutex> lock(detail::clock_mutex());
-    // Retire the old owned clock — do NOT destroy it.
-    if (detail::clock_owner()) {
-        detail::retired_clocks().push_back(std::move(detail::clock_owner()));
-    }
+    detail::retire_owner();
     // No ownership transfer — clock_owner remains null.
     detail::clock_ptr().store(clk, std::memory_order_release);
 }
@@ -165,10 +170,7 @@ inline void set_clock(IClock* clk) {
 /// The previous owned clock is retired (kept alive) to prevent use-after-free.
 inline void reset_clock() {
     std::lock_guard<std::mutex> lock(detail::clock_mutex());
-    // Retire the old owned clock — do NOT destroy it.
-    if (detail::clock_owner()) {
-        detail::retired_clocks().push_back(std::move(detail::clock_owner()));
-    }
+    detail::retire_owner();
     detail::clock_ptr().store(nullptr, std::memory_order_release);
 }
 

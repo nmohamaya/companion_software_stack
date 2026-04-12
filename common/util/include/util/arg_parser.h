@@ -1,6 +1,7 @@
 // common/util/include/util/arg_parser.h
 // Simple command-line argument parser for all processes.
 #pragma once
+#include <cstdio>
 #include <cstring>
 #include <string>
 

@@ -1,7 +1,7 @@
 // common/util/include/util/spdlog_logger.h
 // Production ILogger implementation that delegates to spdlog.
 //
-// Separated from ilogger.h (Issue #384) so that the 60+ files including
+// Separated from ilogger.h (Issue #385) so that the 60+ files including
 // ilogger.h do not transitively depend on spdlog headers.
 //
 // Include this header only where SpdlogLogger is explicitly constructed:

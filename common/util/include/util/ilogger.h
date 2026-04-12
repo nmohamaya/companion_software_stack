@@ -79,7 +79,7 @@ public:
     void log(Level level, std::string_view msg) override {
         static constexpr const char* kLevelNames[] = {"DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"};
         const auto                   idx           = static_cast<uint8_t>(level);
-        const char*                  name          = (idx < 5) ? kLevelNames[idx] : "UNKNOWN";
+        const char* name = (idx < std::size(kLevelNames)) ? kLevelNames[idx] : "UNKNOWN";
         std::fprintf(stderr, "[%s] ", name);
         std::fwrite(msg.data(), 1, msg.size(), stderr);
         std::fputc('\n', stderr);
@@ -101,8 +101,10 @@ public:
 // vector rather than destroyed.  This eliminates use-after-free: any
 // thread that loaded the old pointer via logger() can safely finish its
 // log call even if another thread concurrently swaps the logger.  The
-// cost is a few leaked logger objects (2-3 per process lifetime max),
-// which is negligible for a process that runs for hours/days.
+// cost is process-lifetime retention of retired logger objects.  Memory
+// growth is unbounded with respect to the number of swaps, but this is
+// acceptable because logger replacement is a rare cold-path operation
+// (startup / tests), not a steady-state activity.
 
 namespace detail {
 
@@ -132,6 +134,14 @@ inline std::atomic<ILogger*>& logger_ptr() {
     return ptr;
 }
 
+/// Retire the currently owned logger (if any) into the retirement vector.
+/// Must be called under logger_mutex().
+inline void retire_owner() {
+    if (logger_owner()) {
+        retired_loggers().push_back(std::move(logger_owner()));
+    }
+}
+
 /// Process-wide fallback logger (stderr).  Used when no SpdlogLogger
 /// has been installed yet (before init_process) or after reset_logger().
 inline ILogger& default_logger() {
@@ -150,16 +160,13 @@ inline ILogger& logger() {
 }
 
 /// Install a custom logger (e.g. SpdlogLogger, CapturingLogger).
-/// Pass nullptr or call reset_logger() to revert to fallback.
+/// Call reset_logger() to revert to the StderrFallbackLogger.
 /// Thread-safe: serialized by mutex, atomic store visible to all readers.
 /// The previous logger is retired (kept alive) to prevent use-after-free
 /// if another thread is still using it.
 inline void set_logger(std::unique_ptr<ILogger> l) {
     std::lock_guard<std::mutex> lock(detail::logger_mutex());
-    // Retire the old logger — do NOT destroy it.
-    if (detail::logger_owner()) {
-        detail::retired_loggers().push_back(std::move(detail::logger_owner()));
-    }
+    detail::retire_owner();
     detail::logger_owner() = std::move(l);
     detail::logger_ptr().store(detail::logger_owner().get(), std::memory_order_release);
 }
@@ -168,10 +175,7 @@ inline void set_logger(std::unique_ptr<ILogger> l) {
 /// The previous logger is retired (kept alive) to prevent use-after-free.
 inline void reset_logger() {
     std::lock_guard<std::mutex> lock(detail::logger_mutex());
-    // Retire the old logger — do NOT destroy it.
-    if (detail::logger_owner()) {
-        detail::retired_loggers().push_back(std::move(detail::logger_owner()));
-    }
+    detail::retire_owner();
     detail::logger_ptr().store(nullptr, std::memory_order_release);
 }
 

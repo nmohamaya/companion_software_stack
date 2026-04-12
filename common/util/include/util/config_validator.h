@@ -450,7 +450,7 @@ inline ConfigSchema system_monitor_schema() {
 }
 
 // ── validate_or_exit() — validate and log errors ───────────
-// Returns 0 on success, 1 on validation failure (logs errors via spdlog).
+// Returns 0 on success, 1 on validation failure (logs errors via DRONE_LOG_ERROR).
 // Catches exceptions from malformed configs (defense-in-depth).
 [[nodiscard]] inline int validate_or_exit(const Config& cfg, const ConfigSchema& schema) {
     try {

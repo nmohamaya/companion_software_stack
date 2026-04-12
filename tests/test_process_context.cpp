@@ -6,6 +6,7 @@
 #include "util/process_context.h"
 
 #include <atomic>
+#include <cstdio>
 #include <fstream>
 #include <string>
 #include <type_traits>
@@ -125,17 +126,17 @@ TEST(ProcessContext, ParsedArgsPreserved) {
 }
 
 // ── Test: --skip-validation flag is parsed (Debug builds only) ──
-// These tests are gated behind #ifndef NDEBUG because --skip-validation is
-// a security-sensitive flag that is intentionally disabled in Release builds.
-// In Release, the flag is silently ignored (args.skip_validation stays false),
-// so tests that assert it becomes true would fail. Run with Debug build to test.
+// Gated behind #ifndef NDEBUG because --skip-validation is a security-sensitive
+// flag intentionally disabled in Release builds. In Release, the flag is ignored
+// with a stderr warning (args.skip_validation stays false), so tests that assert
+// it becomes true would fail. Run with Debug/RelWithDebInfo build to test.
 #ifndef NDEBUG
 TEST(ProcessContext, SkipValidationFlagParsed) {
     ArgvBuilder argv_builder({"test_process", "--skip-validation"});
     auto        args = parse_args(argv_builder.argc(), argv_builder.argv(), "test");
     EXPECT_TRUE(args.skip_validation);
 }
-#endif
+#endif  // NDEBUG
 
 TEST(ProcessContext, SkipValidationFlagDefaultFalse) {
     ArgvBuilder argv_builder({"test_process"});
@@ -144,6 +145,9 @@ TEST(ProcessContext, SkipValidationFlagDefaultFalse) {
 }
 
 // ── Test: --skip-validation skips config schema enforcement (Debug only) ──
+// Gated behind #ifndef NDEBUG: --skip-validation is ignored in Release builds
+// (NDEBUG defined by CMake -DCMAKE_BUILD_TYPE=Release), so the "skip" path
+// cannot be exercised. These tests only compile and run in Debug builds.
 #ifndef NDEBUG
 TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
     std::atomic<bool> running{true};
@@ -153,6 +157,7 @@ TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
                            ".json";
     {
         std::ofstream ofs(tmp_path);
+        ASSERT_TRUE(ofs.is_open()) << "Failed to create temp config at: " << tmp_path;
         ofs << R"({"slam": {"vio_rate_hz": 0}})";
     }
 
@@ -175,8 +180,11 @@ TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
 
     std::remove(tmp_path.c_str());
 }
+#endif  // NDEBUG
 
-// ── Test: --skip-validation is preserved in ProcessContext (Debug only) ───
+// ── Test: --skip-validation is preserved in ProcessContext (Debug only) ──
+// Gated behind #ifndef NDEBUG: the flag is ignored in Release builds.
+#ifndef NDEBUG
 TEST(ProcessContext, SkipValidationPreservedInContext) {
     std::atomic<bool> running{true};
     ArgvBuilder       argv_builder({"test_process", "--skip-validation"});
