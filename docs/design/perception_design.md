@@ -1,0 +1,700 @@
+# Process 2 — Perception: Design Document
+
+> **Scope**: Detailed design of the Perception process (`process2_perception`).
+> This document covers the full pipeline from raw video frames to world-frame fused object positions.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Thread Architecture](#thread-architecture)
+3. [IPC Channels](#ipc-channels)
+4. [Component: Detector](#component-detector)
+5. [Component: Tracker](#component-tracker)
+6. [Component: Fusion Engine](#component-fusion-engine)
+7. [Camera → World Transform](#camera--world-transform)
+8. [Object Classification](#object-classification)
+9. [Configuration Reference](#configuration-reference)
+10. [Data Types](#data-types)
+11. [Deployment Profiles](#deployment-profiles)
+12. [Known Gaps and Limitations](#known-gaps-and-limitations)
+
+---
+
+## Overview
+
+Process 2 is a real-time computer vision pipeline that turns raw video frames into world-frame 3D object tracks. It is a three-stage pipeline running across three dedicated threads:
+
+```mermaid
+graph LR
+    subgraph Input["IPC Input"]
+        VF["/drone_mission_cam\nVideoFrame"]
+        SP["/slam_pose\nPose"]
+    end
+
+    subgraph P2["P2 Perception — 3 Pipeline Threads"]
+        direction LR
+        subgraph T1["Inference Thread"]
+            DET["detect()\nIDetector"]
+        end
+        R1["SPSC\ncap 4"]
+        subgraph T2["Tracker Thread"]
+            TRK["update()\nITracker"]
+        end
+        R2["SPSC\ncap 4"]
+        subgraph T3["Fusion Thread"]
+            FUS["fuse()\nIFusionEngine"]
+            ROT["Yaw rotation\ncam → world ENU"]
+        end
+
+        DET --> R1 --> TRK --> R2 --> FUS --> ROT
+    end
+
+    VF --> DET
+    SP --> FUS
+    ROT --> OUT["/detected_objects\nDetectedObjectList"]
+
+    style P2 fill:#1a2a3a,stroke:#2980b9,color:#e0e0e0
+    style T1 fill:#1a1a2e,stroke:#e74c3c,color:#e0e0e0
+    style T2 fill:#1a1a2e,stroke:#f39c12,color:#e0e0e0
+    style T3 fill:#1a1a2e,stroke:#27ae60,color:#e0e0e0
+```
+
+Each stage is independently pipelined. Backpressure is handled by lock-free SPSC ring drop (oldest frame is discarded when the ring is full).
+
+---
+
+## Thread Architecture
+
+| Thread | Name (heartbeat) | Input | Output |
+|--------|-----------------|-------|--------|
+| Inference | `inference` | `drone::ipc::VideoFrame` via IPC subscriber | `Detection2DList` via SPSC ring |
+| Tracker | `tracker` | `Detection2DList` via SPSC ring | `TrackedObjectList` via SPSC ring |
+| Fusion | `fusion` | `TrackedObjectList` via SPSC ring + `drone::ipc::Pose` from IPC | `drone::ipc::DetectedObjectList` via IPC publisher |
+
+**SPSC ring capacity**: 4 slots each. If the downstream thread is slower than upstream, the push fails silently (drop counter incremented, logged every 100 frames or on warning).
+
+**Heartbeat / watchdog**: Each thread registers a `ScopedHeartbeat`. The main loop calls `ThreadHealthPublisher::publish_snapshot()` once per second. `ThreadWatchdog` is armed but all threads stay live under headless operation. Health is published on `THREAD_HEALTH_PERCEPTION`.
+
+---
+
+## IPC Channels
+
+| Direction | Channel key (`drone::ipc::topics::`) | Message type | Source / Consumer |
+|-----------|----------------------------|--------------|------------------|
+| Subscribe | `VIDEO_MISSION_CAM` | `drone::ipc::VideoFrame` | Process 1 → Process 2 |
+| Subscribe | `SLAM_POSE` | `drone::ipc::Pose` | Process 3 → Process 2 (fusion thread) |
+| Subscribe | `RADAR_DETECTIONS` | `drone::ipc::RadarDetectionList` | Radar HAL → Process 2 (fusion thread, Issue #210) |
+| Publish | `DETECTED_OBJECTS` | `drone::ipc::DetectedObjectList` | Process 2 → Process 4 |
+| Publish | `THREAD_HEALTH_PERCEPTION` | `drone::ipc::ThreadHealth` | Process 2 → Process 7 |
+
+The IPC backend (SHM or Zenoh) is resolved from `ipc_backend` in the active config. Gazebo SITL configs default to `"zenoh"`.
+
+---
+
+## Component: Detector
+
+**Interface**: `IDetector` (`detector_interface.h`)
+
+```cpp
+virtual std::vector<Detection2D> detect(
+    const uint8_t* frame_data,
+    uint32_t width, uint32_t height, uint32_t channels) = 0;
+```
+
+The detector receives raw pixel data from a `ShmVideoFrame` and returns a list of axis-aligned bounding boxes with class labels and confidence scores.
+
+### Backends
+
+#### `simulated` (default in `default.json`)
+
+- Class: `SimulatedDetector`
+- Generates 1–5 random detections per frame using `std::mt19937`
+- Bounding boxes are uniformly distributed across the frame with random sizes (40–200 px), confidence (0.40–0.99), and class IDs (0–4)
+- Used only for integration/unit testing without real video
+- **File location:** Extracted from `detector_interface.h` into its own file (`simulated_detector.h`) in PR #264 for cleaner separation of test/simulation code from production interfaces
+
+#### `color_contour` (default in `gazebo_sitl.json`, `hardware.json`)
+
+- Class: `ColorContourDetector`
+- HSV-based color segmentation followed by connected-component labeling (union-find CCL)
+- Suitable for controlled environment testing; works without a GPU / ONNX runtime
+- **Single-pass classification:** `build_color_map()` converts each subsampled pixel to HSV exactly once and stores the winning color index (or `kNoColor = 0xFF`) — O(W·H) total regardless of the number of color classes
+- **Spatial subsampling:** configurable `subsample` stride (default 2) halves both dimensions before classification, reducing pixel work by up to 4×; bounding boxes are scaled back to full resolution on output
+- **Frame-rate cap:** optional `max_fps` sleep throttle (default 0 = unlimited) to free CPU headroom on embedded hardware
+- **Ground-feature rejection filters (Issue #237):**
+  - `min_bbox_height_px` (default 15): rejects detections shorter than this threshold, filtering out ground markings, shadows, and other low-profile false positives
+  - `max_aspect_ratio` (default 3.0): rejects detections wider than tall beyond this ratio, filtering out horizontal ground features (e.g. road lines, terrain edges)
+  - Both are configurable via `perception.detector.min_bbox_height_px` and `perception.detector.max_aspect_ratio`
+- Config keys: `confidence_threshold`, `min_contour_area`, `subsample`, `max_fps`, `min_bbox_height_px`, `max_aspect_ratio`
+
+#### `yolov8` (production)
+
+- Class: `OpenCvYoloDetector`
+- Loads a YOLOv8-nano ONNX model via OpenCV DNN
+- Input is resized to `input_size × input_size` (default 640), normalised to [0,1]
+- Outputs raw 80-class COCO scores; boxes with score ≥ `confidence_threshold` survive NMS at `nms_threshold` IOU
+- COCO class IDs are mapped to `ObjectClass` (see [Object Classification](#object-classification))
+- Compile guard: `#ifdef HAS_OPENCV`; falls back to `color_contour` at runtime if OpenCV is absent
+- Model path: `perception.detector.model_path` (default `models/yolov8n.onnx`)
+
+### Detector Factory
+
+`create_detector(backend, cfg)` in `detector_factory.cpp` selects and constructs the backend. Falls back gracefully to `color_contour` when `yolov8` is requested without OpenCV.
+
+---
+
+## Component: Tracker
+
+**Interface**: `ITracker` (`itracker.h`)
+
+```cpp
+virtual TrackedObjectList update(const Detection2DList& detections) = 0;
+```
+
+### Backend: `ByteTrackTracker` (sole backend — SORT removed in Issue #205)
+
+Implements ByteTrack (Zhang et al., ECCV 2022) two-stage association:
+
+1. **Predict** — advance all active `KalmanBoxTracker` instances one step
+2. **Stage 1** — build IoU cost matrix for ALL tracks vs high-confidence detections, solve with `HungarianSolver`
+3. **Stage 2** — build IoU cost matrix for UNMATCHED tracks vs low-confidence detections, solve with `HungarianSolver` (recovers tracks through occlusion)
+4. **Update** — apply Kalman measurement update for matched pairs
+5. **Spawn** — create new `KalmanBoxTracker` for each unmatched high-confidence detection (low-conf never creates new tracks)
+6. **Prune** — remove tracks exceeding `max_age` consecutive misses
+7. **Emit** — output confirmed tracks (`hits ≥ min_hits`) as `TrackedObjectList`
+
+#### KalmanBoxTracker
+
+**State vector** (8-dimensional, constant-velocity model):
+
+```
+x = [cx, cy, w, h, vcx, vcy, vw, vh]
+```
+
+| Symbol | Description |
+|--------|-------------|
+| cx, cy | Bounding box center in pixels |
+| w, h | Bounding box width and height in pixels |
+| vcx, vcy | Velocity of center (px/frame) |
+| vw, vh | Rate of change of size |
+
+**State transition** (discrete, dt defaults to 1/30 s):
+```
+F = I₈ with F[0,4]=dt, F[1,5]=dt, F[2,6]=dt, F[3,7]=dt
+```
+
+**Measurement model** (`H`, 4×8): direct observation of `[cx, cy, w, h]`.
+
+**Initial covariance**: `P = 10·I₈` with `P[4:8, 4:8] = 1000·I₄` (high velocity uncertainty on birth).
+
+**Confirmation threshold**: `hits ≥ 3` — a new track is not emitted until it has been matched for 3 consecutive frames to suppress false positives.
+
+**Staleness threshold**: `consecutive_misses > 10` — lost tracks are deleted after 10 frames with no association.
+
+#### HungarianSolver
+
+O(n³) Kuhn-Munkres (Hungarian) algorithm for optimal bipartite assignment. ByteTrack uses IoU (Intersection over Union) as the cost metric — any match above `max_iou_cost` (config default 0.7) is treated as no match.
+
+- **Input**: `n_tracks × n_detections` cost matrix (doubles)
+- **Output**: assignment vector + lists of unmatched rows and columns
+- **Padding**: rectangular matrices are padded to square with `max_cost` entries
+- Uses dual-variable (potential) formulation for O(n³) worst-case guarantee
+
+---
+
+## Component: Fusion Engine
+
+**Interface**: `IFusionEngine` (`ifusion_engine.h`)
+
+```cpp
+[[nodiscard]] virtual FusedObjectList fuse(const TrackedObjectList& tracked) = 0;
+```
+
+The fusion engine maps 2D tracked objects to 3D camera-frame positions. Output positions are in **camera body frame** (forward=X, right=Y, down=Z); the `fusion_thread` rotates them to world ENU frame using the latest drone pose.
+
+> **Terminology note:** The name "fusion" covers two different things depending on backend:
+>
+> 1. **`camera_only`** — Monocular depth estimation via pinhole geometry (apparent-size
+>    formula). Input: single RGB camera tracked 2D bboxes. Output: 3D camera-frame positions.
+>    No multi-sensor fusion.
+> 2. **`ukf`** — Per-object Unscented Kalman Filter with **camera + radar multi-sensor fusion**
+>    (Issue #210). Camera provides a bearing+depth measurement; radar provides range, azimuth,
+>    elevation, and radial velocity via a nonlinear measurement model. Tracks updated by both
+>    sensors have tighter covariance than either sensor alone.
+>
+> The **stereo camera** feeds P3 (VIO/SLAM) for pose estimation, **not** P2 perception.
+> LiDAR point-cloud fusion is not yet implemented.
+
+### Backend: `camera_only`
+
+Class: `CameraOnlyFusionEngine`
+
+Stateless per-frame depth estimation using a four-tier monocular model:
+
+#### Depth Estimation Tiers
+
+| Priority | Condition | Formula | Description |
+|----------|-----------|---------|-------------|
+| 1 (horizon-truncated) | `bbox_top ≤ cy + 5 px` AND `bbox_h > 10 px` | `depth = drone_altitude × fy / (bbox_bottom − cy)` | Obstacle extends above the visible frame — bbox_h < true projected height. Uses bbox bottom for ground-plane depth instead of apparent size. Falls back to `camera_height_m` if drone altitude unavailable. |
+| 2 (apparent-size) | `bbox_h > 10 px` | `depth = assumed_obstacle_height_m × fy / bbox_h` | Pinhole apparent-size formula; most reliable when full obstacle height is visible |
+| 3 (ground-plane) | `ray_down > 0.01` | `depth = camera_height_m / ray_down` | Ground-plane intersection for objects below horizon with unreliable bbox height |
+| 4 (near-horizon) | otherwise | `depth = 8.0 m` | Conservative estimate for objects near the image horizon |
+
+Depth is clamped to **[1.0, 40.0] m** for tiers 1–3. All tiers are scaled by `depth_scale` (default 0.7). The 8 m near-horizon fallback was chosen so that the mission planner's 5 m influence radius triggers before close approach.
+
+The horizon-truncated tier (Issue #237) was added because close obstacles often extend above the camera frame, making the apparent-size formula undercount `bbox_h` and overestimate depth. The 5 px margin (`kHorizonMarginPx`) around the optical center `cy` triggers the fallback before the bbox literally hits the frame edge.
+
+#### Depth Confidence Tiers
+
+Each depth estimate carries a `depth_confidence` value (0.0–1.0) that propagates through the `DetectedObject` IPC message to downstream consumers (Process 4 mission planner). Confidence reflects how trustworthy the depth measurement is:
+
+| Tier | Source | Confidence Range | Description |
+|------|--------|-----------------|-------------|
+| 1 | Camera-only monocular | 0.01–0.6 | Near objects with full bbox visibility get up to 0.6; far/clamped objects get 0.2 |
+| 2 | Radar-confirmed depth | 1.0 | Radar range measurement directly sets depth — highest confidence |
+
+**Clamp penalty:** When the raw (pre-clamp) monocular depth exceeds `kDepthMaxM` (40 m), the depth is clamped to 40 m and confidence is reduced to 0.2. This comparison uses the pre-clamp value so that the penalty triggers even though the output depth is within bounds. Near-horizon fallback (tier 4, 8 m default) also receives low confidence.
+
+The `depth_confidence` field in `DetectedObject` carries this value through IPC, allowing the mission planner's occupancy grid to weight cell promotions by measurement quality — radar-confirmed obstacles are promoted to static cells faster than uncertain monocular estimates.
+
+#### Camera-Frame Position
+
+```
+position_3d.x = depth * 1.0              (forward = boresight)
+position_3d.y = depth * (u - cx) / fx   (right)
+position_3d.z = depth * (v - cy) / fy   (down)
+```
+
+where `(u, v)` is the Kalman-filtered bbox center in pixels.
+
+#### Camera-Frame Velocity
+
+```
+velocity_3d.x = 0                               (no forward velocity from monocular)
+velocity_3d.y = pixel_vel_x * depth / fx       (lateral m/s)
+velocity_3d.z = pixel_vel_y * depth / fy       (vertical m/s)
+```
+
+**Covariance**: Fixed `5.0 · I₃` (large, reflecting monocular uncertainty).
+
+---
+
+### Backend: `ukf`
+
+Class: `UKFFusionEngine`
+
+Maintains one `ObjectUKF` instance per track ID. Each UKF instance carries a full 6-state Kalman filter using the Unscented Transform.
+
+#### ObjectUKF State
+
+```
+x = [x, y, z, vx, vy, vz]   (6D, camera body frame)
+```
+
+| Index | Symbol | Meaning |
+|-------|--------|---------|
+| 0 | x | Forward depth (m) |
+| 1 | y | Lateral right (m) |
+| 2 | z | Down (m) |
+| 3 | vx | Forward velocity (m/s) |
+| 4 | vy | Lateral velocity (m/s) |
+| 5 | vz | Vertical velocity (m/s) |
+
+**Initial covariance**: `P = 10·I₆` with `P[3:6, 3:6] = 50·I₃` (high velocity uncertainty).
+
+**Process noise** (constant-velocity model):
+
+| Term | Value |
+|------|-------|
+| Q[0,0], Q[1,1] | 0.1 (position small noise) |
+| Q[2,2] | 0.05 |
+| Q[3,3], Q[4,4] | 1.0 (velocity higher noise) |
+| Q[5,5] | 0.5 |
+
+**Measurement noise**: `R = 2.0 · I₃`
+
+#### UKF Tuning Parameters
+
+| Parameter | Symbol | Value | Role |
+|-----------|--------|-------|------|
+| Spread | α | 1×10⁻³ | Controls sigma point spread around mean |
+| Distribution prior | β | 2.0 | Optimal for Gaussian priors |
+| Secondary scaling | κ | 0.0 | No secondary scaling |
+| Lambda | λ | α²(n+κ)−n | Derived: −5.9999... for n=6 |
+| Sigma points | 2n+1 | 13 | For STATE_DIM=6 |
+
+#### Predict Step
+
+Sigma points are propagated through the constant-velocity model:
+```
+x_new = x + v·dt
+```
+The predicted mean and covariance are recovered by weighted sums of the propagated sigma points, then `Q` is added.
+
+The Cholesky decomposition of `P` is used to generate sigma points. If the matrix loses positive definiteness (numerical drift), the solver attempts up to 3 iterations of diagonal jitter regularization (`10⁻³`, `10⁻²`, `10⁻¹`). If all attempts fail, `L = I` is used as a last resort to avoid NaN propagation.
+
+#### Camera Update Step (`update_camera`)
+
+**Measurement model** (h: state → measurement):
+```
+z = [y/x, z/x, x]   →   [bearing_x, bearing_y, depth]
+```
+
+where `x = max(0.1, state[0])` (depth, guarded against divide-by-zero).
+
+The actual measurement is constructed from the Kalman-tracked bbox center:
+```
+bearing_x = position_2d.x * 0.001    (rough pixel-to-bearing scale)
+bearing_y = position_2d.y * 0.001
+depth     = camera_height_m * fy / max(10, position_2d.y)
+```
+
+The Kalman gain is computed via `S.ldlt().solve(Pxz^T)` (LDLᵀ decomposition) instead of explicit `S.inverse()` for numerical stability. After the update, symmetry is enforced: `P = (P + Pᵀ) / 2`.
+
+#### Radar Measurement Model (`update_radar`) — Issue [#210](https://github.com/nmohamaya/companion_software_stack/issues/210)
+
+`ObjectUKF::update_radar()` implements a nonlinear measurement model that converts the 6D Cartesian state to spherical radar observables:
+
+```
+h(x) = [range, azimuth, elevation, radial_velocity]
+```
+
+where:
+```
+range             = sqrt(x² + y² + z²)
+azimuth           = atan2(y, x)
+elevation         = atan2(z, sqrt(x² + y²))
+radial_velocity   = (x·vx + y·vy + z·vz) / range
+```
+
+The 4×4 measurement noise matrix `R` is diagonal, built from `RadarNoiseConfig`:
+```
+R = diag(range_std_m², azimuth_std_rad², elevation_std_rad², velocity_std_mps²)
+```
+
+Sigma points are propagated through `h(x)` to capture the nonlinearity (no linearisation / no Jacobian required). The predicted measurement mean for the angular components (azimuth at index 1, elevation at index 2) is computed via a circular mean (`atan2(Σ sin, Σ cos)`) to handle ±π wrapping correctly. All residuals involving angular components are wrapped with `wrap_angle()` before computing the innovation covariance `S`, the cross-covariance `Pxz`, and the final innovation. The update uses the same LDLᵀ Kalman gain and symmetry-enforcement as the camera update.
+
+#### Gated Mahalanobis Radar Association
+
+`UKFFusionEngine::fuse()` performs camera update first, then for each track attempts to find a matching radar detection:
+
+1. For each track, compute the predicted radar measurement `z_pred = h(x_pred)` directly in spherical space (no Cartesian conversion)
+2. Compute the angle-wrapped innovation `δz = z_actual - z_pred` (azimuth and elevation wrapped via `wrap_angle()`)
+3. Compute the Mahalanobis distance `d² = δzᵀ R_radar_⁻¹ δz` using `R_radar_` as an approximation of the innovation covariance (cheaper than full sigma-point `S`; solved via Cholesky)
+4. Accept the closest detection with `d² < gate_threshold` (χ²(4) at 95% = 9.21)
+5. Call `update_radar()` on the matched track; set `FusedObject::has_radar = true`
+
+Detections that do not match any existing camera-initiated track are handled by the **radar-primary initialization** path (see below).
+
+#### Radar-Primary Architecture (Issue #237 Phase D)
+
+The core sensor fusion principle is **camera provides bearing, radar provides range**. The camera observation model extracts azimuth and elevation from the bounding box center (bearing-only), while the radar observation model provides range, azimuth, elevation, and radial velocity. The UKF fuses both: camera observations are `[azimuth, elevation]` (bearing), radar observations are `[range, azimuth, elevation, radial_velocity]` (full spherical). This complementary architecture means camera gives angular precision while radar gives depth precision — together they produce tighter position covariance than either sensor alone.
+
+The radar-primary architecture allows radar to independently create and maintain obstacle tracks, even when no camera detection exists. This is critical for obstacles that are outside the camera FOV, too small for visual detection, or in low-visibility conditions.
+
+**Radar Detection Reservation:** During the radar-init pass, if a radar detection initializes a new camera track (providing depth), that detection index is marked as "reserved" (`radar_matched[best_radar_idx] = true`). This prevents the same physical radar return from being consumed by both initialization and a subsequent `update_radar()` call in the same frame — avoiding double-counting.
+
+**Radar-Only Orphan Tracks:** Radar detections that fail both the Mahalanobis gate (no matching camera track) and the radar-init path are emitted as **orphan tracks** — standalone obstacle positions derived entirely from radar. Orphan output is gated by `radar_orphan_min_hits`: a radar detection must have been seen at least N times (via the dormant re-ID pool) before being emitted as an orphan, suppressing transient radar noise.
+
+**Radar-Confirmed Depth:** When a radar detection matches a camera track during initialization, the UKF state is overridden with the radar-measured depth (`set_radar_confirmed_depth()`). This replaces the monocular pinhole estimate with the more accurate radar range measurement. The `radar_update_count` is only incremented by actual `update_radar()` calls, not by depth snaps, preserving the semantic distinction between "radar contributed range" and "radar contributed a full spherical update."
+
+**Configurable Thresholds:**
+- `radar_promotion_hits` (default 3): Number of radar confirmations needed before a dynamic grid cell is promoted to static in the occupancy grid
+- `radar_orphan_min_hits` (default 1): Minimum radar observations before an orphan track is output
+
+#### Altitude Gate (Issue #229)
+
+Before Mahalanobis gating, an altitude consistency check rejects radar-track associations where the radar return's body-frame Z coordinate diverges too far from the track's estimated Z:
+
+```
+if |radar_z - track_z| > altitude_gate_m:
+    skip association (do not attempt Mahalanobis gate)
+```
+
+Default `altitude_gate_m = 2.0`. This prevents ground returns that pass the HAL filter (see below) from corrupting airborne obstacle tracks — even if the angular match is close, the altitude mismatch causes rejection.
+
+#### HAL Ground Filter (Issue #229)
+
+The Gazebo radar HAL (`gazebo_radar.h`) applies a ground-plane filter before publishing detections to the fusion engine. For each radar return:
+
+```
+object_alt = drone_altitude + range * sin(elevation)
+if object_alt < ground_filter_alt_m:
+    reject (ground return)
+```
+
+`drone_altitude` is obtained from the Gazebo odometry topic via `std::atomic<float>`. Default `ground_filter_alt_m = 0.5` m. This rejects radar beams reflecting off the ground plane before they reach the UKF, preventing ground clutter from spawning spurious obstacle associations.
+
+#### Dormant Re-Identification Pool (Issue #237)
+
+When a radar-confirmed track is pruned by ByteTrack (lost visual contact), it is not simply deleted. Instead, its **world-frame position** is stored in a dormant pool. This provides world-frame obstacle memory — the drone remembers where obstacles were even after they leave the camera FOV.
+
+On each fusion cycle, new radar detections are compared against dormant entries using a **covariance-aware merge radius**: `radius = 2σ_max` clamped to `[1.0, dormant_merge_radius_m]`, where `σ_max` is the largest eigenvalue of the position covariance at the time of entry. This means uncertain tracks get a wider re-ID catchment while well-localised tracks require a closer match.
+
+**Camera Adoption (Phase D5):** When a new camera track appears near an existing radar-only filter, the camera can "adopt" the radar filter instead of creating a fresh UKF. The adoption gate checks bearing similarity (`< 0.2 rad`) and range error (`< adopt_gate_m`, default 5.0 m). If both pass, the camera track inherits the radar filter's state — providing immediate radar-quality depth rather than starting with the monocular estimate.
+
+**Late Dormant Entry:** If a camera-only track later receives its first radar update (via Mahalanobis association), a dormant entry is created at that point — not just at track init. This ensures the dormant pool captures obstacles that were initially camera-only but later confirmed by radar.
+
+**Pool constraints:**
+- Maximum `max_dormant` entries (default 32)
+- Only radar-confirmed tracks enter the pool (camera-only tracks are excluded)
+- Requires a valid drone pose (`set_drone_pose()`) for body→world conversion
+- Pool is cleared on `reset()`
+
+**Output:** Dormant re-identified objects are emitted in the `FusedObjectList` with `in_world_frame = true`, signaling to the mission planner that no further body→world rotation is needed.
+
+#### Velocity Frame Correction
+
+The body→world velocity transform in `process2_perception/src/main.cpp` applies the yaw rotation to **all** objects' velocity vectors, including those already in world frame. This is correct because the UKF estimates velocity in body frame regardless of whether the position was world-frame (dormant re-ID) or body-frame (live camera track). After the velocity rotation, `if (obj.in_world_frame) continue;` skips only the position transform. The Z-sign flip (`velocity_3d.z() = -velocity_3d.z()`) converts from body-frame down-positive to world-frame up-positive.
+
+#### Track Lifecycle in UKFFusionEngine
+
+- New `TrackedObject` not seen before → `ObjectUKF` created with `estimate_depth()` initial depth (or radar-confirmed depth if matched)
+- Each frame: `predict()` → `update_camera()` → gated radar association → `update_radar()` (if matched) → orphan emission → dormant re-ID
+- Tracks not present in the current `TrackedObjectList` (i.e. pruned by ByteTrack) are moved to the dormant pool (if radar-confirmed) or erased
+- `FusedObject::has_radar` is set to `true` when a radar detection matches via init or Mahalanobis gate
+
+---
+
+## Camera → World Transform
+
+The `fusion_thread` holds the latest `ShmPose` (subscribed from `drone/slam/pose`). After calling `fuse()`, it rotates all output positions and velocities from camera body frame to world ENU frame.
+
+### Coordinate Conventions
+
+| Frame | X | Y | Z |
+|-------|---|---|---|
+| Camera body | Forward (boresight) | Right | Down |
+| World ENU | North | East | Up |
+
+### Rotation (yaw-only)
+
+Pitch and roll are neglected for range estimation purposes. Yaw is extracted from the pose quaternion `(w, x, y, z)`:
+
+```
+yaw = atan2(2(w·qz + qx·qy), 1 - 2(qy² + qz²))
+```
+
+The rotation is applied:
+```
+world_north = dn + cam_x · cos(yaw) − cam_y · sin(yaw)
+world_east  = de + cam_x · sin(yaw) + cam_y · cos(yaw)
+world_up    = du − cam_z       (cam Z down = world −Z)
+```
+
+Velocity is rotated by the same 2D yaw rotation (no translation offset).
+
+If no pose has been received yet (`has_pose = false`), the positions remain in camera body frame as published. This is noted via the `diag` counters but does not block publication.
+
+---
+
+## Object Classification
+
+```cpp
+enum class ObjectClass : uint8_t {
+    UNKNOWN       = 0,
+    PERSON        = 1,
+    VEHICLE_CAR   = 2,
+    VEHICLE_TRUCK = 3,
+    DRONE         = 4,
+    ANIMAL        = 5,
+    BUILDING      = 6,
+    TREE          = 7,
+};
+```
+
+### COCO → ObjectClass Mapping (YOLOv8 backend)
+
+| COCO ID | COCO Name | ObjectClass |
+|---------|-----------|-------------|
+| 0 | person | PERSON |
+| 2 | car | VEHICLE_CAR |
+| 5 | bus | VEHICLE_CAR |
+| 7 | truck | VEHICLE_TRUCK |
+| 14 | bird | ANIMAL |
+| 15 | cat | ANIMAL |
+| 16 | dog | ANIMAL |
+| 17 | horse | ANIMAL |
+| 18 | sheep | ANIMAL |
+| 19 | cow | ANIMAL |
+| all others | — | UNKNOWN |
+
+BUILDING and TREE are not present in COCO 80 and are only set by custom detectors or simulated inputs.
+
+---
+
+## Configuration Reference
+
+All keys are under `perception.*` in the active JSON config.
+
+### Detector
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `perception.detector.backend` | string | `"simulated"` | One of `"simulated"`, `"color_contour"`, `"yolov8"` |
+| `perception.detector.confidence_threshold` | float | `0.5` | Minimum detection confidence |
+| `perception.detector.nms_threshold` | float | `0.4` | IoU threshold for NMS (yolov8 only) |
+| `perception.detector.model_path` | string | `"models/yolov8n.onnx"` | Path to ONNX model (yolov8 only) |
+| `perception.detector.input_size` | int | `640` | Network input square size in pixels |
+| `perception.detector.min_contour_area` | int | `100` | Minimum contour area in px² (color_contour only) |
+| `perception.detector.subsample` | int | `2` | Spatial subsampling stride; `1` = full resolution, `2` = half resolution in each axis (color_contour only) |
+| `perception.detector.max_fps` | int | `0` | Maximum detection rate in Hz; `0` = unlimited; sleep-throttles the detect loop (color_contour only) |
+| `perception.detector.min_bbox_height_px` | int | `15` | Minimum bounding box height in pixels; shorter detections are rejected as ground features (color_contour only, Issue #237) |
+| `perception.detector.max_aspect_ratio` | float | `3.0` | Maximum width/height ratio; wider detections are rejected as horizontal ground features (color_contour only, Issue #237) |
+| `perception.detector.max_detections` | int | `64` | Hard cap on detections per frame |
+
+### Tracker
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `perception.tracker.backend` | string | `"bytetrack"` | Only `"bytetrack"` is supported (SORT removed in Issue #205) |
+| `perception.tracker.max_age` | int | `10` | Max consecutive misses before deletion |
+| `perception.tracker.min_hits` | int | `3` | Hits required for track confirmation |
+| `perception.tracker.high_conf_threshold` | float | `0.5` | Stage 1 confidence threshold (high-confidence detections) |
+| `perception.tracker.low_conf_threshold` | float | `0.1` | Stage 2 confidence threshold (low-confidence recovery) |
+| `perception.tracker.max_iou_cost` | float | `0.7` | Max IoU cost for valid association |
+
+### Fusion Engine
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `perception.fusion.backend` | string | `"camera_only"` | One of `"camera_only"`, `"ukf"` |
+| `perception.fusion.fx` | float | `500.0` | Focal length x (px) |
+| `perception.fusion.fy` | float | `500.0` | Focal length y (px) |
+| `perception.fusion.cx` | float | `960.0` | Principal point x (px) |
+| `perception.fusion.cy` | float | `540.0` | Principal point y (px) |
+| `perception.fusion.camera_height_m` | float | `1.5` | Camera height above ground (m) — for ground-plane depth |
+| `perception.fusion.assumed_obstacle_height_m` | float | `3.0` | Known obstacle height (m) — for apparent-size depth |
+| `perception.fusion.radar.enabled` | bool | `false` | Enable radar measurement updates in the UKF (Issue #210); controls `UKFFusionEngine`, not `RadarNoiseConfig` |
+| `perception.fusion.radar.range_std_m` | float | `0.3` | Radar range noise std (m) |
+| `perception.fusion.radar.azimuth_std_rad` | float | `0.026` | Radar azimuth noise std (rad) |
+| `perception.fusion.radar.elevation_std_rad` | float | `0.026` | Radar elevation noise std (rad) |
+| `perception.fusion.radar.velocity_std_mps` | float | `0.1` | Radar radial velocity noise std (m/s) |
+| `perception.fusion.radar.gate_threshold` | float | `9.21` | χ²(4) Mahalanobis gate at 95% confidence; detections beyond this are rejected |
+| `perception.fusion.radar.altitude_gate_m` | float | `2.0` | Max body-frame Z difference for radar-track association (Issue #229) |
+| `perception.fusion.radar.ground_filter_enabled` | bool | `true` | Enable/disable ground-plane altitude filter (Issue #229) |
+| `perception.fusion.radar.min_object_altitude_m` | float | `0.3` | Radar returns below this AGL are rejected as ground clutter (Issue #229) |
+| `perception.fusion.radar.orphan_proximity_m` | float | `3.0` | Min distance to existing track for orphan creation (Phase D) |
+| `perception.fusion.radar.adopt_gate_m` | float | `5.0` | Max range error for camera adoption of radar-only track (Phase D) |
+| `perception.fusion.radar.default_radius_m` | float | `1.5` | Conservative default inflation radius for radar-only objects (no bbox) (Phase D) |
+| `perception.fusion.radar.max_orphan_range_m` | float | `40.0` | Max radar range for orphan track creation (Phase D) |
+| `perception.fusion.radar.orphan_min_hits` | int | `1` | Min radar observations before orphan track output (Issue #237) |
+| `perception.fusion.radar.promotion_hits` | int | `3` | Radar updates needed for static grid promotion (Issue #237) |
+| `perception.fusion.dormant_merge_radius_m` | float | `5.0` | World-frame merge radius for dormant re-ID pool (Issue #237) |
+| `perception.fusion.max_dormant` | int | `32` | Max entries in dormant re-ID pool (Issue #237) |
+| `perception.fusion.depth_scale` | float | `0.7` | Global depth scaling factor applied to all tiers |
+
+---
+
+## Data Types
+
+### `Detection2D` (camera output)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `x, y, w, h` | float | Bounding box in pixel coordinates (top-left + size) |
+| `confidence` | float | Detection score [0, 1] |
+| `class_id` | ObjectClass | Semantic class |
+| `timestamp_ns` | uint64 | Capture timestamp (nanoseconds) |
+| `frame_sequence` | uint64 | Frame counter |
+
+### `TrackedObject` (tracker output)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `track_id` | uint32 | Unique persistent ID |
+| `position_2d` | Vector2f | Kalman-filtered bbox center (pixels) |
+| `velocity_2d` | Vector2f | Kalman-estimated velocity (px/frame) |
+| `bbox_w, bbox_h` | float | Predicted bounding box size |
+| `age` | uint32 | Frames since birth |
+| `hits` | uint32 | Matched frames count |
+| `misses` | uint32 | Consecutive unmatched frames |
+| `state` | enum | TENTATIVE / CONFIRMED / LOST |
+
+### `FusedObject` (fusion output, camera frame)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `track_id` | uint32 | Matches tracker track_id |
+| `position_3d` | Vector3f | 3D position (camera body frame before transform) |
+| `velocity_3d` | Vector3f | 3D velocity estimate (m/s) |
+| `position_covariance` | Matrix3f | 3×3 position uncertainty |
+| `has_camera` | bool | Camera measurement present this cycle |
+| `has_radar` | bool | Radar detection matched and applied this cycle (Issue #210) |
+| `in_world_frame` | bool | True if position is already in world ENU (dormant re-ID output) — skip body→world transform |
+| `estimated_radius_m` | float | Estimated obstacle radius from bbox geometry (Issue #237) |
+| `estimated_height_m` | float | Estimated obstacle height from bbox geometry (Issue #237) |
+| `radar_update_count` | uint32 | Number of actual `update_radar()` calls on this track (Issue #237) |
+| `depth_confidence` | float | Depth measurement confidence: 0.01–0.6 for monocular, 0.2 for clamped/far, 1.0 for radar-confirmed (Issue #237) |
+
+### `ShmDetectedObjectList` (IPC output, world frame)
+
+Published per frame. Up to `MAX_DETECTED_OBJECTS` entries. Each entry mirrors `FusedObject` plus `class_id`, `heading` (always 0.0 currently).
+
+---
+
+## Deployment Profiles
+
+| Config | Detector | Tracker | Fusion | IPC | Notes |
+|--------|----------|---------|--------|-----|-------|
+| `default.json` | simulated | bytetrack | camera_only | shm | Integration testing only |
+| `gazebo_sitl.json` | color_contour | bytetrack | camera_only | zenoh | Gazebo SITL with Zenoh (default) |
+| Scenario 18 config | color_contour | bytetrack | ukf (radar-primary) | zenoh | Gazebo perception_avoidance — full radar+camera UKF fusion |
+| `hardware.json` | color_contour | bytetrack | camera_only | shm | Real hardware (yolov8 opt-in) |
+| `zenoh_e2e.json` | (per config) | bytetrack | camera_only | zenoh | End-to-end Zenoh testing |
+
+> To enable the UKF fusion engine, set `"perception.fusion.backend": "ukf"` in the active config or a config overlay.
+
+---
+
+## Observability
+
+P2 subscribes to mission camera frames and publishes fused object lists.
+Latency is tracked from frame capture (P1 `timestamp_ns`) to P2 dequeue.
+
+### Structured Logging
+
+| Field | Description |
+|-------|-------------|
+| `process` | `"perception"` |
+| `detection_count` | Objects detected in the current frame |
+| `tracked_objects` | Active track count after ByteTrack association |
+| `fused_objects` | Objects in the fused world-frame output |
+| `latency_ms` | Frame ingest latency from `log_latency_if_due()` |
+
+> **Note:** These values appear in the `msg` text field of the JSON log line.
+> `--json-logs` does not emit them as separate top-level JSON keys.
+
+### Correlation IDs
+
+P2 does not participate in GCS correlation (no command path).
+
+### Latency Tracking
+
+| Channel | Direction |
+|---------|----------|
+| `/drone_mission_cam` | subscriber |
+
+Latency covers the time from `CapturedFrame::timestamp_ns` (set by P1
+at capture) to when P2 dequeues the frame for detection. Latency is
+tracked automatically on each `receive()` call. Call
+`subscriber->log_latency_if_due(N)` in the detector thread to
+periodically emit a p50/p90/p99 histogram (µs) to the log.
+
+See [observability.md](observability.md) for histogram interpretation.
+
+---
+
+## Known Gaps and Limitations
+
+| Gap | Details | Tracked |
+|-----|---------|---------|
+| **UKF not default** | The UKF fusion backend is implemented and tested but the default config uses `camera_only`. The UKF backend should be validated in a scenario run before becoming default. | — |
+| ~~**Radar fusion disabled by default**~~ | **RESOLVED** (Issue #237). Radar fusion is enabled in Gazebo scenario 18 (`perception_avoidance`). The full radar-primary UKF path is validated in Gazebo SITL with 3/3 PASS runs. | [#210](https://github.com/nmohamaya/companion_software_stack/issues/210) |
+| ~~**Radar-only track spawning not implemented**~~ | **RESOLVED** (Issue #237 Phase D). Radar-primary architecture allows radar to independently initialize camera tracks (radar-confirmed depth) and emit orphan tracks for radar-only detections. Dormant re-ID pool provides world-frame obstacle memory. | [#237](https://github.com/nmohamaya/companion_software_stack/issues/237) |
+| **Monocular depth uncertainty** | Depth estimates from apparent size assume a known obstacle height and fixed focal length. Errors propagate into the world-frame position seen by Process 4. The 3×3 `position_covariance` in UKF quantifies this but Process 4 does not currently use it. | — |
+| **Yaw-only camera→world** | The body→world rotation in `fusion_thread` ignores camera pitch/roll. For aggressively pitched manoeuvres the world-frame position will have a systematic error. | — |
+| **SimulatedDetector produces random positions** | The default config uses `simulated` detector, so the SPSC queues are always exercised but the object positions carry no semantic meaning. Switch to `color_contour` or `yolov8` for meaningful output. | — |
+| **No cross-process factor graph** | Position fusion between Process 2 (camera) and Process 3 (VIO) is done only with a simple yaw rotation. A full factor graph (e.g. iSAM2) unifying IMU, visual odometry, and detected object tracks is a future improvement. | — |

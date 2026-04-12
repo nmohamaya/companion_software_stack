@@ -61,53 +61,27 @@ tasks/sessions/*.log
 .claude/worktrees/
 
 # ── Private / Local-Only ────────────────────────────────────────────
-# Everything below stays out of the public repo for IP protection,
-# security, or internal-use reasons. See the open-source plan for
-# the full classification rationale.
+# Genuinely sensitive files that should not be public even under AGPL.
 
-# Security and compliance documentation
+# Security threat model (contains vulnerability details / attack surfaces)
 docs/architecture/SECURITY.md
+
+# Internal compliance notes
 docs/tracking/LICENSE_AUDIT.md
 
-# Proprietary algorithm design docs (P2/P3/P4)
-docs/design/perception_design.md
-docs/design/slam_vio_nav_design.md
-docs/design/mission_planner_design.md
-
-# Internal strategy and gap analysis
-docs/architecture/STRATEGIC_PLAN.md
-docs/architecture/MAKE_OR_BUY.md
-docs/architecture/PRODUCTION_READINESS.md
-
-# Internal tracking (progress, roadmap, bugs, CI)
-docs/tracking/
-
-# Debug investigation notes
+# Debug investigation notes (ephemeral, not maintained)
 docs/debug/
 
-# Legacy design documents
+# Legacy design documents (superseded .docx binaries)
 docs/legacy/
 
-# Internal design rationale & work instructions
+# Internal agent work instructions (personal process doc)
 docs/guides/work_instructions.md
-docs/guides/DESIGN_RATIONALE.md
-
-# Multi-agent orchestrator (independent IP)
-scripts/orchestrator/
-scripts/orchestrator.egg-info/
-
-# Agent profiles, skills, shared context (methodology IP)
-.claude/agents/
-.claude/skills/
-.claude/shared-context/
-.claude/settings.json
-
-# Internal work tracking
-tasks/
 
 # Python artifacts
 __pycache__/
 *.pyc
+scripts/orchestrator.egg-info/
 .pipeline-state
 
 # graphify intermediate/generated files

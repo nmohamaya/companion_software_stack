@@ -1,0 +1,4 @@
+# Session log files are machine-local and ephemeral.
+# They contain per-agent session traces that are only useful for
+# debugging a specific run and should not clutter the repository.
+*.log

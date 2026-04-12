@@ -75,6 +75,9 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | [GETTING_STARTED.md](docs/guides/GETTING_STARTED.md) | Detailed setup and first-run guide |
 | **Process Design** | |
 | [video_capture_design.md](docs/design/video_capture_design.md) | P1 camera backends, frame formats, stereo sync |
+| [perception_design.md](docs/design/perception_design.md) | P2 perception pipeline: detector backends, ByteTrack tracker, UKF fusion |
+| [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md) | P3 VIO pipeline, pose quality states, IMU integration |
+| [mission_planner_design.md](docs/design/mission_planner_design.md) | P4 FSM, fault management, D* Lite planner, obstacle avoidance, geofencing |
 | [comms_design.md](docs/design/comms_design.md) | P5 MAVLink protocol, thread responsibilities, safety guards |
 | [payload_manager_design.md](docs/design/payload_manager_design.md) | P6 gimbal control, payload actions, rate-limited slew |
 | [system_monitor_design.md](docs/design/system_monitor_design.md) | P7 health metrics, thermal zones, battery monitoring |
@@ -86,10 +89,12 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | [hardening-design.md](docs/design/hardening-design.md) | Three-layer watchdog, systemd integration, foundation hardening |
 | [ipc-key-expressions.md](docs/architecture/ipc-key-expressions.md) | Zenoh topic naming convention and complete channel table |
 | [process-health-monitoring.md](docs/architecture/process-health-monitoring.md) | Zenoh liveliness tokens for crash detection |
-| **Guides & Testing** | |
+| **Guides & Tracking** | |
 | [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md) | All 95+ JSON config keys with defaults and descriptions |
+| [ROADMAP.md](docs/tracking/ROADMAP.md) | Completed milestones and planned production phases |
 | [CPP_PATTERNS_GUIDE.md](docs/guides/CPP_PATTERNS_GUIDE.md) | Project C++17 patterns: Result\<T,E\>, ScopedGuard, thread safety |
 | [DEVELOPMENT_WORKFLOW.md](docs/guides/DEVELOPMENT_WORKFLOW.md) | Branching, PRs, CI, review process |
+| [BUG_FIXES.md](docs/tracking/BUG_FIXES.md) | Documented bugs fixed (good reference for common pitfalls) |
 | [TESTS.md](tests/TESTS.md) | Full test inventory with suites, counts, and run instructions |
 | **Multi-Agent Pipeline** | |
 | [MULTI_AGENT_GUIDE.md](docs/guides/MULTI_AGENT_GUIDE.md) | Multi-agent AI pipeline: setup, deployment, review, pipeline mode |
@@ -234,19 +239,19 @@ Two capture threads acquire frames from mission camera (1920x1080 RGB, 30 Hz) an
 
 A three-stage pipelined vision system: detection (IDetector), tracking (ByteTrack with Kalman filters and Hungarian assignment), and sensor fusion (camera-only monocular depth or camera+radar UKF). Stages are connected by `drone::TripleBuffer` (lock-free latest-value handoff), so consumers always see the most recent result. An optional `radar_read` thread runs when radar is enabled. Three detector backends are available: simulated (random boxes), color contour (HSV segmentation, pure C++), and YOLOv8-nano (OpenCV DNN, optional).
 
-> Perception configuration keys are documented in [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md). For IPC message types, see [API.md](docs/design/API.md).
+> For full pipeline details including Kalman state vectors, association algorithms, fusion backends, and config keys, see [perception_design.md](docs/design/perception_design.md).
 
 ### Process 3 — SLAM/VIO/Nav (4 threads)
 
 Three worker threads plus a main health-check loop. The VIO pipeline extracts features, performs stereo matching, pre-integrates IMU data, and generates a 6-DOF pose published at 100 Hz. The `Pose.quality` field (0=lost to 3=excellent) reflects VIO health state, consumed by P4's FaultManager for safety response. Backends: `SimulatedVIOBackend` (target-following dynamics with full pipeline), `GazeboVIOBackend` (ground-truth odometry), and `GazeboFullVIOBackend` (full pipeline on Gazebo frames).
 
-> SLAM/VIO configuration keys are documented in [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md). For IPC message types, see [API.md](docs/design/API.md).
+> For VIO pipeline details, pose quality states, and IMU integration, see [slam_vio_nav_design.md](docs/design/slam_vio_nav_design.md).
 
 ### Process 4 — Mission Planner (1 thread, 10 Hz)
 
 The autonomous decision-making core: fault evaluation (10+ fault conditions with escalation-only policy) -> FSM tick (IDLE -> PREFLIGHT -> TAKEOFF -> SURVEY -> NAVIGATE -> RTL -> LAND) -> D* Lite path planning with two-layer occupancy grid -> 3D obstacle avoidance with velocity prediction -> FC command dispatch. Includes polygon+altitude geofencing, GCS command handling, HD-map static obstacles, and waypoint advancement with payload triggering.
 
-> Mission planner configuration keys are documented in [CONFIG_GUIDE.md](docs/guides/CONFIG_GUIDE.md). For IPC message types, see [API.md](docs/design/API.md).
+> For FSM state diagram, fault table, planner algorithms, geofencing details, and all config keys, see [mission_planner_design.md](docs/design/mission_planner_design.md).
 
 ### Process 5 — Comms (5 threads)
 
