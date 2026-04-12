@@ -310,6 +310,9 @@ target_compile_definitions(test_process_context PRIVATE
 # ── EventBus tests (Issue #293) ─────────────────────────
 add_drone_test(test_event_bus       test_event_bus.cpp)
 
+# ── ISerializer / RawSerializer tests (Issue #294) ──────
+add_drone_test(test_serializer      test_serializer.cpp)
+
 # ═══════════════════════════════════════════════════════════
 # Integration tests (Issue #292 — Epic #284 Platform Modularity)
 # ═══════════════════════════════════════════════════════════

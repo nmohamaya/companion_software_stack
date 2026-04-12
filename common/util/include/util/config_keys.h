@@ -15,6 +15,9 @@ namespace drone::cfg_key {
 // ═══════════════════════════════════════════════════════════
 inline constexpr const char* LOG_LEVEL   = "log_level";
 inline constexpr const char* IPC_BACKEND = "ipc_backend";
+/// IPC serialization format. Currently only "raw" is supported.
+/// Future options: "protobuf" (for cross-language GCS interop).
+inline constexpr const char* IPC_SERIALIZER = "ipc_serializer";
 /// Multi-vehicle namespace prefix. When present, must be [a-zA-Z0-9_-] or empty.
 /// When set, all IPC topics are namespaced under "/<vehicle_id>/...".
 inline constexpr const char* VEHICLE_ID = "vehicle_id";
