@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
 
@@ -65,14 +66,27 @@ private:
     static constexpr int     kZoneNotFound = -2;
     mutable std::atomic<int> cached_cpu_zone_idx_{kZoneUncached};
 
-    [[nodiscard]] static float read_thermal_zone(int zone_idx) {
+    /// Cached file handle for the discovered Jetson CPU thermal zone.
+    mutable std::ifstream cached_jetson_thermal_;
+    mutable char          cached_jetson_thermal_path_[128]{};
+
+    [[nodiscard]] float read_thermal_zone(int zone_idx) const {
+        // Build the expected path (only changes if zone_idx changes, which
+        // it doesn't after the initial scan — but we handle it for safety).
         char temp_path[128];
         std::snprintf(temp_path, sizeof(temp_path),
                       "/sys/devices/virtual/thermal/thermal_zone%d/temp", zone_idx);
-        std::ifstream temp_f(temp_path);
-        if (temp_f.is_open()) {
+
+        // If cached path doesn't match (first call or zone change), reopen
+        if (std::strcmp(cached_jetson_thermal_path_, temp_path) != 0) {
+            if (cached_jetson_thermal_.is_open()) cached_jetson_thermal_.close();
+            std::snprintf(cached_jetson_thermal_path_, sizeof(cached_jetson_thermal_path_), "%s",
+                          temp_path);
+        }
+
+        if (rewind_or_open(cached_jetson_thermal_, cached_jetson_thermal_path_)) {
             int millideg = 0;
-            temp_f >> millideg;
+            cached_jetson_thermal_ >> millideg;
             return static_cast<float>(millideg) / 1000.0f;
         }
         return kFallbackCpuTempC;

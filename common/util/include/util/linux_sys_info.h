@@ -1,5 +1,9 @@
 // common/util/include/util/linux_sys_info.h
 // Standard Linux ISysInfo implementation — reads from /proc and /sys.
+//
+// Performance: file handles for /proc/stat, /proc/meminfo, and the thermal
+// zone are cached as mutable members.  On each read we seekg(0) + clear()
+// instead of opening a new fd — saves 3+ open/close syscalls per P7 tick.
 #pragma once
 
 #include "util/isys_info.h"
@@ -16,11 +20,10 @@ namespace drone::util {
 class LinuxSysInfo : public ISysInfo {
 public:
     [[nodiscard]] CpuTimes read_cpu_times() const override {
-        CpuTimes      t{};
-        std::ifstream f("/proc/stat");
-        if (!f.is_open()) return t;
+        CpuTimes t{};
+        if (!rewind_or_open(cached_proc_stat_, "/proc/stat")) return t;
         std::string line;
-        if (std::getline(f, line)) {
+        if (std::getline(cached_proc_stat_, line)) {
             // NOLINTNEXTLINE(cert-err34-c) — /proc/stat has a fixed format
             std::sscanf(line.c_str(),
                         "cpu %" SCNu64 " %" SCNu64 " %" SCNu64 " %" SCNu64 " %" SCNu64 " %" SCNu64
@@ -32,11 +35,10 @@ public:
     }
 
     [[nodiscard]] MemInfo read_meminfo() const override {
-        MemInfo       m{};
-        std::ifstream f("/proc/meminfo");
-        if (!f.is_open()) return m;
+        MemInfo m{};
+        if (!rewind_or_open(cached_proc_meminfo_, "/proc/meminfo")) return m;
         std::string line;
-        while (std::getline(f, line)) {
+        while (std::getline(cached_proc_meminfo_, line)) {
             // NOLINTNEXTLINE(cert-err34-c) — /proc/meminfo has a fixed format
             if (line.rfind("MemTotal:", 0) == 0)
                 std::sscanf(line.c_str(), "MemTotal: %" SCNu64 " kB", &m.total_kb);
@@ -55,15 +57,26 @@ public:
     }
 
     [[nodiscard]] float read_cpu_temp() const override {
+        // Try cached handle first (set after first successful open)
+        if (cached_thermal_.is_open()) {
+            if (rewind_or_open(cached_thermal_, cached_thermal_path_)) {
+                int millideg = 0;
+                cached_thermal_ >> millideg;
+                return static_cast<float>(millideg) / 1000.0f;
+            }
+        }
+
+        // First call or cached handle failed — probe both paths
         const char* paths[] = {
             "/sys/devices/virtual/thermal/thermal_zone0/temp",
             "/sys/class/thermal/thermal_zone0/temp",
         };
-        for (auto path : paths) {
-            std::ifstream f(path);
-            if (f.is_open()) {
-                int millideg = 0;
-                f >> millideg;
+        for (const auto* path : paths) {
+            cached_thermal_.open(path);
+            if (cached_thermal_.is_open()) {
+                cached_thermal_path_ = path;
+                int millideg         = 0;
+                cached_thermal_ >> millideg;
                 return static_cast<float>(millideg) / 1000.0f;
             }
         }
@@ -96,6 +109,29 @@ public:
     }
 
     [[nodiscard]] std::string name() const override { return "LinuxSysInfo"; }
+
+protected:
+    /// Rewind a cached ifstream to the beginning, or (re)open it on failure.
+    /// Returns true if the stream is ready for reading.
+    static bool rewind_or_open(std::ifstream& stream, const char* path) {
+        if (stream.is_open()) {
+            stream.clear();
+            stream.seekg(0);
+            if (stream.good()) return true;
+            // Seek failed — close and fall through to reopen
+            stream.close();
+        }
+        stream.open(path);
+        return stream.is_open();
+    }
+
+private:
+    // Cached file handles — mutable because caching is an implementation
+    // detail invisible to callers (all read methods are const).
+    mutable std::ifstream cached_proc_stat_;
+    mutable std::ifstream cached_proc_meminfo_;
+    mutable std::ifstream cached_thermal_;
+    mutable const char*   cached_thermal_path_{nullptr};
 };
 
 }  // namespace drone::util

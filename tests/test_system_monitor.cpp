@@ -159,6 +159,24 @@ TEST(ISysInfo, LinuxSysInfoIsProcessAlive) {
 // ISysInfo interface — MockSysInfo
 // ═══════════════════════════════════════════════════════════
 
+TEST(ISysInfo, LinuxSysInfoRepeatedReadsReturnValidData) {
+    drone::util::LinuxSysInfo sys;
+
+    for (int i = 0; i < 5; ++i) {
+        auto cpu = sys.read_cpu_times();
+        EXPECT_GT(cpu.total(), 0u) << "read_cpu_times() failed on iteration " << i;
+
+        auto mem = sys.read_meminfo();
+        EXPECT_GT(mem.total_kb, 0u) << "read_meminfo() failed on iteration " << i;
+        EXPECT_GE(mem.usage_percent, 0.0f);
+        EXPECT_LE(mem.usage_percent, 100.0f);
+
+        float temp = sys.read_cpu_temp();
+        EXPECT_GE(temp, -20.0f) << "read_cpu_temp() failed on iteration " << i;
+        EXPECT_LE(temp, 120.0f);
+    }
+}
+
 TEST(ISysInfo, MockSysInfoName) {
     drone::util::MockSysInfo mock;
     EXPECT_EQ(mock.name(), "MockSysInfo");
