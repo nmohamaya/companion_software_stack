@@ -6,8 +6,6 @@
 #include "hal/hal_factory.h"
 #include "hal/iradar.h"
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
 #include "perception/detector_interface.h"
 #include "perception/fusion_engine.h"
 #include "perception/ifusion_engine.h"
@@ -15,16 +13,11 @@
 #include "perception/kalman_tracker.h"
 #include "perception/types.h"
 #include "perception/ukf_fusion_engine.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -372,32 +365,15 @@ static void radar_read_thread(drone::hal::IRadar&                               
 // main()
 // ═══════════════════════════════════════════════════════════
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "perception");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("perception", LogConfig::resolve_log_dir(), args.log_level, args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::perception_schema());
-            rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== Perception process starting (PID {}) ===", getpid());
-
-    // ── Create message bus (config-driven: shm or zenoh) ───
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("perception");
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "perception", g_running,
+                                                drone::util::perception_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // ── Subscribe to video frames from Process 1 ────────────
-    auto video_sub = bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
+    auto video_sub =
+        ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
     if (!video_sub->is_connected()) {
         DRONE_LOG_ERROR("Cannot connect to video channel — is video_capture running?");
         return 1;
@@ -405,7 +381,7 @@ int main(int argc, char* argv[]) {
 
     // ── Create publisher for detected objects → Process 4 ───
     auto det_pub =
-        bus.advertise<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
+        ctx.bus.advertise<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!det_pub->is_ready()) {
         DRONE_LOG_ERROR("Failed to create publisher: {}", drone::ipc::topics::DETECTED_OBJECTS);
         return 1;
@@ -413,14 +389,14 @@ int main(int argc, char* argv[]) {
 
     // ── Create detector from config ────────────────────────────
     std::string detector_backend =
-        cfg.get<std::string>(drone::cfg_key::perception::detector::BACKEND, "simulated");
-    auto detector = create_detector(detector_backend, &cfg);
+        ctx.cfg.get<std::string>(drone::cfg_key::perception::detector::BACKEND, "simulated");
+    auto detector = create_detector(detector_backend, &ctx.cfg);
     DRONE_LOG_INFO("[Perception] Detector backend: {} ({})", detector_backend, detector->name());
 
     // ── Create tracker from config ────────────────────────────
-    std::string tracker_backend = cfg.get<std::string>(drone::cfg_key::perception::tracker::BACKEND,
-                                                       "bytetrack");
-    auto        tracker_result  = create_tracker(tracker_backend, &cfg);
+    std::string tracker_backend =
+        ctx.cfg.get<std::string>(drone::cfg_key::perception::tracker::BACKEND, "bytetrack");
+    auto tracker_result = create_tracker(tracker_backend, &ctx.cfg);
     if (!tracker_result.is_ok()) {
         DRONE_LOG_ERROR("[Perception] Failed to create tracker: {}",
                         tracker_result.error().message());
@@ -432,35 +408,40 @@ int main(int argc, char* argv[]) {
     // ── Create fusion engine from config ────────────────────
     CalibrationData calib;
     calib.camera_intrinsics       = Eigen::Matrix3f::Identity();
-    calib.camera_intrinsics(0, 0) = cfg.get<float>(drone::cfg_key::perception::fusion::FX, 500.0f);
-    calib.camera_intrinsics(1, 1) = cfg.get<float>(drone::cfg_key::perception::fusion::FY, 500.0f);
-    calib.camera_intrinsics(0, 2) = cfg.get<float>(drone::cfg_key::perception::fusion::CX, 960.0f);
-    calib.camera_intrinsics(1, 2) = cfg.get<float>(drone::cfg_key::perception::fusion::CY, 540.0f);
-    calib.camera_height_m = cfg.get<float>(drone::cfg_key::perception::fusion::CAMERA_HEIGHT_M,
-                                           1.5f);
+    calib.camera_intrinsics(0, 0) = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::FX,
+                                                       500.0f);
+    calib.camera_intrinsics(1, 1) = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::FY,
+                                                       500.0f);
+    calib.camera_intrinsics(0, 2) = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::CX,
+                                                       960.0f);
+    calib.camera_intrinsics(1, 2) = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::CY,
+                                                       540.0f);
+    calib.camera_height_m = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::CAMERA_HEIGHT_M,
+                                               1.5f);
     calib.assumed_obstacle_height_m =
-        cfg.get<float>(drone::cfg_key::perception::fusion::ASSUMED_OBSTACLE_HEIGHT_M, 3.0f);
-    calib.depth_scale = cfg.get<float>(drone::cfg_key::perception::fusion::DEPTH_SCALE, 0.7f);
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::ASSUMED_OBSTACLE_HEIGHT_M, 3.0f);
+    calib.depth_scale = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::DEPTH_SCALE, 0.7f);
 
-    std::string fusion_backend = cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND,
-                                                      "camera_only");
-    auto        fusion_engine  = create_fusion_engine(fusion_backend, calib, &cfg);
+    std::string fusion_backend =
+        ctx.cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND, "camera_only");
+    auto fusion_engine = create_fusion_engine(fusion_backend, calib, &ctx.cfg);
     DRONE_LOG_INFO("[Perception] Fusion   backend: {} ({})", fusion_backend, fusion_engine->name());
 
     // ── Create radar HAL + publisher (optional) ────────────
-    bool radar_enabled = cfg.get<bool>(drone::cfg_key::perception::radar::ENABLED, false);
+    bool radar_enabled = ctx.cfg.get<bool>(drone::cfg_key::perception::radar::ENABLED, false);
     std::unique_ptr<drone::hal::IRadar>                                     radar;
     std::unique_ptr<drone::ipc::IPublisher<drone::ipc::RadarDetectionList>> radar_pub;
-    int radar_update_rate_hz = cfg.get<int>(drone::cfg_key::perception::radar::UPDATE_RATE_HZ, 20);
+    int radar_update_rate_hz = ctx.cfg.get<int>(drone::cfg_key::perception::radar::UPDATE_RATE_HZ,
+                                                20);
 
     if (radar_enabled) {
         try {
-            radar = drone::hal::create_radar(cfg, drone::cfg_key::perception::radar::SECTION);
+            radar = drone::hal::create_radar(ctx.cfg, drone::cfg_key::perception::radar::SECTION);
             if (!radar->init()) {
                 DRONE_LOG_ERROR("[Radar] HAL init() failed — radar disabled");
                 radar.reset();
             } else {
-                radar_pub = bus.advertise<drone::ipc::RadarDetectionList>(
+                radar_pub = ctx.bus.advertise<drone::ipc::RadarDetectionList>(
                     drone::ipc::topics::RADAR_DETECTIONS);
                 DRONE_LOG_INFO("[Perception] Radar HAL: {} — publishing to {}", radar->name(),
                                drone::ipc::topics::RADAR_DETECTIONS);
@@ -485,14 +466,14 @@ int main(int argc, char* argv[]) {
                           std::ref(tracker_to_fusion), std::ref(g_running), std::ref(*tracker));
 
     // Subscribe to drone pose for the camera→world transform in the fusion thread
-    auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+    auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
 
     // Subscribe to radar detections for multi-sensor fusion
     auto radar_sub =
-        bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
+        ctx.bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
 
     const int fusion_rate_hz =
-        std::clamp(cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
+        std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
                          std::ref(*fusion_engine), fusion_rate_hz);
@@ -509,7 +490,7 @@ int main(int argc, char* argv[]) {
     // ── Thread watchdog + health publisher ──────────────────
     drone::util::ThreadWatchdog watchdog;
     auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_PERCEPTION);
+        ctx.bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_PERCEPTION);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "perception", watchdog);
 
     DRONE_LOG_INFO("All perception threads started — READY");

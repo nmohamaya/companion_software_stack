@@ -4,8 +4,6 @@
 // Sends FC commands (arm, takeoff, mode) to comms via FCCommand.
 
 #include "ipc/ipc_types.h"
-#include "ipc/message_bus_factory.h"
-#include "ipc/zenoh_liveliness.h"
 #include "planner/fault_manager.h"
 #include "planner/fault_response_executor.h"
 #include "planner/gcs_command_handler.h"
@@ -18,17 +16,12 @@
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
 #include "planner/static_obstacle_layer.h"
-#include "util/arg_parser.h"
-#include "util/config.h"
 #include "util/config_keys.h"
-#include "util/config_validator.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
-#include "util/ilogger.h"
-#include "util/log_config.h"
+#include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
-#include "util/signal_handler.h"
 #include "util/thread_health_publisher.h"
 #include "util/thread_heartbeat.h"
 #include "util/thread_watchdog.h"
@@ -66,63 +59,47 @@ static void send_fc_command(drone::ipc::IPublisher<drone::ipc::FCCommand>& pub,
 // main()
 // ═══════════════════════════════════════════════════════════
 int main(int argc, char* argv[]) {
-    auto args = parse_args(argc, argv, "mission_planner");
-    if (args.help) return 0;
-
-    SignalHandler::install(g_running);
-    LogConfig::init("mission_planner", LogConfig::resolve_log_dir(), args.log_level,
-                    args.json_logs);
-
-    drone::Config cfg;
-    if (!cfg.load(args.config_path)) {
-        DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
-    } else {
-        if (int rc = drone::util::validate_or_exit(cfg, drone::util::mission_planner_schema());
-            rc != 0) {
-            return rc;
-        }
-    }
-
-    DRONE_LOG_INFO("=== Mission Planner starting (PID {}) ===", getpid());
-
-    // ── Create message bus (config-driven) ───────────────────
-    auto bus = drone::ipc::create_message_bus(cfg);
-
-    // ── Declare liveliness token (auto-dropped on exit/crash) ──
-    drone::ipc::LivelinessToken liveliness_token("mission_planner");
+    // ── Common boilerplate (args, signals, logging, config, bus) ──
+    auto ctx_result = drone::util::init_process(argc, argv, "mission_planner", g_running,
+                                                drone::util::mission_planner_schema());
+    if (!ctx_result.is_ok()) return ctx_result.error();
+    auto& ctx = ctx_result.value();
 
     // ── Subscribe to inputs ─────────────────────────────────
-    auto pose_sub = bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+    auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
     if (!pose_sub->is_connected()) {
         DRONE_LOG_ERROR("Cannot connect to SLAM pose");
         return 1;
     }
 
     auto obj_sub =
-        bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
+        ctx.bus.subscribe<drone::ipc::DetectedObjectList>(drone::ipc::topics::DETECTED_OBJECTS);
     if (!obj_sub->is_connected()) {
         DRONE_LOG_ERROR("Cannot connect to detected objects");
         return 1;
     }
 
-    auto fc_state_sub = bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
+    auto fc_state_sub = ctx.bus.subscribe<drone::ipc::FCState>(drone::ipc::topics::FC_STATE);
     if (!fc_state_sub->is_connected()) {
         DRONE_LOG_ERROR("Cannot connect to FC state — comms may not be running");
         return 1;
     }
 
-    auto gcs_sub = bus.subscribe_optional<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
+    auto gcs_sub =
+        ctx.bus.subscribe_optional<drone::ipc::GCSCommand>(drone::ipc::topics::GCS_COMMANDS);
     auto mission_upload_sub =
-        bus.subscribe_optional<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
+        ctx.bus.subscribe_optional<drone::ipc::MissionUpload>(drone::ipc::topics::MISSION_UPLOAD);
     auto health_sub =
-        bus.subscribe_optional<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
+        ctx.bus.subscribe_optional<drone::ipc::SystemHealth>(drone::ipc::topics::SYSTEM_HEALTH);
 
     // ── Create publishers ───────────────────────────────────
-    auto status_pub = bus.advertise<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
-    auto traj_pub   = bus.advertise<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
+    auto status_pub =
+        ctx.bus.advertise<drone::ipc::MissionStatus>(drone::ipc::topics::MISSION_STATUS);
+    auto traj_pub =
+        ctx.bus.advertise<drone::ipc::TrajectoryCmd>(drone::ipc::topics::TRAJECTORY_CMD);
     auto payload_pub =
-        bus.advertise<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
-    auto fc_cmd_pub = bus.advertise<drone::ipc::FCCommand>(drone::ipc::topics::FC_COMMANDS);
+        ctx.bus.advertise<drone::ipc::PayloadCommand>(drone::ipc::topics::PAYLOAD_COMMANDS);
+    auto fc_cmd_pub = ctx.bus.advertise<drone::ipc::FCCommand>(drone::ipc::topics::FC_COMMANDS);
 
     if (!status_pub->is_ready() || !traj_pub->is_ready() || !payload_pub->is_ready() ||
         !fc_cmd_pub->is_ready()) {
@@ -132,15 +109,15 @@ int main(int argc, char* argv[]) {
 
     // ── Load mission from config or use defaults ────────────
     const float overshoot_proximity =
-        cfg.get<float>(drone::cfg_key::mission_planner::OVERSHOOT_PROXIMITY_FACTOR, 3.0f);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::OVERSHOOT_PROXIMITY_FACTOR, 3.0f);
     MissionFSM fsm(overshoot_proximity);
-    auto       wp_json = cfg.section(drone::cfg_key::mission_planner::WAYPOINTS);
+    auto       wp_json = ctx.cfg.section(drone::cfg_key::mission_planner::WAYPOINTS);
     if (wp_json.is_array() && !wp_json.empty()) {
         std::vector<Waypoint> waypoints;
         const float           default_radius =
-            cfg.get<float>(drone::cfg_key::mission_planner::ACCEPTANCE_RADIUS_M, 2.0f);
+            ctx.cfg.get<float>(drone::cfg_key::mission_planner::ACCEPTANCE_RADIUS_M, 2.0f);
         const float default_speed =
-            cfg.get<float>(drone::cfg_key::mission_planner::CRUISE_SPEED_MPS, 2.0f);
+            ctx.cfg.get<float>(drone::cfg_key::mission_planner::CRUISE_SPEED_MPS, 2.0f);
         for (const auto& w : wp_json) {
             waypoints.push_back({w.value("x", 0.0f), w.value("y", 0.0f), w.value("z", 5.0f),
                                  w.value("yaw", 0.0f), default_radius,
@@ -159,91 +136,92 @@ int main(int argc, char* argv[]) {
     fsm.on_arm();  // IDLE → PREFLIGHT
 
     // ── Create path planner and obstacle avoider strategies ──
-    const float takeoff_alt = cfg.get<float>(drone::cfg_key::mission_planner::TAKEOFF_ALTITUDE_M,
-                                             10.0f);
-    const float influence_radius = cfg.get<float>(
+    const float takeoff_alt =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::TAKEOFF_ALTITUDE_M, 10.0f);
+    const float influence_radius = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::obstacle_avoidance::INFLUENCE_RADIUS_M, 5.0f);
-    const float repulsive_gain =
-        cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::REPULSIVE_GAIN, 2.0f);
-    const int update_rate_hz = cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ, 10);
+    const float repulsive_gain = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::obstacle_avoidance::REPULSIVE_GAIN, 2.0f);
+    const int update_rate_hz = ctx.cfg.get<int>(drone::cfg_key::mission_planner::UPDATE_RATE_HZ,
+                                                10);
     const int loop_sleep_ms  = std::max(1, update_rate_hz > 0 ? 1000 / update_rate_hz : 100);
 
-    auto planner_backend = cfg.get<std::string>(
+    auto planner_backend = ctx.cfg.get<std::string>(
         drone::cfg_key::mission_planner::path_planner::BACKEND, "potential_field");
     drone::planner::GridPlannerConfig planner_cfg;
-    planner_cfg.resolution_m = cfg.get<float>(
+    planner_cfg.resolution_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::RESOLUTION_M, planner_cfg.resolution_m);
-    planner_cfg.grid_extent_m = cfg.get<float>(
+    planner_cfg.grid_extent_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::GRID_EXTENT_M, planner_cfg.grid_extent_m);
     planner_cfg.inflation_radius_m =
-        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::INFLATION_RADIUS_M,
-                       planner_cfg.inflation_radius_m);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::INFLATION_RADIUS_M,
+                           planner_cfg.inflation_radius_m);
     planner_cfg.replan_interval_s =
-        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::REPLAN_INTERVAL_S,
-                       planner_cfg.replan_interval_s);
-    planner_cfg.path_speed_mps = cfg.get<float>(
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::REPLAN_INTERVAL_S,
+                           planner_cfg.replan_interval_s);
+    planner_cfg.path_speed_mps = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::PATH_SPEED_MPS, planner_cfg.path_speed_mps);
     planner_cfg.smoothing_alpha =
-        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SMOOTHING_ALPHA,
-                       planner_cfg.smoothing_alpha);
-    planner_cfg.max_iterations = cfg.get<int>(
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SMOOTHING_ALPHA,
+                           planner_cfg.smoothing_alpha);
+    planner_cfg.max_iterations = ctx.cfg.get<int>(
         drone::cfg_key::mission_planner::path_planner::MAX_ITERATIONS, planner_cfg.max_iterations);
     planner_cfg.max_search_time_ms =
-        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::MAX_SEARCH_TIME_MS,
-                       planner_cfg.max_search_time_ms);
-    planner_cfg.ramp_dist_m = cfg.get<float>(
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::MAX_SEARCH_TIME_MS,
+                           planner_cfg.max_search_time_ms);
+    planner_cfg.ramp_dist_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::RAMP_DIST_M, planner_cfg.ramp_dist_m);
-    planner_cfg.min_speed_mps = cfg.get<float>(
+    planner_cfg.min_speed_mps = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::MIN_SPEED_MPS, planner_cfg.min_speed_mps);
     planner_cfg.snap_search_radius =
-        cfg.get<int>(drone::cfg_key::mission_planner::path_planner::SNAP_SEARCH_RADIUS,
-                     planner_cfg.snap_search_radius);
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::path_planner::SNAP_SEARCH_RADIUS,
+                         planner_cfg.snap_search_radius);
 
     // Occupancy-grid-specific settings: scenario configs use occupancy_grid.* keys
     // to configure these fields instead of the path_planner.* defaults.
-    planner_cfg.resolution_m = cfg.get<float>(
+    planner_cfg.resolution_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::occupancy_grid::RESOLUTION_M, planner_cfg.resolution_m);
     planner_cfg.inflation_radius_m =
-        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::INFLATION_RADIUS_M,
-                       planner_cfg.inflation_radius_m);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::INFLATION_RADIUS_M,
+                           planner_cfg.inflation_radius_m);
     planner_cfg.cell_ttl_s =
-        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::DYNAMIC_OBSTACLE_TTL_S,
-                       planner_cfg.cell_ttl_s);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::DYNAMIC_OBSTACLE_TTL_S,
+                           planner_cfg.cell_ttl_s);
     planner_cfg.min_confidence =
-        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::MIN_CONFIDENCE,
-                       planner_cfg.min_confidence);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::MIN_CONFIDENCE,
+                           planner_cfg.min_confidence);
     planner_cfg.promotion_hits =
-        cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::PROMOTION_HITS,
-                     planner_cfg.promotion_hits);
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::PROMOTION_HITS,
+                         planner_cfg.promotion_hits);
     planner_cfg.radar_promotion_hits = static_cast<uint32_t>(
-        cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::RADAR_PROMOTION_HITS,
-                     static_cast<int>(planner_cfg.radar_promotion_hits)));
-    planner_cfg.min_promotion_depth_confidence = cfg.get<float>(
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::RADAR_PROMOTION_HITS,
+                         static_cast<int>(planner_cfg.radar_promotion_hits)));
+    planner_cfg.min_promotion_depth_confidence = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::occupancy_grid::MIN_PROMOTION_DEPTH_CONFIDENCE,
         planner_cfg.min_promotion_depth_confidence);
     planner_cfg.max_static_cells =
-        cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::MAX_STATIC_CELLS,
-                     planner_cfg.max_static_cells);
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::MAX_STATIC_CELLS,
+                         planner_cfg.max_static_cells);
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
-        cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,
-                      planner_cfg.prediction_enabled);
+        ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,
+                          planner_cfg.prediction_enabled);
     planner_cfg.prediction_dt_s =
-        cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_DT_S,
-                       planner_cfg.prediction_dt_s);
-    planner_cfg.z_band_cells = cfg.get<int>(
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_DT_S,
+                           planner_cfg.prediction_dt_s);
+    planner_cfg.z_band_cells = ctx.cfg.get<int>(
         drone::cfg_key::mission_planner::path_planner::Z_BAND_CELLS, planner_cfg.z_band_cells);
-    planner_cfg.look_ahead_m = cfg.get<float>(
+    planner_cfg.look_ahead_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::path_planner::LOOK_AHEAD_M, planner_cfg.look_ahead_m);
     planner_cfg.yaw_towards_travel =
-        cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::YAW_TOWARDS_TRAVEL,
-                      planner_cfg.yaw_towards_travel);
+        ctx.cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::YAW_TOWARDS_TRAVEL,
+                          planner_cfg.yaw_towards_travel);
     planner_cfg.yaw_smoothing_rate =
-        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::YAW_SMOOTHING_RATE,
-                       planner_cfg.yaw_smoothing_rate);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::YAW_SMOOTHING_RATE,
+                           planner_cfg.yaw_smoothing_rate);
     planner_cfg.snap_approach_bias =
-        cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS,
-                       planner_cfg.snap_approach_bias);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS,
+                           planner_cfg.snap_approach_bias);
 
     auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
     DRONE_LOG_INFO("Path planner: {}", path_planner->name());
@@ -251,19 +229,19 @@ int main(int argc, char* argv[]) {
 
     // ── HD-map static obstacles ─────────────────────────────
     StaticObstacleLayer obstacle_layer;
-    obstacle_layer.load(cfg, grid_planner);
+    obstacle_layer.load(ctx.cfg, grid_planner);
 
-    auto avoider_backend = cfg.get<std::string>(
+    auto avoider_backend = ctx.cfg.get<std::string>(
         drone::cfg_key::mission_planner::obstacle_avoider::BACKEND, "potential_field");
     auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
-                                                           repulsive_gain, &cfg);
+                                                           repulsive_gain, &ctx.cfg);
     DRONE_LOG_INFO("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────
     Geofence   geofence;
     const bool geofence_cfg_enabled =
-        cfg.get<bool>(drone::cfg_key::mission_planner::geofence::ENABLED, true);
-    auto fence_json = cfg.section(drone::cfg_key::mission_planner::geofence::POLYGON);
+        ctx.cfg.get<bool>(drone::cfg_key::mission_planner::geofence::ENABLED, true);
+    auto fence_json = ctx.cfg.section(drone::cfg_key::mission_planner::geofence::POLYGON);
     if (geofence_cfg_enabled && fence_json.is_array() && fence_json.size() >= 3) {
         std::vector<GeoVertex> vertices;
         for (const auto& v : fence_json) {
@@ -271,19 +249,19 @@ int main(int argc, char* argv[]) {
         }
         geofence.set_polygon(vertices);
         float alt_floor =
-            cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M, 0.0f);
-        float alt_ceiling =
-            cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M, 120.0f);
+            ctx.cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M, 0.0f);
+        float alt_ceiling = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M, 120.0f);
         geofence.set_altitude_limits(alt_floor, alt_ceiling);
         geofence.set_warning_margin(
-            cfg.get<float>(drone::cfg_key::mission_planner::geofence::WARNING_MARGIN_M, 5.0f));
-        geofence.set_altitude_tolerance(
-            cfg.get<float>(drone::cfg_key::mission_planner::geofence::ALTITUDE_TOLERANCE_M, 0.5f));
+            ctx.cfg.get<float>(drone::cfg_key::mission_planner::geofence::WARNING_MARGIN_M, 5.0f));
+        geofence.set_altitude_tolerance(ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::geofence::ALTITUDE_TOLERANCE_M, 0.5f));
         geofence.enable(true);
         DRONE_LOG_INFO(
             "Geofence: {} vertices, alt [{:.0f}, {:.0f}]m, margin {:.0f}m", vertices.size(),
             alt_floor, alt_ceiling,
-            cfg.get<float>(drone::cfg_key::mission_planner::geofence::WARNING_MARGIN_M, 5.0f));
+            ctx.cfg.get<float>(drone::cfg_key::mission_planner::geofence::WARNING_MARGIN_M, 5.0f));
     } else {
         DRONE_LOG_INFO("Geofence: disabled ({})",
                        geofence_cfg_enabled ? "no polygon configured" : "disabled by config");
@@ -291,23 +269,23 @@ int main(int argc, char* argv[]) {
 
     // ── Create extracted subsystems ─────────────────────────
     const float rtl_acceptance_m =
-        cfg.get<float>(drone::cfg_key::mission_planner::RTL_ACCEPTANCE_RADIUS_M, 1.5f);
-    const float landed_alt_m  = cfg.get<float>(drone::cfg_key::mission_planner::LANDED_ALTITUDE_M,
-                                               0.5f);
-    const int rtl_min_dwell_s = cfg.get<int>(drone::cfg_key::mission_planner::RTL_MIN_DWELL_SECONDS,
-                                             5);
-    const float survey_duration = cfg.get<float>(drone::cfg_key::mission_planner::SURVEY_DURATION_S,
-                                                 0.0f);
-    const float survey_yaw_rate = cfg.get<float>(drone::cfg_key::mission_planner::SURVEY_YAW_RATE,
-                                                 0.3f);
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::RTL_ACCEPTANCE_RADIUS_M, 1.5f);
+    const float landed_alt_m =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::LANDED_ALTITUDE_M, 0.5f);
+    const int rtl_min_dwell_s =
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::RTL_MIN_DWELL_SECONDS, 5);
+    const float survey_duration =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::SURVEY_DURATION_S, 0.0f);
+    const float survey_yaw_rate =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::SURVEY_YAW_RATE, 0.3f);
 
     // Collision recovery config (Issue #226)
     const bool collision_recovery_enabled =
-        cfg.get<bool>(drone::cfg_key::mission_planner::collision_recovery::ENABLED, true);
-    const float collision_climb_delta =
-        cfg.get<float>(drone::cfg_key::mission_planner::collision_recovery::CLIMB_DELTA_M, 3.0f);
-    const float collision_hover_duration =
-        cfg.get<float>(drone::cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S, 2.0f);
+        ctx.cfg.get<bool>(drone::cfg_key::mission_planner::collision_recovery::ENABLED, true);
+    const float collision_climb_delta = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::collision_recovery::CLIMB_DELTA_M, 3.0f);
+    const float collision_hover_duration = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S, 2.0f);
 
     MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s,
                                       survey_duration, survey_yaw_rate, collision_recovery_enabled,
@@ -319,7 +297,7 @@ int main(int argc, char* argv[]) {
     };
 
     // ── Create fault manager (config-driven thresholds) ────
-    FaultManager fault_mgr(cfg);
+    FaultManager fault_mgr(ctx.cfg);
 
     DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
@@ -327,8 +305,8 @@ int main(int argc, char* argv[]) {
     // ── Thread heartbeat + watchdog + health publisher ──────
     auto                        planning_hb = drone::util::ScopedHeartbeat("planning_loop", true);
     drone::util::ThreadWatchdog watchdog;
-    auto                        thread_health_pub =
-        bus.advertise<drone::ipc::ThreadHealth>(drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
+    auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
+        drone::ipc::topics::THREAD_HEALTH_MISSION_PLANNER);
     drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "mission_planner",
                                                         watchdog);
     uint32_t                           health_tick = 0;
