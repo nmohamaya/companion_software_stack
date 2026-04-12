@@ -83,6 +83,9 @@ inline constexpr const char* BACKEND              = "perception.tracker.backend"
 inline constexpr const char* MAX_AGE              = "perception.tracker.max_age";
 inline constexpr const char* MIN_HITS             = "perception.tracker.min_hits";
 inline constexpr const char* MAX_ASSOCIATION_COST = "perception.tracker.max_association_cost";
+inline constexpr const char* HIGH_CONF_THRESHOLD  = "perception.tracker.high_conf_threshold";
+inline constexpr const char* LOW_CONF_THRESHOLD   = "perception.tracker.low_conf_threshold";
+inline constexpr const char* MAX_IOU_COST         = "perception.tracker.max_iou_cost";
 }  // namespace tracker
 
 namespace radar {
@@ -293,6 +296,8 @@ inline constexpr const char* BACKEND           = "payload_manager.gimbal.backend
 inline constexpr const char* MAX_SLEW_RATE_DPS = "payload_manager.gimbal.max_slew_rate_dps";
 inline constexpr const char* PITCH_MIN_DEG     = "payload_manager.gimbal.pitch_min_deg";
 inline constexpr const char* PITCH_MAX_DEG     = "payload_manager.gimbal.pitch_max_deg";
+inline constexpr const char* YAW_MIN_DEG       = "payload_manager.gimbal.yaw_min_deg";
+inline constexpr const char* YAW_MAX_DEG       = "payload_manager.gimbal.yaw_max_deg";
 
 namespace auto_track {
 inline constexpr const char* ENABLED        = "payload_manager.gimbal.auto_track.enabled";

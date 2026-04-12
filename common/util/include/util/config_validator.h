@@ -292,9 +292,13 @@ inline ConfigSchema video_capture_schema() {
     s.required<int>(cfg_key::video_capture::mission_cam::WIDTH).range(1, 7680);
     s.required<int>(cfg_key::video_capture::mission_cam::HEIGHT).range(1, 4320);
     s.required<int>(cfg_key::video_capture::mission_cam::FPS).range(1, 240);
+    s.optional<std::string>(cfg_key::video_capture::mission_cam::BACKEND)
+        .one_of({"simulated", "v4l2", "libargus", "gazebo"});
     s.optional<int>(cfg_key::video_capture::stereo_cam::WIDTH).range(1, 7680);
     s.optional<int>(cfg_key::video_capture::stereo_cam::HEIGHT).range(1, 4320);
     s.optional<int>(cfg_key::video_capture::stereo_cam::FPS).range(1, 240);
+    s.optional<std::string>(cfg_key::video_capture::stereo_cam::BACKEND)
+        .one_of({"simulated", "v4l2", "libargus", "gazebo"});
     return s;
 }
 
@@ -304,9 +308,26 @@ inline ConfigSchema perception_schema() {
     s.optional<double>(cfg_key::perception::detector::CONFIDENCE_THRESHOLD).range(0.0, 1.0);
     s.optional<double>(cfg_key::perception::detector::NMS_THRESHOLD).range(0.0, 1.0);
     s.optional<int>(cfg_key::perception::detector::MAX_DETECTIONS).range(1, 10000);
+    s.optional<int>(cfg_key::perception::detector::MIN_CONTOUR_AREA).range(0, 100000);
+    s.optional<int>(cfg_key::perception::detector::SUBSAMPLE).range(1, 16);
+    s.optional<int>(cfg_key::perception::detector::MAX_FPS).range(0, 1000);
+    s.optional<double>(cfg_key::perception::detector::CONFIDENCE_MAX).range(0.0, 1.0);
+    s.optional<double>(cfg_key::perception::detector::CONFIDENCE_BASE).range(0.0, 1.0);
+    s.optional<double>(cfg_key::perception::detector::CONFIDENCE_AREA_SCALE).range(0.0, 10000.0);
+    s.optional<int>(cfg_key::perception::detector::MIN_BBOX_HEIGHT_PX).range(1, 10000);
+    s.optional<double>(cfg_key::perception::detector::MAX_ASPECT_RATIO).range(0.1, 100.0);
+    // Tracker
     s.optional<int>(cfg_key::perception::tracker::MAX_AGE).range(1, 1000);
     s.optional<int>(cfg_key::perception::tracker::MIN_HITS).range(1, 100);
     s.optional<double>(cfg_key::perception::tracker::MAX_ASSOCIATION_COST).range(0.0, 10000.0);
+    s.optional<double>(cfg_key::perception::tracker::HIGH_CONF_THRESHOLD).range(0.0, 1.0);
+    s.optional<double>(cfg_key::perception::tracker::LOW_CONF_THRESHOLD).range(0.0, 1.0);
+    s.optional<double>(cfg_key::perception::tracker::MAX_IOU_COST).range(0.0, 1.0);
+    // Radar
+    s.optional<bool>(cfg_key::perception::radar::ENABLED);
+    s.optional<int>(cfg_key::perception::radar::UPDATE_RATE_HZ).range(1, 1000);
+    // Fusion
+    s.optional<int>(cfg_key::perception::fusion::RATE_HZ).range(1, 1000);
     return s;
 }
 
@@ -319,6 +340,9 @@ inline ConfigSchema slam_schema() {
     s.optional<double>(cfg_key::slam::keyframe::MIN_PARALLAX_PX).range(0.0, 1000.0);
     s.optional<double>(cfg_key::slam::keyframe::MIN_TRACKED_RATIO).range(0.0, 1.0);
     s.optional<double>(cfg_key::slam::keyframe::MAX_TIME_SEC).range(0.001, 60.0);
+    // VIO quality thresholds
+    s.optional<double>(cfg_key::slam::vio::GOOD_TRACE_MAX).range(0.0, 100.0);
+    s.optional<double>(cfg_key::slam::vio::DEGRADED_TRACE_MAX).range(0.0, 100.0);
     return s;
 }
 
@@ -329,8 +353,51 @@ inline ConfigSchema mission_planner_schema() {
     s.required<double>(cfg_key::mission_planner::TAKEOFF_ALTITUDE_M).range(0.5, 500.0);
     s.optional<double>(cfg_key::mission_planner::ACCEPTANCE_RADIUS_M).range(0.1, 100.0);
     s.optional<double>(cfg_key::mission_planner::CRUISE_SPEED_MPS).range(0.1, 50.0);
+    s.optional<double>(cfg_key::mission_planner::RTL_ACCEPTANCE_RADIUS_M).range(0.1, 100.0);
+    s.optional<double>(cfg_key::mission_planner::LANDED_ALTITUDE_M).range(0.0, 50.0);
+    s.optional<int>(cfg_key::mission_planner::RTL_MIN_DWELL_SECONDS).range(0, 600);
+    // Path planner
+    s.optional<double>(cfg_key::mission_planner::path_planner::RAMP_DIST_M).range(0.0, 100.0);
+    s.optional<double>(cfg_key::mission_planner::path_planner::MIN_SPEED_MPS).range(0.0, 50.0);
+    s.optional<int>(cfg_key::mission_planner::path_planner::SNAP_SEARCH_RADIUS).range(1, 100);
+    s.optional<double>(cfg_key::mission_planner::path_planner::YAW_SMOOTHING_RATE).range(0.0, 1.0);
+    s.optional<double>(cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS).range(0.0, 1.0);
+    // Occupancy grid
+    s.optional<double>(cfg_key::mission_planner::occupancy_grid::RESOLUTION_M).range(0.01, 10.0);
+    s.optional<double>(cfg_key::mission_planner::occupancy_grid::INFLATION_RADIUS_M)
+        .range(0.0, 50.0);
+    s.optional<double>(cfg_key::mission_planner::occupancy_grid::DYNAMIC_OBSTACLE_TTL_S)
+        .range(0.0, 60.0);
+    s.optional<double>(cfg_key::mission_planner::occupancy_grid::MIN_CONFIDENCE).range(0.0, 1.0);
+    s.optional<double>(cfg_key::mission_planner::occupancy_grid::MIN_PROMOTION_DEPTH_CONFIDENCE)
+        .range(0.0, 1.0);
+    s.optional<int>(cfg_key::mission_planner::occupancy_grid::MAX_STATIC_CELLS).range(0, 1000000);
+    s.optional<bool>(cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED);
+    s.optional<double>(cfg_key::mission_planner::occupancy_grid::PREDICTION_DT_S).range(0.0, 60.0);
+    // Obstacle avoidance
     s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::MIN_DISTANCE_M)
         .range(0.1, 100.0);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::INFLUENCE_RADIUS_M)
+        .range(0.1, 100.0);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::REPULSIVE_GAIN)
+        .range(0.0, 100.0);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::MAX_CORRECTION_MPS)
+        .range(0.0, 50.0);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::MIN_CONFIDENCE).range(0.0, 1.0);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::PREDICTION_DT_S)
+        .range(0.0, 60.0);
+    s.optional<int>(cfg_key::mission_planner::obstacle_avoidance::MAX_AGE_MS).range(0, 60000);
+    // Geofence
+    s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M).range(-1000.0, 10000.0);
+    s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M).range(0.0, 10000.0);
+    s.optional<double>(cfg_key::mission_planner::geofence::WARNING_MARGIN_M).range(0.0, 1000.0);
+    s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_TOLERANCE_M).range(0.0, 100.0);
+    // Collision recovery
+    s.optional<bool>(cfg_key::mission_planner::collision_recovery::ENABLED);
+    s.optional<double>(cfg_key::mission_planner::collision_recovery::CLIMB_DELTA_M)
+        .range(0.0, 100.0);
+    s.optional<double>(cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S)
+        .range(0.0, 60.0);
     // fault_manager section
     s.optional<int>(cfg_key::fault_manager::POSE_STALE_TIMEOUT_MS).range(1, 60000);
     s.optional<double>(cfg_key::fault_manager::BATTERY_WARN_PERCENT).range(1.0, 100.0);
@@ -344,6 +411,8 @@ inline ConfigSchema comms_schema() {
     s.optional<int>(cfg_key::comms::mavlink::HEARTBEAT_RATE_HZ).range(1, 100);
     s.optional<int>(cfg_key::comms::mavlink::TX_RATE_HZ).range(1, 1000);
     s.optional<int>(cfg_key::comms::mavlink::RX_RATE_HZ).range(1, 1000);
+    s.optional<int>(cfg_key::comms::mavlink::TIMEOUT_MS).range(1, 60000);
+    s.optional<int>(cfg_key::comms::mavlink::BAUD_RATE).range(1200, 4000000);
     s.optional<int>(cfg_key::comms::gcs::UDP_PORT).range(1, 65535);
     s.optional<int>(cfg_key::comms::gcs::TELEMETRY_RATE_HZ).range(1, 100);
     return s;
@@ -356,6 +425,10 @@ inline ConfigSchema payload_manager_schema() {
     s.optional<double>(cfg_key::payload_manager::gimbal::MAX_SLEW_RATE_DPS).range(0.1, 1000.0);
     s.optional<double>(cfg_key::payload_manager::gimbal::PITCH_MIN_DEG).range(-180.0, 0.0);
     s.optional<double>(cfg_key::payload_manager::gimbal::PITCH_MAX_DEG).range(0.0, 180.0);
+    s.optional<double>(cfg_key::payload_manager::gimbal::YAW_MIN_DEG).range(-360.0, 0.0);
+    s.optional<double>(cfg_key::payload_manager::gimbal::YAW_MAX_DEG).range(0.0, 360.0);
+    s.optional<bool>(cfg_key::payload_manager::gimbal::auto_track::ENABLED);
+    s.optional<double>(cfg_key::payload_manager::gimbal::auto_track::MIN_CONFIDENCE).range(0.0, 1.0);
     return s;
 }
 
@@ -364,12 +437,14 @@ inline ConfigSchema system_monitor_schema() {
     s.required_section(cfg_key::system_monitor::SECTION);
     s.optional<std::string>(cfg_key::system_monitor::PLATFORM).one_of({"linux", "jetson", "mock"});
     s.required<int>(cfg_key::system_monitor::UPDATE_RATE_HZ).range(1, 100);
+    s.optional<int>(cfg_key::system_monitor::DISK_CHECK_INTERVAL_S).range(1, 3600);
     s.optional<double>(cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT).range(0.0, 100.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT).range(0.0, 100.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::TEMP_WARN_C).range(0.0, 200.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::TEMP_CRIT_C).range(0.0, 200.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT).range(0.0, 100.0);
     s.optional<double>(cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT).range(0.0, 100.0);
+    s.optional<double>(cfg_key::system_monitor::thresholds::DISK_CRIT_PERCENT).range(0.0, 100.0);
     return s;
 }
 
