@@ -7,7 +7,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -182,7 +184,7 @@ TEST(GlobalClockTest, SetClockToMock) {
     EXPECT_EQ(get_clock().now_ns(), 52'000'000ULL);
 
     // Restore default
-    set_clock(nullptr);
+    reset_clock();
 
     // Now it should be steady_clock again — verify with before/after window
     const auto before_restore =
@@ -203,7 +205,7 @@ TEST(GlobalClockTest, SetClockNullRestoresDefault) {
     set_clock(&mock);
     EXPECT_EQ(get_clock().now_ns(), 1ULL);
 
-    set_clock(nullptr);
+    reset_clock();
     // Default SteadyClock — verify with before/after window
     const auto before =
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -308,4 +310,88 @@ TEST(IClockPolymorphismTest, NowSecondsConvenienceMethod) {
     MockClock     mock(1'500'000'000ULL);
     const IClock& ref = mock;
     EXPECT_DOUBLE_EQ(ref.now_seconds(), 1.5);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  RCU-style retirement tests (Issue #384)
+// ════════════════════════════════════════════════════════════════════
+
+TEST(ClockRCUTest, SetClockOwningOverload) {
+    // Test the unique_ptr overload of set_clock.
+    auto  mock = std::make_unique<MockClock>(42'000'000ULL);
+    auto* ptr  = mock.get();
+    set_clock(std::move(mock));
+
+    EXPECT_EQ(get_clock().now_ns(), 42'000'000ULL);
+
+    // Advance via the raw pointer we kept.
+    ptr->advance_ms(10);
+    EXPECT_EQ(get_clock().now_ns(), 52'000'000ULL);
+
+    // Restore default.
+    reset_clock();
+}
+
+TEST(ClockRCUTest, OldClockSurvivesAfterReplacement) {
+    // The old clock must remain callable after set_clock() replaces it,
+    // because the retirement vector keeps owned clocks alive.
+    auto  mock1 = std::make_unique<MockClock>(100ULL);
+    auto* ptr1  = mock1.get();
+    set_clock(std::move(mock1));
+
+    EXPECT_EQ(get_clock().now_ns(), 100ULL);
+
+    // Replace with a second clock — ptr1 should still be alive (retired).
+    auto mock2 = std::make_unique<MockClock>(200ULL);
+    set_clock(std::move(mock2));
+
+    // The old clock (ptr1) must still be callable — not destroyed.
+    EXPECT_EQ(ptr1->now_ns(), 100ULL);
+    ptr1->advance_ns(50);
+    EXPECT_EQ(ptr1->now_ns(), 150ULL);
+
+    // Restore default.
+    reset_clock();
+}
+
+TEST(ClockRCUTest, ConcurrentClockAccessDuringSwap) {
+    // Stress test: multiple threads call get_clock() while another thread
+    // swaps clocks.  Must not crash or trigger TSAN/ASAN.
+    constexpr int kIterations = 5000;
+    constexpr int kReaders    = 4;
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+
+    // Reader threads: continuously call get_clock().now_ns().
+    std::vector<std::thread> readers;
+    readers.reserve(kReaders);
+    for (int i = 0; i < kReaders; ++i) {
+        readers.emplace_back([&] {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            while (!stop.load(std::memory_order_acquire)) {
+                auto t = get_clock().now_ns();
+                (void)t;  // Just ensure no crash/TSAN race
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+
+    // Writer thread: swap clocks repeatedly using the OWNING overload
+    // to exercise the RCU retirement path (retired_clocks vector).
+    for (int i = 0; i < kIterations; ++i) {
+        set_clock(std::make_unique<MockClock>(static_cast<uint64_t>(i + 1) * 1'000ULL));
+    }
+
+    stop.store(true, std::memory_order_release);
+    for (auto& t : readers) {
+        t.join();
+    }
+
+    // Restore default.
+    reset_clock();
+    // If we get here without crash/TSAN flag, the test passes.
 }

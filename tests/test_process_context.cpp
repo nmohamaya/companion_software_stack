@@ -6,6 +6,8 @@
 #include "util/process_context.h"
 
 #include <atomic>
+#include <cstdio>
+#include <fstream>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -122,3 +124,76 @@ TEST(ProcessContext, ParsedArgsPreserved) {
     EXPECT_EQ(ctx.args.log_level, "debug");
     EXPECT_TRUE(ctx.args.json_logs);
 }
+
+// ── Test: --skip-validation flag is parsed (Debug builds only) ──
+// Gated behind #ifndef NDEBUG because --skip-validation is a security-sensitive
+// flag intentionally disabled in non-Debug builds (CMake defines NDEBUG for
+// Release, RelWithDebInfo, MinSizeRel). In those builds, the flag is ignored
+// with a stderr warning (args.skip_validation stays false), so tests that assert
+// it becomes true would fail. Run with -DCMAKE_BUILD_TYPE=Debug to test.
+#ifndef NDEBUG
+TEST(ProcessContext, SkipValidationFlagParsed) {
+    ArgvBuilder argv_builder({"test_process", "--skip-validation"});
+    auto        args = parse_args(argv_builder.argc(), argv_builder.argv(), "test");
+    EXPECT_TRUE(args.skip_validation);
+}
+#endif  // NDEBUG
+
+TEST(ProcessContext, SkipValidationFlagDefaultFalse) {
+    ArgvBuilder argv_builder({"test_process"});
+    auto        args = parse_args(argv_builder.argc(), argv_builder.argv(), "test");
+    EXPECT_FALSE(args.skip_validation);
+}
+
+// ── Test: --skip-validation skips config schema enforcement (Debug only) ──
+// Gated behind #ifndef NDEBUG: --skip-validation is ignored in non-Debug builds
+// (CMake defines NDEBUG for Release, RelWithDebInfo, MinSizeRel), so the "skip" path
+// cannot be exercised. These tests only compile and run in Debug builds.
+#ifndef NDEBUG
+TEST(ProcessContext, SkipValidationAllowsInvalidConfig) {
+    std::atomic<bool> running{true};
+
+    // Create a config that's invalid: slam.vio_rate_hz = 0 (below min range of 1)
+    std::string tmp_path = "/tmp/drone_test_skip_validation_" + std::to_string(::getpid()) +
+                           ".json";
+    {
+        std::ofstream ofs(tmp_path);
+        ASSERT_TRUE(ofs.is_open()) << "Failed to create temp config at: " << tmp_path;
+        ofs << R"({"slam": {"vio_rate_hz": 0}})";
+    }
+
+    // A schema requiring vio_rate_hz in [1, 10000]
+    auto schema = drone::util::slam_schema();
+
+    // WITH --skip-validation: should succeed despite invalid config
+    ArgvBuilder argv_skip({"test_process", "--config", tmp_path, "--skip-validation"});
+    auto result_skip = drone::util::init_process(argv_skip.argc(), argv_skip.argv(), "test_proc",
+                                                 running, schema);
+    EXPECT_TRUE(result_skip.is_ok()) << "Expected success with --skip-validation";
+
+    // WITHOUT --skip-validation: should fail due to out-of-range vio_rate_hz
+    std::atomic<bool> running2{true};
+    ArgvBuilder       argv_no_skip({"test_process", "--config", tmp_path});
+    auto result_no_skip = drone::util::init_process(argv_no_skip.argc(), argv_no_skip.argv(),
+                                                    "test_proc2", running2, schema);
+    EXPECT_FALSE(result_no_skip.is_ok()) << "Expected failure without --skip-validation";
+    EXPECT_EQ(result_no_skip.error(), 1);
+
+    std::remove(tmp_path.c_str());
+}
+#endif  // NDEBUG
+
+// ── Test: --skip-validation is preserved in ProcessContext (Debug only) ──
+// Gated behind #ifndef NDEBUG: the flag is ignored in non-Debug builds.
+#ifndef NDEBUG
+TEST(ProcessContext, SkipValidationPreservedInContext) {
+    std::atomic<bool> running{true};
+    ArgvBuilder       argv_builder({"test_process", "--skip-validation"});
+
+    auto result = drone::util::init_process(argv_builder.argc(), argv_builder.argv(), "test_proc",
+                                            running, drone::util::common_schema());
+
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_TRUE(result.value().args.skip_validation);
+}
+#endif  // NDEBUG

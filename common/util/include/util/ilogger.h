@@ -6,7 +6,9 @@
 //   - Global accessor: drone::log::logger() / set_logger()
 //   - DRONE_LOG_DEBUG/INFO/WARN/ERROR/CRITICAL macros (fmt-style)
 //
-// Default implementation: SpdlogLogger (delegates to spdlog default logger).
+// Default fallback: StderrFallbackLogger (writes to stderr, no spdlog needed).
+// Production logger: SpdlogLogger (in spdlog_logger.h) — installed via
+//   init_process() / LogConfig::init() during startup.
 // Test implementations: NullLogger, CapturingLogger (separate headers).
 //
 // Usage:
@@ -26,13 +28,14 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
-#include <spdlog/fmt/fmt.h>
-#include <spdlog/spdlog.h>
+#include <fmt/format.h>
 
 namespace drone::log {
 
@@ -67,29 +70,23 @@ public:
     ILogger& operator=(ILogger&&)      = delete;
 };
 
-// ── SpdlogLogger (default) ─────────────────────────────────
-/// Production logger that delegates to spdlog's default logger.
-/// This is the default when no custom logger is installed.
-class SpdlogLogger final : public ILogger {
+// ── StderrFallbackLogger ───────────────────────────────────
+/// Minimal fallback logger that writes to stderr.  Used as the
+/// default before SpdlogLogger is installed via init_process().
+/// Has no dependency on spdlog — keeps ilogger.h decoupled.
+class StderrFallbackLogger final : public ILogger {
 public:
     void log(Level level, std::string_view msg) override {
-        spdlog::log(to_spdlog_level(level), "{}", msg);
+        static constexpr const char* kLevelNames[] = {"DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"};
+        const auto                   idx           = static_cast<uint8_t>(level);
+        const char* name = (idx < std::size(kLevelNames)) ? kLevelNames[idx] : "UNKNOWN";
+        std::fprintf(stderr, "[%s] ", name);
+        std::fwrite(msg.data(), 1, msg.size(), stderr);
+        std::fputc('\n', stderr);
     }
 
-    [[nodiscard]] bool should_log(Level level) const override {
-        return spdlog::should_log(to_spdlog_level(level));
-    }
-
-private:
-    static spdlog::level::level_enum to_spdlog_level(Level level) {
-        switch (level) {
-            case Level::Debug: return spdlog::level::debug;
-            case Level::Info: return spdlog::level::info;
-            case Level::Warn: return spdlog::level::warn;
-            case Level::Error: return spdlog::level::err;
-            case Level::Critical: return spdlog::level::critical;
-        }
-        return spdlog::level::info;  // unreachable, but silences -Wreturn-type
+    [[nodiscard]] bool should_log(Level /*level*/) const override {
+        return true;  // Fallback logger emits everything.
     }
 };
 
@@ -99,11 +96,15 @@ private:
 // reset_logger() are cold-path (startup / tests) and hold a mutex to
 // protect the owning unique_ptr.
 //
-// SAFETY CONTRACT: set_logger() / reset_logger() must only be called
-// during single-threaded startup or in test fixture setup/teardown
-// (before/after worker threads are running).  Calling them while other
-// threads are actively logging is a use-after-free.  See issue #384
-// for a planned RCU-style fix that eliminates this constraint.
+// RCU-style retirement (Issue #384): When set_logger() or reset_logger()
+// replaces the active logger, the OLD logger is moved into a retirement
+// vector rather than destroyed.  This eliminates use-after-free: any
+// thread that loaded the old pointer via logger() can safely finish its
+// log call even if another thread concurrently swaps the logger.  The
+// cost is process-lifetime retention of retired logger objects.  Memory
+// growth is unbounded with respect to the number of swaps, but this is
+// acceptable because logger replacement is a rare cold-path operation
+// (startup / tests), not a steady-state activity.
 
 namespace detail {
 
@@ -120,15 +121,31 @@ inline std::unique_ptr<ILogger>& logger_owner() {
     return owner;
 }
 
+/// Retired loggers — kept alive to prevent use-after-free.
+/// Only accessed under logger_mutex().
+inline std::vector<std::unique_ptr<ILogger>>& retired_loggers() {
+    static std::vector<std::unique_ptr<ILogger>> vec;
+    return vec;
+}
+
 /// Atomic raw pointer cache for hot-path reads (null = use default).
 inline std::atomic<ILogger*>& logger_ptr() {
     static std::atomic<ILogger*> ptr{nullptr};
     return ptr;
 }
 
-/// Process-wide default SpdlogLogger instance.
+/// Retire the currently owned logger (if any) into the retirement vector.
+/// Must be called under logger_mutex().
+inline void retire_owner() {
+    if (logger_owner()) {
+        retired_loggers().push_back(std::move(logger_owner()));
+    }
+}
+
+/// Process-wide fallback logger (stderr).  Used when no SpdlogLogger
+/// has been installed yet (before init_process) or after reset_logger().
 inline ILogger& default_logger() {
-    static SpdlogLogger instance;
+    static StderrFallbackLogger instance;
     return instance;
 }
 
@@ -142,19 +159,23 @@ inline ILogger& logger() {
     return detail::default_logger();
 }
 
-/// Install a custom logger (e.g. CapturingLogger for tests).
-/// Pass nullptr or call reset_logger() to revert to default.
+/// Install a custom logger (e.g. SpdlogLogger, CapturingLogger).
+/// Call reset_logger() to revert to the StderrFallbackLogger.
 /// Thread-safe: serialized by mutex, atomic store visible to all readers.
+/// The previous logger is retired (kept alive) to prevent use-after-free
+/// if another thread is still using it.
 inline void set_logger(std::unique_ptr<ILogger> l) {
     std::lock_guard<std::mutex> lock(detail::logger_mutex());
+    detail::retire_owner();
     detail::logger_owner() = std::move(l);
     detail::logger_ptr().store(detail::logger_owner().get(), std::memory_order_release);
 }
 
-/// Revert to the default SpdlogLogger.
+/// Revert to the StderrFallbackLogger.
+/// The previous logger is retired (kept alive) to prevent use-after-free.
 inline void reset_logger() {
     std::lock_guard<std::mutex> lock(detail::logger_mutex());
-    detail::logger_owner().reset();
+    detail::retire_owner();
     detail::logger_ptr().store(nullptr, std::memory_order_release);
 }
 

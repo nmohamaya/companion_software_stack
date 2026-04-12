@@ -250,6 +250,7 @@
         "platform": "linux",
         "update_rate_hz": 1,
         "disk_check_interval_s": 10,
+        "power_coeff": 0.16,
         "thresholds": {
             "cpu_warn_percent": 90.0,
             "mem_warn_percent": 90.0,

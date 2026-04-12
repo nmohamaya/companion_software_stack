@@ -18,6 +18,15 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 
 ## Log
 
+### 2026-04-12 | tech-lead (deploy-wave) | opus | PR #409
+
+**Task:** Epic #284 Wave 4 — Logger Decoupling, RCU Retirement, cfg_key Migration, Schema Enforcement (#385, #384, #386, #298)
+**Files:** common/util/include/util/ilogger.h, iclock.h, spdlog_logger.h, config_validator.h, config_keys.h, arg_parser.h, log_config.h, process_context.h, sys_info_factory.h, process7_system_monitor/include/monitor/iprocess_monitor.h, process7_system_monitor/src/main.cpp, tests/test_ilogger.cpp, tests/test_iclock.cpp, tests/test_process_context.cpp
+**Tests:** 9 added, 1438 total passing (baseline: 1429)
+**Safety issues found:** none (RCU retirement pattern verified correct by concurrency + memory-safety agents)
+**Hallucination flags:** PASS
+**Notes:** Two-pass review × 2 rounds (9 agents each). Round 1: 13 findings fixed. Round 2: 17 findings fixed. Complex merge conflict on config_validator.h (#386 cfg_key:: vs #298 raw strings). 3 tests gated behind NDEBUG (--skip-validation security flag). Copilot unique finding rate ~40%. Follow-ups filed: #410 (SpdlogLogger double-format), #411 (ifstream per-call in ISysInfo).
+
 ### 2026-04-12 | tech-lead (deploy-wave) | opus | PR #404
 
 **Task:** Epic #284 Wave 3 — Composition & Testing (#293 EventBus, #291 ProcessBuilder, #292 Integration Harness)

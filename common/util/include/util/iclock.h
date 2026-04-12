@@ -14,8 +14,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace drone::util {
 
@@ -49,12 +51,12 @@ public:
         return static_cast<double>(now_ns()) / 1'000'000'000.0;
     }
 
-protected:
+    // Non-copyable, non-movable (held via unique_ptr).
     IClock()                         = default;
-    IClock(const IClock&)            = default;
-    IClock& operator=(const IClock&) = default;
-    IClock(IClock&&)                 = default;
-    IClock& operator=(IClock&&)      = default;
+    IClock(const IClock&)            = delete;
+    IClock& operator=(const IClock&) = delete;
+    IClock(IClock&&)                 = delete;
+    IClock& operator=(IClock&&)      = delete;
 };
 
 // ── SteadyClock — production default ───────────────────────────────
@@ -80,11 +82,14 @@ public:
 // read), so it uses an atomic load (acquire).  set_clock() is cold-path
 // (startup / tests) and holds a mutex to protect ownership.
 //
-// SAFETY CONTRACT: set_clock() must only be called during single-threaded
-// startup or in test fixture setup/teardown (before/after worker threads
-// are running).  Calling it while other threads are actively reading the
-// clock is a data race on the pointed-to object's lifetime.
-// See issue #384 for a planned RCU-style fix.
+// RCU-style retirement (Issue #384): When set_clock() replaces the active
+// clock, the OLD clock is moved into a retirement vector rather than
+// destroyed.  This eliminates use-after-free: any thread that loaded the
+// old pointer via get_clock() can safely finish its operation even if
+// another thread concurrently swaps the clock.  The cost is process-lifetime
+// retention of retired clock objects; memory growth is unbounded with respect
+// to the number of swaps, but acceptable because clock replacement is a rare
+// cold-path operation (startup / tests), not steady-state.
 
 namespace detail {
 
@@ -100,10 +105,32 @@ inline std::mutex& clock_mutex() {
     return mtx;
 }
 
+/// Owning pointer to the user-installed clock (null = use default).
+/// Must hold clock_mutex() to read or write.
+inline std::unique_ptr<IClock>& clock_owner() {
+    static std::unique_ptr<IClock> owner;
+    return owner;
+}
+
+/// Retired clocks — kept alive to prevent use-after-free.
+/// Only accessed under clock_mutex().
+inline std::vector<std::unique_ptr<IClock>>& retired_clocks() {
+    static std::vector<std::unique_ptr<IClock>> vec;
+    return vec;
+}
+
 /// Atomic raw pointer cache for hot-path reads (null = use default).
 inline std::atomic<IClock*>& clock_ptr() {
     static std::atomic<IClock*> ptr{nullptr};
     return ptr;
+}
+
+/// Retire the currently owned clock (if any) into the retirement vector.
+/// Must be called under clock_mutex().
+inline void retire_owner() {
+    if (clock_owner()) {
+        retired_clocks().push_back(std::move(clock_owner()));
+    }
 }
 
 }  // namespace detail
@@ -117,15 +144,34 @@ inline std::atomic<IClock*>& clock_ptr() {
     return detail::default_clock();
 }
 
-/// Set the global clock.  Call once at startup or in test setup.
+/// Set the global clock (owning overload).  Takes ownership of the clock.
 /// Thread-safe: serialized by mutex, atomic store visible to all readers.
-///
-/// @param clk  Pointer to clock instance.  Caller retains ownership
-///             and must ensure the clock outlives all users.
-///             Pass nullptr to restore the default SteadyClock.
+/// The previous clock is retired (kept alive) to prevent use-after-free.
+inline void set_clock(std::unique_ptr<IClock> clk) {
+    std::lock_guard<std::mutex> lock(detail::clock_mutex());
+    detail::retire_owner();
+    detail::clock_owner() = std::move(clk);
+    detail::clock_ptr().store(detail::clock_owner().get(), std::memory_order_release);
+}
+
+/// Set the global clock (non-owning overload for stack-allocated clocks).
+/// The caller retains ownership and must ensure the clock outlives all users.
+/// Pass nullptr to clear the override; get_clock() will fall back to SteadyClock.
+/// Equivalent to reset_clock() when clk == nullptr.
+/// The previous owned clock (if any) is retired, not destroyed.
 inline void set_clock(IClock* clk) {
     std::lock_guard<std::mutex> lock(detail::clock_mutex());
+    detail::retire_owner();
+    // No ownership transfer — clock_owner remains null.
     detail::clock_ptr().store(clk, std::memory_order_release);
+}
+
+/// Revert to the default SteadyClock.
+/// The previous owned clock is retired (kept alive) to prevent use-after-free.
+inline void reset_clock() {
+    std::lock_guard<std::mutex> lock(detail::clock_mutex());
+    detail::retire_owner();
+    detail::clock_ptr().store(nullptr, std::memory_order_release);
 }
 
 }  // namespace drone::util

@@ -4,6 +4,7 @@
 #pragma once
 #include "util/ilogger.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>

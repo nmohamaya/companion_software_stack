@@ -12,10 +12,10 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "util/iclock.h"
 #include "util/ilogger.h"
 #include "util/isys_info.h"
 
-#include <chrono>
 #include <memory>
 #include <string>
 
@@ -27,14 +27,16 @@ namespace drone::monitor {
 // ─────────────────────────────────────────────────────────────
 
 struct MonitorThresholds {
-    float cpu_warn{90.0f};    ///< CPU % threshold for WARNING status.
-    float mem_warn{90.0f};    ///< Memory % threshold for WARNING status.
-    float temp_warn{80.0f};   ///< Temperature (C) threshold for WARNING status.
-    float temp_crit{95.0f};   ///< Temperature (C) threshold for CRITICAL status.
-    float disk_crit{98.0f};   ///< Disk % threshold for CRITICAL status.
-    float batt_warn{20.0f};   ///< Battery % threshold for WARNING status.
-    float batt_crit{10.0f};   ///< Battery % threshold for CRITICAL status.
-    int   disk_interval{10};  ///< Check disk every N calls to reduce overhead.
+    float cpu_warn{90.0f};     ///< CPU % threshold for WARNING status.
+    float mem_warn{90.0f};     ///< Memory % threshold for WARNING status.
+    float temp_warn{80.0f};    ///< Temperature (C) threshold for WARNING status.
+    float temp_crit{95.0f};    ///< Temperature (C) threshold for CRITICAL status.
+    float disk_crit{98.0f};    ///< Disk % threshold for CRITICAL status.
+    float batt_warn{20.0f};    ///< Battery % threshold for WARNING status.
+    float batt_crit{10.0f};    ///< Battery % threshold for CRITICAL status.
+    float power_coeff{0.16f};  ///< Battery-to-power linear coefficient (watts per %).
+    int   disk_interval{
+        10};  ///< Check disk every N ticks (= disk_check_interval_s * update_rate_hz).
 };
 
 /// Abstract system health monitor.
@@ -88,10 +90,7 @@ public:
 
         // Build health struct
         drone::ipc::SystemHealth health{};
-        health.timestamp_ns =
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      std::chrono::steady_clock::now().time_since_epoch())
-                                      .count());
+        health.timestamp_ns         = drone::util::get_clock().now_ns();
         health.cpu_usage_percent    = cpu_usage;
         health.memory_usage_percent = mem.usage_percent;
         health.cpu_temp_c           = temp;
@@ -99,12 +98,10 @@ public:
         health.disk_usage_percent   = disk_.usage_percent;
 
         // Battery-to-power estimate (linear approximation).
-        // TODO(config): source from cfg_key when a real power sensor is available.
-        static constexpr float kBatteryToPowerCoeff = 0.16f;
-        health.power_watts                          = battery_ * kBatteryToPowerCoeff;
+        health.power_watts = battery_ * thresholds_.power_coeff;
 
         // Composite status (thermal_zone):
-        //   0 = normal, 2 = warning, 3 = critical
+        //   0 = normal, 2 = warning, 3 = critical (zone 1 reserved, never assigned)
         health.thermal_zone = 0;
         if (cpu_usage > thresholds_.cpu_warn || mem.usage_percent > thresholds_.mem_warn ||
             temp > thresholds_.temp_warn) {

@@ -113,6 +113,8 @@ private:
     Config cfg;
     if (!cfg.load(args.config_path)) {
         DRONE_LOG_WARN("Running with default configuration; failed to load '{}'", args.config_path);
+    } else if (args.skip_validation) {
+        DRONE_LOG_WARN("Config validation skipped (--skip-validation)");
     } else {
         if (int rc = validate_or_exit(cfg, schema); rc != 0) {
             return Result<ProcessContext, int>::err(rc);

@@ -5,6 +5,7 @@ target_include_directories(drone_util INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(drone_util INTERFACE
+    fmt::fmt
     spdlog::spdlog
     nlohmann_json::nlohmann_json
     pthread

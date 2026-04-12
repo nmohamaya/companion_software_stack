@@ -7,11 +7,18 @@
 #include "util/capturing_logger.h"
 #include "util/ilogger.h"
 #include "util/null_logger.h"
+#include "util/spdlog_logger.h"
 
+#include <atomic>
+#include <cstdio>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 // ── RAII guard: restore default logger after each test ──────
 class LoggerGuard {
@@ -20,15 +27,22 @@ public:
 };
 
 // ═══════════════════════════════════════════════════════════════
-// SpdlogLogger (default)
+// StderrFallbackLogger (default before SpdlogLogger is installed)
 // ═══════════════════════════════════════════════════════════════
 
-TEST(ILoggerTest, DefaultLoggerIsSpdlog) {
-    // The default logger should be a SpdlogLogger instance.
+TEST(ILoggerTest, DefaultLoggerIsStderrFallback) {
+    // Before init_process() installs SpdlogLogger, the default is
+    // StderrFallbackLogger.  It should_log all levels (no filtering).
     auto& lg = drone::log::logger();
-    // Verify it's usable (doesn't crash).
     lg.log(drone::log::Level::Info, "test message from default logger");
+
+    // StderrFallbackLogger returns true for ALL levels (no filtering).
+    // This distinguishes it from SpdlogLogger which filters by spdlog level.
+    EXPECT_TRUE(lg.should_log(drone::log::Level::Debug));
     EXPECT_TRUE(lg.should_log(drone::log::Level::Info));
+    EXPECT_TRUE(lg.should_log(drone::log::Level::Warn));
+    EXPECT_TRUE(lg.should_log(drone::log::Level::Error));
+    EXPECT_TRUE(lg.should_log(drone::log::Level::Critical));
 }
 
 TEST(ILoggerTest, SpdlogLoggerShouldLogRespectsLevel) {
@@ -174,11 +188,11 @@ TEST(ILoggerTest, SetAndResetLogger) {
     DRONE_LOG_INFO("captured");
     EXPECT_EQ(ptr->count(), 1u);
 
-    // Reset to default.
+    // Reset to default (StderrFallbackLogger).
     drone::log::reset_logger();
 
-    // Default logger is SpdlogLogger — should not crash.
-    DRONE_LOG_INFO("back to spdlog");
+    // Default logger is StderrFallbackLogger — should not crash.
+    DRONE_LOG_INFO("back to default logger");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -249,4 +263,163 @@ TEST(ILoggerTest, LevelOrdering) {
     EXPECT_LT(static_cast<uint8_t>(L::Info), static_cast<uint8_t>(L::Warn));
     EXPECT_LT(static_cast<uint8_t>(L::Warn), static_cast<uint8_t>(L::Error));
     EXPECT_LT(static_cast<uint8_t>(L::Error), static_cast<uint8_t>(L::Critical));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RCU-style retirement (Issue #384)
+// ═══════════════════════════════════════════════════════════════
+
+TEST(ILoggerRCUTest, OldLoggerSurvivesAfterSetLogger) {
+    // The old logger must remain callable after set_logger() replaces it,
+    // because the retirement vector keeps it alive.
+    LoggerGuard guard;
+
+    auto  cap1 = std::make_unique<drone::log::CapturingLogger>();
+    auto* ptr1 = cap1.get();
+    drone::log::set_logger(std::move(cap1));
+
+    DRONE_LOG_INFO("msg1");
+    EXPECT_EQ(ptr1->count(), 1u);
+
+    // Replace with a second logger — ptr1 should still be alive (retired).
+    auto  cap2 = std::make_unique<drone::log::CapturingLogger>();
+    auto* ptr2 = cap2.get();
+    drone::log::set_logger(std::move(cap2));
+
+    // The old logger (ptr1) must still be callable — not destroyed.
+    EXPECT_EQ(ptr1->count(), 1u);
+    ptr1->log(drone::log::Level::Info, "still alive");
+    EXPECT_EQ(ptr1->count(), 2u);
+
+    // New logger works too.
+    DRONE_LOG_INFO("msg2");
+    EXPECT_EQ(ptr2->count(), 1u);
+}
+
+TEST(ILoggerRCUTest, OldLoggerSurvivesAfterResetLogger) {
+    LoggerGuard guard;
+
+    auto  cap = std::make_unique<drone::log::CapturingLogger>();
+    auto* ptr = cap.get();
+    drone::log::set_logger(std::move(cap));
+
+    DRONE_LOG_INFO("before reset");
+    EXPECT_EQ(ptr->count(), 1u);
+
+    // Reset to default — old logger must survive (retired).
+    drone::log::reset_logger();
+
+    // The old logger (ptr) must still be callable.
+    EXPECT_EQ(ptr->count(), 1u);
+    ptr->log(drone::log::Level::Info, "still alive after reset");
+    EXPECT_EQ(ptr->count(), 2u);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// StderrFallbackLogger — output format and boundary tests
+// ═══════════════════════════════════════════════════════════════
+
+TEST(ILoggerTest, StderrFallbackLoggerOutputFormat) {
+    // Verify StderrFallbackLogger writes "[LEVEL] msg\n" to stderr.
+    // Redirect stderr to a temp file to capture output.
+    drone::log::StderrFallbackLogger fallback;
+
+    // Save original stderr
+    int orig_stderr = ::dup(STDERR_FILENO);
+
+    std::string tmp_path = "/tmp/drone_test_stderr_" + std::to_string(::getpid()) + ".txt";
+    FILE*       tmp      = std::fopen(tmp_path.c_str(), "w");
+    ASSERT_NE(tmp, nullptr);
+    ::dup2(::fileno(tmp), STDERR_FILENO);
+
+    fallback.log(drone::log::Level::Info, "hello world");
+    std::fflush(stderr);
+
+    // Restore stderr
+    ::dup2(orig_stderr, STDERR_FILENO);
+    ::close(orig_stderr);
+    std::fclose(tmp);
+
+    // Read captured output
+    std::ifstream ifs(tmp_path);
+    std::string   output((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+    std::remove(tmp_path.c_str());
+
+    EXPECT_EQ(output, "[INFO] hello world\n");
+}
+
+TEST(ILoggerTest, StderrFallbackLoggerUnknownLevel) {
+    // Verify that out-of-range Level values produce "UNKNOWN" label.
+    drone::log::StderrFallbackLogger fallback;
+
+    int orig_stderr = ::dup(STDERR_FILENO);
+
+    std::string tmp_path = "/tmp/drone_test_stderr_unk_" + std::to_string(::getpid()) + ".txt";
+    FILE*       tmp      = std::fopen(tmp_path.c_str(), "w");
+    ASSERT_NE(tmp, nullptr);
+    ::dup2(::fileno(tmp), STDERR_FILENO);
+
+    fallback.log(static_cast<drone::log::Level>(99), "boundary test");
+    std::fflush(stderr);
+
+    ::dup2(orig_stderr, STDERR_FILENO);
+    ::close(orig_stderr);
+    std::fclose(tmp);
+
+    std::ifstream ifs(tmp_path);
+    std::string   output((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+    std::remove(tmp_path.c_str());
+
+    EXPECT_EQ(output, "[UNKNOWN] boundary test\n");
+}
+
+TEST(ILoggerRCUTest, ConcurrentLoggerAccessDuringSwap) {
+    // Stress test: multiple threads call logger() while another thread
+    // swaps loggers.  Must not crash or trigger TSAN/ASAN.
+    //
+    // Uses NullLogger (thread-safe, no-op) rather than CapturingLogger
+    // (not thread-safe) since we are testing the swap mechanism, not
+    // the logger implementation.
+    LoggerGuard guard;
+
+    constexpr int kIterations = 5000;
+    constexpr int kReaders    = 4;
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+
+    // Reader threads: continuously call logger() and invoke should_log().
+    // NullLogger::should_log() returns false, so log() is never called.
+    std::vector<std::thread> readers;
+    readers.reserve(kReaders);
+    for (int i = 0; i < kReaders; ++i) {
+        readers.emplace_back([&] {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            while (!stop.load(std::memory_order_acquire)) {
+                auto& lg = drone::log::logger();
+                // Exercise the pointer dereference — the key safety property.
+                auto can_log = lg.should_log(drone::log::Level::Debug);
+                (void)can_log;
+            }
+        });
+    }
+
+    start.store(true, std::memory_order_release);
+
+    // Writer thread: swap loggers repeatedly.
+    for (int i = 0; i < kIterations; ++i) {
+        drone::log::set_logger(std::make_unique<drone::log::NullLogger>());
+    }
+
+    stop.store(true, std::memory_order_release);
+    for (auto& t : readers) {
+        t.join();
+    }
+
+    // If we get here without crash/TSAN flag, the test passes.
+    drone::log::reset_logger();
 }
