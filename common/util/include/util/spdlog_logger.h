@@ -40,8 +40,10 @@ public:
         // Bypass spdlog's fmt formatter — the message is already formatted
         // by DRONE_LOG_* macros (via fmt::format) before reaching here.
         // Using the string_view_t overload avoids double-format overhead.
-        spdlog::default_logger_raw()->log(to_spdlog_level(level),
-                                          spdlog::string_view_t(msg.data(), msg.size()));
+        auto* logger = spdlog::default_logger_raw();
+        if (logger) {
+            logger->log(to_spdlog_level(level), spdlog::string_view_t(msg.data(), msg.size()));
+        }
     }
 
     [[nodiscard]] bool should_log(Level level) const override {

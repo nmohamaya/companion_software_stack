@@ -13,11 +13,13 @@
 #include <cstdio>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 #include <unistd.h>
 
 // ── RAII guard: restore default logger after each test ──────
@@ -46,35 +48,36 @@ TEST(ILoggerTest, DefaultLoggerIsStderrFallback) {
 }
 
 TEST(ILoggerTest, SpdlogLoggerLogBypassesFmtReformat) {
-    // Verify SpdlogLogger::log() correctly passes pre-formatted messages
-    // to spdlog without double-format overhead.  The message arrives
-    // already formatted by DRONE_LOG_* macros, so SpdlogLogger must NOT
-    // re-parse it through fmt.  We verify by sending a message containing
-    // fmt-special characters ('{', '}') — if spdlog re-parsed, it would
-    // throw or corrupt the output.
+    // Verify SpdlogLogger::log() passes pre-formatted messages verbatim to
+    // spdlog without re-parsing through fmt.  We install an ostream_sink to
+    // capture actual spdlog output, then send a message containing raw braces
+    // which would throw or corrupt if spdlog re-parsed them as fmt strings.
     LoggerGuard guard;
 
-    auto  cap = std::make_unique<drone::log::CapturingLogger>();
-    auto* ptr = cap.get();
+    // Install a custom spdlog logger with an ostream sink to capture output
+    std::ostringstream oss;
+    auto               sink   = std::make_shared<spdlog::sinks::ostream_sink_mt>(oss);
+    auto               logger = std::make_shared<spdlog::logger>("test_bypass", sink);
+    logger->set_level(spdlog::level::trace);
+    logger->set_pattern("%v");  // message only, no timestamp/level prefix
+    auto prev_logger = spdlog::default_logger();
+    spdlog::set_default_logger(logger);
 
-    // First: route through SpdlogLogger to verify it doesn't crash on
-    // fmt-special characters.  SpdlogLogger sends to spdlog's default
-    // logger, so we can't easily capture its output here.  But we CAN
-    // verify it doesn't throw or abort.
-    {
-        drone::log::SpdlogLogger spdlog_logger;
-        // These would throw/crash if spdlog re-parsed them as fmt strings
-        spdlog_logger.log(drone::log::Level::Info, "braces: {key} {value}");
-        spdlog_logger.log(drone::log::Level::Warn, "nested: {{already escaped}}");
-        spdlog_logger.log(drone::log::Level::Error, "mixed: {0} and {1}");
-    }
+    drone::log::SpdlogLogger spdlog_logger;
 
-    // Second: verify the interface contract via CapturingLogger — the
-    // message string_view is passed through unchanged.
-    drone::log::set_logger(std::move(cap));
-    DRONE_LOG_INFO("formatted: x={} y={}", 10, 20);
-    ASSERT_EQ(ptr->count(), 1u);
-    EXPECT_TRUE(ptr->contains("formatted: x=10 y=20"));
+    // Raw braces would cause fmt::format to throw if spdlog re-parsed
+    spdlog_logger.log(drone::log::Level::Info, "braces: {key} {value}");
+    spdlog_logger.log(drone::log::Level::Warn, "indexed: {0} and {1}");
+    logger->flush();
+
+    std::string output = oss.str();
+    EXPECT_NE(output.find("braces: {key} {value}"), std::string::npos)
+        << "Expected verbatim braces in output, got: " << output;
+    EXPECT_NE(output.find("indexed: {0} and {1}"), std::string::npos)
+        << "Expected verbatim indexed args in output, got: " << output;
+
+    // Restore original default logger
+    spdlog::set_default_logger(prev_logger);
 }
 
 TEST(ILoggerTest, SpdlogLoggerShouldLogRespectsLevel) {

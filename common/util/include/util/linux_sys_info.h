@@ -62,13 +62,12 @@ public:
         // Reuse cached handle if a path was previously discovered
         if (cached_thermal_path_ != nullptr) {
             if (rewind_or_open(cached_thermal_, cached_thermal_path_)) {
-                int millideg = 0;
-                cached_thermal_ >> millideg;
-                return static_cast<float>(millideg) / 1000.0f;
+                return read_millideg(cached_thermal_);
             }
         }
 
         // First call or cached handle failed — probe both paths
+        // (string literals have static storage duration — pointer stays valid)
         const char* paths[] = {
             "/sys/devices/virtual/thermal/thermal_zone0/temp",
             "/sys/class/thermal/thermal_zone0/temp",
@@ -76,9 +75,7 @@ public:
         for (const auto* path : paths) {
             if (rewind_or_open(cached_thermal_, path)) {
                 cached_thermal_path_ = path;
-                int millideg         = 0;
-                cached_thermal_ >> millideg;
-                return static_cast<float>(millideg) / 1000.0f;
+                return read_millideg(cached_thermal_);
             }
         }
         return kFallbackCpuTempC;
@@ -112,6 +109,13 @@ public:
     [[nodiscard]] std::string name() const override { return "LinuxSysInfo"; }
 
 protected:
+    /// Read a millidegree integer from a thermal zone file and convert to Celsius.
+    static float read_millideg(std::ifstream& stream) {
+        int millideg = 0;
+        stream >> millideg;
+        return static_cast<float>(millideg) / 1000.0f;
+    }
+
     /// Rewind a cached ifstream to the beginning, or (re)open it on failure.
     /// Returns true if the stream is ready for reading.
     /// @note Not thread-safe — caller must ensure single-threaded access.

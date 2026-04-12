@@ -29,8 +29,10 @@ using drone::util::LinuxSysInfo;
 // Existing code that calls drone::monitor::read_cpu_times() still works.
 // ─────────────────────────────────────────────────────────────
 
+/// @note Function-local static keeps cached file handles alive across calls.
+/// Safe because P7 is single-threaded for these reads.
 inline drone::util::CpuTimes read_cpu_times() {
-    LinuxSysInfo sys;
+    static LinuxSysInfo sys;
     return sys.read_cpu_times();
 }
 
@@ -39,22 +41,22 @@ inline drone::util::CpuTimes read_cpu_times() {
 using drone::util::compute_cpu_usage;
 
 inline drone::util::MemInfo read_meminfo() {
-    LinuxSysInfo sys;
+    static LinuxSysInfo sys;
     return sys.read_meminfo();
 }
 
 inline float read_cpu_temp() {
-    LinuxSysInfo sys;
+    static LinuxSysInfo sys;
     return sys.read_cpu_temp();
 }
 
 inline drone::util::DiskInfo read_disk_usage() {
-    LinuxSysInfo sys;
+    static LinuxSysInfo sys;
     return sys.read_disk_usage();
 }
 
 inline bool is_process_alive(pid_t pid) {
-    LinuxSysInfo sys;
+    static LinuxSysInfo sys;
     return sys.is_process_alive(pid);
 }
 

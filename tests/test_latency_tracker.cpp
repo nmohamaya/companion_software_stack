@@ -217,20 +217,20 @@ TEST(LatencyTrackerTest, NowNsReturnsIncreasingValues) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(LatencyTrackerTest, LogSummaryNotDueWithTooFewSamples) {
-    LatencyTracker tracker(64);
+    LatencyTracker tracker(128);
     tracker.record(1000);
     tracker.record(2000);
-    // min_samples defaults to 10 — should not log or reset
+    // min_samples defaults to 100 — should not log or reset
     EXPECT_FALSE(tracker.log_summary_if_due("test_topic"));
     EXPECT_EQ(tracker.total_count(), 2u);  // not reset
 }
 
 TEST(LatencyTrackerTest, LogSummaryDueWithEnoughSamples) {
-    LatencyTracker tracker(64);
-    for (int i = 0; i < 15; ++i) {
-        tracker.record(1000 * i);
+    LatencyTracker tracker(128);
+    for (int i = 0; i < 105; ++i) {
+        tracker.record(static_cast<uint64_t>(1000 * i));
     }
-    // Should log and reset
+    // Default min_samples=100, 105 samples recorded — should log and reset
     EXPECT_TRUE(tracker.log_summary_if_due("test_topic"));
     EXPECT_EQ(tracker.total_count(), 0u);  // was reset
 }

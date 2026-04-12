@@ -77,6 +77,9 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
 
         pub.publish(state);
 
+        // Log IPC latency from the thread that owns fault_sub.receive()
+        fault_sub.log_latency_if_due();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
@@ -163,6 +166,11 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                 }
             }
         }
+
+        // Log IPC latency from the thread that owns these receive() calls
+        traj_sub.log_latency_if_due();
+        cmd_sub.log_latency_if_due();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
@@ -240,6 +248,11 @@ static void gcs_tx_thread(drone::hal::IGCSLink&                               gc
                                telem_fail_count);
             }
         }
+
+        // Log IPC latency from the thread that owns these receive() calls
+        pose_sub.log_latency_if_due();
+        status_sub.log_latency_if_due();
+        fc_sub.log_latency_if_due();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -326,13 +339,8 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         health_publisher.publish_snapshot();
 
-        // Log IPC latency summaries
-        traj_sub->log_latency_if_due();
-        fc_cmd_sub->log_latency_if_due();
-        pose_sub->log_latency_if_due();
-        mission_sub->log_latency_if_due();
-        fc_sub->log_latency_if_due();
-        if (fault_sub) fault_sub->log_latency_if_due();
+        // IPC latency logging moved to owning threads (fc_rx, fc_tx, gcs_tx)
+        // to avoid data races on LatencyTracker.
     }
 
     // Notify systemd BEFORE joining threads — join may take time and

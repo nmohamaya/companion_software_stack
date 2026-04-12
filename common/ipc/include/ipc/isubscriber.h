@@ -3,6 +3,7 @@
 // Decouples process code from the concrete transport (Zenoh, DDS, etc.)
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 

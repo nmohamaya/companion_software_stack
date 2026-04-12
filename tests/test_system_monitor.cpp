@@ -155,10 +155,6 @@ TEST(ISysInfo, LinuxSysInfoIsProcessAlive) {
     EXPECT_FALSE(sys.is_process_alive(0));
 }
 
-// ═══════════════════════════════════════════════════════════
-// ISysInfo interface — MockSysInfo
-// ═══════════════════════════════════════════════════════════
-
 TEST(ISysInfo, LinuxSysInfoRepeatedReadsReturnValidData) {
     drone::util::LinuxSysInfo sys;
 
@@ -176,6 +172,10 @@ TEST(ISysInfo, LinuxSysInfoRepeatedReadsReturnValidData) {
         EXPECT_LE(temp, 120.0f);
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// ISysInfo interface — MockSysInfo
+// ═══════════════════════════════════════════════════════════
 
 TEST(ISysInfo, MockSysInfoName) {
     drone::util::MockSysInfo mock;

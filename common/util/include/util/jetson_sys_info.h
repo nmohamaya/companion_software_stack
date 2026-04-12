@@ -21,8 +21,6 @@ namespace drone::util {
 
 /// Jetson-specific ISysInfo — inherits LinuxSysInfo, overrides CPU thermal zone.
 /// Thread safety: NOT thread-safe — single-thread use only (see ISysInfo).
-/// The atomic cached_cpu_zone_idx_ is safe for concurrent reads after first
-/// write, but the mutable ifstreams are not protected.
 class JetsonSysInfo final : public LinuxSysInfo {
 public:
     /// Jetson-specific: scan thermal zones for the CPU sensor (tegra_tsensor).
@@ -89,9 +87,7 @@ private:
         }
 
         if (rewind_or_open(cached_jetson_thermal_, cached_jetson_thermal_path_)) {
-            int millideg = 0;
-            cached_jetson_thermal_ >> millideg;
-            return static_cast<float>(millideg) / 1000.0f;
+            return read_millideg(cached_jetson_thermal_);
         }
         return kFallbackCpuTempC;
     }
