@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 # Shared Context
 
 This directory contains **non-obvious domain knowledge that ALL agents should know**. It is updated over time as agents discover pitfalls, unintuitive behaviors, and time-wasting gotchas.

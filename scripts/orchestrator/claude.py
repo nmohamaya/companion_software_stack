@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Claude CLI subprocess wrapper — all agent launches go through this module.
 
 Wraps `claude` CLI invocations for agent launching in different modes:

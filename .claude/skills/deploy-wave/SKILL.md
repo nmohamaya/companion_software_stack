@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: deploy-wave
 description: Deploy multiple related issues as a wave — plan all upfront, execute sequentially against an integration branch, review the combined diff, merge to main

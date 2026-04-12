@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Single source of truth for agent roles, models, and pipeline configuration.
 
 Replaces the role-model mappings previously duplicated in:

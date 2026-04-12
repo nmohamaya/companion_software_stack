@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: review-test-quality
 description: Reviews test code for quality — verifies new tests exercise new code paths, assertions are meaningful, boundary conditions covered

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Agent dashboard command — per-agent and team-wide metrics.
 
 Replaces agent-dashboard.sh (256 lines).

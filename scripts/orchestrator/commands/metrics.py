@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Session metrics parser command.
 
 Replaces parse-session-metrics.sh (125 lines).

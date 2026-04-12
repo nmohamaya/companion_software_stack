@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 # Domain Knowledge
 
 Non-obvious project knowledge collected from agent experience. Read this at session start to avoid known pitfalls.

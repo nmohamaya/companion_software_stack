@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: review-pr
 description: Run a two-pass domain-aware code review on a pull request — spawns up to 10 review agents with severity-tagged findings

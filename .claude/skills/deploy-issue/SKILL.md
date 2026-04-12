@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: deploy-issue
 description: Run the full deploy-issue pipeline within the current Claude Code session — routing, agent work, review, PR creation, and cleanup with 5 interactive checkpoints

@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: run-scenario
 description: Run Gazebo SITL scenario integration tests with structured analysis — launch, monitor, parse results, diagnose failures, compare runs

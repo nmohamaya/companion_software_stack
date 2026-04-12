@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Preflight checks — run before launching an agent.
 
 Replaces the preflight checks in start-agent.sh (lines 140-186) and

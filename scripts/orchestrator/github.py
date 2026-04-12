@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """GitHub CLI (gh) subprocess wrapper — all GitHub operations go through this module.
 
 Wraps `gh` CLI calls for issues, PRs, labels, and comments. Used by

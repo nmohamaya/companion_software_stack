@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 # Agent Changelog
 
 Agents append completed work here. Newest entries at top. Keep 30 days.
@@ -17,6 +20,15 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 -->
 
 ## Log
+
+### 2026-04-12 | tech-lead (deploy-wave) | opus | PR #413
+
+**Task:** Epic #284 Wave 5a — SpdlogLogger fix, ISysInfo caching, IPC latency wiring (#410, #411, #283)
+**Files:** spdlog_logger.h, linux_sys_info.h, jetson_sys_info.h, isys_info.h, latency_tracker.h, isubscriber.h, zenoh_subscriber.h, sys_info.h, process{2,3,4,5,6,7}_*/src/main.cpp, tests/test_ilogger.cpp, test_latency_tracker.cpp, test_system_monitor.cpp, test_zenoh_coverage.cpp, CPP_PATTERNS_GUIDE.md, observability.md
+**Tests:** 2 added, 1440 total passing (baseline: 1438)
+**Safety issues found:** P1 data race — log_latency_if_due() called from main thread while receive()/record() ran on worker threads in P2/P3/P5. Fixed by moving latency logging to owning threads.
+**Hallucination flags:** PASS
+**Notes:** Two-pass review × 2 rounds (7 agents each). Round 1: 9 findings fixed. Round 2: 10 findings fixed. Copilot: 19 comments, 17 duplicates, 1 unique (sort_scratch_ reservation). Documented [[nodiscard]] fire-and-forget exception in CPP_PATTERNS_GUIDE.md. Follow-up: lib_scenario_logging.sh em dash sort delimiter (out-of-scope).
 
 ### 2026-04-12 | tech-lead (deploy-wave) | opus | PR #409
 

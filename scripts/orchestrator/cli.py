@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """CLI entry point — argparse subcommands for all orchestrator commands.
 
 Usage: python -m orchestrator <command> [args]

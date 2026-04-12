@@ -645,12 +645,20 @@ All dependencies are standard Ubuntu packages — no custom builds required for 
 
 ### License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL 3.0)** — see [LICENSE](LICENSE).
+This repository contains two separately licensed components:
 
-**What this means:**
-- You can freely use, modify, and distribute this software
+- **Drone software stack** (C++, configs, tests, docs) — [AGPL 3.0](LICENSE)
+- **Agent pipeline** (`.claude/`, `scripts/orchestrator/`, `tasks/`) — [Proprietary](PIPELINE_LICENSE.md)
+
+**Drone stack (AGPL 3.0):**
+- You can freely use, modify, and distribute the drone software
 - If you deploy a modified version (including over a network), you must open-source your modifications under AGPL 3.0
 - A **commercial license** is available for organizations that need proprietary use — see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)
+
+**Agent pipeline (Proprietary):**
+- The 17-agent development pipeline is viewable for reference and educational purposes
+- Use, modification, or redistribution requires a commercial Integration license
+- See [PIPELINE_LICENSE.md](PIPELINE_LICENSE.md) for terms
 
 **Dependency licenses:**
 - **Zenoh** — EPL 2.0 (permissive for linking; copyleft only if you modify Zenoh itself)

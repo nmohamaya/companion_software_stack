@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: create-issue
 description: Create a structured GitHub issue with AI-powered domain detection, auto-labeling, and code context — supports bug, feature, refactor, performance, audit types

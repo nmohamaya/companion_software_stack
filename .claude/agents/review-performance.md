@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: review-performance
 description: Reviews code for performance issues — unnecessary copies, allocation in hot paths, algorithmic complexity, cache efficiency

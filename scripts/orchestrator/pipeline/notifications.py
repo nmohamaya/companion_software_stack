@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Push notification support via ntfy.sh for pipeline checkpoints.
 
 Sends mobile-friendly push notifications when the pipeline reaches a

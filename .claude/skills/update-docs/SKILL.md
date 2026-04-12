@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: update-docs
 description: Auto-generate documentation updates for all tracking files after a PR — PROGRESS.md, ROADMAP.md, BUG_FIXES.md, TESTS.md, API.md, CI_ISSUES.md, design docs, README.md

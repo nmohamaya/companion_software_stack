@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Pipeline state persistence — JSON serialization with legacy bash reader.
 
 PipelineStateData holds all mutable state for a pipeline run:

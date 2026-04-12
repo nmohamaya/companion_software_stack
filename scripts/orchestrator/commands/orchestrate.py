@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Orchestrate command — tech-lead driven issue/epic workflow.
 
 New command (Phase 10, no bash equivalent).

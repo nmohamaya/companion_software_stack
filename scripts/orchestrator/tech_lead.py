@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary
+# Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md.
 """Tech-lead strategy layer — routing, quality assessment, recommendations.
 
 The tech-lead agent acts as a strategy orchestrator:

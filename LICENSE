@@ -1,9 +1,20 @@
-Copyright (c) 2026, nmohamaya
+Copyright (c) 2025-2026, Naveen Mohanan
 All rights reserved.
 
 This software is licensed under the GNU Affero General Public License v3.0.
 A commercial license is available for organizations that cannot comply with AGPL terms.
 See COMMERCIAL_LICENSE.md for details.
+
+SCOPE: This license (AGPL 3.0) applies to all files in this repository
+EXCEPT those listed in PIPELINE_LICENSE.md, which are separately licensed.
+
+Files under PIPELINE_LICENSE.md (proprietary — All Rights Reserved):
+  .claude/agents/
+  .claude/skills/
+  .claude/shared-context/
+  .claude/settings.json
+  scripts/orchestrator/
+  tasks/
 
 ---
 

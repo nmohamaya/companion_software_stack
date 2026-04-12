@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
+
 ---
 name: production-readiness
 description: Pre-deployment audit for hardware — build verification, safety audit, test coverage, security scan, performance check, config audit, debug code gate, systemd validation
