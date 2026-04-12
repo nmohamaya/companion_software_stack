@@ -2,11 +2,12 @@
 // Startup-time JSON config validation using a programmatic schema.
 //
 // Usage:
+//   using namespace drone::cfg_key;
 //   auto schema = ConfigSchema()
-//       .required<int>("slam.vio_rate_hz").range(1, 10000)
-//       .required<double>("mission_planner.takeoff_altitude_m").range(0.5, 500.0)
-//       .optional<std::string>("log_level").one_of({"trace","debug","info","warn","error","critical"})
-//       .required_section("video_capture");
+//       .required<int>(slam::VIO_RATE_HZ).range(1, 10000)
+//       .required<double>(mission_planner::TAKEOFF_ALTITUDE_M).range(0.5, 500.0)
+//       .optional<std::string>(LOG_LEVEL).one_of({"trace","debug","info","warn","error","critical"})
+//       .required_section(video_capture::SECTION);
 //
 //   auto result = validate(cfg, schema);
 //   if (result.is_err()) {
@@ -15,6 +16,7 @@
 //   }
 #pragma once
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/result.h"
 
 #include <cmath>
@@ -268,11 +270,11 @@ private:
 
 inline ConfigSchema common_schema() {
     ConfigSchema s;
-    s.optional<std::string>("log_level")
+    s.optional<std::string>(cfg_key::LOG_LEVEL)
         .one_of({"trace", "debug", "info", "warn", "error", "critical"});
-    s.optional<std::string>("ipc_backend").one_of({"zenoh"});  // "shm" removed in PR #151
+    s.optional<std::string>(cfg_key::IPC_BACKEND).one_of({"zenoh"});  // "shm" removed in PR #151
     // vehicle_id must match TopicResolver's allowed chars: [a-zA-Z0-9_-] or empty
-    s.optional<std::string>("vehicle_id")
+    s.optional<std::string>(cfg_key::VEHICLE_ID)
         .satisfies(
             [](const std::string& id) {
                 return std::all_of(id.begin(), id.end(), [](char c) {
@@ -286,87 +288,88 @@ inline ConfigSchema common_schema() {
 
 inline ConfigSchema video_capture_schema() {
     auto s = common_schema();
-    s.required_section("video_capture");
-    s.required<int>("video_capture.mission_cam.width").range(1, 7680);
-    s.required<int>("video_capture.mission_cam.height").range(1, 4320);
-    s.required<int>("video_capture.mission_cam.fps").range(1, 240);
-    s.optional<int>("video_capture.stereo_cam.width").range(1, 7680);
-    s.optional<int>("video_capture.stereo_cam.height").range(1, 4320);
-    s.optional<int>("video_capture.stereo_cam.fps").range(1, 240);
+    s.required_section(cfg_key::video_capture::SECTION);
+    s.required<int>(cfg_key::video_capture::mission_cam::WIDTH).range(1, 7680);
+    s.required<int>(cfg_key::video_capture::mission_cam::HEIGHT).range(1, 4320);
+    s.required<int>(cfg_key::video_capture::mission_cam::FPS).range(1, 240);
+    s.optional<int>(cfg_key::video_capture::stereo_cam::WIDTH).range(1, 7680);
+    s.optional<int>(cfg_key::video_capture::stereo_cam::HEIGHT).range(1, 4320);
+    s.optional<int>(cfg_key::video_capture::stereo_cam::FPS).range(1, 240);
     return s;
 }
 
 inline ConfigSchema perception_schema() {
     auto s = common_schema();
-    s.required_section("perception");
-    s.optional<double>("perception.detector.confidence_threshold").range(0.0, 1.0);
-    s.optional<double>("perception.detector.nms_threshold").range(0.0, 1.0);
-    s.optional<int>("perception.detector.max_detections").range(1, 10000);
-    s.optional<int>("perception.tracker.max_age").range(1, 1000);
-    s.optional<int>("perception.tracker.min_hits").range(1, 100);
-    s.optional<double>("perception.tracker.max_association_cost").range(0.0, 10000.0);
+    s.required_section(cfg_key::perception::SECTION);
+    s.optional<double>(cfg_key::perception::detector::CONFIDENCE_THRESHOLD).range(0.0, 1.0);
+    s.optional<double>(cfg_key::perception::detector::NMS_THRESHOLD).range(0.0, 1.0);
+    s.optional<int>(cfg_key::perception::detector::MAX_DETECTIONS).range(1, 10000);
+    s.optional<int>(cfg_key::perception::tracker::MAX_AGE).range(1, 1000);
+    s.optional<int>(cfg_key::perception::tracker::MIN_HITS).range(1, 100);
+    s.optional<double>(cfg_key::perception::tracker::MAX_ASSOCIATION_COST).range(0.0, 10000.0);
     return s;
 }
 
 inline ConfigSchema slam_schema() {
     auto s = common_schema();
-    s.required_section("slam");
-    s.required<int>("slam.vio_rate_hz").range(1, 10000);
-    s.optional<int>("slam.visual_frontend_rate_hz").range(1, 1000);
-    s.optional<int>("slam.imu_rate_hz").range(1, 10000);
-    s.optional<double>("slam.keyframe.min_parallax_px").range(0.0, 1000.0);
-    s.optional<double>("slam.keyframe.min_tracked_ratio").range(0.0, 1.0);
-    s.optional<double>("slam.keyframe.max_time_sec").range(0.001, 60.0);
+    s.required_section(cfg_key::slam::SECTION);
+    s.required<int>(cfg_key::slam::VIO_RATE_HZ).range(1, 10000);
+    s.optional<int>(cfg_key::slam::VISUAL_FRONTEND_RATE_HZ).range(1, 1000);
+    s.optional<int>(cfg_key::slam::IMU_RATE_HZ).range(1, 10000);
+    s.optional<double>(cfg_key::slam::keyframe::MIN_PARALLAX_PX).range(0.0, 1000.0);
+    s.optional<double>(cfg_key::slam::keyframe::MIN_TRACKED_RATIO).range(0.0, 1.0);
+    s.optional<double>(cfg_key::slam::keyframe::MAX_TIME_SEC).range(0.001, 60.0);
     return s;
 }
 
 inline ConfigSchema mission_planner_schema() {
     auto s = common_schema();
-    s.required_section("mission_planner");
-    s.required<int>("mission_planner.update_rate_hz").range(1, 1000);
-    s.required<double>("mission_planner.takeoff_altitude_m").range(0.5, 500.0);
-    s.optional<double>("mission_planner.acceptance_radius_m").range(0.1, 100.0);
-    s.optional<double>("mission_planner.cruise_speed_mps").range(0.1, 50.0);
-    s.optional<double>("mission_planner.obstacle_avoidance.min_distance_m").range(0.1, 100.0);
+    s.required_section(cfg_key::mission_planner::SECTION);
+    s.required<int>(cfg_key::mission_planner::UPDATE_RATE_HZ).range(1, 1000);
+    s.required<double>(cfg_key::mission_planner::TAKEOFF_ALTITUDE_M).range(0.5, 500.0);
+    s.optional<double>(cfg_key::mission_planner::ACCEPTANCE_RADIUS_M).range(0.1, 100.0);
+    s.optional<double>(cfg_key::mission_planner::CRUISE_SPEED_MPS).range(0.1, 50.0);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::MIN_DISTANCE_M)
+        .range(0.1, 100.0);
     // fault_manager section
-    s.optional<int>("fault_manager.pose_stale_timeout_ms").range(1, 60000);
-    s.optional<double>("fault_manager.battery_warn_percent").range(1.0, 100.0);
-    s.optional<double>("fault_manager.battery_crit_percent").range(0.0, 100.0);
+    s.optional<int>(cfg_key::fault_manager::POSE_STALE_TIMEOUT_MS).range(1, 60000);
+    s.optional<double>(cfg_key::fault_manager::BATTERY_WARN_PERCENT).range(1.0, 100.0);
+    s.optional<double>(cfg_key::fault_manager::BATTERY_CRIT_PERCENT).range(0.0, 100.0);
     return s;
 }
 
 inline ConfigSchema comms_schema() {
     auto s = common_schema();
-    s.required_section("comms");
-    s.optional<int>("comms.mavlink.heartbeat_rate_hz").range(1, 100);
-    s.optional<int>("comms.mavlink.tx_rate_hz").range(1, 1000);
-    s.optional<int>("comms.mavlink.rx_rate_hz").range(1, 1000);
-    s.optional<int>("comms.gcs.udp_port").range(1, 65535);
-    s.optional<int>("comms.gcs.telemetry_rate_hz").range(1, 100);
+    s.required_section(cfg_key::comms::SECTION);
+    s.optional<int>(cfg_key::comms::mavlink::HEARTBEAT_RATE_HZ).range(1, 100);
+    s.optional<int>(cfg_key::comms::mavlink::TX_RATE_HZ).range(1, 1000);
+    s.optional<int>(cfg_key::comms::mavlink::RX_RATE_HZ).range(1, 1000);
+    s.optional<int>(cfg_key::comms::gcs::UDP_PORT).range(1, 65535);
+    s.optional<int>(cfg_key::comms::gcs::TELEMETRY_RATE_HZ).range(1, 100);
     return s;
 }
 
 inline ConfigSchema payload_manager_schema() {
     auto s = common_schema();
-    s.required_section("payload_manager");
-    s.required<int>("payload_manager.update_rate_hz").range(1, 1000);
-    s.optional<double>("payload_manager.gimbal.max_slew_rate_dps").range(0.1, 1000.0);
-    s.optional<double>("payload_manager.gimbal.pitch_min_deg").range(-180.0, 0.0);
-    s.optional<double>("payload_manager.gimbal.pitch_max_deg").range(0.0, 180.0);
+    s.required_section(cfg_key::payload_manager::SECTION);
+    s.required<int>(cfg_key::payload_manager::UPDATE_RATE_HZ).range(1, 1000);
+    s.optional<double>(cfg_key::payload_manager::gimbal::MAX_SLEW_RATE_DPS).range(0.1, 1000.0);
+    s.optional<double>(cfg_key::payload_manager::gimbal::PITCH_MIN_DEG).range(-180.0, 0.0);
+    s.optional<double>(cfg_key::payload_manager::gimbal::PITCH_MAX_DEG).range(0.0, 180.0);
     return s;
 }
 
 inline ConfigSchema system_monitor_schema() {
     auto s = common_schema();
-    s.required_section("system_monitor");
-    s.optional<std::string>("system_monitor.platform").one_of({"linux", "jetson", "mock"});
-    s.required<int>("system_monitor.update_rate_hz").range(1, 100);
-    s.optional<double>("system_monitor.thresholds.cpu_warn_percent").range(0.0, 100.0);
-    s.optional<double>("system_monitor.thresholds.mem_warn_percent").range(0.0, 100.0);
-    s.optional<double>("system_monitor.thresholds.temp_warn_c").range(0.0, 200.0);
-    s.optional<double>("system_monitor.thresholds.temp_crit_c").range(0.0, 200.0);
-    s.optional<double>("system_monitor.thresholds.battery_warn_percent").range(0.0, 100.0);
-    s.optional<double>("system_monitor.thresholds.battery_crit_percent").range(0.0, 100.0);
+    s.required_section(cfg_key::system_monitor::SECTION);
+    s.optional<std::string>(cfg_key::system_monitor::PLATFORM).one_of({"linux", "jetson", "mock"});
+    s.required<int>(cfg_key::system_monitor::UPDATE_RATE_HZ).range(1, 100);
+    s.optional<double>(cfg_key::system_monitor::thresholds::CPU_WARN_PERCENT).range(0.0, 100.0);
+    s.optional<double>(cfg_key::system_monitor::thresholds::MEM_WARN_PERCENT).range(0.0, 100.0);
+    s.optional<double>(cfg_key::system_monitor::thresholds::TEMP_WARN_C).range(0.0, 200.0);
+    s.optional<double>(cfg_key::system_monitor::thresholds::TEMP_CRIT_C).range(0.0, 200.0);
+    s.optional<double>(cfg_key::system_monitor::thresholds::BATTERY_WARN_PERCENT).range(0.0, 100.0);
+    s.optional<double>(cfg_key::system_monitor::thresholds::BATTERY_CRIT_PERCENT).range(0.0, 100.0);
     return s;
 }
 
