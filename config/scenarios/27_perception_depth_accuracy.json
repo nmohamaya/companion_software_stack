@@ -34,8 +34,9 @@
                 "promotion_hits": 8,
                 "min_promotion_depth_confidence": 0.8,
                 "max_static_cells": 800,
+                "require_radar_for_promotion": true,
                 "prediction_enabled": false,
-                "_comment": "Same occupancy config as scenario 18."
+                "_comment": "Same occupancy config as scenario 18. require_radar_for_promotion prevents camera-only ground feature false promotions."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",

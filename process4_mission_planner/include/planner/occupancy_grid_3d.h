@@ -108,7 +108,8 @@ public:
                              float cell_ttl_s = 3.0f, float min_confidence = 0.3f,
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
                              float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
-                             bool prediction_enabled = true, float prediction_dt_s = 2.0f)
+                             bool prediction_enabled = true, float prediction_dt_s = 2.0f,
+                             bool require_radar_for_promotion = false)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -119,7 +120,8 @@ public:
         , min_promotion_depth_confidence_(min_promotion_depth_confidence)
         , max_static_cells_(max_static_cells)
         , prediction_enabled_(prediction_enabled)
-        , prediction_dt_s_(prediction_dt_s) {}
+        , prediction_dt_s_(prediction_dt_s)
+        , require_radar_for_promotion_(require_radar_for_promotion) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -224,11 +226,19 @@ public:
             // camera bbox + radar range back-projection), otherwise fall back
             // to the configured inflation radius.  This gives accurate grid
             // footprints for radar-confirmed obstacles.
-            const int obj_inflation =
-                (obj.estimated_radius_m > 0.0f)
-                    ? std::max(1, static_cast<int>(std::ceil(
+            //
+            // Cap: camera-only objects use at most the configured inflation
+            // radius.  Without radar, estimated_radius is derived from the
+            // (possibly bogus) camera depth — ground features can produce
+            // radii of 10-20m, inflating a single object to 300+ cells and
+            // flooding the dynamic grid.  Radar-confirmed objects have
+            // reliable range, so their back-projected radius is trusted.
+            const bool has_radar_size = obj.radar_update_count > 0 && obj.estimated_radius_m > 0.0f;
+            const int  obj_inflation =
+                has_radar_size
+                     ? std::max(1, static_cast<int>(std::ceil(
                                       (obj.estimated_radius_m + resolution_ * 0.5f) / resolution_)))
-                    : inflation_cells_;
+                     : inflation_cells_;
 
             // Per-object promotion eligibility (invariant across inflated cells).
             const bool depth_ok    = obj.depth_confidence >= min_promotion_depth_confidence_;
@@ -483,13 +493,21 @@ private:
                                 ++promoted_count_;
                             }
                         } else if (promotion_hits_ > 0 && !cap_reached) {
-                            int& hits = hit_count_[c];
-                            ++hits;
-                            if (hits >= promotion_hits_) {
-                                static_occupied_.insert(c);
-                                occupied_.erase(c);
-                                hit_count_.erase(c);
-                                ++promoted_count_;
+                            // When require_radar_for_promotion_ is set, the hit-count
+                            // path requires at least one radar update on the object.
+                            // Camera-only detections stay dynamic (TTL-based) — they
+                            // still provide immediate avoidance but cannot permanently
+                            // pollute the grid with false ground-feature promotions.
+                            const bool has_any_radar = obj->radar_update_count > 0;
+                            if (!require_radar_for_promotion_ || has_any_radar) {
+                                int& hits = hit_count_[c];
+                                ++hits;
+                                if (hits >= promotion_hits_) {
+                                    static_occupied_.insert(c);
+                                    occupied_.erase(c);
+                                    hit_count_.erase(c);
+                                    ++promoted_count_;
+                                }
                             }
                         }
                     }
@@ -512,6 +530,7 @@ private:
     bool     promotion_paused_{false};               // pause promotion during RTL/LAND
     bool     prediction_enabled_{true};              // enable velocity-based prediction inflation
     float    prediction_dt_s_{2.0f};                 // prediction horizon in seconds
+    bool     require_radar_for_promotion_{false};    // hit-count path needs ≥1 radar update
     // Cumulative count of objects with velocity-based prediction applied (never reset).
     int      total_predictions_applied_{0};
     uint64_t diag_tick_{0};  // for periodic diagnostic logging

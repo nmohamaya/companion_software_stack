@@ -202,6 +202,9 @@ int main(int argc, char* argv[]) {
     planner_cfg.max_static_cells =
         ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::MAX_STATIC_CELLS,
                          planner_cfg.max_static_cells);
+    planner_cfg.require_radar_for_promotion = ctx.cfg.get<bool>(
+        drone::cfg_key::mission_planner::occupancy_grid::REQUIRE_RADAR_FOR_PROMOTION,
+        planner_cfg.require_radar_for_promotion);
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,

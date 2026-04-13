@@ -220,6 +220,8 @@ inline constexpr const char* RADAR_PROMOTION_HITS =
 inline constexpr const char* MIN_PROMOTION_DEPTH_CONFIDENCE =
     "mission_planner.occupancy_grid.min_promotion_depth_confidence";
 inline constexpr const char* MAX_STATIC_CELLS = "mission_planner.occupancy_grid.max_static_cells";
+inline constexpr const char* REQUIRE_RADAR_FOR_PROMOTION =
+    "mission_planner.occupancy_grid.require_radar_for_promotion";
 inline constexpr const char* PREDICTION_ENABLED =
     "mission_planner.occupancy_grid.prediction_enabled";
 inline constexpr const char* PREDICTION_DT_S = "mission_planner.occupancy_grid.prediction_dt_s";
