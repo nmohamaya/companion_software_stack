@@ -5,7 +5,7 @@
 name: review-security
 description: Reviews code for security vulnerabilities — input validation, IPC bounds checks, authentication, secrets
 tools: [Read, Glob, Grep]
-model: opus
+model: sonnet
 ---
 
 # Review Agent — Security

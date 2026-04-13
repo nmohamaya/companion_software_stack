@@ -66,10 +66,10 @@ ROLES: dict[str, RoleConfig] = {
         "review-concurrency", "claude-opus-4-6", ModelTier.OPUS, read_only=True
     ),
     "review-fault-recovery": RoleConfig(
-        "review-fault-recovery", "claude-opus-4-6", ModelTier.OPUS, read_only=True
+        "review-fault-recovery", "claude-sonnet-4-6", ModelTier.SONNET, read_only=True
     ),
     "review-security": RoleConfig(
-        "review-security", "claude-opus-4-6", ModelTier.OPUS, read_only=True
+        "review-security", "claude-sonnet-4-6", ModelTier.SONNET, read_only=True
     ),
     # Pass 2 review agents (run after Pass 1, receive Pass 1 findings as context)
     "review-test-quality": RoleConfig(

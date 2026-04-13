@@ -5,7 +5,7 @@
 name: review-fault-recovery
 description: Reviews code for fault recovery correctness — error propagation, watchdog integration, graceful degradation
 tools: [Read, Glob, Grep]
-model: opus
+model: sonnet
 ---
 
 # Review Agent — Fault Recovery

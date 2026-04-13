@@ -140,8 +140,8 @@ flowchart TD
 |---|------|-------|---------|-------|
 | 7 | `review-memory-safety` | Opus | Always | RAII, ownership, lifetimes |
 | 8 | `review-concurrency` | Opus | If atomics/mutex/thread in diff | Races, atomics, deadlocks |
-| 9 | `review-fault-recovery` | Opus | If P4/P5/P7/watchdog in diff | Watchdog, degradation |
-| 10 | `review-security` | Opus | Always | Input validation, auth, TLS |
+| 9 | `review-fault-recovery` | Sonnet | If P4/P5/P7/watchdog in diff | Watchdog, degradation |
+| 10 | `review-security` | Sonnet | Always | Input validation, auth, TLS |
 | 11 | `test-unit` | Sonnet | Always | GTest, coverage delta (tests/ only) |
 | 12 | `test-scenario` | Sonnet | If IPC/HAL/Gazebo in diff | Gazebo SITL, integration (tests/ only) |
 

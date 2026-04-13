@@ -231,13 +231,42 @@ User choices:
 
 ---
 
-## PHASE 3: Per-Group Execution [GROUP-BASED]
+## PHASE 3: Execution [GROUP-BASED]
+
+### Step 3.0 — Wave Execution Mode Selection
+
+Before starting execution, present the mode choice:
+
+```
+═══ Wave Execution Mode ═══
+
+  [S]tandard — validate after each group (current behavior)
+     Safer: failures isolated per-issue, easy to attribute
+     Time: ~<N * 15-20> min for <N> issues
+
+  [F]ast — all agents first, single validation pass at end
+     ~50-65% faster: agents work in parallel, one build+test+review at end
+     Time: ~<20-30> min regardless of issue count
+
+  Recommendation: <Fast|Standard> based on:
+    - Issue count: <N> issues
+    - Independence: <all independent | has dependencies>
+    - Estimated time saved: ~<X> min
+```
+
+User choices:
+- **standard** → execute Phase 3A (group-based, validate per group)
+- **fast** → execute Phase 3B (all agents first, single validation)
+
+---
+
+### PHASE 3A: Standard Mode — Per-Group Execution
 
 Execute each execution group from Phase 2 in order. Within a group, independent issues run their feature agents in **parallel** (each in its own worktree). Between groups, execution is sequential — group N+1 starts only after group N is fully merged and validated.
 
 For each execution group G:
 
-### Step 3.1 — Pre-group setup
+### Step 3A.1 — Pre-group setup
 
 1. Push integration branch to remote (agents branch from it):
    ```bash
@@ -249,7 +278,7 @@ For each execution group G:
    - `.claude/shared-context/domain-knowledge.md` — non-obvious pitfalls
 3. For groups after Group 1: also prepare summaries of all previously merged issues (from prior groups' AGENT_REPORT.md files) to include in agent prompts.
 
-### Step 3.2 — Spawn feature agents
+### Step 3A.2 — Spawn feature agents
 
 **Single-issue group:** Spawn one agent (identical to the sequential case):
 
@@ -258,7 +287,7 @@ Agent(
   description: "Implement issue #<N> (wave <W>, group <G>)",
   subagent_type: "<routed-role>",
   isolation: "worktree",
-  prompt: <plan for this issue> + issue body + cross-agent context + pipeline instructions
+  prompt: <plan for this issue> + acceptance criteria + cross-agent context + pipeline instructions
 )
 ```
 
@@ -270,15 +299,17 @@ Agent(
   description: "Implement issue #<N1> (wave <W>, group <G>, 1/<group_size>)",
   subagent_type: "<routed-role-1>",
   isolation: "worktree",
-  prompt: <plan for issue N1> + ...
+  prompt: <plan for issue N1> + acceptance criteria + ...
 )
 Agent(
   description: "Implement issue #<N2> (wave <W>, group <G>, 2/<group_size>)",
   subagent_type: "<routed-role-2>",
   isolation: "worktree",
-  prompt: <plan for issue N2> + ...
+  prompt: <plan for issue N2> + acceptance criteria + ...
 )
 ```
+
+**Context trimming for agent prompts:** Pass only the **acceptance criteria** extracted from the issue body, not the full issue body. The tech-lead's implementation plan (from Phase 2) is the primary spec and already incorporates the relevant context. Only include the full issue body if the plan explicitly references "see issue for details" or the acceptance criteria cannot stand alone. Cross-agent context should only be included when the issue touches shared modules (IPC, HAL, common/).
 
 Pipeline instructions for each agent (same for single or parallel):
 - Implement the issue following the plan
@@ -291,11 +322,11 @@ Pipeline instructions for each agent (same for single or parallel):
 
 **Additional prompt for parallel agents:** "Other issues executing in parallel in this group: #X, #Y. You share no files with them (verified in the dependency analysis). Do not modify files outside your plan."
 
-### Step 3.3 — Wait for completion
+### Step 3A.3 — Wait for completion
 
 All agents in the group complete before proceeding. The Agent tool handles this implicitly when multiple calls are made in one message — all return before the next step.
 
-### Step 3.4 — Sequential merge-back
+### Step 3A.4 — Sequential merge-back
 
 Even when agents run in parallel, merging to the integration branch is **always sequential** (one at a time, in planned merge order). This prevents merge conflicts between parallel agents.
 
@@ -320,7 +351,7 @@ For each completed agent in the group, in the planned merge order:
    ```
    Do this right after merging, not at the end of the wave. Stale worktrees pollute the VS Code source control panel and risk accidental commits to dead branches.
 
-### Step 3.5 — Validate merged group
+### Step 3A.5 — Validate merged group
 
 Run validation on the integration branch after ALL agents in the group are merged. This runs once per group (not once per issue):
 
@@ -329,7 +360,7 @@ Run validation on the integration branch after ALL agents in the group are merge
 - **Test count**: `ctest -N --test-dir build | grep "Total Tests:"` — compare against baseline in `tests/TESTS.md`
 - **Hallucination checks**: includes, report vs diff, config keys, symbols — same as deploy-issue Phase 3
 
-### Step 3.6 — Group checkpoint
+### Step 3A.6 — Group checkpoint
 
 **Single-issue group:** Present per-issue checkpoint (same format as before):
 
@@ -383,7 +414,7 @@ User choices:
 - **skip group** → skip all issues in this group, move to next
 - **abort wave** → stop the entire wave
 
-### Step 3.7 — Commit and PR (for accepted issues)
+### Step 3A.7 — Commit and PR (for accepted issues)
 
 For each accepted issue in the group:
 
@@ -392,9 +423,136 @@ For each accepted issue in the group:
 3. Create PR: `gh pr create --title "feat(#<N>): <title>" --base <integration_branch>`
 4. Apply labels and milestone from source issue
 
-### Step 3.8 — Loop to next group
+### Step 3A.8 — Loop to next group
 
-Repeat Steps 3.1–3.7 for the next execution group. Each subsequent group's agents receive summaries of all previously merged issues (from prior groups) so they have full context and don't duplicate or conflict.
+Repeat Steps 3A.1–3A.7 for the next execution group. Each subsequent group's agents receive summaries of all previously merged issues (from prior groups) so they have full context and don't duplicate or conflict.
+
+---
+
+### PHASE 3B: Fast Mode — All Agents First, Single Validation
+
+In Fast mode, ALL feature agents run first (in parallel worktrees), then a single validation+review pass runs on the combined result. This eliminates redundant per-group build/test/review cycles.
+
+### Step 3B.1 — Spawn ALL feature agents [PARALLEL]
+
+Push integration branch to remote, then spawn **all** feature agents simultaneously, regardless of execution groups:
+
+```bash
+git push origin <integration_branch>
+```
+
+```
+// All agents in a single message — maximum parallelism
+Agent(
+  description: "Implement issue #<N1> (wave <W>, fast mode, 1/<total>)",
+  subagent_type: "<routed-role-1>",
+  isolation: "worktree",
+  prompt: <plan for issue N1> + acceptance criteria + pipeline instructions
+)
+Agent(
+  description: "Implement issue #<N2> (wave <W>, fast mode, 2/<total>)",
+  subagent_type: "<routed-role-2>",
+  isolation: "worktree",
+  prompt: <plan for issue N2> + acceptance criteria + pipeline instructions
+)
+// ... up to all issues in the wave
+```
+
+Cap at **3 parallel agents** per spawn. If the wave has more than 3 issues, batch into groups of 3 and wait for each batch before spawning the next. This gives each agent sufficient context window.
+
+Same context trimming rules apply: pass acceptance criteria only (not full issue body), include cross-agent context only for shared modules.
+
+### Step 3B.2 — Wait for all agents
+
+All agents complete before proceeding. Report progress as each finishes:
+
+```
+  ✓ #288 (feature-infra-platform)  complete — AGENT_REPORT.md ready
+  ✓ #290 (feature-infra-core)      complete — AGENT_REPORT.md ready
+  ⏳ #289 (feature-infra-core)      running...
+```
+
+### Step 3B.3 — Sequential merge into integration branch
+
+Merge each agent's work one-at-a-time, in dependency order (from Phase 2 dependency graph). After each merge, run a **quick compile check** (not full test suite):
+
+```bash
+# For each agent, in dependency order:
+git merge <agent_worktree_branch> --no-edit
+
+# Quick compile check — catches obvious breakage early
+cd build && cmake --build . --target all -j$(nproc) 2>&1 | tail -5
+```
+
+**If compile fails after a merge:**
+1. Identify which agent's merge broke the build
+2. Present to user with options:
+   a) **Fix inline** — manually resolve the issue
+   b) **Revert and re-run** — `git revert HEAD --no-edit`, re-run that agent with updated integration branch
+   c) **Skip issue** — revert the merge, continue with remaining agents
+
+**Clean up each agent's worktree immediately after merging:**
+```bash
+git worktree remove .claude/worktrees/<agent-id> --force
+git branch -D worktree-<agent-id>
+```
+
+### Step 3B.4 — Single full build + test pass
+
+After all agents are merged, run the full validation once:
+
+- **Build**: `bash deploy/build.sh` (verify exit code 0, zero warnings)
+- **Format**: Find changed C++ files and check with `clang-format-18 --dry-run --Werror`
+- **Test count**: `ctest -N --test-dir build | grep "Total Tests:"` — compare against baseline
+- **Hallucination checks**: includes, report vs diff, config keys, symbols — spot-check mode
+
+**If full build/test fails** (but quick compiles passed — indicates cross-issue interaction):
+1. Identify the failure (build error, test failure, etc.)
+2. Binary search: revert merges one-at-a-time from last to first until build passes
+3. The last reverted merge is the culprit (or the interaction between it and prior merges)
+4. Present to user with the culprit identified and options to fix or skip
+
+### Step 3B.5 — Batch checkpoint (all issues)
+
+Present all agents' work in a single checkpoint:
+
+```
+═══ Fast Mode — All Issues Complete ═══
+
+┌── Issue #<N1> — <title> ──────────────────────┐
+│ [AGENT_REPORT summary, max 100 words]         │
+│ Diff: +<A> -<B> across <C> files              │
+│ Merge: clean                                   │
+└────────────────────────────────────────────────┘
+
+┌── Issue #<N2> — <title> ──────────────────────┐
+│ [AGENT_REPORT summary, max 100 words]         │
+│ Diff: +<A> -<B> across <C> files              │
+│ Merge: clean                                   │
+└────────────────────────────────────────────────┘
+
+[... all issues ...]
+
+--- Combined Validation ---
+Build: PASS/FAIL
+Format: PASS/FAIL
+Test count: N (expected M)
+
+--- Tech-Lead Assessment ---
+[assessment of the wave as a whole + cross-issue observations]
+```
+
+User choices:
+- **accept all** → proceed to Phase 4 (wave review)
+- **accept #X, reject #Y** → revert rejected issues' merge commits, re-validate
+- **changes #X** → make modifications to a specific issue, re-validate
+- **abort wave** → stop
+
+### Step 3B.6 — Commit and push
+
+For each accepted issue, commit and push to the integration branch. Create per-issue PRs against the integration branch.
+
+After Phase 3B completes, proceed to Phase 4 (Wave Review) — the same combined review runs regardless of execution mode.
 
 ---
 
