@@ -82,7 +82,6 @@ Expected: drone takes off, navigates 3 waypoints, returns home.
 | [payload_manager_design.md](docs/design/payload_manager_design.md) | P6 gimbal control, payload actions, rate-limited slew |
 | [system_monitor_design.md](docs/design/system_monitor_design.md) | P7 health metrics, thermal zones, battery monitoring |
 | **Cross-Cutting** | |
-| [modularity_guide.md](docs/design/modularity_guide.md) | Platform modularity: architecture, usage, extension guide (Epic #284) |
 | [API.md](docs/design/API.md) | IPC interfaces, Zenoh pub/sub, HAL interfaces, message types |
 | [hal_design.md](docs/design/hal_design.md) | Hardware Abstraction Layer: interfaces, backends, factory pattern |
 | [ipc_design.md](docs/design/ipc_design.md) | IPC architecture: Zenoh message bus, TripleBuffer, channel design |
