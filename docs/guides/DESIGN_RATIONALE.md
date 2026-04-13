@@ -199,3 +199,107 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **When to revisit:** When MDE networks (Depth Anything V2, RTS-Mono) replace geometric depth estimation. Neural depth with ~5-8% error no longer needs a 30% safety margin — reduce to 0.9 or 1.0 with the inflation radius providing the remaining buffer.
 
 **Date:** 2026-04-09
+
+---
+
+## DR-009: PluginRegistry dlclose in Static Destructor vs. Intentional Leak
+
+**Question:** `PluginRegistry` is a Meyer's singleton that calls `dlclose()` on all stored handles in its destructor (static destruction). Copilot suggested intentionally leaking the handles instead, since static destruction order across translation units is unspecified — a plugin instance in another static could outlive the registry, causing vtable UAF.
+
+**Arguments for dlclose in static destructor (current approach):**
+
+- Clean resource release — valgrind/sanitizers don't report leaks
+- LIFO ordering (reverse of load order) is the standard pattern for dlclose
+- Plugin instances are documented to be held in `main()` locals or objects owned by `main()`, never in static/global variables — this is an enforced contract, not a hope
+- The codebase already follows this pattern: all HAL factory results go into process `main()` locals
+- If a plugin instance violates the contract (held in a static), the bug is in the violating code, not the registry
+
+**Arguments for intentional leak:**
+
+- Eliminates the static destruction order fiasco entirely — zero risk regardless of how callers hold instances
+- `dlclose` at process exit is largely pointless — the OS reclaims everything anyway
+- Some frameworks (e.g., LLVM plugin system) intentionally leak for this reason
+- Defensive programming: protect against future callers who don't read the contract
+
+**Our decision:** Keep dlclose in the destructor with LIFO ordering. The contract (plugin instances must not outlive the registry) is documented in the header, enforced by code review, and consistent with the codebase's RAII philosophy. Intentional leaks normalize resource mismanagement and hide bugs that should be caught early.
+
+**When to revisit:** If a use-after-free is traced to static destruction ordering with plugin handles. At that point, the leak approach becomes justified as a pragmatic defense. Also revisit if we add a plugin reload mechanism (unload + reload .so at runtime), where dlclose becomes functionally necessary.
+
+**Date:** 2026-04-13
+
+---
+
+## DR-010: SHM Threshold Based on sizeof(T) vs. serialized_size()
+
+**Question:** `ZenohPublisher` decides whether to use the SHM zero-copy path based on `sizeof(T) > kShmPublishThreshold` (a compile-time check). Copilot noted this will be incorrect for variable-length serializers (e.g., protobuf) where wire size differs from `sizeof(T)`.
+
+**Arguments for sizeof(T) (current approach):**
+
+- Compile-time decision — the `if constexpr` branch is resolved at compile time, so the unused path is eliminated entirely (no dead code, no branch misprediction)
+- With `RawSerializer<T>` (the only serializer today), `sizeof(T) == serialized_size(msg)` is an invariant — there's no divergence
+- Switching to runtime `serialized_size()` would require a runtime branch on every publish, adding overhead to the hot path for a capability we don't use yet
+- The SHM path is specifically optimized for large fixed-size structs (VideoFrame ~6.2 MB) — variable-length messages may not benefit from SHM the same way
+
+**Arguments for serialized_size() (runtime check):**
+
+- Correct for future variable-length serializers (protobuf, flatbuffers)
+- A protobuf message with `sizeof(T)` = 64 bytes but wire size = 2 KB would never hit the SHM path despite benefiting from it
+- Conversely, a sparse protobuf with `sizeof(T)` = 6 MB but wire size = 100 bytes would wastefully allocate SHM
+
+**Our decision:** Keep `sizeof(T)` with `if constexpr`. The compile-time optimization is valuable on the publish hot path, and the only serializer in use (`RawSerializer`) guarantees `sizeof(T) == serialized_size()`. When a variable-length serializer is added, this must be revisited — the SHM decision should then use `serialized_size()` with a runtime branch (the cost is justified when you're already doing non-trivial serialization).
+
+**When to revisit:** When implementing `ProtobufSerializer<T>` or any serializer where wire size != `sizeof(T)`. File as part of that issue's acceptance criteria.
+
+**Date:** 2026-04-13
+
+---
+
+## DR-011: Partial Mutation on Deserialize Failure (Non-Validate Branch)
+
+**Question:** In `ZenohSubscriber::on_sample()`, the non-validate branch deserializes directly into `latest_msg_` under lock. If the serializer fails mid-write, `latest_msg_` may be partially mutated while `has_data_` remains true. Copilot suggested deserializing into a heap temporary (as the validate branch does) and only committing on success.
+
+**Arguments for direct deserialization (current approach):**
+
+- `RawSerializer::deserialize()` checks `size != sizeof(T)` **before** any copy — on size mismatch, zero bytes are written, so partial mutation cannot happen with the current serializer
+- The validate branch uses `make_unique<T>()` because it needs the temporary for `validate()` anyway — the heap allocation is not purely defensive
+- Adding a heap allocation to the non-validate path penalizes **every** message for every type, including small high-frequency types (Pose, FCState at 50-100 Hz) where the cost is measurable
+- For large types (VideoFrame ~6.2 MB), the validate branch already handles them correctly
+- The "partial mutation" scenario requires a serializer that writes some bytes before discovering failure — `RawSerializer` doesn't do this, and any future serializer can be designed to validate-before-write
+
+**Arguments for heap temporary (defensive):**
+
+- Future serializers (protobuf) may fail mid-deserialize, leaving `latest_msg_` in a torn state
+- A subscriber reading `latest_msg_` immediately after a failed deserialize would see corrupted data
+- The heap allocation cost (~100ns for typical IPC structs) is negligible compared to the Zenoh transport overhead (~10-50µs)
+- Defense in depth: don't rely on serializer implementation details for correctness
+
+**Our decision:** Keep direct deserialization for the non-validate branch. The current serializer guarantees atomic-or-nothing behavior (size check before copy). Added a code comment cross-referencing the validate branch's approach and explaining the design trade-off. When a variable-length serializer is added, this decision should be revisited — protobuf deserialize can fail mid-stream, making the heap temporary necessary.
+
+**When to revisit:** When adding `ProtobufSerializer<T>` — at that point, the non-validate branch should adopt the heap-temporary pattern (or better, all types should go through a validate-like path since protobuf has built-in validation).
+
+**Date:** 2026-04-13
+
+---
+
+## DR-012: CMAKE_DL_LIBS Propagation for ENABLE_PLUGINS
+
+**Question:** When `ENABLE_PLUGINS=ON`, code using `dlopen/dlsym/dlclose` (via `plugin_loader.h`) needs to link against `libdl` on platforms where it's separate from libc. The current CMake only defines `HAVE_PLUGINS` without propagating `${CMAKE_DL_LIBS}`. Copilot suggested adding `link_libraries(${CMAKE_DL_LIBS})`.
+
+**Arguments for deferring (current approach):**
+
+- `ENABLE_PLUGINS` defaults to OFF — no current target enables it
+- On glibc >= 2.34 (Ubuntu 22.04+, our primary platform), `dlopen` is in libc — no separate `-ldl` needed
+- Adding `link_libraries()` at top-level scope is a blunt instrument — it links libdl into every target, including those that don't use plugins
+- The proper fix (when needed) is to add `${CMAKE_DL_LIBS}` to specific targets (`drone_util` or `drone_hal`) via `target_link_libraries(... INTERFACE ${CMAKE_DL_LIBS})`, not a global `link_libraries()`
+
+**Arguments for fixing now:**
+
+- Cross-compilation targets (older ARM toolchains, musl-based systems) may have separate libdl
+- If someone enables plugins and gets a linker error, the root cause is non-obvious
+- One line of CMake now prevents a confusing debugging session later
+
+**Our decision:** Defer. The feature is disabled by default, and our target platforms don't need it. When `ENABLE_PLUGINS` is first used in a real deployment (likely Jetson Orin with a custom detector backend), add `${CMAKE_DL_LIBS}` to the specific target at that time — not as a global link.
+
+**When to revisit:** When any real target enables `ENABLE_PLUGINS=ON` and targets a platform with separate libdl (cross-compilation, musl, older glibc).
+
+**Date:** 2026-04-13
