@@ -2889,4 +2889,28 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #67 (PR #346). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+---
+
+### Improvement #68 — Epic #284 Wave 6: ISerializer Abstraction + PluginLoader (Issues #294, #295, PR #416)
+
+**Date:** 2026-04-13
+**Category:** Feature / Platform Modularity
+**Issues:** [#294](https://github.com/nmohamaya/companion_software_stack/issues/294), [#295](https://github.com/nmohamaya/companion_software_stack/issues/295)
+**PR:** [#416](https://github.com/nmohamaya/companion_software_stack/pull/416)
+**Epic:** [#284 — Platform Modularity](https://github.com/nmohamaya/companion_software_stack/issues/284)
+
+**What:**
+
+- **ISerializer\<T\> abstraction** (#294) — Virtual interface for pluggable wire-format serialization with `serialize()` (vector + buffer-write), `deserialize()`, `serialized_size()`, `name()`. `RawSerializer<T>` as default (byte-identical to previous inline `reinterpret_cast`). Injected into `ZenohPublisher<T>` and `ZenohSubscriber<T>` via `shared_ptr<const ISerializer<T>>`. SHM zero-copy path uses buffer-write overload.
+- **PluginLoader\<Interface\>** (#295) — Runtime `.so` loading via `dlopen/dlsym/dlclose` behind `#ifdef HAVE_PLUGINS` (cmake `-DENABLE_PLUGINS=ON`). RAII `PluginHandle<I>` ensures destruction order (instance before dlclose). `PluginRegistry` singleton stores handles for process-lifetime retention. `load_plugin<Interface>()` DRY helper used by all 6 HAL factory functions + detector factory.
+- **Design rationale documentation** — 4 new DR entries (DR-009 through DR-012) documenting deferred review findings with full trade-off analysis.
+
+**Files modified:** `iserializer.h` (new), `raw_serializer.h` (new), `plugin_loader.h` (new), `zenoh_publisher.h`, `zenoh_subscriber.h`, `hal_factory.h`, `detector_factory.cpp`, `config_keys.h`, `config_validator.h`, `default.json`, `CMakeLists.txt`, `test_serializer.cpp` (new), `test_plugin_loader.cpp` (new), `test_plugin_mock.cpp` (new), `test_process_interfaces.cpp`, `DESIGN_RATIONALE.md`
+
+**Why:** Final wave of Epic #284 Platform Modularity. ISerializer decouples wire format from transport — enables future protobuf/flatbuffers without changing Zenoh code. PluginLoader enables runtime-swappable HAL/detector backends via `.so` files — critical for customer-specific hardware without recompilation.
+
+**Test count:** 1389 → 1461 (+72 tests across Waves 5a+6). 21 serializer tests, 13 plugin tests (HAVE_PLUGINS only). See [tests/TESTS.md](../../tests/TESTS.md) for current counts.
+
+---
+
+_Last updated after Improvement #68 (PR #416). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

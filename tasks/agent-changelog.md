@@ -98,3 +98,11 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 - **Mode:** skill (/deploy-issue)
 - **Fix iterations:** 2 (review fixes + re-review fixes)
 - **Status:** completed
+
+### 2026-04-13 | feature-infra-core | claude-opus-4-6 | PR #416
+
+- **Issues:** #294 — `ISerializer<T>` abstraction + `RawSerializer<T>`, #295 — `PluginLoader<Interface>` runtime .so loading
+- **Branch:** integration/epic-284-wave-6
+- **Mode:** skill (/deploy-wave)
+- **Fix iterations:** 1 (13 P1+P2 review findings fixed, 4 DR entries for deferred P3)
+- **Status:** completed
