@@ -221,32 +221,39 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             //   2. Apply full rotation matrix from VIO quaternion (FRU → NEU)
             //   3. Translate by drone world position
             if (has_pose) {
-                // Full rotation from VIO quaternion (w, x, y, z order)
-                const Eigen::Quaterniond q(latest_pose.quaternion[0], latest_pose.quaternion[1],
-                                           latest_pose.quaternion[2], latest_pose.quaternion[3]);
-                const Eigen::Matrix3d    R = q.normalized().toRotationMatrix();
+                // Full rotation from VIO quaternion (w, x, y, z order).
+                // Stay in float — UKF state is float, ~3mm precision at 100m is sufficient
+                // for obstacle avoidance (review fix #9).
+                const Eigen::Quaternionf q(static_cast<float>(latest_pose.quaternion[0]),
+                                           static_cast<float>(latest_pose.quaternion[1]),
+                                           static_cast<float>(latest_pose.quaternion[2]),
+                                           static_cast<float>(latest_pose.quaternion[3]));
+                // Guard degenerate quaternion — NaN would propagate to all positions (review fix #11)
+                if (q.norm() < 1e-6f) {
+                    DRONE_LOG_DEBUG("[Fusion] Skipping transform — degenerate quaternion");
+                    continue;
+                }
+                const Eigen::Matrix3f R = q.normalized().toRotationMatrix();
                 // Note: yaw for set_drone_pose() is extracted separately at ~line 182.
 
-                const double dn = latest_pose.translation[0];
-                const double de = latest_pose.translation[1];
-                const double du = latest_pose.translation[2];
+                const float dn = static_cast<float>(latest_pose.translation[0]);
+                const float de = static_cast<float>(latest_pose.translation[1]);
+                const float du = static_cast<float>(latest_pose.translation[2]);
 
                 for (auto& obj : fused.objects) {
                     // Velocity: body FRD → FRU (negate z) → rotate to world NEU
-                    const Eigen::Vector3d v_fru(obj.velocity_3d.x(), obj.velocity_3d.y(),
-                                                -static_cast<double>(obj.velocity_3d.z()));
-                    const Eigen::Vector3d v_world = R * v_fru;
-                    obj.velocity_3d               = v_world.cast<float>();
+                    const Eigen::Vector3f v_fru(obj.velocity_3d.x(), obj.velocity_3d.y(),
+                                                -obj.velocity_3d.z());
+                    obj.velocity_3d = R * v_fru;
 
                     // Re-identified objects already have world-frame positions
                     // from the dormant obstacle pool — skip position transform.
                     if (obj.in_world_frame) continue;
 
                     // Position: body FRD → FRU (negate z) → rotate → translate
-                    const Eigen::Vector3d p_fru(obj.position_3d.x(), obj.position_3d.y(),
-                                                -static_cast<double>(obj.position_3d.z()));
-                    const Eigen::Vector3d p_world = R * p_fru + Eigen::Vector3d(dn, de, du);
-                    obj.position_3d               = p_world.cast<float>();
+                    const Eigen::Vector3f p_fru(obj.position_3d.x(), obj.position_3d.y(),
+                                                -obj.position_3d.z());
+                    obj.position_3d = R * p_fru + Eigen::Vector3f(dn, de, du);
                 }
             }
 
@@ -442,6 +449,11 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_TREE, 6.0f);
     calib.bbox_height_noise_px =
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::BBOX_HEIGHT_NOISE_PX, 2.5f);
+
+    // Validate height priors — zero/negative values produce nonsensical depth (review fix #5)
+    for (auto& hp : calib.height_priors) {
+        hp = std::max(0.1f, hp);
+    }
 
     std::string fusion_backend =
         ctx.cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND, "camera_only");

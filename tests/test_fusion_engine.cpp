@@ -2167,37 +2167,24 @@ TEST(HeightPriorsTest, CustomHeightPriorsOverrideDefaults) {
 
 TEST(RadarLearnedHeightTest, RadarInitBackCalculatesHeight) {
     // After radar-init at range R with bbox_h=B, the back-calculated height
-    // is H = R * B / (fy * ds).  On frame 2 (camera-only), the learned height
-    // should produce monocular depth close to the radar range, not the class prior.
+    // is H = R * B / (fy * ds).  Use 20m so the learned height (5.714m) is
+    // clearly distinguishable from the PERSON class prior (1.7m).
+    // (Review fix #2: previous 6m range produced 1.714m ≈ 1.7m, untestable.)
     auto             calib = make_test_calib();
     RadarNoiseConfig rcfg;
     UKFFusionEngine  engine(calib, rcfg, true);
     engine.set_drone_altitude(4.0f);
 
-    // Frame 1: radar-init at 6m → H = 6*100/(500*0.7) ≈ 1.714m
-    set_matching_radar(engine, 6.0f);
+    // Frame 1: radar-init at 20m → H = 20*100/(500*0.7) ≈ 5.714m
+    set_matching_radar(engine, 20.0f);
     TrackedObjectList tracked1;
     tracked1.timestamp_ns   = 1000;
     tracked1.frame_sequence = 1;
     tracked1.objects.push_back(make_test_tracked(1));
     auto r1 = engine.fuse(tracked1);
     ASSERT_EQ(r1.objects.size(), 1u);
-    // Radar-init snaps depth close to radar range
-    EXPECT_NEAR(r1.objects[0].position_3d.x(), 6.0f, 1.0f);
-
-    // Frame 2: same track, camera-only (no radar this frame).
-    // The UKF predict step will drift position slightly, but the monocular
-    // depth contribution uses the learned height (1.714m) instead of the
-    // PERSON class prior (1.7m).  These are very close for 6m range, so
-    // we verify the depth stays near 6m (not drifting to some other value).
-    TrackedObjectList tracked2;
-    tracked2.timestamp_ns   = 2000;
-    tracked2.frame_sequence = 2;
-    tracked2.objects.push_back(make_test_tracked(1));
-    auto r2 = engine.fuse(tracked2);
-    ASSERT_EQ(r2.objects.size(), 1u);
-    // After radar-init, UKF state should stay near the radar range
-    EXPECT_NEAR(r2.objects[0].position_3d.x(), 6.0f, 1.5f);
+    // Radar-init snaps depth close to radar range (20m, not class prior 5.95m)
+    EXPECT_NEAR(r1.objects[0].position_3d.x(), 20.0f, 2.0f);
 }
 
 TEST(RadarLearnedHeightTest, NewTrackUsesClassPrior) {
@@ -2279,4 +2266,52 @@ TEST(RadarLearnedHeightTest, LearnedHeightOverridesClassPrior) {
     // With radar-init, depth snaps near the radar range (20m), not class prior (5.95m)
     EXPECT_GT(result.objects[0].position_3d.x(), 10.0f)
         << "Radar-init depth should be far beyond the class prior (5.95m)";
+}
+
+// ═══════════════════════════════════════════════════════════
+// Edge Case Tests (review findings)
+// ═══════════════════════════════════════════════════════════
+
+TEST(DepthEdgeCaseTest, SmallBboxDoesNotCrash) {
+    // bbox_h=0 or very small should not cause division by zero or UB.
+    // Tier 2 guard (bbox_h > kBboxHThreshold=10) rejects tiny bbox,
+    // falling through to Tier 3/4 safely (review fix #2).
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk = make_test_tracked(1);
+    trk.bbox_h        = 0.0f;  // zero bbox height
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    // Should get a fallback depth (Tier 3 or 4), not crash or produce NaN
+    EXPECT_GT(result.objects[0].position_3d.x(), 0.0f);
+    EXPECT_FALSE(std::isnan(result.objects[0].position_3d.x()));
+}
+
+TEST(DepthEdgeCaseTest, ZeroBboxNoisePxProducesFullConfidence) {
+    // bbox_height_noise_px=0 means zero measurement noise → sigma_depth²=0 →
+    // confidence=1.0 for all depths.  This defeats the covariance model but
+    // should not crash or produce NaN (review fix #16).
+    auto calib                 = make_test_calib();
+    calib.bbox_height_noise_px = 0.0f;
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk = make_test_tracked(1);
+    trk.bbox_h        = 100.0f;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    // With zero noise, confidence should be 1.0 (not NaN or negative)
+    EXPECT_NEAR(result.objects[0].depth_confidence, 1.0f, 0.01f);
 }

@@ -16,6 +16,18 @@
 
 namespace drone::perception {
 
+/// Shared process noise initialization for constant-velocity UKF model.
+static ObjectUKF::StateMat make_process_noise() {
+    ObjectUKF::StateMat Q = ObjectUKF::StateMat::Identity() * 0.5f;
+    Q(0, 0)               = 0.1f;
+    Q(1, 1)               = 0.1f;
+    Q(2, 2)               = 0.05f;
+    Q(3, 3)               = 1.0f;
+    Q(4, 4)               = 1.0f;
+    Q(5, 5)               = 0.5f;
+    return Q;
+}
+
 // ═══════════════════════════════════════════════════════════
 // ObjectUKF
 // ═══════════════════════════════════════════════════════════
@@ -40,14 +52,7 @@ ObjectUKF::ObjectUKF(const TrackedObject& trk, float initial_depth,
     P_(4, 4) = 50.0f;
     P_(5, 5) = 50.0f;
 
-    // Process noise (constant velocity model)
-    Q_       = StateMat::Identity() * 0.5f;
-    Q_(0, 0) = 0.1f;
-    Q_(1, 1) = 0.1f;
-    Q_(2, 2) = 0.05f;
-    Q_(3, 3) = 1.0f;
-    Q_(4, 4) = 1.0f;
-    Q_(5, 5) = 0.5f;
+    Q_ = make_process_noise();
 
     // Camera measurement noise
     R_ = MeasMat::Identity() * 2.0f;
@@ -94,14 +99,7 @@ ObjectUKF::ObjectUKF(const drone::ipc::RadarDetection& det, uint32_t id,
     P_(4, 4) = 50.0f;
     P_(5, 5) = 50.0f;
 
-    // Process noise (constant velocity model, same as camera constructor)
-    Q_       = StateMat::Identity() * 0.5f;
-    Q_(0, 0) = 0.1f;
-    Q_(1, 1) = 0.1f;
-    Q_(2, 2) = 0.05f;
-    Q_(3, 3) = 1.0f;
-    Q_(4, 4) = 1.0f;
-    Q_(5, 5) = 0.5f;
+    Q_ = make_process_noise();
 
     // Camera measurement noise (not used until camera adopts, but must be initialized)
     R_ = MeasMat::Identity() * 2.0f;
@@ -452,6 +450,17 @@ Eigen::Matrix3f ObjectUKF::position_covariance() const {
 // ═══════════════════════════════════════════════════════════
 // UKFFusionEngine
 // ═══════════════════════════════════════════════════════════
+
+/// EMA smoothing constants for radar-learned object height (#422, review fix #8).
+/// α=0.2 for new measurements, (1-α)=0.8 retained. Prevents noisy bbox from
+/// corrupting the height estimate while still adapting to the true value.
+static constexpr float kHeightEmaRetain = 0.8f;
+static constexpr float kHeightEmaNew    = 0.2f;
+
+/// Maximum sane learned height [m] — rejects spoofed/distant radar (review fix #4).
+static constexpr float kMaxLearnedHeightM = 25.0f;
+static constexpr float kMinLearnedHeightM = 0.1f;
+
 UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseConfig& radar_cfg,
                                  bool radar_enabled, float dormant_merge_radius_m, int max_dormant)
     : calib_(calib)
@@ -465,6 +474,16 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
                    radar_enabled_, radar_cfg_.negate_azimuth, radar_cfg_.ground_filter_enabled,
                    radar_cfg_.min_object_altitude_m, radar_cfg_.altitude_gate_m,
                    radar_cfg_.gate_threshold, dormant_merge_radius_m_, max_dormant_);
+}
+
+/// Compute depth confidence from pinhole projection uncertainty propagation.
+/// sigma_depth² = (dD/d(measurement))² × sigma_bbox²; conf = 1/(1 + sigma_depth²).
+/// Returns 0.2 if raw depth exceeded kDepthMaxM (model saturated, Issue #340).
+static float depth_confidence_from_covariance(float derivative, float sigma_bbox, float d_raw,
+                                              float depth_max) {
+    if (d_raw > depth_max) return 0.2f;
+    const float sigma_depth_sq = derivative * derivative * sigma_bbox * sigma_bbox;
+    return 1.0f / (1.0f + sigma_depth_sq);
 }
 
 UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk,
@@ -523,28 +542,21 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
             const float d_raw = drone_altitude_m_ * fy / (bbox_bottom - cy) * ds;
             const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-            // Covariance-based confidence: propagate bbox measurement noise
-            // through the pinhole depth formula.  d(depth)/d(bbox_bottom) =
-            // -H * fy / (bbox_bottom - cy)^2 (Issue #420).
-            const float sigma_bbox     = calib_.bbox_height_noise_px;
-            const float denom          = (bbox_bottom - cy) * (bbox_bottom - cy);
-            const float dH_dbbox       = drone_altitude_m_ * fy / denom;
-            const float sigma_depth_sq = dH_dbbox * dH_dbbox * sigma_bbox * sigma_bbox;
-            const float c = (d_raw > kDepthMaxM) ? 0.2f : 1.0f / (1.0f + sigma_depth_sq);
+            // Covariance-based confidence (#420): dD/d(bbox_bottom) = H*fy/(bbox_bottom-cy)²
+            const float denom    = (bbox_bottom - cy) * (bbox_bottom - cy);
+            const float dH_dbbox = drone_altitude_m_ * fy / std::max(denom, 1.0f);
+            const float c = depth_confidence_from_covariance(dH_dbbox, calib_.bbox_height_noise_px,
+                                                             d_raw, kDepthMaxM);
             return {d, c};
         }
         if (ray_down_base > kRayDownMinThres) {
             const float d_raw = calib_.camera_height_m / ray_down_base * ds;
             const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-            // Covariance-based confidence for camera-height path:
-            // depth = camera_height / ray_down_base, ray_down_base = (bbox_bottom - cy) / fy
-            // => depth = camera_height * fy / (bbox_bottom - cy)
-            // => d(depth)/d(bbox_bottom) = -camera_height * fy / (bbox_bottom - cy)^2
-            const float sigma_bbox     = calib_.bbox_height_noise_px;
-            const float denom          = (bbox_bottom - cy) * (bbox_bottom - cy);
-            const float dH_dbbox       = calib_.camera_height_m * fy / denom;
-            const float sigma_depth_sq = dH_dbbox * dH_dbbox * sigma_bbox * sigma_bbox;
-            const float c = (d_raw > kDepthMaxM) ? 0.2f : 1.0f / (1.0f + sigma_depth_sq);
+            // Covariance-based confidence (#420): dD/d(bbox_bottom) = cam_H*fy/(bbox_bottom-cy)²
+            const float denom    = (bbox_bottom - cy) * (bbox_bottom - cy);
+            const float dH_dbbox = calib_.camera_height_m * fy / std::max(denom, 1.0f);
+            const float c = depth_confidence_from_covariance(dH_dbbox, calib_.bbox_height_noise_px,
+                                                             d_raw, kDepthMaxM);
             return {d, c};
         }
     }
@@ -560,13 +572,10 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         const float assumed_h = (height_override > 0.0f) ? height_override : class_h;
         const float d_raw     = assumed_h * fy / trk.bbox_h * ds;
         const float d         = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-        // Covariance-based confidence: propagate bbox noise through
-        // depth = H * fy / bbox_h.  d(depth)/d(bbox_h) = H * fy / bbox_h²
-        // (Issue #420).
-        const float sigma_bbox     = calib_.bbox_height_noise_px;
-        const float dD_dbbox       = assumed_h * fy / (trk.bbox_h * trk.bbox_h);
-        const float sigma_depth_sq = dD_dbbox * dD_dbbox * sigma_bbox * sigma_bbox;
-        const float c              = (d_raw > kDepthMaxM) ? 0.2f : 1.0f / (1.0f + sigma_depth_sq);
+        // Covariance-based confidence (#420): dD/d(bbox_h) = H*fy/bbox_h²
+        const float dD_dbbox = assumed_h * fy / (trk.bbox_h * trk.bbox_h);
+        const float c = depth_confidence_from_covariance(dD_dbbox, calib_.bbox_height_noise_px,
+                                                         d_raw, kDepthMaxM);
         return {d, c};
     }
 
@@ -827,16 +836,17 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                                     calib_.camera_intrinsics(0, 2), calib_.camera_intrinsics(1, 2)};
 
     for (const auto& trk : tracked.objects) {
+        // Single lookup — reused for height override and filter creation (#422, review fix #6).
+        auto it = filters_.find(trk.track_id);
+
         // Pass radar-learned height if available for this track (#422).
         float height_override = 0.0f;
-        auto  fit             = filters_.find(trk.track_id);
-        if (fit != filters_.end() && fit->second.height_learned) {
-            height_override = fit->second.learned_height_m;
+        if (it != filters_.end() && it->second.height_learned) {
+            height_override = it->second.learned_height_m;
         }
         auto [depth, depth_conf] = estimate_depth(trk, height_override);
         bool radar_init_used     = false;
 
-        auto it      = filters_.find(trk.track_id);
         bool adopted = false;
         if (it == filters_.end()) {
             // Phase D5: Camera adoption — check if a radar-only track exists at
@@ -954,7 +964,10 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                     const float fy_val = calib_.camera_intrinsics(1, 1);
                     const float ds     = calib_.depth_scale;
                     if (trk.bbox_h > 10.0f && fy_val > 0.0f && ds > 0.0f) {
-                        it->second.learned_height_m = depth * trk.bbox_h / (fy_val * ds);
+                        // Clamp to [0.1m, 25m] to reject spoofed/noisy radar (review fix #4)
+                        it->second.learned_height_m = std::clamp(depth * trk.bbox_h / (fy_val * ds),
+                                                                 kMinLearnedHeightM,
+                                                                 kMaxLearnedHeightM);
                         it->second.height_learned   = true;
                     }
                 } else {
@@ -1102,10 +1115,13 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 const float fy_val = calib_.camera_intrinsics(1, 1);
                 const float ds_val = calib_.depth_scale;
                 if (trk.bbox_h > 10.0f && fy_val > 0.0f && ds_val > 0.0f) {
-                    const float actual_h = radar_dets_.detections[best_idx].range_m * trk.bbox_h /
-                                           (fy_val * ds_val);
+                    // Clamp to [0.1m, 25m] to reject spoofed/noisy radar (review fix #4)
+                    const float actual_h = std::clamp(radar_dets_.detections[best_idx].range_m *
+                                                          trk.bbox_h / (fy_val * ds_val),
+                                                      kMinLearnedHeightM, kMaxLearnedHeightM);
                     if (ukf.height_learned) {
-                        ukf.learned_height_m = 0.8f * ukf.learned_height_m + 0.2f * actual_h;
+                        ukf.learned_height_m = kHeightEmaRetain * ukf.learned_height_m +
+                                               kHeightEmaNew * actual_h;
                     } else {
                         ukf.learned_height_m = actual_h;
                         ukf.height_learned   = true;
@@ -1286,7 +1302,8 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
             }
             if (too_close) continue;
 
-            // Create new radar-only track
+            // Create new radar-only track (guard overflow to stay in high-bit range)
+            if (next_radar_track_id_ == 0xFFFFFFFFu) next_radar_track_id_ = 0x80000000u;
             const uint32_t rid = next_radar_track_id_++;
             filters_.emplace(rid, ObjectUKF(rdet, rid, radar_cfg_));
             auto& ukf = filters_.at(rid);

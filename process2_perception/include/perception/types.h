@@ -116,6 +116,10 @@ struct FusedObjectList {
 namespace drone::perception {
 
 inline constexpr uint8_t kNumObjectClasses = 8;
+// height_priors[] is indexed by static_cast<uint8_t>(ObjectClass).
+// Update kNumObjectClasses when adding new ObjectClass values.
+static_assert(static_cast<uint8_t>(ObjectClass::TREE) < kNumObjectClasses,
+              "ObjectClass enum grew beyond kNumObjectClasses — update height_priors array");
 
 /// Calibration data for camera-based depth estimation.
 struct CalibrationData {
