@@ -1,8 +1,8 @@
 {
-    "_comment": "Scenario 18: Sensor-Driven Obstacle Avoidance (no HD-map). All obstacle knowledge comes from live camera+radar perception at runtime — static_obstacles is intentionally empty. Compare with scenario 02 which pre-loads HD-map obstacles.",
+    "_comment": "Scenario 27: Depth Estimation Accuracy Validation. Flies past all 4 varied-height obstacles to validate class-prior depth estimation. Compare with scenario 18 (perception avoidance) which shares the same perception stack but tests avoidance rather than depth accuracy.",
     "scenario": {
-        "name": "perception_avoidance",
-        "description": "Navigate through an obstacle field using camera+radar perception — no static HD-map. The color_contour detector finds obstacles, ByteTrack maintains tracks, UKF fuses camera depth + radar range/velocity (with altitude gate), and D* Lite replans dynamically via update_from_objects(). Path-aware ObstacleAvoider3D provides lateral nudge without fighting the planner. Validates the full multi-sensor perception→planning loop for unknown environments.",
+        "name": "perception_depth_accuracy",
+        "description": "Depth estimation accuracy validation with varied-height obstacles and class priors",
         "tier": 2,
         "timeout_s": 160,
         "requires_gazebo": true
@@ -24,7 +24,7 @@
                 "max_correction_mps": 1.5,
                 "vertical_gain": 0.0,
                 "path_aware": true,
-                "_comment": "D* Lite is the primary avoidance. Avoider is a strong safety net: 8m influence (early reaction), 1.5 max correction (100% of cruise), gain=3.0. Compensates for depth estimation uncertainty and 5m-tall obstacles at 4m flight altitude."
+                "_comment": "Same avoidance config as scenario 18. D* Lite is primary, avoider is safety net."
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,
@@ -35,7 +35,7 @@
                 "min_promotion_depth_confidence": 0.8,
                 "max_static_cells": 800,
                 "prediction_enabled": false,
-                "_comment": "2m grid, 2m inflation, 1s TTL. min_promotion_depth_confidence=0.8: blocks camera-only Tier 1-4 (0.01-0.7) while allowing radar-confirmed (1.0) to promote. prediction_enabled=false: camera-only depth/velocity too noisy (Issue #340). max_static_cells=800 safety cap."
+                "_comment": "Same occupancy config as scenario 18."
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "Empty — no HD-map. All obstacle knowledge comes from camera detections at runtime.",
@@ -44,13 +44,13 @@
                 "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding detected obstacles"
             },
             "waypoints": [
-                {"x": 0,  "y": 18, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly north — RED(3,15) ~3m to the right."},
-                {"x": 12, "y": 18, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": false, "_comment": "Fly east — clear corridor north of obstacle field."},
-                {"x": 20, "y": 8,  "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "Fly southeast — GREEN(10,10) and BLUE(18,5) nearby."},
-                {"x": 12, "y": 0,  "z": 4, "yaw": -1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "Fly southwest — yaw faces south so camera sees BLUE(18,5) during approach."},
-                {"x": 0,  "y": 0,  "z": 5, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "Return home — ORANGE(5,3) near path, drone routes around."}
+                {"x": 0,  "y": 15, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "WP1: Fly north — near RED(3,15) PERSON 1.7m"},
+                {"x": 10, "y": 15, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": false, "_comment": "WP2: Fly east — near GREEN(10,10) TREE 6.0m"},
+                {"x": 18, "y": 10, "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "WP3: Fly southeast — near BLUE(18,5) VEHICLE_CAR 2.0m"},
+                {"x": 5,  "y": 5,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "WP4: Fly southwest — near ORANGE(5,3) BUILDING 10.0m"},
+                {"x": 0,  "y": 0,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "WP5: Return home"}
             ],
-            "_comment_waypoints": "Waypoints route through field with 4 well-spaced obstacles (≥10m apart). Camera detects obstacles, D* Lite routes around."
+            "_comment_waypoints": "5 waypoints route past all 4 varied-height obstacles. Flight altitude 4m — below GREEN(6m) and ORANGE(10m) tops, above RED(1.7m) and BLUE(2.0m). Tests depth estimation at multiple height/distance combinations."
         },
         "perception": {
             "detector": {
@@ -70,7 +70,7 @@
                 "enabled": true,
                 "update_rate_hz": 20,
                 "ground_filter_alt_m": 2.0,
-                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL rejects noise-elevated ground returns (Issue #340). Obstacles are 5m tall → returns at 3-5m altitude pass. Elevation noise (~3°) can push ground returns to ~1.5m, so 2.0m threshold provides margin."
+                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL rejects noise-elevated ground returns"
             },
             "fusion": {
                 "backend": "ukf",
@@ -86,7 +86,7 @@
                     "orphan_proximity_m": 5.0,
                     "max_orphan_range_m": 25.0,
                     "promotion_hits": 8,
-                    "_comment": "Camera+radar UKF fusion with ground filter + altitude gate (Issue #229). Orphan proximity 5m reduces multipath duplicates. Max range 25m rejects distant clutter. Promotion 8 hits (0.4s at 20Hz) filters transient returns."
+                    "_comment": "Camera+radar UKF fusion with height_priors for class-aware depth estimation. Orphan proximity 5m reduces multipath duplicates."
                 }
             }
         }

@@ -141,21 +141,22 @@
       </link>
     </model>
 
-    <!-- ═══ Obstacles — 4 well-spaced (≥10m apart) for Scenario 18 ═══ -->
+    <!-- ═══ Obstacles — 4 well-spaced (≥10m apart) with varied heights for Scenario 18/27 ═══ -->
     <!-- Layout: rectangular field with clear 5m+ corridors between obstacles.
          Drone routes through the field using D* Lite + camera perception.
-         All obstacles reach flight altitude (4–5m) to force lateral avoidance. -->
+         Heights vary by ObjectClass to test depth estimation with class priors:
+           RED=PERSON(1.7m), GREEN=TREE(6.0m), BLUE=VEHICLE_CAR(2.0m), ORANGE=BUILDING(10.0m) -->
 
-    <!-- Obstacle 1: RED cylinder — near origin→WP1 leg -->
+    <!-- Obstacle 1: RED cylinder — PERSON class, 1.7m tall (z=0.85) -->
     <model name="obstacle_red_cylinder">
       <static>true</static>
-      <pose>3 15 2.5 0 0 0</pose>
+      <pose>3 15 0.85 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><cylinder><radius>1.0</radius><length>5</length></cylinder></geometry>
+          <geometry><cylinder><radius>1.0</radius><length>1.7</length></cylinder></geometry>
         </collision>
         <visual name="visual">
-          <geometry><cylinder><radius>1.0</radius><length>5</length></cylinder></geometry>
+          <geometry><cylinder><radius>1.0</radius><length>1.7</length></cylinder></geometry>
           <material>
             <ambient>0.9 0.1 0.1 1</ambient>
             <diffuse>0.9 0.1 0.1 1</diffuse>
@@ -165,16 +166,16 @@
       </link>
     </model>
 
-    <!-- Obstacle 2: GREEN cylinder — center of field, near WP2→WP3 leg -->
+    <!-- Obstacle 2: GREEN cylinder — TREE class, 6.0m tall (z=3.0) -->
     <model name="obstacle_green_cylinder">
       <static>true</static>
-      <pose>10 10 2.5 0 0 0</pose>
+      <pose>10 10 3.0 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><cylinder><radius>1.0</radius><length>5</length></cylinder></geometry>
+          <geometry><cylinder><radius>1.0</radius><length>6.0</length></cylinder></geometry>
         </collision>
         <visual name="visual">
-          <geometry><cylinder><radius>1.0</radius><length>5</length></cylinder></geometry>
+          <geometry><cylinder><radius>1.0</radius><length>6.0</length></cylinder></geometry>
           <material>
             <ambient>0.1 0.85 0.1 1</ambient>
             <diffuse>0.1 0.85 0.1 1</diffuse>
@@ -184,16 +185,16 @@
       </link>
     </model>
 
-    <!-- Obstacle 3: BLUE cylinder — east side, near WP3→WP4 leg -->
+    <!-- Obstacle 3: BLUE cylinder — VEHICLE_CAR class, 2.0m tall (z=1.0) -->
     <model name="obstacle_blue_cylinder">
       <static>true</static>
-      <pose>18 5 2.5 0 0 0</pose>
+      <pose>18 5 1.0 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><cylinder><radius>0.8</radius><length>5</length></cylinder></geometry>
+          <geometry><cylinder><radius>0.8</radius><length>2.0</length></cylinder></geometry>
         </collision>
         <visual name="visual">
-          <geometry><cylinder><radius>0.8</radius><length>5</length></cylinder></geometry>
+          <geometry><cylinder><radius>0.8</radius><length>2.0</length></cylinder></geometry>
           <material>
             <ambient>0.1 0.1 0.9 1</ambient>
             <diffuse>0.1 0.1 0.9 1</diffuse>
@@ -203,16 +204,16 @@
       </link>
     </model>
 
-    <!-- Obstacle 4: ORANGE box — on return leg toward home -->
+    <!-- Obstacle 4: ORANGE box — BUILDING class, 10.0m tall (z=5.0) -->
     <model name="obstacle_orange_box">
       <static>true</static>
-      <pose>5 3 2.0 0 0 0</pose>
+      <pose>5 3 5.0 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry><box><size>1.5 1.5 4</size></box></geometry>
+          <geometry><box><size>1.5 1.5 10</size></box></geometry>
         </collision>
         <visual name="visual">
-          <geometry><box><size>1.5 1.5 4</size></box></geometry>
+          <geometry><box><size>1.5 1.5 10</size></box></geometry>
           <material>
             <ambient>0.95 0.5 0.05 1</ambient>
             <diffuse>0.95 0.5 0.05 1</diffuse>
