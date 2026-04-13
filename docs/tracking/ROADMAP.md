@@ -455,6 +455,7 @@
 | [#110](https://github.com/nmohamaya/companion_software_stack/issues/110) | [Epic] Core Autonomy & Safety — IPC, Perception, VIO, Planning | **Closed** ✅ |
 | ~~[#126](https://github.com/nmohamaya/companion_software_stack/issues/126)~~ | ~~[Epic] Zenoh-Only IPC — Remove Legacy SHM, Keep Middleware-Swappable~~ | **Closed** ✅ (PR #151) |
 | ~~[#263](https://github.com/nmohamaya/companion_software_stack/issues/263)~~ | ~~[Epic] Autonomous Intelligence & Sim Fidelity~~ | **Closed** ✅ (integration branch, 10 PRs) |
+| [#419](https://github.com/nmohamaya/companion_software_stack/issues/419) | [Epic] Depth Fusion Infrastructure — Covariance, Priors, Radar Scale | Wave 1 ✅ (PR #427) |
 
 ### Standalone Issues (Post-Epic)
 
@@ -609,6 +610,18 @@
 
 ---
 
+### Depth Fusion Infrastructure (Epic #419) — Wave 1 ✅ COMPLETE
+
+| # | Title | Wave | State |
+|---|-------|------|-------|
+| ~~[#420](https://github.com/nmohamaya/companion_software_stack/issues/420)~~ | ~~Covariance-weighted depth fusion~~ | Wave 1 | **Closed** ✅ (PR #427) |
+| ~~[#421](https://github.com/nmohamaya/companion_software_stack/issues/421)~~ | ~~IMU pitch/roll correction (full quaternion)~~ | Wave 1 | **Closed** ✅ (PR #427) |
+| ~~[#422](https://github.com/nmohamaya/companion_software_stack/issues/422)~~ | ~~Radar-learned object heights / scale recovery~~ | Wave 1 | **Closed** ✅ (PR #427) |
+| ~~[#423](https://github.com/nmohamaya/companion_software_stack/issues/423)~~ | ~~Multi-class height priors~~ | Wave 1 | **Closed** ✅ (PR #427) |
+| ~~[#424](https://github.com/nmohamaya/companion_software_stack/issues/424)~~ | ~~Sim world diversification + depth accuracy scenario~~ | Wave 1 | **Closed** ✅ (PR #427) |
+
+---
+
 ## Multi-Developer GitHub Setup
 
 When onboarding new developers or enabling multi-agent collaboration, several files that are currently **local-only** (gitignored) need to be shared. This section documents what needs to be uploaded and configured.
@@ -688,37 +701,38 @@ Add these lines to keep ephemeral/sensitive files local:
 
 ## Metrics History
 
-| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | Epic #110 | Epic #263 | PR #346 | **Epic #284 (Current)** |
-|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|-------|-------|-------|
-| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | 1108 | 1238 | 1259 | **1461** |
-| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | 42 | 47 | 47 | **65** |
-| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | 34 | 48 | 48 | **48** |
-| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | 110+ | 120+ | 120+ | **125+** |
-| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 9 | 9 | 9 | **9+plugin** |
-| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | Zenoh (sole) | Zenoh (sole) | Zenoh (sole) | **Zenoh (sole)** |
-| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | **3+plugin** |
-| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
-| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
-| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
-| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | 7 | 7 | **7** |
-| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
-| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
-| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | 9 | 9 | **9** |
-| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | 10 | 12 | **12** |
-| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
-| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | 26 | 26 | **26** |
-| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | **7** |
-| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | Result<T,E> | Result<T,E> | **Result<T,E>** |
-| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | 75.1% | 75.1% | **75.1%** |
-| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | enforced | **enforced** |
-| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
-| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | systemd + ProcessManager | **systemd + ProcessManager** |
-| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | D* Lite + A* 3D + potential field | **D* Lite + A* 3D + potential field** |
-| Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | Geofence + battery RTL + FC contingency | **+ collision recovery** |
-| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | UKF radar-primary | **+ radar-only init + dynamic prediction + gimbal tracking** |
-| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 15 (14 T1 + 1 T2) | **25 (20 T1 + 5 T2), 20/20 T1 pass** |
-| VIO backends | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 2 (Simulated + Gazebo) | **3 (+ GazeboFull) + covariance quality** |
+| Metric | Phase 1 | Phase 3 | Phase 6 | Phase 7 | Phase 8 | Phase 9 | Zenoh A | Zenoh B | Zenoh C | Zenoh D | Zenoh E | Zenoh F | E2E | FaultMgr | Hardening | Watchdog | Epic #110 | Epic #263 | PR #346 | Epic #284 | **Epic #419 (Current)** |
+|--------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|---------|-----|--------|-------|-------|-------|-------|-------|-------|-------|
+| Unit tests | 58 | 121 | 196 | 262 | 262 | 262 | 295 | 308 | 329 | 348 | 359 | 370 | 377 | 400 | 464 | 701 | 1108 | 1238 | 1259 | 1461 | **1479** |
+| Test suites | 6 | 10 | 14 | 18 | 18 | 18 | 19 | 19 | 19 | 19 | 20 | 21 | 22 | 23 | 26 | 31+ | 42 | 47 | 47 | 65 | **66** |
+| Bug fixes | 6 | 6 | 13 | 13 | 15 | 15 | 17 | 17 | 17 | 17 | 17 | 17 | 19 | 19 | 21 | 21 | 34 | 48 | 48 | 48 | **48** |
+| Config tunables | 45+ | 45+ | 70+ | 75+ | 75+ | 80+ | 80+ | 80+ | 85+ | 85+ | 90+ | 90+ | 90+ | 95+ | 95+ | 95+ | 110+ | 120+ | 120+ | 125+ | **135+** |
+| HAL backends | 0 | 5 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 9 | 9 | 9 | 9+plugin | **9+plugin** |
+| IPC backends | SHM | SHM | SHM | SHM | SHM | SHM | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | SHM + Zenoh | Zenoh (sole) | Zenoh (sole) | Zenoh (sole) | Zenoh (sole) | **Zenoh (sole)** |
+| Perception backends | 0 | 0 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3+plugin | **3+plugin** |
+| Compiler warnings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Processes on factory | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 0/7 | 2/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | 7/7 | **7/7** |
+| Processes w/ real Gazebo data | 0/7 | 0/7 | 4/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | 5/7 | **5/7** |
+| Zenoh channels migrated | — | — | — | — | — | — | 0/12 | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | **12/12** |
+| Liveliness tokens | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | **7** |
+| Network transport | — | — | — | — | — | — | — | — | — | — | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** |
+| E2E checks | — | — | — | — | — | — | — | — | — | — | — | — | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | 42/42 | **42/42** |
+| CI matrix legs | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 9 | 9 | 9 | 9 | 9 | 9 | **9** |
+| Fault conditions | — | — | — | — | — | — | — | — | — | — | — | — | — | 8 | 8 | 8 | 10 | 12 | 12 | 12 | **12** |
+| Sanitizers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | ASan+TSan+UBSan | **ASan+TSan+UBSan** |
+| `[[nodiscard]]` headers | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
+| Config schemas | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 7 | 7 | 7 | 7 | 7 | 7 | **7** |
+| Error handling | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | exceptions | Result<T,E> | Result<T,E> | Result<T,E> | Result<T,E> | Result<T,E> | Result<T,E> | **Result<T,E>** |
+| Line coverage | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 75.1% | 75.1% | 75.1% | 75.1% | 75.1% | 75.1% | **75.1%** |
+| Code style | — | — | — | — | — | — | — | — | — | — | — | — | — | — | enforced | enforced | enforced | enforced | enforced | enforced | **enforced** |
+| Thread watchdog | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ThreadHeartbeat | ThreadHeartbeat + ThreadWatchdog | ThreadHeartbeat + ThreadWatchdog | ThreadHeartbeat + ThreadWatchdog | ThreadHeartbeat + ThreadWatchdog | **ThreadHeartbeat + ThreadWatchdog** |
+| Process supervision | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | systemd + ProcessManager | systemd + ProcessManager | systemd + ProcessManager | systemd + ProcessManager | systemd + ProcessManager | **systemd + ProcessManager** |
+| Planning | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | D* Lite + A* 3D + potential field | D* Lite + A* 3D + potential field | D* Lite + A* 3D + potential field | D* Lite + A* 3D + potential field | **D* Lite + A* 3D + potential field** |
+| Depth estimation | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | hard tiers | hard tiers | hard tiers | **covariance + class priors + radar-learned** |
+| Safety subsystems | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | Geofence + battery RTL + FC contingency | + collision recovery | + collision recovery | + collision recovery | **+ collision recovery** |
+| Perception fusion | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | UKF radar-primary | + radar-only init + dynamic prediction + gimbal tracking | + radar-only init + dynamic prediction + gimbal tracking | + radar-only init + dynamic prediction + gimbal tracking | **+ covariance depth + class priors + radar-learned heights** |
+| Integration scenarios | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 15 (14 T1 + 1 T2) | 25 (20 T1 + 5 T2), 20/20 T1 pass | 25 (20 T1 + 5 T2) | 25 (20 T1 + 5 T2) | **25 (20 T1 + 5 T2) + scenario 27** |
+| VIO backends | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | 2 (Simulated + Gazebo) | 3 (+ GazeboFull) + covariance quality | 3 | 3 | **3** |
 
 ### Process Activity During Simulation
 
@@ -734,4 +748,4 @@ Add these lines to keep ephemeral/sensitive files local:
 
 ---
 
-*Last updated after Epic #237 + Issue #242 — see [tests/TESTS.md](../../tests/TESTS.md) for current test counts. 1108 tests, 50+ C++ test files, 170+ scenario checks across 18 scenarios (15 Tier 1 + 3 Tier 2), Zenoh sole IPC backend, 9 CI jobs. All Tier 1 and Tier 2 scenarios passing (Scenario 18: 3/3 Gazebo runs PASS). 51 bug fixes total. Radar-primary architecture with persistent timestamped scenario logging. Open issue: Bug #29 (GitHub #129, PX4 exit kills companion stack and GUI).*
+*Last updated after Epic #419 Wave 1 (PR #427) — see [tests/TESTS.md](../../tests/TESTS.md) for current test counts. 1479 tests, 66 C++ test files, 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2), Zenoh sole IPC backend, 9 CI jobs. Depth fusion infrastructure: covariance-weighted confidence, multi-class height priors, radar-learned object heights, full quaternion camera→world transform, diversified sim world.*

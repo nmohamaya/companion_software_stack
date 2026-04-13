@@ -100,7 +100,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 5 | 176 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID), color contour, YOLOv8 |
+| [P2 — Perception](#p2--perception) | 6 | 216 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID+covariance depth+height priors+radar-learned heights), color contour, YOLOv8, world transform |
 | [P4 — Mission Planner](#p4--mission-planner) | 8 | 220 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
@@ -127,7 +127,7 @@ bash deploy/build.sh --test-filter watchdog
 | [IPC — TopicResolver](#ipc--topicresolver) | 1 | 17 | Vehicle_id namespace resolution, validation, Zenoh pub/sub round-trip |
 | [IPC — Serializer](#ipc--serializer) | 1 | 21 | ISerializer<T> interface, RawSerializer round-trip, wire-format compat, null safety |
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
-| **Total** | **65 C++ + 5 shell** | **1461 + 42 + 250+** | |
+| **Total** | **66 C++ + 5 shell** | **1479 + 42 + 250+** | |
 
 ---
 
@@ -359,37 +359,46 @@ infrastructure used by ByteTrackTracker.
 
 ---
 
-### test_fusion_engine.cpp — 39 tests
+### test_fusion_engine.cpp — 74 tests
 
 **What it tests:** CameraOnlyFusionEngine, UKFFusionEngine (per-object UKF with radar),
 IFusionEngine factory, altitude gate, ground filter, dormant re-identification (Issue #237),
 radar-primary architecture (radar detection reservation, orphan output gating, radar-confirmed
-depth promotion — Issue #237 Phase D).
+depth promotion — Issue #237 Phase D), covariance-weighted depth confidence (Issue #420),
+multi-class height priors (Issue #423), radar-learned object heights (Issue #422),
+depth edge cases (Issue #419).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `FusionEngineTest` | 4 | Empty inputs → empty output, camera-only fusion, depth estimation from bbox height, multiple tracked objects |
 | `FusionFactoryTest` | 3 | Factory creates `camera_only` and `ukf` backends, unknown backend throws |
-| `UKFFusionEngineTest` | 5 | Empty input, 3D position estimate, covariance convergence, reset clears state, name |
+| `UKFFusionEngineTest` | 6 | Empty input, 3D position estimate, covariance convergence, reset clears state, name, radar range adopts PERSON height prior |
 | `CameraOnlyFusionEngineTest` | 1 | Name returns "camera_only" |
-| `RadarMeasurementModel` | 1 | Nonlinear radar h(x): Cartesian → [range, azimuth, elevation, radial_velocity] mapping correctness |
-| `RadarUpdateReducesCovariance` | 1 | UKF covariance trace shrinks after a radar measurement update |
-| `CameraRadarFusionTighterThanEither` | 1 | Combined camera+radar covariance trace is smaller than camera-only or radar-only |
-| `RadarGateRejectsOutlier` | 1 | Mahalanobis gate rejects a detection whose χ²(4) distance exceeds `gate_threshold` (default 9.21) |
-| `RadarNoiseConfig` | 1 | `RadarNoiseConfig` struct fields accepted; non-default stds propagate into `R` matrix |
-| `RadarDisabledByDefault` | 1 | `set_radar_detections()` no-op on `IFusionEngine` base; `has_radar` stays false |
-| `SetRadarDetectionsAndFuse` | 1 | `UKFFusionEngine::set_radar_detections()` stores data; `fuse()` performs radar update and sets `has_radar` |
-| `HasRadarFlagOnlyWhenMatched` | 1 | `FusedObject::has_radar` is true only for tracks that received a matched radar detection |
-| `GroundFilterRejectsLowAltitude` | 1 | Radar detections below 0.3m AGL are rejected before UKF association |
-| `GroundFilterPassesHighAltitude` | 1 | Radar detections above the elevation threshold pass through to UKF |
-| `GroundFilterDisabledPassesAll` | 1 | When ground filter is disabled, all radar detections reach UKF regardless of altitude |
-| `AltitudeGateRejectsMismatch` | 1 | Radar-track association rejected when body-frame Z difference exceeds `altitude_gate_m` |
-| `AltitudeGateAcceptsSimilar` | 1 | Radar-track association accepted when body-frame Z difference is within `altitude_gate_m` |
-| `AltitudeGateConfigurable` | 1 | `altitude_gate_m` can be configured to a custom value and correctly gates associations |
 | `DormantReIDTest` | 8 | Radar-confirmed track creates dormant entry, re-ID merges at similar world position, world-frame flag output, pool cap respected, reset clears state, no dormant without pose, camera-only excluded from pool, distant tracks get separate entries |
 | `RadarFusionTest` | 16 | Radar measurement model, covariance reduction, azimuth sign convention, radar-initialized depth override, camera+radar tighter than either, gate rejects outlier, noise config, disabled-by-default, set_radar_detections+fuse, has_radar flag, ground filter (reject/pass/disabled), altitude gate (reject/accept/configurable), radar detection reservation prevents double-init, orphan output gating by radar_orphan_min_hits |
+| `RadarPrimaryTest` | 11 | Radar-primary depth override, reservation prevents double-init, orphan output gating, radar update count, multi-radar association |
+| `RadarOnlyTrackTest` | 8 | Radar-only track creation, output gating, camera adoption, depth confidence |
+| `CovarianceConfidenceTest` | 4 | Monotonic confidence decay with range, close range high confidence, far range low confidence, kDepthMaxM penalty preserved |
+| `HeightPriorsTest` | 3 | Class-specific depth differs by class, UNKNOWN uses default 3.0m, config override applied |
+| `RadarLearnedHeightTest` | 4 | Radar back-calculates height, EMA converges, learned height overrides class prior, new track uses prior |
+| `DepthConfidenceTest` | 4 | Covariance-based confidence output, close range near 1.0, far range near 0.0, smooth degradation |
+| `DepthEdgeCaseTest` | 2 | Zero bbox_h does not crash, zero bbox_noise_px produces full confidence |
 
 **Key files under test:** `perception/fusion_engine.h`, `perception/ifusion_engine.h`, `perception/ukf_fusion_engine.h`
+
+---
+
+### test_world_transform.cpp — 5 tests
+
+**What it tests:** Camera-to-world coordinate transform using full VIO quaternion rotation
+(Issue #421). Validates that pitch/roll from the IMU are properly applied when converting
+camera-frame 3D positions to world-frame NEU coordinates.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `WorldTransformTest` | 5 | Identity quaternion matches z-flip, pure yaw 90° rotates forward to east, 10° pitch nose-down shifts vertical, combined yaw+pitch composition, velocity not affected by drone position offset |
+
+**Key files under test:** `process2_perception/src/main.cpp` (camera→world transform block)
 
 ---
 
@@ -1248,4 +1257,4 @@ pytest test suite, separate from the C++ GTest suite tracked by ctest.
 
 ---
 
-*Last updated: April 2026 — 1461 C++ unit tests across 65 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #416 (Epic #284 Wave 6): ISerializer\<T\> abstraction + RawSerializer\<T\> (21 tests), PluginLoader\<Interface\> for runtime .so loading (13 tests, HAVE_PLUGINS only). All 1461 C++ tests passing.*
+*Last updated: April 2026 — 1479 C++ unit tests across 66 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. Epic #419 Wave 1: covariance-weighted depth fusion (4 tests), multi-class height priors (3 tests), radar-learned object heights (4 tests), depth confidence (4 tests), depth edge cases (2 tests), world transform quaternion rotation (5 tests). All 1479 C++ tests passing.*

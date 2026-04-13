@@ -2913,4 +2913,30 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #68 (PR #416). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+---
+
+### Improvement #69 — Epic #419 Wave 1: Depth Fusion Infrastructure (Issues #420–#424, PR #427)
+
+**Date:** 2026-04-13
+**Category:** Feature / Perception — Depth Estimation
+**Issues:** [#420](https://github.com/nmohamaya/companion_software_stack/issues/420), [#421](https://github.com/nmohamaya/companion_software_stack/issues/421), [#422](https://github.com/nmohamaya/companion_software_stack/issues/422), [#423](https://github.com/nmohamaya/companion_software_stack/issues/423), [#424](https://github.com/nmohamaya/companion_software_stack/issues/424)
+**PR:** [#427](https://github.com/nmohamaya/companion_software_stack/pull/427) (merge PR: integration/epic-419-wave-1 → main)
+**Epic:** [#419 — Depth Fusion Infrastructure](https://github.com/nmohamaya/companion_software_stack/issues/419)
+
+**What:**
+
+- **Covariance-weighted depth fusion** (#420) — Replace hard confidence tiers (0.01/0.3/0.6/0.7) with continuous variance model: σ² = (dD/d(bbox_h))² × σ_bbox² × ds², confidence = 1/(1+σ²). Smooth degradation with range. Includes depth_scale in derivative for correctness.
+- **IMU pitch/roll correction** (#421) — Full VIO quaternion rotation (Quaternionf) in camera→world transform instead of yaw-only. Degenerate quaternion guard, correct body-FRD→world-NEU convention.
+- **Radar-learned object heights** (#422) — When radar confirms range, back-calculate actual height: H = range × bbox_h / (fy × ds). EMA smoothing (α=0.2), height clamp [0.1m, 25m]. Precedence: radar-learned > class prior > UNKNOWN fallback.
+- **Multi-class height priors** (#423) — Per-ObjectClass height lookup table (PERSON=1.7m, CAR=1.5m, TRUCK=3.5m, DRONE=0.3m, etc.) replacing single 3.0m assumption. Config-overridable.
+- **Sim world diversification** (#424) — Varied obstacle heights in test_world.sdf matching class priors. New scenario 27 for depth accuracy testing.
+
+**Files modified:** `ukf_fusion_engine.cpp`, `ukf_fusion_engine.h`, `main.cpp`, `types.h`, `config_keys.h`, `default.json`, `test_world.sdf`, `test_fusion_engine.cpp`, `test_world_transform.cpp` (new), scenarios 02/18/27
+
+**Why:** Phase 1 of depth estimation improvement (Issue #393). Builds permanent fusion infrastructure that ML depth models (Phase 2) plug directly into — covariance framework makes adding new depth sources a matter of defining their noise model, not hacking confidence thresholds.
+
+**Test count:** 1461 → 1479 (+18 tests). 4 covariance, 3 height priors, 4 radar-learned, 4 depth confidence, 2 edge cases, 5 world transform (new file). See [tests/TESTS.md](../../tests/TESTS.md) for current counts.
+
+---
+
+_Last updated after Improvement #69 (PR #427). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
