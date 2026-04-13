@@ -428,6 +428,24 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::ASSUMED_OBSTACLE_HEIGHT_M, 3.0f);
     calib.depth_scale = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::DEPTH_SCALE, 0.7f);
 
+    // Per-class height priors for apparent-size depth estimation (Issue #423)
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::UNKNOWN)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_UNKNOWN, 3.0f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::PERSON)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_PERSON, 1.7f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::VEHICLE_CAR)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_VEHICLE_CAR, 1.5f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::VEHICLE_TRUCK)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_VEHICLE_TRUCK, 3.5f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::DRONE)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_DRONE, 0.3f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::ANIMAL)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_ANIMAL, 0.8f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::BUILDING)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_BUILDING, 10.0f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::TREE)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_TREE, 6.0f);
+
     std::string fusion_backend =
         ctx.cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND, "camera_only");
     auto fusion_engine = create_fusion_engine(fusion_backend, calib, &ctx.cfg);

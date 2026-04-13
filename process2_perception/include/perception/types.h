@@ -1,6 +1,7 @@
 // process2_perception/include/perception/types.h
 // All data types for perception: detections, tracked/fused objects.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -114,12 +115,24 @@ struct FusedObjectList {
 // ═══════════════════════════════════════════════════════════
 namespace drone::perception {
 
+inline constexpr uint8_t kNumObjectClasses = 8;
+
 /// Calibration data for camera-based depth estimation.
 struct CalibrationData {
     Eigen::Matrix3f camera_intrinsics = Eigen::Matrix3f::Identity();
     float           camera_height_m   = 1.5f;  // camera height above ground
     float assumed_obstacle_height_m   = 3.0f;  // assumed obstacle height for apparent-size depth
     float depth_scale = 0.7f;  // conservative depth scaling (<1.0 places obstacles closer)
+    std::array<float, kNumObjectClasses> height_priors = {
+        3.0f,   // UNKNOWN
+        1.7f,   // PERSON
+        1.5f,   // VEHICLE_CAR
+        3.5f,   // VEHICLE_TRUCK
+        0.3f,   // DRONE
+        0.8f,   // ANIMAL
+        10.0f,  // BUILDING
+        6.0f,   // TREE
+    };
 };
 
 }  // namespace drone::perception

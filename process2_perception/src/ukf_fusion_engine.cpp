@@ -533,8 +533,12 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
 
     // Tier 2: Full-height apparent-size depth (bbox fully visible)
     if (trk.bbox_h > kBboxHThreshold) {
-        const float d_raw = calib_.assumed_obstacle_height_m * fy / trk.bbox_h * ds;
-        const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
+        const auto  class_idx = static_cast<uint8_t>(trk.class_id);
+        const float assumed_h = (class_idx < drone::perception::kNumObjectClasses)
+                                    ? calib_.height_priors[class_idx]
+                                    : calib_.height_priors[0];  // UNKNOWN fallback
+        const float d_raw     = assumed_h * fy / trk.bbox_h * ds;
+        const float d         = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
         // Raw depth exceeded max → the apparent-size model broke down (ground
         // features with small bbox_h produce huge raw depths that clamp).
         const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.7f;

@@ -419,7 +419,11 @@ static float test_estimate_depth(const CalibrationData& calib, const TrackedObje
     const float     ds               = calib.depth_scale;
 
     if (trk.bbox_h > kBboxHThreshold) {
-        return std::clamp(calib.assumed_obstacle_height_m * fy / trk.bbox_h * ds, 1.0f, 40.0f);
+        const auto  class_idx = static_cast<uint8_t>(trk.class_id);
+        const float assumed_h = (class_idx < drone::perception::kNumObjectClasses)
+                                    ? calib.height_priors[class_idx]
+                                    : calib.height_priors[0];
+        return std::clamp(assumed_h * fy / trk.bbox_h * ds, 1.0f, 40.0f);
     }
     const float ray_down = (trk.position_2d.y() - cy) / std::max(1.0f, fy);
     if (ray_down > kRayDownMinThres) {
@@ -1953,4 +1957,73 @@ TEST(RadarOnlyTrackTest, MaxOrphanRangeRejectsDistantDetections) {
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_NEAR(result.objects[0].position_3d.norm(), 20.0f, 1.0f)
         << "Only the near detection should create a track";
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-Class Height Priors Tests (Issue #423)
+// ═══════════════════════════════════════════════════════════
+
+TEST(HeightPriorsTest, PersonShorterDepthThanBuilding) {
+    // PERSON (1.7m prior) should produce a shorter depth estimate than
+    // BUILDING (10.0m prior) for identical bbox_h, because depth is
+    // proportional to assumed_height.
+    auto calib = make_test_calib();
+    // Use default height_priors (PERSON=1.7, BUILDING=10.0)
+
+    TrackedObject person = make_test_tracked();
+    person.class_id      = ObjectClass::PERSON;
+    person.bbox_h        = 100.0f;  // well above kBboxHThreshold (10)
+
+    TrackedObject building = make_test_tracked();
+    building.class_id      = ObjectClass::BUILDING;
+    building.bbox_h        = 100.0f;  // same bbox_h
+
+    float depth_person   = test_estimate_depth(calib, person);
+    float depth_building = test_estimate_depth(calib, building);
+
+    EXPECT_GT(depth_building, depth_person)
+        << "Building (10.0m prior) should yield greater depth than Person (1.7m prior)";
+    // Ratio should match the height prior ratio: 10.0 / 1.7 ≈ 5.88
+    EXPECT_NEAR(depth_building / depth_person, 10.0f / 1.7f, 0.01f);
+}
+
+TEST(HeightPriorsTest, UnknownClassFallsBackToDefault) {
+    // UNKNOWN class (index 0) should use the 3.0m default prior.
+    auto calib = make_test_calib();
+
+    TrackedObject trk = make_test_tracked();
+    trk.class_id      = ObjectClass::UNKNOWN;
+    trk.bbox_h        = 100.0f;
+
+    float depth = test_estimate_depth(calib, trk);
+
+    // Expected: 3.0 * fy / bbox_h * depth_scale = 3.0 * 500 / 100 * 0.7 = 10.5
+    const float expected = std::clamp(3.0f * 500.0f / 100.0f * 0.7f, 1.0f, 40.0f);
+    EXPECT_NEAR(depth, expected, 0.01f);
+}
+
+TEST(HeightPriorsTest, CustomHeightPriorsOverrideDefaults) {
+    // Custom height_priors in CalibrationData should override the defaults.
+    auto calib                                                            = make_test_calib();
+    calib.height_priors[static_cast<uint8_t>(ObjectClass::PERSON)]        = 5.0f;
+    calib.height_priors[static_cast<uint8_t>(ObjectClass::VEHICLE_TRUCK)] = 12.0f;
+
+    TrackedObject person = make_test_tracked();
+    person.class_id      = ObjectClass::PERSON;
+    person.bbox_h        = 100.0f;
+
+    TrackedObject truck = make_test_tracked();
+    truck.class_id      = ObjectClass::VEHICLE_TRUCK;
+    truck.bbox_h        = 100.0f;
+
+    float depth_person = test_estimate_depth(calib, person);
+    float depth_truck  = test_estimate_depth(calib, truck);
+
+    // With custom priors: person=5.0, truck=12.0
+    const float expected_person = std::clamp(5.0f * 500.0f / 100.0f * 0.7f, 1.0f, 40.0f);
+    const float expected_truck  = std::clamp(12.0f * 500.0f / 100.0f * 0.7f, 1.0f, 40.0f);
+    EXPECT_NEAR(depth_person, expected_person, 0.01f);
+    EXPECT_NEAR(depth_truck, expected_truck, 0.01f);
+    EXPECT_GT(depth_truck, depth_person)
+        << "Truck (12.0m custom prior) should yield greater depth than Person (5.0m custom prior)";
 }
