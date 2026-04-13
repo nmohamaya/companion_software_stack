@@ -222,10 +222,10 @@ public:
             }
             ++accepted;
 
-            // Per-object inflation: use estimated radius if available (from
-            // camera bbox + radar range back-projection), otherwise fall back
-            // to the configured inflation radius.  This gives accurate grid
-            // footprints for radar-confirmed obstacles.
+            // Per-object inflation: use estimated radius only for radar-confirmed
+            // objects (where range is reliable), otherwise fall back to the
+            // configured inflation radius.  This gives accurate grid footprints
+            // for radar-confirmed obstacles.
             //
             // Cap: camera-only objects use at most the configured inflation
             // radius.  Without radar, estimated_radius is derived from the
@@ -508,6 +508,11 @@ private:
                                     hit_count_.erase(c);
                                     ++promoted_count_;
                                 }
+                            } else {
+                                // Camera-only: clear any stale hit count so a
+                                // later radar-confirmed object in the same cell
+                                // doesn't inherit accumulated hits.
+                                hit_count_.erase(c);
                             }
                         }
                     }

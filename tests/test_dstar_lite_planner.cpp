@@ -1807,6 +1807,138 @@ TEST(OccupancyGrid3DTest, PromotionPausedBlocksPromotion) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// Issue #428: False grid promotion — radar gate + inflation cap
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, RequireRadarBlocksCameraOnlyPromotion) {
+    // Camera-only objects must NOT promote via hit-count when
+    // require_radar_for_promotion is enabled.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
+                         /*prediction_enabled=*/false, /*prediction_dt_s=*/2.0f,
+                         /*require_radar_for_promotion=*/true);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.9f;
+    objects.objects[0].radar_update_count = 0;  // camera-only
+    drone::ipc::Pose pose{};
+
+    // Many observations — should never promote
+    for (int i = 0; i < 10; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u);    // no promotion
+    EXPECT_GT(grid.occupied_count(), 0u);  // dynamic cells exist
+}
+
+TEST(OccupancyGrid3DTest, RequireRadarAllowsRadarTouchedPromotion) {
+    // Objects with ≥1 radar update should still promote via hit-count
+    // even when require_radar_for_promotion is enabled.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/2,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
+                         /*prediction_enabled=*/false, /*prediction_dt_s=*/2.0f,
+                         /*require_radar_for_promotion=*/true);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 0.9f;
+    objects.objects[0].radar_update_count = 1;  // has radar
+    drone::ipc::Pose pose{};
+
+    for (int i = 0; i < 5; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_GT(grid.static_count(), 0u);  // promoted via hit-count
+}
+
+TEST(OccupancyGrid3DTest, CameraOnlyInflationCapped) {
+    // Camera-only objects with large estimated_radius_m must be capped
+    // to the configured inflation radius, not use the back-projected size.
+    // A 2.0m inflation on 1.0m grid = 2 cells.  A bogus 20m radius would
+    // be 20 cells — we must NOT see that many occupied cells.
+    OccupancyGrid3D grid(1.0f, 40.0f, 2.0f);  // 2m inflation
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 10.0f;
+    objects.objects[0].position_y         = 10.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].estimated_radius_m = 20.0f;  // bogus large radius
+    objects.objects[0].radar_update_count = 0;      // camera-only
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+
+    // With 2m inflation on 1m grid → inflation_cells_ = 2.
+    // A 2D disk of radius 2 cells ≈ at most 13 cells (π×2²).
+    // If uncapped, 20m radius → 20 cells → π×20² ≈ 1257 cells.
+    EXPECT_LT(grid.occupied_count(), 20u);
+}
+
+TEST(OccupancyGrid3DTest, StaleHitCountClearedWhenRadarGateBlocks) {
+    // When the radar gate blocks camera-only promotion, any accumulated
+    // hit_count for that cell must be cleared so a future radar-confirmed
+    // object doesn't inherit stale hits.
+    OccupancyGrid3D grid(1.0f, 20.0f, 0.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/3,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0,
+                         /*prediction_enabled=*/false, /*prediction_dt_s=*/2.0f,
+                         /*require_radar_for_promotion=*/true);
+
+    // Phase 1: Camera-only object observes the cell many times.
+    // Hits should be cleared each time (not accumulated).
+    drone::ipc::DetectedObjectList cam_objects{};
+    cam_objects.num_objects                   = 1;
+    cam_objects.objects[0].position_x         = 5.0f;
+    cam_objects.objects[0].position_y         = 5.0f;
+    cam_objects.objects[0].position_z         = 5.0f;
+    cam_objects.objects[0].confidence         = 0.9f;
+    cam_objects.objects[0].depth_confidence   = 0.9f;
+    cam_objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    for (int i = 0; i < 10; ++i) {
+        grid.update_from_objects(cam_objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u);  // nothing promoted
+
+    // Phase 2: Now a radar-confirmed object appears at the same cell.
+    // It should need the full promotion_hits (3), not benefit from stale hits.
+    drone::ipc::DetectedObjectList radar_objects{};
+    radar_objects.num_objects                   = 1;
+    radar_objects.objects[0].position_x         = 5.0f;
+    radar_objects.objects[0].position_y         = 5.0f;
+    radar_objects.objects[0].position_z         = 5.0f;
+    radar_objects.objects[0].confidence         = 0.9f;
+    radar_objects.objects[0].depth_confidence   = 0.9f;
+    radar_objects.objects[0].radar_update_count = 1;
+
+    // 2 observations — NOT enough for promotion_hits=3
+    grid.update_from_objects(radar_objects, pose);
+    grid.update_from_objects(radar_objects, pose);
+    EXPECT_EQ(grid.static_count(), 0u);  // should NOT have promoted yet
+
+    // 3rd observation — now it should promote
+    grid.update_from_objects(radar_objects, pose);
+    EXPECT_GT(grid.static_count(), 0u);
+}
+
+// ═════════════════════════════════════════════════════════════
 // Issue #338: Snap goal approach bias tests
 // ═════════════════════════════════════════════════════════════
 
