@@ -28,6 +28,8 @@
 #include <chrono>
 #include <thread>
 
+#include <Eigen/Geometry>  // Quaternionf for full-quaternion transform (#421)
+
 using namespace drone::perception;
 
 static std::atomic<bool> g_running{true};

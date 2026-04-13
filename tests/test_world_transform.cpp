@@ -132,7 +132,7 @@ TEST(WorldTransformTest, CombinedYawAndPitchCompose) {
     const double yaw_rad   = M_PI / 4.0;           // 45° yaw
     const double pitch_rad = 15.0 * M_PI / 180.0;  // 15° nose-down in FRU
 
-    // Build quaternion: yaw about Z, then pitch about Y (in body frame)
+    // Build quaternion: pitch about Y first, then yaw about Z (Eigen column-vector convention)
     const Eigen::Quaterniond q_yaw(Eigen::AngleAxisd(yaw_rad, Eigen::Vector3d::UnitZ()));
     const Eigen::Quaterniond q_pitch(Eigen::AngleAxisd(pitch_rad, Eigen::Vector3d::UnitY()));
     const Eigen::Quaterniond q_combined = q_yaw * q_pitch;

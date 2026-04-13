@@ -542,9 +542,9 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
             const float d_raw = drone_altitude_m_ * fy / (bbox_bottom - cy) * ds;
             const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-            // Covariance-based confidence (#420): dD/d(bbox_bottom) = H*fy/(bbox_bottom-cy)²
+            // Covariance-based confidence (#420): dD/d(bbox_bottom) = H*fy*ds/(bbox_bottom-cy)²
             const float denom    = (bbox_bottom - cy) * (bbox_bottom - cy);
-            const float dH_dbbox = drone_altitude_m_ * fy / std::max(denom, 1.0f);
+            const float dH_dbbox = drone_altitude_m_ * fy * ds / std::max(denom, 1.0f);
             const float c = depth_confidence_from_covariance(dH_dbbox, calib_.bbox_height_noise_px,
                                                              d_raw, kDepthMaxM);
             return {d, c};
@@ -552,9 +552,9 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         if (ray_down_base > kRayDownMinThres) {
             const float d_raw = calib_.camera_height_m / ray_down_base * ds;
             const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-            // Covariance-based confidence (#420): dD/d(bbox_bottom) = cam_H*fy/(bbox_bottom-cy)²
+            // Covariance-based confidence (#420): dD/d(bbox_bottom) = cam_H*fy*ds/(bbox_bottom-cy)²
             const float denom    = (bbox_bottom - cy) * (bbox_bottom - cy);
-            const float dH_dbbox = calib_.camera_height_m * fy / std::max(denom, 1.0f);
+            const float dH_dbbox = calib_.camera_height_m * fy * ds / std::max(denom, 1.0f);
             const float c = depth_confidence_from_covariance(dH_dbbox, calib_.bbox_height_noise_px,
                                                              d_raw, kDepthMaxM);
             return {d, c};
@@ -572,8 +572,8 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         const float assumed_h = (height_override > 0.0f) ? height_override : class_h;
         const float d_raw     = assumed_h * fy / trk.bbox_h * ds;
         const float d         = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-        // Covariance-based confidence (#420): dD/d(bbox_h) = H*fy/bbox_h²
-        const float dD_dbbox = assumed_h * fy / (trk.bbox_h * trk.bbox_h);
+        // Covariance-based confidence (#420): dD/d(bbox_h) = H*fy*ds/bbox_h²
+        const float dD_dbbox = assumed_h * fy * ds / (trk.bbox_h * trk.bbox_h);
         const float c = depth_confidence_from_covariance(dD_dbbox, calib_.bbox_height_noise_px,
                                                          d_raw, kDepthMaxM);
         return {d, c};
