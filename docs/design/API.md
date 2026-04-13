@@ -220,7 +220,7 @@ Validation: `[a-zA-Z0-9_-]` only. Throws `invalid_argument` at construction.
 
 ---
 
-## 1.6 Intra-Process Infrastructure — Epic #284
+## 1.5 Intra-Process Infrastructure — Epic #284
 
 ### `EventBus<Event>` — `drone::util` — Issue #293
 
@@ -277,7 +277,7 @@ Pre-built schemas: `common_schema()`, `video_capture_schema()`, ..., `system_mon
 
 ---
 
-## 1.5 IPC Message Types (`common/ipc/include/ipc/ipc_types.h`)
+## 1.6 IPC Message Types (`common/ipc/include/ipc/ipc_types.h`)
 
 Key wire-format structs used across pub/sub topics. All must be trivially copyable.
 

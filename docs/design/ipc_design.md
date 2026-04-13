@@ -428,7 +428,7 @@ r_default.resolve("/slam_pose")  // → "/slam_pose" (unchanged)
 ```
 
 - **Validation:** `[a-zA-Z0-9_-]` only; throws `invalid_argument` at construction
-- **Integration:** Set via config key `zenoh.vehicle_id`; `create_message_bus(cfg)` installs it
+- **Integration:** Set via top-level config key `vehicle_id`; `create_message_bus(cfg)` installs it
 - **Backward compatible:** Empty `vehicle_id` (default) produces identical behavior to pre-TopicResolver code
 
 ---
