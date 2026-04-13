@@ -379,8 +379,8 @@ This project uses a **17-agent pipeline** orchestrated via Claude Agent SDK with
 | 6 | `feature-infra-platform` | Opus | deploy/, CI, boards/, certification |
 | 7 | `review-memory-safety` | Opus | RAII, ownership, lifetimes (Pass 1, read-only) |
 | 8 | `review-concurrency` | Opus | Races, atomics, deadlocks (Pass 1, read-only) |
-| 9 | `review-fault-recovery` | Opus | Watchdog, degradation (Pass 1, read-only) |
-| 10 | `review-security` | Opus | Input validation, auth, TLS (Pass 1, read-only) |
+| 9 | `review-fault-recovery` | Sonnet | Watchdog, degradation (Pass 1, read-only) |
+| 10 | `review-security` | Sonnet | Input validation, auth, TLS (Pass 1, read-only) |
 | 11 | `test-unit` | Sonnet | GTest, coverage delta (Pass 1, tests/ only) |
 | 12 | `test-scenario` | Sonnet | Gazebo SITL, integration (Pass 1, tests/ only) |
 | 13 | `review-test-quality` | Opus | Tests exercise new paths, assertions meaningful (Pass 2, read-only) |

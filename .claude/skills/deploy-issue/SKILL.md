@@ -176,8 +176,8 @@ Agent(
 
 The prompt must include:
 1. **Your implementation plan from Step 2.2** — this is the primary spec. Be specific: name files, functions, patterns to follow, and the exact approach. The agent should execute your plan, not re-derive the architecture.
-2. The full issue body (for context and acceptance criteria)
-3. Cross-agent context from Step 2.1
+2. **Issue acceptance criteria only** — extract the acceptance criteria bullet points from the issue body, not the full body. Only include the full issue body if the plan explicitly references "see issue for details" or the acceptance criteria are unclear without surrounding context.
+3. Cross-agent context from Step 2.1 (only include if the issue touches shared modules — IPC, HAL, common/)
 4. These pipeline instructions:
    - Implement the issue following the plan above
    - Run `bash deploy/build.sh` and verify zero warnings

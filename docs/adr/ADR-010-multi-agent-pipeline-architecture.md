@@ -33,8 +33,8 @@ Implement a **17-agent pipeline** with formal role definitions, orchestration sc
 |---|------|-------|---------|-------|
 | 7 | `review-memory-safety` | Opus | Always | RAII, ownership, lifetimes |
 | 8 | `review-concurrency` | Opus | If atomics/mutex/thread in diff | Races, atomics, deadlocks |
-| 9 | `review-fault-recovery` | Opus | If P4/P5/P7/watchdog in diff | Watchdog, degradation, restart |
-| 10 | `review-security` | Opus | Always | Input validation, auth, TLS |
+| 9 | `review-fault-recovery` | Sonnet | If P4/P5/P7/watchdog in diff | Watchdog, degradation, restart |
+| 10 | `review-security` | Sonnet | Always | Input validation, auth, TLS |
 | 11 | `test-unit` | Sonnet | Always | Build, run tests, verify count vs baseline |
 | 12 | `test-scenario` | Sonnet | If IPC/HAL/Gazebo in diff | Gazebo SITL scenario integration |
 
