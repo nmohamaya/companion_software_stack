@@ -122,7 +122,8 @@ struct CalibrationData {
     Eigen::Matrix3f camera_intrinsics = Eigen::Matrix3f::Identity();
     float           camera_height_m   = 1.5f;  // camera height above ground
     float assumed_obstacle_height_m   = 3.0f;  // assumed obstacle height for apparent-size depth
-    float depth_scale = 0.7f;  // conservative depth scaling (<1.0 places obstacles closer)
+    float depth_scale = 0.7f;           // conservative depth scaling (<1.0 places obstacles closer)
+    float bbox_height_noise_px = 2.5f;  // bbox height measurement noise for covariance model (§4.2)
     std::array<float, kNumObjectClasses> height_priors = {
         3.0f,   // UNKNOWN
         1.7f,   // PERSON

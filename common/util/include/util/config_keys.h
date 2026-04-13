@@ -120,6 +120,7 @@ inline constexpr const char* HEIGHT_PRIORS_DRONE    = "perception.fusion.height_
 inline constexpr const char* HEIGHT_PRIORS_ANIMAL   = "perception.fusion.height_priors.animal";
 inline constexpr const char* HEIGHT_PRIORS_BUILDING = "perception.fusion.height_priors.building";
 inline constexpr const char* HEIGHT_PRIORS_TREE     = "perception.fusion.height_priors.tree";
+inline constexpr const char* BBOX_HEIGHT_NOISE_PX   = "perception.fusion.bbox_height_noise_px";
 }  // namespace fusion
 
 }  // namespace perception

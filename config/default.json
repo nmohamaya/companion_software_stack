@@ -104,6 +104,7 @@
                 "building": 10.0,
                 "tree": 6.0
             },
+            "bbox_height_noise_px": 2.5,
             "depth": {
                 "covariance_init": 5.0,
                 "bbox_h_threshold": 10.0,

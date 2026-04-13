@@ -471,13 +471,18 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
     const float fy = calib_.camera_intrinsics(1, 1);
     const float cy = calib_.camera_intrinsics(1, 2);
 
-    // Four-tier depth estimation with confidence:
+    // Four-tier depth estimation with covariance-based confidence (#420):
     //
-    // 1. Horizon-truncated bbox (conf=0.6): bbox top at/above horizon,
-    //    use ground-plane geometry from bbox bottom.  Geometric but
-    //    extrapolating — moderate confidence.
+    // Tiers 1 & 2 use pinhole projection uncertainty propagation:
+    //   sigma_depth^2 = (dD/d(bbox_h))^2 * sigma_bbox^2
+    //   confidence    = 1 / (1 + sigma_depth^2)
+    // Close objects (large bbox_h) → small derivative → high confidence.
+    // Far objects (small bbox_h) → large derivative → low confidence.
     //
-    // 2. Apparent-size (conf=0.7): depth = assumed_height * fy / bbox_h
+    // 1. Horizon-truncated bbox: bbox top at/above horizon,
+    //    use ground-plane geometry from bbox bottom.
+    //
+    // 2. Apparent-size: depth = assumed_height * fy / bbox_h
     //    Most reliable camera-only method when full height visible.
     //
     // 3. Ground-plane fallback (conf=0.3): depth = camera_height / ray_down
@@ -517,16 +522,28 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         if (ray_down_base > kRayDownMinThres && has_altitude_) {
             const float d_raw = drone_altitude_m_ * fy / (bbox_bottom - cy) * ds;
             const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-            // Raw depth exceeded max → model saturated (common for ground
-            // features at shallow angles).  Reduce confidence to block
-            // promotion while still creating a dynamic cell.
-            const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.6f;
+            // Covariance-based confidence: propagate bbox measurement noise
+            // through the pinhole depth formula.  d(depth)/d(bbox_bottom) =
+            // -H * fy / (bbox_bottom - cy)^2 (Issue #420).
+            const float sigma_bbox     = calib_.bbox_height_noise_px;
+            const float denom          = (bbox_bottom - cy) * (bbox_bottom - cy);
+            const float dH_dbbox       = drone_altitude_m_ * fy / denom;
+            const float sigma_depth_sq = dH_dbbox * dH_dbbox * sigma_bbox * sigma_bbox;
+            const float c = (d_raw > kDepthMaxM) ? 0.2f : 1.0f / (1.0f + sigma_depth_sq);
             return {d, c};
         }
         if (ray_down_base > kRayDownMinThres) {
             const float d_raw = calib_.camera_height_m / ray_down_base * ds;
             const float d     = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-            const float c     = (d_raw > kDepthMaxM) ? 0.2f : 0.6f;
+            // Covariance-based confidence for camera-height path:
+            // depth = camera_height / ray_down_base, ray_down_base = (bbox_bottom - cy) / fy
+            // => depth = camera_height * fy / (bbox_bottom - cy)
+            // => d(depth)/d(bbox_bottom) = -camera_height * fy / (bbox_bottom - cy)^2
+            const float sigma_bbox     = calib_.bbox_height_noise_px;
+            const float denom          = (bbox_bottom - cy) * (bbox_bottom - cy);
+            const float dH_dbbox       = calib_.camera_height_m * fy / denom;
+            const float sigma_depth_sq = dH_dbbox * dH_dbbox * sigma_bbox * sigma_bbox;
+            const float c = (d_raw > kDepthMaxM) ? 0.2f : 1.0f / (1.0f + sigma_depth_sq);
             return {d, c};
         }
     }
@@ -539,9 +556,13 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
                                     : calib_.height_priors[0];  // UNKNOWN fallback
         const float d_raw     = assumed_h * fy / trk.bbox_h * ds;
         const float d         = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
-        // Raw depth exceeded max → the apparent-size model broke down (ground
-        // features with small bbox_h produce huge raw depths that clamp).
-        const float c = (d_raw > kDepthMaxM) ? 0.2f : 0.7f;
+        // Covariance-based confidence: propagate bbox noise through
+        // depth = H * fy / bbox_h.  d(depth)/d(bbox_h) = H * fy / bbox_h²
+        // (Issue #420).
+        const float sigma_bbox     = calib_.bbox_height_noise_px;
+        const float dD_dbbox       = assumed_h * fy / (trk.bbox_h * trk.bbox_h);
+        const float sigma_depth_sq = dD_dbbox * dD_dbbox * sigma_bbox * sigma_bbox;
+        const float c              = (d_raw > kDepthMaxM) ? 0.2f : 1.0f / (1.0f + sigma_depth_sq);
         return {d, c};
     }
 

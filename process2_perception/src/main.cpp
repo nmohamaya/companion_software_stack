@@ -440,6 +440,8 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_BUILDING, 10.0f);
     calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::TREE)] =
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_TREE, 6.0f);
+    calib.bbox_height_noise_px =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::BBOX_HEIGHT_NOISE_PX, 2.5f);
 
     std::string fusion_backend =
         ctx.cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND, "camera_only");

@@ -1560,8 +1560,9 @@ TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
 // ═══════════════════════════════════════════════════════════
 
 TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
-    // Full-height visible bbox → Tier 2 (apparent-size) → confidence ≥ 0.5.
-    // bbox_h=30 → depth = 3.0*500/30*0.7 = 35m (not clamped) → 0.7 confidence.
+    // Close object with large bbox → Tier 2 → high covariance-based confidence.
+    // bbox_h=100, PERSON (H=1.7): dD/d(bbox_h) = 1.7*500/10000 = 0.085
+    // σ² = 0.085² * 2.5² = 0.045 → conf = 1/(1+0.045) ≈ 0.96 (#420).
     auto            calib = make_test_calib();
     UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
 
@@ -1570,8 +1571,8 @@ TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
     trk.class_id     = ObjectClass::PERSON;
     trk.confidence   = 0.9f;
     trk.position_2d  = {320.0f, 340.0f};  // well below horizon
-    trk.bbox_w       = 20.0f;
-    trk.bbox_h       = 30.0f;  // > 10px threshold → Tier 2
+    trk.bbox_w       = 60.0f;
+    trk.bbox_h       = 100.0f;  // large bbox = close object → high confidence
     trk.velocity_2d  = Eigen::Vector2f::Zero();
     trk.timestamp_ns = 1000;
 
@@ -1582,7 +1583,7 @@ TEST(DepthConfidenceTest, Tier2_ApparentSize_HighConfidence) {
 
     auto result = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
-    EXPECT_GE(result.objects[0].depth_confidence, 0.5f);
+    EXPECT_GE(result.objects[0].depth_confidence, 0.9f);
 }
 
 TEST(DepthConfidenceTest, Tier2_ClampedDepth_LowConfidence) {
@@ -1598,7 +1599,7 @@ TEST(DepthConfidenceTest, Tier2_ClampedDepth_LowConfidence) {
     trk.confidence   = 0.9f;
     trk.position_2d  = {320.0f, 340.0f};  // well below horizon
     trk.bbox_w       = 15.0f;
-    trk.bbox_h       = 11.0f;  // > 10px → Tier 2, but depth = 3.0*500/11*0.7 = 95.5m → clamped
+    trk.bbox_h       = 11.0f;  // > 10px → Tier 2, but depth = 1.7*500/11*0.7 = 54.1m → clamped
     trk.velocity_2d  = Eigen::Vector2f::Zero();
     trk.timestamp_ns = 1000;
 
@@ -1637,6 +1638,137 @@ TEST(DepthConfidenceTest, Tier4_NearHorizon_LowConfidence) {
     auto result = engine.fuse(tracked);
     ASSERT_EQ(result.objects.size(), 1u);
     EXPECT_FLOAT_EQ(result.objects[0].depth_confidence, 0.01f);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Covariance Depth Confidence Tests (#420)
+// ═══════════════════════════════════════════════════════════
+
+TEST(CovarianceConfidenceTest, MonotonicDecay) {
+    // Confidence should strictly decrease as bbox_h decreases (object farther away).
+    // Covariance model: σ² = (H*fy/bbox_h²)² * σ_bbox² → grows with smaller bbox_h.
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    const float bbox_sizes[] = {200.0f, 100.0f, 50.0f, 20.0f};
+    float       prev_conf    = 1.0f;
+
+    for (float bh : bbox_sizes) {
+        TrackedObject trk;
+        trk.track_id     = 1;
+        trk.class_id     = ObjectClass::PERSON;
+        trk.confidence   = 0.9f;
+        trk.position_2d  = {320.0f, 340.0f};
+        trk.bbox_w       = bh * 0.6f;
+        trk.bbox_h       = bh;
+        trk.velocity_2d  = Eigen::Vector2f::Zero();
+        trk.timestamp_ns = 1000;
+
+        TrackedObjectList tracked;
+        tracked.timestamp_ns   = 1000;
+        tracked.frame_sequence = 1;
+        tracked.objects.push_back(trk);
+
+        auto result = engine.fuse(tracked);
+        ASSERT_EQ(result.objects.size(), 1u);
+        EXPECT_LT(result.objects[0].depth_confidence, prev_conf)
+            << "bbox_h=" << bh << " should have lower confidence than previous";
+        prev_conf = result.objects[0].depth_confidence;
+    }
+}
+
+TEST(CovarianceConfidenceTest, CloseHighFarLow) {
+    // Close object (large bbox) → high confidence, far object (small bbox) → low.
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    auto make_trk = [](float bh) {
+        TrackedObject trk;
+        trk.track_id     = 1;
+        trk.class_id     = ObjectClass::PERSON;
+        trk.confidence   = 0.9f;
+        trk.position_2d  = {320.0f, 340.0f};
+        trk.bbox_w       = bh * 0.6f;
+        trk.bbox_h       = bh;
+        trk.velocity_2d  = Eigen::Vector2f::Zero();
+        trk.timestamp_ns = 1000;
+        return trk;
+    };
+
+    TrackedObjectList close_tracked;
+    close_tracked.timestamp_ns   = 1000;
+    close_tracked.frame_sequence = 1;
+    close_tracked.objects.push_back(make_trk(200.0f));  // very close
+
+    TrackedObjectList far_tracked;
+    far_tracked.timestamp_ns   = 1000;
+    far_tracked.frame_sequence = 1;
+    far_tracked.objects.push_back(make_trk(15.0f));  // far away
+
+    auto close_result = engine.fuse(close_tracked);
+    auto far_result   = engine.fuse(far_tracked);
+
+    ASSERT_EQ(close_result.objects.size(), 1u);
+    ASSERT_EQ(far_result.objects.size(), 1u);
+    EXPECT_GT(close_result.objects[0].depth_confidence, 0.5f);
+    EXPECT_LT(far_result.objects[0].depth_confidence, 0.3f);
+}
+
+TEST(CovarianceConfidenceTest, ClampPenaltyPreserved) {
+    // Very small bbox that produces d_raw > 40m should still get 0.2 penalty,
+    // not the covariance formula (Issue #340 regression guard).
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 340.0f};
+    trk.bbox_w       = 8.0f;
+    trk.bbox_h       = 11.0f;  // depth = 1.7*500/11*0.7 = 54.1m > 40m → clamped
+    trk.velocity_2d  = Eigen::Vector2f::Zero();
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FLOAT_EQ(result.objects[0].depth_confidence, 0.2f);
+}
+
+TEST(CovarianceConfidenceTest, RegressionTypicalRange) {
+    // bbox_h=100, PERSON → depth ≈ 5.95m, confidence in reasonable range.
+    // dD/d(bbox_h) = 1.7*500/10000 = 0.085, σ² = 0.085²*2.5² ≈ 0.045
+    // conf = 1/(1+0.045) ≈ 0.957
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, false);
+
+    TrackedObject trk;
+    trk.track_id     = 1;
+    trk.class_id     = ObjectClass::PERSON;
+    trk.confidence   = 0.9f;
+    trk.position_2d  = {320.0f, 340.0f};
+    trk.bbox_w       = 60.0f;
+    trk.bbox_h       = 100.0f;
+    trk.velocity_2d  = Eigen::Vector2f::Zero();
+    trk.timestamp_ns = 1000;
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(trk);
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    // Depth should be ~5.95m (1.7 * 500 / 100 * 0.7)
+    EXPECT_NEAR(result.objects[0].position_3d.x(), 5.95f, 0.5f);
+    // Confidence in [0.9, 1.0) — high for close object
+    EXPECT_GE(result.objects[0].depth_confidence, 0.9f);
+    EXPECT_LT(result.objects[0].depth_confidence, 1.0f);
 }
 
 TEST(DepthConfidenceTest, RadarConfirmed_OverridesConfidence) {
