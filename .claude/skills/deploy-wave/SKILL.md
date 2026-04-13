@@ -233,25 +233,52 @@ User choices:
 
 ## PHASE 3: Execution [GROUP-BASED]
 
-### Step 3.0 — Wave Execution Mode Selection
+### Step 3.0 — Wave Execution Mode Assessment
 
-Before starting execution, present the mode choice:
+Before starting execution, present a mode recommendation with concrete reasoning based on the dependency analysis from Phase 2. Evaluate these risk factors:
+
+**Factors favoring Fast mode (lower risk):**
+- All issues are fully independent (no edges in dependency graph)
+- No shared files between any pair of issues
+- Each issue touches a distinct process/module (e.g., P2 vs P4 vs P7)
+- Issues are small scope (<200 lines each)
+- Issues are additive (new files/features) rather than refactors of existing code
+
+**Factors favoring Standard mode (higher risk):**
+- Dependency edges exist between issues (group count > 1)
+- Issues share files or interfaces (even if classified "independent-with-conflict-risk")
+- Issues modify the same module or subsystem (e.g., two perception changes)
+- Large scope (>300 lines per issue) — more surface area for cross-issue breakage
+- Issues modify core infrastructure (IPC types, HAL interfaces, config schema) that other issues consume
+- First time using a new pattern or interface — want per-issue validation to catch design mistakes early
+
+Present the assessment:
 
 ```
 ═══ Wave Execution Mode ═══
 
-  [S]tandard — validate after each group (current behavior)
+  [S]tandard — validate after each group
      Safer: failures isolated per-issue, easy to attribute
      Time: ~<N * 15-20> min for <N> issues
 
   [F]ast — all agents first, single validation pass at end
-     ~50-65% faster: agents work in parallel, one build+test+review at end
+     ~50-65% faster: one build+test+review at end
      Time: ~<20-30> min regardless of issue count
 
-  Recommendation: <Fast|Standard> based on:
-    - Issue count: <N> issues
-    - Independence: <all independent | has dependencies>
-    - Estimated time saved: ~<X> min
+--- Risk Assessment ---
+
+| Factor                        | This Wave                          | Signal    |
+|-------------------------------|------------------------------------|-----------|
+| Dependency graph              | <all independent / has deps>       | Fast/Std  |
+| Shared files                  | <none / list overlapping files>    | Fast/Std  |
+| Module overlap                | <distinct modules / same module>   | Fast/Std  |
+| Avg scope per issue           | <~N lines>                         | Fast/Std  |
+| Change type                   | <additive / refactor / mixed>      | Fast/Std  |
+| Core infrastructure modified  | <yes: list / no>                   | Fast/Std  |
+
+Recommendation: <FAST / STANDARD>
+Reason: <1-2 sentence summary of the dominant factors>
+Estimated time saved by Fast: ~<X> min
 ```
 
 User choices:
