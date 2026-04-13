@@ -75,6 +75,9 @@ add_drone_test(test_fusion_engine   test_fusion_engine.cpp
 )
 endif()
 
+# ── World transform tests (Issue #421) ──────────────────────────
+add_drone_test(test_world_transform  test_world_transform.cpp)
+
 # ── Config system tests ──────────────────────────────────────
 add_drone_test(test_config          test_config.cpp)
 target_compile_definitions(test_config PRIVATE
