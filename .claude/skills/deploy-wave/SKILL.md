@@ -3,15 +3,15 @@
 
 ---
 name: deploy-wave
-description: Deploy multiple related issues as a wave — plan all upfront, execute sequentially against an integration branch, review the combined diff, merge to main
+description: Deploy multiple related issues as a wave — plan all upfront, classify dependencies, execute independent issues in parallel against an integration branch, review the combined diff, merge to main
 argument-hint: "<issue-numbers...> --epic <N> [--base <branch>]"
 ---
 
 # /deploy-wave — Multi-Issue Wave Deployment
 
-Deploy a wave of related issues from an epic. Plans all issues upfront as a batch, executes each against an integration branch, runs a single combined review on the full wave diff, and creates a final merge PR to main.
+Deploy a wave of related issues from an epic. Plans all issues upfront as a batch, classifies dependencies between issues, executes independent issues in parallel using worktrees, runs a single combined review on the full wave diff, and creates a final merge PR to main.
 
-**This is the orchestrator for multi-issue waves.** It replaces running `/deploy-issue` N times by adding wave-level planning and combined review — catching cross-issue conflicts and shared-interface problems before they compound.
+**This is the orchestrator for multi-issue waves.** It replaces running `/deploy-issue` N times by adding wave-level planning, dependency analysis, parallel execution, and combined review — catching cross-issue conflicts and shared-interface problems before they compound.
 
 ## Session Continuity
 
@@ -37,14 +37,15 @@ If no arguments provided, ask the user for the issue numbers and epic.
 ┌─────────────────────────────────────────────┐
 │ PHASE 2: WAVE PLAN (key value-add)          │
 │ Tech-lead plans ALL issues → User approves  │
-│ Identify sequence, shared files, risks      │
+│ Dependency graph → Execution groups         │
 └──────────────────────┬──────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────┐
-│ PHASE 3: PER-ISSUE EXECUTION (loop)         │
-│ For each issue in sequence:                 │
-│   Agent work → Validate → Commit → PR       │
-│   User checkpoint per issue                 │
+│ PHASE 3: PER-GROUP EXECUTION (loop)         │
+│ For each execution group:                   │
+│   Independent → Parallel agents (worktrees) │
+│   Dependent   → Sequential agent            │
+│   Merge sequentially → Validate → Batch CP  │
 └──────────────────────┬──────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────┐
@@ -113,7 +114,7 @@ If an integration branch for this epic already exists (`git branch -r --list 'or
 
 ## PHASE 2: Wave Plan [MANDATORY]
 
-This is the key value-add over running `/deploy-issue` N times. The tech-lead plans ALL issues as a coherent batch.
+This is the key value-add over running `/deploy-issue` N times. The tech-lead plans ALL issues as a coherent batch, analyzes dependencies between them, and groups independent issues for parallel execution.
 
 **Step 2.1 — Read relevant code for all issues**
 
@@ -121,86 +122,165 @@ For each issue, read the source files that will need to change. Build a mental m
 
 **Step 2.2 — Produce the wave plan**
 
-Present a unified plan covering all issues:
+Present a unified plan covering all issues. The plan has three parts: per-issue implementation plans, dependency analysis, and execution groups.
+
+**Step 2.2a — Dependency Analysis**
+
+For every pair of issues in the wave, classify the relationship:
+
+- **Independent**: No shared files, no interface dependency (issue A's output is not consumed by issue B). These can run in parallel.
+- **Dependent**: Issue B uses types, interfaces, or files created/modified by issue A. B must run after A merges. Record the direction: `A → B` meaning "B depends on A."
+- **Independent-with-conflict-risk**: Both issues modify the same file but for orthogonal reasons (e.g., both add entries to a CMakeLists.txt). Mark as independent — can run in parallel — but merge order matters and conflict is expected.
+
+The classification is based on the file lists from Step 2.1. Two issues share a dependency if:
+1. Their planned file-change lists overlap (same file modified by both), OR
+2. One issue creates a new header/interface that the other issue's plan imports or references
+
+**Step 2.2b — Execution Groups**
+
+Using the dependency graph from 2.2a, partition issues into ordered execution groups:
+
+- An execution group is a set of issues that are mutually independent (no edges between them in the dependency graph).
+- Groups execute in sequence: all issues in group N must complete and merge before group N+1 starts.
+- Within a group, all issues execute in **parallel** (each in its own worktree).
+- Cap: **max 3 parallel agents per group** (gives each agent sufficient context window). If more than 3 independent issues, split into sub-groups of 3.
+
+The partitioning algorithm is a topological sort of the dependency DAG, where each "level" of the topological order becomes one execution group. Issues with no unresolved dependencies go into the current group; after that group completes, remove their edges; repeat.
+
+**Step 2.2c — Present the wave plan**
 
 ```
 ═══ WAVE PLAN — Epic #<N> Wave <W> ═══
 
-Execution order: #288 → #290 → #289
-Reasoning: CMake options (288) are build-only with no code deps.
-           ISysInfo (290) creates interfaces used by 289's TopicResolver.
-           TopicResolver (289) goes last as it may reference ISysInfo types.
+Dependency graph:
+  #288 (CMake options) — independent
+  #290 (ISysInfo)      — independent
+  #289 (TopicResolver) — depends on #290
 
-┌─────────────────────────────────────────────────┐
+Execution groups:
+  Group 1 [PARALLEL]: #288, #290
+  Group 2 [SEQUENTIAL]: #289 (depends on #290)
+
+┌── GROUP 1 — Parallel ──────────────────────────┐
+│                                                 │
 │ Issue #288 — Per-process CMake enable options    │
 │ Agent: feature-infra-platform                   │
-│                                                 │
 │ Approach: <concrete implementation plan>        │
 │ Files: <list of files to modify/create>         │
 │ Tests: <what to test>                           │
 │ Scope: ~150 lines                               │
-└─────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────┐
+│                                                 │
 │ Issue #290 — ISysInfo platform abstraction      │
 │ Agent: feature-infra-core                       │
-│                                                 │
 │ Approach: <concrete implementation plan>        │
 │ Files: <list of files to modify/create>         │
 │ Tests: <what to test>                           │
 │ Scope: ~200 lines                               │
+│                                                 │
 └─────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────┐
+┌── GROUP 2 — Sequential (depends on Group 1) ───┐
+│                                                 │
 │ Issue #289 — TopicResolver + vehicle_id         │
 │ Agent: feature-infra-core                       │
-│                                                 │
 │ Approach: <concrete implementation plan>        │
 │ Files: <list of files to modify/create>         │
 │ Tests: <what to test>                           │
 │ Scope: ~250 lines                               │
+│                                                 │
 └─────────────────────────────────────────────────┘
 
 Shared concerns:
-  - Files touched by multiple issues: <list, if any>
-  - Cross-issue interfaces: <e.g., 290 creates ISysInfo, 289 uses it>
-  - Risk: <anything non-obvious>
+  - Cross-issue interfaces: #290 creates ISysInfo, #289 uses it
+  - Conflict risk: none within groups (or: list any independent-with-conflict-risk pairs)
 
 Total estimated scope: ~600 lines across 3 PRs
 ```
 
+**Parallel justification table** (shown for each parallel group before user approval):
+
+```
+═══ Parallel Justification — Group 1 ═══
+
+Why #288 and #290 can run in parallel:
+
+| Criterion           | #288 (CMake options)          | #290 (ISysInfo)                 | Overlap? |
+|---------------------|-------------------------------|---------------------------------|----------|
+| Files modified      | CMakeLists.txt (root), cmake/ | common/util/include/util/,      | None     |
+|                     | process[1-7]_*/CMakeLists.txt | process7_system_monitor/        |          |
+| Files created       | cmake/ProcessOptions.cmake    | isys_info.h, jetson_sys_info.h  | None     |
+|                     |                               | linux_sys_info.h, mock_sys_info |          |
+| Headers included    | None new                      | <sys/sysinfo.h>, <fstream>      | None     |
+| Interfaces produced | CMake options (build-only)    | ISysInfo interface              | None     |
+| Interfaces consumed | None                          | None                            | None     |
+| Config keys         | ENABLE_PROCESS_*              | system_monitor.sys_info_backend | None     |
+
+Verdict: INDEPENDENT — no shared files, no interface dependency, no config overlap.
+
+Why #289 must wait for #290:
+  #289 imports ISysInfo (created by #290) in TopicResolver
+  → Dependent: #289 runs after #290 merges
+```
+
+This justification table gives the user concrete evidence to verify the parallelism classification. If they spot a missed dependency (e.g., "actually #288 also touches common/util/CMakeLists.txt"), they can override before agents launch.
+
 User choices:
 - **approve** → proceed to Phase 3
-- **modify** → adjust plan (reorder, change approach, drop an issue)
+- **modify** → adjust plan (reorder, change approach, drop an issue, reclassify dependency, move issue between groups)
 - **abort** → stop
 
 ---
 
-## PHASE 3: Per-Issue Execution [SEQUENTIAL LOOP]
+## PHASE 3: Per-Group Execution [GROUP-BASED]
 
-For each issue in the approved execution order:
+Execute each execution group from Phase 2 in order. Within a group, independent issues run their feature agents in **parallel** (each in its own worktree). Between groups, execution is sequential — group N+1 starts only after group N is fully merged and validated.
 
-### Step 3.1 — Gather cross-agent context
+For each execution group G:
 
-Read these files if they exist (skip if missing):
-- `tasks/active-work.md` — current in-flight work
-- `tasks/agent-changelog.md` — recent completed work
-- `.claude/shared-context/domain-knowledge.md` — non-obvious pitfalls
+### Step 3.1 — Pre-group setup
 
-### Step 3.2 — Spawn feature agent
+1. Push integration branch to remote (agents branch from it):
+   ```bash
+   git push origin <integration_branch>
+   ```
+2. Gather cross-agent context (read if they exist, skip if missing):
+   - `tasks/active-work.md` — current in-flight work
+   - `tasks/agent-changelog.md` — recent completed work
+   - `.claude/shared-context/domain-knowledge.md` — non-obvious pitfalls
+3. For groups after Group 1: also prepare summaries of all previously merged issues (from prior groups' AGENT_REPORT.md files) to include in agent prompts.
 
-Use the Agent tool with the **approved plan for this specific issue** as the primary spec:
+### Step 3.2 — Spawn feature agents
+
+**Single-issue group:** Spawn one agent (identical to the sequential case):
 
 ```
 Agent(
-  description: "Implement issue #<N> (wave <W>, <position>/<total>)",
+  description: "Implement issue #<N> (wave <W>, group <G>)",
   subagent_type: "<routed-role>",
   isolation: "worktree",
-  prompt: <plan from Phase 2 for this issue> + issue body + cross-agent context + pipeline instructions
+  prompt: <plan for this issue> + issue body + cross-agent context + pipeline instructions
 )
 ```
 
-Pipeline instructions for the agent:
+**Multi-issue group (parallel):** Spawn ALL agents in the group using **multiple `Agent()` calls in a single message**:
+
+```
+// All in a single message — they run in parallel
+Agent(
+  description: "Implement issue #<N1> (wave <W>, group <G>, 1/<group_size>)",
+  subagent_type: "<routed-role-1>",
+  isolation: "worktree",
+  prompt: <plan for issue N1> + ...
+)
+Agent(
+  description: "Implement issue #<N2> (wave <W>, group <G>, 2/<group_size>)",
+  subagent_type: "<routed-role-2>",
+  isolation: "worktree",
+  prompt: <plan for issue N2> + ...
+)
+```
+
+Pipeline instructions for each agent (same for single or parallel):
 - Implement the issue following the plan
 - The integration branch is `<branch_name>` — your worktree branches from it
 - Run `bash deploy/build.sh` and verify zero warnings
@@ -209,25 +289,52 @@ Pipeline instructions for the agent:
 - If you deviate from the plan, document why
 - Do NOT create a PR or push
 
-### Step 3.3 — Integrate and validate
+**Additional prompt for parallel agents:** "Other issues executing in parallel in this group: #X, #Y. You share no files with them (verified in the dependency analysis). Do not modify files outside your plan."
 
-After the agent completes:
+### Step 3.3 — Wait for completion
 
-1. Read `AGENT_REPORT.md`
-2. Merge agent worktree changes into the integration branch
-3. **Clean up the agent worktree immediately** — remove the worktree and delete its local branch:
+All agents in the group complete before proceeding. The Agent tool handles this implicitly when multiple calls are made in one message — all return before the next step.
+
+### Step 3.4 — Sequential merge-back
+
+Even when agents run in parallel, merging to the integration branch is **always sequential** (one at a time, in planned merge order). This prevents merge conflicts between parallel agents.
+
+For each completed agent in the group, in the planned merge order:
+
+1. Read `AGENT_REPORT.md` from the agent's worktree
+2. Merge the agent's worktree branch into the integration branch:
+   ```bash
+   git merge <agent_worktree_branch> --no-edit
+   ```
+3. If merge conflict occurs:
+   - For **independent-with-conflict-risk** pairs (identified in Phase 2): attempt auto-resolve for append-only files (CMakeLists.txt entries, config additions are typically trivially resolved)
+   - If auto-resolve fails, present the conflict to the user with options:
+     a) **Resolve manually** — user fixes the conflict in the current session
+     b) **Re-run agent** — re-run the conflicting agent with the current integration branch state as base (it now sees all previously merged agents' work)
+     c) **Move to next group** — defer this issue to a later sequential group
+     d) **Skip issue** — drop this issue from the wave
+4. **Clean up the agent worktree immediately** after merging (or after deciding to skip):
    ```bash
    git worktree remove .claude/worktrees/<agent-id> --force
    git branch -D worktree-<agent-id>
    ```
    Do this right after merging, not at the end of the wave. Stale worktrees pollute the VS Code source control panel and risk accidental commits to dead branches.
-4. Run validation (build + format + test count — same as deploy-issue Phase 3)
-5. Run hallucination checks (includes, report vs diff, config keys, symbols — same as deploy-issue)
 
-### Step 3.4 — Per-issue checkpoint
+### Step 3.5 — Validate merged group
+
+Run validation on the integration branch after ALL agents in the group are merged. This runs once per group (not once per issue):
+
+- **Build**: `bash deploy/build.sh` (verify exit code 0, zero warnings)
+- **Format**: Find changed C++ files and check with `clang-format-18 --dry-run --Werror`
+- **Test count**: `ctest -N --test-dir build | grep "Total Tests:"` — compare against baseline in `tests/TESTS.md`
+- **Hallucination checks**: includes, report vs diff, config keys, symbols — same as deploy-issue Phase 3
+
+### Step 3.6 — Group checkpoint
+
+**Single-issue group:** Present per-issue checkpoint (same format as before):
 
 ```
-═══ Issue <position>/<total> — #<N> <title> ═══
+═══ Issue — #<N> <title> ═══
 
 [AGENT_REPORT summary]
 
@@ -243,21 +350,51 @@ Test count: N (expected M)
 [your assessment]
 ```
 
+**Multi-issue group (parallel):** Present **batch checkpoint** showing each issue's results and combined validation:
+
+```
+═══ Group <G>/<total_groups> — <N> Issues (Parallel) ═══
+
+┌── Issue #<N1> — <title> ──────────────────────┐
+│ [AGENT_REPORT summary, max 100 words]         │
+│ Diff: +<A> -<B> across <C> files              │
+│ Merge: clean                                   │
+└────────────────────────────────────────────────┘
+
+┌── Issue #<N2> — <title> ──────────────────────┐
+│ [AGENT_REPORT summary, max 100 words]         │
+│ Diff: +<A> -<B> across <C> files              │
+│ Merge: clean                                   │
+└────────────────────────────────────────────────┘
+
+--- Combined Validation ---
+Build: PASS/FAIL
+Format: PASS/FAIL
+Test count: N (expected M)
+
+--- Tech-Lead Assessment ---
+[assessment of the group as a whole + any cross-issue observations]
+```
+
 User choices:
-- **accept** → commit, create PR against integration branch, move to next issue
-- **changes** → make modifications, re-validate, then re-present
-- **skip** → skip this issue, move to next (issue stays open)
+- **accept all** → commit all, create per-issue PRs, move to next group
+- **accept #X, reject #Y** → selective accept/reject per issue. Rejected issues: `git revert <merge-commit> --no-edit` to undo their merge from the integration branch.
+- **changes #X** → make modifications to a specific issue, re-validate, then re-present the group checkpoint
+- **skip group** → skip all issues in this group, move to next
 - **abort wave** → stop the entire wave
 
-If accepted:
+### Step 3.7 — Commit and PR (for accepted issues)
+
+For each accepted issue in the group:
+
 1. Commit: `feat(#<N>): <title>`
 2. Push to integration branch
 3. Create PR: `gh pr create --title "feat(#<N>): <title>" --base <integration_branch>`
 4. Apply labels and milestone from source issue
 
-### Step 3.5 — Loop
+### Step 3.8 — Loop to next group
 
-Repeat Steps 3.1–3.4 for the next issue. Each subsequent agent's prompt should mention what the prior issues changed (brief summary) so it doesn't duplicate or conflict.
+Repeat Steps 3.1–3.7 for the next execution group. Each subsequent group's agents receive summaries of all previously merged issues (from prior groups) so they have full context and don't duplicate or conflict.
 
 ---
 
@@ -382,11 +519,17 @@ User choices:
 
 ## Edge Cases
 
-- **Agent conflict**: If agent B touches a file that agent A already modified on the integration branch, the merge in Step 3.3 may conflict. Resolve manually or re-run agent B with awareness of A's changes.
+- **Agent conflict**: If agent B touches a file that agent A already modified on the integration branch, the merge in Step 3.4 may conflict. Resolve manually or re-run agent B with awareness of A's changes.
 - **Partial wave**: If the user aborts mid-wave, the completed per-issue PRs remain on the integration branch. The wave can be resumed later by re-running with the remaining issues and `--base` pointing to the existing integration branch.
 - **Single issue wave**: If only one issue number is provided, the skill degrades gracefully to essentially `/deploy-issue` with an integration branch. Still useful for consistency.
 - **Existing integration branch**: Check `git branch -r --list 'origin/integration/epic-<N>*'` before creating. If one exists, offer to reuse it (pick up where a prior wave left off).
-- **Context window management**: A full wave with 3 issues + 2-pass review generates significant context. Cap all agent outputs to 200 words. Summarize per-issue results before starting the next issue. If context gets tight, summarize earlier issues aggressively.
+- **Context window management**: A full wave with 3 issues + 2-pass review generates significant context. Cap all agent outputs to 200 words. Summarize per-issue results before starting the next issue. If context gets tight, summarize earlier issues aggressively. For parallel groups: each agent's output is capped at 200 words; with the 3-agent-per-group cap, batch checkpoint output stays under ~900 words.
 - **Empty per-issue PR**: If an issue's files were committed as part of a bulk operation (e.g., user's gitignore changes, re-tracking commits), the per-issue feature branch may show an empty diff against integration. In that case, skip the per-issue PR for that issue — note it in the wave summary and ensure the changes are covered by the merge PR.
+- **Parallel agent failure**: If one agent in a parallel group fails (crashes, times out, or produces no useful output), the other agents' results are still valid. Merge the successful agents, skip the failed one, and note it in the group checkpoint. Offer to re-run the failed agent sequentially after the group merges.
+- **Conflict during parallel merge-back**: If merging agent N's branch conflicts with a previously merged agent's changes from the same group, this means the Phase 2 dependency analysis missed a shared-file relationship. Present the conflict to the user with the options listed in Step 3.4. Log this as a lesson for future wave plans.
+- **Selective rejection from batch**: If the user rejects one issue from a parallel batch after all have been merged, use `git revert <merge-commit> --no-edit` on that issue's merge commit. This is safe because merges were done sequentially — the revert creates a new commit that undoes only the specified merge. If the rejected issue was merged before other accepted issues, the revert is still clean.
+- **All issues independent (single group)**: If all issues are mutually independent, the entire wave executes as one parallel group. Cap at 3 parallel agents per group to give each agent sufficient context window. If more than 3, split into sub-groups of 3.
+- **All issues dependent (fully sequential)**: If every issue depends on the previous one, execution degrades to the current sequential model with per-issue checkpoints. No behavioral change from the original deploy-wave design.
+- **Re-run after rejection**: If the user rejects an issue from a parallel batch and wants it re-run, spawn a single agent sequentially (it now branches from the updated integration branch with all accepted issues merged). This is effectively a mini-group of size 1.
 
 If the user provided arguments, use them as context: $ARGUMENTS
