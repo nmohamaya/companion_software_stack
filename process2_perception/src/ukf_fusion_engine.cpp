@@ -467,7 +467,8 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
                    radar_cfg_.gate_threshold, dormant_merge_radius_m_, max_dormant_);
 }
 
-UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk) const {
+UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObject& trk,
+                                                               float height_override) const {
     const float fy = calib_.camera_intrinsics(1, 1);
     const float cy = calib_.camera_intrinsics(1, 2);
 
@@ -550,10 +551,13 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
 
     // Tier 2: Full-height apparent-size depth (bbox fully visible)
     if (trk.bbox_h > kBboxHThreshold) {
+        // Height precedence (#422): radar-learned > class prior > UNKNOWN fallback.
+        // Radar-learned height is passed via height_override when available.
         const auto  class_idx = static_cast<uint8_t>(trk.class_id);
-        const float assumed_h = (class_idx < drone::perception::kNumObjectClasses)
+        const float class_h   = (class_idx < drone::perception::kNumObjectClasses)
                                     ? calib_.height_priors[class_idx]
-                                    : calib_.height_priors[0];  // UNKNOWN fallback
+                                    : calib_.height_priors[0];
+        const float assumed_h = (height_override > 0.0f) ? height_override : class_h;
         const float d_raw     = assumed_h * fy / trk.bbox_h * ds;
         const float d         = std::clamp(d_raw, kDepthMinM, kDepthMaxM);
         // Covariance-based confidence: propagate bbox noise through
@@ -823,7 +827,13 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                                     calib_.camera_intrinsics(0, 2), calib_.camera_intrinsics(1, 2)};
 
     for (const auto& trk : tracked.objects) {
-        auto [depth, depth_conf] = estimate_depth(trk);
+        // Pass radar-learned height if available for this track (#422).
+        float height_override = 0.0f;
+        auto  fit             = filters_.find(trk.track_id);
+        if (fit != filters_.end() && fit->second.height_learned) {
+            height_override = fit->second.learned_height_m;
+        }
+        auto [depth, depth_conf] = estimate_depth(trk, height_override);
         bool radar_init_used     = false;
 
         auto it      = filters_.find(trk.track_id);
@@ -938,6 +948,15 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 if (radar_init_used) {
                     it->second.set_radar_confirmed_depth(depth);
                     it->second.depth_confidence = 1.0f;
+                    // Back-calculate object height from radar-init range (#422).
+                    // Compensate for depth_scale so the round-trip is consistent:
+                    // forward: depth = H * fy / bbox_h * ds → back: H = depth * bbox_h / (fy * ds)
+                    const float fy_val = calib_.camera_intrinsics(1, 1);
+                    const float ds     = calib_.depth_scale;
+                    if (trk.bbox_h > 10.0f && fy_val > 0.0f && ds > 0.0f) {
+                        it->second.learned_height_m = depth * trk.bbox_h / (fy_val * ds);
+                        it->second.height_learned   = true;
+                    }
                 } else {
                     it->second.set_depth_covariance(100.0f);
                     it->second.depth_confidence = depth_conf;
@@ -1075,6 +1094,23 @@ FusedObjectList UKFFusionEngine::fuse(const TrackedObjectList& tracked) {
                 radar_matched[best_idx] = true;
                 matched_radar           = true;
                 ukf.depth_confidence    = 1.0f;
+
+                // Back-calculate actual object height from radar range + bbox (#422).
+                // Compensate for depth_scale: H = range * bbox_h / (fy * ds).
+                // EMA smoothing (α=0.2) prevents noisy bbox from corrupting the
+                // estimate.  This becomes the ML depth scale anchor (§3.7 of #393).
+                const float fy_val = calib_.camera_intrinsics(1, 1);
+                const float ds_val = calib_.depth_scale;
+                if (trk.bbox_h > 10.0f && fy_val > 0.0f && ds_val > 0.0f) {
+                    const float actual_h = radar_dets_.detections[best_idx].range_m * trk.bbox_h /
+                                           (fy_val * ds_val);
+                    if (ukf.height_learned) {
+                        ukf.learned_height_m = 0.8f * ukf.learned_height_m + 0.2f * actual_h;
+                    } else {
+                        ukf.learned_height_m = actual_h;
+                        ukf.height_learned   = true;
+                    }
+                }
             }
         }
 

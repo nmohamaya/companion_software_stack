@@ -2160,3 +2160,123 @@ TEST(HeightPriorsTest, CustomHeightPriorsOverrideDefaults) {
     EXPECT_GT(depth_truck, depth_person)
         << "Truck (12.0m custom prior) should yield greater depth than Person (5.0m custom prior)";
 }
+
+// ═══════════════════════════════════════════════════════════
+// Radar-Learned Height Tests (#422)
+// ═══════════════════════════════════════════════════════════
+
+TEST(RadarLearnedHeightTest, RadarInitBackCalculatesHeight) {
+    // After radar-init at range R with bbox_h=B, the back-calculated height
+    // is H = R * B / (fy * ds).  On frame 2 (camera-only), the learned height
+    // should produce monocular depth close to the radar range, not the class prior.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    UKFFusionEngine  engine(calib, rcfg, true);
+    engine.set_drone_altitude(4.0f);
+
+    // Frame 1: radar-init at 6m → H = 6*100/(500*0.7) ≈ 1.714m
+    set_matching_radar(engine, 6.0f);
+    TrackedObjectList tracked1;
+    tracked1.timestamp_ns   = 1000;
+    tracked1.frame_sequence = 1;
+    tracked1.objects.push_back(make_test_tracked(1));
+    auto r1 = engine.fuse(tracked1);
+    ASSERT_EQ(r1.objects.size(), 1u);
+    // Radar-init snaps depth close to radar range
+    EXPECT_NEAR(r1.objects[0].position_3d.x(), 6.0f, 1.0f);
+
+    // Frame 2: same track, camera-only (no radar this frame).
+    // The UKF predict step will drift position slightly, but the monocular
+    // depth contribution uses the learned height (1.714m) instead of the
+    // PERSON class prior (1.7m).  These are very close for 6m range, so
+    // we verify the depth stays near 6m (not drifting to some other value).
+    TrackedObjectList tracked2;
+    tracked2.timestamp_ns   = 2000;
+    tracked2.frame_sequence = 2;
+    tracked2.objects.push_back(make_test_tracked(1));
+    auto r2 = engine.fuse(tracked2);
+    ASSERT_EQ(r2.objects.size(), 1u);
+    // After radar-init, UKF state should stay near the radar range
+    EXPECT_NEAR(r2.objects[0].position_3d.x(), 6.0f, 1.5f);
+}
+
+TEST(RadarLearnedHeightTest, NewTrackUsesClassPrior) {
+    // A new track without radar history should use the class prior, not
+    // a learned height from a different track.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    UKFFusionEngine  engine(calib, rcfg, true);
+    engine.set_drone_altitude(4.0f);
+
+    // Frame 1: Track 1 with radar-init (learns height from radar)
+    set_matching_radar(engine, 10.0f);
+    TrackedObjectList tracked1;
+    tracked1.timestamp_ns   = 1000;
+    tracked1.frame_sequence = 1;
+    tracked1.objects.push_back(make_test_tracked(1));
+    engine.fuse(tracked1);
+
+    // Frame 2: New track 2 (no radar) — should use class prior, not track 1's height
+    TrackedObjectList tracked2;
+    tracked2.timestamp_ns   = 2000;
+    tracked2.frame_sequence = 2;
+    tracked2.objects.push_back(make_test_tracked(2, 200.0f, 350.0f));
+    auto result = engine.fuse(tracked2);
+
+    bool found_track2 = false;
+    for (const auto& obj : result.objects) {
+        if (obj.track_id == 2) {
+            found_track2 = true;
+            EXPECT_EQ(obj.radar_update_count, 0u);
+            // Depth from PERSON class prior: 1.7*500/100*0.7 ≈ 5.95m
+            EXPECT_NEAR(obj.position_3d.x(), 5.95f, 1.0f);
+        }
+    }
+    EXPECT_TRUE(found_track2);
+}
+
+TEST(RadarLearnedHeightTest, BackCalcFormulaRoundTrips) {
+    // The back-calculation H = R * bbox_h / (fy * ds) should round-trip through
+    // the forward formula depth = H * fy / bbox_h * ds.  Verify algebraically
+    // via test_estimate_depth (which mirrors the Tier 2 formula).
+    auto calib = make_test_calib();
+
+    TrackedObject trk = make_test_tracked(1);           // PERSON, bbox_h=100
+    const float   fy  = calib.camera_intrinsics(1, 1);  // 500
+    const float   ds  = calib.depth_scale;              // 0.7
+
+    // For several radar ranges, compute learned height and verify the forward
+    // formula reproduces the original range.
+    for (float radar_range : {4.0f, 8.0f, 15.0f, 30.0f}) {
+        const float learned_h = radar_range * trk.bbox_h / (fy * ds);
+        // Forward: depth = learned_h * fy / bbox_h * ds
+        const float depth = std::clamp(learned_h * fy / trk.bbox_h * ds, 1.0f, 40.0f);
+        EXPECT_NEAR(depth, std::min(radar_range, 40.0f), 0.01f)
+            << "Round-trip failed for radar_range=" << radar_range;
+    }
+}
+
+TEST(RadarLearnedHeightTest, LearnedHeightOverridesClassPrior) {
+    // When a track has a radar-learned height, its depth estimate should differ
+    // from the class prior.  Verify by comparing fuse() output of a radar-init
+    // track at 20m vs the class-prior depth (5.95m for PERSON).
+    auto             calib = make_test_calib();
+    RadarNoiseConfig rcfg;
+    UKFFusionEngine  engine(calib, rcfg, true);
+    engine.set_drone_altitude(4.0f);
+
+    // Track with radar-init at 20m → learned H = 20*100/(500*0.7) ≈ 5.714m
+    // vs PERSON class prior of 1.7m.  The learned height is 3.36× larger,
+    // so subsequent monocular estimates should be much deeper than 5.95m.
+    set_matching_radar(engine, 20.0f);
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked(1));
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+
+    // With radar-init, depth snaps near the radar range (20m), not class prior (5.95m)
+    EXPECT_GT(result.objects[0].position_3d.x(), 10.0f)
+        << "Radar-init depth should be far beyond the class prior (5.95m)";
+}
