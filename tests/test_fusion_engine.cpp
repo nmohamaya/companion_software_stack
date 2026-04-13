@@ -380,12 +380,12 @@ static CameraIntrinsics cam_intr_from(const CalibrationData& c) {
 // Helper: create a TrackedObject at a known position for radar tests.
 static TrackedObject make_test_tracked(uint32_t id = 1, float px = 320.0f, float py = 340.0f) {
     TrackedObject obj;
-    obj.track_id     = id;
-    obj.class_id     = ObjectClass::PERSON;
-    obj.confidence   = 0.9f;
-    obj.position_2d  = {px, py};
-    obj.velocity_2d  = Eigen::Vector2f::Zero();
-    obj.bbox_h       = 100.0f;  // apparent-size depth = 3.0 * 500 / 100 = 15m
+    obj.track_id    = id;
+    obj.class_id    = ObjectClass::PERSON;
+    obj.confidence  = 0.9f;
+    obj.position_2d = {px, py};
+    obj.velocity_2d = Eigen::Vector2f::Zero();
+    obj.bbox_h = 100.0f;  // apparent-size depth = 1.7 * 500 / 100 * 0.7 ≈ 5.95m (PERSON prior)
     obj.timestamp_ns = 1000;
     return obj;
 }
@@ -1521,12 +1521,13 @@ TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
     UKFFusionEngine engine(calib, rcfg, true, 5.0f, 32);
     engine.set_drone_altitude(4.0f);
 
-    // Frame 1: Radar-only detection at ~15m forward, ~0 lateral
+    // Frame 1: Radar-only detection at ~6m forward, ~0 lateral.
+    // Range matches PERSON height prior depth: 1.7 * 500 / 100 * 0.7 ≈ 5.95m.
     // azimuth=0, elevation≈0.197 (matching default test track bearing)
     drone::ipc::RadarDetectionList radar{};
     radar.timestamp_ns   = 1000;
     radar.num_detections = 1;
-    radar.detections[0]  = make_radar_det(15.0f, 0.0f, 0.197f, 0.0f);
+    radar.detections[0]  = make_radar_det(6.0f, 0.0f, 0.197f, 0.0f);
     engine.set_radar_detections(radar);
 
     TrackedObjectList empty;
@@ -1537,7 +1538,7 @@ TEST(RadarPrimaryTest, CameraAdoptsRadarOnlyTrack) {
     EXPECT_GE(result1.objects[0].track_id, 0x80000000u);
 
     // Frame 2: Camera track at same bearing (px=320, py=340) + radar
-    set_matching_radar(engine, 15.0f);
+    set_matching_radar(engine, 6.0f);
     TrackedObjectList tracked;
     tracked.timestamp_ns   = 2000;
     tracked.frame_sequence = 2;
