@@ -21,6 +21,41 @@ Sections:
 
 ---
 
+### Fix #346 — Stack Overflow in ZenohSubscriber::on_sample() for Large IPC Types (#294)
+
+**Date:** 2026-04-13
+**Severity:** Critical (segfault in IPC hot path)
+**File:** `common/ipc/include/ipc/zenoh_subscriber.h`
+
+**Bug:** After introducing `ISerializer<T>` (#294), `ZenohSubscriber<VideoFrame>::on_sample()` segfaults on the very first received message. The crash occurs at the function prologue (before any user code executes) with the stack pointer past the guard page.
+
+**Symptoms:**
+- 3 SHM-related tests segfault: `ZenohPubSub.LargeVideoFrameRoundTrip`, `ZenohShmPublish.LargeVideoFrameUsesShmPath`, `ZenohShmPublish.SustainedVideoPublish`
+- Only affects types where `sizeof(T)` is large (VideoFrame = 6.2 MB, StereoFrame = 600 KB)
+- Crash happens during `publisher->put()` — Zenoh delivers to local subscribers **synchronously** on the publisher's thread (intra-process optimization), so the callback runs on the same thread stack, not a separate thread
+
+**Root Cause:** The agent's ISerializer integration added `serializer_->serialized_size(T{})` in error-path log messages inside `on_sample()`. This expression default-constructs a full `T` on the stack — for VideoFrame, that's **6,220,832 bytes (~6.2 MB)**. Even though this code is on an error path that rarely executes, the compiler reserves the maximum stack frame at function entry (especially in Release builds with `-O2`). Combined with the existing stack usage from `payload.as_vector()` (another 6.2 MB vector — though heap-backed, the vector object and return value overhead adds up), plus Zenoh's own call chain depth from `resolve_put()` → `callback`, the total stack demand exceeds the thread's stack limit.
+
+Additionally, the `else` branch (for types without `validate()`) contained `T temp{}` — a 6.2 MB stack-allocated temporary used to avoid corrupting `latest_msg_` on deserialization failure. While this branch isn't taken for VideoFrame (which has `validate()`), it would crash for any future large type added without a `validate()` method.
+
+**Why Debug builds survived:** In `-O0` (debug), the compiler doesn't inline `on_sample()` into the Zenoh call chain and may defer stack allocation for unreachable code paths. In `-O2` (release), aggressive inlining and eager stack frame allocation push the prologue past the stack guard page immediately.
+
+**Fix (two changes):**
+1. Replaced `serializer_->serialized_size(T{})` with `sizeof(T)` in all error log messages — for `RawSerializer`, these are identical (`serialized_size()` just returns `sizeof(T)`), but `sizeof(T)` is a compile-time constant that requires zero stack space.
+2. Removed `T temp{}` stack variable in the non-validate `else` branch — instead, deserialize directly into `latest_msg_` under the mutex lock (matching the original pre-#294 behavior). The serializer already rejects size mismatches before writing, so corruption from partial writes cannot happen.
+
+**Lesson:** Never default-construct a large IPC type on the stack, even in error paths — the compiler reserves stack space at function entry regardless. Use `sizeof(T)` for size reporting, and `std::make_unique<T>()` when an actual instance is needed. This is especially critical in Zenoh callbacks, which may run on the publisher's thread with limited remaining stack.
+
+**Found by:** Integration testing during Wave 6 (Epic #284). GDB backtrace showed `this` at inaccessible address `0x7fffff41e918` (stack overflow) with the crash at the function prologue, confirmed by the call chain: `publish_shm()` → `zenoh::Publisher::put()` → `resolve_put()` → `callback` → `on_sample()`.
+
+**Debugging tools used:**
+- **GDB (GNU Debugger)** — Attached to the failing test binary with `gdb ./build/bin/test_zenoh_pubsub`. Ran with `run --gtest_filter=ZenohShmPublish.LargeVideoFrameUsesShmPath`. GDB caught the SIGSEGV and `bt` (backtrace) showed the crash at the `on_sample()` function prologue with the stack pointer (`$rsp`) past the guard page. The `info registers` command confirmed `this` was at `0x7fffff41e918` — an inaccessible address deep in the stack, proving stack overflow rather than a null pointer or use-after-free. The backtrace also revealed Zenoh's synchronous intra-process delivery path: `publish_shm()` → `zenoh::Publisher::put()` → `resolve_put()` → subscriber callback → `on_sample()`, which was key to understanding why the publisher's thread stack was exhausted.
+- **`sizeof(T)` compile-time checks** — Used `static_assert` and `DRONE_LOG_INFO` to print `sizeof(VideoFrame)` at compile time and runtime to confirm the 6,220,832-byte size that was being default-constructed on the stack.
+
+**Regression test:** The existing `ZenohShmPublish.LargeVideoFrameUsesShmPath` test now passes (was segfaulting). No new test needed — the existing tests cover this path.
+
+---
+
 ### Fix #39 — fault_injector shm_unlink on Exit Breaks Subsequent Runs (#125)
 
 **Date:** 2026-03-12

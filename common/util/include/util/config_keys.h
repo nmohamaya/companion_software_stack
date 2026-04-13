@@ -360,6 +360,10 @@ namespace hal {
 inline constexpr const char* BACKEND  = ".backend";
 inline constexpr const char* GZ_TOPIC = ".gz_topic";
 
+// Plugin sub-keys (appended to section prefix, used when backend == "plugin")
+inline constexpr const char* PLUGIN_PATH    = ".plugin_path";
+inline constexpr const char* PLUGIN_FACTORY = ".plugin_factory";
+
 // Radar-specific sub-keys (appended to section prefix)
 inline constexpr const char* MAX_RANGE_M         = ".max_range_m";
 inline constexpr const char* FOV_AZIMUTH_RAD     = ".fov_azimuth_rad";

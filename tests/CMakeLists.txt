@@ -313,6 +313,30 @@ add_drone_test(test_event_bus       test_event_bus.cpp)
 # ── ISerializer / RawSerializer tests (Issue #294) ──────
 add_drone_test(test_serializer      test_serializer.cpp)
 
+# ── PluginLoader tests (Issue #295 — Epic #284) ────────────
+# Only built when ENABLE_PLUGINS=ON.  Builds a mock .so and
+# loads it at runtime to verify PluginLoader / PluginHandle /
+# PluginRegistry lifetime management.
+if(ENABLE_PLUGINS)
+    # Build the mock plugin as a shared library
+    add_library(test_plugin_mock SHARED test_plugin_mock.cpp)
+    target_include_directories(test_plugin_mock PRIVATE
+        ${PROJECT_SOURCE_DIR}/common/hal/include
+    )
+    set_target_properties(test_plugin_mock PROPERTIES
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+    )
+
+    # Build and register the test
+    add_drone_test(test_plugin_loader test_plugin_loader.cpp)
+    target_link_libraries(test_plugin_loader PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_plugin_loader PRIVATE
+        TEST_PLUGIN_MOCK_PATH="${CMAKE_BINARY_DIR}/lib/test_plugin_mock.so"
+    )
+    add_dependencies(test_plugin_loader test_plugin_mock)
+endif()
+
 # ═══════════════════════════════════════════════════════════
 # Integration tests (Issue #292 — Epic #284 Platform Modularity)
 # ═══════════════════════════════════════════════════════════

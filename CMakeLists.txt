@@ -90,6 +90,19 @@ find_package(spdlog        REQUIRED)
 find_package(Eigen3        REQUIRED NO_MODULE)
 find_package(nlohmann_json REQUIRED)
 
+# ── Optional: runtime plugin loading ────────────────────────
+# When enabled, HAL factories gain a "plugin" backend that loads
+# .so files at runtime via dlopen.  OFF by default — only enable
+# in trusted environments (arbitrary .so loading = arbitrary code).
+option(ENABLE_PLUGINS "Enable runtime plugin loading via dlopen" OFF)
+
+if(ENABLE_PLUGINS)
+    add_compile_definitions(HAVE_PLUGINS=1)
+    message(STATUS "  Plugins      : ENABLED (dlopen)")
+else()
+    message(STATUS "  Plugins      : DISABLED")
+endif()
+
 # ── Optional: systemd integration ───────────────────────────
 # When enabled, P7 (system_monitor) calls sd_notify() for watchdog support.
 # Requires libsystemd-dev.  Harmless to enable on non-systemd systems at
@@ -230,6 +243,7 @@ message(STATUS "  MAVSDK       : ${MAVSDK_FOUND}")
 message(STATUS "  Gazebo       : ${GAZEBO_FOUND}")
 message(STATUS "  OpenCV       : ${OPENCV_FOUND}")
 message(STATUS "  Zenoh        : REQUIRED")
+message(STATUS "  Plugins      : ${ENABLE_PLUGINS}")
 message(STATUS "  systemd      : ${ENABLE_SYSTEMD}")
 message(STATUS "  ── Processes ──")
 message(STATUS "  P1 video_capture   : ${ENABLE_PROCESS_VIDEO_CAPTURE}")

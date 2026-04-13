@@ -40,6 +40,10 @@
 #include "hal/gazebo_radar.h"
 #endif
 
+#ifdef HAVE_PLUGINS
+#include "util/plugin_loader.h"
+#endif
+
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
@@ -67,6 +71,18 @@ namespace drone::hal {
     }
 #endif
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                            "create_instance");
+        auto result  = drone::util::PluginLoader::load<ICamera>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown camera backend: " + backend);
 }
@@ -85,7 +101,19 @@ namespace drone::hal {
 #ifdef HAVE_MAVSDK
     if (backend == "mavlink") return std::make_unique<MavlinkFCLink>();
 #endif
-    // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
+        // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                            "create_instance");
+        auto result  = drone::util::PluginLoader::load<IFCLink>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown FC link backend: " + backend);
 }
@@ -102,6 +130,18 @@ namespace drone::hal {
         return std::make_unique<SimulatedGCSLink>();
     }
     // Future: if (backend == "udp") return std::make_unique<UDPGCSLink>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                            "create_instance");
+        auto result  = drone::util::PluginLoader::load<IGCSLink>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown GCS link backend: " + backend);
 }
@@ -118,6 +158,18 @@ namespace drone::hal {
         return std::make_unique<SimulatedGimbal>();
     }
     // Future: if (backend == "siyi") return std::make_unique<SIYIGimbal>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                            "create_instance");
+        auto result  = drone::util::PluginLoader::load<IGimbal>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown gimbal backend: " + backend);
 }
@@ -141,6 +193,18 @@ namespace drone::hal {
     }
 #endif
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                            "create_instance");
+        auto result  = drone::util::PluginLoader::load<IIMUSource>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown IMU backend: " + backend);
 }
@@ -160,6 +224,19 @@ namespace drone::hal {
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
         return std::make_unique<GazeboRadarBackend>(cfg, section);
+    }
+#endif
+
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                            "create_instance");
+        auto result  = drone::util::PluginLoader::load<IRadar>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
     }
 #endif
 
