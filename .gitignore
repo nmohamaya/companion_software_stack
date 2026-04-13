@@ -95,3 +95,6 @@ export_claude_context.sh
 
 # Agent artifacts (transient reports from deploy-issue/deploy-wave pipelines)
 AGENT_REPORT.md
+
+# Local-only deep documentation (not committed — personal reference)
+docs/design/modularity_guide.md

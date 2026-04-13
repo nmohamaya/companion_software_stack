@@ -22,11 +22,13 @@
 7. [Wire Format](#wire-format)
 8. [Topic Mapping](#topic-mapping)
 9. [MessageBus Abstraction](#messagebus-abstraction)
-10. [Service Channels](#service-channels)
-11. [Liveliness Monitoring](#liveliness-monitoring)
-12. [Configuration Reference](#configuration-reference)
-13. [Testing](#testing)
-14. [Known Limitations](#known-limitations)
+10. [ISerializer\<T\> — Serialization Abstraction](#iserializert--serialization-abstraction)
+11. [TopicResolver — Multi-Vehicle Namespacing](#topicresolver--multi-vehicle-namespacing)
+12. [Service Channels](#service-channels)
+13. [Liveliness Monitoring](#liveliness-monitoring)
+14. [Configuration Reference](#configuration-reference)
+15. [Testing](#testing)
+16. [Known Limitations](#known-limitations)
 
 ---
 
@@ -382,6 +384,52 @@ MessageBus create_message_bus(const Config& cfg);
 
 The factory is the **only** place backend selection happens. Process code never
 references Zenoh directly — it only uses the `IPublisher`/`ISubscriber` interfaces.
+
+---
+
+## ISerializer\<T\> — Serialization Abstraction
+
+> **File:** `common/ipc/include/ipc/iserializer.h` — Epic #284, Issue #294
+
+Decouples wire format from transport. ZenohPublisher/Subscriber delegate serialization to `ISerializer<T>` instead of hardcoding `reinterpret_cast` + `std::copy`.
+
+```cpp
+template<typename T>
+class ISerializer {
+public:
+    virtual size_t serialize(const T& msg, uint8_t* buf, size_t buf_size) const = 0;
+    virtual std::vector<uint8_t> serialize(const T& msg) const = 0;
+    virtual bool deserialize(const uint8_t* data, size_t size, T& out) const = 0;
+    virtual size_t serialized_size(const T& msg) const = 0;
+    virtual std::string_view name() const = 0;
+};
+```
+
+**Current implementation:** `RawSerializer<T>` (`raw_serializer.h`) — byte-identical memcpy with `static_assert(is_trivially_copyable_v<T>)`. Produces identical output to the previous inline code.
+
+**Design choice:** Virtual dispatch (~1-3 ns) is negligible vs Zenoh transport latency (~10-100 us). Simple virtual interface preferred over CRTP complexity.
+
+**Future:** `ProtobufSerializer<T>` for cross-language GCS communication.
+
+---
+
+## TopicResolver — Multi-Vehicle Namespacing
+
+> **File:** `common/ipc/include/ipc/topic_resolver.h` — Epic #284, Issue #289
+
+Enables multiple vehicles on the same Zenoh network by namespacing topics under `/<vehicle_id>/...`.
+
+```cpp
+TopicResolver r("drone42");
+r.resolve("/slam_pose")     // → "/drone42/slam_pose"
+
+TopicResolver r_default;    // empty vehicle_id
+r_default.resolve("/slam_pose")  // → "/slam_pose" (unchanged)
+```
+
+- **Validation:** `[a-zA-Z0-9_-]` only; throws `invalid_argument` at construction
+- **Integration:** Set via top-level config key `vehicle_id`; `create_message_bus(cfg)` installs it
+- **Backward compatible:** Empty `vehicle_id` (default) produces identical behavior to pre-TopicResolver code
 
 ---
 

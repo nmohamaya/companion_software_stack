@@ -13,7 +13,7 @@
 3. [Thread Architecture](#thread-architecture)
 4. [IPC Channels](#ipc-channels)
 5. [Health Collection: LinuxProcessMonitor](#health-collection-linuxprocessmonitor)
-6. [System Info Parsers](#system-info-parsers)
+6. [System Info — ISysInfo Interface](#system-info--isysinfo-interface-epic-284-issue-290)
 7. [ProcessManager (Layer 2)](#processmanager-layer-2)
 8. [ProcessGraph](#processgraph)
 9. [RestartPolicy](#restartpolicy)
@@ -150,11 +150,41 @@ to prevent thermal runaway from crash loops.
 
 ---
 
-## System Info Parsers
+## System Info — ISysInfo Interface (Epic #284, Issue #290)
 
-- **Header:** [`sys_info.h`](../common/util/include/util/sys_info.h)
+> **Interface:** [`isys_info.h`](../../common/util/include/util/isys_info.h)
+> **Factory:** [`sys_info_factory.h`](../../common/util/include/util/sys_info_factory.h)
 
-### CpuTimes
+System metrics are accessed through the `ISysInfo` interface, abstracting platform-specific paths (`/proc`, `/sys`) behind a testable contract:
+
+```cpp
+class ISysInfo {
+public:
+    virtual ~ISysInfo() = default;
+    virtual CpuTimes    read_cpu_times() const = 0;
+    virtual MemInfo     read_meminfo() const = 0;
+    virtual float       read_cpu_temp() const = 0;
+    virtual DiskInfo    read_disk_usage() const = 0;
+    virtual bool        is_process_alive(pid_t pid) const = 0;
+    virtual std::string name() const = 0;
+};
+```
+
+**Implementations:**
+
+| Class | File | Platform |
+|-------|------|----------|
+| `LinuxSysInfo` | `linux_sys_info.h` | Generic Linux (`/proc/stat`, `/sys/class/thermal/thermal_zone0`) |
+| `JetsonSysInfo` | `jetson_sys_info.h` | NVIDIA Jetson (discovers CPU thermal zone by `type`, caches zone index) |
+| `MockSysInfo` | `mock_sys_info.h` | Tests (injectable fields, requires `DRONE_ENABLE_MOCK`) |
+
+**Factory:** `create_sys_info("linux" | "jetson" | "mock")` — selected via config key `system_monitor.platform`.
+
+**Caching:** `LinuxSysInfo` reuses cached file handles for `/proc` and `/sys` reads by rewinding and rereading them on each collection cycle. `JetsonSysInfo` follows the same approach and additionally caches the discovered thermal zone index. No configurable TTL-based read cache is currently used.
+
+### Data Structures
+
+#### CpuTimes
 
 Parsed from `/proc/stat` first line. Two-sample delta method for CPU usage:
 ```
