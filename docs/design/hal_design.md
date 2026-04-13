@@ -412,14 +412,44 @@ file for clarity.
 
 ## 5. Backend Availability Matrix
 
-| Interface | Simulated | Gazebo | Real |
-|-----------|-----------|--------|------|
-| `ICamera` | ✓ | ✓ (HAVE_GAZEBO) | V4L2 (future) |
-| `IFCLink` | ✓ | ✓ via `mavlink` + PX4 SITL | MAVSDK (`HAVE_MAVSDK`) |
-| `IGCSLink` | ✓ | ✓ (via FC) | UDP (future) |
-| `IGimbal` | ✓ | — | SIYI (future) |
-| `IIMUSource` | ✓ | ✓ (HAVE_GAZEBO) | BMI088 (future) |
-| `IRadar` | ✓ | ✓ (HAVE_GAZEBO) | TI AWR1843 (future) |
+| Interface | Simulated | Gazebo | Real | Plugin |
+|-----------|-----------|--------|------|--------|
+| `ICamera` | ✓ | ✓ (HAVE_GAZEBO) | V4L2 (future) | ✓ (HAVE_PLUGINS) |
+| `IFCLink` | ✓ | ✓ via `mavlink` + PX4 SITL | MAVSDK (`HAVE_MAVSDK`) | ✓ (HAVE_PLUGINS) |
+| `IGCSLink` | ✓ | ✓ (via FC) | UDP (future) | ✓ (HAVE_PLUGINS) |
+| `IGimbal` | ✓ | — | SIYI (future) | ✓ (HAVE_PLUGINS) |
+| `IIMUSource` | ✓ | ✓ (HAVE_GAZEBO) | BMI088 (future) | ✓ (HAVE_PLUGINS) |
+| `IRadar` | ✓ | ✓ (HAVE_GAZEBO) | TI AWR1843 (future) | ✓ (HAVE_PLUGINS) |
+
+---
+
+## 5.5 Plugin Backend Support — Epic #284, Issue #295
+
+> **Gate:** `ENABLE_PLUGINS=ON` → `HAVE_PLUGINS` compile definition
+> **File:** `common/hal/include/hal/hal_factory.h` (plugin dispatch), `common/util/include/util/plugin_loader.h` (loader)
+
+When `ENABLE_PLUGINS` is enabled, all 6 HAL factory functions gain a `"plugin"` backend that loads a `.so` at runtime via `dlopen`. This enables third-party or hardware-specific backends without recompiling the stack.
+
+**Config example:**
+
+```json
+{
+  "video_capture.mission_cam.backend": "plugin",
+  "video_capture.mission_cam.plugin_path": "/opt/drone/plugins/libv4l2_camera.so",
+  "video_capture.mission_cam.plugin_factory": "create_camera"
+}
+```
+
+**Plugin .so contract:**
+
+- Factory function must use `extern "C"` linkage (no name mangling)
+- Factory must have `__attribute__((visibility("default")))`
+- Signature: `Interface* symbol_name();` — caller takes ownership
+- Default factory symbol: `"create_instance"` (configurable via `plugin_factory` config key)
+
+**Lifetime management:** `PluginHandle<I>` (RAII) ensures the dlopen handle outlives the instance. `PluginRegistry` provides process-lifetime storage for handles when the HAL factory needs to return `unique_ptr<Interface>`.
+
+**Security:** `ENABLE_PLUGINS` is OFF by default. Arbitrary .so loading can execute any code — only enable in trusted environments.
 
 ---
 

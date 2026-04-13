@@ -150,11 +150,39 @@ to prevent thermal runaway from crash loops.
 
 ---
 
-## System Info Parsers
+## System Info — ISysInfo Interface (Epic #284, Issue #290)
 
-- **Header:** [`sys_info.h`](../common/util/include/util/sys_info.h)
+> **Interface:** [`isys_info.h`](../../common/util/include/util/isys_info.h)
+> **Factory:** [`sys_info_factory.h`](../../common/util/include/util/sys_info_factory.h)
 
-### CpuTimes
+System metrics are accessed through the `ISysInfo` interface, abstracting platform-specific paths (`/proc`, `/sys`) behind a testable contract:
+
+```cpp
+class ISysInfo {
+    virtual CpuTimes read_cpu_times() const = 0;
+    virtual MemInfo  read_meminfo() const = 0;
+    virtual float    read_cpu_temp() const = 0;
+    virtual DiskInfo read_disk_usage() const = 0;
+    virtual bool     is_process_alive(pid_t pid) const = 0;
+    virtual std::string name() const = 0;
+};
+```
+
+**Implementations:**
+
+| Class | File | Platform |
+|-------|------|----------|
+| `LinuxSysInfo` | `linux_sys_info.h` | Generic Linux (`/proc/stat`, `/sys/class/thermal/thermal_zone0`) |
+| `JetsonSysInfo` | `jetson_sys_info.h` | NVIDIA Jetson (Tegra thermal zone1) |
+| `MockSysInfo` | `mock_sys_info.h` | Tests (injectable fields, requires `DRONE_ENABLE_MOCK`) |
+
+**Factory:** `create_sys_info("linux" | "jetson" | "mock")` — selected via config key `system_monitor.platform`.
+
+**Caching:** Both `LinuxSysInfo` and `JetsonSysInfo` cache file reads with a configurable TTL (default 500ms) to avoid excessive `/proc` and `/sys` I/O per collection cycle.
+
+### Data Structures
+
+#### CpuTimes
 
 Parsed from `/proc/stat` first line. Two-sample delta method for CPU usage:
 ```

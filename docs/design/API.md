@@ -187,6 +187,94 @@ sub->receive(out);
 - Liveliness tokens for process death detection
 - Configurable QoS (reliable/best-effort, history depth)
 
+### `ISerializer<T>` — `drone::ipc` — Epic #284, Issue #294
+
+> **File:** `common/ipc/include/ipc/iserializer.h`
+
+Abstract serialization interface decoupling wire format from transport.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `serialize(msg, buf, buf_size)` | `size_t` | Serialize into pre-allocated buffer (SHM path) |
+| `serialize(msg)` | `vector<uint8_t>` | Serialize into new vector (bytes path) |
+| `deserialize(data, size, out)` | `bool` | Deserialize from raw bytes |
+| `serialized_size(msg)` | `size_t` | Query serialized size |
+| `name()` | `string_view` | Human-readable name (e.g. "raw") |
+
+**Implementation:** `RawSerializer<T>` (`raw_serializer.h`) — byte-identical memcpy with `static_assert(is_trivially_copyable_v<T>)`.
+
+### `TopicResolver` — `drone::ipc` — Epic #284, Issue #289
+
+> **File:** `common/ipc/include/ipc/topic_resolver.h`
+
+Multi-vehicle topic namespacing. Prepends `/<vehicle_id>` to topic names.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `TopicResolver(vehicle_id)` | — | Constructor; empty = no prefix (backward compat) |
+| `resolve(base_topic)` | `string` | Namespace a topic: `"/slam_pose"` → `"/drone42/slam_pose"` |
+| `vehicle_id()` | `const string&` | Configured vehicle ID |
+| `has_prefix()` | `bool` | True if vehicle_id is non-empty |
+
+Validation: `[a-zA-Z0-9_-]` only. Throws `invalid_argument` at construction.
+
+---
+
+## 1.6 Intra-Process Infrastructure — Epic #284
+
+### `EventBus<Event>` — `drone::util` — Issue #293
+
+> **File:** `common/util/include/util/event_bus.h`
+
+Lightweight typed intra-process pub/sub with RAII subscriptions.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `subscribe(handler)` | `Subscription<Event>` | Subscribe; returns RAII token |
+| `publish(event)` | `void` | Notify all subscribers (snapshot-copy, re-entrant safe) |
+| `subscriber_count()` | `size_t` | Active subscription count |
+
+Thread-safe: subscribe/publish/unsubscribe from any thread. Lifetime: bus must outlive all subscriptions.
+
+### `PluginLoader` — `drone::util` — Epic #284, Issue #295
+
+> **File:** `common/util/include/util/plugin_loader.h`
+> **Gate:** `#ifdef HAVE_PLUGINS`
+
+Runtime .so loading via dlopen with RAII lifetime management.
+
+| Class | Purpose |
+|-------|---------|
+| `PluginLoader` | Static factory: `load<Interface>(so_path, factory_symbol)` → `Result<PluginHandle<I>>` |
+| `PluginHandle<I>` | RAII: owns dl handle + instance. Destroys instance before dlclose. |
+| `PluginRegistry` | Process-lifetime singleton storing dl handles when caller needs `unique_ptr<I>` |
+
+Plugin .so contract: `extern "C" __attribute__((visibility("default"))) Interface* create_instance();`
+
+### Config Key Registry — `drone::cfg_key` — Issue #287
+
+> **File:** `common/util/include/util/config_keys.h`
+
+~130 `inline constexpr const char*` constants organized per-process namespace. Eliminates string typos in `cfg.get<>()` calls. Namespaces: `zenoh::`, `perception::`, `slam::`, `mission_planner::`, `comms::`, `payload_manager::`, `system_monitor::`, `watchdog::`, `recorder::`, `hal::`, `fault_manager::`.
+
+### ConfigValidator — `drone::util` — Issue #298
+
+> **File:** `common/util/include/util/config_validator.h`
+
+Fluent schema builder for config validation at startup.
+
+| Method | Description |
+|--------|-------------|
+| `required<T>(key)` | Key must exist with correct type |
+| `optional<T>(key)` | Key may exist; if present, must match type |
+| `.range(lo, hi)` | Value must be in [lo, hi] |
+| `.one_of({...})` | Value must be in set |
+| `.satisfies(predicate, desc)` | Custom validation |
+| `required_section(key)` | JSON object must exist |
+| `custom(rule)` | Arbitrary validation lambda |
+
+Pre-built schemas: `common_schema()`, `video_capture_schema()`, ..., `system_monitor_schema()`.
+
 ---
 
 ## 1.5 IPC Message Types (`common/ipc/include/ipc/ipc_types.h`)
