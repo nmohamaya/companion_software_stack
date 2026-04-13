@@ -51,10 +51,12 @@ struct GridPlannerConfig {
     float    min_promotion_depth_confidence = 0.3f;  // Min depth confidence for promotion [0-1]
                                                      // Scenario configs override to 0.8 to block
     // camera-only (0.01-0.7), allowing radar-confirmed (1.0)
-    float look_ahead_m = 0.0f;        // Pure-pursuit look-ahead distance along path
-                                      // (0 = disabled, use cell-by-cell following)
-    int   max_static_cells   = 0;     // Cap on promoted static cells (0 = unlimited)
-    bool  yaw_towards_travel = true;  // Face sensors toward next waypoint during NAVIGATE
+    float look_ahead_m = 0.0f;                 // Pure-pursuit look-ahead distance along path
+                                               // (0 = disabled, use cell-by-cell following)
+    bool require_radar_for_promotion = false;  // Require ≥1 radar update for hit-count promotion
+                                               // (radar-confirmed path always works regardless)
+    int   max_static_cells   = 0;              // Cap on promoted static cells (0 = unlimited)
+    bool  yaw_towards_travel = true;           // Face sensors toward next waypoint during NAVIGATE
     float yaw_smoothing_rate = 0.3f;  // EMA alpha for yaw transitions (0=frozen, 1=instant)
     float snap_approach_bias = 0.5f;  // Approach-direction penalty for snap fallback
     bool  prediction_enabled = true;  // Enable velocity-based obstacle prediction
@@ -99,7 +101,8 @@ public:
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
-                config.max_static_cells, config.prediction_enabled, config.prediction_dt_s) {}
+                config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
+                config.require_radar_for_promotion) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

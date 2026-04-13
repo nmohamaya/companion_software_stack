@@ -176,6 +176,7 @@
             "min_confidence": 0.3,
             "min_promotion_depth_confidence": 0.5,
             "max_static_cells": 0,
+            "require_radar_for_promotion": false,
             "prediction_enabled": true,
             "prediction_dt_s": 2.0
         },
