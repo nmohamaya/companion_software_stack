@@ -51,7 +51,9 @@ public:
     explicit ZenohSubscriber(
         const std::string& key_expr, bool track_latency = true,
         std::shared_ptr<const ISerializer<T>> serializer = std::make_shared<RawSerializer<T>>())
-        : key_expr_(key_expr), track_latency_(track_latency), serializer_(std::move(serializer)) {
+        : key_expr_(key_expr)
+        , track_latency_(track_latency)
+        , serializer_(serializer ? std::move(serializer) : std::make_shared<RawSerializer<T>>()) {
         try {
             auto& session = ZenohSession::instance().session();
             subscriber_.emplace(session.declare_subscriber(
@@ -148,19 +150,20 @@ private:
             // For types without validate(), deserialize directly into latest_msg_
             // under lock.  A stack temporary is NOT safe here — large types like
             // VideoFrame (~6.2 MB) would overflow Zenoh's callback thread stack.
-            // The serializer checks size first, so partial writes on failure are
-            // acceptable (the old value was already overwritten by design).
+            // (For validating types, the if-branch above uses make_unique for the
+            // same reason.)  The serializer checks size first, so partial writes
+            // on failure are acceptable (the old value was already overwritten by
+            // design).
             std::lock_guard<std::mutex> lock(data_mutex_);
             if (!serializer_->deserialize(bytes.data(), bytes.size(), latest_msg_)) {
-                DRONE_LOG_WARN("[ZenohSubscriber] Size mismatch on '{}': "
-                               "expected {} got {}",
-                               key_expr_, sizeof(T), bytes.size());
+                DRONE_LOG_WARN("[ZenohSubscriber] Deserialization failed on '{}': "
+                               "payload {} bytes, sizeof(T) {}",
+                               key_expr_, bytes.size(), sizeof(T));
                 return;
             }
             timestamp_ns_ = drone::util::get_clock().now_ns();
         }
 
-        seq_.fetch_add(1, std::memory_order_relaxed);
         has_data_.store(true, std::memory_order_release);
     }
 
@@ -181,7 +184,6 @@ private:
     mutable std::mutex                  data_mutex_;
     T                                   latest_msg_{};
     uint64_t                            timestamp_ns_{0};
-    std::atomic<uint64_t>               seq_{0};
     std::atomic<bool>                   has_data_{false};
     mutable drone::util::LatencyTracker latency_tracker_{1024};
 };

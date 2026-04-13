@@ -13,6 +13,7 @@
 #include "ipc/iserializer.h"
 #include "ipc/raw_serializer.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -363,4 +364,25 @@ TEST(RawSerializerTest, OversizedBufferWorks) {
     SimpleMsg decoded{};
     ASSERT_TRUE(ser.deserialize(big_buf.data(), sizeof(SimpleMsg), decoded));
     EXPECT_EQ(decoded.id, 42u);
+}
+
+// ── Null pointer safety ───────────────────────────────────
+
+TEST(RawSerializerTest, SerializeNullBufferNonZeroSizeReturnsZero) {
+    RawSerializer<SimpleMsg> ser;
+    SimpleMsg                msg{};
+    msg.id = 1;
+
+    // Null buf with non-zero size must return 0, not dereference
+    EXPECT_EQ(ser.serialize(msg, nullptr, sizeof(SimpleMsg)), 0u);
+    EXPECT_EQ(ser.serialize(msg, nullptr, 1024), 0u);
+}
+
+TEST(RawSerializerTest, DeserializeNullDataReturnsFailure) {
+    RawSerializer<SimpleMsg> ser;
+    SimpleMsg                out{};
+
+    // Null data with valid size must return false, not dereference
+    EXPECT_FALSE(ser.deserialize(nullptr, sizeof(SimpleMsg), out));
+    EXPECT_FALSE(ser.deserialize(nullptr, 0, out));
 }

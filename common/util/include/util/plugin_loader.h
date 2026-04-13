@@ -105,17 +105,20 @@ public:
         return std::move(instance_);
     }
 
+private:
+    friend class PluginLoader;
+    friend class PluginRegistry;
+
     /// Release ONLY the dl_handle, returning it as a void*.
-    /// After this call, this PluginHandle no longer owns the dl_handle.
-    /// Caller is responsible for calling dlclose() when done.
+    /// Private — only PluginRegistry::extract() should call this to safely
+    /// transfer the dl_handle to process-lifetime storage.  Calling dlclose()
+    /// on the returned handle while a live Interface instance still holds
+    /// vtable pointers from the library causes use-after-free.
     [[nodiscard]] void* release_dl_handle() noexcept {
         void* h    = dl_handle_;
         dl_handle_ = nullptr;
         return h;
     }
-
-private:
-    friend class PluginLoader;
 
     PluginHandle(void* dl_handle, Interface* instance)
         : dl_handle_(dl_handle), instance_(instance) {}
@@ -130,6 +133,12 @@ private:
 /// When HAL factories need to return unique_ptr<Interface> but the dl
 /// handle must outlive the interface object, the registry stores the
 /// handle.  dlclose happens only at process exit (static destructor).
+///
+/// IMPORTANT: All plugin-created instances (unique_ptr<Interface>) must be
+/// destroyed BEFORE static destructors run.  In practice, this means plugin
+/// instances should be held in main() locals or in objects owned by main(),
+/// never in static/global variables.  If a plugin instance outlives
+/// ~PluginRegistry, its vtable pointers will dangle (use-after-free).
 ///
 /// Thread safety: NOT thread-safe.  Call store() from main thread only
 /// during startup.
@@ -249,8 +258,21 @@ public:
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) — required for dlsym
         auto factory = reinterpret_cast<FactoryFunc>(sym);
 
-        // Call the factory.
-        Interface* instance = factory();
+        // Call the factory — guard against exceptions to avoid leaking dl_handle.
+        Interface* instance = nullptr;
+        try {
+            instance = factory();
+        } catch (const std::exception& e) {
+            ::dlclose(dl_handle);
+            return Result<PluginHandle<Interface>, std::string>::err(
+                "Factory function '" + factory_symbol + "' in '" + so_path +
+                "' threw: " + e.what());
+        } catch (...) {
+            ::dlclose(dl_handle);
+            return Result<PluginHandle<Interface>, std::string>::err(
+                "Factory function '" + factory_symbol + "' in '" + so_path +
+                "' threw unknown exception");
+        }
         if (!instance) {
             ::dlclose(dl_handle);
             return Result<PluginHandle<Interface>, std::string>::err(

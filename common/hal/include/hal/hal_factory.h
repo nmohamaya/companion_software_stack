@@ -53,6 +53,33 @@
 
 namespace drone::hal {
 
+#ifdef HAVE_PLUGINS
+/// Load a plugin backend from config.  Centralises the read-config → load →
+/// extract pattern so all create_* functions share the same validation logic.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "video_capture.mission_cam")
+/// @param label    Human-readable label for error messages (e.g. "camera")
+template<typename Interface>
+[[nodiscard]] inline std::unique_ptr<Interface> load_plugin(const drone::Config& cfg,
+                                                            const std::string&   section,
+                                                            const std::string&   label) {
+    auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+    auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                        "create_instance");
+    if (so_path.empty()) {
+        throw std::runtime_error("[HAL] " + label +
+                                 " plugin requires a non-empty config value "
+                                 "at '" +
+                                 section + drone::cfg_key::hal::PLUGIN_PATH + "'");
+    }
+    auto result = drone::util::PluginLoader::load<Interface>(so_path, factory);
+    if (result.is_err()) {
+        throw std::runtime_error("[HAL] " + label + " plugin load failed: " + result.error());
+    }
+    return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+}
+#endif
+
 /// Create a camera backend from config.
 /// @param cfg      Loaded configuration
 /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
@@ -73,14 +100,7 @@ namespace drone::hal {
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
-        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
-        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
-                                            "create_instance");
-        auto result  = drone::util::PluginLoader::load<ICamera>(so_path, factory);
-        if (result.is_err()) {
-            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
-        }
-        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+        return load_plugin<ICamera>(cfg, section, "camera");
     }
 #endif
 
@@ -104,14 +124,7 @@ namespace drone::hal {
         // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
-        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
-        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
-                                            "create_instance");
-        auto result  = drone::util::PluginLoader::load<IFCLink>(so_path, factory);
-        if (result.is_err()) {
-            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
-        }
-        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+        return load_plugin<IFCLink>(cfg, section, "FC link");
     }
 #endif
 
@@ -132,14 +145,7 @@ namespace drone::hal {
     // Future: if (backend == "udp") return std::make_unique<UDPGCSLink>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
-        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
-        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
-                                            "create_instance");
-        auto result  = drone::util::PluginLoader::load<IGCSLink>(so_path, factory);
-        if (result.is_err()) {
-            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
-        }
-        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+        return load_plugin<IGCSLink>(cfg, section, "GCS link");
     }
 #endif
 
@@ -160,14 +166,7 @@ namespace drone::hal {
     // Future: if (backend == "siyi") return std::make_unique<SIYIGimbal>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
-        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
-        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
-                                            "create_instance");
-        auto result  = drone::util::PluginLoader::load<IGimbal>(so_path, factory);
-        if (result.is_err()) {
-            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
-        }
-        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+        return load_plugin<IGimbal>(cfg, section, "gimbal");
     }
 #endif
 
@@ -195,14 +194,7 @@ namespace drone::hal {
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
-        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
-        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
-                                            "create_instance");
-        auto result  = drone::util::PluginLoader::load<IIMUSource>(so_path, factory);
-        if (result.is_err()) {
-            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
-        }
-        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+        return load_plugin<IIMUSource>(cfg, section, "IMU source");
     }
 #endif
 
@@ -229,14 +221,7 @@ namespace drone::hal {
 
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
-        auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
-        auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
-                                            "create_instance");
-        auto result  = drone::util::PluginLoader::load<IRadar>(so_path, factory);
-        if (result.is_err()) {
-            throw std::runtime_error("[HAL] Plugin load failed: " + result.error());
-        }
-        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+        return load_plugin<IRadar>(cfg, section, "radar");
     }
 #endif
 

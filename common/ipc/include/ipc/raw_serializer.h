@@ -36,7 +36,7 @@ public:
     /// Serialize msg into a pre-allocated buffer (SHM zero-copy path).
     /// @return sizeof(T) on success, 0 if buf_size < sizeof(T).
     [[nodiscard]] size_t serialize(const T& msg, uint8_t* buf, size_t buf_size) const override {
-        if (buf_size < sizeof(T)) {
+        if (!buf || buf_size < sizeof(T)) {
             return 0;
         }
         const auto* src = reinterpret_cast<const uint8_t*>(&msg);
@@ -53,7 +53,7 @@ public:
     /// Deserialize from raw bytes.
     /// @return false if size != sizeof(T).
     [[nodiscard]] bool deserialize(const uint8_t* data, size_t size, T& out) const override {
-        if (size != sizeof(T)) {
+        if (!data || size != sizeof(T)) {
             return false;
         }
         auto* dst = reinterpret_cast<uint8_t*>(&out);

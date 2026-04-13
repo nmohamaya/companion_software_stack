@@ -35,8 +35,8 @@ public:
     virtual ~ISerializer() = default;
 
     ISerializer()                              = default;
-    ISerializer(const ISerializer&)            = default;
-    ISerializer& operator=(const ISerializer&) = default;
+    ISerializer(const ISerializer&)            = delete;
+    ISerializer& operator=(const ISerializer&) = delete;
     ISerializer(ISerializer&&)                 = default;
     ISerializer& operator=(ISerializer&&)      = default;
 
