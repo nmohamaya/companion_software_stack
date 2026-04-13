@@ -85,6 +85,14 @@ MessageBus create_message_bus(const ConfigT& cfg) {
         zenoh_json = net_cfg.to_json();
     }
 
+    // Validate serializer setting (only "raw" is currently supported)
+    const auto serializer = cfg.template get<std::string>(drone::cfg_key::IPC_SERIALIZER, "raw");
+    if (serializer != "raw") {
+        DRONE_LOG_WARN("[MessageBusFactory] Unknown ipc_serializer '{}' — "
+                       "only 'raw' is currently supported. Using 'raw'.",
+                       serializer);
+    }
+
     auto bus = create_message_bus(backend, shm_pool_mb, zenoh_json);
 
     // Apply vehicle_id topic namespacing if configured

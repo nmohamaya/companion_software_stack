@@ -1,15 +1,22 @@
 // common/ipc/include/ipc/zenoh_subscriber.h
 // Zenoh-backed subscriber — wraps zenoh::Subscriber behind ISubscriber<T>.
 //
-// Receives trivially-copyable T from raw bytes via Zenoh callback.
-// The Zenoh callback runs on an internal Zenoh thread; receive() is called
-// from the process main loop.  Thread-safety is provided by atomics.
+// Receives T from raw bytes via Zenoh callback, using a pluggable
+// ISerializer<T> for wire-format decoding.  The Zenoh callback runs on
+// an internal Zenoh thread; receive() is called from the process main
+// loop.  Thread-safety is provided by atomics + mutex.
+//
+// The serializer defaults to RawSerializer<T> (byte-identical to the
+// previous inline reinterpret_cast + std::copy), preserving full backward
+// compatibility.
 //
 // Guarded by HAVE_ZENOH.
 #pragma once
 
 
+#include "ipc/iserializer.h"
 #include "ipc/isubscriber.h"
+#include "ipc/raw_serializer.h"
 #include "ipc/zenoh_session.h"
 #include "util/iclock.h"
 #include "util/ilogger.h"
@@ -33,21 +40,27 @@ namespace drone::ipc {
 /// Maintains a latest-value cache updated by the Zenoh callback thread.
 template<typename T>
 class ZenohSubscriber final : public ISubscriber<T> {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "ZenohSubscriber requires trivially copyable types");
-
 public:
     /// Construct and declare a Zenoh subscriber on the given key expression.
     /// @param key_expr        Zenoh key expression (e.g. "drone/slam/pose").
     /// @param track_latency   Enable IPC latency tracking (default: true).
-    explicit ZenohSubscriber(const std::string& key_expr, bool track_latency = true)
-        : key_expr_(key_expr), track_latency_(track_latency) {
+    /// @param serializer      Optional serializer (default: RawSerializer<T>).
+    ///                        shared_ptr because MessageBus may share one
+    ///                        instance across multiple subscribers for the
+    ///                        same type.
+    explicit ZenohSubscriber(
+        const std::string& key_expr, bool track_latency = true,
+        std::shared_ptr<const ISerializer<T>> serializer = std::make_shared<RawSerializer<T>>())
+        : key_expr_(key_expr)
+        , track_latency_(track_latency)
+        , serializer_(serializer ? std::move(serializer) : std::make_shared<RawSerializer<T>>()) {
         try {
             auto& session = ZenohSession::instance().session();
             subscriber_.emplace(session.declare_subscriber(
                 zenoh::KeyExpr(key_expr), [this](zenoh::Sample& sample) { on_sample(sample); },
                 []() { /* on_drop — no-op */ }));
-            DRONE_LOG_INFO("[ZenohSubscriber] Subscribed to '{}'", key_expr);
+            DRONE_LOG_INFO("[ZenohSubscriber] Subscribed to '{}' (serializer={})", key_expr,
+                           serializer_->name());
         } catch (const std::exception& e) {
             DRONE_LOG_ERROR("[ZenohSubscriber] Failed to subscribe to '{}': {}", key_expr,
                             e.what());
@@ -111,21 +124,19 @@ private:
     void on_sample(zenoh::Sample& sample) {
         const auto& payload = sample.get_payload();
         auto        bytes   = payload.as_vector();
-        if (bytes.size() != sizeof(T)) {
-            DRONE_LOG_WARN("[ZenohSubscriber] Size mismatch on '{}': "
-                           "expected {} got {}",
-                           key_expr_, sizeof(T), bytes.size());
-            return;
-        }
 
         // Validate into a heap-allocated temporary before committing to
         // latest_msg_, so a failed validation never overwrites a previously
         // good value.  Heap allocation avoids stack overflow for large types
         // (e.g. VideoFrame ~6.2 MB) on Zenoh's callback thread.
         if constexpr (has_validate<T>::value) {
-            auto  temp = std::make_unique<T>();
-            auto* dst  = reinterpret_cast<uint8_t*>(temp.get());
-            std::copy(bytes.begin(), bytes.end(), dst);
+            auto temp = std::make_unique<T>();
+            if (!serializer_->deserialize(bytes.data(), bytes.size(), *temp)) {
+                DRONE_LOG_WARN("[ZenohSubscriber] Deserialization failed on '{}': "
+                               "expected {} got {}",
+                               key_expr_, sizeof(T), bytes.size());
+                return;
+            }
             if (!temp->validate()) {
                 DRONE_LOG_WARN("[ZenohSubscriber] Validation failed on '{}' — "
                                "dropping message",
@@ -136,13 +147,23 @@ private:
             latest_msg_   = *temp;
             timestamp_ns_ = drone::util::get_clock().now_ns();
         } else {
+            // For types without validate(), deserialize directly into latest_msg_
+            // under lock.  A stack temporary is NOT safe here — large types like
+            // VideoFrame (~6.2 MB) would overflow Zenoh's callback thread stack.
+            // (For validating types, the if-branch above uses make_unique for the
+            // same reason.)  The serializer checks size first, so partial writes
+            // on failure are acceptable (the old value was already overwritten by
+            // design).
             std::lock_guard<std::mutex> lock(data_mutex_);
-            auto*                       dst = reinterpret_cast<uint8_t*>(&latest_msg_);
-            std::copy(bytes.begin(), bytes.end(), dst);
+            if (!serializer_->deserialize(bytes.data(), bytes.size(), latest_msg_)) {
+                DRONE_LOG_WARN("[ZenohSubscriber] Deserialization failed on '{}': "
+                               "payload {} bytes, sizeof(T) {}",
+                               key_expr_, bytes.size(), sizeof(T));
+                return;
+            }
             timestamp_ns_ = drone::util::get_clock().now_ns();
         }
 
-        seq_.fetch_add(1, std::memory_order_relaxed);
         has_data_.store(true, std::memory_order_release);
     }
 
@@ -155,15 +176,15 @@ private:
         : std::true_type {};
 
     std::string                            key_expr_;
+    bool                                   track_latency_ = true;
+    std::shared_ptr<const ISerializer<T>>  serializer_;
     std::optional<zenoh::Subscriber<void>> subscriber_;
 
     // Latest-value cache (protected by data_mutex_ + atomics)
     mutable std::mutex                  data_mutex_;
     T                                   latest_msg_{};
     uint64_t                            timestamp_ns_{0};
-    std::atomic<uint64_t>               seq_{0};
     std::atomic<bool>                   has_data_{false};
-    bool                                track_latency_ = true;
     mutable drone::util::LatencyTracker latency_tracker_{1024};
 };
 

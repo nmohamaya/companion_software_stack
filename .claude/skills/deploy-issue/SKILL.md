@@ -484,6 +484,7 @@ User choices:
 - **accept** → proceed to CP5 (findings are acceptable as-is)
 - **fix** → spawn feature agent with findings, then re-validate, commit, push, and **re-run the FULL Phase 5 review (BOTH Pass 1 AND Pass 2)**. This is mandatory — do NOT skip Pass 2 or go directly to CP5 after fixes. The fix loop always returns to Step 5.1 (roster approval).
 - **fix \<numbers\>** → fix only specific issues by number (e.g., `fix 1 3`), accept the rest as-is. Still re-runs full Phase 5.
+- **defer with rationale** → for P3 findings or comments where we disagree with the recommendation, document the decision in `docs/guides/DESIGN_RATIONALE.md` as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated and the trade-offs weighed — not ignored. Each deferred item needs: the question, arguments for both sides, our decision, and when to revisit.
 - **back** → return to CP3
 - **reject** → go to ABORT
 

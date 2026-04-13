@@ -40,6 +40,10 @@
 #include "hal/gazebo_radar.h"
 #endif
 
+#ifdef HAVE_PLUGINS
+#include "util/plugin_loader.h"
+#endif
+
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
@@ -48,6 +52,33 @@
 #include <stdexcept>
 
 namespace drone::hal {
+
+#ifdef HAVE_PLUGINS
+/// Load a plugin backend from config.  Centralises the read-config → load →
+/// extract pattern so all create_* functions share the same validation logic.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "video_capture.mission_cam")
+/// @param label    Human-readable label for error messages (e.g. "camera")
+template<typename Interface>
+[[nodiscard]] inline std::unique_ptr<Interface> load_plugin(const drone::Config& cfg,
+                                                            const std::string&   section,
+                                                            const std::string&   label) {
+    auto so_path = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_PATH, "");
+    auto factory = cfg.get<std::string>(section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                        "create_instance");
+    if (so_path.empty()) {
+        throw std::runtime_error("[HAL] " + label +
+                                 " plugin requires a non-empty config value "
+                                 "at '" +
+                                 section + drone::cfg_key::hal::PLUGIN_PATH + "'");
+    }
+    auto result = drone::util::PluginLoader::load<Interface>(so_path, factory);
+    if (result.is_err()) {
+        throw std::runtime_error("[HAL] " + label + " plugin load failed: " + result.error());
+    }
+    return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+}
+#endif
 
 /// Create a camera backend from config.
 /// @param cfg      Loaded configuration
@@ -67,6 +98,11 @@ namespace drone::hal {
     }
 #endif
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<ICamera>(cfg, section, "camera");
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown camera backend: " + backend);
 }
@@ -85,7 +121,12 @@ namespace drone::hal {
 #ifdef HAVE_MAVSDK
     if (backend == "mavlink") return std::make_unique<MavlinkFCLink>();
 #endif
-    // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
+        // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IFCLink>(cfg, section, "FC link");
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown FC link backend: " + backend);
 }
@@ -102,6 +143,11 @@ namespace drone::hal {
         return std::make_unique<SimulatedGCSLink>();
     }
     // Future: if (backend == "udp") return std::make_unique<UDPGCSLink>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IGCSLink>(cfg, section, "GCS link");
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown GCS link backend: " + backend);
 }
@@ -118,6 +164,11 @@ namespace drone::hal {
         return std::make_unique<SimulatedGimbal>();
     }
     // Future: if (backend == "siyi") return std::make_unique<SIYIGimbal>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IGimbal>(cfg, section, "gimbal");
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown gimbal backend: " + backend);
 }
@@ -141,6 +192,11 @@ namespace drone::hal {
     }
 #endif
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IIMUSource>(cfg, section, "IMU source");
+    }
+#endif
 
     throw std::runtime_error("[HAL] Unknown IMU backend: " + backend);
 }
@@ -160,6 +216,12 @@ namespace drone::hal {
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
         return std::make_unique<GazeboRadarBackend>(cfg, section);
+    }
+#endif
+
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IRadar>(cfg, section, "radar");
     }
 #endif
 

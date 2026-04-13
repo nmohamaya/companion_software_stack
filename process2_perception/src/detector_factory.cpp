@@ -9,7 +9,12 @@
 #include "perception/opencv_yolo_detector.h"
 #endif
 
+#ifdef HAVE_PLUGINS
+#include "util/plugin_loader.h"
+#endif
+
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -75,6 +80,26 @@ std::unique_ptr<IDetector> create_detector(const std::string& backend, const dro
 
         return std::make_unique<SimulatedDetector>(sim_cfg);
     }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        if (!cfg) {
+            throw std::runtime_error("[Detector] Plugin backend requires config for .so path");
+        }
+        const std::string det_section = "perception.detector";
+        auto so_path = cfg->get<std::string>(det_section + drone::cfg_key::hal::PLUGIN_PATH, "");
+        auto factory = cfg->get<std::string>(det_section + drone::cfg_key::hal::PLUGIN_FACTORY,
+                                             "create_instance");
+        if (so_path.empty()) {
+            throw std::runtime_error("[Detector] Plugin requires a non-empty config value at '" +
+                                     det_section + drone::cfg_key::hal::PLUGIN_PATH + "'");
+        }
+        auto result = drone::util::PluginLoader::load<IDetector>(so_path, factory);
+        if (result.is_err()) {
+            throw std::runtime_error("[Detector] Plugin load failed: " + result.error());
+        }
+        return drone::util::PluginRegistry::instance().extract(std::move(result.value()));
+    }
+#endif
     throw std::runtime_error("Unknown detector backend: " + backend);
 }
 

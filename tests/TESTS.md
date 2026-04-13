@@ -47,19 +47,19 @@
 
 | Module | Description | Approx. Tests |
 |--------|-------------|---------------|
-| `ipc` | Zenoh IPC primitives, message bus, wire format | ~150 |
-| `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~85 |
-| `perception` | Kalman tracker, fusion engine (UKF+camera+radar), color contour, YOLOv8 | ~149 |
-| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D | ~182 |
+| `ipc` | Zenoh IPC primitives, message bus, wire format, serializer | ~296 |
+| `watchdog` | Thread heartbeat, health publisher, restart policy, process graph, supervisor | ~86 |
+| `perception` | Kalman tracker, fusion engine (UKF+camera+radar), color contour, YOLOv8 | ~189 |
+| `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D, geofence, event bus | ~287 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
-| `hal` | Simulated, Gazebo, and MAVLink HAL backends | ~44 |
-| `payload` | GimbalController servo simulation | ~9 |
-| `monitor` | P7 system monitor (CPU/memory/thermal) | ~28 |
-| `util` | Config, Result, latency tracker, JSON log, correlation | ~136 |
-| `interfaces` | IProcessMonitor interface tests | ~5 |
-| `zenoh` | All Zenoh-specific tests | ~121 |
-| `network` | Network transport, wire format, liveliness | ~50 |
-| `quick` | All fast unit tests (excludes slow/resource-heavy) | ~600 |
+| `hal` | Simulated, Gazebo, MAVLink, and plugin HAL backends | ~129 |
+| `payload` | GimbalController servo simulation | ~34 |
+| `monitor` | P7 system monitor (CPU/memory/thermal, ISysInfo, process context) | ~64 |
+| `util` | Config, Result, latency tracker, JSON log, correlation, replay dispatch | ~251 |
+| `interfaces` | IProcessMonitor interface tests | ~7 |
+| `zenoh` | All Zenoh-specific tests | ~154 |
+| `network` | Network transport, wire format, liveliness | ~51 |
+| `quick` | All fast unit tests (excludes slow/resource-heavy) | ~1200 |
 | `zenoh-e2e` | Zenoh end-to-end integration smoke test (shell script) | N/A |
 | `gazebo-e2e` | Gazebo SITL integration smoke test (shell script) | N/A |
 
@@ -100,16 +100,16 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 5 | 149 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID), color contour, YOLOv8 |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 182 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P2 — Perception](#p2--perception) | 5 | 176 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID), color contour, YOLOv8 |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 220 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
-| [P7 — System Monitor](#p7--system-monitor) | 2 | 28 | CPU/memory/thermal monitoring, ProcessManager supervisor |
+| [P7 — System Monitor](#p7--system-monitor) | 2 | 53 | CPU/memory/thermal monitoring, ISysInfo abstraction, ProcessManager supervisor |
 | [Watchdog — Thread Heartbeat](#watchdog--thread-heartbeat) | 1 | 25 | ThreadHeartbeatRegistry, ScopedHeartbeat, ThreadWatchdog |
 | [Watchdog — Thread Health Publisher](#watchdog--thread-health-publisher) | 1 | 15 | ShmThreadHealth struct, ThreadHealthPublisher bridge |
 | [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
 | [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
-| [Utility](#utility) | 5 | 136 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
+| [Utility](#utility) | 5 | 147 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
 | [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 49 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend (covariance quality) |
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [P4 — Collision Recovery](#p4--collision-recovery) | 1 | 14 | Post-collision FSM state, waypoint skip, recovery logic |
@@ -118,14 +118,16 @@ bash deploy/build.sh --test-filter watchdog
 | [P3 — Rate Clamping](#p3--rate-clamping) | 1 | 27 | Config-driven loop rate clamping for P3 threads |
 | [P2 — Simulated Detector](#p2--simulated-detector) | 1 | 13 | SimulatedDetector extraction, detection generation |
 | [Flight Data Recorder](#flight-data-recorder) | 1 | 19 | Ring-buffer flight recorder, IPC replay |
-| [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 5 | IProcessMonitor |
+| [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 7 | IProcessMonitor, ISysInfo |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
 | [IPC — TopicResolver](#ipc--topicresolver) | 1 | 17 | Vehicle_id namespace resolution, validation, Zenoh pub/sub round-trip |
-| **Total** | **57 C++ + 5 shell** | **1389 + 42 + 250+** | |
+| [IPC — Serializer](#ipc--serializer) | 1 | 21 | ISerializer<T> interface, RawSerializer round-trip, wire-format compat, null safety |
+| [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
+| **Total** | **65 C++ + 5 shell** | **1461 + 42 + 250+** | |
 
 ---
 
@@ -603,15 +605,17 @@ factory registration.
 
 ## P7 — System Monitor
 
-### test_system_monitor.cpp — 27 tests
+### test_system_monitor.cpp — 36 tests
 
 **What it tests:** System resource monitoring via Linux `/proc` filesystem.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `SysInfo` | 11 | `CpuTimes` struct arithmetic (total/active), parsing `/proc/stat`, CPU usage percentage, zero-delta edge case, memory info, thermal zone reading, process enumeration |
+| `ISysInfo` | 15 | ISysInfo interface abstraction — LinuxSysInfo (name, CPU, memory, thermal, process alive, repeated reads), MockSysInfo (name, injected values), JetsonSysInfo (name, thermal zones, millideg conversion), SysInfoFactory (platform detection, config override) |
+| `ProcessMonitor` | 10 | IProcessMonitor threshold monitoring — default/custom thresholds, CPU/memory/thermal alerts, battery voltage/remaining, critical battery, overlapping thresholds |
 
-**Key files under test:** `monitor/sys_info.h`
+**Key files under test:** `monitor/sys_info.h`, `util/isys_info.h`, `util/linux_sys_info.h`, `util/mock_sys_info.h`, `util/jetson_sys_info.h`, `util/sys_info_factory.h`, `monitor/iprocess_monitor.h`
 
 ---
 
@@ -965,7 +969,7 @@ explicitly guard against this.
 
 ## Cross-Cutting Interfaces
 
-### test_process_interfaces.cpp — 6 tests
+### test_process_interfaces.cpp — 7 tests
 
 **What it tests:** Internal strategy interfaces used across multiple
 processes — tested via their simulated backends.
@@ -974,9 +978,9 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `ProcessMonitorTest` | 5 | `IProcessMonitor` — Linux process monitoring interface, CPU/memory query |
+| `ProcessMonitorTest` | 7 | `IProcessMonitor` — Linux process monitoring interface, CPU/memory query, ISysInfo integration |
 
-**Key files under test:** `monitor/iprocess_monitor.h`
+**Key files under test:** `monitor/iprocess_monitor.h`, `util/isys_info.h`
 
 ---
 
@@ -1244,4 +1248,4 @@ pytest test suite, separate from the C++ GTest suite tracked by ctest.
 
 ---
 
-*Last updated: April 2026 — 1386 C++ unit tests across 57 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #401 (Epic #284 Wave 2): ISysInfo platform abstraction, TopicResolver + vehicle_id, CMake enable options (+127 tests from 1259). All 1389 C++ tests passing (re-review fixes: +3 tests for battery critical, overlapping thresholds, custom MonitorThresholds).*
+*Last updated: April 2026 — 1461 C++ unit tests across 65 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. PR #416 (Epic #284 Wave 6): ISerializer\<T\> abstraction + RawSerializer\<T\> (21 tests), PluginLoader\<Interface\> for runtime .so loading (13 tests, HAVE_PLUGINS only). All 1461 C++ tests passing.*

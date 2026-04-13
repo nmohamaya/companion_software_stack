@@ -91,7 +91,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches baseline? (currently **1259** — see [tests/TESTS.md](tests/TESTS.md))
+- [ ] Test count matches baseline? (currently **1461** — see [tests/TESTS.md](tests/TESTS.md))
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 
@@ -258,6 +258,8 @@ After addressing review comments:
 4. Re-run build + tests before pushing
 
 **Codebase-wide scope:** When a review comment identifies an issue that could apply elsewhere in the codebase (e.g., misleading comments, inconsistent log levels, missing test patterns), always search for and fix all occurrences — not just the one the reviewer pointed out. A review comment on one file is a signal to check the whole codebase for the same pattern.
+
+**Disagreeing with review comments:** When declining to fix a review comment (from Copilot, review agents, or humans) based on a justified rationale, **always document the decision in `docs/guides/DESIGN_RATIONALE.md`** as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, the trade-offs were weighed, and the decision was intentional — not an oversight. Include the question, arguments for both sides, our decision, and when to revisit. This applies to both P3 deferrals and genuine "we disagree" situations.
 
 ### Planning & Self-Correction (from `docs/guides/work_instructions.md`)
 - Enter plan mode for any non-trivial task (3+ steps or architectural decisions)
