@@ -109,7 +109,18 @@ inline constexpr const char* CY              = "perception.fusion.cy";
 inline constexpr const char* CAMERA_HEIGHT_M = "perception.fusion.camera_height_m";
 inline constexpr const char* ASSUMED_OBSTACLE_HEIGHT_M =
     "perception.fusion.assumed_obstacle_height_m";
-inline constexpr const char* DEPTH_SCALE = "perception.fusion.depth_scale";
+inline constexpr const char* DEPTH_SCALE           = "perception.fusion.depth_scale";
+inline constexpr const char* HEIGHT_PRIORS_UNKNOWN = "perception.fusion.height_priors.unknown";
+inline constexpr const char* HEIGHT_PRIORS_PERSON  = "perception.fusion.height_priors.person";
+inline constexpr const char* HEIGHT_PRIORS_VEHICLE_CAR =
+    "perception.fusion.height_priors.vehicle_car";
+inline constexpr const char* HEIGHT_PRIORS_VEHICLE_TRUCK =
+    "perception.fusion.height_priors.vehicle_truck";
+inline constexpr const char* HEIGHT_PRIORS_DRONE    = "perception.fusion.height_priors.drone";
+inline constexpr const char* HEIGHT_PRIORS_ANIMAL   = "perception.fusion.height_priors.animal";
+inline constexpr const char* HEIGHT_PRIORS_BUILDING = "perception.fusion.height_priors.building";
+inline constexpr const char* HEIGHT_PRIORS_TREE     = "perception.fusion.height_priors.tree";
+inline constexpr const char* BBOX_HEIGHT_NOISE_PX   = "perception.fusion.bbox_height_noise_px";
 }  // namespace fusion
 
 }  // namespace perception

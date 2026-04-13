@@ -91,7 +91,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches baseline? (currently **1461** — see [tests/TESTS.md](tests/TESTS.md))
+- [ ] Test count matches baseline? (currently **1479** — see [tests/TESTS.md](tests/TESTS.md))
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 

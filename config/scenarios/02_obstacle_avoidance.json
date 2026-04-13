@@ -37,10 +37,10 @@
                 "_comment": "2m grid, 2m inflation, 1.0s TTL. promotion_hits=8: filters transient detections (0.4s at 20Hz) before promoting to static. HD-map suppression (Issue #389) prevents duplicating cells near pre-mapped obstacles. max_static_cells=800 safety cap. prediction_enabled=false: camera-depth noise makes velocity extrapolation unreliable (Issue #340), and HD-map already provides obstacle positions."
             },
             "static_obstacles": [
-                {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 5.0, "_color": "RED"},
-                {"x": 10, "y": 10, "radius_m": 1.0, "height_m": 5.0, "_color": "GREEN"},
-                {"x": 18, "y": 5,  "radius_m": 0.8, "height_m": 5.0, "_color": "BLUE"},
-                {"x": 5,  "y": 3,  "radius_m": 0.75, "height_m": 4.0, "_color": "ORANGE"}
+                {"x": 3,  "y": 15, "radius_m": 1.0, "height_m": 1.7, "_color": "RED"},
+                {"x": 10, "y": 10, "radius_m": 1.0, "height_m": 6.0, "_color": "GREEN"},
+                {"x": 18, "y": 5,  "radius_m": 0.8, "height_m": 2.0, "_color": "BLUE"},
+                {"x": 5,  "y": 3,  "radius_m": 0.75, "height_m": 10.0, "_color": "ORANGE"}
             ],
             "_comment_static_obstacles": "HD-map matching the 4 physical obstacles in test_world.sdf. Camera+radar detections confirm these at runtime.",
             "geofence": {
@@ -80,7 +80,8 @@
                 "backend": "ukf",
                 "rate_hz": 30,
                 "depth_scale": 1.0,
-                "assumed_obstacle_height_m": 5.0,
+                "assumed_obstacle_height_m": 3.0,
+                "height_priors": {"unknown": 3.0, "person": 1.7, "vehicle_car": 2.0, "vehicle_truck": 3.5, "drone": 0.3, "animal": 0.8, "building": 10.0, "tree": 6.0},
                 "radar": {
                     "enabled": true,
                     "ground_filter_enabled": true,

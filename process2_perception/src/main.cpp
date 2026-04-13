@@ -28,6 +28,8 @@
 #include <chrono>
 #include <thread>
 
+#include <Eigen/Geometry>  // Quaternionf for full-quaternion transform (#421)
+
 using namespace drone::perception;
 
 static std::atomic<bool> g_running{true};
@@ -205,53 +207,55 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 
             diag.add_metric("Fuse", "n_fused_objects", static_cast<double>(fused.objects.size()));
 
-            // ── Camera-frame → World-frame transform ──────────────
-            // fusion_engine returns position_3d in camera body frame:
+            // ── Full quaternion camera→world transform (Issue #421) ──
+            // fusion_engine returns position_3d in camera body frame (FRD):
             //   cam.x = forward (along boresight)
             //   cam.y = right
             //   cam.z = down
-            // Our world frame: translation[0]=North, [1]=East, [2]=Up.
-            // Drone heading = yaw extracted from quaternion (w,x,y,z).
-            // Camera boresight = drone body +X = world North when yaw=0.
+            // World frame (NEU): translation[0]=North, [1]=East, [2]=Up.
             //
-            // Rotation (yaw only — ignore small pitch/roll for range estimation):
-            //   world_north = cam.x * cos(yaw) - cam.y * sin(yaw)  + drone_north
-            //   world_east  = cam.x * sin(yaw) + cam.y * cos(yaw)  + drone_east
-            //   world_up    = drone_up - cam.z   (cam Z down = world -Z)
+            // Previous: yaw-only rotation ignored pitch/roll, causing
+            // systematic depth errors during forward flight (5-15deg pitch).
+            // Now: use full VIO quaternion for body FRD → world NEU.
+            //
+            // Transform chain:
+            //   1. Negate Z to convert FRD → FRU (body forward-right-up)
+            //   2. Apply full rotation matrix from VIO quaternion (FRU → NEU)
+            //   3. Translate by drone world position
             if (has_pose) {
-                // Extract yaw from quaternion (w, x, y, z)
-                const double qw  = latest_pose.quaternion[0];
-                const double qx  = latest_pose.quaternion[1];
-                const double qy  = latest_pose.quaternion[2];
-                const double qz  = latest_pose.quaternion[3];
-                const float  yaw = static_cast<float>(
-                    std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
-                const float cos_y = std::cos(yaw);
-                const float sin_y = std::sin(yaw);
+                // Full rotation from VIO quaternion (w, x, y, z order).
+                // Stay in float — UKF state is float, ~3mm precision at 100m is sufficient
+                // for obstacle avoidance (review fix #9).
+                const Eigen::Quaternionf q(static_cast<float>(latest_pose.quaternion[0]),
+                                           static_cast<float>(latest_pose.quaternion[1]),
+                                           static_cast<float>(latest_pose.quaternion[2]),
+                                           static_cast<float>(latest_pose.quaternion[3]));
+                // Guard degenerate quaternion — NaN would propagate to all positions (review fix #11)
+                if (q.norm() < 1e-6f) {
+                    DRONE_LOG_DEBUG("[Fusion] Skipping transform — degenerate quaternion");
+                    continue;
+                }
+                const Eigen::Matrix3f R = q.normalized().toRotationMatrix();
+                // Note: yaw for set_drone_pose() is extracted separately at ~line 182.
 
                 const float dn = static_cast<float>(latest_pose.translation[0]);
                 const float de = static_cast<float>(latest_pose.translation[1]);
                 const float du = static_cast<float>(latest_pose.translation[2]);
 
                 for (auto& obj : fused.objects) {
-                    // Velocity is always in body FRD frame from the UKF —
-                    // rotate to world frame and flip Z (FRD down → world up).
-                    const float vx      = obj.velocity_3d.x();
-                    const float vy      = obj.velocity_3d.y();
-                    obj.velocity_3d.x() = vx * cos_y - vy * sin_y;
-                    obj.velocity_3d.y() = vx * sin_y + vy * cos_y;
-                    obj.velocity_3d.z() = -obj.velocity_3d.z();
+                    // Velocity: body FRD → FRU (negate z) → rotate to world NEU
+                    const Eigen::Vector3f v_fru(obj.velocity_3d.x(), obj.velocity_3d.y(),
+                                                -obj.velocity_3d.z());
+                    obj.velocity_3d = R * v_fru;
 
                     // Re-identified objects already have world-frame positions
                     // from the dormant obstacle pool — skip position transform.
                     if (obj.in_world_frame) continue;
 
-                    const float cx      = obj.position_3d.x();           // camera forward
-                    const float cy      = obj.position_3d.y();           // camera right
-                    const float cz      = obj.position_3d.z();           // camera down
-                    obj.position_3d.x() = dn + cx * cos_y - cy * sin_y;  // world North
-                    obj.position_3d.y() = de + cx * sin_y + cy * cos_y;  // world East
-                    obj.position_3d.z() = du - cz;                       // world Up
+                    // Position: body FRD → FRU (negate z) → rotate → translate
+                    const Eigen::Vector3f p_fru(obj.position_3d.x(), obj.position_3d.y(),
+                                                -obj.position_3d.z());
+                    obj.position_3d = R * p_fru + Eigen::Vector3f(dn, de, du);
                 }
             }
 
@@ -427,6 +431,31 @@ int main(int argc, char* argv[]) {
     calib.assumed_obstacle_height_m =
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::ASSUMED_OBSTACLE_HEIGHT_M, 3.0f);
     calib.depth_scale = ctx.cfg.get<float>(drone::cfg_key::perception::fusion::DEPTH_SCALE, 0.7f);
+
+    // Per-class height priors for apparent-size depth estimation (Issue #423)
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::UNKNOWN)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_UNKNOWN, 3.0f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::PERSON)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_PERSON, 1.7f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::VEHICLE_CAR)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_VEHICLE_CAR, 1.5f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::VEHICLE_TRUCK)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_VEHICLE_TRUCK, 3.5f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::DRONE)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_DRONE, 0.3f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::ANIMAL)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_ANIMAL, 0.8f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::BUILDING)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_BUILDING, 10.0f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::TREE)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_TREE, 6.0f);
+    calib.bbox_height_noise_px =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::BBOX_HEIGHT_NOISE_PX, 2.5f);
+
+    // Validate height priors — zero/negative values produce nonsensical depth (review fix #5)
+    for (auto& hp : calib.height_priors) {
+        hp = std::max(0.1f, hp);
+    }
 
     std::string fusion_backend =
         ctx.cfg.get<std::string>(drone::cfg_key::perception::fusion::BACKEND, "camera_only");

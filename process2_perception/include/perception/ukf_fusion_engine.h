@@ -129,6 +129,8 @@ public:
     uint32_t radar_update_count{0};   ///< Number of radar updates received (for B1 trust)
     float    depth_confidence{0.0f};  ///< Depth estimation quality [0.0=guess, 1.0=radar-confirmed]
     bool     radar_only{false};       ///< True if created from radar without camera (Phase D)
+    float learned_height_m{0.0f};  ///< Radar-derived object height (EMA), for scale recovery (#422)
+    bool  height_learned{false};   ///< True after first radar height back-calculation
 
     /// Tighten depth covariance after radar provides accurate range.
     void set_radar_confirmed_depth(float radar_range);
@@ -236,7 +238,8 @@ private:
         float depth      = 8.0f;
         float confidence = 0.0f;
     };
-    DepthEstimate   estimate_depth(const TrackedObject& trk) const;
+    /// @param height_override If > 0, use this height instead of class prior (radar-learned height).
+    DepthEstimate   estimate_depth(const TrackedObject& trk, float height_override = 0.0f) const;
     Eigen::Vector3f body_to_world(const Eigen::Vector3f& body) const;
     int             find_nearest_dormant(const Eigen::Vector3f& world_pos,
                                          const Eigen::Matrix3f& pos_cov = Eigen::Matrix3f::Identity() *

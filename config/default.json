@@ -94,6 +94,17 @@
             "rate_hz": 30,
             "camera_weight": 1.0,
             "camera_height_m": 1.5,
+            "height_priors": {
+                "unknown": 3.0,
+                "person": 1.7,
+                "vehicle_car": 1.5,
+                "vehicle_truck": 3.5,
+                "drone": 0.3,
+                "animal": 0.8,
+                "building": 10.0,
+                "tree": 6.0
+            },
+            "bbox_height_noise_px": 2.5,
             "depth": {
                 "covariance_init": 5.0,
                 "bbox_h_threshold": 10.0,

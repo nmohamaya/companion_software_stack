@@ -21,6 +21,15 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 
 ## Log
 
+### 2026-04-13 | tech-lead (deploy-wave) | opus | PR #427
+
+**Task:** Epic #419 Wave 1 — Depth Fusion Infrastructure (#420 covariance fusion, #421 IMU pitch/roll, #422 radar-learned heights, #423 height priors, #424 sim world)
+**Files:** ukf_fusion_engine.cpp, ukf_fusion_engine.h, main.cpp, types.h, config_keys.h, default.json, test_world.sdf, test_fusion_engine.cpp, test_world_transform.cpp (new), scenarios 02/18/27
+**Tests:** 18 added, 1479 total passing (baseline: 1461)
+**Safety issues found:** P1 (pre-existing, noted in PR): NaN/negative radar range_m not validated at set_radar_detections() entry point. Degenerate quaternion guard added for camera→world transform.
+**Hallucination flags:** PASS
+**Notes:** 3 execution groups (2 parallel + 1 sequential). Two-pass review with all 9 agents. Copilot overlap ~60%. Key fixes from review: depth_scale included in covariance derivatives, make_process_noise() DRY helper, depth_confidence_from_covariance() DRY helper, next_radar_track_id_ overflow guard, height EMA clamp bounds. 5 issues across 3 PRs (#425/#426 per-issue, #427 merge).
+
 ### 2026-04-12 | tech-lead (deploy-wave) | opus | PR #413
 
 **Task:** Epic #284 Wave 5a — SpdlogLogger fix, ISysInfo caching, IPC latency wiring (#410, #411, #283)
@@ -105,4 +114,11 @@ Agents append completed work here. Newest entries at top. Keep 30 days.
 - **Branch:** integration/epic-284-wave-6
 - **Mode:** skill (/deploy-wave)
 - **Fix iterations:** 1 (13 P1+P2 review findings fixed, 4 DR entries for deferred P3)
+- **Status:** completed
+
+### 2026-04-13 | tech-lead | claude-opus-4-6 | PR #427
+- **Issue:** Epic #419 Wave 1 — Depth fusion infrastructure (#420, #421, #422, #423, #424)
+- **Branch:** integration/epic-419-wave-1
+- **Mode:** skill (/deploy-wave)
+- **Fix iterations:** 2 (13 agent findings + 5 Copilot findings fixed)
 - **Status:** completed
