@@ -186,6 +186,12 @@ else()
     endif()
 endif()
 
+# ── ML model presets ───────────────────────────────────────
+include(cmake/ModelPresets.cmake)
+configure_file(config/model_defaults.h.in
+    ${CMAKE_BINARY_DIR}/generated/model_defaults.h @ONLY)
+include_directories(${CMAKE_BINARY_DIR}/generated)
+
 # ── Shared interface libraries ───────────────────────────────
 add_subdirectory(common/ipc)
 add_subdirectory(common/util)
@@ -243,6 +249,7 @@ message(STATUS "  MAVSDK       : ${MAVSDK_FOUND}")
 message(STATUS "  Gazebo       : ${GAZEBO_FOUND}")
 message(STATUS "  OpenCV       : ${OPENCV_FOUND}")
 message(STATUS "  Zenoh        : REQUIRED")
+message(STATUS "  Model Preset : ${MODEL_PRESET}")
 message(STATUS "  Plugins      : ${ENABLE_PLUGINS}")
 message(STATUS "  systemd      : ${ENABLE_SYSTEMD}")
 message(STATUS "  ── Processes ──")

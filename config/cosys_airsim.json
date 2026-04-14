@@ -1,0 +1,35 @@
+{
+    "_comment": "Config overlay for Cosys-AirSim cloud simulation (MODEL_PRESET=cloud)",
+    "perception": {
+        "detector": {
+            "backend": "yolov8",
+            "model_path": "models/yolov8m.onnx",
+            "dataset": "coco",
+            "num_classes": 80,
+            "confidence_threshold": 0.3,
+            "input_size": 640
+        },
+        "depth_estimator": {
+            "backend": "simulated",
+            "model_path": "models/depth_anything_v2_vitb.onnx",
+            "enabled": true
+        },
+        "radar": {
+            "backend": "simulated",
+            "enabled": true
+        }
+    },
+    "video_capture": {
+        "mission_cam": {
+            "backend": "simulated",
+            "width": 1920,
+            "height": 1080,
+            "fps": 30
+        }
+    },
+    "comms": {
+        "mavlink": {
+            "backend": "simulated"
+        }
+    }
+}
