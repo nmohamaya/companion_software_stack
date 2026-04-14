@@ -56,11 +56,11 @@ class TestTierCategories:
 
     def test_opus_roles(self):
         opus = [r for r, c in ROLES.items() if c.tier == ModelTier.OPUS]
-        assert len(opus) == 11  # 1 lead + 5 feature + 5 review (pass 1 + test-quality)
+        assert len(opus) == 9  # 1 lead + 5 feature + 3 review (memory-safety, concurrency, test-quality)
 
     def test_sonnet_roles(self):
         sonnet = [r for r, c in ROLES.items() if c.tier == ModelTier.SONNET]
-        assert len(sonnet) == 5  # test-unit, test-scenario, api-contract, code-quality, performance
+        assert len(sonnet) == 7  # fault-recovery, security, api-contract, code-quality, performance, test-unit, test-scenario
 
     def test_haiku_roles(self):
         haiku = [r for r, c in ROLES.items() if c.tier == ModelTier.HAIKU]
