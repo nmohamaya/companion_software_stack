@@ -5,6 +5,9 @@ Tracking all bug fixes applied to the Drone Companion Software Stack.
 > **⚠️ IMPORTANT:** The "Fix #X" numbers (e.g., "Fix #1", "Fix #46") in this document are **sequential identifiers for this file only** and do **NOT** correspond to GitHub issue numbers. For the actual GitHub issue, see the **(Issue #Y)** reference in each fix title or use the `Found by:` / `Related to:` fields.
 
 Sections:
+
+- [Writing a Bug Fix Entry](#writing-a-bug-fix-entry)
+- [ONNX and OpenCV DNN Troubleshooting](#onnx-and-opencv-dnn-troubleshooting)
 - [IPC / Transport](#ipc--transport)
 - [Perception (Process 2)](#perception-process-2)
 - [SLAM / VIO (Process 3)](#slam--vio-process-3)
@@ -14,6 +17,90 @@ Sections:
 - [Simulation (Gazebo SITL)](#simulation-gazebo-sitl)
 - [CI / Tooling](#ci--tooling)
 - [Open Bugs](#open-bugs)
+
+---
+
+## Writing a Bug Fix Entry
+
+Copy this template when adding a new fix. Every section is mandatory — a fix entry that someone else can't reproduce or learn from is just a changelog line.
+
+```markdown
+### Fix #XX — <Short title describing the symptom> (#<GitHub issue>)
+
+**Date:** YYYY-MM-DD
+**Severity:** Critical / Blocker / High / Medium / Low
+**Files:** `path/to/changed_file.cpp`, `path/to/another.h`
+
+**What:** One paragraph. What broke, what the user/test/CI observed, and what the
+expected behavior should have been. Be specific — "tests fail" is not enough;
+"6 model-dependent tests GTEST_SKIP with 'model not loaded'" is.
+
+**Error messages (searchable):**
+Paste the exact error strings. People search for these.
+- `error: (-215:Assertion failed) inputs.size() == 1 ...`
+- `FATAL: No path: g(start)=1000000000`
+
+**Reproduce:**
+Numbered steps someone can follow to trigger the bug from a clean checkout.
+1. `git checkout <commit-before-fix>`
+2. `bash deploy/build.sh`
+3. `./build/bin/<test>` — observe: <exact symptom>
+
+**Why (Root Cause):**
+What actually went wrong in the code/data/environment. Not "it was broken" — explain
+the mechanism. If there are multiple layered causes, number them.
+
+**How (Fix):**
+What you changed and why each change was necessary. Separate the investigation
+narrative from the actual changeset:
+
+*Investigation:*
+What you tried, what failed, what you learned along the way.
+
+*Changeset:*
+- `file_a.cpp` — <what changed and why>
+- `file_b.json` — <what changed and why>
+
+**Diagnostic commands:**
+Copy-pasteable commands someone can use to diagnose the same class of issue.
+```bash
+# Example: check ONNX Resize node input counts
+python3 -c "import onnx; ..."
+```
+
+**Tools used:**
+- **Tool name** — What it did, why it was the right tool for this step.
+
+**Limitations / Known issues:**
+Anything that's still not perfect after the fix.
+
+**Found by:** How the bug was discovered (test name, CI run, Gazebo scenario, manual testing).
+
+**Regression test:** What test(s) now guard against this bug recurring.
+```
+
+### Key principles
+
+1. **Searchable error messages.** People Google error strings. Include them verbatim.
+2. **Reproducible steps.** If someone can't trigger the bug, they can't verify the fix.
+3. **Separate investigation from changeset.** The investigation teaches debugging skills; the changeset is what to review. Different audiences need different sections.
+4. **Diagnostic commands.** Copy-pasteable. Not "use GDB" — show the actual GDB commands.
+5. **Tools with purpose.** Not just "used onnxsim" — explain *what it did* and *why it was the right choice* for that step.
+6. **Limitations.** Be honest about what's still imperfect. The next person will find out anyway.
+
+---
+
+## ONNX and OpenCV DNN Troubleshooting
+
+Common issues when deploying ONNX models with OpenCV DNN in this project. If you're adding a new ML model backend, run through this checklist before filing a bug.
+
+- [ ] **Opset version:** `python3 -c "import onnx; print(onnx.load('model.onnx').opset_import)"` — use opset ≤14 for OpenCV DNN 4.6–4.10
+- [ ] **Self-contained model:** No `.onnx.data` external weight files. If present, inline with: `m = onnx.load('model.onnx', load_external_data=True); onnx.save(m, 'model_inline.onnx')`
+- [ ] **Resize node inputs:** `python3 -c "import onnx; m=onnx.load('model.onnx'); [print(n.name, len(n.input)) for n in m.graph.node if n.op_type=='Resize']"` — OpenCV DNN requires ≤2 inputs (3 with empty roi). Run `onnxsim` first; if still >2, use graph surgery (see Fix #51 and `models/download_depth_anything_v2.sh`)
+- [ ] **Interpolation modes:** Only `nearest` and `bilinear` supported. If model uses `bicubic`/`cubic`, monkey-patch during export (see Fix #51)
+- [ ] **OpenCV DNN load test:** `python3 -c "import cv2; cv2.dnn.readNetFromONNX('model.onnx'); print('OK')"` — if Python cv2 is unavailable, build and run: `cv::dnn::readNetFromONNX("model.onnx")` in a test binary
+- [ ] **Inference test:** Create a random input blob, run `net.forward()`, verify output shape matches expected. ONNX Runtime (`onnxruntime`) is a good reference: `sess.run(None, {'input': np.random.randn(1,3,H,W).astype(np.float32)})`
+- [ ] **Unsupported ops:** Check OpenCV DNN's supported op list. Common failures: `Tile`, `NonZero`, `ScatterND`, `GatherElements`. Run `onnxsim` to see if they can be folded away.
 
 ---
 
@@ -538,6 +625,124 @@ else
 **Impact:** Radar tracks reduced further (best: 8 for 4 obstacles). Avoider max correction dropped from 1.51 → 0.33 m/s (planner handles avoidance). No collision risks across all test runs.
 
 **Found by:** Gazebo scenario testing — comparing single-circle vs double-circle survey coverage and obstacle proximity metrics.
+
+---
+
+### Fix #51 — Depth Anything V2 ONNX Model Incompatible with OpenCV DNN (#455)
+
+**Date:** 2026-04-14
+**Severity:** Blocker (ML depth backend completely non-functional)
+**Files:** `models/download_depth_anything_v2.sh`, `common/hal/src/depth_anything_v2.cpp`, `config/scenarios/28_ml_depth_estimation.json`
+
+**What:** The Depth Anything V2 ViT-S ONNX model could not be loaded by OpenCV DNN. Three separate compatibility issues surfaced sequentially during model export and loading, each blocking the next step. Additionally, the first successful Gazebo run (scenario 28) failed 19/20 — the drone could not find a path to the final waypoint because the ML depth backend caused occupancy grid saturation with 331 promoted static cells.
+
+**Error messages (searchable):**
+
+- `OpenCV(4.10.0) resize_layer.cpp:58: error: (-215:Assertion failed) inputs.size() == 1 || inputs.size() == 2 in function 'getMemoryShapes'`
+- `interpolation == "nearest" || interpolation == "opencv_linear" || interpolation == "bilinear"`
+- `Node [Resize@ai.onnx]:(onnx_node!/backbone/embeddings/Resize) parse error`
+- `D*Lite No path: start=(16,5,2) goal=(3,2,2) g(start)=1000000000 queue=0 occupied=52`
+- `[Grid] 7 objs (accepted=7, suppressed=5, excluded_cells=0), 67 dynamic, 331 static (promoted=331, hd_map=0, max=800, predictions=0)`
+
+**Reproduce:**
+
+1. `git checkout 1ec8668` (commit with DA V2 backend before model fix)
+2. `pip install torch transformers onnx` and export the model naively:
+   ```bash
+   python3 -c "
+   from transformers import AutoModelForDepthEstimation; import torch
+   m = AutoModelForDepthEstimation.from_pretrained('depth-anything/Depth-Anything-V2-Small-hf')
+   torch.onnx.export(m, {'pixel_values': torch.randn(1,3,518,518)}, 'model.onnx', opset_version=14, dynamo=False)
+   "
+   ```
+3. `bash deploy/build.sh && ./build/bin/test_depth_anything_v2` — observe: 6 model-dependent tests fail with `model not loaded`
+4. For the grid saturation bug: run scenario 28 with `promotion_hits=8` and `timeout_s=180` — observe: drone reaches WP 4/5 then cannot find a path to WP 5
+
+**Why (Root Causes):**
+
+1. **No pre-exported ONNX available.** HuggingFace hosts DA V2 as PyTorch safetensors only — no ONNX artifact exists. The download script assumed a direct download but needed a full torch-to-ONNX export pipeline.
+
+2. **Bicubic Resize unsupported by OpenCV DNN.** DA V2's DINOv2 backbone uses `F.interpolate(mode='bicubic')` for patch embedding resize. PyTorch faithfully exports this as an ONNX Resize node with `mode=cubic`. OpenCV DNN (4.6.0-4.10.0) only supports `nearest` and `bilinear` Resize modes — it rejects `cubic` at model parse time.
+
+3. **4-input ONNX Resize node format.** Even after fixing the interpolation mode, OpenCV DNN fails at the `inputs.size()` assertion. The ONNX standard Resize op has 4 inputs: `(X, roi, scales, sizes)`. PyTorch's TorchScript exporter faithfully produces this 4-input format. OpenCV DNN's `ResizeLayer::getMemoryShapes()` only handles 1-input (deprecated opset-10 format) or 2-input (X + scales). This is a fundamental limitation in OpenCV's ONNX import layer, not a version-specific bug.
+
+4. **ML depth causes occupancy grid saturation in Gazebo.** Unlike the simulated depth estimator (which returns constant values), DA V2 produces real depth values for everything in the scene — ground texture, distant geometry, sky gradients. Combined with radar, this promoted far more cells to static status (331 vs ~50 for simulated), eventually blocking all paths to the final waypoint.
+
+**How (Fix):**
+
+*Investigation (what we tried and what failed):*
+
+| Attempt | Approach | Result | Lesson |
+|---------|----------|--------|--------|
+| 1 | `hf_hub_download(filename='onnx/model.onnx')` | 404 — file doesn't exist on HuggingFace | HF only has safetensors for this model |
+| 2 | `torch.onnx.export(dynamo=True)` at opset 18 | Segfault in OpenCV DNN | Opset 18 too new; external `.onnx.data` weights also problematic |
+| 3 | `torch.onnx.export(dynamo=False)` at opset 14 | `mode=cubic` rejected | DINOv2 uses bicubic interpolation |
+| 4 | Monkey-patch `F.interpolate` bicubic→bilinear during export | `inputs.size() == 1 \|\| inputs.size() == 2` assertion | Resize node format incompatible |
+| 5 | `onnxsim` to simplify Resize nodes | Still 4-input Resize (sizes are dynamic via Concat) | Simplifier can't fold dynamic shapes |
+| 6 | ONNX graph surgery: replace 4-input Resize with 3-input using precomputed scales | Model loads and runs in OpenCV DNN | Final solution |
+| 7 | First Gazebo run with default promotion thresholds | 19/20 — drone stuck on WP 5, 331 static cells | ML depth too aggressive for default thresholds |
+
+*Changeset:*
+
+- `models/download_depth_anything_v2.sh` — Replaced naive HF download with 4-step pipeline: (1) torch export with bilinear monkey-patch, (2) onnxsim simplification, (3) ONNX graph surgery to convert 4-input Resize to 3-input with precomputed fixed scales, (4) validation via ONNX Runtime
+- `config/scenarios/28_ml_depth_estimation.json` — Tuned `promotion_hits` 8→12 and `min_promotion_depth_confidence` 0.8→0.85 to prevent grid saturation from ML depth noise; increased `timeout_s` 180→240 and `cruise_speed_mps` 1.5→2.0 for the slower ML inference cadence
+
+**Diagnostic commands:**
+
+```bash
+# Check ONNX opset version
+python3 -c "import onnx; print(onnx.load('model.onnx').opset_import)"
+
+# List all Resize nodes and their input counts
+python3 -c "
+import onnx; m = onnx.load('model.onnx')
+for n in m.graph.node:
+    if n.op_type == 'Resize':
+        print(f'{n.name}: {len(n.input)} inputs, names={list(n.input)}')
+"
+
+# Check interpolation modes on Resize nodes
+python3 -c "
+import onnx; m = onnx.load('model.onnx')
+for n in m.graph.node:
+    if n.op_type == 'Resize':
+        for a in n.attribute:
+            if a.name == 'mode': print(f'{n.name}: mode={a.s.decode()}')
+"
+
+# Test if OpenCV DNN can load the model
+python3 -c "import cv2; cv2.dnn.readNetFromONNX('model.onnx'); print('OK')"
+
+# Verify model output shape with ONNX Runtime (reference engine)
+python3 -c "
+import onnxruntime as ort, numpy as np
+s = ort.InferenceSession('model.onnx')
+out = s.run(None, {'pixel_values': np.random.randn(1,3,518,518).astype(np.float32)})
+print(f'Output shape: {out[0].shape}, range: [{out[0].min():.3f}, {out[0].max():.3f}]')
+"
+
+# Check occupancy grid saturation in Gazebo logs
+grep '\[Grid\]' drone_logs/scenarios_gazebo/*/mission_planner.log | tail -5
+grep 'No path' drone_logs/scenarios_gazebo/*/mission_planner.log | tail -5
+```
+
+**Tools used:**
+
+- **PyTorch + HuggingFace Transformers** — Model loading (`AutoModelForDepthEstimation.from_pretrained`) and ONNX export via `torch.onnx.export`. Used legacy TorchScript exporter (`dynamo=False`) at opset 14 because Dynamo (default in PyTorch 2.11) produced opset 18 with external weights and unsupported ops.
+- **onnx-simplifier (`onnxsim`)** — Graph-level constant folding. Reduced node count from 1593 to 806 (removed all 56 Shape nodes, 50 Gather nodes, 76 Unsqueeze nodes, 7 Cast nodes). Could not fix the Resize input count because the size inputs are dynamically computed via Concat nodes, not constants.
+- **ONNX Runtime (`onnxruntime`)** — Reference execution engine used in three ways: (a) verified model produces correct output shape `[1, 518, 518]` before and after surgery, (b) traced intermediate tensor shapes at each Resize node by temporarily adding extra model outputs and running inference, (c) validated output equivalence between original and surgically modified models.
+- **ONNX Python library (`onnx`)** — Direct graph manipulation for the surgery: iterated `model.graph.node`, replaced Resize nodes, added `numpy_helper.from_array()` initializer tensors for precomputed scales and empty roi, ran `onnx.checker.check_model()` for structural validation.
+- **Gazebo scenario log analysis** — Parsed `mission_planner.log` to diagnose grid saturation: `[Grid] 331 static (promoted=331)` and repeated `D*Lite No path: g(start)=1000000000` confirmed the planner was blocked by excessive static cell promotion, not an avoider bug.
+
+**Limitations / Known issues:**
+
+- The fixed scale factors are baked in for 518x518 input. Changing `input_size` in config requires re-running the export script.
+- Bilinear interpolation in the patch embedding (instead of bicubic) may slightly affect depth accuracy — not measured quantitatively, but validated qualitatively in Gazebo (drone navigates correctly around all 4 obstacles).
+- Documented in DR-014 (DESIGN_RATIONALE.md).
+
+**Found by:** Implementation and Gazebo testing during Issue #455 — each failure surfaced sequentially during the export→load→run pipeline. The investigation table above shows the exact sequence.
+
+**Regression test:** 15 unit tests (9 always-run + 6 model-dependent with GTEST_SKIP). Scenario 28 passes 20/20 in Gazebo SITL.
 
 ---
 
