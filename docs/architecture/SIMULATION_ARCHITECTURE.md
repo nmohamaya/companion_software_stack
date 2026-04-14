@@ -16,9 +16,13 @@
 12. [Debugging Workflow](#debugging-workflow)
 13. [Fault Injection Tool](#fault-injection-tool)
 14. [Test Scenarios](#test-scenarios)
-15. [Simulation Coverage Gaps](#simulation-coverage-gaps)
-16. [Data Flow Diagram](#data-flow-diagram)
-17. [File Layout](#file-layout)
+15. [Scenario Design Principles](#scenario-design-principles)
+16. [Scenario Dependency Map](#scenario-dependency-map)
+17. [Scenario Runtime and Tuning Guide](#scenario-runtime-and-tuning-guide)
+18. [Known Flaky Scenarios](#known-flaky-scenarios)
+19. [Simulation Coverage Gaps](#simulation-coverage-gaps)
+20. [Data Flow Diagram](#data-flow-diagram)
+21. [File Layout](#file-layout)
 
 ---
 
@@ -1894,6 +1898,152 @@ When adding a new scenario with an optional dependency, document the prerequisit
 
 ---
 
+## Scenario Dependency Map
+
+Scenarios are grouped by the capability family they test. Within each family, scenarios build on each other — if a later scenario fails but an earlier one passes, the problem is in the delta between them.
+
+### Perception and Avoidance Family
+
+```text
+02 Obstacle Avoidance (HD-map + D* Lite)
+ └─ 18 Perception Avoidance (camera + radar, no HD-map)
+     └─ 27 Depth Accuracy (+ simulated depth + radar fusion)
+         └─ 28 ML Depth (+ Depth Anything V2 replacing simulated)
+```
+
+**Triage logic:** If 28 fails but 27 passes → DA V2 model or config tuning. If 27 fails but 18 passes → depth estimation or UKF integration. If 18 fails but 02 passes → color_contour detection or radar fusion. If 02 fails → path planner or avoidance core.
+
+### Detection Backend Family
+
+```text
+09 Perception Tracking (simulated detector + ByteTrack)
+ └─ 02 Obstacle Avoidance (color_contour detector)
+     └─ 21 YOLOv8 Detection (yolov8 detector, ONNX model)
+```
+
+**Triage logic:** If 21 fails but 02 passes → YOLO model loading or OpenCV DNN inference. If 02 fails but 09 passes → color_contour detector or Gazebo rendering.
+
+### Fault Handling Family
+
+```text
+04 FC Link Loss (basic loss → LOITER → RTL)
+ └─ 15 FC Quick Recovery (loss → quick reconnect before RTL)
+     └─ 08 Full Stack Stress (concurrent faults: battery + thermal + FC)
+```
+
+### GCS Command Family
+
+```text
+10 GCS Pause/Resume (LOITER ↔ NAVIGATE)
+11 GCS Abort (→ RTL)
+12 GCS RTL (direct RTL command)
+13 GCS Land (land at current position)
+06 Mission Upload (mid-flight waypoint change)
+```
+
+These are independent — each tests a single GCS command path. No dependency chain.
+
+### Sensor Pipeline Family
+
+```text
+17 Radar Gazebo (radar HAL + UKF fusion)
+20 Radar Degraded (camera dropout, radar primary)
+26 Gazebo Full VIO (stereo + IMU → VIO pipeline)
+16 VIO Failure (VIO quality degradation)
+```
+
+---
+
+## Scenario Runtime and Tuning Guide
+
+### Expected Runtime
+
+Times include process startup, mission execution, and verification. Tier 2 adds ~15-20s for Gazebo + PX4 SITL launch.
+
+| Scenario | Tier | Timeout | Typical Runtime | Notes |
+| --- | --- | --- | --- | --- |
+| 01 Nominal | 1 | 90s | ~30s | Baseline — fastest mission |
+| 02 Obstacles | 2 | 150s | ~120s | D* Lite replanning adds latency |
+| 03 Battery | 1 | 80s | ~40s | Fault injection at fixed delays |
+| 04 FC Link | 1 | 60s | ~25s | Short: loss + timeout + RTL |
+| 05 Geofence | 1 | 60s | ~25s | Short: breach + RTL |
+| 06 Upload | 1 | 120s | ~50s | Mid-flight waypoint swap |
+| 07 Thermal | 1 | 90s | ~45s | Zone escalation ramp |
+| 08 Stress | 1 | 180s | ~90s | Longest Tier 1 — concurrent faults |
+| 09 Tracking | 1 | 90s | ~35s | ByteTrack association test |
+| 10-13 GCS | 1 | 90-120s | ~30-40s | Single GCS command each |
+| 14 Alt Ceiling | 1 | 60s | ~25s | Quick breach + RTL |
+| 15 FC Recover | 1 | 120s | ~50s | Loss + reconnect before timeout |
+| 16 VIO Failure | 1 | 60s | ~25s | Quality drop + LOITER |
+| 17 Radar | 2 | 150s | ~100s | Radar fusion validation |
+| 18 Perc. Avoid | 2 | 160s | ~130s | Full perception pipeline |
+| 19 Collision | 1 | 120s | ~45s | Post-collision recovery |
+| 20 Radar Deg. | 1 | 30s | ~15s | Shortest — camera dropout |
+| 21 YOLOv8 | 2 | 160s | ~130s | Requires ONNX model download |
+| 23 Dyn. Predict | 1 | 90s | ~35s | Occupancy grid prediction |
+| 24 Gimbal | 1 | 90s | ~30s | Auto-track smoke test |
+| 25 Recorder | 1 | 60s | ~25s | Flight recorder + replay |
+| 26 Full VIO | 2 | 50s | ~40s | Short Gazebo VIO validation |
+| 27 Depth Acc. | 2 | 160s | ~130s | Simulated depth + radar fusion |
+| 28 ML Depth | 2 | 240s | ~180s | Slowest — DA V2 CPU inference ~1.7s/frame |
+
+**Batch runtimes:**
+
+- All Tier 1 (20 scenarios): ~12 minutes sequential, ~4 minutes with `run_scenario.sh --all -j4`
+- All Tier 2 (7 scenarios): ~14 minutes sequential (Gazebo startup overhead per run)
+- Full suite: ~26 minutes sequential
+
+> **Note:** Scenario 22 was never created — the numbering gap is intentional (a planned scenario was descoped). Do not renumber existing scenarios; config paths and log directories use the number as a stable identifier.
+
+### Tuning Guide — Common Failures and Knobs
+
+When a scenario fails, diagnose from the logs before changing config. The table below maps symptoms to the most likely knob.
+
+| Symptom | Log pattern to look for | Likely cause | Config knob | Typical fix |
+| --- | --- | --- | --- | --- |
+| Drone stuck, no path found | `No path: g(start)=1000000000` | Occupancy grid saturated with static cells | `occupancy_grid.promotion_hits` | Increase from 8 to 12-16 |
+| Drone stuck, no path found | `occupied=N` where N > 400 | Too many promoted cells blocking the grid | `occupancy_grid.max_static_cells` | Increase cap, or enable `require_radar_for_promotion` |
+| Path keeps getting rejected | `Rejecting backward path (dot=...)` | Planner finds paths away from goal | `path_planner.max_search_time_ms` | Increase to give D* Lite more time |
+| Scenario times out | `Mission complete` missing from logs | Drone too slow or avoidance adds detours | `timeout_s`, `cruise_speed_mps` | Increase timeout or speed |
+| False obstacle detections | `[Grid] N objs (accepted=N, suppressed=...)` with high N | Detector sees ground/sky as obstacles | `detector.confidence_threshold` | Increase from 0.3 to 0.5 |
+| Ghost static cells | `promoted=N` growing unbounded | Depth estimator returns depth for non-obstacle pixels | `occupancy_grid.min_promotion_depth_confidence` | Increase from 0.8 to 0.85-0.9 |
+| EMERGENCY_LAND triggered | `FAULT_BATTERY_CRITICAL` or `FAULT_POSE_STALE` | Battery drains or VIO goes stale | `fault_manager.*_percent`, VIO pipeline | Check if sim is running too slowly |
+| ML model not loaded | `model not loaded` or `Failed to load model` | ONNX file missing or incompatible | `depth_estimator.model_path` | Run `bash models/download_depth_anything_v2.sh` |
+| Occupancy grid bloated at start | `hd_map=N` with high N on first Grid line | HD-map static obstacles use too many cells | `static_obstacles[].radius` | Reduce obstacle radii or `occupancy_grid.inflation_radius_m` |
+
+**Diagnostic commands:**
+
+```bash
+# Check grid saturation in a scenario log
+grep '\[Grid\]' drone_logs/scenarios_gazebo/<scenario>/<run>/mission_planner.log | tail -10
+
+# Check path planner status
+grep -E 'No path|Path OK|extraction FAILED' drone_logs/scenarios_gazebo/<scenario>/<run>/mission_planner.log | tail -20
+
+# Check promoted cell growth over time
+grep '\[Grid\]' <log> | grep -oP 'promoted=\d+' | sort -t= -k2 -n | uniq
+
+# Check what depth backend was active
+grep -i 'depth estimator' drone_logs/scenarios_gazebo/<scenario>/<run>/perception.log
+```
+
+---
+
+## Known Flaky Scenarios
+
+Scenarios that may intermittently fail due to timing sensitivity, physics jitter, or non-deterministic behavior. If a scenario listed here fails once, re-run it before investigating.
+
+| Scenario | Flakiness | Root cause | Mitigation |
+| --- | --- | --- | --- |
+| 02 Obstacle Avoidance | ~10% failure rate on return leg | False cell promotion blocks return path. color_contour detects ground texture during low-altitude passes, radar confirms range, cells get promoted. The final waypoint (home) is often surrounded by these ghost cells. | Increase `promotion_hits` or enable `require_radar_for_promotion`. See Fix #51 for the ML depth variant of this issue. |
+| 18 Perception Avoidance | Occasional SLAM pose stale | Gazebo rendering hiccup causes VIO to lose tracking for >500ms. Transient — next frame recovers. | Re-run. If persistent, check GPU load (`nvidia-smi`) — Gazebo rendering competes with OpenCV DNN inference on the GPU. |
+| 26 Gazebo Full VIO | Tight timeout (50s) | VIO initialization on Gazebo stereo data takes variable time (5-15s). If Gazebo is slow to render the first frames, the mission may not complete in 50s. | Increase `timeout_s` to 70s if consistently failing. |
+| 28 ML Depth | Grid saturation on slow machines | DA V2 inference takes ~1.7s/frame on CPU. On slower machines, fewer depth maps are produced, making promotion thresholds behave differently. | Increase `timeout_s` or reduce `input_size` to 256 (faster inference, lower accuracy). |
+
+> **Non-flaky scenarios:** Tier 1 scenarios (01-16, 19-20, 23-25) are deterministic — simulated backends produce identical results every run. If a Tier 1 scenario fails, it's a real bug.
+
+---
+
 ## Simulation Coverage Gaps
 
 The following code paths are **not exercised** by any scenario and rely solely on
@@ -1901,28 +2051,31 @@ unit tests for validation. This section is maintained to guide future scenario d
 
 ### Backends Never Tested in Scenarios
 
-| Backend  | Type     | Unit Tests | Why Not Covered                                        |
-|----------|----------|------------|--------------------------------------------------------|
-| `yolov8` | Detector | 24 tests   | Requires ONNX model + OpenCV; add to a Tier 2 scenario |
+All pluggable backends are now exercised by at least one scenario:
 
-> **Previously untested (now resolved):** `ukf` fusion engine is now exercised by scenario 17
-> (Radar Gazebo) which enables radar fusion with `GazeboRadarBackend`. See Issue #210 / #212.
+| Backend | Type | Scenario | Status |
+| --- | --- | --- | --- |
+| `yolov8` | Detector | 21 YOLOv8 Detection | Covered (requires ONNX model) |
+| `depth_anything_v2` | Depth estimator | 28 ML Depth | Covered (requires ONNX model) |
+| `ukf` | Fusion | 17, 18, 27, 28 | Covered |
+| `color_contour` | Detector | 02, 18, 27, 28 | Covered |
+| `bytetrack` | Tracker | All scenarios | Covered (sole tracker backend) |
+| `dstar_lite` | Path planner | All scenarios | Covered (sole planner backend) |
+| `potential_field_3d` | Obstacle avoider | All scenarios | Covered (sole avoider backend) |
+| `gazebo` (camera) | Camera HAL | All Tier 2 | Covered |
+| `gazebo` (IMU) | IMU HAL | 26 Full VIO | Covered |
+| `gazebo` (radar) | Radar HAL | 17, 18, 27, 28 | Covered |
+
+> **History:** `ukf` was untested until scenario 17 (Issue #210). `yolov8` was untested until scenario 21. `depth_anything_v2` was untested until scenario 28 (Issue #455). `SORT` tracker and `potential_field` 2D planner/avoider were removed — superseded by `bytetrack` and `dstar_lite`/`potential_field_3d` respectively.
 
 ### Backend Coverage Recommendations
 
-Per the "maximise stack coverage in simulation" principle, most scenarios should
-exercise the same backends that would run on real hardware:
+Per the "maximise stack coverage in simulation" principle, all 27 scenarios exercise the same core backends that run on real hardware:
 
-- **Tracker**: All 16 scenarios now use ByteTrack (default changed from SORT in
-  Issue #205). SORT was removed — ByteTrack strictly supersedes it with two-stage
-  association for better occlusion handling.
-- **Path planner**: All 16 scenarios now use D* Lite (default changed from
-  `potential_field` in Issue #207). PotentialFieldPlanner was removed — D* Lite
-  strictly supersedes it with 3D grid search and obstacle awareness.
-- **Obstacle avoider**: All 16 scenarios now use `potential_field_3d` (default
-  changed from `potential_field` in Issue #207). PotentialFieldAvoider (2D) was
-  removed — ObstacleAvoider3D strictly supersedes it with full 3D repulsion and
-  velocity prediction.
+- **Tracker**: All scenarios use ByteTrack (sole tracker since Issue #205).
+- **Path planner**: All scenarios use D* Lite (sole planner since Issue #207).
+- **Obstacle avoider**: All scenarios use ObstacleAvoider3D (sole avoider since Issue #207).
+- **Fusion**: Scenarios 17, 18, 27, 28 use UKF with radar. Remaining scenarios use camera-only fusion.
 
 ### Fault Types Never Triggered
 
@@ -1950,7 +2103,7 @@ exercise the same backends that would run on real hardware:
 
 ### Tier 2 Limitations
 
-Only **scenarios 02, 17, 18, 21, and 26** run on Gazebo SITL. The following fault
+**Scenarios 02, 17, 18, 21, 26, 27, and 28** run on Gazebo SITL (7 total). The following fault
 scenarios would benefit from Gazebo validation but are currently Tier 1 only:
 
 - Battery degradation (03) — PX4 has its own battery model; Tier 1 uses injected values
@@ -1967,10 +2120,9 @@ which parameters can be adjusted for manual testing:
 - **Thresholds**: Adjust `fault_manager.*_percent` values
 - **Fault timing**: Change `delay_s` in `fault_sequence.steps`
 - **Geofence polygon**: Modify vertices in `geofence.polygon`
-- **Backend selection**: Switch `path_planner.backend` between
-  `"potential_field"` and `"dstar_lite"`
-- **Obstacle avoider backend**: `"potential_field"` or
-  `"potential_field_3d"` (3D variant — used by scenarios 01, 02, 08, 09)
+- **Backend selection**: `path_planner.backend` is `dstar_lite` (sole planner)
+- **Obstacle avoider backend**: `potential_field_3d` (sole avoider)
+- **Depth estimator**: Enable with `perception.depth_estimator.enabled=true` and set `backend` to `simulated` or `depth_anything_v2`
 - **IPC transport**: Zenoh (sole backend, configured via `config/default.json`)
 
 ---
