@@ -118,7 +118,6 @@ LABEL model_preset="${MODEL_PRESET}"
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
         libspdlog1.12 \
-        libeigen3-dev \
         libfmt9 \
         libgtk-3-0t64 \
         libavcodec60 \
@@ -150,8 +149,8 @@ COPY --from=builder /usr/local/lib/libopencv* /usr/local/lib/
 # Copy OpenCV pkgconfig and cmake files for runtime library resolution
 COPY --from=builder /usr/local/lib/cmake/opencv4/ /usr/local/lib/cmake/opencv4/
 
-# Copy companion stack binaries
-COPY --from=builder /app/build/bin/ /usr/local/bin/
+# Copy companion stack binaries — launch_all.sh expects them at $PROJECT_DIR/build/bin/
+COPY --from=builder /app/build/bin/ /app/build/bin/
 
 # Copy runtime configuration
 COPY --from=builder /app/config/default.json /app/config/default.json
