@@ -106,6 +106,9 @@ The UKF fuses camera (sub-degree bearing from pinhole model, color/class, bbox) 
 ### UKF state and coordinate conventions
 State: `[x=depth(forward), y=lateral(right), z=vertical(down), vx, vy, vz]` in body frame (FRD). Radar azimuth from Gazebo is FLU (positive=left) — negate for UKF FRD (positive=right).
 
+### ML depth conversion formulas — verify full range utilization
+When implementing or modifying depth conversion formulas (inverse depth → metric depth, disparity → depth, etc.), always verify that the output spans the full `[min_depth, max_depth]` range on non-uniform input. A common bug: `depth = max / (normalized + eps)` looks correct but collapses almost all output to `max_depth` because any `normalized < ~1` produces a value above the clamp ceiling. Test with: (1) gradient input asserting `max_d - min_d > 1.0m`, and (2) half-black/half-white "known scene" asserting left/right mean depth differs by >2m. These catch formula bugs at the unit test level without needing Gazebo. See Fix #51 in BUG_FIXES.md for the full investigation.
+
 ### Depth estimation 4-tier strategy
 1. Horizon-truncated bbox → ground-plane depth from bbox bottom
 2. Apparent-size: `depth = assumed_height * fy / bbox_h`
