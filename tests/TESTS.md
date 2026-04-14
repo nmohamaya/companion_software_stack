@@ -127,7 +127,8 @@ bash deploy/build.sh --test-filter watchdog
 | [IPC — TopicResolver](#ipc--topicresolver) | 1 | 17 | Vehicle_id namespace resolution, validation, Zenoh pub/sub round-trip |
 | [IPC — Serializer](#ipc--serializer) | 1 | 21 | ISerializer<T> interface, RawSerializer round-trip, wire-format compat, null safety |
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
-| **Total** | **66 C++ + 5 shell** | **1479 + 42 + 250+** | |
+| [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
+| **Total** | **68 C++ + 5 shell** | **1546 + 42 + 250+** | |
 
 ---
 
@@ -339,6 +340,25 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 | `GazeboRadarFallbackTest` | 2 | Fallback to simulated when `HAVE_GAZEBO` is not defined; gazebo backend throws `std::runtime_error` |
 
 **Key files under test:** `hal/gazebo_radar.h`, `hal/hal_factory.h`
+
+---
+
+## HAL — Depth Anything V2
+
+### test_depth_anything_v2.cpp — 16 tests
+
+**What it tests:** `DepthAnythingV2Estimator` — ML monocular depth estimation via OpenCV DNN. Tests run with and without the ONNX model file (model-dependent tests use `GTEST_SKIP`). Requires `OPENCV_FOUND` at build time.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `DepthAnythingV2Test` | 9 | Name, model-not-found, estimate-returns-error, path traversal (direct + middle), null frame, zero dimensions, invalid channels (0/1/2/5), config construction with assert-load |
+| `DAv2ModelTest` | 7 | Model loads, valid frame produces depth map, source dimensions set correctly, **depth values positive/bounded with >1m variation**, **known-scene left/right depth differs by >2m**, RGBA frame, max_depth config affects output |
+
+**Key assertions:**
+- `DepthValuesPositiveAndBounded`: gradient input must produce `max_d - min_d > 1.0m` (catches conversion formulas that collapse to uniform output — see Fix #51)
+- `KnownSceneLeftRightDepthDiffers`: half-black/half-white frame must produce >2m mean depth difference between halves (golden test for formula correctness)
+
+**Key files under test:** `hal/depth_anything_v2.h`, `hal/depth_anything_v2.cpp`, `hal/hal_factory.h`
 
 ---
 

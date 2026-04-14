@@ -7,6 +7,7 @@
 #include "util/config.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -224,6 +225,61 @@ TEST_F(DAv2ModelTest, DepthValuesPositiveAndBounded) {
     // should spread values across [0.1, max_depth], not collapse to a narrow range.
     EXPECT_LT(min_d, max_d) << "Depth map should have variation on non-uniform input";
     EXPECT_GT(max_d - min_d, 1.0f) << "Depth range should span at least 1m on gradient input";
+}
+
+TEST_F(DAv2ModelTest, KnownSceneLeftRightDepthDiffers) {
+    // "Known scene" golden test: a half-black / half-white frame should produce
+    // substantially different mean depths for each half. This catches conversion
+    // formula bugs (e.g., normalization that collapses output to a single value)
+    // at the unit test level without needing Gazebo.
+    DepthAnythingV2Estimator estimator(g_model_path, 518, 20.0f);
+
+    constexpr uint32_t   w = 320, h = 240, c = 3;
+    std::vector<uint8_t> frame(w * h * c);
+    for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+            size_t  idx    = (y * w + x) * c;
+            uint8_t val    = (x < w / 2) ? 20 : 235;  // Dark left, bright right
+            frame[idx + 0] = val;
+            frame[idx + 1] = val;
+            frame[idx + 2] = val;
+        }
+    }
+
+    auto result = estimator.estimate(frame.data(), w, h, c);
+    ASSERT_TRUE(result.is_ok()) << result.error();
+
+    const auto& map   = result.value();
+    uint32_t    mid_x = map.width / 2;
+    double      sum_l = 0.0;
+    double      sum_r = 0.0;
+    uint32_t    cnt_l = 0;
+    uint32_t    cnt_r = 0;
+
+    for (uint32_t y = 0; y < map.height; ++y) {
+        for (uint32_t x = 0; x < map.width; ++x) {
+            float d = map.data[y * map.width + x];
+            if (x < mid_x) {
+                sum_l += d;
+                ++cnt_l;
+            } else {
+                sum_r += d;
+                ++cnt_r;
+            }
+        }
+    }
+
+    ASSERT_GT(cnt_l, 0u);
+    ASSERT_GT(cnt_r, 0u);
+    float mean_l = static_cast<float>(sum_l / cnt_l);
+    float mean_r = static_cast<float>(sum_r / cnt_r);
+
+    // The two halves must have meaningfully different mean depths.
+    // Exact values depend on the model, but 2m difference is conservative.
+    float diff = std::abs(mean_l - mean_r);
+    EXPECT_GT(diff, 2.0f) << "Half-black/half-white scene should produce >2m mean depth "
+                             "difference between halves (got left="
+                          << mean_l << ", right=" << mean_r << ", diff=" << diff << ")";
 }
 
 TEST_F(DAv2ModelTest, RGBAFrameWorks) {
