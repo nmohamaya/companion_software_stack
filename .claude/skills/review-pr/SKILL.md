@@ -72,10 +72,27 @@ Review Routing:
 
 ### Step 3: Pass 1 — Safety & Correctness [PARALLEL]
 
-Spawn Pass 1 agents in **parallel** using multiple Agent tool calls in a single message. Each agent receives:
-- The PR diff (or summary of changed files with key code snippets for large diffs)
-- The PR description for context
-- Instructions to report findings with severity (P1/P2/P3) and file:line references
+Spawn Pass 1 agents in **parallel** using `subagent_type` to reference each custom agent role. This automatically loads the role's system prompt, model tier, tools, and review checklist from `.claude/agents/<role>.md`. Do NOT manually reconstruct role context in the prompt.
+
+```
+// All in a single message — they run in parallel
+Agent(
+  description: "Review PR #<N> — memory safety",
+  subagent_type: "review-memory-safety",   // loads .claude/agents/review-memory-safety.md
+  prompt: "Review this PR diff for memory safety issues.\n\n<PR diff or summary>\n\nReport findings with severity (P1/P2/P3) and file:line references. Cap output to 200 words if clean."
+)
+Agent(
+  description: "Review PR #<N> — security",
+  subagent_type: "review-security",
+  prompt: "..."
+)
+Agent(
+  description: "Review PR #<N> — unit tests",
+  subagent_type: "test-unit",
+  prompt: "..."
+)
+// Add conditional agents (review-concurrency, review-fault-recovery, test-scenario) if triggered
+```
 
 Wait for all Pass 1 agents to complete. Collect findings.
 
@@ -83,11 +100,30 @@ Wait for all Pass 1 agents to complete. Collect findings.
 
 Skip if `--pass1-only` was specified.
 
-Spawn Pass 2 agents in **parallel**, providing Pass 1 findings as context:
-- `review-test-quality` — validates tests exercise new code paths, assertions are meaningful
-- `review-api-contract` — validates docstrings match implementation, data consistency
-- `review-code-quality` — catches dead code, DRY violations, complexity, naming issues
-- `review-performance` — catches unnecessary copies, allocation in hot paths, O(n²)
+Spawn Pass 2 agents in **parallel** using `subagent_type`. Provide Pass 1 findings as context in the prompt:
+
+```
+Agent(
+  description: "Review PR #<N> — test quality",
+  subagent_type: "review-test-quality",    // loads .claude/agents/review-test-quality.md
+  prompt: "Review test quality.\n\nPass 1 findings:\n<merged results>\n\nPR diff:\n<diff>\n\nCap output to 200 words if clean."
+)
+Agent(
+  description: "Review PR #<N> — API contracts",
+  subagent_type: "review-api-contract",
+  prompt: "..."
+)
+Agent(
+  description: "Review PR #<N> — code quality",
+  subagent_type: "review-code-quality",
+  prompt: "..."
+)
+Agent(
+  description: "Review PR #<N> — performance",
+  subagent_type: "review-performance",
+  prompt: "..."
+)
+```
 
 Wait for all Pass 2 agents to complete. Collect findings.
 

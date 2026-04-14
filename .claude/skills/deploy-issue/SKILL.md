@@ -254,18 +254,18 @@ User choices:
 - **launch** → spawn the agent
 - **override \<role\>** → launch a different agent role instead (e.g., user wants `feature-nav` instead of `feature-integration`)
 
-Use the Agent tool:
+Use the Agent tool with `subagent_type` set to the routed role name. This automatically loads the agent's system prompt, model tier, tools, and boundary constraints from `.claude/agents/<role>.md` — do NOT manually reconstruct role context (domain knowledge, safety practices, file boundaries) in the prompt.
 
 ```
 Agent(
   description: "Implement issue #<N>",
-  subagent_type: "<routed-role>",  // e.g., "feature-perception"
+  subagent_type: "<routed-role>",  // e.g., "feature-perception" → loads .claude/agents/feature-perception.md
   isolation: "worktree",
   prompt: <see below>
 )
 ```
 
-The prompt must include:
+The prompt provides task-specific context only (the role definition is loaded automatically):
 1. **Your implementation plan from Step 2.2** — this is the primary spec. Be specific: name files, functions, patterns to follow, and the exact approach. The agent should execute your plan, not re-derive the architecture.
 2. **Issue acceptance criteria only** — extract the acceptance criteria bullet points from the issue body, not the full body. Only include the full issue body if the plan explicitly references "see issue for details" or the acceptance criteria are unclear without surrounding context.
 3. Cross-agent context from Step 2.1 (only include if the issue touches shared modules — IPC, HAL, common/)
@@ -565,9 +565,27 @@ User choices:
 
 **Step 5.3 — Launch Pass 1 agents** [PARALLEL]
 
-Spawn all **approved** Pass 1 agents in **parallel** using multiple Agent tool calls in a single message. Each agent receives:
-- The PR diff (or summary of changed files with key snippets)
-- Instructions to report findings with severity (P1/P2/P3) and file:line references
+Spawn all **approved** Pass 1 agents in **parallel** using multiple Agent tool calls in a single message. Use `subagent_type` to reference the custom agent role — this automatically loads the role's system prompt, model tier, tools, and review checklist from `.claude/agents/<role>.md`. Do NOT manually reconstruct the role context in the prompt.
+
+```
+// All in a single message — they run in parallel
+Agent(
+  description: "Review PR #<N> — memory safety",
+  subagent_type: "review-memory-safety",   // loads .claude/agents/review-memory-safety.md
+  prompt: "Review this PR diff for memory safety issues.\n\n<PR diff or summary>\n\nReport findings with severity (P1/P2/P3) and file:line references. Cap output to 200 words if clean."
+)
+Agent(
+  description: "Review PR #<N> — security",
+  subagent_type: "review-security",
+  prompt: "Review this PR diff for security issues.\n\n<PR diff or summary>\n\n..."
+)
+Agent(
+  description: "Review PR #<N> — unit tests",
+  subagent_type: "test-unit",
+  prompt: "Review test coverage for this PR.\n\n<PR diff or summary>\n\n..."
+)
+// Add conditional agents (review-concurrency, review-fault-recovery, test-scenario) if triggered
+```
 
 Collect all Pass 1 results. Report progress as agents complete:
 ```
@@ -578,8 +596,32 @@ Collect all Pass 1 results. Report progress as agents complete:
 
 **Step 5.4 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
 
-Spawn all **approved** Pass 2 agents in parallel, providing Pass 1 findings as context:
-- Each Pass 2 agent receives the merged Pass 1 findings so it can build on them
+Spawn all **approved** Pass 2 agents in parallel using `subagent_type` for each role. Provide Pass 1 findings as context in the prompt:
+
+```
+// All in a single message — they run in parallel, after Pass 1 completes
+Agent(
+  description: "Review PR #<N> — test quality",
+  subagent_type: "review-test-quality",    // loads .claude/agents/review-test-quality.md
+  prompt: "Review test quality for this PR.\n\nPass 1 findings:\n<merged Pass 1 results>\n\nPR diff:\n<diff or summary>\n\nCap output to 200 words if clean."
+)
+Agent(
+  description: "Review PR #<N> — API contracts",
+  subagent_type: "review-api-contract",
+  prompt: "Review API contracts for this PR.\n\nPass 1 findings:\n<merged Pass 1 results>\n\n..."
+)
+Agent(
+  description: "Review PR #<N> — code quality",
+  subagent_type: "review-code-quality",
+  prompt: "..."
+)
+Agent(
+  description: "Review PR #<N> — performance",
+  subagent_type: "review-performance",
+  prompt: "..."
+)
+```
+
 - Skipped Pass 2 agents show as "SKIPPED" in the final report
 
 Collect Pass 2 results.

@@ -361,12 +361,14 @@ For each execution group G:
 
 ### Step 3A.2 — Spawn feature agents
 
+Use `subagent_type` set to the routed role name (e.g., `"feature-perception"`). This automatically loads the agent's system prompt, model tier, tools, and boundary constraints from `.claude/agents/<role>.md` — do NOT manually reconstruct role context (domain knowledge, safety practices, file boundaries) in the prompt. The prompt provides task-specific context only.
+
 **Single-issue group:** Spawn one agent (identical to the sequential case):
 
 ```
 Agent(
   description: "Implement issue #<N> (wave <W>, group <G>)",
-  subagent_type: "<routed-role>",
+  subagent_type: "<routed-role>",     // e.g., "feature-perception" → loads .claude/agents/feature-perception.md
   isolation: "worktree",
   prompt: <plan for this issue> + acceptance criteria + cross-agent context + pipeline instructions
 )
@@ -378,13 +380,13 @@ Agent(
 // All in a single message — they run in parallel
 Agent(
   description: "Implement issue #<N1> (wave <W>, group <G>, 1/<group_size>)",
-  subagent_type: "<routed-role-1>",
+  subagent_type: "<routed-role-1>",   // loads .claude/agents/<routed-role-1>.md
   isolation: "worktree",
   prompt: <plan for issue N1> + acceptance criteria + ...
 )
 Agent(
   description: "Implement issue #<N2> (wave <W>, group <G>, 2/<group_size>)",
-  subagent_type: "<routed-role-2>",
+  subagent_type: "<routed-role-2>",   // loads .claude/agents/<routed-role-2>.md
   isolation: "worktree",
   prompt: <plan for issue N2> + acceptance criteria + ...
 )
@@ -528,7 +530,7 @@ In Fast mode, ALL feature agents run first (in parallel worktrees), then a singl
 
 ### Step 3B.1 — Spawn ALL feature agents [PARALLEL]
 
-Push integration branch to remote, then spawn **all** feature agents simultaneously, regardless of execution groups:
+Push integration branch to remote, then spawn **all** feature agents simultaneously, regardless of execution groups. Use `subagent_type` set to each agent's routed role — this automatically loads the role's system prompt, model tier, tools, and boundaries from `.claude/agents/<role>.md`. Do NOT manually reconstruct role context in the prompt.
 
 ```bash
 git push origin <integration_branch>
@@ -538,13 +540,13 @@ git push origin <integration_branch>
 // All agents in a single message — maximum parallelism
 Agent(
   description: "Implement issue #<N1> (wave <W>, fast mode, 1/<total>)",
-  subagent_type: "<routed-role-1>",
+  subagent_type: "<routed-role-1>",   // loads .claude/agents/<routed-role-1>.md
   isolation: "worktree",
   prompt: <plan for issue N1> + acceptance criteria + pipeline instructions
 )
 Agent(
   description: "Implement issue #<N2> (wave <W>, fast mode, 2/<total>)",
-  subagent_type: "<routed-role-2>",
+  subagent_type: "<routed-role-2>",   // loads .claude/agents/<routed-role-2>.md
   isolation: "worktree",
   prompt: <plan for issue N2> + acceptance criteria + pipeline instructions
 )
@@ -716,11 +718,57 @@ Present the roster for approval (same format as deploy-issue Step 5.1).
 
 **Step 4.4 — Launch Pass 1 agents** [PARALLEL]
 
-Spawn Pass 1 review agents on the combined diff. Cap output to 200 words per agent.
+Spawn all approved Pass 1 review agents in **parallel** using `subagent_type` to reference the custom agent role. This automatically loads the role's system prompt, model tier, tools, and review checklist from `.claude/agents/<role>.md`. Do NOT manually reconstruct role context in the prompt.
+
+```
+// All in a single message — they run in parallel
+Agent(
+  description: "Review wave diff — memory safety",
+  subagent_type: "review-memory-safety",   // loads .claude/agents/review-memory-safety.md
+  prompt: "Review this combined wave diff for memory safety issues.\n\n<combined diff or summary>\n\nReport findings with severity (P1/P2/P3) and file:line references. Cap output to 200 words if clean."
+)
+Agent(
+  description: "Review wave diff — security",
+  subagent_type: "review-security",
+  prompt: "Review this combined wave diff for security issues.\n\n<combined diff>\n\n..."
+)
+Agent(
+  description: "Review wave diff — unit tests",
+  subagent_type: "test-unit",
+  prompt: "Review test coverage for this wave.\n\n<combined diff>\n\n..."
+)
+// Add conditional agents (review-concurrency, review-fault-recovery, test-scenario) if triggered
+```
+
+Cap output to 200 words per agent.
 
 **Step 4.5 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
 
-Spawn Pass 2 review agents with Pass 1 findings as context.
+Spawn all approved Pass 2 review agents in parallel using `subagent_type`. Provide Pass 1 findings as context in the prompt:
+
+```
+// All in a single message — after Pass 1 completes
+Agent(
+  description: "Review wave diff — test quality",
+  subagent_type: "review-test-quality",    // loads .claude/agents/review-test-quality.md
+  prompt: "Review test quality for this wave.\n\nPass 1 findings:\n<merged Pass 1 results>\n\nCombined diff:\n<diff>\n\nCap output to 200 words if clean."
+)
+Agent(
+  description: "Review wave diff — API contracts",
+  subagent_type: "review-api-contract",
+  prompt: "..."
+)
+Agent(
+  description: "Review wave diff — code quality",
+  subagent_type: "review-code-quality",
+  prompt: "..."
+)
+Agent(
+  description: "Review wave diff — performance",
+  subagent_type: "review-performance",
+  prompt: "..."
+)
+```
 
 **Step 4.6 — Check bot/CI comments**
 
