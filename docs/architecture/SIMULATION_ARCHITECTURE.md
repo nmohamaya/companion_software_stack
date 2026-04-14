@@ -207,7 +207,7 @@ flowchart TB
 
 ### When to Use Each Tier
 
-- **Tier 1**: Run on every commit in CI. Fast, deterministic, no external
+- **Tier 1**: Run on every commit in CI. Fast, reproducible, no external
   dependencies. Validates fault handling, FSM transitions, IPC flow, and
   config parsing. Use the `fault_injector` to simulate faults.
 
@@ -2031,7 +2031,7 @@ grep -i 'depth estimator' drone_logs/scenarios_gazebo/<scenario>/<run>/perceptio
 
 ## Known Flaky Scenarios
 
-Scenarios that may intermittently fail due to timing sensitivity, physics jitter, or non-deterministic behavior. If a scenario listed here fails once, re-run it before investigating.
+Scenarios that may intermittently fail due to timing sensitivity, physics jitter, or non-reproducible behavior. If a scenario listed here fails once, re-run it before investigating.
 
 | Scenario | Flakiness | Root cause | Mitigation |
 | --- | --- | --- | --- |
@@ -2040,7 +2040,7 @@ Scenarios that may intermittently fail due to timing sensitivity, physics jitter
 | 26 Gazebo Full VIO | Tight timeout (50s) | VIO initialization on Gazebo stereo data takes variable time (5-15s). If Gazebo is slow to render the first frames, the mission may not complete in 50s. | Increase `timeout_s` to 70s if consistently failing. |
 | 28 ML Depth | Grid saturation on slow machines | DA V2 inference takes ~1.7s/frame on CPU. On slower machines, fewer depth maps are produced, making promotion thresholds behave differently. | Increase `timeout_s` or reduce `input_size` to 256 (faster inference, lower accuracy). |
 
-> **Non-flaky scenarios:** Tier 1 scenarios (01-16, 19-20, 23-25) are deterministic — simulated backends produce identical results every run. If a Tier 1 scenario fails, it's a real bug.
+> **Non-flaky scenarios:** Tier 1 scenarios (01-16, 19-20, 23-25) are reproducible — simulated backends return fixed, predictable values and fault injection fires at exact delay offsets, so the FSM follows the same path every run. Thread scheduling and IPC latency vary by microseconds between runs, but the pass/fail outcome is consistent because thresholds have generous margins. If a Tier 1 scenario fails, it's a real bug — not a timing fluke.
 
 ---
 
