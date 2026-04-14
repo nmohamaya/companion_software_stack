@@ -5,7 +5,7 @@
 # The ViT-S variant balances accuracy and speed for drone applications:
 #   - Input: 518x518 RGB
 #   - Output: relative inverse depth map (converted to metric in C++ backend)
-#   - CPU inference via OpenCV DNN: ~60-80ms per frame
+#   - CPU inference via OpenCV DNN: ~1s per frame (i7 laptop, single-threaded)
 #
 # Why export instead of download?
 #   HuggingFace hosts PyTorch weights (safetensors) only — no pre-exported ONNX.

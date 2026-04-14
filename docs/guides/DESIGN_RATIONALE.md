@@ -359,3 +359,26 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **When to revisit:** When migrating to TensorRT for Jetson Orin deployment (TensorRT supports full ONNX natively). Also revisit if OpenCV 5.x adds full Resize op support.
 
 **Date:** 2026-04-14
+
+---
+
+## DR-015: OpenCV INTERFACE Link in drone_hal CMake
+
+**Question:** Should we split OpenCV-dependent HAL backends into a separate `drone_hal_opencv` static library to prevent `${OpenCV_LIBS}` from leaking via INTERFACE link to all `drone_hal` consumers?
+
+**Background:** PR #456 review flagged that `target_link_libraries(drone_hal INTERFACE ${OpenCV_LIBS})` makes OpenCV a transitive dependency for every target that links `drone_hal` — including tests and processes that don't use OpenCV.
+
+**Arguments for splitting now:**
+- Cleaner dependency graph — only P2 and OpenCV-specific tests link OpenCV
+- Smaller link lines for non-perception targets
+- Matches the pattern suggested for Cosys-AirSim (see `common/hal/CMakeLists.txt` comment)
+
+**Arguments for deferring (our decision):**
+- Currently only two OpenCV HAL backends exist (YOLO detector, DA V2 depth). The link leak is benign — OpenCV is a shared library, so unused symbols aren't linked in
+- Splitting requires refactoring all consumers to explicitly link `drone_hal_opencv` — touches 5+ CMakeLists.txt files for zero functional benefit today
+- The Cosys-AirSim block already documents this same pattern with the same deferral rationale ("migrate to STATIC when real SDK code is added")
+- YOLO detector sources are already compiled per-target (not via INTERFACE), so the actual compile-time leak is minimal
+
+**When to revisit:** When a third OpenCV HAL backend is added, or when the Cosys-AirSim migration to STATIC happens — do both splits together.
+
+**Date:** 2026-04-14

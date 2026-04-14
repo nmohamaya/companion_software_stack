@@ -78,15 +78,14 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 [[nodiscard]] drone::util::Result<DepthMap, std::string> DepthAnythingV2Estimator::estimate(
     const uint8_t* frame_data, uint32_t width, uint32_t height, uint32_t channels,
     uint32_t stride) {
-    (void)stride;  // OpenCV DNN handles layout internally via blobFromImage
-
     if (frame_data == nullptr || width == 0 || height == 0) {
         return drone::util::Result<DepthMap, std::string>::err(
             "DepthAnythingV2: invalid frame (null data or zero dimensions)");
     }
-    if (channels == 0 || channels < 3) {
+    if (channels < 3 || channels > 4) {
         return drone::util::Result<DepthMap, std::string>::err(
-            "DepthAnythingV2: requires at least 3 channels (RGB), got " + std::to_string(channels));
+            "DepthAnythingV2: requires 3 (RGB) or 4 (RGBA) channels, got " +
+            std::to_string(channels));
     }
 
 #ifdef HAS_OPENCV
@@ -98,8 +97,9 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 
     // ── Step 1: Wrap raw pixel data as cv::Mat ──────────────
     int     cv_type = (channels == 4) ? CV_8UC4 : CV_8UC3;
+    size_t  step    = (stride > 0) ? static_cast<size_t>(stride) : cv::Mat::AUTO_STEP;
     cv::Mat frame(static_cast<int>(height), static_cast<int>(width), cv_type,
-                  const_cast<uint8_t*>(frame_data));
+                  const_cast<uint8_t*>(frame_data), step);
 
     // If RGBA, convert to RGB
     cv::Mat rgb;
@@ -164,8 +164,13 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     const auto  num_pixels = static_cast<size_t>(out_h) * static_cast<size_t>(out_w);
 
     // ── Step 5: Convert relative inverse depth → metric depth ──
-    // DA V2 outputs relative (unnormalized) inverse depth values.
-    // Find min/max to normalize, then convert: depth = max_depth / (normalized + eps)
+    // DA V2 outputs unnormalized inverse depth: higher values = closer objects.
+    // We normalize to [0,1] then invert: depth = max_depth / (normalized + eps).
+    // This maps: normalized≈1 (closest) → depth≈max_depth/(1+eps)≈max_depth,
+    //            normalized≈0 (farthest) → depth≈max_depth/eps (clamped to max_depth).
+    // The final clamp to [0.1, max_depth_m_] ensures valid metric range.
+    // Note: inverse depth means the "closest" pixel gets the highest raw value,
+    // so after inversion the depth spread depends on the scene's actual depth range.
     float min_val = raw_data[0];
     float max_val = raw_data[0];
     for (size_t i = 1; i < num_pixels; ++i) {

@@ -85,18 +85,23 @@ TEST(DepthAnythingV2Test, ZeroDimensionsReturnError) {
     EXPECT_FALSE(r2.is_ok());
 }
 
-TEST(DepthAnythingV2Test, InsufficientChannelsReturnsError) {
+TEST(DepthAnythingV2Test, InvalidChannelsReturnsError) {
     DepthAnythingV2Estimator estimator("nonexistent_model.onnx");
     std::vector<uint8_t>     frame(100, 128);
 
-    auto r1 = estimator.estimate(frame.data(), 10, 10, 0);
+    // Too few channels
+    auto r0 = estimator.estimate(frame.data(), 10, 10, 0);
+    EXPECT_FALSE(r0.is_ok());
+
+    auto r1 = estimator.estimate(frame.data(), 10, 10, 1);
     EXPECT_FALSE(r1.is_ok());
 
-    auto r2 = estimator.estimate(frame.data(), 10, 10, 1);
+    auto r2 = estimator.estimate(frame.data(), 10, 10, 2);
     EXPECT_FALSE(r2.is_ok());
 
-    auto r3 = estimator.estimate(frame.data(), 10, 10, 2);
-    EXPECT_FALSE(r3.is_ok());
+    // Too many channels (only 3=RGB and 4=RGBA supported)
+    auto r5 = estimator.estimate(frame.data(), 10, 10, 5);
+    EXPECT_FALSE(r5.is_ok());
 }
 
 TEST(DepthAnythingV2Test, ConfigConstruction) {
@@ -189,17 +194,33 @@ TEST_F(DAv2ModelTest, SourceDimensionsSetCorrectly) {
 TEST_F(DAv2ModelTest, DepthValuesPositiveAndBounded) {
     DepthAnythingV2Estimator estimator(g_model_path, 518, 20.0f);
 
+    // Use a gradient frame (not uniform) to ensure depth variation in output
     constexpr uint32_t   w = 320, h = 240, c = 3;
-    std::vector<uint8_t> frame(w * h * c, 100);
+    std::vector<uint8_t> frame(w * h * c);
+    for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+            size_t idx     = (y * w + x) * c;
+            frame[idx + 0] = static_cast<uint8_t>(x % 256);
+            frame[idx + 1] = static_cast<uint8_t>(y % 256);
+            frame[idx + 2] = 128;
+        }
+    }
 
     auto result = estimator.estimate(frame.data(), w, h, c);
     ASSERT_TRUE(result.is_ok()) << result.error();
 
-    const auto& map = result.value();
+    const auto& map   = result.value();
+    float       min_d = map.data[0];
+    float       max_d = map.data[0];
     for (float d : map.data) {
         EXPECT_GE(d, 0.1f) << "Depth must be >= 0.1m";
         EXPECT_LE(d, 20.0f) << "Depth must be <= max_depth_m (20.0)";
+        min_d = std::min(min_d, d);
+        max_d = std::max(max_d, d);
     }
+
+    // Non-uniform input must produce depth variation (not collapsed to single value)
+    EXPECT_LT(min_d, max_d) << "Depth map should have variation on non-uniform input";
 }
 
 TEST_F(DAv2ModelTest, RGBAFrameWorks) {

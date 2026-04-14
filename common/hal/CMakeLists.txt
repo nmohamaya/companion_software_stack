@@ -51,6 +51,9 @@ endif()
 # breaking tests that compile detector_factory.cpp without YOLO sources).
 # HAS_OPENCV stays per-target: process2_perception and specific test targets.
 # The DA V2 source compiles safely without HAS_OPENCV (returns error at runtime).
+# TODO: When more OpenCV-dependent HAL backends accumulate, split into a separate
+# drone_hal_opencv STATIC library to avoid INTERFACE link leaking ${OpenCV_LIBS}
+# to all consumers. See PR #456 review discussion.
 if(OPENCV_FOUND)
     target_sources(drone_hal INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/depth_anything_v2.cpp
