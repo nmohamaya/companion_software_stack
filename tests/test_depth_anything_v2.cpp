@@ -122,13 +122,14 @@ TEST(DepthAnythingV2Test, ConfigConstruction) {
     }
 
     drone::Config cfg;
-    cfg.load(path);
+    bool          loaded = cfg.load(path);
+    std::remove(path.c_str());
+    ASSERT_TRUE(loaded) << "Failed to load test config from " << path;
+
     DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
 
     EXPECT_EQ(estimator.name(), "DepthAnythingV2Estimator");
     EXPECT_FALSE(estimator.is_loaded());  // model doesn't exist
-
-    std::remove(path.c_str());
 }
 
 // ═══════════════════════════════════════════════════════════

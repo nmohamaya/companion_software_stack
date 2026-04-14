@@ -333,7 +333,7 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 
 **Question:** How should we handle the incompatibility between the Depth Anything V2 ONNX export and OpenCV DNN's Resize layer?
 
-**Background:** DA V2's DINOv2 backbone uses bicubic interpolation and produces ONNX Resize nodes with 4 inputs (X, roi, scales, sizes) per the ONNX spec. OpenCV DNN (tested on 4.6.0 and 4.10.0) only supports Resize nodes with 1-2 inputs and bilinear/nearest interpolation. This is a fundamental limitation — not a version gap we can upgrade past easily.
+**Background:** DA V2's DINOv2 backbone uses bicubic interpolation and produces ONNX Resize nodes with 4 inputs (X, roi, scales, sizes) per the ONNX spec. OpenCV DNN (tested on 4.6.0 and 4.10.0) fails to load the 4-input `Resize(X, roi, scales, sizes)` form. Our workaround rewrites these to the 3-input `Resize(X, roi, scales)` form with precomputed constant scales, which OpenCV DNN accepts. It also does not support bicubic interpolation mode. This is a fundamental limitation — not a version gap we can upgrade past easily.
 
 **Arguments for using ONNX Runtime instead of OpenCV DNN:**
 - ORT supports the full ONNX spec natively — no graph surgery needed
@@ -344,8 +344,8 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 - OpenCV is already a project dependency (used for detection, image processing) — no new dependency
 - ONNX Runtime adds ~200MB to deployment image, plus CUDA runtime for GPU
 - For our target (Jetson Orin), TensorRT is the production inference path — ORT would be a temporary stopgap anyway
-- The graph surgery is deterministic and well-understood: replace dynamic-size Resize with precomputed fixed-scale Resize for a known input size (518x518)
-- CPU inference at ~1s/frame is acceptable for our 15fps depth budget (we subsample)
+- The graph surgery is deterministic and well-understood: replace 4-input Resize(X, roi, scales, sizes) with 3-input Resize(X, roi, scales) using precomputed constant scale tensors for a known input size (518x518)
+- CPU inference at ~1s/frame on i7 laptop (single-threaded) is acceptable — the depth thread runs independently and the fusion engine consumes whatever rate is available. On Jetson Orin with GPU, TensorRT will be the production path
 
 **The fix:** Three-step ONNX post-processing in `models/download_depth_anything_v2.sh`:
 1. Export with `torch.onnx.export(dynamo=False, opset_version=14)` + monkey-patch `F.interpolate` to replace bicubic→bilinear

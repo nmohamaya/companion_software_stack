@@ -1725,7 +1725,7 @@ a zero-initialized struct would activate every override at its most dangerous va
 
 ## Test Scenarios
 
-Twenty-five pre-defined scenarios in `config/scenarios/`:
+Twenty-seven pre-defined scenarios in `config/scenarios/`:
 
 | # | Scenario | Tier | Gazebo | What it Tests |
 |---|---|---|---|---|

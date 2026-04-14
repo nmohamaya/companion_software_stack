@@ -25,7 +25,7 @@ Sections:
 Copy this template when adding a new fix. Every section is mandatory — a fix entry that someone else can't reproduce or learn from is just a changelog line.
 
 ```markdown
-### Fix #XX — <Short title describing the symptom> (#<GitHub issue>)
+### Fix #XX — <Short title describing the symptom> (Issue #<GitHub issue>)
 
 **Date:** YYYY-MM-DD
 **Severity:** Critical / Blocker / High / Medium / Low
@@ -628,7 +628,7 @@ else
 
 ---
 
-### Fix #51 — Depth Anything V2 ONNX Model Incompatible with OpenCV DNN (#455)
+### Fix #51 — Depth Anything V2 ONNX Model Incompatible with OpenCV DNN (Issue #455)
 
 **Date:** 2026-04-14
 **Severity:** Blocker (ML depth backend completely non-functional)

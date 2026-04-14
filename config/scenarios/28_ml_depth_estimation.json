@@ -66,7 +66,7 @@
                 "input_size": 518,
                 "max_fps": 15,
                 "max_depth_m": 20.0,
-                "_comment": "Depth Anything V2 ViT-S ONNX via OpenCV DNN. CPU inference ~60-80ms/frame."
+                "_comment": "Depth Anything V2 ViT-S ONNX via OpenCV DNN at 518x518. CPU inference ~1s/frame (hardware-dependent)."
             },
             "tracker": {
                 "backend": "bytetrack",

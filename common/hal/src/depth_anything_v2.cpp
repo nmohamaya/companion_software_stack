@@ -159,7 +159,11 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
             std::to_string(out_w));
     }
 
-    CV_Assert(output.type() == CV_32F);
+    if (output.type() != CV_32F) {
+        return drone::util::Result<DepthMap, std::string>::err(
+            "DepthAnythingV2: unexpected output type=" + std::to_string(output.type()) +
+            ", expected CV_32F (" + std::to_string(CV_32F) + ")");
+    }
     const auto* raw_data   = reinterpret_cast<const float*>(output.data);
     const auto  num_pixels = static_cast<size_t>(out_h) * static_cast<size_t>(out_w);
 
