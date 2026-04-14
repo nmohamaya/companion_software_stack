@@ -201,7 +201,7 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
         // Read latest ML depth map for depth estimation enhancement (Issue #430)
         if (depth_buf) {
             if (auto dopt = depth_buf->read()) {
-                engine.set_depth_map(*dopt);
+                engine.set_depth_map(std::move(*dopt));
             }
         }
 
@@ -355,6 +355,7 @@ static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_
     auto       last_run   = std::chrono::steady_clock::now();
 
     uint64_t frame_count = 0;
+    uint64_t fail_count  = 0;
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::VideoFrame frame;
@@ -376,11 +377,21 @@ static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_
                 depth_map.timestamp_ns = frame.timestamp_ns;
                 output_queue.write(std::move(depth_map));
                 ++frame_count;
+                fail_count = 0;  // reset on success
 
                 if (frame_count % 100 == 0) {
                     DRONE_LOG_INFO("[Depth] Processed {} frames (writes={})", frame_count,
                                    output_queue.write_count());
                 }
+            } else {
+                ++fail_count;
+                // Throttled warning: log first failure and every 100th after
+                if (fail_count == 1 || fail_count % 100 == 0) {
+                    DRONE_LOG_WARN("[Depth] estimate() failed ({} consecutive): {}", fail_count,
+                                   result.error());
+                }
+                // Backpressure: sleep to avoid hot-looping on persistent HAL failure
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));

@@ -585,10 +585,11 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         return {std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM), 0.3f};
     }
 
-    // Tier 3.5: ML depth map override (Issue #430).
-    // If an ML depth map is available, sample at the detection center.
-    // ML depth variance scales proportionally to distance squared.
-    // Only prefer ML depth when its variance is lower than geometric fallback.
+    // Tier 3.5: ML depth map fallback (Issue #430).
+    // Only reached when Tier 3 ground-plane is geometrically impossible
+    // (detection centroid at or above the horizon, ray_down <= threshold).
+    // Samples the ML depth map at the bbox center; variance = 0.1 * depth².
+    // Preferred over Tier 4 (blind fallback) when ML variance is reasonable.
     if (has_depth_map_ && latest_depth_map_.width > 0 && latest_depth_map_.height > 0) {
         // Scale bbox center (pixel coords) to depth map coordinates
         const float img_w   = calib_.camera_intrinsics(0, 2) * 2.0f;  // approx image width from cx
@@ -680,9 +681,9 @@ void UKFFusionEngine::set_drone_altitude(float altitude_m) {
     has_altitude_     = true;
 }
 
-void UKFFusionEngine::set_depth_map(const drone::hal::DepthMap& depth_map) {
-    latest_depth_map_ = depth_map;
+void UKFFusionEngine::set_depth_map(drone::hal::DepthMap depth_map) {
     has_depth_map_    = !depth_map.data.empty() && depth_map.width > 0 && depth_map.height > 0;
+    latest_depth_map_ = std::move(depth_map);
 }
 
 bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& radar_matched,

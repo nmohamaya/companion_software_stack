@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 
 namespace drone::perception {
 
@@ -46,9 +47,19 @@ OpenCvYoloDetector::OpenCvYoloDetector(const std::string& model_path, float conf
 
 // ── Model loading ───────────────────────────────────────────
 void OpenCvYoloDetector::load_model(const std::string& model_path) {
+    // Path traversal guard: reject paths containing ".." components.
+    // Real backends will load model files from disk — prevent directory traversal
+    // from config-injected paths (e.g. "../../etc/passwd").
+    const auto canonical = std::filesystem::weakly_canonical(model_path);
+    if (model_path.find("..") != std::string::npos) {
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] Rejected model path with '..': {}", model_path);
+        model_loaded_ = false;
+        return;
+    }
+
 #ifdef HAS_OPENCV
     try {
-        net_ = cv::dnn::readNetFromONNX(model_path);
+        net_ = cv::dnn::readNetFromONNX(canonical.string());
         net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         model_loaded_ = true;
@@ -61,7 +72,7 @@ void OpenCvYoloDetector::load_model(const std::string& model_path) {
         model_loaded_ = false;
     }
 #else
-    (void)model_path;
+    (void)canonical;
     DRONE_LOG_WARN("[OpenCvYoloDetector] OpenCV not available — model not loaded");
     model_loaded_ = false;
 #endif

@@ -237,12 +237,16 @@ TEST(UKFDepthFusionTest, EmptyDepthMapIsIgnored) {
 }
 
 TEST(UKFDepthFusionTest, DepthMapUsedInFusion) {
-    // Provide a depth map and a tracked object at the center of the image.
-    // The UKF should use the ML depth when geometric methods have high variance.
-    auto                               calib = make_depth_test_calib();
+    // Verify ML depth map is actually used in Tier 3.5 of estimate_depth().
+    // Force past Tiers 1-3 by:
+    //   - bbox_h = 0 → skips Tier 1 (needs bbox_h > 10) and Tier 2 (same guard)
+    //   - position_2d.y() = cy (240) → ray_down = 0 → skips Tier 3
+    // This lands in Tier 3.5 which reads the ML depth map.
+    auto calib        = make_depth_test_calib();
+    calib.depth_scale = 1.0f;  // Disable conservative scaling so ML depth passes through unscaled
     drone::perception::UKFFusionEngine engine(calib);
 
-    // Create depth map with known depth at center
+    // Create depth map with uniform known depth
     constexpr uint32_t dw = 64, dh = 48;
     constexpr float    known_depth = 12.0f;
     DepthMap           depth;
@@ -250,9 +254,9 @@ TEST(UKFDepthFusionTest, DepthMapUsedInFusion) {
     depth.height = dh;
     depth.scale  = 1.0f;
     depth.data.assign(dw * dh, known_depth);
-    engine.set_depth_map(depth);
+    engine.set_depth_map(std::move(depth));
 
-    // Create a tracked object near image center
+    // Create a tracked object at the horizon with zero bbox height
     drone::perception::TrackedObjectList tracked;
     tracked.timestamp_ns   = 1000;
     tracked.frame_sequence = 1;
@@ -261,19 +265,19 @@ TEST(UKFDepthFusionTest, DepthMapUsedInFusion) {
     obj.track_id     = 1;
     obj.class_id     = drone::perception::ObjectClass::PERSON;
     obj.confidence   = 0.8f;
-    obj.position_2d  = {320.0f, 200.0f};  // Near center, above cy — geometric depth is very high
+    obj.position_2d  = {320.0f, 240.0f};  // At cy (horizon) — ray_down = 0
     obj.velocity_2d  = {0.0f, 0.0f};
     obj.timestamp_ns = 1000;
-    obj.bbox_h       = 50.0f;
+    obj.bbox_h       = 0.0f;  // Zero height — forces past Tier 1 & 2
     tracked.objects.push_back(obj);
 
     auto result = engine.fuse(tracked);
 
     ASSERT_EQ(result.objects.size(), 1u);
-    // The fused depth should be influenced by the ML depth map.
-    // Exact value depends on the UKF's multi-tier depth logic, but it
-    // should produce a positive, finite depth.
-    EXPECT_GT(result.objects[0].position_3d.x(), 0.0f);
+    // Fused depth (position_3d.x() in body-frame FRD) should be near the
+    // ML depth of 12m. UKF initial state uses this depth directly, so the
+    // first fuse() output should be close. Allow ±3m for UKF initialization.
+    EXPECT_NEAR(result.objects[0].position_3d.x(), known_depth, 3.0f);
     EXPECT_TRUE(std::isfinite(result.objects[0].position_3d.x()));
 }
 

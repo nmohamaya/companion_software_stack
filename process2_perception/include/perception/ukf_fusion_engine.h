@@ -202,7 +202,8 @@ public:
     void set_drone_pose(float north, float east, float up, float yaw) override;
 
     /// Provide ML depth map for depth-enhanced fusion (Issue #430).
-    void set_depth_map(const drone::hal::DepthMap& depth_map) override;
+    /// Takes ownership via move to avoid copying ~1.2MB per frame at 30Hz.
+    void set_depth_map(drone::hal::DepthMap depth_map) override;
 
     /// Access dormant obstacles (for testing).
     [[nodiscard]] const std::vector<DormantObstacle>& dormant_obstacles() const {
