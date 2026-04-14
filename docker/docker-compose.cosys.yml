@@ -1,0 +1,66 @@
+# ============================================================================
+# docker-compose.cosys.yml — Companion Stack + Cosys-AirSim (Phase 3 stub)
+# ============================================================================
+# Two-service template for running the companion stack alongside a
+# Cosys-AirSim photorealistic simulation environment.
+#
+# STATUS: Phase 3 placeholder (Issue #435).
+# The cosys-airsim service is a stub — it will be fully implemented when
+# Phase 3 adds Cosys-AirSim integration with camera/IMU/GPS bridge topics.
+#
+# Phase 3 (#435) will add:
+#   - Cosys-AirSim Docker image build or pull from registry
+#   - AirSim settings.json volume mount for environment configuration
+#   - Bridge process that translates AirSim sensor data to Zenoh IPC topics
+#   - Shared Zenoh network between companion stack and simulator
+#   - GPU sharing or multi-GPU allocation between inference and rendering
+#   - Health checks and startup ordering (simulator ready before stack starts)
+#
+# Usage (once Phase 3 is complete):
+#   docker compose -f docker/docker-compose.cosys.yml up --build
+# ============================================================================
+
+services:
+  # Extend the base companion-stack service to avoid duplicating config
+  companion-stack:
+    extends:
+      file: docker-compose.yml
+      service: companion-stack
+    networks:
+      - sim-network
+    # Phase 3: depends_on cosys-airsim with condition: service_healthy
+
+  # ── Cosys-AirSim photorealistic simulator (Phase 3 stub) ─────────────────
+  # This service will run the Cosys-AirSim Unreal Engine environment,
+  # providing synthetic camera, depth, IMU, and GPS data to the companion
+  # stack via a Zenoh bridge process.
+  cosys-airsim:
+    image: cosys-airsim:latest       # Phase 3: replace with actual image
+    command: ["echo", "Cosys-AirSim stub — implement in Phase 3 (#435)"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Phase 3 volumes:
+    #   - ./airsim_settings.json:/home/airsim/AirSim/settings.json:ro
+    #   - airsim-data:/home/airsim/data
+    networks:
+      - sim-network
+    # Phase 3: healthcheck for simulator readiness
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:41451/api/ping"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 30
+    #   start_period: 60s
+
+networks:
+  sim-network:
+    driver: bridge
+
+volumes:
+  models:
+  logs:

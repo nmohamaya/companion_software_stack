@@ -1,0 +1,51 @@
+# ============================================================================
+# .dockerignore — Build context exclusions for Docker builds
+# ============================================================================
+# Docker reads .dockerignore from the build context root (repo root), not from
+# the docker/ subdirectory. This file must live here for exclusions to apply.
+# ============================================================================
+
+# Build artifacts
+build/
+build-*/
+cmake-build-*/
+
+# Version control
+.git/
+.gitignore
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude / AI tooling
+.claude/
+graphify-out/
+extracted_code/
+tasks/
+AGENT_REPORT.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+scripts/orchestrator.egg-info/
+.pipeline-state
+
+# Logs and coverage
+drone_logs/
+*.log
+coverage-report/
+*.gcno
+*.gcda
+
+# ML model files (mounted at runtime, not baked into image)
+*.onnx
+*.pt
+
+# Documentation (not needed in build context)
+docs/debug/
+docs/legacy/

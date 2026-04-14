@@ -1,0 +1,40 @@
+# ============================================================================
+# docker-compose.yml — Drone Companion Software Stack
+# ============================================================================
+# Single-service compose for running the full 7-process companion stack.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up --build
+#   docker compose -f docker/docker-compose.yml up -d        # detached
+#   docker compose -f docker/docker-compose.yml logs -f      # follow logs
+#   docker compose -f docker/docker-compose.yml down          # stop
+#
+# Override config by placing a custom default.json in config/:
+#   The config/ directory is bind-mounted read-only into the container.
+# ============================================================================
+
+services:
+  companion-stack:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        MODEL_PRESET: edge
+    image: companion-stack:latest
+    init: true                     # tini as PID 1 — proper signal forwarding to all 7 processes
+    ipc: host                      # Zenoh SHM zero-copy requires host IPC
+    volumes:
+      - ../config:/app/config:ro   # Override runtime config
+      - models:/app/models         # ML model files (e.g. yolov8n.onnx)
+      - logs:/app/drone_logs       # Persist logs across restarts
+    environment:
+      - DRONE_LOG_DIR=/app/drone_logs
+    # Resource limits (compose-compatible — deploy.resources is Swarm-only)
+    mem_limit: 4g
+    mem_reservation: 1g
+    pids_limit: 512
+    restart: unless-stopped
+
+volumes:
+  models:
+  logs:
