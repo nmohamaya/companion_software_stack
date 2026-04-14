@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: tech-lead
 description: Orchestrator agent that routes work, manages reviews, and coordinates multi-agent sessions
-tools: [Read, Glob, Grep, Bash, Agent]
+tools: Read, Glob, Grep, Bash, Agent
 model: opus
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Tech Lead — Orchestrator Agent
 

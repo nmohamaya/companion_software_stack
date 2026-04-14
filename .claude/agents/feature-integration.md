@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: feature-integration
 description: Implements comms, payload, and system monitor features — FC/GCS links, gimbal, health monitoring
-tools: [Read, Edit, Write, Bash, Glob, Grep]
+tools: Read, Edit, Write, Bash, Glob, Grep
 model: opus
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Feature Agent — Integration (Comms, Payload, Monitor)
 
