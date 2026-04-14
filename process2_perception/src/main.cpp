@@ -198,6 +198,13 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             }
         }
 
+        // Read latest ML depth map for depth estimation enhancement (Issue #430)
+        if (depth_buf) {
+            if (auto dopt = depth_buf->read()) {
+                engine.set_depth_map(*dopt);
+            }
+        }
+
         // Fuse when tracking data arrives (latest-value, never stale)
         if (auto topt = tracked_queue.read()) {
             drone::util::FrameDiagnostics diag(fusion_count);
@@ -543,9 +550,30 @@ int main(int argc, char* argv[]) {
         DRONE_LOG_INFO("[Perception] Radar disabled (perception.radar.enabled=false)");
     }
 
+    // ── Create depth estimator HAL (optional, Issue #430) ──
+    bool depth_enabled = ctx.cfg.get<bool>(drone::cfg_key::perception::depth_estimator::ENABLED,
+                                           false);
+    std::unique_ptr<drone::hal::IDepthEstimator> depth_estimator;
+    if (depth_enabled) {
+        try {
+            depth_estimator = drone::hal::create_depth_estimator(
+                ctx.cfg, drone::cfg_key::perception::depth_estimator::SECTION);
+            DRONE_LOG_INFO("[Perception] Depth estimator: {}", depth_estimator->name());
+        } catch (const std::exception& e) {
+            DRONE_LOG_ERROR("[Depth] Failed to create HAL backend: {} — depth disabled", e.what());
+            depth_estimator.reset();
+            depth_enabled = false;
+        }
+    } else {
+        DRONE_LOG_INFO("[Perception] Depth estimator disabled "
+                       "(perception.depth_estimator.enabled=false)");
+    }
+
     // ── Internal triple buffers (lock-free latest-value handoff) ──
     drone::TripleBuffer<Detection2DList>   inference_to_tracker;
     drone::TripleBuffer<TrackedObjectList> tracker_to_fusion;
+    // Depth map triple buffer — only used when depth estimator is enabled
+    drone::TripleBuffer<drone::hal::DepthMap> depth_to_fusion;
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread, std::ref(*video_sub), std::ref(inference_to_tracker),
@@ -565,7 +593,22 @@ int main(int argc, char* argv[]) {
         std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
-                         std::ref(*fusion_engine), fusion_rate_hz);
+                         std::ref(*fusion_engine), fusion_rate_hz,
+                         depth_enabled ? &depth_to_fusion : nullptr);
+
+    // Launch depth estimation thread if HAL is active (Issue #430)
+    // Subscriber must outlive the thread — declare in outer scope (same pattern as pose_sub, radar_sub)
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::VideoFrame>> depth_video_sub;
+    std::thread                                                      t_depth;
+    if (depth_enabled && depth_estimator) {
+        // Separate video subscriber for depth thread — don't share with inference
+        depth_video_sub =
+            ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
+        const int depth_max_fps = std::clamp(
+            ctx.cfg.get<int>(drone::cfg_key::perception::depth_estimator::MAX_FPS, 15), 1, 60);
+        t_depth = std::thread(depth_thread, std::ref(*depth_video_sub), std::ref(depth_to_fusion),
+                              std::ref(g_running), std::ref(*depth_estimator), depth_max_fps);
+    }
 
     // Launch radar read thread if HAL is active and publisher is ready
     std::thread t_radar;
@@ -599,6 +642,7 @@ int main(int argc, char* argv[]) {
     t_inference.join();
     t_tracker.join();
     t_fusion.join();
+    if (t_depth.joinable()) t_depth.join();
     if (t_radar.joinable()) t_radar.join();
 
     DRONE_LOG_INFO("=== Perception process stopped ===");

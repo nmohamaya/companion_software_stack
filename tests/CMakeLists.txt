@@ -221,6 +221,12 @@ if(OPENCV_FOUND)
     target_link_libraries(test_opencv_yolo_detector PRIVATE ${OpenCV_LIBS})
     target_compile_definitions(test_opencv_yolo_detector PRIVATE HAS_OPENCV=1)
 endif()
+
+# ── Depth estimator + UKF depth fusion tests (Issue #430) ──
+add_drone_test(test_depth_estimator  test_depth_estimator.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/fusion_engine.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/ukf_fusion_engine.cpp
+)
 endif()
 
 # ── Diagnostic Collector tests ──────────────────────────────
