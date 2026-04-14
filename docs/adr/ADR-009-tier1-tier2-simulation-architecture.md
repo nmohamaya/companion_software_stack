@@ -7,6 +7,7 @@
 | **Author** | Team |
 | **Deciders** | Project leads |
 | **Supersedes** | — |
+| **Extended by** | ADR-011 (Cosys-AirSim Tier 3 photorealistic simulation) |
 | **Related** | Issue #167, ADR-006 (HAL strategy), Improvement #46, scenarios 01–09 |
 
 ---
