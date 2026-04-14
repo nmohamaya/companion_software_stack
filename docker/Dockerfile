@@ -48,7 +48,7 @@ RUN apt-get update -qq && \
 
 # ── Zenoh 1.7.2 ────────────────────────────────────────────────────────────
 ARG ZENOH_VERSION=1.7.2
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 RUN wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc_${ZENOH_VERSION}-1_${TARGETARCH}.deb" \
          -O /tmp/libzenohc.deb && \
     wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-dev_${ZENOH_VERSION}-1_${TARGETARCH}.deb" \
@@ -98,7 +98,7 @@ RUN mkdir -p build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DALLOW_INSECURE_ZENOH=ON \
-        -DCMAKE_CXX_FLAGS="-Wall -Wextra" && \
+        -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" && \
     make -j$(nproc)
 
 # Validate build with tests
@@ -129,17 +129,16 @@ RUN apt-get update -qq && \
         libtiff6 && \
     rm -rf /var/lib/apt/lists/*
 
-# Zenoh runtime library (not -dev)
+# Zenoh runtime library (not -dev) — merged into single apt layer
 ARG ZENOH_VERSION=1.7.2
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends wget ca-certificates && \
     wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc_${ZENOH_VERSION}-1_${TARGETARCH}.deb" \
          -O /tmp/libzenohc.deb && \
     dpkg -i /tmp/libzenohc.deb && \
     rm /tmp/libzenohc.deb && \
-    apt-get purge -y wget && \
-    apt-get autoremove -y && \
+    apt-get purge -y --auto-remove wget ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     ldconfig
 
@@ -165,8 +164,13 @@ RUN ldconfig
 
 WORKDIR /app
 
-# Create log directory
-RUN mkdir -p /app/drone_logs
+# Create log directory and non-root user for runtime security
+RUN mkdir -p /app/drone_logs && \
+    useradd -r -u 1001 -m drone && \
+    chown -R drone:drone /app
+
 ENV DRONE_LOG_DIR=/app/drone_logs
+
+USER drone
 
 ENTRYPOINT ["/app/deploy/launch_all.sh"]
