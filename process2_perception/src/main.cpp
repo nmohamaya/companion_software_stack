@@ -4,6 +4,7 @@
 // publishes fused objects to SHM.
 
 #include "hal/hal_factory.h"
+#include "hal/idepth_estimator.h"
 #include "hal/iradar.h"
 #include "ipc/ipc_types.h"
 #include "perception/detector_interface.h"
@@ -136,7 +137,8 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                           drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
                           drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
                           drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
-                          std::atomic<bool>& running, IFusionEngine& engine, int fusion_rate_hz) {
+                          std::atomic<bool>& running, IFusionEngine& engine, int fusion_rate_hz,
+                          drone::TripleBuffer<drone::hal::DepthMap>* depth_buf) {
     DRONE_LOG_INFO("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
                    fusion_rate_hz);
 
@@ -327,6 +329,58 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
     }
     DRONE_LOG_INFO("[Fusion] Thread stopped after {} cycles (reads={})", fusion_count,
                    tracked_queue.read_count());
+}
+
+// ── Depth estimation thread (Issue #430) ───────────────────
+// Reads video frames, runs ML depth estimation, publishes results
+// to a triple buffer for consumption by the fusion thread.
+static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
+                         drone::TripleBuffer<drone::hal::DepthMap>&       output_queue,
+                         std::atomic<bool>& running, drone::hal::IDepthEstimator& estimator,
+                         int max_fps) {
+    DRONE_LOG_INFO("[Depth] Thread started — backend: {}, max_fps: {}", estimator.name(), max_fps);
+
+    auto hb = drone::util::ScopedHeartbeat("depth", true);
+
+    // Rate limiting — avoid running faster than the model can process
+    const auto min_period = (max_fps > 0) ? std::chrono::milliseconds(1000 / max_fps)
+                                          : std::chrono::milliseconds(0);
+    auto       last_run   = std::chrono::steady_clock::now();
+
+    uint64_t frame_count = 0;
+    while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+        drone::ipc::VideoFrame frame;
+        bool                   got_frame = video_sub.receive(frame);
+
+        if (got_frame) {
+            // Rate limiting
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_run < min_period) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            last_run = now;
+
+            auto result = estimator.estimate(frame.pixel_data, frame.width, frame.height,
+                                             frame.channels);
+            if (result.is_ok()) {
+                auto depth_map         = std::move(result).value();
+                depth_map.timestamp_ns = frame.timestamp_ns;
+                output_queue.write(std::move(depth_map));
+                ++frame_count;
+
+                if (frame_count % 100 == 0) {
+                    DRONE_LOG_INFO("[Depth] Processed {} frames (writes={})", frame_count,
+                                   output_queue.write_count());
+                }
+            }
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    DRONE_LOG_INFO("[Depth] Thread stopped — {} frames, {} writes", frame_count,
+                   output_queue.write_count());
 }
 
 // ── Radar HAL read thread ──────────────────────────────────

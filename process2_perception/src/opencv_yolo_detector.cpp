@@ -20,6 +20,18 @@ OpenCvYoloDetector::OpenCvYoloDetector(const drone::Config& cfg) {
     nms_threshold_ = cfg.get<float>(drone::cfg_key::perception::detector::NMS_THRESHOLD, 0.45f);
     input_size_    = cfg.get<int>(drone::cfg_key::perception::detector::INPUT_SIZE, 640);
 
+    // Dataset selection: "coco" (80 classes) or "visdrone" (10 aerial classes)
+    auto dataset_str = cfg.get<std::string>(drone::cfg_key::perception::detector::DATASET, "coco");
+    if (dataset_str == "visdrone") {
+        dataset_     = DetectorDataset::VISDRONE;
+        num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 10);
+    } else {
+        dataset_     = DetectorDataset::COCO;
+        num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 80);
+    }
+
+    DRONE_LOG_INFO("[OpenCvYoloDetector] Dataset: {}, num_classes: {}", dataset_str, num_classes_);
+
     load_model(model_path);
 }
 
@@ -178,7 +190,9 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
         det.w              = static_cast<float>(boxes[idx].width);
         det.h              = static_cast<float>(boxes[idx].height);
         det.confidence     = confidences[idx];
-        det.class_id       = coco_to_object_class(class_ids[idx]);
+        det.class_id       = (dataset_ == DetectorDataset::VISDRONE)
+                                 ? visdrone_to_object_class(class_ids[idx])
+                                 : coco_to_object_class(class_ids[idx]);
         det.timestamp_ns   = now_ns;
         det.frame_sequence = 0;
 

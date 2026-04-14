@@ -585,6 +585,38 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         return {std::clamp(calib_.camera_height_m / ray_down * ds, kDepthMinM, kDepthMaxM), 0.3f};
     }
 
+    // Tier 3.5: ML depth map override (Issue #430).
+    // If an ML depth map is available, sample at the detection center.
+    // ML depth variance scales proportionally to distance squared.
+    // Only prefer ML depth when its variance is lower than geometric fallback.
+    if (has_depth_map_ && latest_depth_map_.width > 0 && latest_depth_map_.height > 0) {
+        // Scale bbox center (pixel coords) to depth map coordinates
+        const float img_w   = calib_.camera_intrinsics(0, 2) * 2.0f;  // approx image width from cx
+        const float img_h   = calib_.camera_intrinsics(1, 2) * 2.0f;  // approx image height from cy
+        const float scale_x = static_cast<float>(latest_depth_map_.width) / std::max(1.0f, img_w);
+        const float scale_y = static_cast<float>(latest_depth_map_.height) / std::max(1.0f, img_h);
+
+        const auto dm_x = static_cast<uint32_t>(std::clamp(
+            trk.position_2d.x() * scale_x, 0.0f, static_cast<float>(latest_depth_map_.width - 1)));
+        const auto dm_y = static_cast<uint32_t>(std::clamp(
+            trk.position_2d.y() * scale_y, 0.0f, static_cast<float>(latest_depth_map_.height - 1)));
+
+        const size_t idx = static_cast<size_t>(dm_y) * latest_depth_map_.width + dm_x;
+        if (idx < latest_depth_map_.data.size()) {
+            const float ml_depth = latest_depth_map_.data[idx] * latest_depth_map_.scale;
+            if (ml_depth > kDepthMinM && ml_depth < kDepthMaxM) {
+                // ML depth variance: proportional to distance squared (10% relative error)
+                const float ml_var = 0.1f * ml_depth * ml_depth;
+                // Geometric fallback variance is high (Tier 3/4) — ML wins easily here
+                constexpr float kGeometricFallbackVar = 25.0f;  // ~5m std dev
+                if (ml_var < kGeometricFallbackVar) {
+                    const float ml_conf = std::clamp(1.0f / (1.0f + ml_var), 0.1f, 0.6f);
+                    return {std::clamp(ml_depth * ds, kDepthMinM, kDepthMaxM), ml_conf};
+                }
+            }
+        }
+    }
+
     // Tier 4: Near-horizon conservative estimate — no geometric basis.
     // Use 0.01 (not 0.0) so the P2 camera-only fallback doesn't override
     // this with detection confidence (which would defeat the promotion gate).
@@ -596,6 +628,8 @@ void UKFFusionEngine::reset() {
     dormant_obstacles_.clear();
     track_to_dormant_.clear();
     has_radar_data_      = false;
+    has_depth_map_       = false;
+    latest_depth_map_    = {};
     next_radar_track_id_ = 0x80000000u;
 }
 
@@ -644,6 +678,11 @@ void UKFFusionEngine::set_radar_detections(const drone::ipc::RadarDetectionList&
 void UKFFusionEngine::set_drone_altitude(float altitude_m) {
     drone_altitude_m_ = altitude_m;
     has_altitude_     = true;
+}
+
+void UKFFusionEngine::set_depth_map(const drone::hal::DepthMap& depth_map) {
+    latest_depth_map_ = depth_map;
+    has_depth_map_    = !depth_map.data.empty() && depth_map.width > 0 && depth_map.height > 0;
 }
 
 bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& radar_matched,
