@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: review-security
 description: Reviews code for security vulnerabilities — input validation, IPC bounds checks, authentication, secrets
-tools: [Read, Glob, Grep]
+tools: Read, Glob, Grep
 model: sonnet
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Review Agent — Security
 

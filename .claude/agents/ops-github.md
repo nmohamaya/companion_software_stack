@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: ops-github
 description: GitHub operations — issue triage, label management, milestone tracking, stale cleanup, epic progress
-tools: [Read, Glob, Grep, Bash]
+tools: Read, Glob, Grep, Bash
 model: haiku
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Ops Agent — GitHub Operations
 
