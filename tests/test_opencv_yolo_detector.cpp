@@ -64,7 +64,7 @@ TEST(CocoMappingTest, ClassNames) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// VisDrone mapping tests (Issue #430 — always run, no OpenCV needed)
+// VisDrone mapping tests (Issue #430 — pure mapping logic, no OpenCV DNN calls)
 // ═══════════════════════════════════════════════════════════
 
 TEST(VisDroneMappingTest, PedestrianMaps) {

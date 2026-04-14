@@ -17,6 +17,12 @@ namespace drone::hal {
 /// Simulated depth estimator returning fixed depth with Gaussian noise.
 /// NOT thread-safe: rng_ is mutated on each estimate() call.
 /// Only call from a single thread (the depth thread in P2).
+///
+/// Performance note: generates a full width×height depth map with per-pixel RNG.
+/// At 1920×1080 this is ~2M RNG draws — acceptable for simulation/testing at 15fps.
+/// Real backends (Depth Anything V2) produce model-native resolution (e.g. 518×518)
+/// which is smaller and faster.
+///
 /// Config keys:
 ///   perception.depth_estimator.default_depth_m  (default 10.0)
 ///   perception.depth_estimator.noise_std_m      (default 0.5)
@@ -51,11 +57,13 @@ public:
         }
 
         DepthMap map;
-        map.width        = width;
-        map.height       = height;
-        map.scale        = 1.0f;
-        map.confidence   = 0.5f;  // simulated confidence
-        map.timestamp_ns = 0;     // caller should set from frame timestamp
+        map.width         = width;
+        map.height        = height;
+        map.source_width  = width;  // simulated: output matches input
+        map.source_height = height;
+        map.scale         = 1.0f;
+        map.confidence    = 0.5f;  // simulated confidence
+        map.timestamp_ns  = 0;     // caller should set from frame timestamp
 
         const auto num_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
         map.data.resize(num_pixels);

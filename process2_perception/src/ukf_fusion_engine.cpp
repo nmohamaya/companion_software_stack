@@ -591,9 +591,15 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
     // Samples the ML depth map at the bbox center; variance = 0.1 * depth².
     // Preferred over Tier 4 (blind fallback) when ML variance is reasonable.
     if (has_depth_map_ && latest_depth_map_.width > 0 && latest_depth_map_.height > 0) {
-        // Scale bbox center (pixel coords) to depth map coordinates
-        const float img_w   = calib_.camera_intrinsics(0, 2) * 2.0f;  // approx image width from cx
-        const float img_h   = calib_.camera_intrinsics(1, 2) * 2.0f;  // approx image height from cy
+        // Scale bbox center (pixel coords) to depth map coordinates.
+        // Use source_width/source_height (the frame size the estimator received) for accurate
+        // mapping. Falls back to 2*cx/2*cy only if source dimensions are not set (backward compat).
+        const float img_w   = (latest_depth_map_.source_width > 0)
+                                  ? static_cast<float>(latest_depth_map_.source_width)
+                                  : calib_.camera_intrinsics(0, 2) * 2.0f;
+        const float img_h   = (latest_depth_map_.source_height > 0)
+                                  ? static_cast<float>(latest_depth_map_.source_height)
+                                  : calib_.camera_intrinsics(1, 2) * 2.0f;
         const float scale_x = static_cast<float>(latest_depth_map_.width) / std::max(1.0f, img_w);
         const float scale_y = static_cast<float>(latest_depth_map_.height) / std::max(1.0f, img_h);
 
@@ -606,7 +612,7 @@ UKFFusionEngine::DepthEstimate UKFFusionEngine::estimate_depth(const TrackedObje
         if (idx < latest_depth_map_.data.size()) {
             const float ml_depth = latest_depth_map_.data[idx] * latest_depth_map_.scale;
             if (ml_depth > kDepthMinM && ml_depth < kDepthMaxM) {
-                // ML depth variance: proportional to distance squared (10% relative error)
+                // ML depth variance: proportional to distance squared (~31.6% relative std dev)
                 const float ml_var = 0.1f * ml_depth * ml_depth;
                 // Geometric fallback variance is high (Tier 3/4) — ML wins easily here
                 constexpr float kGeometricFallbackVar = 25.0f;  // ~5m std dev

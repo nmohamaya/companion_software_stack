@@ -358,17 +358,20 @@ static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_
     uint64_t fail_count  = 0;
     while (running.load(std::memory_order_relaxed)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        // Rate limit BEFORE receive() to avoid copying a ~6MB VideoFrame
+        // that would be immediately dropped. Sleep until the next allowed tick.
+        auto now = std::chrono::steady_clock::now();
+        if (now < last_run + min_period) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
         drone::ipc::VideoFrame frame;
         bool                   got_frame = video_sub.receive(frame);
 
         if (got_frame) {
-            // Rate limiting
-            auto now = std::chrono::steady_clock::now();
-            if (now - last_run < min_period) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            last_run = now;
+            last_run = std::chrono::steady_clock::now();
 
             auto result = estimator.estimate(frame.pixel_data, frame.width, frame.height,
                                              frame.channels);
@@ -615,8 +618,9 @@ int main(int argc, char* argv[]) {
         // Separate video subscriber for depth thread — don't share with inference
         depth_video_sub =
             ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
+        // 0 = no rate limit (run as fast as model allows), consistent with detector max_fps
         const int depth_max_fps = std::clamp(
-            ctx.cfg.get<int>(drone::cfg_key::perception::depth_estimator::MAX_FPS, 15), 1, 60);
+            ctx.cfg.get<int>(drone::cfg_key::perception::depth_estimator::MAX_FPS, 15), 0, 60);
         t_depth = std::thread(depth_thread, std::ref(*depth_video_sub), std::ref(depth_to_fusion),
                               std::ref(g_running), std::ref(*depth_estimator), depth_max_fps);
     }

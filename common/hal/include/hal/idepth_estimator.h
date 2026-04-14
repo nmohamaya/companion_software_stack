@@ -16,11 +16,17 @@ namespace drone::hal {
 /// Stores per-pixel metric depth (meters) in row-major order.
 struct DepthMap {
     std::vector<float> data;       // depth in meters, row-major
-    uint32_t           width{0};   // width in pixels
-    uint32_t           height{0};  // height in pixels
+    uint32_t           width{0};   // depth map width in pixels
+    uint32_t           height{0};  // depth map height in pixels
     uint64_t           timestamp_ns{0};
     float              scale{1.0f};       // depth scale factor (1.0 = meters)
     float              confidence{0.0f};  // overall confidence [0.0, 1.0]
+
+    // Source frame dimensions — used to map bbox pixel coords to depth map coords.
+    // Set by the estimator to the input frame size. May differ from width/height
+    // if the model outputs at a different resolution than its input.
+    uint32_t source_width{0};   // 0 = same as width (backward compat)
+    uint32_t source_height{0};  // 0 = same as height (backward compat)
 };
 
 /// Abstract depth estimator interface.

@@ -3,6 +3,7 @@
 // Concrete implementations: CameraOnlyFusionEngine, UKFFusionEngine.
 // Phase 1C (Issue #114), radar fusion (Issue #210).
 #pragma once
+// DepthMap is needed by-value in set_depth_map() — cannot forward-declare.
 #include "hal/idepth_estimator.h"
 #include "ipc/ipc_types.h"
 #include "perception/types.h"

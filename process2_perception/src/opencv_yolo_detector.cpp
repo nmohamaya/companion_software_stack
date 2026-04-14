@@ -26,7 +26,12 @@ OpenCvYoloDetector::OpenCvYoloDetector(const drone::Config& cfg) {
     if (dataset_str == "visdrone") {
         dataset_     = DetectorDataset::VISDRONE;
         num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 10);
+    } else if (dataset_str == "coco") {
+        dataset_     = DetectorDataset::COCO;
+        num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 80);
     } else {
+        DRONE_LOG_WARN("[OpenCvYoloDetector] Unknown dataset '{}', defaulting to COCO",
+                       dataset_str);
         dataset_     = DetectorDataset::COCO;
         num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 80);
     }
@@ -50,9 +55,18 @@ void OpenCvYoloDetector::load_model(const std::string& model_path) {
     // Path traversal guard: reject paths containing ".." components.
     // Real backends will load model files from disk — prevent directory traversal
     // from config-injected paths (e.g. "../../etc/passwd").
-    const auto canonical = std::filesystem::weakly_canonical(model_path);
     if (model_path.find("..") != std::string::npos) {
         DRONE_LOG_ERROR("[OpenCvYoloDetector] Rejected model path with '..': {}", model_path);
+        model_loaded_ = false;
+        return;
+    }
+
+    // Canonicalize path — weakly_canonical can throw on invalid paths or IO errors
+    std::filesystem::path canonical;
+    try {
+        canonical = std::filesystem::weakly_canonical(model_path);
+    } catch (const std::filesystem::filesystem_error& e) {
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] Invalid model path '{}': {}", model_path, e.what());
         model_loaded_ = false;
         return;
     }
@@ -142,6 +156,19 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
     // output is [1, 84, 8400], reshape to [84, 8400]
     const int rows = output.size[1];  // 84 (4 bbox + 80 classes)
     const int cols = output.size[2];  // 8400 proposals
+
+    // Validate model output shape matches configured dataset class count.
+    // rows should be 4 (bbox) + num_classes_. Mismatch means wrong model for config.
+    const int expected_rows = 4 + num_classes_;
+    if (rows != expected_rows) {
+        static bool warned = false;
+        if (!warned) {
+            DRONE_LOG_WARN("[OpenCvYoloDetector] Model output shape mismatch: "
+                           "expected {} rows (4+{}), got {}. Check dataset config vs model.",
+                           expected_rows, num_classes_, rows);
+            warned = true;
+        }
+    }
 
     // Pointer to raw data — assert float dtype before reinterpret_cast
     CV_Assert(output.type() == CV_32F);
