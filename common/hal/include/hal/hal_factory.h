@@ -22,6 +22,7 @@
 #include "hal/igimbal.h"
 #include "hal/iimu_source.h"
 #include "hal/simulated_camera.h"
+#include "hal/simulated_depth_estimator.h"
 #include "hal/simulated_fc_link.h"
 #include "hal/simulated_gcs_link.h"
 #include "hal/simulated_gimbal.h"
@@ -226,6 +227,29 @@ template<typename Interface>
 #endif
 
     throw std::runtime_error("[HAL] Unknown radar backend: " + backend);
+}
+
+/// Create a depth estimator backend from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.depth_estimator")
+[[nodiscard]] inline std::unique_ptr<IDepthEstimator> create_depth_estimator(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::depth_estimator::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating depth estimator '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedDepthEstimator>(cfg, section);
+    }
+    // Future: if (backend == "depth_anything_v2") return std::make_unique<DepthAnythingV2>(cfg, section);
+    // Future: if (backend == "gazebo") return std::make_unique<GazeboDepthEstimator>(cfg, section);
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IDepthEstimator>(cfg, section, "depth estimator");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown depth estimator backend: " + backend);
 }
 
 }  // namespace drone::hal

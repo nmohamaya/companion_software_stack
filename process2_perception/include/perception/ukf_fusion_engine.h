@@ -4,6 +4,7 @@
 // Measurement models: camera (bearing + depth), radar (range, azimuth, elevation, radial_velocity).
 // Phase 1C (Issue #114), radar fusion (Issue #210).
 #pragma once
+#include "hal/idepth_estimator.h"
 #include "ipc/ipc_types.h"
 #include "perception/ifusion_engine.h"
 #include "perception/types.h"
@@ -200,6 +201,10 @@ public:
     /// Provide full drone pose for world-frame dormant re-identification.
     void set_drone_pose(float north, float east, float up, float yaw) override;
 
+    /// Provide ML depth map for depth-enhanced fusion (Issue #430).
+    /// Takes ownership via move to avoid copying ~1.2MB per frame at 30Hz.
+    void set_depth_map(drone::hal::DepthMap depth_map) override;
+
     /// Access dormant obstacles (for testing).
     [[nodiscard]] const std::vector<DormantObstacle>& dormant_obstacles() const {
         return dormant_obstacles_;
@@ -230,6 +235,10 @@ private:
 
     // Map active track_id → index into dormant_obstacles_ (-1 = no match)
     std::unordered_map<uint32_t, int> track_to_dormant_;
+
+    // ML depth map for depth-enhanced fusion (Issue #430)
+    drone::hal::DepthMap latest_depth_map_;
+    bool                 has_depth_map_{false};
 
     // Radar-primary: monotonic ID counter for radar-only tracks (high bit set)
     uint32_t next_radar_track_id_{0x80000000u};

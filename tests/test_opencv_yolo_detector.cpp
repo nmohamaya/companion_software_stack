@@ -64,6 +64,66 @@ TEST(CocoMappingTest, ClassNames) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// VisDrone mapping tests (Issue #430 — pure mapping logic, no OpenCV DNN calls)
+// ═══════════════════════════════════════════════════════════
+
+TEST(VisDroneMappingTest, PedestrianMaps) {
+    EXPECT_EQ(visdrone_to_object_class(0), ObjectClass::PERSON);
+}
+
+TEST(VisDroneMappingTest, PeopleMaps) {
+    EXPECT_EQ(visdrone_to_object_class(1), ObjectClass::PERSON);
+}
+
+TEST(VisDroneMappingTest, CarMaps) {
+    EXPECT_EQ(visdrone_to_object_class(3), ObjectClass::VEHICLE_CAR);
+}
+
+TEST(VisDroneMappingTest, VanMapsToCar) {
+    EXPECT_EQ(visdrone_to_object_class(4), ObjectClass::VEHICLE_CAR);
+}
+
+TEST(VisDroneMappingTest, TruckMaps) {
+    EXPECT_EQ(visdrone_to_object_class(5), ObjectClass::VEHICLE_TRUCK);
+}
+
+TEST(VisDroneMappingTest, BusMapsToTruck) {
+    EXPECT_EQ(visdrone_to_object_class(8), ObjectClass::VEHICLE_TRUCK);
+}
+
+TEST(VisDroneMappingTest, BicycleIsUnknown) {
+    EXPECT_EQ(visdrone_to_object_class(2), ObjectClass::UNKNOWN);
+}
+
+TEST(VisDroneMappingTest, TricycleIsUnknown) {
+    EXPECT_EQ(visdrone_to_object_class(6), ObjectClass::UNKNOWN);
+}
+
+TEST(VisDroneMappingTest, MotorIsUnknown) {
+    EXPECT_EQ(visdrone_to_object_class(9), ObjectClass::UNKNOWN);
+}
+
+TEST(VisDroneMappingTest, OutOfRangeIsUnknown) {
+    EXPECT_EQ(visdrone_to_object_class(10), ObjectClass::UNKNOWN);
+    EXPECT_EQ(visdrone_to_object_class(-1), ObjectClass::UNKNOWN);
+    EXPECT_EQ(visdrone_to_object_class(99), ObjectClass::UNKNOWN);
+}
+
+TEST(VisDroneMappingTest, ClassNames) {
+    EXPECT_STREQ(visdrone_class_name(0), "pedestrian");
+    EXPECT_STREQ(visdrone_class_name(3), "car");
+    EXPECT_STREQ(visdrone_class_name(8), "bus");
+    EXPECT_STREQ(visdrone_class_name(9), "motor");
+    EXPECT_STREQ(visdrone_class_name(10), "unknown");
+    EXPECT_STREQ(visdrone_class_name(-1), "unknown");
+}
+
+TEST(VisDroneMappingTest, DatasetEnumValues) {
+    EXPECT_EQ(static_cast<uint8_t>(DetectorDataset::COCO), 0);
+    EXPECT_EQ(static_cast<uint8_t>(DetectorDataset::VISDRONE), 1);
+}
+
+// ═══════════════════════════════════════════════════════════
 // OpenCV-dependent tests
 // ═══════════════════════════════════════════════════════════
 #ifdef HAS_OPENCV

@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 
 namespace drone::perception {
 
@@ -19,6 +20,23 @@ OpenCvYoloDetector::OpenCvYoloDetector(const drone::Config& cfg) {
         cfg.get<float>(drone::cfg_key::perception::detector::CONFIDENCE_THRESHOLD, 0.25f);
     nms_threshold_ = cfg.get<float>(drone::cfg_key::perception::detector::NMS_THRESHOLD, 0.45f);
     input_size_    = cfg.get<int>(drone::cfg_key::perception::detector::INPUT_SIZE, 640);
+
+    // Dataset selection: "coco" (80 classes) or "visdrone" (10 aerial classes)
+    auto dataset_str = cfg.get<std::string>(drone::cfg_key::perception::detector::DATASET, "coco");
+    if (dataset_str == "visdrone") {
+        dataset_     = DetectorDataset::VISDRONE;
+        num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 10);
+    } else if (dataset_str == "coco") {
+        dataset_     = DetectorDataset::COCO;
+        num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 80);
+    } else {
+        DRONE_LOG_WARN("[OpenCvYoloDetector] Unknown dataset '{}', defaulting to COCO",
+                       dataset_str);
+        dataset_     = DetectorDataset::COCO;
+        num_classes_ = cfg.get<int>(drone::cfg_key::perception::detector::NUM_CLASSES, 80);
+    }
+
+    DRONE_LOG_INFO("[OpenCvYoloDetector] Dataset: {}, num_classes: {}", dataset_str, num_classes_);
 
     load_model(model_path);
 }
@@ -34,9 +52,28 @@ OpenCvYoloDetector::OpenCvYoloDetector(const std::string& model_path, float conf
 
 // ── Model loading ───────────────────────────────────────────
 void OpenCvYoloDetector::load_model(const std::string& model_path) {
+    // Path traversal guard: reject paths containing ".." components.
+    // Real backends will load model files from disk — prevent directory traversal
+    // from config-injected paths (e.g. "../../etc/passwd").
+    if (model_path.find("..") != std::string::npos) {
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] Rejected model path with '..': {}", model_path);
+        model_loaded_ = false;
+        return;
+    }
+
+    // Canonicalize path — weakly_canonical can throw on invalid paths or IO errors
+    std::filesystem::path canonical;
+    try {
+        canonical = std::filesystem::weakly_canonical(model_path);
+    } catch (const std::filesystem::filesystem_error& e) {
+        DRONE_LOG_ERROR("[OpenCvYoloDetector] Invalid model path '{}': {}", model_path, e.what());
+        model_loaded_ = false;
+        return;
+    }
+
 #ifdef HAS_OPENCV
     try {
-        net_ = cv::dnn::readNetFromONNX(model_path);
+        net_ = cv::dnn::readNetFromONNX(canonical.string());
         net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         model_loaded_ = true;
@@ -49,7 +86,7 @@ void OpenCvYoloDetector::load_model(const std::string& model_path) {
         model_loaded_ = false;
     }
 #else
-    (void)model_path;
+    (void)canonical;
     DRONE_LOG_WARN("[OpenCvYoloDetector] OpenCV not available — model not loaded");
     model_loaded_ = false;
 #endif
@@ -120,6 +157,19 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
     const int rows = output.size[1];  // 84 (4 bbox + 80 classes)
     const int cols = output.size[2];  // 8400 proposals
 
+    // Validate model output shape matches configured dataset class count.
+    // rows should be 4 (bbox) + num_classes_. Mismatch means wrong model for config.
+    const int expected_rows = 4 + num_classes_;
+    if (rows != expected_rows) {
+        static bool warned = false;
+        if (!warned) {
+            DRONE_LOG_WARN("[OpenCvYoloDetector] Model output shape mismatch: "
+                           "expected {} rows (4+{}), got {}. Check dataset config vs model.",
+                           expected_rows, num_classes_, rows);
+            warned = true;
+        }
+    }
+
     // Pointer to raw data — assert float dtype before reinterpret_cast
     CV_Assert(output.type() == CV_32F);
     float* data = reinterpret_cast<float*>(output.data);
@@ -178,7 +228,9 @@ std::vector<Detection2D> OpenCvYoloDetector::detect(const uint8_t* frame_data, u
         det.w              = static_cast<float>(boxes[idx].width);
         det.h              = static_cast<float>(boxes[idx].height);
         det.confidence     = confidences[idx];
-        det.class_id       = coco_to_object_class(class_ids[idx]);
+        det.class_id       = (dataset_ == DetectorDataset::VISDRONE)
+                                 ? visdrone_to_object_class(class_ids[idx])
+                                 : coco_to_object_class(class_ids[idx]);
         det.timestamp_ns   = now_ns;
         det.frame_sequence = 0;
 

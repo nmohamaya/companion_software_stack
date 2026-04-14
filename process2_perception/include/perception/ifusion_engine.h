@@ -3,6 +3,8 @@
 // Concrete implementations: CameraOnlyFusionEngine, UKFFusionEngine.
 // Phase 1C (Issue #114), radar fusion (Issue #210).
 #pragma once
+// DepthMap is needed by-value in set_depth_map() — cannot forward-declare.
+#include "hal/idepth_estimator.h"
 #include "ipc/ipc_types.h"
 #include "perception/types.h"
 
@@ -53,6 +55,10 @@ public:
     /// Provide full drone pose for world-frame dormant obstacle re-identification.
     /// Default no-op — only UKFFusionEngine uses this.
     virtual void set_drone_pose(float /*north*/, float /*east*/, float /*up*/, float /*yaw*/) {}
+
+    /// Provide ML depth map for depth-enhanced fusion (takes ownership via move).
+    /// Default no-op — only UKFFusionEngine uses ML depth data.
+    virtual void set_depth_map(drone::hal::DepthMap /*depth_map*/) {}
 };
 
 /// Factory: create a fusion engine from a backend name.

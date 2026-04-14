@@ -49,7 +49,20 @@
             "input_size": 640,
             "min_contour_area": 100,
             "subsample": 2,
-            "max_fps": 0
+            "max_fps": 0,
+            "dataset": "visdrone",
+            "num_classes": 10,
+            "_comment_visdrone": "VisDrone dataset for aerial-perspective detection (10 classes)"
+        },
+        "depth_estimator": {
+            "backend": "simulated",
+            "enabled": true,
+            "model_path": "models/depth_anything_v2_vits.onnx",
+            "input_size": 518,
+            "max_fps": 15,
+            "default_depth_m": 10.0,
+            "noise_std_m": 0.5,
+            "_comment": "Switch to 'depth_anything_v2' when ONNX model is available"
         },
         "tracker": {
             "max_age": 15,

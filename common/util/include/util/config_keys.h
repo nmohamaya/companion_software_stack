@@ -78,6 +78,8 @@ inline constexpr const char* MAX_ASPECT_RATIO      = "perception.detector.max_as
 inline constexpr const char* COLORS                = "perception.detector.colors";
 inline constexpr const char* MODEL_PATH            = "perception.detector.model_path";
 inline constexpr const char* INPUT_SIZE            = "perception.detector.input_size";
+inline constexpr const char* DATASET               = "perception.detector.dataset";
+inline constexpr const char* NUM_CLASSES           = "perception.detector.num_classes";
 }  // namespace detector
 
 namespace tracker {
@@ -97,6 +99,17 @@ inline constexpr const char* BACKEND        = "perception.radar.backend";
 inline constexpr const char* ENABLED        = "perception.radar.enabled";
 inline constexpr const char* UPDATE_RATE_HZ = "perception.radar.update_rate_hz";
 }  // namespace radar
+
+namespace depth_estimator {
+inline constexpr const char* SECTION         = "perception.depth_estimator";
+inline constexpr const char* BACKEND         = "perception.depth_estimator.backend";
+inline constexpr const char* MODEL_PATH      = "perception.depth_estimator.model_path";
+inline constexpr const char* INPUT_SIZE      = "perception.depth_estimator.input_size";
+inline constexpr const char* MAX_FPS         = "perception.depth_estimator.max_fps";
+inline constexpr const char* NOISE_STD_M     = "perception.depth_estimator.noise_std_m";
+inline constexpr const char* DEFAULT_DEPTH_M = "perception.depth_estimator.default_depth_m";
+inline constexpr const char* ENABLED         = "perception.depth_estimator.enabled";
+}  // namespace depth_estimator
 
 namespace fusion {
 inline constexpr const char* SECTION         = "perception.fusion";
