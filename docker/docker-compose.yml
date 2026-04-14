@@ -29,12 +29,9 @@ services:
       - logs:/app/drone_logs       # Persist logs across restarts
     environment:
       - DRONE_LOG_DIR=/app/drone_logs
-    deploy:
-      resources:
-        limits:
-          memory: 4g
-        reservations:
-          memory: 1g
+    # Resource limits (compose-compatible — deploy.resources is Swarm-only)
+    mem_limit: 4g
+    mem_reservation: 1g
     pids_limit: 512
     restart: unless-stopped
 

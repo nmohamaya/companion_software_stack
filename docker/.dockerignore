@@ -1,29 +1,3 @@
-build/
-build-*/
-cmake-build-*/
-.git/
-.gitignore
-.vscode/
-.idea/
-.claude/
-drone_logs/
-*.log
-*.onnx
-*.pt
-*.swp
-*.swo
-*~
-graphify-out/
-extracted_code/
-__pycache__/
-*.pyc
-.venv/
-coverage-report/
-*.gcno
-*.gcda
-scripts/orchestrator.egg-info/
-.pipeline-state
-docs/debug/
-docs/legacy/
-tasks/
-AGENT_REPORT.md
+# This file is intentionally empty.
+# Docker reads .dockerignore from the build context root (repo root), not here.
+# See /.dockerignore for the actual exclusions.

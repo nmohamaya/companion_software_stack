@@ -281,6 +281,29 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 
 ---
 
+## DR-013: -Werror in Docker Builds Despite CUDA System Header Warnings
+
+**Question:** Copilot review (twice) suggested removing `-Werror` from the Docker CMake flags because CUDA devel base images may produce warnings from system headers that we don't control, breaking the build.
+
+**Arguments for removing -Werror:**
+- CUDA/cuDNN system headers may emit warnings (deprecated declarations, unused parameters) under `-Wall -Wextra`
+- Docker builds should be maximally reliable — a new CUDA SDK release shouldn't break our build
+- CI already enforces `-Werror` on the native build; Docker doesn't need to duplicate the gate
+
+**Arguments for keeping -Werror (our approach):**
+- The Docker image is a deployment artifact — it must meet the same quality bar as CI
+- Silent warnings in Docker but not CI means the two build environments can diverge without anyone noticing
+- If CUDA headers produce warnings, that's valuable signal — we should fix it (e.g., suppress specific warnings with `-Wno-*` for system headers) rather than ignore all warnings
+- `-isystem` already applies to most system headers; any remaining warnings are likely in our code's use of CUDA APIs
+
+**Our decision:** Keep `-Werror -Wall -Wextra` in the Docker build. If a CUDA SDK update introduces system header warnings, address them with targeted `-Wno-*` flags or `-isystem` adjustments rather than dropping `-Werror` entirely. The CI/Docker parity is more valuable than build convenience.
+
+**When to revisit:** If a CUDA SDK update causes widespread system header warnings that cannot be suppressed with targeted flags, consider `-Werror` with an explicit allowlist of suppressed system-header warnings (e.g., `-Wno-deprecated-declarations` for CUDA headers only).
+
+**Date:** 2026-04-14
+
+---
+
 ## DR-012: CMAKE_DL_LIBS Propagation for ENABLE_PLUGINS
 
 **Question:** When `ENABLE_PLUGINS=ON`, code using `dlopen/dlsym/dlclose` (via `plugin_loader.h`) needs to link against `libdl` on platforms where it's separate from libc. The current CMake only defines `HAVE_PLUGINS` without propagating `${CMAKE_DL_LIBS}`. Copilot suggested adding `link_libraries(${CMAKE_DL_LIBS})`.

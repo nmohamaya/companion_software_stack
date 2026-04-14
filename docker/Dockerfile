@@ -14,7 +14,8 @@
 # ============================================================================
 
 # ── Builder stage ───────────────────────────────────────────────────────────
-FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS builder
+# cudnn-devel includes cuDNN headers required by -DWITH_CUDNN=ON / -DOPENCV_DNN_CUDA=ON
+FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS builder
 
 ARG MODEL_PRESET=edge
 ARG DEBIAN_FRONTEND=noninteractive
@@ -53,7 +54,7 @@ RUN wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_
          -O /tmp/libzenohc.deb && \
     wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-dev_${ZENOH_VERSION}-1_${TARGETARCH}.deb" \
          -O /tmp/libzenohc-dev.deb && \
-    dpkg -i /tmp/libzenohc.deb /tmp/libzenohc-dev.deb && \
+    (dpkg -i /tmp/libzenohc.deb /tmp/libzenohc-dev.deb || apt-get -f install -y) && \
     rm /tmp/libzenohc*.deb && \
     ldconfig
 
@@ -137,14 +138,15 @@ RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends wget ca-certificates && \
     wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc_${ZENOH_VERSION}-1_${TARGETARCH}.deb" \
          -O /tmp/libzenohc.deb && \
-    dpkg -i /tmp/libzenohc.deb && \
+    (dpkg -i /tmp/libzenohc.deb || apt-get -f install -y) && \
     rm /tmp/libzenohc.deb && \
-    apt-get purge -y --auto-remove wget ca-certificates && \
+    apt-get purge -y --auto-remove wget && \
     rm -rf /var/lib/apt/lists/* && \
     ldconfig
 
-# Copy OpenCV shared libraries from builder
+# Copy OpenCV shared libraries and protobuf (OpenCV DNN dependency) from builder
 COPY --from=builder /usr/local/lib/libopencv* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libprotobuf* /usr/local/lib/
 
 # Copy OpenCV pkgconfig and cmake files for runtime library resolution
 COPY --from=builder /usr/local/lib/cmake/opencv4/ /usr/local/lib/cmake/opencv4/
