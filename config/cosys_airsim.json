@@ -1,0 +1,50 @@
+{
+    "_comment": "Config overlay for Cosys-AirSim cloud simulation (MODEL_PRESET=cloud)",
+    "_comment2": "Requires HAVE_COSYS_AIRSIM build flag. Without it, backends fall back to simulated.",
+    "cosys_airsim": {
+        "host": "cosys-airsim",
+        "port": 41451,
+        "camera_name": "mission_cam",
+        "radar_name": "radar",
+        "imu_name": "imu",
+        "vehicle_name": "x500"
+    },
+    "perception": {
+        "detector": {
+            "backend": "yolov8",
+            "model_path": "models/yolov8m.onnx",
+            "dataset": "coco",
+            "num_classes": 80,
+            "confidence_threshold": 0.3,
+            "input_size": 640
+        },
+        "depth_estimator": {
+            "backend": "cosys_airsim",
+            "model_path": "models/depth_anything_v2_vitb.onnx",
+            "enabled": true
+        },
+        "radar": {
+            "backend": "cosys_airsim",
+            "enabled": true
+        }
+    },
+    "video_capture": {
+        "mission_cam": {
+            "backend": "cosys_airsim",
+            "width": 1920,
+            "height": 1080,
+            "fps": 30
+        }
+    },
+    "slam": {
+        "imu": {
+            "backend": "cosys_airsim"
+        }
+    },
+    "comms": {
+        "mavlink": {
+            "backend": "mavlink",
+            "uri": "tcp://cosys-airsim:14540"
+        }
+    }
+}

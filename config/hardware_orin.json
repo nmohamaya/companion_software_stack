@@ -1,0 +1,18 @@
+{
+    "_comment": "Config overlay for NVIDIA Jetson Orin hardware (MODEL_PRESET=orin)",
+    "perception": {
+        "detector": {
+            "backend": "yolov8",
+            "model_path": "models/yolov8s.onnx",
+            "dataset": "coco",
+            "num_classes": 80,
+            "confidence_threshold": 0.35,
+            "input_size": 640
+        },
+        "depth_estimator": {
+            "backend": "simulated",
+            "model_path": "models/depth_anything_v2_vits.onnx",
+            "enabled": true
+        }
+    }
+}

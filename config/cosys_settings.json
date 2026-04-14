@@ -1,0 +1,49 @@
+{
+    "SettingsVersion": 1.2,
+    "SimMode": "Multirotor",
+    "ViewMode": "NoDisplay",
+    "ClockType": "SteppableClock",
+    "Vehicles": {
+        "x500": {
+            "VehicleType": "PX4Multirotor",
+            "UseSerial": false,
+            "LockStep": true,
+            "UseTcp": true,
+            "TcpPort": 4560,
+            "ControlPortLocal": 14540,
+            "ControlPortRemote": 14580,
+            "Sensors": {
+                "mission_cam": {
+                    "SensorType": 0,
+                    "ImageType": 0,
+                    "Width": 1920,
+                    "Height": 1080,
+                    "FOV_Degrees": 90,
+                    "CaptureSettings": [
+                        {
+                            "ImageType": 0,
+                            "Width": 1920,
+                            "Height": 1080
+                        }
+                    ]
+                },
+                "depth_cam": {
+                    "SensorType": 0,
+                    "ImageType": 2,
+                    "Width": 640,
+                    "Height": 480
+                },
+                "radar": {
+                    "SensorType": 8,
+                    "MaxDistance": 50,
+                    "HorizontalFOVDegrees": 60,
+                    "VerticalFOVDegrees": 30,
+                    "NumberOfReturns": 256
+                },
+                "imu": {
+                    "SensorType": 2
+                }
+            }
+        }
+    }
+}

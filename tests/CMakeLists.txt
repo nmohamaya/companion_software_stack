@@ -229,6 +229,9 @@ add_drone_test(test_depth_estimator  test_depth_estimator.cpp
 )
 endif()
 
+# ── Cosys-AirSim HAL backend tests (Issue #434) ────────────
+add_drone_test(test_cosys_hal_backends test_cosys_hal_backends.cpp)
+
 # ── Diagnostic Collector tests ──────────────────────────────
 add_drone_test(test_diagnostic      test_diagnostic.cpp)
 
@@ -371,5 +374,11 @@ target_include_directories(test_integration_fault_cascade PRIVATE
     ${PROJECT_SOURCE_DIR}/tests
 )
 target_compile_definitions(test_integration_fault_cascade PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
+# ── Model Presets + Config Overlay tests (Issue #433) ───────
+add_drone_test(test_model_presets    test_model_presets.cpp)
+target_compile_definitions(test_model_presets PRIVATE
     PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
 )

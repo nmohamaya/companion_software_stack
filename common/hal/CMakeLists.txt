@@ -10,6 +10,11 @@ target_link_libraries(drone_hal INTERFACE
     spdlog::spdlog
 )
 
+# Generated model_defaults.h (from cmake/ModelPresets.cmake)
+if(DEFINED GENERATED_INCLUDE_DIR)
+    target_include_directories(drone_hal INTERFACE ${GENERATED_INCLUDE_DIR})
+endif()
+
 # ── Optional: MAVSDK backend ────────────────────────────────
 if(MAVSDK_FOUND)
     target_compile_definitions(drone_hal INTERFACE HAVE_MAVSDK)
@@ -22,5 +27,19 @@ if(GAZEBO_FOUND)
     target_link_libraries(drone_hal INTERFACE
         gz-transport${GZ_TRANSPORT_VER}::core
         gz-msgs${GZ_MSGS_VER}::core
+    )
+endif()
+
+# ── Optional: Cosys-AirSim backend ────────────────────────
+# NOTE: Currently uses INTERFACE target_sources because the .cpp stubs are
+# empty (ifdef guards only). When real AirSim SDK code is added, migrate to
+# a STATIC library (drone_hal_cosys) to avoid compiling in every consumer.
+if(COSYS_AIRSIM_FOUND)
+    target_compile_definitions(drone_hal INTERFACE HAVE_COSYS_AIRSIM)
+    target_sources(drone_hal INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_camera.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_radar.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_imu.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_depth.cpp
     )
 endif()

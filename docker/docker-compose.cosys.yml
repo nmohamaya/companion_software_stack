@@ -1,61 +1,80 @@
 # ============================================================================
-# docker-compose.cosys.yml — Companion Stack + Cosys-AirSim (Phase 3 stub)
+# docker-compose.cosys.yml — Companion Stack + Cosys-AirSim Cloud Deployment
 # ============================================================================
-# Two-service template for running the companion stack alongside a
-# Cosys-AirSim photorealistic simulation environment.
+# Two-service architecture for cloud GPU instances:
+#   1. cosys-airsim: UE5 headless rendering + PX4 SITL + AirSim RPC
+#   2. companion-stack: 7-process drone stack with cloud ML model preset
 #
-# STATUS: Phase 3 placeholder (Issue #435).
-# The cosys-airsim service is a stub — it will be fully implemented when
-# Phase 3 adds Cosys-AirSim integration with camera/IMU/GPS bridge topics.
+# Requires: NVIDIA Container Toolkit (--gpus all), ~16GB VRAM total.
+# Target instance: AWS g5.xlarge (A10G 24GB) or equivalent.
 #
-# Phase 3 (#435) will add:
-#   - Cosys-AirSim Docker image build or pull from registry
-#   - AirSim settings.json volume mount for environment configuration
-#   - Bridge process that translates AirSim sensor data to Zenoh IPC topics
-#   - Shared Zenoh network between companion stack and simulator
-#   - GPU sharing or multi-GPU allocation between inference and rendering
-#   - Health checks and startup ordering (simulator ready before stack starts)
-#
-# Usage (once Phase 3 is complete):
+# Usage:
 #   docker compose -f docker/docker-compose.cosys.yml up --build
+#   docker compose -f docker/docker-compose.cosys.yml up -d
+#   docker compose -f docker/docker-compose.cosys.yml logs -f
+#   docker compose -f docker/docker-compose.cosys.yml down
+#
+# The Docker Compose layer is fully cloud-agnostic. Provider-specific
+# provisioning lives in cloud/providers/$CLOUD_PROVIDER.sh.
 # ============================================================================
 
 services:
-  # Extend the base companion-stack service to avoid duplicating config
+  # ── Companion stack (extends base service) ─────────────────────────────────
   companion-stack:
     extends:
       file: docker-compose.yml
       service: companion-stack
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        MODEL_PRESET: cloud
+    # Override base mem_limit/mem_reservation for cloud instances (more RAM available)
+    mem_limit: 16g
+    mem_reservation: 4g
+    depends_on:
+      cosys-airsim:
+        condition: service_healthy
+    environment:
+      - DRONE_LOG_DIR=/app/drone_logs
+      - DRONE_CONFIG=/app/config/cosys_airsim.json
+      # Request GPU access via NVIDIA Container Toolkit runtime
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    runtime: nvidia
+    volumes:
+      - ../config:/app/config:ro
+      - models:/app/models
+      - logs:/app/drone_logs
+      - artifacts:/app/artifacts
     networks:
       - sim-network
-    # Phase 3: depends_on cosys-airsim with condition: service_healthy
 
-  # ── Cosys-AirSim photorealistic simulator (Phase 3 stub) ─────────────────
-  # This service will run the Cosys-AirSim Unreal Engine environment,
-  # providing synthetic camera, depth, IMU, and GPS data to the companion
-  # stack via a Zenoh bridge process.
+  # ── Cosys-AirSim photorealistic simulator ──────────────────────────────────
+  # Runs UE5 headless with PX4 SITL integration. Provides synthetic camera,
+  # depth, radar, and IMU data via the AirSim RPC API (port 41451).
   cosys-airsim:
-    image: cosys-airsim:latest       # Phase 3: replace with actual image
-    command: ["echo", "Cosys-AirSim stub — implement in Phase 3 (#435)"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    # Phase 3 volumes:
-    #   - ./airsim_settings.json:/home/airsim/AirSim/settings.json:ro
-    #   - airsim-data:/home/airsim/data
+    image: cosys-lab/cosys-airsim:latest
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+    volumes:
+      - ../config/cosys_settings.json:/home/airsim/Documents/AirSim/settings.json:ro
+      - airsim-data:/home/airsim/data
+    ports:
+      - "41451:41451"    # AirSim RPC API
+      - "14540:14540"    # PX4 SITL MAVLink
+    healthcheck:
+      # AirSim uses msgpack RPC (not HTTP) — check TCP port reachability
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/41451' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s   # UE5 takes time to load assets
     networks:
       - sim-network
-    # Phase 3: healthcheck for simulator readiness
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:41451/api/ping"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 30
-    #   start_period: 60s
+    restart: unless-stopped
 
 networks:
   sim-network:
@@ -64,3 +83,5 @@ networks:
 volumes:
   models:
   logs:
+  artifacts:
+  airsim-data:

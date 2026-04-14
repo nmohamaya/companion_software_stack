@@ -186,6 +186,24 @@ else()
     endif()
 endif()
 
+# ── Optional: Cosys-AirSim simulation backend ─────────────
+find_package(AirSim QUIET)
+if(AirSim_FOUND)
+    set(COSYS_AIRSIM_FOUND TRUE)
+    message(STATUS "  Cosys-AirSim : ${AirSim_VERSION} — Cosys-AirSim HAL backends available")
+else()
+    set(COSYS_AIRSIM_FOUND FALSE)
+    message(STATUS "  Cosys-AirSim : NOT FOUND — Cosys-AirSim HAL backends disabled")
+endif()
+
+# ── ML model presets ───────────────────────────────────────
+include(cmake/ModelPresets.cmake)
+configure_file(config/model_defaults.h.in
+    ${CMAKE_BINARY_DIR}/generated/model_defaults.h @ONLY)
+# Expose generated headers to targets that need them (via drone_hal INTERFACE)
+# rather than polluting global include path
+set(GENERATED_INCLUDE_DIR ${CMAKE_BINARY_DIR}/generated)
+
 # ── Shared interface libraries ───────────────────────────────
 add_subdirectory(common/ipc)
 add_subdirectory(common/util)
@@ -241,8 +259,10 @@ message(STATUS "  Install Prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  Binaries     : ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "  MAVSDK       : ${MAVSDK_FOUND}")
 message(STATUS "  Gazebo       : ${GAZEBO_FOUND}")
+message(STATUS "  Cosys-AirSim : ${COSYS_AIRSIM_FOUND}")
 message(STATUS "  OpenCV       : ${OPENCV_FOUND}")
 message(STATUS "  Zenoh        : REQUIRED")
+message(STATUS "  Model Preset : ${MODEL_PRESET}")
 message(STATUS "  Plugins      : ${ENABLE_PLUGINS}")
 message(STATUS "  systemd      : ${ENABLE_SYSTEMD}")
 message(STATUS "  ── Processes ──")

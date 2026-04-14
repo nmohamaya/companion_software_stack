@@ -1,0 +1,116 @@
+# ============================================================================
+# CI Perception Workflow — Advisory cloud GPU check for perception regressions
+# ============================================================================
+# Triggers on PRs touching perception, HAL, depth, detector, or fusion code.
+# Provisions a cloud GPU instance, runs perception scenarios, compares metrics
+# against baseline, and posts results as a PR comment.
+#
+# Advisory only — does not block merge (continue-on-error: true).
+# Change to a required status check once baseline metrics are established.
+# ============================================================================
+name: Perception Regression (Advisory)
+
+on:
+  pull_request:
+    paths:
+      - 'process2_perception/**'
+      - 'common/hal/**'
+      - 'config/cosys_airsim.json'
+      - 'config/cosys_settings.json'
+      - 'tests/test_*perception*'
+      - 'tests/test_*depth*'
+      - 'tests/test_*detector*'
+      - 'tests/test_*fusion*'
+
+# Advisory: don't block PR merge
+# Change to 'required' status check once stable
+concurrency:
+  group: perception-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  perception-check:
+    runs-on: ubuntu-latest
+    # Advisory — continue even if this fails
+    continue-on-error: true
+    timeout-minutes: 45
+
+    permissions:
+      pull-requests: write  # For posting PR comment
+      issues: write         # Required by actions/github-script for issues.listComments/createComment
+
+    env:
+      CLOUD_PROVIDER: ${{ vars.CLOUD_PROVIDER || 'aws' }}
+      CLOUD_REGION: ${{ vars.CLOUD_REGION || 'us-east-1' }}
+      GPU_INSTANCE_TYPE: ${{ vars.GPU_INSTANCE_TYPE || 'g5.xlarge' }}
+      SPOT_MAX_PRICE: "0.50"
+      ARTIFACT_STORE_URL: ${{ vars.ARTIFACT_STORE_URL }}
+      RUN_ID: "pr-${{ github.event.pull_request.number }}-${{ github.run_number }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run perception CI
+        id: perception
+        run: |
+          # Auto-detect dry-run: if cloud credentials are not configured,
+          # run in dry-run mode (generates placeholder results from baseline)
+          DRY_RUN_FLAG=""
+          if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
+            echo "No cloud credentials configured — running in dry-run mode"
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          bash tests/run_perception_ci.sh \
+            --baseline tests/perception_baseline.json \
+            --output /tmp/perception-results.json \
+            $DRY_RUN_FLAG
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Post results as PR comment
+        if: always() && steps.perception.conclusion != 'skipped'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Perception Regression Results\n\n';
+            try {
+              const results = JSON.parse(fs.readFileSync('/tmp/perception-results.json', 'utf8'));
+              body += `| Metric | Baseline | Current | Delta | Status |\n`;
+              body += `|--------|----------|---------|-------|--------|\n`;
+              for (const [key, val] of Object.entries(results.metrics || {})) {
+                const delta = (val.current - val.baseline).toFixed(3);
+                const status = val.passed ? '✅' : '⚠️';
+                body += `| ${key} | ${val.baseline} | ${val.current} | ${delta} | ${status} |\n`;
+              }
+              body += `\n**Cost:** $${results.cost || 'N/A'} | **Duration:** ${results.duration_min || 'N/A'} min`;
+            } catch (e) {
+              body += 'Could not parse perception results. Check workflow logs.\n';
+              body += `Error: ${e.message}`;
+            }
+            body += '\n\n> Advisory check — does not block merge.';
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const existing = comments.data.find(c => c.body.includes('Perception Regression Results'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body
+              });
+            }
+
+      - name: Cleanup cloud resources
+        if: always()
+        run: |
+          if [[ -f /tmp/instance-ip.txt ]]; then
+            bash cloud/scripts/terminate.sh "$(cat /tmp/instance-ip.txt)" || true
+          fi
