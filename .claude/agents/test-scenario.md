@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: test-scenario
 description: Runs and maintains scenario integration tests — Gazebo SITL, JSON scenario configs, stack coverage
-tools: [Read, Edit, Bash, Glob, Grep]
+tools: Read, Edit, Bash, Glob, Grep
 model: sonnet
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Test Agent — Scenario Integration Tests
 

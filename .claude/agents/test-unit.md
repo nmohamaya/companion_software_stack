@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: test-unit
 description: Writes and maintains unit tests — GTest framework, coverage verification, test count tracking
-tools: [Read, Edit, Write, Bash, Glob, Grep]
+tools: Read, Edit, Write, Bash, Glob, Grep
 model: sonnet
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Test Agent — Unit Tests
 

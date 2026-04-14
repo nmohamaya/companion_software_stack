@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: review-code-quality
 description: Reviews code for quality and maintainability — dead code, DRY violations, complexity, naming, unnecessary abstractions
-tools: [Read, Glob, Grep]
+tools: Read, Glob, Grep
 model: sonnet
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Review Agent — Code Quality & Maintainability
 

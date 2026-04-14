@@ -1,12 +1,12 @@
-<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
-<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
-
 ---
 name: feature-infra-core
 description: Implements core infrastructure — utilities, config, IPC factories, modularity epic
-tools: [Read, Edit, Write, Bash, Glob, Grep]
+tools: Read, Edit, Write, Bash, Glob, Grep
 model: opus
 ---
+
+<!-- SPDX-License-Identifier: LicenseRef-Pipeline-Proprietary -->
+<!-- Copyright (c) 2025-2026 Naveen Mohanan. All Rights Reserved. See PIPELINE_LICENSE.md. -->
 
 # Feature Agent — Infrastructure Core
 
