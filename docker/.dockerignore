@@ -1,0 +1,17 @@
+build/
+build-*/
+.git/
+.gitignore
+.vscode/
+.idea/
+.claude/
+drone_logs/
+*.log
+*.onnx
+*.pt
+graphify-out/
+extracted_code/
+__pycache__/
+*.pyc
+tasks/
+AGENT_REPORT.md
