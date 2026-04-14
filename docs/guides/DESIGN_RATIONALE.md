@@ -326,3 +326,36 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **When to revisit:** When any real target enables `ENABLE_PLUGINS=ON` and targets a platform with separate libdl (cross-compilation, musl, older glibc).
 
 **Date:** 2026-04-13
+
+---
+
+## DR-014: ONNX Graph Surgery for Depth Anything V2 + OpenCV DNN Compatibility
+
+**Question:** How should we handle the incompatibility between the Depth Anything V2 ONNX export and OpenCV DNN's Resize layer?
+
+**Background:** DA V2's DINOv2 backbone uses bicubic interpolation and produces ONNX Resize nodes with 4 inputs (X, roi, scales, sizes) per the ONNX spec. OpenCV DNN (tested on 4.6.0 and 4.10.0) only supports Resize nodes with 1-2 inputs and bilinear/nearest interpolation. This is a fundamental limitation — not a version gap we can upgrade past easily.
+
+**Arguments for using ONNX Runtime instead of OpenCV DNN:**
+- ORT supports the full ONNX spec natively — no graph surgery needed
+- Better long-term compatibility as models evolve
+- GPU acceleration via CUDA/TensorRT providers
+
+**Arguments for keeping OpenCV DNN (our decision):**
+- OpenCV is already a project dependency (used for detection, image processing) — no new dependency
+- ONNX Runtime adds ~200MB to deployment image, plus CUDA runtime for GPU
+- For our target (Jetson Orin), TensorRT is the production inference path — ORT would be a temporary stopgap anyway
+- The graph surgery is deterministic and well-understood: replace dynamic-size Resize with precomputed fixed-scale Resize for a known input size (518x518)
+- CPU inference at ~1s/frame is acceptable for our 15fps depth budget (we subsample)
+
+**The fix:** Three-step ONNX post-processing in `models/download_depth_anything_v2.sh`:
+1. Export with `torch.onnx.export(dynamo=False, opset_version=14)` + monkey-patch `F.interpolate` to replace bicubic→bilinear
+2. Run `onnxsim` to simplify the graph (folds constants, removes Shape/Gather/Cast nodes)
+3. ONNX graph surgery: trace Resize input/output shapes via ORT, compute scale factors, replace 4-input Resize(X, roi, scales, sizes) with 3-input Resize(X, roi, scales) using constant scale tensors
+
+**Limitations:**
+- Scales are baked in for 518x518 input. Changing `input_size` in config requires re-running the export script.
+- Bilinear interpolation in the patch embedding (instead of bicubic) may slightly affect depth accuracy — not measured, but the model still produces valid relative depth maps.
+
+**When to revisit:** When migrating to TensorRT for Jetson Orin deployment (TensorRT supports full ONNX natively). Also revisit if OpenCV 5.x adds full Resize op support.
+
+**Date:** 2026-04-14

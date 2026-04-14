@@ -229,6 +229,16 @@ add_drone_test(test_depth_estimator  test_depth_estimator.cpp
 )
 endif()
 
+# ── Depth Anything V2 backend tests (Issue #455) ───────────
+add_drone_test(test_depth_anything_v2 test_depth_anything_v2.cpp)
+target_compile_definitions(test_depth_anything_v2 PRIVATE
+    DA_V2_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/depth_anything_v2_vits.onnx"
+)
+if(OPENCV_FOUND)
+    target_link_libraries(test_depth_anything_v2 PRIVATE ${OpenCV_LIBS})
+    target_compile_definitions(test_depth_anything_v2 PRIVATE HAS_OPENCV=1)
+endif()
+
 # ── Cosys-AirSim HAL backend tests (Issue #434) ────────────
 add_drone_test(test_cosys_hal_backends test_cosys_hal_backends.cpp)
 

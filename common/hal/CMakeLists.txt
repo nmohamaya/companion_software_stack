@@ -43,3 +43,17 @@ if(COSYS_AIRSIM_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_depth.cpp
     )
 endif()
+
+# ── Optional: Depth Anything V2 (OpenCV DNN) ──────────────
+# Uses OpenCV DNN to run DA V2 ONNX model for monocular metric depth estimation.
+# Issue #455.
+# NOTE: HAS_OPENCV is NOT defined here (INTERFACE would leak to all consumers,
+# breaking tests that compile detector_factory.cpp without YOLO sources).
+# HAS_OPENCV stays per-target: process2_perception and specific test targets.
+# The DA V2 source compiles safely without HAS_OPENCV (returns error at runtime).
+if(OPENCV_FOUND)
+    target_sources(drone_hal INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/depth_anything_v2.cpp
+    )
+    target_link_libraries(drone_hal INTERFACE ${OpenCV_LIBS})
+endif()
