@@ -1,0 +1,127 @@
+{
+    "_comment": "Scenario 28: ML Depth Estimation in Gazebo — validates Depth Anything V2 backend with full perception pipeline. Uses color_contour (works on Gazebo cylinders) for detection + DA V2 for metric depth + radar for range confirmation. Compare with scenario 27 (simulated depth) and scenario 18 (perception avoidance).",
+    "scenario": {
+        "name": "ml_depth_estimation",
+        "description": "ML depth estimation validation: color_contour + Depth Anything V2 + radar UKF fusion",
+        "tier": 2,
+        "timeout_s": 240,
+        "requires_gazebo": true
+    },
+    "config_overrides": {
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 3.0,
+            "overshoot_proximity_factor": 5.0,
+            "cruise_speed_mps": 2.0,
+            "survey_duration_s": 26.0,
+            "survey_yaw_rate": 0.5,
+            "path_planner": {"backend": "dstar_lite", "max_search_time_ms": 1500, "max_iterations": 200000, "z_band_cells": 0, "replan_interval_s": 0.5, "look_ahead_m": 0.0, "smoothing_alpha": 0.5, "yaw_towards_travel": true, "yaw_smoothing_rate": 0.3, "snap_approach_bias": 1.0},
+            "obstacle_avoider": {"backend": "potential_field_3d"},
+            "obstacle_avoidance": {
+                "min_distance_m": 2.0,
+                "influence_radius_m": 8.0,
+                "repulsive_gain": 3.0,
+                "max_correction_mps": 1.5,
+                "vertical_gain": 0.0,
+                "path_aware": true,
+                "_comment": "Same avoidance config as scenarios 18/27."
+            },
+            "occupancy_grid": {
+                "resolution_m": 2.0,
+                "inflation_radius_m": 2.0,
+                "dynamic_obstacle_ttl_s": 1.0,
+                "min_confidence": 0.4,
+                "promotion_hits": 12,
+                "min_promotion_depth_confidence": 0.85,
+                "max_static_cells": 800,
+                "require_radar_for_promotion": true,
+                "prediction_enabled": false,
+                "_comment": "Higher promotion_hits (12 vs 8) and depth confidence (0.85 vs 0.8) than scenario 27 — ML depth produces real values for more scene elements, need stricter promotion to avoid grid saturation."
+            },
+            "static_obstacles": [],
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary when avoiding detected obstacles"
+            },
+            "waypoints": [
+                {"x": 0,  "y": 15, "z": 4, "yaw": 1.57,  "speed": 1.5, "payload_trigger": false, "_comment": "WP1: Fly north — near RED(3,15) PERSON 1.7m"},
+                {"x": 10, "y": 15, "z": 4, "yaw": 0,      "speed": 1.5, "payload_trigger": false, "_comment": "WP2: Fly east — near GREEN(10,10) TREE 6.0m"},
+                {"x": 18, "y": 10, "z": 4, "yaw": -1.0,   "speed": 1.5, "payload_trigger": false, "_comment": "WP3: Fly southeast — near BLUE(18,5) VEHICLE_CAR 2.0m"},
+                {"x": 5,  "y": 5,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "WP4: Fly southwest — near ORANGE(5,3) BUILDING 10.0m"},
+                {"x": 0,  "y": 0,  "z": 4, "yaw": -2.36,  "speed": 1.5, "payload_trigger": false, "_comment": "WP5: Return home"}
+            ],
+            "_comment_waypoints": "Same waypoint route as scenario 27 — flies past all 4 varied-height obstacles."
+        },
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "confidence_threshold": 0.3,
+                "max_detections": 64,
+                "_comment": "color_contour detects Gazebo's colored cylinders. DA V2 provides depth."
+            },
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "enabled": true,
+                "model_path": "models/depth_anything_v2_vits.onnx",
+                "input_size": 518,
+                "max_fps": 15,
+                "max_depth_m": 20.0,
+                "_comment": "Depth Anything V2 ViT-S ONNX via OpenCV DNN at 518x518. CPU inference ~1s/frame (hardware-dependent)."
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "high_conf_threshold": 0.5,
+                "low_conf_threshold": 0.1,
+                "max_iou_cost": 0.7
+            },
+            "radar": {
+                "backend": "gazebo",
+                "enabled": true,
+                "update_rate_hz": 20,
+                "ground_filter_alt_m": 2.0,
+                "_comment": "Radar enabled — HAL ground filter at 2.0m AGL"
+            },
+            "fusion": {
+                "backend": "ukf",
+                "rate_hz": 30,
+                "depth_scale": 1.0,
+                "assumed_obstacle_height_m": 3.0,
+                "height_priors": {"unknown": 3.0, "person": 1.7, "vehicle_car": 2.0, "vehicle_truck": 3.5, "drone": 0.3, "animal": 0.8, "building": 10.0, "tree": 6.0},
+                "radar": {
+                    "enabled": true,
+                    "ground_filter_enabled": true,
+                    "min_object_altitude_m": 1.5,
+                    "altitude_gate_m": 2.0,
+                    "orphan_proximity_m": 5.0,
+                    "max_orphan_range_m": 25.0,
+                    "promotion_hits": 8,
+                    "_comment": "Camera+radar UKF fusion with ML depth from DA V2 feeding Tier 3.5."
+                }
+            }
+        }
+    },
+    "fault_sequence": {
+        "steps": []
+    },
+    "pass_criteria": {
+        "log_contains": [
+            "Path planner: DStarLitePlanner",
+            "Obstacle avoider: ObstacleAvoider3D",
+            "Depth estimator: DepthAnythingV2Estimator",
+            "backend: bytetrack",
+            "ground_filter_alt_m",
+            "TAKEOFF",
+            "Survey complete",
+            "EXECUTING",
+            "Mission complete"
+        ],
+        "log_must_not_contain": [
+            "EMERGENCY_LAND",
+            "OBSTACLE COLLISION"
+        ],
+        "processes_alive": [
+            "video_capture", "perception", "slam_vio_nav",
+            "mission_planner", "comms", "payload_manager", "system_monitor"
+        ]
+    }
+}

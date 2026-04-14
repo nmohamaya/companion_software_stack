@@ -48,6 +48,10 @@
 #include "hal/cosys_radar.h"
 #endif
 
+#ifdef HAS_OPENCV
+#include "hal/depth_anything_v2.h"
+#endif
+
 #ifdef HAVE_PLUGINS
 #include "util/plugin_loader.h"
 #endif
@@ -269,7 +273,17 @@ template<typename Interface>
         return std::make_unique<CosysDepthBackend>(cfg, section);
     }
 #endif
-    // Future: if (backend == "depth_anything_v2") return std::make_unique<DepthAnythingV2>(cfg, section);
+#ifdef HAS_OPENCV
+    if (backend == "depth_anything_v2") {
+        return std::make_unique<DepthAnythingV2Estimator>(cfg, section);
+    }
+#else
+    if (backend == "depth_anything_v2") {
+        throw std::runtime_error(
+            "[HAL] Depth estimator backend 'depth_anything_v2' requires OpenCV "
+            "(HAS_OPENCV), but this build was compiled without it");
+    }
+#endif
     // Future: if (backend == "gazebo") return std::make_unique<GazeboDepthEstimator>(cfg, section);
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
