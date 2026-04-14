@@ -10,6 +10,7 @@
 #include "util/config.h"
 #include "util/config_keys.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -24,12 +25,16 @@
 // Helper: create a unique temporary config file
 // ═══════════════════════════════════════════════════════════
 static std::vector<std::string> g_cosys_temp_files;
+static std::atomic<int>         g_cosys_temp_counter{0};
 
 static std::string create_temp_config(const std::string& json_content) {
     char tmpl[] = "/tmp/test_cosys_XXXXXX.json";
     int  fd     = mkstemps(tmpl, 5);  // 5 = strlen(".json")
     if (fd < 0) {
-        std::string   path = "/tmp/test_cosys_" + std::to_string(getpid()) + ".json";
+        // Fallback: use PID + counter for uniqueness across tests in same process
+        int         seq  = g_cosys_temp_counter.fetch_add(1);
+        std::string path = "/tmp/test_cosys_" + std::to_string(getpid()) + "_" +
+                           std::to_string(seq) + ".json";
         std::ofstream ofs(path);
         ofs << json_content;
         ofs.close();
@@ -200,7 +205,7 @@ TEST(CosysBackendTest, DepthConstructAndDestruct) {
     EXPECT_NE(depth->name().find("CosysDepth"), std::string::npos);
 }
 
-TEST(CosysBackendTest, DepthEstimateReturnsValidMap) {
+TEST(CosysBackendTest, DepthEstimateReturnsErrorUntilSdkConnected) {
     auto          path = create_temp_config(R"({
         "perception": { "depth_estimator": { "backend": "cosys_airsim" } },
         "cosys_airsim": { "host": "127.0.0.1", "port": 41451 }
@@ -216,15 +221,10 @@ TEST(CosysBackendTest, DepthEstimateReturnsValidMap) {
     constexpr uint32_t   kChannels = 3;
     std::vector<uint8_t> frame(kWidth * kHeight * kChannels, 128);
 
+    // Stub returns error until AirSim SDK is integrated (not a zero depth map)
     auto result = depth->estimate(frame.data(), kWidth, kHeight, kChannels);
-    ASSERT_TRUE(result.is_ok());
-
-    const auto& map = result.value();
-    EXPECT_EQ(map.width, kWidth);
-    EXPECT_EQ(map.height, kHeight);
-    EXPECT_EQ(map.source_width, kWidth);
-    EXPECT_EQ(map.source_height, kHeight);
-    EXPECT_EQ(map.data.size(), static_cast<size_t>(kWidth) * kHeight);
+    ASSERT_TRUE(result.is_err());
+    EXPECT_NE(result.error().find("not yet implemented"), std::string::npos);
 }
 
 #endif  // HAVE_COSYS_AIRSIM

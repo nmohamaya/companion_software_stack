@@ -77,9 +77,12 @@ public:
 
         // TODO(#434): Connect to Cosys-AirSim RPC endpoint at host_:port_
         // and start image retrieval thread using simGetImages() API.
-        // For now, mark as open but images will be empty until SDK is integrated.
+        // Until SDK is integrated, open() succeeds but capture() will timeout
+        // (no frames arrive). This allows pipeline startup without the SDK.
 
         open_ = true;
+        DRONE_LOG_WARN("[CosysCamera] SDK not connected — capture() will timeout until "
+                       "AirSim RPC integration is implemented");
         DRONE_LOG_INFO("[CosysCamera] Opened camera='{}' on {}:{} ({}x{}@{}Hz)", camera_name_,
                        host_, port_, width_, height_, fps_);
         return true;

@@ -70,24 +70,13 @@ public:
         // image type for camera_name_ on vehicle_name_.
         // Parse the returned float array into the DepthMap.
         //
-        // For now, return a placeholder depth map with zero depth to indicate
-        // that the SDK connection is not yet implemented.
+        // Until the AirSim SDK integration is implemented, return an error
+        // so callers don't silently consume a zero depth map as ground truth.
 
-        DepthMap map;
-        map.width         = width;
-        map.height        = height;
-        map.source_width  = width;  // AirSim returns depth at request resolution
-        map.source_height = height;
-        map.scale         = 1.0f;  // AirSim returns metric depth directly
-        map.confidence    = 1.0f;  // Ground truth from simulator
-        map.timestamp_ns  = 0;     // Caller should set from frame timestamp
+        DRONE_LOG_WARN("[CosysDepth] SDK not connected — cannot estimate depth");
 
-        const auto num_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
-        map.data.resize(num_pixels, 0.0f);  // Zero depth until SDK is connected
-
-        DRONE_LOG_WARN("[CosysDepth] SDK not connected — returning zero depth map");
-
-        return drone::util::Result<DepthMap, std::string>::ok(std::move(map));
+        return drone::util::Result<DepthMap, std::string>::err(
+            "CosysDepthBackend: AirSim SDK integration not yet implemented");
     }
 
     [[nodiscard]] std::string name() const override {

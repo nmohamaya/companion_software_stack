@@ -42,15 +42,18 @@ ssh ${SSH_OPTS} "ubuntu@${INSTANCE_IP}" \
     "cd /opt/companion-stack && docker compose -f docker/docker-compose.cosys.yml logs --no-color 2>&1" \
     > "${TMPDIR}/docker-compose.log" 2>/dev/null || true
 
+# Normalize trailing slash on artifact store URL
+ARTIFACT_STORE_URL="${ARTIFACT_STORE_URL%/}"
+
 # Upload to artifact store (provider-neutral via URL scheme)
-echo "Uploading to ${ARTIFACT_STORE_URL}${RUN_ID}/..."
+echo "Uploading to ${ARTIFACT_STORE_URL}/${RUN_ID}/..."
 
 case "$ARTIFACT_STORE_URL" in
     s3://*)
-        aws s3 cp --recursive "$TMPDIR" "${ARTIFACT_STORE_URL}${RUN_ID}/"
+        aws s3 cp --recursive "$TMPDIR" "${ARTIFACT_STORE_URL}/${RUN_ID}/"
         ;;
     gs://*)
-        gsutil -m cp -r "${TMPDIR}/*" "${ARTIFACT_STORE_URL}${RUN_ID}/"
+        gsutil -m cp -r "$TMPDIR"/* "${ARTIFACT_STORE_URL}/${RUN_ID}/"
         ;;
     file://*)
         local_path="${ARTIFACT_STORE_URL#file://}/${RUN_ID}"
@@ -64,4 +67,4 @@ case "$ARTIFACT_STORE_URL" in
         ;;
 esac
 
-echo "Artifacts uploaded to ${ARTIFACT_STORE_URL}${RUN_ID}/"
+echo "Artifacts uploaded to ${ARTIFACT_STORE_URL}/${RUN_ID}/"

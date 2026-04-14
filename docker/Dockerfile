@@ -99,6 +99,7 @@ RUN mkdir -p build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DALLOW_INSECURE_ZENOH=ON \
+        -DMODEL_PRESET="${MODEL_PRESET}" \
         -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" && \
     make -j$(nproc)
 

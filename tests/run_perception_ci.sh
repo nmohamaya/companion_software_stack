@@ -162,9 +162,21 @@ except (FileNotFoundError, json.JSONDecodeError):
 
 results = {'metrics': {}, 'cost': 0.25, 'duration_min': 30}
 for key, val in bl['metrics'].items():
-    current = raw.get(key, val['value'])
     baseline_val = val['value']
     threshold = val['threshold']
+
+    if key not in raw:
+        # Missing metric = fail (don't silently fall back to baseline)
+        results['metrics'][key] = {
+            'baseline': baseline_val,
+            'current': None,
+            'threshold': threshold,
+            'passed': False,
+            'error': 'metric not found in scenario output'
+        }
+        continue
+
+    current = raw[key]
 
     if val.get('direction') == 'lower_is_better':
         # Current should not exceed baseline + threshold

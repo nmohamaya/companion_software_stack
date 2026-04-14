@@ -200,7 +200,9 @@ endif()
 include(cmake/ModelPresets.cmake)
 configure_file(config/model_defaults.h.in
     ${CMAKE_BINARY_DIR}/generated/model_defaults.h @ONLY)
-include_directories(${CMAKE_BINARY_DIR}/generated)
+# Expose generated headers to targets that need them (via drone_hal INTERFACE)
+# rather than polluting global include path
+set(GENERATED_INCLUDE_DIR ${CMAKE_BINARY_DIR}/generated)
 
 # ── Shared interface libraries ───────────────────────────────
 add_subdirectory(common/ipc)

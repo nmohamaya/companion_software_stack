@@ -6,10 +6,11 @@
 # Adding a new cloud provider means adding one file under cloud/providers/.
 #
 # Required provider functions:
-#   provision_instance  — create GPU instance, print instance ID
-#   get_instance_ip     — given instance ID, print public IP
-#   setup_instance      — SSH into instance, install prerequisites
-#   terminate_instance  — terminate instance by ID
+#   provision_instance      — create GPU instance, print instance ID
+#   get_instance_ip         — given instance ID, print public IP
+#   get_instance_id_from_ip — reverse lookup instance ID from public IP
+#   setup_instance          — SSH into instance, install prerequisites
+#   terminate_instance      — terminate instance by ID
 #
 # Environment variables:
 #   CLOUD_PROVIDER      — provider name (default: aws)
@@ -49,7 +50,7 @@ fi
 source "$PROVIDER_SCRIPT"
 
 # Verify provider implements required interface
-for fn in provision_instance get_instance_ip setup_instance terminate_instance; do
+for fn in provision_instance get_instance_ip get_instance_id_from_ip setup_instance terminate_instance; do
     if ! declare -f "$fn" > /dev/null 2>&1; then
         echo "ERROR: Provider '${CLOUD_PROVIDER}' does not implement ${fn}()"
         exit 1
@@ -87,9 +88,15 @@ docker compose -f docker/docker-compose.cosys.yml up --build -d
 
 echo "Waiting for services to become healthy..."
 for i in \$(seq 1 60); do
-    if docker compose -f docker/docker-compose.cosys.yml ps --format json | grep -q '"healthy"'; then
-        echo "Services healthy after \${i}0 seconds."
+    # Check that ALL services report healthy (not just any one)
+    if docker compose -f docker/docker-compose.cosys.yml ps --format json 2>/dev/null | \
+        python3 -c "import sys,json; data=json.loads(sys.stdin.read()); svcs=data if isinstance(data,list) else [data]; sys.exit(0 if svcs and all(s.get('Health')=='healthy' for s in svcs) else 1)" 2>/dev/null; then
+        echo "All services healthy after \${i}0 seconds."
         break
+    fi
+    if [[ "\$i" -eq 60 ]]; then
+        echo "WARNING: Services did not become healthy within 600s"
+        docker compose -f docker/docker-compose.cosys.yml ps
     fi
     sleep 10
 done

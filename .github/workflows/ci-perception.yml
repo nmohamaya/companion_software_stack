@@ -37,6 +37,7 @@ jobs:
 
     permissions:
       pull-requests: write  # For posting PR comment
+      issues: write         # Required by actions/github-script for issues.listComments/createComment
 
     env:
       CLOUD_PROVIDER: ${{ vars.CLOUD_PROVIDER || 'aws' }}

@@ -18,6 +18,9 @@
 
 # Default to g5.xlarge (NVIDIA A10G 24GB) — sufficient for UE5 + inference
 GPU_INSTANCE_TYPE="${GPU_INSTANCE_TYPE:-g5.xlarge}"
+# SSH key pair and security group — MUST be set for non-default VPCs
+SSH_KEY_NAME="${SSH_KEY_NAME:?Set SSH_KEY_NAME to an existing EC2 key pair name}"
+SECURITY_GROUP="${SECURITY_GROUP:-}"  # Optional: uses VPC default if empty
 
 provision_instance() {
     # Find the latest Deep Learning Base AMI with NVIDIA drivers
@@ -36,10 +39,19 @@ provision_instance() {
         return 1
     fi
 
+    # Build optional flags
+    local sg_flag=""
+    if [[ -n "$SECURITY_GROUP" ]]; then
+        sg_flag="--security-group-ids $SECURITY_GROUP"
+    fi
+
     local instance_id
+    # shellcheck disable=SC2086
     instance_id=$(aws ec2 run-instances \
         --image-id "$ami_id" \
         --instance-type "$GPU_INSTANCE_TYPE" \
+        --key-name "$SSH_KEY_NAME" \
+        ${sg_flag} \
         --instance-market-options "MarketType=spot,SpotOptions={MaxPrice=${SPOT_MAX_PRICE},SpotInstanceType=one-time}" \
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=companion-stack-cosys},{Key=Project,Value=companion-stack},{Key=AutoTerminate,Value=${RUN_DURATION_HOURS}h}]" \
         --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3"}}]' \

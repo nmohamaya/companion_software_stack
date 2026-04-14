@@ -37,8 +37,6 @@ services:
         condition: service_healthy
     environment:
       - DRONE_LOG_DIR=/app/drone_logs
-      - COSYS_AIRSIM_HOST=cosys-airsim
-      - COSYS_AIRSIM_PORT=41451
       - DRONE_CONFIG=/app/config/cosys_airsim.json
       # Request GPU access via NVIDIA Container Toolkit runtime
       - NVIDIA_VISIBLE_DEVICES=all
@@ -68,7 +66,8 @@ services:
       - "41451:41451"    # AirSim RPC API
       - "14540:14540"    # PX4 SITL MAVLink
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:41451/api/ping || exit 1"]
+      # AirSim uses msgpack RPC (not HTTP) — check TCP port reachability
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/41451' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
