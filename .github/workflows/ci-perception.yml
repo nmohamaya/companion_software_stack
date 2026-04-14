@@ -53,9 +53,17 @@ jobs:
       - name: Run perception CI
         id: perception
         run: |
+          # Auto-detect dry-run: if cloud credentials are not configured,
+          # run in dry-run mode (generates placeholder results from baseline)
+          DRY_RUN_FLAG=""
+          if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
+            echo "No cloud credentials configured — running in dry-run mode"
+            DRY_RUN_FLAG="--dry-run"
+          fi
           bash tests/run_perception_ci.sh \
             --baseline tests/perception_baseline.json \
-            --output /tmp/perception-results.json
+            --output /tmp/perception-results.json \
+            $DRY_RUN_FLAG
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

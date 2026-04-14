@@ -18,11 +18,17 @@
 
 # Default to g5.xlarge (NVIDIA A10G 24GB) — sufficient for UE5 + inference
 GPU_INSTANCE_TYPE="${GPU_INSTANCE_TYPE:-g5.xlarge}"
-# SSH key pair and security group — MUST be set for non-default VPCs
-SSH_KEY_NAME="${SSH_KEY_NAME:?Set SSH_KEY_NAME to an existing EC2 key pair name}"
+# SSH key pair and security group — validated at provision time, not at source time
+# (this file is sourced by launch.sh before any provisioning happens)
 SECURITY_GROUP="${SECURITY_GROUP:-}"  # Optional: uses VPC default if empty
 
 provision_instance() {
+    # Validate SSH key pair — required for SSH access to the instance
+    if [[ -z "${SSH_KEY_NAME:-}" ]]; then
+        echo "ERROR: SSH_KEY_NAME is required. Set it to an existing EC2 key pair name." >&2
+        return 1
+    fi
+
     # Find the latest Deep Learning Base AMI with NVIDIA drivers
     local ami_id
     ami_id=$(aws ec2 describe-images \
