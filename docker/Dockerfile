@@ -114,7 +114,7 @@ LABEL maintainer="Drone Companion Stack Team"
 LABEL description="Autonomous drone companion computer software stack (7 processes, Zenoh IPC)"
 LABEL model_preset="${MODEL_PRESET}"
 
-# Runtime-only packages
+# Runtime-only packages (procps provides pgrep for healthcheck)
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
         libspdlog1.12 \
@@ -126,7 +126,8 @@ RUN apt-get update -qq && \
         libtbb12 \
         libjpeg8 \
         libpng16-16 \
-        libtiff6 && \
+        libtiff6 \
+        procps && \
     rm -rf /var/lib/apt/lists/*
 
 # Zenoh runtime library (not -dev) — merged into single apt layer
@@ -172,5 +173,10 @@ RUN mkdir -p /app/drone_logs && \
 ENV DRONE_LOG_DIR=/app/drone_logs
 
 USER drone
+
+# Healthcheck: verify system_monitor (P7) is running — it supervises all other processes.
+# Cloud orchestrators (ECS, K8s, Cloud Run) use this for routing and restart decisions.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD pgrep -x system_monitor > /dev/null || exit 1
 
 ENTRYPOINT ["/app/deploy/launch_all.sh"]
