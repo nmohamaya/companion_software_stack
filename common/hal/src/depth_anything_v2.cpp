@@ -168,13 +168,13 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     const auto  num_pixels = static_cast<size_t>(out_h) * static_cast<size_t>(out_w);
 
     // ── Step 5: Convert relative inverse depth → metric depth ──
-    // DA V2 outputs unnormalized inverse depth: higher values = closer objects.
-    // We normalize to [0,1] then invert: depth = max_depth / (normalized + eps).
-    // This maps: normalized≈1 (closest) → depth≈max_depth/(1+eps)≈max_depth,
-    //            normalized≈0 (farthest) → depth≈max_depth/eps (clamped to max_depth).
-    // The final clamp to [0.1, max_depth_m_] ensures valid metric range.
-    // Note: inverse depth means the "closest" pixel gets the highest raw value,
-    // so after inversion the depth spread depends on the scene's actual depth range.
+    // DA V2 outputs unnormalized inverse depth: higher raw value = closer object.
+    // We normalize to [0,1] then linearly map to metric depth:
+    //   normalized=1 (closest object, highest inverse depth) → min_depth (0.1m)
+    //   normalized=0 (farthest object, lowest inverse depth) → max_depth
+    // This provides full utilization of the [min_depth, max_depth] range.
+    // Note: DA V2 is a relative (not metric) model — the absolute scale depends
+    // on the scene. The linear mapping is the simplest correct conversion.
     float min_val = raw_data[0];
     float max_val = raw_data[0];
     for (size_t i = 1; i < num_pixels; ++i) {
@@ -182,8 +182,9 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
         max_val = std::max(max_val, raw_data[i]);
     }
 
-    constexpr float eps   = 1e-6f;
-    const float     range = max_val - min_val;
+    constexpr float eps       = 1e-6f;
+    constexpr float min_depth = 0.1f;  // Minimum metric depth (closest objects)
+    const float     range     = max_val - min_val;
 
     DepthMap map;
     map.width         = static_cast<uint32_t>(out_w);
@@ -199,12 +200,11 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
         std::fill(map.data.begin(), map.data.end(), max_depth_m_);
     } else {
         for (size_t i = 0; i < num_pixels; ++i) {
-            // Normalize inverse depth to [0, 1]
+            // Normalize inverse depth to [0, 1]: 1 = closest, 0 = farthest
             const float normalized = (raw_data[i] - min_val) / range;
-            // Convert: high inverse depth → close, low inverse depth → far
-            // Clamp metric depth to [0.1, max_depth_m_]
-            const float metric = max_depth_m_ / (normalized + eps);
-            map.data[i]        = std::clamp(metric, 0.1f, max_depth_m_);
+            // Linear map: high inverse depth (close) → small depth, low → large depth
+            const float metric = min_depth + (max_depth_m_ - min_depth) * (1.0f - normalized);
+            map.data[i]        = metric;
         }
     }
 

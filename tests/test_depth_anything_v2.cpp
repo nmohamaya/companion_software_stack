@@ -220,8 +220,10 @@ TEST_F(DAv2ModelTest, DepthValuesPositiveAndBounded) {
         max_d = std::max(max_d, d);
     }
 
-    // Non-uniform input must produce depth variation (not collapsed to single value)
+    // Non-uniform input must produce meaningful depth variation — the linear mapping
+    // should spread values across [0.1, max_depth], not collapse to a narrow range.
     EXPECT_LT(min_d, max_d) << "Depth map should have variation on non-uniform input";
+    EXPECT_GT(max_d - min_d, 1.0f) << "Depth range should span at least 1m on gradient input";
 }
 
 TEST_F(DAv2ModelTest, RGBAFrameWorks) {
