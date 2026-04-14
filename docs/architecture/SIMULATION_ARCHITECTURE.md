@@ -1750,8 +1750,10 @@ Twenty-five pre-defined scenarios in `config/scenarios/`:
 | 24 | Gimbal Auto Track | 1 | No | Gimbal auto-tracking smoke test |
 | 25 | Flight Recorder Replay | 1 | No | 2-waypoint mission with flight recorder enabled, verifies replay |
 | 26 | Gazebo Full VIO | 2 | Yes | Short mission with full VIO pipeline on Gazebo stereo+IMU data |
+| 27 | Perception Depth Accuracy | 2 | Yes | Simulated depth + radar UKF fusion accuracy with varied-height obstacles |
+| 28 | ML Depth Estimation | 2 | Yes | Depth Anything V2 (OpenCV DNN) + color_contour + radar UKF fusion |
 
-**Counts:** 20 Tier 1 scenarios + 5 Tier 2 (Gazebo) scenarios = 25 total.
+**Counts:** 20 Tier 1 scenarios + 7 Tier 2 (Gazebo) scenarios = 27 total.
 
 ### Scenario JSON Structure
 
@@ -1813,6 +1815,8 @@ Which pluggable backends are exercised by each scenario:
 | 24 Gimbal Track | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 25 Flight Recorder | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
 | 26 Gazebo Full VIO | `dstar_lite` | `potential_field_3d` | `simulated` | `bytetrack` | `camera_only` |
+| 27 Depth Accuracy | `dstar_lite` | `potential_field_3d` | `color_contour` | `bytetrack` | `ukf` + radar + simulated depth |
+| 28 ML Depth | `dstar_lite` | `potential_field_3d` | `color_contour` | `bytetrack` | `ukf` + radar + `depth_anything_v2` |
 
 ### Per-Scenario Fault Coverage
 
@@ -1845,6 +1849,48 @@ Which fault types and FSM states are exercised:
 | 24 Gimbal Track | None | NAVIGATE -> RTL -> LAND | — |
 | 25 Flight Recorder | None | IDLE -> TAKEOFF -> NAVIGATE -> RTL -> LAND | — |
 | 26 Gazebo Full VIO | None | IDLE -> TAKEOFF -> NAVIGATE -> RTL -> LAND | — |
+| 27 Depth Accuracy | None | IDLE -> TAKEOFF -> SURVEY -> NAVIGATE -> RTL -> LAND | — |
+| 28 ML Depth | None | IDLE -> TAKEOFF -> SURVEY -> NAVIGATE -> RTL -> LAND | — |
+
+---
+
+## Scenario Design Principles
+
+### One Capability Per Scenario
+
+Each scenario should test **one primary capability** in isolation. When a scenario fails, you should be able to identify the failing component immediately without ambiguity.
+
+| Scenario | Primary capability under test | Why isolated |
+| --- | --- | --- |
+| 02 Obstacle Avoidance | D* Lite + HD-map + potential field avoidance | Tests path planning with known obstacles. Depth estimator disabled — avoidance failures trace to planner/avoider, not depth. |
+| 18 Perception Avoidance | Camera-detected obstacle avoidance (no HD-map) | Tests perception-to-planner pipeline. Uses simulated depth — avoidance failures trace to detection/fusion, not ML model. |
+| 27 Depth Accuracy | Simulated depth + radar fusion accuracy | Tests UKF fusion with controlled depth values. Uses simulated depth (constant, predictable) — fusion failures trace to the UKF, not model inference. |
+| 28 ML Depth Estimation | Depth Anything V2 ONNX model inference | Tests the ML depth backend end-to-end. If it fails, you know the model loading, inference, or depth-to-fusion integration broke. |
+
+**Anti-pattern:** Enabling ML depth in scenario 02. If that scenario fails, is it the avoidance logic? The ML model? The grid saturation from ML depth noise? Layering multiple capabilities makes failures harder to attribute. Instead, scenario 28 validates ML depth independently.
+
+### Progressive Complexity
+
+Scenarios build on each other in a chain of increasing capability:
+
+```text
+02 (avoidance + HD-map)
+ └─ 18 (avoidance + perception, no HD-map)
+     └─ 27 (+ simulated depth + radar fusion)
+         └─ 28 (+ ML depth replacing simulated)
+```
+
+If scenario 28 fails but 27 passes, the problem is in the DA V2 backend or its config tuning — not the fusion pipeline. If 27 fails but 18 passes, the problem is in depth estimation integration — not detection or tracking.
+
+### Optional Backend Dependencies
+
+Scenarios that require optional backends (ML models, Gazebo, etc.) must degrade gracefully:
+
+- **Scenario 21 (YOLOv8):** Requires `yolov8n.onnx` model file. Without it, the test runner skips.
+- **Scenario 28 (ML Depth):** Requires `depth_anything_v2_vits.onnx` model file. Without it, the depth estimator fails to load and the backend returns errors.
+- **All Tier 2 scenarios:** Require Gazebo + PX4 SITL installed. Use `run_scenario_gazebo.sh` (not `run_scenario.sh`).
+
+When adding a new scenario with an optional dependency, document the prerequisite in the scenario JSON `_comment` field and in this table.
 
 ---
 
