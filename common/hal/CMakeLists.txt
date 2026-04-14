@@ -24,3 +24,14 @@ if(GAZEBO_FOUND)
         gz-msgs${GZ_MSGS_VER}::core
     )
 endif()
+
+# ── Optional: Cosys-AirSim backend ────────────────────────
+if(COSYS_AIRSIM_FOUND)
+    target_compile_definitions(drone_hal INTERFACE HAVE_COSYS_AIRSIM)
+    target_sources(drone_hal INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_camera.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_radar.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_imu.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_depth.cpp
+    )
+endif()

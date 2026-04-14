@@ -41,6 +41,13 @@
 #include "hal/gazebo_radar.h"
 #endif
 
+#ifdef HAVE_COSYS_AIRSIM
+#include "hal/cosys_camera.h"
+#include "hal/cosys_depth.h"
+#include "hal/cosys_imu.h"
+#include "hal/cosys_radar.h"
+#endif
+
 #ifdef HAVE_PLUGINS
 #include "util/plugin_loader.h"
 #endif
@@ -96,6 +103,11 @@ template<typename Interface>
     if (backend == "gazebo") {
         auto gz_topic = cfg.get<std::string>(section + drone::cfg_key::hal::GZ_TOPIC, "/camera");
         return std::make_unique<GazeboCameraBackend>(gz_topic);
+    }
+#endif
+#ifdef HAVE_COSYS_AIRSIM
+    if (backend == "cosys_airsim") {
+        return std::make_unique<CosysCameraBackend>(cfg, section);
     }
 #endif
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
@@ -192,6 +204,11 @@ template<typename Interface>
         return imu;
     }
 #endif
+#ifdef HAVE_COSYS_AIRSIM
+    if (backend == "cosys_airsim") {
+        return std::make_unique<CosysIMUBackend>(cfg, section);
+    }
+#endif
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
@@ -220,6 +237,12 @@ template<typename Interface>
     }
 #endif
 
+#ifdef HAVE_COSYS_AIRSIM
+    if (backend == "cosys_airsim") {
+        return std::make_unique<CosysRadarBackend>(cfg, section);
+    }
+#endif
+
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
         return load_plugin<IRadar>(cfg, section, "radar");
@@ -241,6 +264,11 @@ template<typename Interface>
     if (backend == "simulated") {
         return std::make_unique<SimulatedDepthEstimator>(cfg, section);
     }
+#ifdef HAVE_COSYS_AIRSIM
+    if (backend == "cosys_airsim") {
+        return std::make_unique<CosysDepthBackend>(cfg, section);
+    }
+#endif
     // Future: if (backend == "depth_anything_v2") return std::make_unique<DepthAnythingV2>(cfg, section);
     // Future: if (backend == "gazebo") return std::make_unique<GazeboDepthEstimator>(cfg, section);
 #ifdef HAVE_PLUGINS

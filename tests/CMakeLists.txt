@@ -229,6 +229,9 @@ add_drone_test(test_depth_estimator  test_depth_estimator.cpp
 )
 endif()
 
+# ── Cosys-AirSim HAL backend tests (Issue #434) ────────────
+add_drone_test(test_cosys_hal_backends test_cosys_hal_backends.cpp)
+
 # ── Diagnostic Collector tests ──────────────────────────────
 add_drone_test(test_diagnostic      test_diagnostic.cpp)
 
