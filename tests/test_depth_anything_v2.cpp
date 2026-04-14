@@ -7,6 +7,7 @@
 #include "util/config.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
