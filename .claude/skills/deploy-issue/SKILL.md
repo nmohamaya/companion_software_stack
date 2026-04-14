@@ -17,6 +17,44 @@ Run the full development pipeline for a GitHub issue within the current Claude C
 
 If this skill was already loaded earlier in the conversation (e.g., from a prior invocation or context compaction), the Skill tool call may fail with "Unknown skill." In that case, **immediately acknowledge to the user**: "The deploy-issue skill is already active in this session — I'll continue with your arguments." Then proceed to execute the pipeline with the provided arguments. Never leave the user with silence.
 
+## Pipeline State Persistence
+
+Write pipeline state to `tasks/pipeline-state.json` after each phase transition. This enables recovery if context compacts mid-pipeline.
+
+**At startup — check for existing state:**
+
+```
+if tasks/pipeline-state.json exists AND skill == "deploy-issue":
+  read and display state summary:
+    "Found pipeline state: Issue #<N> — <title>, Phase: <phase>, Branch: <branch>"
+  ask user: "Resume from <phase>?" or "Start fresh?"
+  if resume: skip to the recorded phase, restoring branch/PR/validation state
+  if fresh: delete state file, proceed normally
+```
+
+**State shape:**
+```json
+{
+  "skill": "deploy-issue",
+  "issue": 434,
+  "title": "Cosys-AirSim HAL backends",
+  "branch": "feature/issue-434-hal-backends",
+  "base_branch": "main",
+  "phase": "CP2",
+  "pr": null,
+  "validation": {"build": "pass", "format": "pass", "test_count": 1483},
+  "updated_at": "2026-04-14T10:30:00Z"
+}
+```
+
+**Write state after:** Step 1.4 (branch created), CP1 (changes accepted), CP2 (committed), CP3 (PR created), CP4 (reviews complete). Use a simple bash write:
+
+```bash
+cat > tasks/pipeline-state.json << 'STATE'
+{ ... current state ... }
+STATE
+```
+
 ## Arguments
 
 Parse `$ARGUMENTS` to extract:
@@ -24,6 +62,49 @@ Parse `$ARGUMENTS` to extract:
 - **--base \<branch\>** (optional): Target branch for the PR (default: `main`). Use for integration branches like `--base integration/epic-284`.
 
 If no arguments provided, ask the user for the issue number.
+
+## Pipeline Overview
+
+```
+┌─────────────────────────────────────────────┐
+│ STARTUP: STATE CHECK                        │
+│ pipeline-state.json exists? → Resume/Fresh  │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ PHASE 1: ROUTING & SETUP         [→ state]  │
+│ Fetch issue → Route → Create branch         │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ PHASE 2: AGENT WORK                         │
+│ Tech-lead plan → Spawn agent (worktree)     │
+│ CP1: Changes Review              [→ state]  │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ PHASE 3: VALIDATE & COMMIT       [→ state]  │
+│ 9-check hallucination detector              │
+│ CP2: Commit Approval                        │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ PHASE 4: PR CREATION             [→ state]  │
+│ Push → Generate PR metadata                 │
+│ CP3: PR Preview                             │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ PHASE 5: REVIEW                  [→ state]  │
+│ Scope: Full (2-pass) / Quick (3 agents)     │
+│ CP4: Review Findings                        │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ CP5: FINAL SUMMARY → CLEANUP               │
+│ Close issue, cleanup state file             │
+└─────────────────────────────────────────────┘
+```
 
 ## Pipeline Phases
 
@@ -93,6 +174,16 @@ git checkout -b "$branch_name" "$base_ref"
 ```
 
 Note: The feature agent in Phase 2 runs in an **isolated worktree** (via `isolation: "worktree"`) so it cannot interfere with the current checkout. After the agent completes, its changes are merged back in Step 2.5.
+
+**Write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-issue | Issue: #<N> — <title>
+Branch: <branch_name> | Base: <base_branch>
+Phase: SETUP complete → Agent Work next
+═══════════════════════
+```
 
 ---
 
@@ -239,6 +330,17 @@ User choices:
 - **changes** → ask the user what modifications they want, then either make them yourself or spawn the agent again with specific instructions. Return to CP1 after changes.
 - **reject** → go to ABORT
 
+**On accept — write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-issue | Issue: #<N> — <title>
+Branch: <branch_name> | Base: <base_branch>
+Phase: CP1 complete → Validate & Commit next
+Diff: +<A> -<B> across <C> files
+═══════════════════════
+```
+
 ---
 
 ### PHASE 3: Validate & Commit
@@ -322,6 +424,17 @@ User choices:
 - **back** → return to CP1
 - **abort** → go to ABORT
 
+**On commit — write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-issue | Issue: #<N> — <title>
+Branch: <branch_name> | Base: <base_branch>
+Phase: CP2 complete → PR Creation next
+Validation: Build PASS | Format PASS | Tests <N>
+═══════════════════════
+```
+
 ---
 
 ### PHASE 4: PR Creation [SEQUENTIAL]
@@ -357,11 +470,52 @@ User choices:
 
 After creating: check for existing open PR for same branch first (`gh pr list --head <branch> --state open`). If one exists, offer to update it instead.
 
+**On create — write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-issue | Issue: #<N> — <title>
+Branch: <branch_name> | Base: <base_branch>
+Phase: CP3 complete → Review next
+PR: #<pr_number>
+═══════════════════════
+```
+
 ---
 
 ### PHASE 5: Review [TWO PASSES]
 
-**Step 5.1 — Build review roster and get approval**
+**Step 5.1 — Select review scope**
+
+Before building the detailed roster, offer the user a review scope tier:
+
+```
+═══ Review Scope ═══
+
+  [F]ull — 2-pass, 8+ agents (default)
+           Best for: final reviews, large changes, safety-critical code
+           Context cost: ~2000 words
+
+  [Q]uick — 1-pass, 3 agents (memory-safety + test-unit + code-quality)
+            Best for: small changes, context-constrained sessions, fix-loop re-reviews
+            Context cost: ~600 words
+
+  [S]kip — No review (existing option)
+```
+
+User choices:
+- **full** (default) → proceed to Step 5.2 with full two-pass roster
+- **quick** → run single-pass Quick review (Step 5.2-quick below)
+- **skip** → skip the entire review phase, go directly to CP5
+
+**Quick review roster (single pass, no Pass 2):**
+- `review-memory-safety` — RAII, ownership, lifetimes
+- `test-unit` — GTest coverage, test count verification
+- `review-code-quality` — dead code, DRY violations, complexity, naming
+
+These 3 cover the highest-value checks. Launch all 3 in parallel, collect results, skip Pass 2, proceed directly to CP4 with findings. All other CP4 behavior (fix loop, defer, etc.) remains the same.
+
+**Step 5.2 — Build review roster and get approval**
 
 Get the PR diff and determine which reviewers are applicable:
 
@@ -409,7 +563,7 @@ User choices:
 - **only \<numbers\>** → launch only the specified agents (e.g., `only 1 2 3` for safety-only review)
 - **skip all** → skip the entire review phase, go directly to CP5
 
-**Step 5.2 — Launch Pass 1 agents** [PARALLEL]
+**Step 5.3 — Launch Pass 1 agents** [PARALLEL]
 
 Spawn all **approved** Pass 1 agents in **parallel** using multiple Agent tool calls in a single message. Each agent receives:
 - The PR diff (or summary of changed files with key snippets)
@@ -422,7 +576,7 @@ Collect all Pass 1 results. Report progress as agents complete:
   ⏳ test-unit              running...
 ```
 
-**Step 5.3 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
+**Step 5.4 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
 
 Spawn all **approved** Pass 2 agents in parallel, providing Pass 1 findings as context:
 - Each Pass 2 agent receives the merged Pass 1 findings so it can build on them
@@ -430,9 +584,9 @@ Spawn all **approved** Pass 2 agents in parallel, providing Pass 1 findings as c
 
 Collect Pass 2 results.
 
-**Step 5.4 — Merge findings** from both passes into a combined report. Mark skipped agents clearly.
+**Step 5.5 — Merge findings** from both passes into a combined report. Mark skipped agents clearly.
 
-**Step 5.5 — Check for bot/CI review comments**
+**Step 5.6 — Check for bot/CI review comments**
 
 Before presenting CP4, check for existing review comments from Copilot or other bots on the PR:
 
@@ -442,7 +596,7 @@ gh api repos/<owner>/<repo>/pulls/<N>/comments --jq '.[].body' | head -50
 
 Categorize each bot comment as: **already fixed** (by our agents), **worth fixing** (net-new), or **false positive** (with reason). Include actionable findings in the CP4 presentation.
 
-**Step 5.6 — Post findings to PR**
+**Step 5.7 — Post findings to PR**
 
 **Always** post the merged review findings as a PR comment — do not wait to be asked. Use a structured format with agent status table, P1/P2 details, and tech-lead assessment. This creates an audit trail on the PR.
 
@@ -488,6 +642,18 @@ User choices:
 - **back** → return to CP3
 - **reject** → go to ABORT
 
+**On accept/fix complete — write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-issue | Issue: #<N> — <title>
+Branch: <branch_name> | Base: <base_branch>
+Phase: CP4 complete → Final Summary next
+PR: #<pr_number>
+Reviews: <N> P1, <N> P2, <N> P3 (all addressed)
+═══════════════════════
+```
+
 ---
 
 ### CP5: Final Summary [INTERACTIVE]
@@ -528,7 +694,11 @@ User choices:
    - **Status:** completed
    ```
 3. Post a summary comment on the GitHub issue noting the PR
-4. Report completion to the user:
+4. Clean up state file:
+   ```bash
+   rm -f tasks/pipeline-state.json
+   ```
+5. Report completion to the user:
    ```
    Pipeline complete. PR #<N> ready for merge.
    URL: <pr_url>
@@ -541,8 +711,8 @@ User choices:
 If the user chooses to abort at any checkpoint:
 
 1. Ask: **clean up** (delete branch + any worktree) or **preserve** (keep for manual work)?
-2. If clean: `git checkout <base_branch>` and `git branch -D <branch_name>`
-3. If preserve: show resume instructions
+2. If clean: `git checkout <base_branch>` and `git branch -D <branch_name>` and `rm -f tasks/pipeline-state.json`
+3. If preserve: show resume instructions. Note: pipeline state preserved in `tasks/pipeline-state.json` for manual resume.
 4. Report abort status
 
 ---

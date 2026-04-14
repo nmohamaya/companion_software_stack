@@ -17,6 +17,46 @@ Deploy a wave of related issues from an epic. Plans all issues upfront as a batc
 
 If this skill was already loaded earlier in the conversation (e.g., from a prior invocation or context compaction), the Skill tool call may fail with "Unknown skill." In that case, **immediately acknowledge to the user**: "The deploy-wave skill is already active in this session — I'll continue with your arguments." Then proceed to execute the pipeline with the provided arguments. Never leave the user with silence.
 
+## Pipeline State Persistence
+
+Write pipeline state to `tasks/pipeline-state.json` after each phase transition. This enables recovery if context compacts mid-wave.
+
+**At startup — check for existing state:**
+
+```
+if tasks/pipeline-state.json exists AND skill == "deploy-wave":
+  read and display state summary:
+    "Found pipeline state: Epic #<N> Wave <W>, Phase: <phase>, Branch: <branch>"
+    "Issues: #X (merged, PR #Y), #Z (in_progress, group 2)"
+  ask user: "Resume from <phase>?" or "Start fresh?"
+  if resume: skip to the recorded phase, restoring branch/issue/group state
+  if fresh: delete state file, proceed normally
+```
+
+**State shape:**
+```json
+{
+  "skill": "deploy-wave",
+  "epic": 431,
+  "integration_branch": "integration/epic-431-wave-1",
+  "base_branch": "main",
+  "phase": "3A.6",
+  "mode": "standard",
+  "issues": {
+    "432": {"status": "merged", "pr": 450},
+    "433": {"status": "merged", "pr": 451},
+    "434": {"status": "in_progress", "group": 2}
+  },
+  "groups": [
+    {"group": 1, "issues": [432, 433], "status": "complete"},
+    {"group": 2, "issues": [434], "status": "in_progress"}
+  ],
+  "updated_at": "2026-04-14T10:30:00Z"
+}
+```
+
+**Write state after:** Step 1.3 (integration branch created), each Step 3A.7/3B.6 (group committed), Phase 4 reviews complete, Phase 5 final merge. In Fast Mode, also write after each merge in Step 3B.3 (so recovery knows which merges succeeded).
+
 ## Arguments
 
 Parse `$ARGUMENTS` to extract:
@@ -30,7 +70,12 @@ If no arguments provided, ask the user for the issue numbers and epic.
 
 ```
 ┌─────────────────────────────────────────────┐
-│ PHASE 1: SETUP                              │
+│ STARTUP: STATE CHECK                        │
+│ pipeline-state.json exists? → Resume/Fresh  │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│ PHASE 1: SETUP                    [→ state] │
 │ Fetch all issues → Create integration branch │
 └──────────────────────┬──────────────────────┘
                        ▼
@@ -41,23 +86,22 @@ If no arguments provided, ask the user for the issue numbers and epic.
 └──────────────────────┬──────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────┐
-│ PHASE 3: PER-GROUP EXECUTION (loop)         │
-│ For each execution group:                   │
-│   Independent → Parallel agents (worktrees) │
-│   Dependent   → Sequential agent            │
-│   Merge sequentially → Validate → Batch CP  │
+│ PHASE 3: PER-GROUP EXECUTION      [→ state] │
+│ Standard: per-group validate + checkpoint   │
+│ Fast: all agents → single validation        │
+│ State written after each merge/group        │
 └──────────────────────┬──────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────┐
-│ PHASE 4: WAVE REVIEW                        │
-│ Two-pass review on combined integration     │
-│ branch diff vs main                         │
+│ PHASE 4: WAVE REVIEW             [→ state]  │
+│ Scope: Full (2-pass) / Quick (3 agents)     │
+│ Default: Quick if Standard, Full if Fast    │
 └──────────────────────┬──────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────┐
 │ PHASE 5: MERGE & CLEANUP                    │
 │ Final merge PR: integration → main          │
-│ Close issues, update tracking               │
+│ Close issues, cleanup state file            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -109,6 +153,16 @@ git push -u origin "$branch_name"
 ```
 
 If an integration branch for this epic already exists (`git branch -r --list 'origin/integration/epic-<N>*'`), ask the user whether to reuse it or create a new one.
+
+**Write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-wave | Epic: #<N> | Branch: <integration_branch>
+Phase: SETUP complete → Wave Plan next
+Issues: #<N1>, #<N2>, #<N3> (all pending)
+═══════════════════════
+```
 
 ---
 
@@ -450,6 +504,18 @@ For each accepted issue in the group:
 3. Create PR: `gh pr create --title "feat(#<N>): <title>" --base <integration_branch>`
 4. Apply labels and milestone from source issue
 
+**Write state + emit summary after group commit:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-wave | Epic: #<N> | Branch: <integration_branch>
+Phase: Group <G>/<total> complete
+Done: #<N1> (PR #<P1>), #<N2> (PR #<P2>)
+Active: Group <G+1>
+Pending: #<N3>, #<N4>
+═══════════════════════
+```
+
 ### Step 3A.8 — Loop to next group
 
 Repeat Steps 3A.1–3A.7 for the next execution group. Each subsequent group's agents receive summaries of all previously merged issues (from prior groups) so they have full context and don't duplicate or conflict.
@@ -510,6 +576,8 @@ git merge <agent_worktree_branch> --no-edit
 # Quick compile check — catches obvious breakage early
 cd build && cmake --build . --target all -j$(nproc) 2>&1 | tail -5
 ```
+
+**After each successful merge, write updated state** to `tasks/pipeline-state.json` recording which issues have been merged. This means if context compacts during the merge sequence, recovery knows which merges succeeded.
 
 **If compile fails after a merge:**
 1. Identify which agent's merge broke the build
@@ -579,6 +647,18 @@ User choices:
 
 For each accepted issue, commit and push to the integration branch. Create per-issue PRs against the integration branch.
 
+**Write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-wave | Epic: #<N> | Branch: <integration_branch>
+Phase: Fast Mode execution complete → Wave Review next
+Mode: fast
+Done: #<N1> (PR #<P1>), #<N2> (PR #<P2>), #<N3> (PR #<P3>)
+Validation: Build PASS | Format PASS | Tests <N>
+═══════════════════════
+```
+
 After Phase 3B completes, proceed to Phase 4 (Wave Review) — the same combined review runs regardless of execution mode.
 
 ---
@@ -594,7 +674,38 @@ git diff origin/<base_branch>...HEAD --stat
 git diff origin/<base_branch>...HEAD
 ```
 
-**Step 4.2 — Build review roster**
+**Step 4.2 — Select review scope**
+
+Before building the detailed roster, offer the user a review scope tier. The default depends on the execution mode:
+
+```
+═══ Review Scope ═══
+
+  [F]ull — 2-pass, 8+ agents
+           Best for: final reviews, large changes, safety-critical code
+           Context cost: ~2000 words
+
+  [Q]uick — 1-pass, 3 agents (memory-safety + test-unit + code-quality)
+            Best for: mid-wave groups, small changes, context-constrained sessions
+            Context cost: ~600 words
+
+  [S]kip — No review
+```
+
+**Default selection logic:**
+- **Standard mode** → default to **Quick** (per-group validation already caught major issues)
+- **Fast mode** → default to **Full** (no per-group validation occurred, this is the only review)
+
+User can always override the default.
+
+**Quick review roster (single pass, no Pass 2):**
+- `review-memory-safety` — RAII, ownership, lifetimes
+- `test-unit` — GTest coverage, test count verification
+- `review-code-quality` — dead code, DRY violations, complexity, naming
+
+Launch all 3 in parallel, collect results, skip Pass 2, proceed to Wave Review Checkpoint.
+
+**Step 4.3 — Build review roster (Full scope only)**
 
 Same roster logic as `/deploy-issue` Phase 5, but applied to the **combined diff**. This catches cross-issue problems that per-issue reviews would miss:
 - Interface mismatches between issues
@@ -603,15 +714,15 @@ Same roster logic as `/deploy-issue` Phase 5, but applied to the **combined diff
 
 Present the roster for approval (same format as deploy-issue Step 5.1).
 
-**Step 4.3 — Launch Pass 1 agents** [PARALLEL]
+**Step 4.4 — Launch Pass 1 agents** [PARALLEL]
 
 Spawn Pass 1 review agents on the combined diff. Cap output to 200 words per agent.
 
-**Step 4.4 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
+**Step 4.5 — Launch Pass 2 agents** [PARALLEL, after Pass 1]
 
 Spawn Pass 2 review agents with Pass 1 findings as context.
 
-**Step 4.5 — Check bot/CI comments**
+**Step 4.6 — Check bot/CI comments**
 
 Check all per-issue PRs for Copilot/bot review comments:
 ```bash
@@ -622,7 +733,7 @@ done
 
 Categorize each bot comment as: **already fixed** (by our agents), **worth fixing** (net-new), or **false positive** (with reason). Include actionable findings in the checkpoint presentation.
 
-**Step 4.6 — Post findings**
+**Step 4.7 — Post findings**
 
 Post the merged review findings as a comment on the **merge PR**. After all fixes are applied, **also post a Copilot triage table** summarizing what was already fixed by our agents, what was fixed from Copilot, and what was a false positive (with reasons). This documents the value-add of each review layer and creates a full audit trail.
 
@@ -652,6 +763,17 @@ User choices:
 - **fix** → fix issues, re-validate, re-review. **Always re-run BOTH Pass 1 AND Pass 2** — fixes frequently introduce new issues. Loop back to Step 4.2 (roster approval), not Phase 3.
 - **defer with rationale** → for P3 findings or comments where we disagree with the recommendation, document each decision in `docs/guides/DESIGN_RATIONALE.md` as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, trade-offs weighed, and the decision was intentional — not an oversight. Each entry needs: the question, arguments for both sides, our decision, and when to revisit.
 - **abort** → stop
+
+**On accept — write state + emit summary:**
+
+```
+═══ PIPELINE STATE ═══
+Skill: deploy-wave | Epic: #<N> | Branch: <integration_branch>
+Phase: Wave Review complete → Merge & Cleanup next
+Done: #<N1> (PR #<P1>), #<N2> (PR #<P2>), #<N3> (PR #<P3>)
+Reviews: <N> P1, <N> P2, <N> P3 (all addressed)
+═══════════════════════
+```
 
 ---
 
@@ -700,13 +822,17 @@ User choices:
 2. Append wave entry to `tasks/agent-changelog.md`
 3. Post summary comment on the epic issue (#<epic_number>) with wave progress
 4. Update `tasks/active-work.md` if it exists
+5. Clean up state file:
+   ```bash
+   rm -f tasks/pipeline-state.json
+   ```
 
 ---
 
 ## Edge Cases
 
 - **Agent conflict**: If agent B touches a file that agent A already modified on the integration branch, the merge in Step 3.4 may conflict. Resolve manually or re-run agent B with awareness of A's changes.
-- **Partial wave**: If the user aborts mid-wave, the completed per-issue PRs remain on the integration branch. The wave can be resumed later by re-running with the remaining issues and `--base` pointing to the existing integration branch.
+- **Partial wave / abort**: If the user aborts mid-wave, the completed per-issue PRs remain on the integration branch. Pipeline state is preserved in `tasks/pipeline-state.json` for resume. The wave can be resumed later by re-running the skill — it will detect the state file and offer to resume from the last completed phase. Alternatively, re-run with the remaining issues and `--base` pointing to the existing integration branch.
 - **Single issue wave**: If only one issue number is provided, the skill degrades gracefully to essentially `/deploy-issue` with an integration branch. Still useful for consistency.
 - **Existing integration branch**: Check `git branch -r --list 'origin/integration/epic-<N>*'` before creating. If one exists, offer to reuse it (pick up where a prior wave left off).
 - **Context window management**: A full wave with 3 issues + 2-pass review generates significant context. Cap all agent outputs to 200 words. Summarize per-issue results before starting the next issue. If context gets tight, summarize earlier issues aggressively. For parallel groups: each agent's output is capped at 200 words; with the 3-agent-per-group cap, batch checkpoint output stays under ~900 words.
