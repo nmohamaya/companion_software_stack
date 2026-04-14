@@ -1,0 +1,62 @@
+{
+    "_comment": "Perception regression baseline — update after each validated photorealistic run",
+    "version": 1,
+    "updated_at": "2026-04-14",
+    "metrics": {
+        "yolo_precision": {
+            "value": 0.0,
+            "threshold": 0.05,
+            "direction": "higher_is_better"
+        },
+        "yolo_recall": {
+            "value": 0.0,
+            "threshold": 0.05,
+            "direction": "higher_is_better"
+        },
+        "yolo_map50": {
+            "value": 0.0,
+            "threshold": 0.05,
+            "direction": "higher_is_better"
+        },
+        "depth_mae_5m": {
+            "value": 0.0,
+            "threshold": 0.5,
+            "unit": "meters",
+            "direction": "lower_is_better"
+        },
+        "depth_mae_10m": {
+            "value": 0.0,
+            "threshold": 1.0,
+            "unit": "meters",
+            "direction": "lower_is_better"
+        },
+        "depth_mae_20m": {
+            "value": 0.0,
+            "threshold": 2.0,
+            "unit": "meters",
+            "direction": "lower_is_better"
+        },
+        "depth_mae_30m": {
+            "value": 0.0,
+            "threshold": 3.0,
+            "unit": "meters",
+            "direction": "lower_is_better"
+        },
+        "fusion_track_accuracy": {
+            "value": 0.0,
+            "threshold": 0.05,
+            "direction": "higher_is_better"
+        },
+        "fusion_association_rate": {
+            "value": 0.0,
+            "threshold": 0.05,
+            "direction": "higher_is_better"
+        },
+        "inference_latency_ms": {
+            "value": 0.0,
+            "threshold": 10.0,
+            "unit": "ms",
+            "direction": "lower_is_better"
+        }
+    }
+}
