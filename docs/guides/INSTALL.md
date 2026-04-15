@@ -296,7 +296,8 @@ cmake \
 
 | Issue | Symptom | Fix |
 |---|---|---|
-| **Stale source build with CUDA** | CMake error: `Could NOT find CUDA: Found unsuitable version` | Old OpenCV at `/usr/local` was built against a different CUDA. Fix: `-DOpenCV_DIR=/usr/lib/x86_64-linux-gnu/cmake/opencv4` to force apt version, or remove stale build: `sudo rm -rf /usr/local/lib/cmake/opencv4 /usr/local/lib/libopencv*` |
+| **Stale source build with CUDA** | CMake error: `Could NOT find CUDA: Found unsuitable version` | Old OpenCV at `/usr/local` was built against a different CUDA. Remove stale build: `sudo rm -rf /usr/local/lib/cmake/opencv4 /usr/local/lib/libopencv*` and rebuild from source |
+| **CMake finds apt OpenCV instead of source build** | `OpenCV : 4.5.4` when 4.10.0 is installed at `/usr/local` | Remove the apt package: `sudo apt-get remove -y libopencv-dev && sudo ldconfig`. Having both causes version confusion. |
 | **pkg-config finds apt version instead of source build** | CMake picks up 4.6.0 when 4.10.0 is installed to `/usr/local` | Set `OpenCV_DIR=/usr/local/lib/cmake/opencv4` or uninstall `libopencv-dev` |
 | **Missing protobuf for DNN** | `cv::dnn::readNetFromONNX()` fails at build time | Add `-DWITH_PROTOBUF=ON -DBUILD_PROTOBUF=ON` to the OpenCV CMake flags |
 | **Anaconda/Conda conflicts** | Linker picks up Conda's older `libstdc++.so` | `conda deactivate` before building |
