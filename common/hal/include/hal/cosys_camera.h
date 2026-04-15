@@ -12,6 +12,7 @@
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_rpc_client.h"
 #include "hal/icamera.h"
 #include "util/config.h"
 #include "util/config_keys.h"
@@ -20,6 +21,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -33,16 +35,18 @@ namespace drone::hal {
 /// to the back-buffer, and `capture()` swaps it to the front-buffer.
 class CosysCameraBackend : public ICamera {
 public:
+    /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
-    explicit CosysCameraBackend(const drone::Config& cfg, const std::string& section)
-        : host_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::HOST), "127.0.0.1"))
-        , port_(cfg.get<int>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451))
+    explicit CosysCameraBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
+                                const std::string& section)
+        : client_(std::move(client))
         , camera_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::CAMERA_NAME),
                                             "front_center"))
         , vehicle_name_(cfg.get<std::string>(
               std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0")) {
-        DRONE_LOG_INFO("[CosysCamera] Created for {}:{} camera='{}' vehicle='{}'", host_, port_,
+        (void)section;  // section reserved for future per-camera config
+        DRONE_LOG_INFO("[CosysCamera] Created for {} camera='{}' vehicle='{}'", client_->endpoint(),
                        camera_name_, vehicle_name_);
     }
 
@@ -75,16 +79,15 @@ public:
         back_buffer_.resize(buf_size, 0);
         front_buffer_.resize(buf_size, 0);
 
-        // TODO(#434): Connect to Cosys-AirSim RPC endpoint at host_:port_
-        // and start image retrieval thread using simGetImages() API.
-        // Until SDK is integrated, open() succeeds but capture() will timeout
-        // (no frames arrive). This allows pipeline startup without the SDK.
+        // TODO(#462): Start image retrieval thread using simGetImages() API
+        // via client_. Until SDK is integrated, open() succeeds but capture()
+        // will timeout (no frames arrive). This allows pipeline startup without the SDK.
 
         open_ = true;
         DRONE_LOG_WARN("[CosysCamera] SDK not connected — capture() will timeout until "
                        "AirSim RPC integration is implemented");
-        DRONE_LOG_INFO("[CosysCamera] Opened camera='{}' on {}:{} ({}x{}@{}Hz)", camera_name_,
-                       host_, port_, width_, height_, fps_);
+        DRONE_LOG_INFO("[CosysCamera] Opened camera='{}' on {} ({}x{}@{}Hz)", camera_name_,
+                       client_->endpoint(), width_, height_, fps_);
         return true;
     }
 
@@ -92,8 +95,8 @@ public:
         std::lock_guard<std::mutex> lock(mtx_);
         if (!open_) return;
 
-        // TODO(#434): Disconnect from Cosys-AirSim RPC endpoint
-        // and stop image retrieval thread.
+        // TODO(#462): Stop image retrieval thread.
+        // Connection lifecycle is managed by the shared CosysRpcClient.
 
         open_        = false;
         frame_ready_ = false;
@@ -141,13 +144,14 @@ public:
     }
 
     std::string name() const override {
-        return "CosysCamera(" + camera_name_ + "@" + host_ + ":" + std::to_string(port_) + ")";
+        return "CosysCamera(" + camera_name_ + "@" + client_->endpoint() + ")";
     }
 
 private:
+    // ── Shared RPC client (shared_ptr: shared across 4 HAL backends) ──
+    std::shared_ptr<CosysRpcClient> client_;
+
     // ── Config ─────────────────────────────────────────────
-    std::string host_;          ///< Cosys-AirSim RPC host
-    int         port_;          ///< Cosys-AirSim RPC port
     std::string camera_name_;   ///< AirSim camera name
     std::string vehicle_name_;  ///< AirSim vehicle name
 

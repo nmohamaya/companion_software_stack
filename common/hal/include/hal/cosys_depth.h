@@ -15,12 +15,14 @@
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_rpc_client.h"
 #include "hal/idepth_estimator.h"
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 
 namespace drone::hal {
@@ -34,16 +36,19 @@ namespace drone::hal {
 ///   cosys_airsim.vehicle_name (default "Drone0")
 class CosysDepthBackend : public IDepthEstimator {
 public:
-    /// Construct from config.
-    explicit CosysDepthBackend(const drone::Config& cfg, const std::string& section)
-        : host_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::HOST), "127.0.0.1"))
-        , port_(cfg.get<int>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451))
+    /// Construct from shared RPC client and config.
+    /// @param client   Shared RPC client (manages connection lifecycle)
+    /// @param cfg      Loaded configuration
+    /// @param section  Config path prefix (e.g. "perception.depth_estimator")
+    explicit CosysDepthBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
+                               const std::string& section)
+        : client_(std::move(client))
         , camera_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::CAMERA_NAME),
                                             "front_center"))
         , vehicle_name_(cfg.get<std::string>(
               std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0")) {
         (void)section;  // section reserved for future per-estimator config
-        DRONE_LOG_INFO("[CosysDepth] Created for {}:{} camera='{}' vehicle='{}'", host_, port_,
+        DRONE_LOG_INFO("[CosysDepth] Created for {} camera='{}' vehicle='{}'", client_->endpoint(),
                        camera_name_, vehicle_name_);
     }
 
@@ -66,8 +71,8 @@ public:
                 "CosysDepthBackend: invalid channel count (0)");
         }
 
-        // TODO(#434): Call Cosys-AirSim simGetImages() with DepthPerspective
-        // image type for camera_name_ on vehicle_name_.
+        // TODO(#462): Call Cosys-AirSim simGetImages() via client_ with
+        // DepthPerspective image type for camera_name_ on vehicle_name_.
         // Parse the returned float array into the DepthMap.
         //
         // Until the AirSim SDK integration is implemented, return an error
@@ -80,12 +85,13 @@ public:
     }
 
     [[nodiscard]] std::string name() const override {
-        return "CosysDepth(" + camera_name_ + "@" + host_ + ":" + std::to_string(port_) + ")";
+        return "CosysDepth(" + camera_name_ + "@" + client_->endpoint() + ")";
     }
 
 private:
-    std::string host_;          ///< Cosys-AirSim RPC host
-    int         port_;          ///< Cosys-AirSim RPC port
+    // ── Shared RPC client (shared_ptr: shared across 4 HAL backends) ──
+    std::shared_ptr<CosysRpcClient> client_;
+
     std::string camera_name_;   ///< AirSim camera name for depth retrieval
     std::string vehicle_name_;  ///< AirSim vehicle name
 };

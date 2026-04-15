@@ -7,13 +7,17 @@
 #
 # These are non-cache derived variables — they always track MODEL_PRESET.
 # Runtime config (perception.detector.model_path) overrides these defaults.
-set(MODEL_PRESET "edge" CACHE STRING "ML model size preset: edge|orin|cloud")
-set_property(CACHE MODEL_PRESET PROPERTY STRINGS edge orin cloud)
+set(MODEL_PRESET "edge" CACHE STRING "ML model size preset: edge|orin|cloud|dev")
+set_property(CACHE MODEL_PRESET PROPERTY STRINGS edge orin cloud dev)
 
 if(MODEL_PRESET STREQUAL "cloud")
     set(DEFAULT_YOLO_MODEL  "yolov8m.onnx")
     set(DEFAULT_DEPTH_MODEL "depth_anything_v2_vitb.onnx")
 elseif(MODEL_PRESET STREQUAL "orin")
+    set(DEFAULT_YOLO_MODEL  "yolov8s.onnx")
+    set(DEFAULT_DEPTH_MODEL "depth_anything_v2_vits.onnx")
+elseif(MODEL_PRESET STREQUAL "dev")
+    # dev — GTX 1080 Ti desktop (11 GB VRAM minus ~8 GB UE5 = ~3 GB for ML)
     set(DEFAULT_YOLO_MODEL  "yolov8s.onnx")
     set(DEFAULT_DEPTH_MODEL "depth_anything_v2_vits.onnx")
 else()

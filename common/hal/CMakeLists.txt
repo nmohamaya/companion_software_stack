@@ -37,6 +37,7 @@ endif()
 if(COSYS_AIRSIM_FOUND)
     target_compile_definitions(drone_hal INTERFACE HAVE_COSYS_AIRSIM)
     target_sources(drone_hal INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_rpc_client.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_camera.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_radar.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_imu.cpp

@@ -13,6 +13,7 @@
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_rpc_client.h"
 #include "hal/iradar.h"
 #include "util/config.h"
 #include "util/config_keys.h"
@@ -20,6 +21,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -36,18 +38,19 @@ namespace drone::hal {
 ///   auto dets = radar.read();
 class CosysRadarBackend : public IRadar {
 public:
+    /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "perception.radar")
-    explicit CosysRadarBackend(const drone::Config& cfg, const std::string& section)
-        : host_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::HOST), "127.0.0.1"))
-        , port_(cfg.get<int>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451))
+    explicit CosysRadarBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
+                               const std::string& section)
+        : client_(std::move(client))
         , radar_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::RADAR_NAME),
                                            "front_radar"))
         , vehicle_name_(cfg.get<std::string>(
               std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0"))
         , max_range_m_(cfg.get<float>(section + drone::cfg_key::hal::MAX_RANGE_M, 100.0f)) {
-        DRONE_LOG_INFO("[CosysRadar] Created for {}:{} radar='{}' vehicle='{}' max_range={}m",
-                       host_, port_, radar_name_, vehicle_name_, max_range_m_);
+        DRONE_LOG_INFO("[CosysRadar] Created for {} radar='{}' vehicle='{}' max_range={}m",
+                       client_->endpoint(), radar_name_, vehicle_name_, max_range_m_);
     }
 
     ~CosysRadarBackend() override { shutdown(); }
@@ -64,12 +67,13 @@ public:
             return false;
         }
 
-        // TODO(#434): Connect to Cosys-AirSim RPC endpoint at host_:port_
-        // and verify radar sensor exists using getRadarData(radar_name_, vehicle_name_).
+        // TODO(#462): Verify radar sensor exists via client_ using
+        // getRadarData(radar_name_, vehicle_name_).
         // Start polling thread for periodic radar data retrieval.
 
         active_.store(true, std::memory_order_release);
-        DRONE_LOG_INFO("[CosysRadar] Initialised radar='{}' on {}:{}", radar_name_, host_, port_);
+        DRONE_LOG_INFO("[CosysRadar] Initialised radar='{}' on {}", radar_name_,
+                       client_->endpoint());
         return true;
     }
 
@@ -79,8 +83,8 @@ public:
             if (!active_.load(std::memory_order_acquire)) return;
             active_.store(false, std::memory_order_release);
         }
-        // TODO(#434): Disconnect from Cosys-AirSim RPC endpoint
-        // and stop polling thread.
+        // TODO(#462): Stop polling thread.
+        // Connection lifecycle is managed by the shared CosysRpcClient.
         DRONE_LOG_INFO("[CosysRadar] Shut down radar='{}'", radar_name_);
     }
 
@@ -95,16 +99,17 @@ public:
     }
 
     std::string name() const override {
-        return "CosysRadar(" + radar_name_ + "@" + host_ + ":" + std::to_string(port_) + ")";
+        return "CosysRadar(" + radar_name_ + "@" + client_->endpoint() + ")";
     }
 
     /// Number of scan messages received (useful for diagnostics).
     uint64_t scan_message_count() const { return scan_count_.load(std::memory_order_acquire); }
 
 private:
+    // ── Shared RPC client (shared_ptr: shared across 4 HAL backends) ──
+    std::shared_ptr<CosysRpcClient> client_;
+
     // ── Config ────────────────────────────────────────────────
-    std::string host_;          ///< Cosys-AirSim RPC host
-    int         port_;          ///< Cosys-AirSim RPC port
     std::string radar_name_;    ///< AirSim radar sensor name
     std::string vehicle_name_;  ///< AirSim vehicle name
     float       max_range_m_;   ///< Maximum detection range

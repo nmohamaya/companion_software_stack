@@ -152,6 +152,47 @@ TEST(CosysFactoryTest, DepthThrowsWithoutSdk) {
 #endif  // !HAVE_COSYS_AIRSIM
 
 // ═══════════════════════════════════════════════════════════
+// CosysRpcClient tests (only with HAVE_COSYS_AIRSIM)
+// ═══════════════════════════════════════════════════════════
+
+#ifdef HAVE_COSYS_AIRSIM
+
+TEST(CosysRpcClientTest, ConstructionSetsEndpoint) {
+    drone::hal::CosysRpcClient client("10.0.0.5", 9999);
+    EXPECT_EQ(client.endpoint(), "10.0.0.5:9999");
+}
+
+TEST(CosysRpcClientTest, InitiallyNotConnected) {
+    drone::hal::CosysRpcClient client("127.0.0.1", 41451);
+    EXPECT_FALSE(client.is_connected());
+}
+
+TEST(CosysRpcClientTest, ConnectStubReturnsFalse) {
+    drone::hal::CosysRpcClient client("127.0.0.1", 41451);
+    EXPECT_FALSE(client.connect());
+    EXPECT_FALSE(client.is_connected());
+}
+
+TEST(CosysRpcClientTest, DisconnectSetsNotConnected) {
+    drone::hal::CosysRpcClient client("127.0.0.1", 41451);
+    client.disconnect();
+    EXPECT_FALSE(client.is_connected());
+}
+
+TEST(SharedClientTest, FactoryCreatesSingleInstance) {
+    auto          path = create_temp_config(R"({
+        "cosys_airsim": { "host": "127.0.0.1", "port": 41451 }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    auto& client1 = drone::hal::detail::get_shared_cosys_client(cfg);
+    auto& client2 = drone::hal::detail::get_shared_cosys_client(cfg);
+    EXPECT_EQ(client1.get(), client2.get());
+}
+
+#endif  // HAVE_COSYS_AIRSIM
+
+// ═══════════════════════════════════════════════════════════
 // Backend construction tests (only with HAVE_COSYS_AIRSIM)
 // ═══════════════════════════════════════════════════════════
 
