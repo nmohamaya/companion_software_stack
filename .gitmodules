@@ -1,0 +1,4 @@
+[submodule "third_party/cosys-airsim"]
+	path = third_party/cosys-airsim
+	url = https://github.com/Cosys-Lab/Cosys-AirSim.git
+	shallow = true

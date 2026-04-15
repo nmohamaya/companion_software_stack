@@ -8,11 +8,13 @@
 #   bash deploy/install_dependencies.sh --core-only  # Core dependencies only (no optional)
 #
 # What this installs:
-#   CORE (always):  build-essential, cmake, spdlog, Eigen3, nlohmann-json, GTest
+#   CORE (always):  build-essential, cmake, spdlog, fmt, Eigen3, nlohmann-json, GTest
+#   REQUIRED:
+#     Zenoh (zenohc)    — Zenoh IPC backend (sole IPC, always required)
 #   OPTIONAL:
 #     OpenCV 4.10       — YOLOv8-nano object detection via OpenCV DNN module
+#     ML models         — YOLOv8n ONNX (direct download) + DA V2 ONNX (Python export)
 #     MAVSDK 2.12       — MAVLink communication with PX4 flight controller
-#     Zenoh (zenohc)    — Zenoh IPC backend (alternative to POSIX SHM)
 #     Gazebo Harmonic   — 3D physics simulation (camera, IMU, odometry)
 #     PX4 SITL          — Software-in-the-loop flight controller
 #
@@ -151,15 +153,17 @@ sudo apt-get install -y --no-install-recommends \
     pkg-config \
     wget \
     curl \
+    unzip \
     lsb-release \
     gnupg \
     libspdlog-dev \
+    libfmt-dev \
     libeigen3-dev \
     nlohmann-json3-dev \
     libgtest-dev
 
 success "Core dependencies installed"
-INSTALLED+=("Core (spdlog, Eigen3, nlohmann-json, GTest)")
+INSTALLED+=("Core (spdlog, fmt, Eigen3, nlohmann-json, GTest)")
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 2: OpenCV (Optional)
@@ -269,19 +273,71 @@ if $INSTALL_OPENCV; then
         fi
     fi
 
-    # Download YOLOv8n model
+    # Download ML models
     MODELS_DIR="${PROJECT_DIR}/models"
-    if [[ ! -f "${MODELS_DIR}/yolov8n.onnx" ]]; then
-        info "Downloading YOLOv8n ONNX model (12.8 MB)..."
-        mkdir -p "$MODELS_DIR"
-        wget -q --show-progress -O "${MODELS_DIR}/yolov8n.onnx" \
-            "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx" \
-            || warn "Failed to download YOLOv8n model. You can download it later manually."
-        if [[ -f "${MODELS_DIR}/yolov8n.onnx" ]]; then
-            success "YOLOv8n model saved to models/yolov8n.onnx"
-        fi
+    mkdir -p "$MODELS_DIR"
+
+    # YOLOv8n — delegate to standalone script (has multi-URL fallback + Python export)
+    if [[ ! -f "${MODELS_DIR}/yolov8n.onnx" ]] || [[ ! -s "${MODELS_DIR}/yolov8n.onnx" ]]; then
+        info "Downloading YOLOv8n ONNX model..."
+        bash "${PROJECT_DIR}/models/download_yolov8n.sh" || \
+            warn "YOLOv8n download failed. Run manually: bash models/download_yolov8n.sh"
     else
         info "YOLOv8n model already exists at models/yolov8n.onnx"
+    fi
+
+    # Depth Anything V2 ViT-S — requires Python export (graph surgery for OpenCV DNN)
+    # The raw HuggingFace ONNX has Resize nodes with 4 inputs; OpenCV DNN <=4.10
+    # only supports 1-2 inputs. The export script patches this automatically.
+    # NOTE: DA V2 also requires OpenCV 4.10+ at runtime — the apt version (4.5.4 on
+    # 22.04, 4.6.0 on 24.04) cannot parse the ReduceMean node. Build OpenCV from
+    # source (Section 4 Option A in INSTALL.md) if you need DA V2.
+    if [[ ! -f "${MODELS_DIR}/depth_anything_v2_vits.onnx" ]]; then
+        info "Depth Anything V2 model requires Python export (ONNX graph surgery for OpenCV DNN)."
+        if ask_yes_no "Install Python deps and export DA V2 model (~95 MB)?" "y"; then
+            # Use a venv to avoid polluting system Python or conflicting with Conda
+            # Ensure python3-venv is installed (not present on fresh Ubuntu by default)
+            if ! python3 -m venv --help &>/dev/null; then
+                info "Installing python3-venv package..."
+                sudo apt-get install -y --no-install-recommends python3-venv python3-pip
+            fi
+            VENV_DIR="${PROJECT_DIR}/.venv"
+            if [[ ! -d "$VENV_DIR" ]]; then
+                info "Creating Python virtual environment at .venv/..."
+                python3 -m venv "$VENV_DIR"
+            fi
+            # shellcheck disable=SC1091
+            source "${VENV_DIR}/bin/activate"
+
+            info "Installing Python dependencies for model export..."
+            pip install --quiet torch transformers onnx onnxruntime onnxsim 2>/dev/null || {
+                warn "pip install failed. Try manually:"
+                warn "  source .venv/bin/activate"
+                warn "  pip install torch transformers onnx onnxruntime onnxsim"
+                warn "  bash models/download_depth_anything_v2.sh"
+            }
+            if python3 -c "import transformers, onnx, onnxruntime" 2>/dev/null; then
+                info "Exporting Depth Anything V2 (this takes 1-2 minutes)..."
+                bash "${PROJECT_DIR}/models/download_depth_anything_v2.sh" && \
+                    success "Depth Anything V2 model exported to models/depth_anything_v2_vits.onnx" || \
+                    warn "DA V2 export failed. Run manually: bash models/download_depth_anything_v2.sh"
+            else
+                warn "Python deps not available. Skipping DA V2 model export."
+                warn "To install later:"
+                warn "  source .venv/bin/activate"
+                warn "  pip install torch transformers onnx onnxruntime onnxsim"
+                warn "  bash models/download_depth_anything_v2.sh"
+            fi
+
+            deactivate 2>/dev/null || true
+        else
+            info "Skipping DA V2 model. To export later:"
+            info "  python3 -m venv .venv && source .venv/bin/activate"
+            info "  pip install torch transformers onnx onnxruntime onnxsim"
+            info "  bash models/download_depth_anything_v2.sh"
+        fi
+    else
+        info "Depth Anything V2 model already exists at models/depth_anything_v2_vits.onnx"
     fi
 else
     info "Skipping OpenCV."
@@ -377,9 +433,19 @@ echo "  zero-copy, peer-to-peer networking, and multi-machine support."
 echo "  The stack requires Zenoh to build and run."
 echo ""
 
-INSTALL_ZENOH=false
-if ask_yes_no "Install Zenoh (zenohc + zenoh-cpp)?" "y"; then
-    INSTALL_ZENOH=true
+# Zenoh is REQUIRED (not optional) — always install unless already present.
+# In --core-only mode, ask_yes_no returns "no" for optional deps, but Zenoh
+# is not optional — the build fails without it.
+INSTALL_ZENOH=true
+if [[ "$MODE" == "interactive" ]]; then
+    if ! ask_yes_no "Install Zenoh (zenohc + zenoh-cpp)?" "y"; then
+        warn "Zenoh is required — the stack will not build without it."
+        if ! ask_yes_no "Skip anyway?" "n"; then
+            INSTALL_ZENOH=true
+        else
+            INSTALL_ZENOH=false
+        fi
+    fi
 fi
 
 if $INSTALL_ZENOH; then
@@ -399,39 +465,61 @@ if $INSTALL_ZENOH; then
     if $INSTALL_ZENOH; then
         info "Installing Zenoh C bindings (zenohc)..."
 
-        # Method: install from Eclipse Zenoh apt repo / pre-built .deb
+        # Method: install from Eclipse Zenoh GitHub releases.
+        # Releases are distributed as a .zip containing two .deb files.
         # The zenohc packages provide libzenohc.so and the CMake config
         # files needed by find_package(zenohc).
         ZENOH_VERSION="1.7.2"
-        ARCH="$(dpkg --print-architecture)"
-        ZENOH_DEB_URL="https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}"
+        ARCH="$(uname -m)"
+        # Map dpkg architecture to Rust target triple used in release assets
+        case "$ARCH" in
+            x86_64)  ZENOH_TARGET="x86_64-unknown-linux-gnu" ;;
+            aarch64) ZENOH_TARGET="aarch64-unknown-linux-gnu" ;;
+            armv7l)  ZENOH_TARGET="armv7-unknown-linux-gnueabihf" ;;
+            *)       fail "Unsupported architecture: $ARCH"; INSTALL_ZENOH=false ;;
+        esac
 
         ZENOH_TMP="/tmp/zenoh_install_$$"
         mkdir -p "$ZENOH_TMP"
         cd "$ZENOH_TMP"
 
-        info "Downloading zenohc ${ZENOH_VERSION} .deb packages..."
-        wget -q --show-progress "${ZENOH_DEB_URL}/libzenohc_${ZENOH_VERSION}-1_${ARCH}.deb" \
-            -O "libzenohc.deb" || true
-        wget -q --show-progress "${ZENOH_DEB_URL}/libzenohc-dev_${ZENOH_VERSION}-1_${ARCH}.deb" \
-            -O "libzenohc-dev.deb" || true
+        if $INSTALL_ZENOH; then
+            ZENOH_ZIP="libzenohc-${ZENOH_VERSION}-${ZENOH_TARGET}-debian.zip"
+            ZENOH_ZIP_URL="https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/${ZENOH_ZIP}"
 
-        if [[ -f libzenohc.deb && -f libzenohc-dev.deb ]]; then
-            sudo dpkg -i libzenohc.deb libzenohc-dev.deb || sudo apt-get -f install -y
-            sudo ldconfig
-            if pkg-config --exists zenohc 2>/dev/null; then
-                VER="$(pkg-config --modversion zenohc)"
-                success "zenohc ${VER} installed successfully"
-                INSTALLED+=("Zenoh zenohc ${VER}")
-            else
-                warn "zenohc installed but pkg-config doesn't see it."
-                INSTALLED+=("Zenoh zenohc ${ZENOH_VERSION} (no pkg-config)")
+            info "Downloading zenohc ${ZENOH_VERSION} for ${ZENOH_TARGET}..."
+            wget -q --show-progress "${ZENOH_ZIP_URL}" -O "${ZENOH_ZIP}" || true
+
+            if [[ ! -f "${ZENOH_ZIP}" ]] || [[ ! -s "${ZENOH_ZIP}" ]]; then
+                fail "Download failed. Check the URL: ${ZENOH_ZIP_URL}"
+                warn "Browse releases at: https://github.com/eclipse-zenoh/zenoh-c/releases"
+                SKIPPED+=("Zenoh")
+                INSTALL_ZENOH=false
             fi
-        else
-            warn "Could not download zenohc .deb packages."
-            warn "Try manual install: https://github.com/eclipse-zenoh/zenoh-c/releases"
-            SKIPPED+=("Zenoh")
-            INSTALL_ZENOH=false
+        fi
+
+        if $INSTALL_ZENOH; then
+            info "Extracting .deb packages..."
+            unzip -o "${ZENOH_ZIP}" -d .
+
+            if ls libzenohc_*.deb 1>/dev/null 2>&1 && ls libzenohc-dev_*.deb 1>/dev/null 2>&1; then
+                sudo dpkg -i libzenohc_*.deb libzenohc-dev_*.deb || sudo apt-get -f install -y
+                sudo ldconfig
+                if pkg-config --exists zenohc 2>/dev/null; then
+                    VER="$(pkg-config --modversion zenohc)"
+                    success "zenohc ${VER} installed successfully"
+                    INSTALLED+=("Zenoh zenohc ${VER}")
+                else
+                    warn "zenohc installed but pkg-config doesn't see it."
+                    INSTALLED+=("Zenoh zenohc ${ZENOH_VERSION} (no pkg-config)")
+                fi
+            else
+                warn "Extracted zip but .deb files not found. Contents:"
+                ls -la "$ZENOH_TMP"
+                warn "Try manual install: https://github.com/eclipse-zenoh/zenoh-c/releases"
+                SKIPPED+=("Zenoh")
+                INSTALL_ZENOH=false
+            fi
         fi
 
         # Install zenoh-cpp (header-only C++17 bindings)
