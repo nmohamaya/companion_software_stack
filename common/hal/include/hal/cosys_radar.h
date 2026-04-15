@@ -6,10 +6,14 @@
 // Cosys-AirSim provides native radar sensor support (unlike stock AirSim),
 // returning range, azimuth, elevation, and velocity for each detection.
 //
+// Polling thread runs at 20 Hz and converts AirSim RadarData to our
+// RadarDetectionList format. Ground filtering skips returns with
+// elevation < -30 degrees (looking at the ground).
+//
 // Thread-safe: uses std::mutex to guard cached RadarDetectionList.
 // Compile guard: only available when HAVE_COSYS_AIRSIM is defined by CMake.
 //
-// Issue: #434
+// Issue: #434, #462
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
@@ -21,19 +25,33 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
+
+#include <common/common_utils/StrictMode.hpp>
+STRICT_MODE_OFF
+#include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
+STRICT_MODE_ON
 
 namespace drone::hal {
 
 /// CosysRadarBackend — retrieves radar detections from Cosys-AirSim
 /// via the getRadarData() RPC endpoint.
 ///
+/// The polling thread runs at 20 Hz (configurable via kPollIntervalMs)
+/// and converts AirSim's native radar data to our RadarDetectionList
+/// wire format. Ground returns with elevation < -30 degrees are filtered.
+///
+/// AirSim uses NED body frame which maps directly to our FRD convention:
+/// X=forward, Y=right, Z=down — no coordinate negation needed.
+///
 /// Usage:
 ///   drone::Config cfg;
 ///   cfg.load("config/cosys_airsim.json");
-///   CosysRadarBackend radar(cfg, "perception.radar");
+///   CosysRadarBackend radar(client, cfg, "perception.radar");
 ///   radar.init();
 ///   auto dets = radar.read();
 class CosysRadarBackend : public IRadar {
@@ -55,7 +73,7 @@ public:
 
     ~CosysRadarBackend() override { shutdown(); }
 
-    // Non-copyable, non-movable (owns RPC connection state)
+    // Non-copyable, non-movable (owns polling thread)
     CosysRadarBackend(const CosysRadarBackend&)            = delete;
     CosysRadarBackend& operator=(const CosysRadarBackend&) = delete;
     CosysRadarBackend(CosysRadarBackend&&)                 = delete;
@@ -67,11 +85,16 @@ public:
             return false;
         }
 
-        // TODO(#462): Verify radar sensor exists via client_ using
-        // getRadarData(radar_name_, vehicle_name_).
-        // Start polling thread for periodic radar data retrieval.
+        if (!client_->is_connected()) {
+            DRONE_LOG_ERROR("[CosysRadar] RPC client not connected — cannot init radar");
+            return false;
+        }
 
         active_.store(true, std::memory_order_release);
+
+        // Start 20 Hz polling thread for radar data retrieval
+        poll_thread_ = std::thread(&CosysRadarBackend::poll_loop, this);
+
         DRONE_LOG_INFO("[CosysRadar] Initialised radar='{}' on {}", radar_name_,
                        client_->endpoint());
         return true;
@@ -83,8 +106,12 @@ public:
             if (!active_.load(std::memory_order_acquire)) return;
             active_.store(false, std::memory_order_release);
         }
-        // TODO(#462): Stop polling thread.
-        // Connection lifecycle is managed by the shared CosysRpcClient.
+
+        // Join polling thread outside the lock to avoid deadlock
+        if (poll_thread_.joinable()) {
+            poll_thread_.join();
+        }
+
         DRONE_LOG_INFO("[CosysRadar] Shut down radar='{}'", radar_name_);
     }
 
@@ -106,6 +133,94 @@ public:
     uint64_t scan_message_count() const { return scan_count_.load(std::memory_order_acquire); }
 
 private:
+    /// Radar polling loop — runs at 20 Hz, converts AirSim radar data
+    /// to our RadarDetectionList format with ground filtering.
+    void poll_loop() {
+        constexpr auto kPollInterval = std::chrono::milliseconds(50);  // 20 Hz
+        // Ground filter: skip returns looking more than 30 degrees below horizontal.
+        // Elevation is measured from the horizontal plane — negative = looking down.
+        constexpr float kGroundElevationThreshold = -30.0f * 3.14159265f / 180.0f;  // -30 deg
+
+        DRONE_LOG_INFO("[CosysRadar] Polling thread started (interval={}ms)",
+                       kPollInterval.count());
+
+        while (active_.load(std::memory_order_acquire)) {
+            try {
+                if (!client_->is_connected()) {
+                    DRONE_LOG_WARN("[CosysRadar] RPC disconnected — skipping scan");
+                    std::this_thread::sleep_for(kPollInterval);
+                    continue;
+                }
+
+                // Retrieve radar data from Cosys-AirSim.
+                // Cosys-AirSim (unlike stock AirSim) has native radar sensor support.
+                auto radar_data = client_->rpc_client().getRadarData(radar_name_, vehicle_name_);
+
+                drone::ipc::RadarDetectionList list{};
+                const auto now    = std::chrono::steady_clock::now().time_since_epoch();
+                list.timestamp_ns = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+
+                // Convert each AirSim radar point to our RadarDetection format.
+                // AirSim RadarData contains point_cloud (x,y,z triples) and
+                // additional per-point metadata.
+                for (const auto& point : radar_data.point_cloud) {
+                    if (list.num_detections >= drone::ipc::MAX_RADAR_DETECTIONS) break;
+
+                    // AirSim radar point_cloud entries are (x, y, z) in NED body frame.
+                    // Convert Cartesian to spherical: range, azimuth, elevation.
+                    const float x     = point.x;
+                    const float y     = point.y;
+                    const float z     = point.z;
+                    const float range = std::sqrt(x * x + y * y + z * z);
+
+                    // Skip zero-range or out-of-range returns
+                    if (range < 0.1f || range > max_range_m_) continue;
+
+                    const float azimuth   = std::atan2(y, x);
+                    const float elevation = std::asin(std::clamp(z / range, -1.0f, 1.0f));
+
+                    // Ground filter: skip returns with steep downward elevation
+                    if (elevation < kGroundElevationThreshold) continue;
+
+                    drone::ipc::RadarDetection det{};
+                    det.timestamp_ns        = list.timestamp_ns;
+                    det.range_m             = range;
+                    det.azimuth_rad         = azimuth;
+                    det.elevation_rad       = elevation;
+                    det.radial_velocity_mps = point.velocity;
+                    // SNR model: inversely proportional to range (simplified radar equation)
+                    det.snr_db = std::max(0.0f, 30.0f - 20.0f * std::log10(std::max(1.0f, range)));
+                    det.confidence = std::clamp(det.snr_db / 30.0f, 0.0f, 1.0f);
+                    det.rcs_dbsm   = 0.0f;  // Not provided by AirSim
+                    det.track_id   = list.num_detections + 1;
+
+                    list.detections[list.num_detections++] = det;
+                }
+
+                // Store under lock
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (!active_.load(std::memory_order_acquire)) break;
+                    cached_detections_ = list;
+                }
+
+                const uint64_t count = scan_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
+                if (count == 1) {
+                    DRONE_LOG_INFO("[CosysRadar] First scan: {} detections from '{}'",
+                                   list.num_detections, radar_name_);
+                }
+
+            } catch (const std::exception& e) {
+                DRONE_LOG_WARN("[CosysRadar] RPC error in polling thread: {}", e.what());
+            }
+
+            std::this_thread::sleep_for(kPollInterval);
+        }
+
+        DRONE_LOG_INFO("[CosysRadar] Polling thread exiting");
+    }
+
     // ── Shared RPC client (shared_ptr: shared across 4 HAL backends) ──
     std::shared_ptr<CosysRpcClient> client_;
 
@@ -121,6 +236,9 @@ private:
     // ── Cached detections (guarded by mutex_) ─────────────────
     mutable std::mutex             mutex_;
     drone::ipc::RadarDetectionList cached_detections_{};
+
+    // ── Polling thread ────────────────────────────────────────
+    std::thread poll_thread_;  ///< Polls getRadarData() at 20 Hz
 };
 
 }  // namespace drone::hal

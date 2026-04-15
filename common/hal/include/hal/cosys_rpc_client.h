@@ -6,7 +6,7 @@
 // Shared across all 4 Cosys-AirSim HAL backends (camera, radar, IMU, depth)
 // via a single std::shared_ptr — see hal_factory.h detail::get_shared_cosys_client().
 //
-// Issue: #461
+// Issue: #461, #462
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
@@ -16,16 +16,22 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <thread>
 
+// AirSim SDK header — provides MultirotorRpcLibClient for all RPC calls.
+// The header path matches the vendored SDK layout under third_party/cosys-airsim/.
+#include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
+
 namespace drone::hal {
 
-/// CosysRpcClient — connection management skeleton for Cosys-AirSim RPC.
+/// CosysRpcClient — connection management for Cosys-AirSim RPC.
 ///
-/// This is a stub: connect() logs and returns false until the real AirSim
-/// RPC calls are wired in (#462). The reconnect logic (exponential backoff)
-/// is fully implemented and ready for the SDK integration.
+/// Wraps msr::airlib::MultirotorRpcLibClient with connection lifecycle,
+/// exponential-backoff reconnect, and thread-safe status tracking.
+/// All 4 Cosys-AirSim HAL backends (camera, radar, IMU, depth) share
+/// a single instance via std::shared_ptr.
 ///
 /// Non-copyable, non-movable — owns connection state.
 /// Thread-safe: is_connected() uses atomic with acquire/release ordering.
@@ -44,28 +50,50 @@ public:
     CosysRpcClient& operator=(CosysRpcClient&&)      = delete;
 
     /// Attempt connection to AirSim RPC server.
-    /// Stub: logs and returns false until real RPC integration (#462).
+    /// Creates the underlying MultirotorRpcLibClient, confirms connection,
+    /// and enables API control.
+    /// @return true if connection and API handshake succeeded
     [[nodiscard]] bool connect() {
         DRONE_LOG_INFO("[CosysRpcClient] Connecting to {}:{} ...", host_, port_);
-        // TODO(#462): Real AirSim RPC connection via msr::airlib::RpcLibClientBase
-        connected_.store(false, std::memory_order_release);
-        DRONE_LOG_WARN("[CosysRpcClient] Stub — no real RPC connection yet");
-        return false;
+        try {
+            rpc_client_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(
+                host_, static_cast<uint16_t>(port_));
+            rpc_client_->confirmConnection();
+            rpc_client_->enableApiControl(true);
+            connected_.store(true, std::memory_order_release);
+            DRONE_LOG_INFO("[CosysRpcClient] Connected to {}:{}", host_, port_);
+            return true;
+        } catch (const std::exception& e) {
+            DRONE_LOG_WARN("[CosysRpcClient] Connection failed: {}", e.what());
+            rpc_client_.reset();
+            connected_.store(false, std::memory_order_release);
+            return false;
+        }
     }
 
     /// Thread-safe health check.
     [[nodiscard]] bool is_connected() const { return connected_.load(std::memory_order_acquire); }
 
-    /// Close the RPC connection.
+    /// Close the RPC connection and release the underlying client.
     void disconnect() {
         if (connected_.load(std::memory_order_acquire)) {
             DRONE_LOG_INFO("[CosysRpcClient] Disconnecting from {}:{}", host_, port_);
         }
         connected_.store(false, std::memory_order_release);
+        rpc_client_.reset();
     }
 
     /// Returns "host:port" endpoint string.
     std::string endpoint() const { return host_ + ":" + std::to_string(port_); }
+
+    /// Access the underlying AirSim RPC client.
+    /// Caller must check is_connected() before use.
+    /// @pre is_connected() == true
+    msr::airlib::MultirotorRpcLibClient& rpc_client() {
+        // Defensive: caller should always check is_connected() first.
+        // If rpc_client_ is null, this is a programming error.
+        return *rpc_client_;
+    }
 
     /// Reconnect with exponential backoff.
     /// Starts at kInitialBackoff, doubles each retry, caps at kMaxBackoff.
@@ -101,6 +129,9 @@ private:
     std::string       host_{"127.0.0.1"};  ///< AirSim RPC host (default matches config)
     uint16_t          port_{41451};        ///< AirSim RPC port (default matches config)
     std::atomic<bool> connected_{false};   ///< Thread-safe connection status
+
+    /// Underlying AirSim RPC client — null when disconnected.
+    std::unique_ptr<msr::airlib::MultirotorRpcLibClient> rpc_client_;
 };
 
 }  // namespace drone::hal
