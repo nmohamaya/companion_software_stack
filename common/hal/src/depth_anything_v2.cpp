@@ -76,10 +76,8 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 
 // ── Depth estimation ────────────────────────────────────────
 [[nodiscard]] drone::util::Result<DepthMap, std::string> DepthAnythingV2Estimator::estimate(
-    [[maybe_unused]] const uint8_t* frame_data,
-    [[maybe_unused]] uint32_t width,
-    [[maybe_unused]] uint32_t height,
-    [[maybe_unused]] uint32_t channels,
+    [[maybe_unused]] const uint8_t* frame_data, [[maybe_unused]] uint32_t width,
+    [[maybe_unused]] uint32_t height, [[maybe_unused]] uint32_t channels,
     [[maybe_unused]] uint32_t stride) {
     if (frame_data == nullptr || width == 0 || height == 0) {
         return drone::util::Result<DepthMap, std::string>::err(
@@ -101,7 +99,7 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     // ── Step 1: Wrap raw pixel data as cv::Mat ──────────────
     int     cv_type = (channels == 4) ? CV_8UC4 : CV_8UC3;
     size_t  step    = (stride > 0) ? static_cast<size_t>(stride)
-                                    : static_cast<size_t>(cv::Mat::AUTO_STEP);
+                                   : static_cast<size_t>(cv::Mat::AUTO_STEP);
     cv::Mat frame(static_cast<int>(height), static_cast<int>(width), cv_type,
                   const_cast<uint8_t*>(frame_data), step);
 
