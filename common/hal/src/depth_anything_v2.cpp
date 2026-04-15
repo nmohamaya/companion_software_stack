@@ -97,7 +97,8 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 
     // ── Step 1: Wrap raw pixel data as cv::Mat ──────────────
     int     cv_type = (channels == 4) ? CV_8UC4 : CV_8UC3;
-    size_t  step    = (stride > 0) ? static_cast<size_t>(stride) : cv::Mat::AUTO_STEP;
+    size_t  step    = (stride > 0) ? static_cast<size_t>(stride)
+                                    : static_cast<size_t>(cv::Mat::AUTO_STEP);
     cv::Mat frame(static_cast<int>(height), static_cast<int>(width), cv_type,
                   const_cast<uint8_t*>(frame_data), step);
 
@@ -221,6 +222,11 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     return drone::util::Result<DepthMap, std::string>::ok(std::move(map));
 
 #else
+    (void)frame_data;
+    (void)width;
+    (void)height;
+    (void)channels;
+    (void)stride;
     return drone::util::Result<DepthMap, std::string>::err(
         "DepthAnythingV2: OpenCV not available (compiled without HAS_OPENCV)");
 #endif

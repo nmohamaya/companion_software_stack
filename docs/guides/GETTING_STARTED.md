@@ -13,6 +13,8 @@ This guide takes you from a **fresh clone to a working build** in under 10 minut
 - **Resources:** 4 GB RAM (minimum), 8+ GB disk space, 2 cores (minimum)
 - **User:** Can be any user; `sudo` access required for real-time scheduling (optional)
 
+> **Conda/Anaconda Warning:** If you have Conda installed, run `conda deactivate` before building. Conda ships its own `libfmt`, `libstdc++`, and `GTest` that conflict with system libraries and cause linker errors. See [INSTALL.md](INSTALL.md) for details.
+
 ### Check Your System
 
 ```bash
@@ -67,10 +69,27 @@ sudo apt-get update
 sudo apt-get install -y \
     build-essential \
     cmake \
+    git \
+    pkg-config \
+    wget \
+    unzip \
     libspdlog-dev \
+    libfmt-dev \
     libeigen3-dev \
     nlohmann-json3-dev \
     libgtest-dev
+```
+
+**Zenoh IPC (required):**
+```bash
+# Zenoh is the sole IPC backend — not available via apt
+# See docs/guides/INSTALL.md Section 3 for full instructions
+ZENOH_VERSION="1.7.2"
+wget "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip"
+unzip libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip
+sudo dpkg -i libzenohc_*.deb libzenohc-dev_*.deb && sudo ldconfig
+rm -f libzenohc-*.zip libzenohc_*.deb libzenohc-dev_*.deb
+# Also install zenoh-cpp headers — see INSTALL.md Section 3.2
 ```
 
 **Optional (recommended):**
@@ -79,13 +98,10 @@ sudo apt-get install -y \
 sudo apt-get install -y libopencv-dev
 
 # MAVSDK (for PX4 MAVLink communication)
-# Build from source — see docs/INSTALL.md
+# Build from source — see docs/guides/INSTALL.md Section 5
 
 # Gazebo (for SITL simulation)
-sudo apt-get install -y gz-harmonic
-
-# Zenoh (for network IPC — usually pre-installed)
-# Pre-built debs at: https://github.com/eclipse-zenoh/zenoh-c/releases
+sudo apt-get install -y gz-harmonic libgz-transport13-dev libgz-msgs10-dev
 ```
 
 > **Note:** If you choose `--core-only`, you can still build and test everything — optional backends are auto-detected and skipped gracefully.
@@ -326,12 +342,17 @@ ctest -N --test-dir build | grep "Total Tests:"
 ```
 companion_software_stack/
   ├── README.md                    ← Read next (architecture overview)
-  ├── docs/
-  │   ├── GETTING_STARTED.md       ← You are here
-  │   ├── DEVELOPMENT_WORKFLOW.md  ← Read if you want to contribute
-  │   ├── API.md                   ← IPC message types
-  │   ├── HARDWARE_SETUP.md        ← Real Jetson Orin setup
-  │   └── DEBUG.md                 ← Debugging tips
+  ├── common/
+  │   ├── hal/                     ← Hardware Abstraction Layer (interfaces + backends)
+  │   ├── ipc/                     ← Zenoh IPC (publisher/subscriber/MessageBus)
+  │   └── util/                    ← Config, Result<T,E>, logging, watchdog
+  ├── process1_video_capture/      ← P1: Camera frame acquisition
+  ├── process2_perception/         ← P2: Detection + tracking + sensor fusion
+  ├── process3_slam_vio_nav/       ← P3: Visual-inertial odometry + navigation
+  ├── process4_mission_planner/    ← P4: FSM + path planning + obstacle avoidance
+  ├── process5_comms/              ← P5: Flight controller & GCS communication
+  ├── process6_payload_manager/    ← P6: Gimbal & camera control
+  ├── process7_system_monitor/     ← P7: Health monitoring & process supervision
   ├── config/
   │   └── default.json             ← All tunables (camera res, detect threshold, etc.)
   ├── deploy/
@@ -342,49 +363,53 @@ companion_software_stack/
   ├── tests/
   │   ├── run_tests.sh             ← Run all tests (see TESTS.md for count)
   │   └── TESTS.md                 ← Test inventory
-  └── src/
-      ├── process1_video_capture/
-      ├── process2_perception/
-      ├── process3_slam_vio_nav/
-      ├── process4_mission_planner/
-      ├── process5_comms/
-      ├── process6_payload_manager/
-      └── process7_system_monitor/
+  └── docs/
+      ├── guides/
+      │   ├── GETTING_STARTED.md   ← You are here
+      │   ├── INSTALL.md           ← Detailed installation guide
+      │   └── DEVELOPMENT_WORKFLOW.md ← Read if you want to contribute
+      └── design/
+          └── API.md               ← IPC message types
 ```
 
 ---
 
-## Typical First Session (10 minutes)
+## Typical First Session
 
 ```bash
 # 1. Clone (1 min)
 git clone https://github.com/nmohamaya/companion_software_stack.git
 cd companion_software_stack
 
-# 2. Install deps (3 min, mostly waiting for apt)
+# 2. Install deps
+#    Core only: ~5 min (apt + Zenoh .deb)
+#    Full (+ OpenCV source + MAVSDK source + Gazebo + PX4): ~1-2 hours
 bash deploy/install_dependencies.sh --all
 
-# 3. Build (3 min)
+# 3. Build (3-5 min)
 bash deploy/build.sh
 
-# 4. Test (2 min)
+# 4. Test (1-2 min)
 bash tests/run_tests.sh
 
-# 5. Run Gazebo (1+ min of autonomous flight)
+# 5. Run simulated stack (no Gazebo needed)
+bash deploy/launch_all.sh
+
+# 6. Run with Gazebo SITL (requires Gazebo + MAVSDK + PX4)
 bash deploy/launch_gazebo.sh --gui
 ```
 
-**Total time:** ~10–12 minutes, mostly automated.
+**Total time:** ~10 minutes for core-only build+test, ~1-2 hours for full environment with all optional deps.
 
 ---
 
 ## Questions?
 
-- **How do I contribute?** → [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) (Steps 1–9)
+- **How do I contribute?** → [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) (Steps 1-9)
 - **What's the architecture?** → [README.md](../../README.md#architecture)
-- **How do I debug a crash?** → [Debugging workflow](../architecture/SIMULATION_ARCHITECTURE.md#debugging-workflow)
+- **Detailed installation/troubleshooting?** → [INSTALL.md](INSTALL.md)
 - **Real hardware setup?** → [README.md](../../README.md#launch-on-real-hardware)
-- **IPC message types?** → [docs/API.md](../design/API.md)
+- **IPC message types?** → [API.md](../design/API.md)
 
 ---
 
