@@ -23,6 +23,7 @@
 #include "util/config_keys.h"
 #include "util/ilogger.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -41,7 +42,7 @@ namespace drone::hal {
 /// CosysRadarBackend — retrieves radar detections from Cosys-AirSim
 /// via the getRadarData() RPC endpoint.
 ///
-/// The polling thread runs at 20 Hz (configurable via kPollIntervalMs)
+/// The polling thread runs at a fixed 20 Hz (kPollInterval = 50 ms)
 /// and converts AirSim's native radar data to our RadarDetectionList
 /// wire format. Ground returns with elevation < -30 degrees are filtered.
 ///
@@ -136,25 +137,28 @@ private:
     /// Radar polling loop — runs at 20 Hz, converts AirSim radar data
     /// to our RadarDetectionList format with ground filtering.
     void poll_loop() {
-        constexpr auto kPollInterval = std::chrono::milliseconds(50);  // 20 Hz
+        constexpr auto  kPollInterval = std::chrono::milliseconds(50);  // 20 Hz
+        constexpr float kPiF          = 3.14159265358979f;
         // Ground filter: skip returns looking more than 30 degrees below horizontal.
-        // Elevation is measured from the horizontal plane — negative = looking down.
-        constexpr float kGroundElevationThreshold = -30.0f * 3.14159265f / 180.0f;  // -30 deg
+        constexpr float kGroundElevationThreshold = -30.0f * kPiF / 180.0f;
+        // Simplified radar equation: SNR = ref_snr - path_loss * log10(range)
+        constexpr float kReferenceSNRdB    = 30.0f;  // SNR at 1m range
+        constexpr float kSNRPathLossFactor = 20.0f;  // Free-space path loss exponent
 
         DRONE_LOG_INFO("[CosysRadar] Polling thread started (interval={}ms)",
                        kPollInterval.count());
 
         while (active_.load(std::memory_order_acquire)) {
             try {
-                if (!client_->is_connected()) {
+                // Use with_client() to prevent TOCTOU race on disconnect
+                msr::airlib::RadarData radar_data;
+                bool                   got_data = client_->with_client(
+                    [&](auto& rpc) { radar_data = rpc.getRadarData(radar_name_, vehicle_name_); });
+                if (!got_data) {
                     DRONE_LOG_WARN("[CosysRadar] RPC disconnected — skipping scan");
                     std::this_thread::sleep_for(kPollInterval);
                     continue;
                 }
-
-                // Retrieve radar data from Cosys-AirSim.
-                // Cosys-AirSim (unlike stock AirSim) has native radar sensor support.
-                auto radar_data = client_->rpc_client().getRadarData(radar_name_, vehicle_name_);
 
                 drone::ipc::RadarDetectionList list{};
                 const auto now    = std::chrono::steady_clock::now().time_since_epoch();
@@ -190,8 +194,10 @@ private:
                     det.elevation_rad       = elevation;
                     det.radial_velocity_mps = point.velocity;
                     // SNR model: inversely proportional to range (simplified radar equation)
-                    det.snr_db = std::max(0.0f, 30.0f - 20.0f * std::log10(std::max(1.0f, range)));
-                    det.confidence = std::clamp(det.snr_db / 30.0f, 0.0f, 1.0f);
+                    det.snr_db     = std::max(0.0f,
+                                              kReferenceSNRdB - kSNRPathLossFactor *
+                                                                    std::log10(std::max(1.0f, range)));
+                    det.confidence = std::clamp(det.snr_db / kReferenceSNRdB, 0.0f, 1.0f);
                     det.rcs_dbsm   = 0.0f;  // Not provided by AirSim
                     det.track_id   = list.num_detections + 1;
 

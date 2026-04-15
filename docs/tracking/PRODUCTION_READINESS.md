@@ -44,8 +44,36 @@
 ## DIAG Logging: Gate Before Production
 
 **Severity:** Low (performance, not correctness)
-**Current state:** Some per-tick diagnostic logging uses `spdlog::info` instead of `spdlog::debug`. See `project_production_debug_cleanup` memory for full list.
+**Current state:** Some per-tick diagnostic logging uses `spdlog::info` instead of `spdlog::debug`. See `project_production_debug_cleanup` notes for full list.
 
 **What to address:** Audit all `DRONE_LOG_INFO` in hot paths, gate behind `spdlog::debug` or `spdlog::should_log()`.
 
 **When to address:** Before production deployment.
+
+---
+
+## Performance: Camera Frame Allocation Churn
+
+**Severity:** Low-Medium (allocator pressure, not correctness)
+**Current state:** CosysCameraBackend creates a new `FrameData` with `vector::assign()` on every frame, allocating and copying RGB data each time. At 30 FPS with 1280x720 RGB this is ~2.7 MB/frame of allocation.
+
+**What to address:**
+- Pre-allocate `FrameData` buffers in the TripleBuffer slots to match expected frame size
+- On retrieval, resize (no-op if same size) and copy directly into the pre-allocated buffer
+- Eliminates per-frame heap allocation — only copies remain (unavoidable with RPC response)
+
+**When to address:** When profiling shows allocator contention on constrained hardware (Jetson Orin). Not a concern for desktop/cloud simulation.
+
+---
+
+## Performance: Radar Math Extraction
+
+**Severity:** Low (testability, not performance)
+**Current state:** Cartesian-to-spherical conversion, ground filter, and SNR model are inline in `CosysRadarBackend::poll_loop()` inside `#ifdef HAVE_COSYS_AIRSIM`. Pure arithmetic but untestable without the SDK.
+
+**What to address:**
+- Extract to free functions: `cartesian_to_spherical(x, y, z)`, `compute_snr_db(range)`, `is_ground_return(elevation)`
+- Place outside the `#ifdef` guard so they can be unit-tested independently
+- Guards against `std::asin` domain errors on corrupt radar points
+
+**When to address:** Before hardware radar integration. Good first issue for a new contributor.

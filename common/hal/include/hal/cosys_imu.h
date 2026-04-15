@@ -142,24 +142,23 @@ private:
     /// IMU polling loop — runs at rate_hz_, retrieves getImuData() from AirSim
     /// and converts to ImuReading format.
     void poll_loop() {
-        const auto poll_interval = std::chrono::milliseconds(rate_hz_ > 0 ? 1000 / rate_hz_
-                                                                          : 5);  // default 200 Hz
+        // Clamp to minimum 1ms to prevent hot-loop on misconfigured rate > 1000
+        const auto poll_interval =
+            std::chrono::milliseconds(std::max(1, rate_hz_ > 0 ? 1000 / rate_hz_ : 5));
 
         DRONE_LOG_INFO("[CosysIMU] Polling thread started (interval={}ms)", poll_interval.count());
 
         while (active_.load(std::memory_order_acquire)) {
             try {
-                if (!client_->is_connected()) {
+                // Use with_client() to prevent TOCTOU race on disconnect
+                msr::airlib::ImuBase::Output imu_data;
+                bool                         got_data = client_->with_client(
+                    [&](auto& rpc) { imu_data = rpc.getImuData(imu_name_, vehicle_name_); });
+                if (!got_data) {
                     DRONE_LOG_WARN("[CosysIMU] RPC disconnected — skipping sample");
                     std::this_thread::sleep_for(poll_interval);
                     continue;
                 }
-
-                // Retrieve IMU data from AirSim.
-                // AirSim getImuData() returns ImuBase::Output with:
-                //   angular_velocity (Vector3r, rad/s) in NED
-                //   linear_acceleration (Vector3r, m/s^2) in NED
-                auto imu_data = client_->rpc_client().getImuData(imu_name_, vehicle_name_);
 
                 ImuReading r;
 

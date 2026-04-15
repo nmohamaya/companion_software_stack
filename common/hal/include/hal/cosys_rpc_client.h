@@ -16,13 +16,18 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 // AirSim SDK header — provides MultirotorRpcLibClient for all RPC calls.
-// The header path matches the vendored SDK layout under third_party/cosys-airsim/.
+// StrictMode wrapper prevents AirSim SDK warnings from breaking our -Werror build.
+#include <common/common_utils/StrictMode.hpp>
+STRICT_MODE_OFF
 #include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
+STRICT_MODE_ON
 
 namespace drone::hal {
 
@@ -50,14 +55,12 @@ public:
     CosysRpcClient& operator=(CosysRpcClient&&)      = delete;
 
     /// Attempt connection to AirSim RPC server.
-    /// Creates the underlying MultirotorRpcLibClient, confirms connection,
-    /// and enables API control.
-    /// @return true if connection and API handshake succeeded
+    /// Thread-safe: serialised with disconnect() and with_client() via rpc_mtx_.
     [[nodiscard]] bool connect() {
+        std::lock_guard<std::mutex> lock(rpc_mtx_);
         DRONE_LOG_INFO("[CosysRpcClient] Connecting to {}:{} ...", host_, port_);
         try {
-            rpc_client_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(
-                host_, static_cast<uint16_t>(port_));
+            rpc_client_ = std::make_unique<msr::airlib::MultirotorRpcLibClient>(host_, port_);
             rpc_client_->confirmConnection();
             rpc_client_->enableApiControl(true);
             connected_.store(true, std::memory_order_release);
@@ -71,11 +74,12 @@ public:
         }
     }
 
-    /// Thread-safe health check.
+    /// Thread-safe health check (lock-free, atomic read).
     [[nodiscard]] bool is_connected() const { return connected_.load(std::memory_order_acquire); }
 
-    /// Close the RPC connection and release the underlying client.
+    /// Close the RPC connection. Thread-safe: serialised via rpc_mtx_.
     void disconnect() {
+        std::lock_guard<std::mutex> lock(rpc_mtx_);
         if (connected_.load(std::memory_order_acquire)) {
             DRONE_LOG_INFO("[CosysRpcClient] Disconnecting from {}:{}", host_, port_);
         }
@@ -86,13 +90,16 @@ public:
     /// Returns "host:port" endpoint string.
     std::string endpoint() const { return host_ + ":" + std::to_string(port_); }
 
-    /// Access the underlying AirSim RPC client.
-    /// Caller must check is_connected() before use.
-    /// @pre is_connected() == true
-    msr::airlib::MultirotorRpcLibClient& rpc_client() {
-        // Defensive: caller should always check is_connected() first.
-        // If rpc_client_ is null, this is a programming error.
-        return *rpc_client_;
+    /// Execute a callback with the RPC client under lock.
+    /// Prevents TOCTOU races: the client cannot be disconnected between the
+    /// is_connected check and the RPC call. Returns false if not connected.
+    /// Usage: client->with_client([](auto& rpc) { rpc.simGetImages(...); });
+    template<typename Fn>
+    [[nodiscard]] bool with_client(Fn&& fn) {
+        std::lock_guard<std::mutex> lock(rpc_mtx_);
+        if (!rpc_client_) return false;
+        fn(*rpc_client_);
+        return true;
     }
 
     /// Reconnect with exponential backoff.
@@ -128,9 +135,14 @@ public:
 private:
     std::string       host_{"127.0.0.1"};  ///< AirSim RPC host (default matches config)
     uint16_t          port_{41451};        ///< AirSim RPC port (default matches config)
-    std::atomic<bool> connected_{false};   ///< Thread-safe connection status
+    std::atomic<bool> connected_{false};   ///< Lock-free health check (fast path)
 
-    /// Underlying AirSim RPC client — null when disconnected.
+    /// Mutex serialises connect/disconnect/with_client to prevent TOCTOU races.
+    /// Not used for is_connected() (atomic, lock-free) — only for operations
+    /// that touch rpc_client_.
+    mutable std::mutex rpc_mtx_;
+
+    /// Underlying AirSim RPC client — null when disconnected, guarded by rpc_mtx_.
     std::unique_ptr<msr::airlib::MultirotorRpcLibClient> rpc_client_;
 };
 

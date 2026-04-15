@@ -27,7 +27,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -90,23 +89,22 @@ public:
                 "CosysDepthBackend: invalid channel count (0)");
         }
 
-        if (!client_->is_connected()) {
+        // Use with_client() to prevent TOCTOU race on disconnect
+        using namespace msr::airlib;
+        std::vector<ImageCaptureBase::ImageResponse> responses;
+        bool got_data = client_->with_client([&](auto& rpc) {
+            std::vector<ImageCaptureBase::ImageRequest> requests = {ImageCaptureBase::ImageRequest(
+                camera_name_, ImageCaptureBase::ImageType::DepthPerspective,
+                /* pixels_as_float */ true, /* compress */ false)};
+            responses = rpc.simGetImages(requests, vehicle_name_);
+        });
+
+        if (!got_data) {
             return drone::util::Result<DepthMap, std::string>::err(
                 "CosysDepthBackend: RPC client not connected");
         }
 
         try {
-            using namespace msr::airlib;
-
-            // Request DepthPerspective image — returns float array with metric depth per pixel.
-            // pixels_as_float=true: response contains float depth values in image_data_float.
-            // compress=false: raw float data, no compression.
-            std::vector<ImageCaptureBase::ImageRequest> requests = {ImageCaptureBase::ImageRequest(
-                camera_name_, ImageCaptureBase::ImageType::DepthPerspective,
-                /* pixels_as_float */ true, /* compress */ false)};
-
-            auto responses = client_->rpc_client().simGetImages(requests, vehicle_name_);
-
             if (responses.empty()) {
                 return drone::util::Result<DepthMap, std::string>::err(
                     "CosysDepthBackend: simGetImages returned empty response");
@@ -114,7 +112,8 @@ public:
 
             const auto& resp = responses[0];
 
-            if (resp.image_data_float.empty() || resp.width == 0 || resp.height == 0) {
+            // Guard signed→unsigned: check > 0 BEFORE casting
+            if (resp.image_data_float.empty() || resp.width <= 0 || resp.height <= 0) {
                 return drone::util::Result<DepthMap, std::string>::err(
                     "CosysDepthBackend: empty or invalid depth image from AirSim");
             }

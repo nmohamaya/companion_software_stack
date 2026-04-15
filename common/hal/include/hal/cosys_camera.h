@@ -124,6 +124,10 @@ public:
         DRONE_LOG_INFO("[CosysCamera] Closed camera='{}'", camera_name_);
     }
 
+    /// Read the latest frame from the TripleBuffer (lock-free).
+    /// SINGLE-CONSUMER: this method must only be called from one thread.
+    /// The returned CapturedFrame::data points into last_frame_.pixels and is
+    /// valid until the next capture() call (matches ICamera contract).
     CapturedFrame capture() override {
         CapturedFrame frame;
         if (!open_.load(std::memory_order_acquire)) return frame;
@@ -131,16 +135,17 @@ public:
         // Lock-free read from TripleBuffer — returns nullopt if no new frame
         auto latest = frame_buffer_.read();
         if (!latest) {
-            // No new frame yet — return the last frame if we have one
+            // No new frame yet — return the last frame with same sequence
+            // (don't increment — consumers use sequence to detect new frames)
             if (!last_frame_.pixels.empty()) {
-                return build_frame(last_frame_);
+                return build_frame(last_frame_, false);
             }
             return frame;  // No frame available at all
         }
 
-        // Got a new frame — cache it and return
+        // Got a new frame — cache it and return with incremented sequence
         last_frame_ = std::move(*latest);
-        return build_frame(last_frame_);
+        return build_frame(last_frame_, true);
     }
 
     bool is_open() const override { return open_.load(std::memory_order_acquire); }
@@ -152,10 +157,12 @@ public:
 private:
     /// Build a CapturedFrame from FrameData. The returned frame points into
     /// last_frame_.pixels which is stable until the next capture() call.
-    CapturedFrame build_frame(const FrameData& data) {
+    /// @param new_frame  If true, increment sequence (new data). If false, reuse
+    ///                   last sequence (duplicate frame, no new data from producer).
+    CapturedFrame build_frame(const FrameData& data, bool new_frame) {
         CapturedFrame frame;
         frame.timestamp_ns = data.timestamp_ns;
-        frame.sequence     = sequence_++;
+        frame.sequence     = new_frame ? sequence_++ : sequence_;
         frame.width        = data.width;
         frame.height       = data.height;
         frame.channels     = data.channels;
@@ -169,59 +176,72 @@ private:
     /// Writes frames to TripleBuffer (lock-free, never blocks).
     void retrieval_loop() {
         using namespace msr::airlib;
-        const auto frame_interval = std::chrono::milliseconds(fps_ > 0 ? 1000 / fps_
-                                                                       : 33);  // default ~30 FPS
+        // Clamp to minimum 1ms to prevent hot-loop on misconfigured fps > 1000
+        const auto frame_interval =
+            std::chrono::milliseconds(std::max(1, fps_ > 0 ? 1000 / fps_ : 33));
 
         DRONE_LOG_INFO("[CosysCamera] Retrieval thread started (interval={}ms)",
                        frame_interval.count());
 
+        constexpr uint32_t kRGBChannels = 3;
+
         while (open_.load(std::memory_order_acquire)) {
             try {
-                if (!client_->is_connected()) {
+                // Use with_client() to prevent TOCTOU race on disconnect
+                bool got_frame = client_->with_client([&](auto& rpc) {
+                    // Request uncompressed RGB Scene image from AirSim
+                    std::vector<ImageCaptureBase::ImageRequest> requests = {
+                        ImageCaptureBase::ImageRequest(camera_name_,
+                                                       ImageCaptureBase::ImageType::Scene,
+                                                       /* pixels_as_float */ false,
+                                                       /* compress */ false)};
+
+                    auto responses = rpc.simGetImages(requests, vehicle_name_);
+
+                    if (responses.empty() || responses[0].image_data_uint8.empty()) {
+                        return;  // no frame this tick
+                    }
+
+                    const auto& resp = responses[0];
+
+                    // Guard signed→unsigned: check > 0 BEFORE casting
+                    if (resp.width <= 0 || resp.height <= 0) {
+                        DRONE_LOG_WARN("[CosysCamera] Invalid dimensions: {}x{}", resp.width,
+                                       resp.height);
+                        return;
+                    }
+
+                    const auto w        = static_cast<uint32_t>(resp.width);
+                    const auto h        = static_cast<uint32_t>(resp.height);
+                    const auto expected = static_cast<size_t>(w) * h * kRGBChannels;
+
+                    if (resp.image_data_uint8.size() < expected) {
+                        DRONE_LOG_WARN("[CosysCamera] Unexpected size: {}x{} ({} bytes, "
+                                       "expected {})",
+                                       w, h, resp.image_data_uint8.size(), expected);
+                        return;
+                    }
+
+                    // Build FrameData and write to TripleBuffer (lock-free, never blocks)
+                    FrameData fd;
+                    fd.pixels.assign(resp.image_data_uint8.begin(),
+                                     resp.image_data_uint8.begin() +
+                                         static_cast<ptrdiff_t>(expected));
+                    fd.width        = w;
+                    fd.height       = h;
+                    fd.channels     = kRGBChannels;
+                    fd.timestamp_ns = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count());
+
+                    frame_buffer_.write(std::move(fd));
+                });
+
+                if (!got_frame) {
+                    // RPC client disconnected — skip this tick
                     DRONE_LOG_WARN("[CosysCamera] RPC disconnected — skipping frame");
-                    std::this_thread::sleep_for(frame_interval);
-                    continue;
                 }
-
-                // Request uncompressed RGB Scene image from AirSim
-                std::vector<ImageCaptureBase::ImageRequest> requests = {
-                    ImageCaptureBase::ImageRequest(camera_name_, ImageCaptureBase::ImageType::Scene,
-                                                   /* pixels_as_float */ false,
-                                                   /* compress */ false)};
-
-                auto responses = client_->rpc_client().simGetImages(requests, vehicle_name_);
-
-                if (responses.empty() || responses[0].image_data_uint8.empty()) {
-                    std::this_thread::sleep_for(frame_interval);
-                    continue;
-                }
-
-                const auto& resp     = responses[0];
-                const auto  channels = uint32_t{3};
-                const auto  expected = static_cast<size_t>(resp.width) * resp.height * channels;
-
-                if (resp.image_data_uint8.size() < expected || resp.width == 0 ||
-                    resp.height == 0) {
-                    DRONE_LOG_WARN("[CosysCamera] Unexpected image size: {}x{} ({} bytes, "
-                                   "expected {})",
-                                   resp.width, resp.height, resp.image_data_uint8.size(), expected);
-                    std::this_thread::sleep_for(frame_interval);
-                    continue;
-                }
-
-                // Build FrameData and write to TripleBuffer (lock-free, never blocks)
-                FrameData fd;
-                fd.pixels.assign(resp.image_data_uint8.begin(),
-                                 resp.image_data_uint8.begin() + static_cast<ptrdiff_t>(expected));
-                fd.width    = static_cast<uint32_t>(resp.width);
-                fd.height   = static_cast<uint32_t>(resp.height);
-                fd.channels = channels;
-                fd.timestamp_ns =
-                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                              std::chrono::steady_clock::now().time_since_epoch())
-                                              .count());
-
-                frame_buffer_.write(std::move(fd));
 
             } catch (const std::exception& e) {
                 DRONE_LOG_WARN("[CosysCamera] RPC error in retrieval thread: {}", e.what());
@@ -254,7 +274,9 @@ private:
     // Consumer (capture()) reads via frame_buffer_.read()
     // No mutex, no cv — TripleBuffer handles synchronisation via atomics.
     drone::TripleBuffer<FrameData> frame_buffer_;
-    FrameData                      last_frame_;  ///< Most recent frame for repeat reads
+    /// Most recent frame for repeat reads. Only accessed from capture() which
+    /// is single-consumer (ICamera contract). Not thread-safe for concurrent callers.
+    FrameData last_frame_;
 
     // ── Image retrieval thread ─────────────────────────────
     std::thread retrieval_thread_;  ///< Polls simGetImages() at target FPS
