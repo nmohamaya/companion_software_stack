@@ -76,8 +76,11 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 
 // ── Depth estimation ────────────────────────────────────────
 [[nodiscard]] drone::util::Result<DepthMap, std::string> DepthAnythingV2Estimator::estimate(
-    const uint8_t* frame_data, uint32_t width, uint32_t height, uint32_t channels,
-    uint32_t stride) {
+    [[maybe_unused]] const uint8_t* frame_data,
+    [[maybe_unused]] uint32_t width,
+    [[maybe_unused]] uint32_t height,
+    [[maybe_unused]] uint32_t channels,
+    [[maybe_unused]] uint32_t stride) {
     if (frame_data == nullptr || width == 0 || height == 0) {
         return drone::util::Result<DepthMap, std::string>::err(
             "DepthAnythingV2: invalid frame (null data or zero dimensions)");
@@ -222,11 +225,6 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     return drone::util::Result<DepthMap, std::string>::ok(std::move(map));
 
 #else
-    (void)frame_data;
-    (void)width;
-    (void)height;
-    (void)channels;
-    (void)stride;
     return drone::util::Result<DepthMap, std::string>::err(
         "DepthAnythingV2: OpenCV not available (compiled without HAS_OPENCV)");
 #endif

@@ -18,7 +18,9 @@
 include(ExternalProject)
 
 set(AIRSIM_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/third_party/cosys-airsim")
-set(AIRSIM_VERSION "5.5-v3.3")
+# NOTE: Update this when bumping the submodule to a new tag.
+# Dependabot PRs that update the submodule should also update this version.
+set(AIRSIM_VERSION "5.5-v3.3" CACHE STRING "Cosys-AirSim SDK version (must match submodule tag)")
 
 # ── Check if submodule is populated ──────────────────────────
 # AirSim.sln is a reliable sentinel file that exists in the repo root.
@@ -33,7 +35,10 @@ endif()
 # AirSim's setup.sh normally downloads rpclib. We handle it in CMake so the
 # submodule works without running setup.sh first.
 set(RPCLIB_DIR "${AIRSIM_SUBMODULE_DIR}/external/rpclib/rpclib-2.3.1")
-set(RPCLIB_DOWNLOAD_URL "https://github.com/WouterJansen/rpclib/archive/refs/tags/v2.3.1.tar.gz")
+# Override for air-gapped builds or internal mirrors:
+#   cmake .. -DRPCLIB_DOWNLOAD_URL=https://internal-mirror.example.com/rpclib-2.3.1.tar.gz
+set(RPCLIB_DOWNLOAD_URL "https://github.com/WouterJansen/rpclib/archive/refs/tags/v2.3.1.tar.gz"
+    CACHE STRING "URL for rpclib tarball (override for mirrors/air-gapped builds)")
 set(RPCLIB_DOWNLOAD_DEST "${AIRSIM_SUBMODULE_DIR}/external/rpclib/v2.3.1.tar.gz")
 
 if(NOT EXISTS "${RPCLIB_DIR}/CMakeLists.txt")

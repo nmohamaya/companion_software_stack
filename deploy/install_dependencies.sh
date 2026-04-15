@@ -277,15 +277,11 @@ if $INSTALL_OPENCV; then
     MODELS_DIR="${PROJECT_DIR}/models"
     mkdir -p "$MODELS_DIR"
 
-    # YOLOv8n — direct download (no Python deps needed)
-    if [[ ! -f "${MODELS_DIR}/yolov8n.onnx" ]]; then
-        info "Downloading YOLOv8n ONNX model (12.8 MB)..."
-        wget -q --show-progress -O "${MODELS_DIR}/yolov8n.onnx" \
-            "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx" \
-            || warn "Failed to download YOLOv8n model. You can download it later manually."
-        if [[ -f "${MODELS_DIR}/yolov8n.onnx" ]]; then
-            success "YOLOv8n model saved to models/yolov8n.onnx"
-        fi
+    # YOLOv8n — delegate to standalone script (has multi-URL fallback + Python export)
+    if [[ ! -f "${MODELS_DIR}/yolov8n.onnx" ]] || [[ ! -s "${MODELS_DIR}/yolov8n.onnx" ]]; then
+        info "Downloading YOLOv8n ONNX model..."
+        bash "${PROJECT_DIR}/models/download_yolov8n.sh" || \
+            warn "YOLOv8n download failed. Run manually: bash models/download_yolov8n.sh"
     else
         info "YOLOv8n model already exists at models/yolov8n.onnx"
     fi
@@ -493,15 +489,15 @@ if $INSTALL_ZENOH; then
 
             if ls libzenohc_*.deb 1>/dev/null 2>&1 && ls libzenohc-dev_*.deb 1>/dev/null 2>&1; then
                 sudo dpkg -i libzenohc_*.deb libzenohc-dev_*.deb || sudo apt-get -f install -y
-            sudo ldconfig
-            if pkg-config --exists zenohc 2>/dev/null; then
-                VER="$(pkg-config --modversion zenohc)"
-                success "zenohc ${VER} installed successfully"
-                INSTALLED+=("Zenoh zenohc ${VER}")
-            else
-                warn "zenohc installed but pkg-config doesn't see it."
-                INSTALLED+=("Zenoh zenohc ${ZENOH_VERSION} (no pkg-config)")
-            fi
+                sudo ldconfig
+                if pkg-config --exists zenohc 2>/dev/null; then
+                    VER="$(pkg-config --modversion zenohc)"
+                    success "zenohc ${VER} installed successfully"
+                    INSTALLED+=("Zenoh zenohc ${VER}")
+                else
+                    warn "zenohc installed but pkg-config doesn't see it."
+                    INSTALLED+=("Zenoh zenohc ${ZENOH_VERSION} (no pkg-config)")
+                fi
             else
                 warn "Extracted zip but .deb files not found. Contents:"
                 ls -la "$ZENOH_TMP"
