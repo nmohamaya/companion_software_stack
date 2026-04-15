@@ -46,6 +46,7 @@
 #include "hal/cosys_depth.h"
 #include "hal/cosys_imu.h"
 #include "hal/cosys_radar.h"
+#include "hal/cosys_rpc_client.h"
 #endif
 
 #ifdef HAS_OPENCV
@@ -64,6 +65,35 @@
 #include <stdexcept>
 
 namespace drone::hal {
+
+// ── Shared Cosys-AirSim RPC client ──────────────────────────
+// All 4 Cosys-AirSim backends (camera, radar, IMU, depth) share a single
+// RPC connection to the simulator. shared_ptr is acceptable here — it's a
+// shared resource across 4 independently-created HAL backends, same
+// justification as spdlog/MAVSDK/Zenoh callback contracts.
+#ifdef HAVE_COSYS_AIRSIM
+namespace detail {
+/// Returns the process-global shared Cosys-AirSim RPC client.
+/// NOTE: cfg is only read on first construction — subsequent calls return the
+/// same client regardless of cfg contents. This is intentional: one RPC
+/// connection per process, configured once at startup.
+inline const std::shared_ptr<CosysRpcClient>& get_shared_cosys_client(const drone::Config& cfg) {
+    // Thread-safe: C++11 guarantees static local init is thread-safe.
+    // The lambda runs exactly once, even under concurrent first calls.
+    static auto client = [&cfg]() {
+        auto host = cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::HOST),
+                                         "127.0.0.1");
+        auto port = cfg.get<uint16_t>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451);
+        auto c    = std::make_shared<CosysRpcClient>(host, port);
+        if (!c->connect()) {
+            DRONE_LOG_WARN("[HAL] CosysRpcClient initial connect failed — backends will retry");
+        }
+        return c;
+    }();
+    return client;
+}
+}  // namespace detail
+#endif
 
 #ifdef HAVE_PLUGINS
 /// Load a plugin backend from config.  Centralises the read-config → load →
@@ -111,7 +141,8 @@ template<typename Interface>
 #endif
 #ifdef HAVE_COSYS_AIRSIM
     if (backend == "cosys_airsim") {
-        return std::make_unique<CosysCameraBackend>(cfg, section);
+        return std::make_unique<CosysCameraBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                    section);
     }
 #endif
     // Future: if (backend == "v4l2") return std::make_unique<V4L2Camera>();
@@ -210,7 +241,8 @@ template<typename Interface>
 #endif
 #ifdef HAVE_COSYS_AIRSIM
     if (backend == "cosys_airsim") {
-        return std::make_unique<CosysIMUBackend>(cfg, section);
+        return std::make_unique<CosysIMUBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                 section);
     }
 #endif
     // Future: if (backend == "bmi088") return std::make_unique<BMI088IMU>();
@@ -243,7 +275,8 @@ template<typename Interface>
 
 #ifdef HAVE_COSYS_AIRSIM
     if (backend == "cosys_airsim") {
-        return std::make_unique<CosysRadarBackend>(cfg, section);
+        return std::make_unique<CosysRadarBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                   section);
     }
 #endif
 
@@ -270,7 +303,8 @@ template<typename Interface>
     }
 #ifdef HAVE_COSYS_AIRSIM
     if (backend == "cosys_airsim") {
-        return std::make_unique<CosysDepthBackend>(cfg, section);
+        return std::make_unique<CosysDepthBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                   section);
     }
 #endif
 #ifdef HAS_OPENCV

@@ -12,12 +12,14 @@
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_rpc_client.h"
 #include "hal/iimu_source.h"
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -34,17 +36,18 @@ namespace drone::hal {
 ///   auto sample = imu.read();
 class CosysIMUBackend : public IIMUSource {
 public:
+    /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "slam.imu")
-    explicit CosysIMUBackend(const drone::Config& cfg, const std::string& section)
-        : host_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::HOST), "127.0.0.1"))
-        , port_(cfg.get<int>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451))
+    explicit CosysIMUBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
+                             const std::string& section)
+        : client_(std::move(client))
         , imu_name_(
               cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::IMU_NAME), "imu"))
         , vehicle_name_(cfg.get<std::string>(
               std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0")) {
         (void)section;  // section reserved for future per-IMU config
-        DRONE_LOG_INFO("[CosysIMU] Created for {}:{} imu='{}' vehicle='{}'", host_, port_,
+        DRONE_LOG_INFO("[CosysIMU] Created for {} imu='{}' vehicle='{}'", client_->endpoint(),
                        imu_name_, vehicle_name_);
     }
 
@@ -57,8 +60,8 @@ public:
             if (!active_.load(std::memory_order_acquire)) return;
             active_.store(false, std::memory_order_release);
         }
-        // TODO(#434): Disconnect from Cosys-AirSim RPC endpoint
-        // and stop polling thread.
+        // TODO(#462): Stop polling thread.
+        // Connection lifecycle is managed by the shared CosysRpcClient.
         DRONE_LOG_INFO("[CosysIMU] Shut down imu='{}'", imu_name_);
     }
 
@@ -79,13 +82,13 @@ public:
 
         rate_hz_ = rate_hz;
 
-        // TODO(#434): Connect to Cosys-AirSim RPC endpoint at host_:port_
-        // and verify IMU sensor exists using getImuData(imu_name_, vehicle_name_).
+        // TODO(#462): Verify IMU sensor exists via client_ using
+        // getImuData(imu_name_, vehicle_name_).
         // Start polling thread for periodic IMU data retrieval.
 
         active_.store(true, std::memory_order_release);
-        DRONE_LOG_INFO("[CosysIMU] Initialised imu='{}' on {}:{} (rate_hz={} informational)",
-                       imu_name_, host_, port_, rate_hz_);
+        DRONE_LOG_INFO("[CosysIMU] Initialised imu='{}' on {} (rate_hz={} informational)",
+                       imu_name_, client_->endpoint(), rate_hz_);
         return true;
     }
 
@@ -104,16 +107,17 @@ public:
 
     /// Human-readable name including the sensor and host.
     std::string name() const override {
-        return "CosysIMU(" + imu_name_ + "@" + host_ + ":" + std::to_string(port_) + ")";
+        return "CosysIMU(" + imu_name_ + "@" + client_->endpoint() + ")";
     }
 
     /// Number of messages received (useful for diagnostics).
     uint64_t message_count() const { return msg_count_.load(std::memory_order_acquire); }
 
 private:
+    // ── Shared RPC client (shared_ptr: shared across 4 HAL backends) ──
+    std::shared_ptr<CosysRpcClient> client_;
+
     // ── Config ────────────────────────────────────────────────
-    std::string host_;          ///< Cosys-AirSim RPC host
-    int         port_;          ///< Cosys-AirSim RPC port
     std::string imu_name_;      ///< AirSim IMU sensor name
     std::string vehicle_name_;  ///< AirSim vehicle name
     int         rate_hz_{200};  ///< Informational sample rate

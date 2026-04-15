@@ -272,6 +272,16 @@
         "loiter_escalation_timeout_s": 30
     },
 
+    "cosys_airsim": {
+        "_comment": "Cosys-AirSim simulation settings (used when backend=cosys_airsim)",
+        "host": "127.0.0.1",
+        "port": 41451,
+        "camera_name": "front_center",
+        "radar_name": "radar",
+        "imu_name": "imu",
+        "vehicle_name": "Drone0"
+    },
+
     "system_monitor": {
         "platform": "linux",
         "update_rate_hz": 1,
