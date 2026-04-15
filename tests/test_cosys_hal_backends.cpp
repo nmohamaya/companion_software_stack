@@ -193,8 +193,11 @@ TEST(SharedClientTest, FactoryCreatesSingleInstance) {
     })");
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
-    auto& client1 = drone::hal::detail::get_shared_cosys_client(cfg);
-    auto& client2 = drone::hal::detail::get_shared_cosys_client(cfg);
+    // Capture raw pointer from first call before second call to prove identity
+    const auto& client1 = drone::hal::detail::get_shared_cosys_client(cfg);
+    auto*       raw_ptr = client1.get();
+    const auto& client2 = drone::hal::detail::get_shared_cosys_client(cfg);
+    EXPECT_EQ(raw_ptr, client2.get());
     EXPECT_EQ(client1.get(), client2.get());
 }
 

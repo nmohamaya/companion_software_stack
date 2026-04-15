@@ -44,8 +44,8 @@ public:
     explicit CosysRadarBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
                                const std::string& section)
         : client_(std::move(client))
-        , radar_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::RADAR_NAME),
-                                           "front_radar"))
+        , radar_name_(
+              cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::RADAR_NAME), "radar"))
         , vehicle_name_(cfg.get<std::string>(
               std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0"))
         , max_range_m_(cfg.get<float>(section + drone::cfg_key::hal::MAX_RANGE_M, 100.0f)) {

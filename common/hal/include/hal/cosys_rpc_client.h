@@ -12,6 +12,7 @@
 
 #include "util/ilogger.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>

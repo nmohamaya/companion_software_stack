@@ -65,8 +65,8 @@
             "num_targets": 3
         },
         "depth_estimator": {
-            "backend": "cosys_airsim",
-            "_comment": "Ground-truth depth from simulator; switch to 'depth_anything_v2' for ML",
+            "backend": "depth_anything_v2",
+            "_comment": "ML depth until #462 wires cosys_airsim ground-truth depth",
             "model_path": "models/depth_anything_v2_vits.onnx"
         },
         "fusion": {

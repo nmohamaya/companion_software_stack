@@ -77,7 +77,7 @@ namespace detail {
 /// NOTE: cfg is only read on first construction — subsequent calls return the
 /// same client regardless of cfg contents. This is intentional: one RPC
 /// connection per process, configured once at startup.
-inline std::shared_ptr<CosysRpcClient>& get_shared_cosys_client(const drone::Config& cfg) {
+inline const std::shared_ptr<CosysRpcClient>& get_shared_cosys_client(const drone::Config& cfg) {
     // Thread-safe: C++11 guarantees static local init is thread-safe.
     // The lambda runs exactly once, even under concurrent first calls.
     static auto client = [&cfg]() {
