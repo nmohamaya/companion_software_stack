@@ -41,18 +41,25 @@ set(RPCLIB_DOWNLOAD_URL "https://github.com/WouterJansen/rpclib/archive/refs/tag
     CACHE STRING "URL for rpclib tarball (override for mirrors/air-gapped builds)")
 set(RPCLIB_DOWNLOAD_DEST "${AIRSIM_SUBMODULE_DIR}/external/rpclib/v2.3.1.tar.gz")
 
+# NOTE: rpclib is extracted into the submodule tree (external/rpclib/) because
+# AirSim's own CMakeLists expects it at that exact path. This makes the submodule
+# appear "dirty" (untracked files). Add external/rpclib/ to .gitignore if this
+# bothers your workflow. Moving it to CMAKE_BINARY_DIR would require patching
+# AirSim's build system, which defeats the purpose of vendoring.
 if(NOT EXISTS "${RPCLIB_DIR}/CMakeLists.txt")
     message(STATUS "  Cosys-AirSim : Downloading rpclib v2.3.1...")
 
     # Create target directory
     file(MAKE_DIRECTORY "${AIRSIM_SUBMODULE_DIR}/external/rpclib")
 
-    # Download the tarball
+    # Download the tarball (SHA256 pinned for supply-chain integrity)
     file(DOWNLOAD
         "${RPCLIB_DOWNLOAD_URL}"
         "${RPCLIB_DOWNLOAD_DEST}"
         STATUS _rpclib_download_status
         TIMEOUT 60
+        EXPECTED_HASH SHA256=16a1f5f112e2a7f6706f660f8ab3f0937049aef5750d580311e34b0e8846d248
+        TLS_VERIFY ON
     )
     list(GET _rpclib_download_status 0 _rpclib_download_code)
 
@@ -99,11 +106,29 @@ set(AIRSIM_OUTPUT_LIB_DIR "${AIRSIM_BINARY_DIR}/output/lib")
 
 find_package(Threads REQUIRED)
 
+# Handle multi-config generators (Ninja Multi-Config, VS) where
+# CMAKE_BUILD_TYPE is empty — default to Release for the external build.
+set(_AIRSIM_EFFECTIVE_TYPE "${CMAKE_BUILD_TYPE}")
+if(NOT _AIRSIM_EFFECTIVE_TYPE)
+    set(_AIRSIM_EFFECTIVE_TYPE "Release")
+endif()
+
+# Forward compiler and toolchain settings so cross-compilation and
+# non-default compilers work consistently with the external build.
+set(_AIRSIM_COMPILER_ARGS
+    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+    -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+)
+if(CMAKE_TOOLCHAIN_FILE)
+    list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
+endif()
+
 ExternalProject_Add(airsim_external
     SOURCE_DIR        "${AIRSIM_SUBMODULE_DIR}/cmake"
     BINARY_DIR        "${AIRSIM_BINARY_DIR}"
     CMAKE_ARGS
-        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_BUILD_TYPE=${_AIRSIM_EFFECTIVE_TYPE}
+        ${_AIRSIM_COMPILER_ARGS}
         -DCMAKE_CXX_STANDARD=17
         -DCMAKE_CXX_STANDARD_REQUIRED=ON
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON

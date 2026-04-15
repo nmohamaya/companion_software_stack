@@ -661,7 +661,7 @@ If any show "not found", run `sudo ldconfig` or check `LD_LIBRARY_PATH`.
 
 ### Do NOT Build spdlog/fmt from Source
 
-The apt versions of `libspdlog-dev` and `libfmt-dev` work correctly with GCC 13 on Ubuntu 22.04. **Do not build spdlog or fmt from source** — a source-built spdlog installs cmake configs to `/usr/local` that conflict with the apt shared library, causing linker errors like:
+The apt versions of `libspdlog-dev` and `libfmt-dev` work correctly with GCC 11+ (including GCC 13 if installed from PPA) on Ubuntu 22.04 and with GCC 13 on Ubuntu 24.04. **Do not build spdlog or fmt from source** — a source-built spdlog installs cmake configs to `/usr/local` that conflict with the apt shared library, causing linker errors like:
 ```
 undefined reference to `spdlog::details::log_msg::log_msg(...)'
 ```

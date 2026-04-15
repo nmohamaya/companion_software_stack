@@ -296,6 +296,11 @@ if $INSTALL_OPENCV; then
         info "Depth Anything V2 model requires Python export (ONNX graph surgery for OpenCV DNN)."
         if ask_yes_no "Install Python deps and export DA V2 model (~95 MB)?" "y"; then
             # Use a venv to avoid polluting system Python or conflicting with Conda
+            # Ensure python3-venv is installed (not present on fresh Ubuntu by default)
+            if ! python3 -m venv --help &>/dev/null; then
+                info "Installing python3-venv package..."
+                sudo apt-get install -y --no-install-recommends python3-venv python3-pip
+            fi
             VENV_DIR="${PROJECT_DIR}/.venv"
             if [[ ! -d "$VENV_DIR" ]]; then
                 info "Creating Python virtual environment at .venv/..."
@@ -428,9 +433,19 @@ echo "  zero-copy, peer-to-peer networking, and multi-machine support."
 echo "  The stack requires Zenoh to build and run."
 echo ""
 
-INSTALL_ZENOH=false
-if ask_yes_no "Install Zenoh (zenohc + zenoh-cpp)?" "y"; then
-    INSTALL_ZENOH=true
+# Zenoh is REQUIRED (not optional) — always install unless already present.
+# In --core-only mode, ask_yes_no returns "no" for optional deps, but Zenoh
+# is not optional — the build fails without it.
+INSTALL_ZENOH=true
+if [[ "$MODE" == "interactive" ]]; then
+    if ! ask_yes_no "Install Zenoh (zenohc + zenoh-cpp)?" "y"; then
+        warn "Zenoh is required — the stack will not build without it."
+        if ! ask_yes_no "Skip anyway?" "n"; then
+            INSTALL_ZENOH=true
+        else
+            INSTALL_ZENOH=false
+        fi
+    fi
 fi
 
 if $INSTALL_ZENOH; then

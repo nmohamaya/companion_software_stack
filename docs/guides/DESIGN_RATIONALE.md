@@ -382,3 +382,24 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **When to revisit:** When a third OpenCV HAL backend is added, or when the Cosys-AirSim migration to STATIC happens — do both splits together.
 
 **Date:** 2026-04-14
+
+---
+
+## DR-016: rpclib Downloaded Into Submodule Working Tree
+
+**Question:** The `FindAirSim.cmake` module downloads rpclib into `third_party/cosys-airsim/external/rpclib/`, which dirties the submodule working tree. Should we download into `${CMAKE_BINARY_DIR}` instead?
+
+**For moving to CMAKE_BINARY_DIR:**
+- Clean submodule (`git status` shows no untracked files)
+- Standard CMake practice (FetchContent, ExternalProject all use binary dir)
+- Less confusing for developers who check submodule status
+
+**For keeping in submodule tree:**
+- AirSim's own `cmake/CMakeLists.txt` hardcodes `find_path(... PATHS ${AIRSIM_ROOT}/external/rpclib/rpclib-2.3.1)` — the build expects rpclib at that exact relative path
+- Moving it would require patching AirSim's CMakeLists, defeating the purpose of vendoring an unmodified upstream
+- The `external/rpclib/` directory is already in `.gitignore` (or should be) since AirSim's own `setup.sh` downloads it there too
+- Only happens once (cached after first configure)
+
+**Decision:** Keep rpclib in the submodule tree. The cost of a "dirty" submodule is low (add to `.gitignore`), while patching AirSim's build creates maintenance burden on every upstream update.
+
+**Revisit when:** AirSim's CMake is refactored to accept external rpclib paths, or we fork the repo and can control the build system.

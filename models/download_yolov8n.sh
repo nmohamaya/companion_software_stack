@@ -37,7 +37,7 @@ URLS=(
 
 for url in "${URLS[@]}"; do
     echo "  Trying: $url"
-    if wget -q --show-progress -O "$MODEL_PATH" "$url" 2>/dev/null; then
+    if wget -q --show-progress -O "$MODEL_PATH" "$url"; then
         if [[ -s "$MODEL_PATH" ]]; then
             echo "Downloaded successfully: $MODEL_PATH ($(du -h "$MODEL_PATH" | cut -f1))"
             exit 0
