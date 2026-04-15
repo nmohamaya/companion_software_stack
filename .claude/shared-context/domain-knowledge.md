@@ -72,8 +72,8 @@ Use `spdlog::debug` for anything that fires every tick. Gate with `spdlog::shoul
 
 ## Testing
 
-### TripleBufferTest.HighContentionStress is flaky
-This is a pre-existing flaky test. If it fails intermittently, it is not caused by your changes.
+### TripleBufferTest.HighContentionStress — fixed (was flaky)
+Previously flaky on CI due to producer finishing before consumer was scheduled. Fixed with start barrier + minimum 50ms runtime. If it still fails, the issue is a real TripleBuffer bug, not scheduling.
 
 ### Fully qualify namespaces in test files
 Interfaces live in sub-namespaces (`drone::slam`, `drone::planner`, `drone::monitor`). A bare `using namespace drone` is not sufficient. Either add `using namespace` for each sub-namespace you reference, or use full qualification consistently.

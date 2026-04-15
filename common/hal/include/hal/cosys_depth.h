@@ -8,10 +8,14 @@
 // retrieves ground-truth depth directly from the simulator — ideal for
 // validating perception pipelines without model inference.
 //
+// The estimate() call ignores the frame_data input parameter; depth comes
+// from the simulator via simGetImages(DepthPerspective), not from the frame.
+// This means estimate() makes a synchronous RPC call on each invocation.
+//
 // NOT thread-safe for estimate() — call from a single thread (depth thread in P2).
 // Config access is thread-safe (read-only after construction).
 //
-// Issue: #434
+// Issue: #434, #462
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
@@ -22,12 +26,23 @@
 #include "util/ilogger.h"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include <common/common_utils/StrictMode.hpp>
+STRICT_MODE_OFF
+#include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
+STRICT_MODE_ON
 
 namespace drone::hal {
 
 /// Cosys-AirSim depth estimator — retrieves ground-truth depth from simulation.
+///
+/// Calls simGetImages() with ImageType::DepthPerspective (pixels_as_float=true)
+/// to get metric depth per pixel. Returns DepthMap with confidence=0.95
+/// (ground truth from simulator, not perfect due to rendering artifacts).
 ///
 /// Config keys:
 ///   cosys_airsim.host         (default "127.0.0.1")
@@ -52,12 +67,15 @@ public:
                        camera_name_, vehicle_name_);
     }
 
-    // Non-copyable, non-movable (may own RPC connection state in future)
+    // Non-copyable, non-movable (owns RPC connection state reference)
     CosysDepthBackend(const CosysDepthBackend&)            = delete;
     CosysDepthBackend& operator=(const CosysDepthBackend&) = delete;
     CosysDepthBackend(CosysDepthBackend&&)                 = delete;
     CosysDepthBackend& operator=(CosysDepthBackend&&)      = delete;
 
+    /// Estimate depth by retrieving ground-truth depth from AirSim.
+    /// The frame_data parameter is ignored — depth comes from the simulator.
+    /// Makes a synchronous RPC call to simGetImages(DepthPerspective).
     [[nodiscard]] drone::util::Result<DepthMap, std::string> estimate(
         const uint8_t* frame_data, uint32_t width, uint32_t height, uint32_t channels,
         uint32_t stride = 0) override {
@@ -71,17 +89,75 @@ public:
                 "CosysDepthBackend: invalid channel count (0)");
         }
 
-        // TODO(#462): Call Cosys-AirSim simGetImages() via client_ with
-        // DepthPerspective image type for camera_name_ on vehicle_name_.
-        // Parse the returned float array into the DepthMap.
-        //
-        // Until the AirSim SDK integration is implemented, return an error
-        // so callers don't silently consume a zero depth map as ground truth.
+        // Use with_client() to prevent TOCTOU race on disconnect
+        using namespace msr::airlib;
+        std::vector<ImageCaptureBase::ImageResponse> responses;
+        bool got_data = client_->with_client([&](auto& rpc) {
+            std::vector<ImageCaptureBase::ImageRequest> requests = {ImageCaptureBase::ImageRequest(
+                camera_name_, ImageCaptureBase::ImageType::DepthPerspective,
+                /* pixels_as_float */ true, /* compress */ false)};
+            responses = rpc.simGetImages(requests, vehicle_name_);
+        });
 
-        DRONE_LOG_WARN("[CosysDepth] SDK not connected — cannot estimate depth");
+        if (!got_data) {
+            return drone::util::Result<DepthMap, std::string>::err(
+                "CosysDepthBackend: RPC client not connected");
+        }
 
-        return drone::util::Result<DepthMap, std::string>::err(
-            "CosysDepthBackend: AirSim SDK integration not yet implemented");
+        try {
+            if (responses.empty()) {
+                return drone::util::Result<DepthMap, std::string>::err(
+                    "CosysDepthBackend: simGetImages returned empty response");
+            }
+
+            const auto& resp = responses[0];
+
+            // Guard signed→unsigned: check > 0 BEFORE casting
+            if (resp.image_data_float.empty() || resp.width <= 0 || resp.height <= 0) {
+                return drone::util::Result<DepthMap, std::string>::err(
+                    "CosysDepthBackend: empty or invalid depth image from AirSim");
+            }
+
+            const auto depth_w      = static_cast<uint32_t>(resp.width);
+            const auto depth_h      = static_cast<uint32_t>(resp.height);
+            const auto total_pixels = static_cast<size_t>(depth_w) * depth_h;
+
+            if (resp.image_data_float.size() < total_pixels) {
+                return drone::util::Result<DepthMap, std::string>::err(
+                    "CosysDepthBackend: depth data size mismatch (got " +
+                    std::to_string(resp.image_data_float.size()) + ", expected " +
+                    std::to_string(total_pixels) + ")");
+            }
+
+            // Build DepthMap from the float array
+            DepthMap depth_map;
+            depth_map.width  = depth_w;
+            depth_map.height = depth_h;
+            depth_map.data.resize(total_pixels);
+            std::copy(resp.image_data_float.begin(),
+                      resp.image_data_float.begin() + static_cast<ptrdiff_t>(total_pixels),
+                      depth_map.data.begin());
+            depth_map.scale = 1.0f;  // AirSim returns metric depth in metres
+
+            // Ground truth from simulator — high confidence but not perfect
+            // due to rendering artifacts and floating-point precision
+            depth_map.confidence = 0.95f;
+
+            depth_map.timestamp_ns =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+
+            // Record source frame dimensions for bbox-to-depth coordinate mapping
+            depth_map.source_width  = width;
+            depth_map.source_height = height;
+
+            return drone::util::Result<DepthMap, std::string>::ok(std::move(depth_map));
+
+        } catch (const std::exception& e) {
+            return drone::util::Result<DepthMap, std::string>::err(
+                std::string("CosysDepthBackend: RPC error — ") + e.what());
+        }
     }
 
     [[nodiscard]] std::string name() const override {

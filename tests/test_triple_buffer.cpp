@@ -158,46 +158,70 @@ TEST(TripleBufferTest, ConcurrentProducerConsumer) {
 }
 
 TEST(TripleBufferTest, HighContentionStress) {
-    // Producer at max rate, consumer at ~30Hz cadence
+    // Producer at max rate, consumer at ~1kHz. Uses a start barrier to ensure
+    // both threads are running before work begins, and a minimum runtime to
+    // prevent the producer from finishing before the consumer is scheduled.
+    // This was flaky on CI (ctest -j$(nproc)) because the producer could
+    // blast 50K writes before the consumer got a single timeslice.
     TripleBuffer<uint64_t> buf;
-    std::atomic<bool>      done{false};
+    std::atomic<bool>      start{false};
+    std::atomic<bool>      stop{false};
+    std::atomic<uint64_t>  consumer_reads{0};
+    constexpr auto         kMinRunTime = std::chrono::milliseconds(50);
 
     std::thread producer([&]() {
-        for (uint64_t i = 1; i <= 50000; ++i) {
-            buf.write(i);
+        // Wait for start barrier
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
         }
-        done.store(true, std::memory_order_release);
+        // Write continuously until stop is signalled
+        uint64_t i = 0;
+        while (!stop.load(std::memory_order_relaxed)) {
+            buf.write(++i);
+            // Yield occasionally to let consumer run on single-core CI
+            if ((i & 0xFF) == 0) std::this_thread::yield();
+        }
     });
 
     std::thread consumer([&]() {
-        uint64_t prev     = 0;
-        uint64_t read_cnt = 0;
-        while (true) {
+        // Wait for start barrier
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        uint64_t prev = 0;
+        while (!stop.load(std::memory_order_relaxed)) {
             auto v = buf.read();
             if (v.has_value()) {
                 // Monotonically increasing — no corruption
                 EXPECT_GT(*v, prev);
                 prev = *v;
-                ++read_cnt;
+                consumer_reads.fetch_add(1, std::memory_order_relaxed);
             }
-            // Simulate ~1kHz consumer
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            if (done.load(std::memory_order_acquire)) {
-                // Drain final value
-                auto final_v = buf.read();
-                if (final_v.has_value()) {
-                    EXPECT_GT(*final_v, prev);
-                }
-                break;
-            }
         }
-        // Consumer should have read far fewer values than producer wrote
-        // (latest-value semantics — skipping is expected)
-        EXPECT_GT(read_cnt, 0u);
+        // Drain final value
+        auto final_v = buf.read();
+        if (final_v.has_value()) {
+            EXPECT_GT(*final_v, prev);
+            consumer_reads.fetch_add(1, std::memory_order_relaxed);
+        }
     });
 
+    // Start both threads simultaneously
+    start.store(true, std::memory_order_release);
+
+    // Run for at least kMinRunTime, or until consumer has read something
+    auto deadline = std::chrono::steady_clock::now() + kMinRunTime;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    stop.store(true, std::memory_order_release);
     producer.join();
     consumer.join();
 
-    EXPECT_EQ(buf.write_count(), 50000u);
+    // Consumer must have read at least once in 50ms
+    EXPECT_GT(consumer_reads.load(), 0u);
+    // Producer must have written many values
+    EXPECT_GT(buf.write_count(), 100u);
 }
