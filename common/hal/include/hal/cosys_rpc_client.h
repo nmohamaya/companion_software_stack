@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <thread>
 
@@ -31,9 +32,9 @@ class CosysRpcClient {
 public:
     /// @param host  Cosys-AirSim RPC host (e.g. "127.0.0.1")
     /// @param port  Cosys-AirSim RPC port (e.g. 41451)
-    CosysRpcClient(const std::string& host, int port) : host_(host), port_(port) {}
+    CosysRpcClient(const std::string& host, uint16_t port) : host_(host), port_(port) {}
 
-    ~CosysRpcClient() { disconnect(); }
+    ~CosysRpcClient() noexcept { disconnect(); }
 
     // Non-copyable, non-movable (owns connection state)
     CosysRpcClient(const CosysRpcClient&)            = delete;
@@ -96,9 +97,9 @@ public:
     }
 
 private:
-    std::string       host_;              ///< AirSim RPC host
-    int               port_{41451};       ///< AirSim RPC port
-    std::atomic<bool> connected_{false};  ///< Thread-safe connection status
+    std::string       host_{"127.0.0.1"};  ///< AirSim RPC host (default matches config)
+    uint16_t          port_{41451};        ///< AirSim RPC port (default matches config)
+    std::atomic<bool> connected_{false};   ///< Thread-safe connection status
 };
 
 }  // namespace drone::hal

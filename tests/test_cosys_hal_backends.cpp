@@ -179,6 +179,14 @@ TEST(CosysRpcClientTest, DisconnectSetsNotConnected) {
     EXPECT_FALSE(client.is_connected());
 }
 
+TEST(CosysRpcClientTest, ReconnectFailsAfterMaxRetries) {
+    // Stub connect() always returns false, so reconnect exhausts all 5 retries.
+    // Total sleep: 100 + 200 + 400 + 800 = 1500ms (4 sleeps, last attempt has no sleep)
+    drone::hal::CosysRpcClient client("127.0.0.1", 41451);
+    EXPECT_FALSE(client.reconnect());
+    EXPECT_FALSE(client.is_connected());
+}
+
 TEST(SharedClientTest, FactoryCreatesSingleInstance) {
     auto          path = create_temp_config(R"({
         "cosys_airsim": { "host": "127.0.0.1", "port": 41451 }

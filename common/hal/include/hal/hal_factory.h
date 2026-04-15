@@ -73,15 +73,23 @@ namespace drone::hal {
 // justification as spdlog/MAVSDK/Zenoh callback contracts.
 #ifdef HAVE_COSYS_AIRSIM
 namespace detail {
+/// Returns the process-global shared Cosys-AirSim RPC client.
+/// NOTE: cfg is only read on first construction — subsequent calls return the
+/// same client regardless of cfg contents. This is intentional: one RPC
+/// connection per process, configured once at startup.
 inline std::shared_ptr<CosysRpcClient>& get_shared_cosys_client(const drone::Config& cfg) {
-    static std::shared_ptr<CosysRpcClient> client;
-    if (!client) {
+    // Thread-safe: C++11 guarantees static local init is thread-safe.
+    // The lambda runs exactly once, even under concurrent first calls.
+    static auto client = [&cfg]() {
         auto host = cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::HOST),
                                          "127.0.0.1");
-        auto port = cfg.get<int>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451);
-        client    = std::make_shared<CosysRpcClient>(host, port);
-        client->connect();
-    }
+        auto port = cfg.get<uint16_t>(std::string(drone::cfg_key::cosys_airsim::PORT), 41451);
+        auto c    = std::make_shared<CosysRpcClient>(host, port);
+        if (!c->connect()) {
+            DRONE_LOG_WARN("[HAL] CosysRpcClient initial connect failed — backends will retry");
+        }
+        return c;
+    }();
     return client;
 }
 }  // namespace detail
