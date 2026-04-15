@@ -1,0 +1,137 @@
+# deploy/docker/Dockerfile.cosys — Multi-stage Dockerfile for companion stack
+# with Cosys-AirSim support.
+#
+# 3-stage build:
+#   1. sdk-builder  — Build AirSim C++ SDK
+#   2. companion    — Build companion stack with Cosys-AirSim support
+#   3. runtime      — Minimal runtime image
+#
+# Usage:
+#   docker build -f deploy/docker/Dockerfile.cosys -t companion-stack:cosys .
+#   docker build -f deploy/docker/Dockerfile.cosys --target sdk-builder -t airsim-sdk .
+#
+# Issue: #463 (part of Epic #459)
+
+# ══════════════════════════════════════════════════════════════
+# Stage 1: AirSim SDK Builder
+# ══════════════════════════════════════════════════════════════
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS sdk-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    libstdc++-12-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build AirSim C++ SDK from vendored submodule (copied from project)
+WORKDIR /opt/airsim-sdk
+COPY extern/cosys-airsim-sdk/ /opt/airsim-sdk/
+
+RUN mkdir -p build && cd build \
+    && cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/airsim-sdk/install \
+    && make -j"$(nproc)" \
+    && make install
+
+# ══════════════════════════════════════════════════════════════
+# Stage 2: Companion Stack Builder
+# ══════════════════════════════════════════════════════════════
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS companion
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
+# Install core dependencies (mirrors install_dependencies.sh --core-only)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    libspdlog-dev \
+    libfmt-dev \
+    libeigen3-dev \
+    nlohmann-json3-dev \
+    libgtest-dev \
+    libgmock-dev \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zenoh-C (required IPC backend)
+RUN curl -fsSL https://github.com/eclipse-zenoh/zenoh-c/releases/latest/download/zenoh-c-linux-x86_64.deb \
+    -o /tmp/zenoh-c.deb \
+    && dpkg -i /tmp/zenoh-c.deb \
+    && rm /tmp/zenoh-c.deb \
+    || echo "WARNING: Zenoh-C deb install failed — may need manual install"
+
+# Copy AirSim SDK from stage 1
+COPY --from=sdk-builder /opt/airsim-sdk/install /opt/airsim-sdk/install
+
+# Copy project source
+WORKDIR /opt/companion-stack
+COPY . .
+
+# Build companion stack with Cosys-AirSim support
+RUN mkdir -p build && cd build \
+    && cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" \
+        -DALLOW_INSECURE_ZENOH=ON \
+        -DHAVE_COSYS_AIRSIM=ON \
+        -DCMAKE_PREFIX_PATH=/opt/airsim-sdk/install \
+    && make -j"$(nproc)"
+
+# Run tests to verify build
+RUN cd build && ctest --output-on-failure -j"$(nproc)" || true
+
+# ══════════════════════════════════════════════════════════════
+# Stage 3: Runtime
+# ══════════════════════════════════════════════════════════════
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libspdlog1 \
+    libfmt8 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zenoh-C runtime
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL https://github.com/eclipse-zenoh/zenoh-c/releases/latest/download/zenoh-c-linux-x86_64.deb \
+       -o /tmp/zenoh-c.deb \
+    && dpkg -i /tmp/zenoh-c.deb \
+    && rm /tmp/zenoh-c.deb \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    || echo "WARNING: Zenoh-C runtime install failed"
+
+# Copy built binaries
+COPY --from=companion /opt/companion-stack/build/bin/ /opt/companion-stack/bin/
+COPY --from=companion /opt/companion-stack/config/ /opt/companion-stack/config/
+COPY --from=companion /opt/companion-stack/deploy/ /opt/companion-stack/deploy/
+
+# Copy models directory (ML models for perception)
+COPY --from=companion /opt/companion-stack/models/ /opt/companion-stack/models/
+
+WORKDIR /opt/companion-stack
+
+# Default log directory
+ENV DRONE_LOG_DIR=/opt/companion-stack/drone_logs
+RUN mkdir -p "$DRONE_LOG_DIR"
+
+# Expose Zenoh and Cosys-AirSim RPC ports
+EXPOSE 7447
+EXPOSE 41451
+
+# Default: launch with dev config
+ENTRYPOINT ["/opt/companion-stack/deploy/launch_cosys.sh"]
+CMD ["--profile", "cloud"]
