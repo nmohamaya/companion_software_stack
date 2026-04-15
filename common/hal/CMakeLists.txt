@@ -31,9 +31,9 @@ if(GAZEBO_FOUND)
 endif()
 
 # ── Optional: Cosys-AirSim backend ────────────────────────
-# NOTE: Currently uses INTERFACE target_sources because the .cpp stubs are
-# empty (ifdef guards only). When real AirSim SDK code is added, migrate to
-# a STATIC library (drone_hal_cosys) to avoid compiling in every consumer.
+# Links against the vendored AirSim SDK (built via ExternalProject in
+# cmake/FindAirSim.cmake). The AirSim::All target bundles AirLib + rpclib +
+# MavLinkCom + Threads.
 if(COSYS_AIRSIM_FOUND)
     target_compile_definitions(drone_hal INTERFACE HAVE_COSYS_AIRSIM)
     target_sources(drone_hal INTERFACE
@@ -42,6 +42,7 @@ if(COSYS_AIRSIM_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_imu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_depth.cpp
     )
+    target_link_libraries(drone_hal INTERFACE AirSim::All)
 endif()
 
 # ── Optional: Depth Anything V2 (OpenCV DNN) ──────────────

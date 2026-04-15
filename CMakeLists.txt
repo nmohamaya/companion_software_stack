@@ -187,14 +187,10 @@ else()
 endif()
 
 # ── Optional: Cosys-AirSim simulation backend ─────────────
-find_package(AirSim QUIET)
-if(AirSim_FOUND)
-    set(COSYS_AIRSIM_FOUND TRUE)
-    message(STATUS "  Cosys-AirSim : ${AirSim_VERSION} — Cosys-AirSim HAL backends available")
-else()
-    set(COSYS_AIRSIM_FOUND FALSE)
-    message(STATUS "  Cosys-AirSim : NOT FOUND — Cosys-AirSim HAL backends disabled")
-endif()
+# Uses ExternalProject_Add for flag isolation (AirSim's CommonSetup.cmake
+# mutates global CXX_FLAGS which would break our -Werror policy).
+# See cmake/FindAirSim.cmake for details.
+include(cmake/FindAirSim.cmake)
 
 # ── ML model presets ───────────────────────────────────────
 include(cmake/ModelPresets.cmake)
