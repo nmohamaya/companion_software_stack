@@ -104,7 +104,8 @@ jobs:
           # Exclude tests that depend on external libraries (Zenoh, MAVSDK, OpenCV YOLO)
           # whose internal threading produces false positives under TSan.
           # MessageBus uses ZenohMessageBus internally — same Zenoh false positives.
-          CTEST_EXCLUDE="Zenoh|Mavlink|Yolo|Liveliness|MessageBus"
+          # TopicResolver creates a ZenohMessageBus for namespaced pub/sub — same issue.
+          CTEST_EXCLUDE="Zenoh|Mavlink|Yolo|Liveliness|MessageBus|TopicResolver"
         fi
         if [ -n "${CTEST_EXCLUDE}" ]; then
           ctest --output-on-failure -j"$(nproc)" -E "${CTEST_EXCLUDE}"
