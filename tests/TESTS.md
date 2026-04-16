@@ -52,7 +52,7 @@
 | `perception` | Kalman tracker, fusion engine (UKF+camera+radar), color contour, YOLOv8 | ~189 |
 | `mission` | Mission FSM, FaultManager, D* Lite, ObstacleAvoider3D, geofence, event bus | ~287 |
 | `comms` | MavlinkSim and GCSLink | ~13 |
-| `hal` | Simulated, Gazebo, MAVLink, and plugin HAL backends | ~129 |
+| `hal` | Simulated, Gazebo, MAVLink, and plugin HAL backends | ~136 |
 | `payload` | GimbalController servo simulation | ~34 |
 | `monitor` | P7 system monitor (CPU/memory/thermal, ISysInfo, process context) | ~64 |
 | `util` | Config, Result, latency tracker, JSON log, correlation, replay dispatch | ~251 |
@@ -128,7 +128,8 @@ bash deploy/build.sh --test-filter watchdog
 | [IPC — Serializer](#ipc--serializer) | 1 | 21 | ISerializer<T> interface, RawSerializer round-trip, wire-format compat, null safety |
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
-| **Total** | **68 C++ + 5 shell** | **1546 + 42 + 250+** | |
+| [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
+| **Total** | **70 C++ + 5 shell** | **1553 + 42 + 250+** | |
 
 ---
 
@@ -261,6 +262,21 @@ network configuration.
 | `HALFactoryTest` | 5 | Factory creates correct backend from `config.hal_backend` string |
 
 **Key files under test:** `hal/hal_factory.h`, `hal/icamera.h`, `hal/iimu_source.h`, `hal/ifc_link.h`, `hal/igcs_link.h`, `hal/igimbal.h`
+
+---
+
+### test_hal_camera_lifetime.cpp — 7 tests
+
+**What it tests:** CapturedFrame owned data lifetime safety (Issue #452).
+Verifies that frame data survives beyond subsequent capture() calls, matches
+expected dimensions, and remains valid after camera close.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `CameraLifetimeTest` | 6 | Frame data survives next capture, size matches w*h*c, invalid frame empty, multiple frames independent, grayscale size, data survives close |
+| `CapturedFrameDefault` | 1 | Default-constructed CapturedFrame has empty data |
+
+**Key files under test:** `hal/icamera.h`, `hal/simulated_camera.h`
 
 ---
 

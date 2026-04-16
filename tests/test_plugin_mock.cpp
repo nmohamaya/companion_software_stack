@@ -15,6 +15,10 @@ namespace {
 
 class MockPluginCamera final : public drone::hal::ICamera {
 public:
+    static constexpr uint32_t kWidth    = 640;
+    static constexpr uint32_t kHeight   = 480;
+    static constexpr uint32_t kChannels = 3;
+
     [[nodiscard]] bool open(uint32_t /*width*/, uint32_t /*height*/, int /*fps*/) override {
         opened_ = true;
         return true;
@@ -24,14 +28,16 @@ public:
 
     [[nodiscard]] drone::hal::CapturedFrame capture() override {
         drone::hal::CapturedFrame frame;
-        frame.width        = 640;
-        frame.height       = 480;
-        frame.channels     = 3;
-        frame.stride       = 640 * 3;
+        frame.width        = kWidth;
+        frame.height       = kHeight;
+        frame.channels     = kChannels;
+        frame.stride       = kWidth * kChannels;
         frame.timestamp_ns = 12345;
         frame.sequence     = seq_++;
-        frame.data         = dummy_data_.data();
         frame.valid        = opened_;
+        if (frame.valid) {
+            frame.data = dummy_data_;  // copy — each valid frame owns its data
+        }
         return frame;
     }
 
@@ -42,7 +48,7 @@ public:
 private:
     bool                 opened_ = false;
     uint64_t             seq_    = 0;
-    std::vector<uint8_t> dummy_data_{std::vector<uint8_t>(640 * 480 * 3, 128)};
+    std::vector<uint8_t> dummy_data_{std::vector<uint8_t>(kWidth * kHeight * kChannels, 128)};
 };
 
 }  // namespace

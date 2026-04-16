@@ -157,7 +157,7 @@ TEST_F(SimulatedCameraTest, CaptureReturnsValidFrame) {
     EXPECT_EQ(frame.height, 240u);
     EXPECT_GT(frame.timestamp_ns, 0u);
     EXPECT_EQ(frame.sequence, 0u);
-    EXPECT_NE(frame.data, nullptr);
+    EXPECT_FALSE(frame.data.empty());
 }
 
 TEST_F(SimulatedCameraTest, SequenceIncrementsEachCapture) {

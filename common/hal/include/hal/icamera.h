@@ -4,19 +4,20 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace drone::hal {
 
 /// Result of a single frame capture.
 struct CapturedFrame {
-    uint64_t       timestamp_ns{0};
-    uint64_t       sequence{0};
-    uint32_t       width{0};
-    uint32_t       height{0};
-    uint32_t       channels{0};  // 1=GRAY, 3=RGB
-    uint32_t       stride{0};
-    const uint8_t* data{nullptr};  // pointer to internal buffer — valid until next capture()
-    bool           valid{false};
+    uint64_t             timestamp_ns{0};
+    uint64_t             sequence{0};
+    uint32_t             width{0};
+    uint32_t             height{0};
+    uint32_t             channels{0};  // 1=GRAY, 3=RGB
+    uint32_t             stride{0};
+    std::vector<uint8_t> data;  // owned pixel data; size == height * stride when valid
+    bool                 valid{false};
 };
 
 /// Abstract camera interface.
@@ -34,7 +35,7 @@ public:
 
     /// Capture one frame. May block (V4L2) or return immediately with the latest
     /// available frame (SimulatedCamera, CosysCamera). Check CapturedFrame::valid.
-    /// The returned CapturedFrame::data pointer is valid until the next call to capture().
+    /// The returned CapturedFrame owns its pixel data — valid for the lifetime of the frame.
     [[nodiscard]] virtual CapturedFrame capture() = 0;
 
     /// Check whether the camera is currently open.

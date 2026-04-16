@@ -117,6 +117,9 @@ add_drone_test(test_system_monitor  test_system_monitor.cpp)
 # ── HAL tests ────────────────────────────────────────────────
 add_drone_test(test_hal             test_hal.cpp)
 
+# ── HAL Camera Lifetime tests (Issue #452) ───────────────────
+add_drone_test(test_hal_camera_lifetime test_hal_camera_lifetime.cpp)
+
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
 

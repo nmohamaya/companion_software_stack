@@ -126,8 +126,7 @@ public:
 
     /// Read the latest frame from the TripleBuffer (lock-free).
     /// SINGLE-CONSUMER: this method must only be called from one thread.
-    /// The returned CapturedFrame::data points into last_frame_.pixels and is
-    /// valid until the next capture() call (matches ICamera contract).
+    /// The returned CapturedFrame owns its pixel data (valid for frame lifetime).
     CapturedFrame capture() override {
         CapturedFrame frame;
         if (!open_.load(std::memory_order_acquire)) return frame;
@@ -155,8 +154,8 @@ public:
     }
 
 private:
-    /// Build a CapturedFrame from FrameData. The returned frame points into
-    /// last_frame_.pixels which is stable until the next capture() call.
+    /// Build a CapturedFrame from FrameData. The returned frame owns a copy of
+    /// the pixel data, so it remains valid for its entire lifetime.
     /// @param new_frame  If true, increment sequence (new data). If false, reuse
     ///                   last sequence (duplicate frame, no new data from producer).
     CapturedFrame build_frame(const FrameData& data, bool new_frame) {
@@ -168,7 +167,7 @@ private:
         frame.height       = data.height;
         frame.channels     = data.channels;
         frame.stride       = data.width * data.channels;
-        frame.data         = data.pixels.data();
+        frame.data         = data.pixels;  // copy from cached FrameData
         frame.valid        = true;
         return frame;
     }
