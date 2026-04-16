@@ -190,8 +190,8 @@ SHM zero-copy, and session management.  Tests are split into *always-compiled*
 | `ZenohMessageBus` | 10 | Bus factory, advertise, subscribe, lazy subscribe |
 | `ZenohTopicMapping` | 6 | Key-expression generation from IPC keys |
 | `ZenohMigration` | 4 | SHM ↔ Zenoh migration compatibility |
-| `ZenohShmProvider` | 6 | SHM buffer allocation, zero-copy semantics |
-| `ZenohShmPublish` | 5 | Zero-copy SHM publish path (>64 KB payloads) |
+| `ZenohShmProvider` | 6 | SHM buffer allocation, zero-copy semantics (requires SHM-enabled zenohc — CI uses custom .deb) |
+| `ZenohShmPublish` | 5 | Zero-copy SHM publish path (>64 KB payloads, requires SHM-enabled zenohc) |
 | `ZenohServiceChannel` | 5 | Zenoh queryable service request/response |
 | `MessageBusFactory` | 4 | Config-driven bus creation (`"shm"` vs `"zenoh"`) |
 
@@ -1247,7 +1247,7 @@ is not available.
 
 | Guard | Tests affected | Dependency |
 |-------|---------------|------------|
-| `HAVE_ZENOH` | `test_zenoh_ipc`, `test_zenoh_liveliness`, `test_zenoh_network` | Zenoh C++ 1.7.2 |
+| `HAVE_ZENOH` | `test_zenoh_ipc`, `test_zenoh_liveliness`, `test_zenoh_network` | Zenoh C++ 1.7.2 (CI uses custom SHM-enabled .deb — all 7 SHM tests run in CI) |
 | `HAVE_GAZEBO` | `test_gazebo_camera`, `test_gazebo_imu`, `test_gazebo_radar` | Gazebo Harmonic + gz-transport |
 | `HAVE_MAVSDK` | `test_mavlink_fc_link` | MAVSDK 2.12.12 |
 | `HAVE_OPENCV` | `test_opencv_yolo_detector` (inference tests) | OpenCV 4.10.0 + YOLOv8 ONNX model ✓ (available at `models/yolov8n.onnx`) |
