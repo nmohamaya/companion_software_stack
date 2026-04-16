@@ -20,6 +20,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -88,10 +89,22 @@ public:
 
     /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
     virtual void set_promotion_paused(bool paused) = 0;
+
+    /// Whether the planner has snapped the current goal to an alternate position.
+    [[nodiscard]] virtual bool has_snapped_goal() const = 0;
+
+    /// Get the snapped world-frame position {x, y, z} if a snap is active.
+    /// Returns std::nullopt when no snap is active (has_snapped_goal() == false).
+    [[nodiscard]] virtual std::optional<std::array<float, 3>> snapped_goal_xyz() const = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
 // GridPlannerBase — shared logic for grid-based planners
+//
+// Thread safety: all methods must be called from the planning
+// loop thread only (P4 is single-threaded). The snap accessors
+// has_snapped_goal() and snapped_goal_xyz() are only safe to
+// call from the same thread that calls plan().
 // ─────────────────────────────────────────────────────────────
 
 class GridPlannerBase : public IGridPlanner {
@@ -126,13 +139,16 @@ public:
     }
 
     /// Whether the planner has snapped the current goal to an alternate position.
-    [[nodiscard]] bool has_snapped_goal() const { return snap_valid_; }
+    [[nodiscard]] bool has_snapped_goal() const override { return snap_valid_; }
 
     /// Get the snapped world-frame position {x, y, z}.
     /// Updated when a replan occurs; remains stable between replan cycles as
-    /// long as the goal is unchanged. Only meaningful when has_snapped_goal()
-    /// returns true. The acceptance radius remains wp.radius.
-    [[nodiscard]] const std::array<float, 3>& snapped_goal_xyz() const { return snapped_xyz_; }
+    /// long as the goal is unchanged. Returns std::nullopt when no snap is
+    /// active. The acceptance radius remains wp.radius.
+    [[nodiscard]] std::optional<std::array<float, 3>> snapped_goal_xyz() const override {
+        if (!snap_valid_) return std::nullopt;
+        return snapped_xyz_;
+    }
 
     /// Get the current obstacle grid (for diagnostics/testing).
     [[nodiscard]] const OccupancyGrid3D& grid() const { return grid_; }
@@ -502,7 +518,17 @@ private:
             }
 
             if (snapped) {
-                snapped_xyz_            = grid_.grid_to_world(goal);
+                snapped_xyz_ = grid_.grid_to_world(goal);
+                // NaN/Inf guard — reject snaps that produce non-finite coordinates.
+                // This can happen if grid_to_world produces degenerate values from
+                // extreme cell indices near grid boundaries.
+                if (!std::isfinite(snapped_xyz_[0]) || !std::isfinite(snapped_xyz_[1]) ||
+                    !std::isfinite(snapped_xyz_[2])) {
+                    snap_valid_ = false;
+                    DRONE_LOG_WARN("[Planner] Snapped position contains NaN/Inf — "
+                                   "rejecting snap, using original goal");
+                    return raw_goal;
+                }
                 snap_valid_             = true;
                 last_snap_static_count_ = current_static;
                 const float snap_dist =

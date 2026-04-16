@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace drone::planner {
 
@@ -343,13 +344,12 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
-            // Cache the GridPlannerBase downcast once per tick — grid_planner never
-            // changes type, so a single cast covers diagnostics and snap access.
-            auto* gpb = dynamic_cast<GridPlannerBase*>(grid_planner);
-
-            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level
+            // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level.
+            // Grid diagnostics require GridPlannerBase downcast (only used here for
+            // logging counters — all functional code uses IGridPlanner interface).
             if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&
                 debug_tick_++ % 10 == 0) {
+                auto*       gpb_diag   = dynamic_cast<GridPlannerBase*>(grid_planner);
                 const float dpx        = static_cast<float>(pose.translation[0]);
                 const float dpy        = static_cast<float>(pose.translation[1]);
                 const float dpz        = static_cast<float>(pose.translation[2]);
@@ -360,10 +360,10 @@ private:
                 float       dist_to_wp = std::sqrt((dpx - wp->x) * (dpx - wp->x) +
                                                    (dpy - wp->y) * (dpy - wp->y) +
                                                    (dpz - wp->z) * (dpz - wp->z));
-                int         occ        = gpb ? static_cast<int>(gpb->grid().occupied_count()) : -1;
-                int         stat       = gpb ? static_cast<int>(gpb->grid().static_count()) : -1;
-                int         prom       = gpb ? gpb->grid().promoted_count() : -1;
-                bool        fb         = grid_planner && grid_planner->using_direct_fallback();
+                int  occ  = gpb_diag ? static_cast<int>(gpb_diag->grid().occupied_count()) : -1;
+                int  stat = gpb_diag ? static_cast<int>(gpb_diag->grid().static_count()) : -1;
+                int  prom = gpb_diag ? gpb_diag->grid().promoted_count() : -1;
+                bool fb   = grid_planner && grid_planner->using_direct_fallback();
                 DRONE_LOG_DEBUG("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
                                 " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
                                 " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
@@ -384,11 +384,16 @@ private:
             // (because it was occupied), check acceptance against the snapped
             // position — otherwise the drone reaches the navigation target but
             // can never satisfy the radius check.  See Issue #394.
-            const std::array<float, 3>* snap_xyz =
-                (gpb && gpb->has_snapped_goal()) ? &gpb->snapped_goal_xyz() : nullptr;
+            // Uses IGridPlanner interface — no dynamic_cast needed (Issue #398).
+            const std::optional<std::array<float, 3>> snap_opt =
+                (grid_planner && grid_planner->has_snapped_goal())
+                    ? grid_planner->snapped_goal_xyz()
+                    : std::nullopt;
+            const std::array<float, 3>* snap_xyz = snap_opt.has_value() ? &snap_opt.value()
+                                                                        : nullptr;
 
             const bool reached  = fsm.waypoint_reached(px, py, pz, *wp, snap_xyz);
-            const bool overshot = fsm.waypoint_overshot(px, py, pz);
+            const bool overshot = fsm.waypoint_overshot(px, py, pz, snap_opt);
             if (reached || overshot) {
                 DRONE_LOG_INFO("[Planner] Waypoint {} {}!", fsm.current_wp_index() + 1,
                                overshot ? "overshot" : "reached");
@@ -411,13 +416,13 @@ private:
                     flight_state_.rtl_start_time = std::chrono::steady_clock::now();
                     flight_state_.nav_was_armed  = true;
                     fsm.on_rtl();
-                } else if (gpb) {
+                } else if (grid_planner) {
                     // Invalidate snap cache on waypoint advance — the snap from
                     // the previous waypoint must not carry over to the next one.
                     // Without this, waypoint_reached() checks the new waypoint
                     // against the old snap position until the next replan cycle
                     // (~1s), causing false "reached" and rapid advancement.
-                    gpb->invalidate_path();
+                    grid_planner->invalidate_path();
                 }
             }
         }
