@@ -5,6 +5,8 @@
 #include "util/ilogger.h"
 
 #include <array>
+#include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -78,8 +80,9 @@ public:
         const float odx = px - wp.x, ody = py - wp.y, odz = pz - wp.z;
         if ((odx * odx + ody * ody + odz * odz) < r_sq) return true;
 
-        // Also check snapped position if provided
-        if (snapped_xyz) {
+        // Also check snapped position if provided and finite
+        if (snapped_xyz && std::isfinite((*snapped_xyz)[0]) && std::isfinite((*snapped_xyz)[1]) &&
+            std::isfinite((*snapped_xyz)[2])) {
             const float sdx = px - (*snapped_xyz)[0];
             const float sdy = py - (*snapped_xyz)[1];
             const float sdz = pz - (*snapped_xyz)[2];
@@ -112,25 +115,41 @@ public:
     /// acceptance_radius of the waypoint — prevents premature advancement when
     /// the drone is far away and merely "ahead" in the dot-product sense.
     /// Returns false for the last waypoint — it always requires acceptance radius.
-    [[nodiscard]] bool waypoint_overshot(float px, float py, float pz) const {
+    /// When snapped_xyz is provided, checks overshoot against BOTH the original
+    /// waypoint and the snapped position (same OR-logic as waypoint_reached).
+    [[nodiscard]] bool waypoint_overshot(
+        float px, float py, float pz,
+        std::optional<std::array<float, 3>> snapped_xyz = std::nullopt) const {
         const Waypoint* wp = current_waypoint();
         if (!wp || current_wp_ == 0) return false;               // No overshoot for first WP
         if (current_wp_ + 1 >= waypoints_.size()) return false;  // Last WP needs acceptance
 
-        // Drone offset from current WP
-        float dx = px - wp->x, dy = py - wp->y, dz = pz - wp->z;
-        float dist_sq = dx * dx + dy * dy + dz * dz;
-
-        // Must be within proximity zone to qualify (configurable via overshoot_proximity_factor)
-        float proximity_r = wp->radius * overshoot_proximity_factor_;
-        if (dist_sq > proximity_r * proximity_r) return false;
-
         // Approach vector: previous_wp → current_wp (direction drone was traveling)
         const auto& prev = waypoints_[current_wp_ - 1];
-        float       ax = wp->x - prev.x, ay = wp->y - prev.y, az = wp->z - prev.z;
+        const float ax = wp->x - prev.x, ay = wp->y - prev.y, az = wp->z - prev.z;
+        const float proximity_r = wp->radius * overshoot_proximity_factor_;
+        const float prox_sq     = proximity_r * proximity_r;
 
-        // Positive dot product means drone is past WP along the approach direction
-        return (dx * ax + dy * ay + dz * az) > 0.0f;
+        // Check overshoot relative to original waypoint position
+        {
+            const float dx = px - wp->x, dy = py - wp->y, dz = pz - wp->z;
+            const float dist_sq = dx * dx + dy * dy + dz * dz;
+            if (dist_sq <= prox_sq && (dx * ax + dy * ay + dz * az) > 0.0f) return true;
+        }
+
+        // Check overshoot relative to snapped position if provided and finite
+        if (snapped_xyz && std::isfinite((*snapped_xyz)[0]) && std::isfinite((*snapped_xyz)[1]) &&
+            std::isfinite((*snapped_xyz)[2])) {
+            const float sdx     = px - (*snapped_xyz)[0];
+            const float sdy     = py - (*snapped_xyz)[1];
+            const float sdz     = pz - (*snapped_xyz)[2];
+            const float dist_sq = sdx * sdx + sdy * sdy + sdz * sdz;
+            // Use the same approach vector (prev→wp) since the drone's travel
+            // direction is defined by the mission plan, not the snap offset.
+            if (dist_sq <= prox_sq && (sdx * ax + sdy * ay + sdz * az) > 0.0f) return true;
+        }
+
+        return false;
     }
 
     [[nodiscard]] bool advance_waypoint() {
