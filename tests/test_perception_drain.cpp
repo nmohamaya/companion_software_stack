@@ -142,9 +142,13 @@ TEST(PerceptionDrainTest, DrainTimeoutPreventsHanging) {
     bool timed_out = false;
 
     // Simulated tracker with drain timeout
+    // The feeder continuously writes, so the tracker should never see "no data"
+    // during drain — it should only exit via the timeout.
     std::thread t_tracker([&] {
-        bool tracker_draining    = false;
-        auto tracker_drain_start = std::chrono::steady_clock::now();
+        bool          tracker_draining    = false;
+        int           consecutive_no_data = 0;
+        constexpr int kDrainEmpty         = 5;  // consecutive empty reads to consider drained
+        auto          tracker_drain_start = std::chrono::steady_clock::now();
 
         while (shutdown_phase.load(std::memory_order_acquire) < 2) {
             if (!tracker_draining && shutdown_phase.load(std::memory_order_acquire) >= 1) {
@@ -154,7 +158,14 @@ TEST(PerceptionDrainTest, DrainTimeoutPreventsHanging) {
 
             auto val = buffer.read();
             if (!val.has_value() && tracker_draining) {
-                break;
+                ++consecutive_no_data;
+                if (consecutive_no_data >= kDrainEmpty) {
+                    break;  // upstream genuinely drained
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            } else if (val.has_value()) {
+                consecutive_no_data = 0;
             }
 
             if (tracker_draining) {

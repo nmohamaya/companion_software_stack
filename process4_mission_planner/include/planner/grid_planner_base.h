@@ -170,11 +170,16 @@ public:
         float py = static_cast<float>(pose.translation[1]);
         float pz = static_cast<float>(pose.translation[2]);
 
-        // ── Re-plan on interval or if no path ───────────────
-        auto now         = std::chrono::steady_clock::now();
-        bool need_replan = cached_path_.empty() || path_index_ >= cached_path_.size() ||
-                           std::chrono::duration<float>(now - last_plan_time_).count() >
-                               config_.replan_interval_s;
+        // ── Target change detection — must force replan + snap invalidation
+        // even within the replan interval, otherwise we navigate to a stale goal.
+        const bool target_changed = (target.x != last_target_x_ || target.y != last_target_y_ ||
+                                     target.z != last_target_z_);
+
+        // ── Re-plan on interval, missing path, or target change ─────
+        auto now = std::chrono::steady_clock::now();
+        bool need_replan =
+            target_changed || cached_path_.empty() || path_index_ >= cached_path_.size() ||
+            std::chrono::duration<float>(now - last_plan_time_).count() > config_.replan_interval_s;
 
         if (need_replan) {
             GridCell start = grid_.world_to_grid(px, py, pz);
