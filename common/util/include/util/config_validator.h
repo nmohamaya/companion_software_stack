@@ -293,12 +293,12 @@ inline ConfigSchema video_capture_schema() {
     s.required<int>(cfg_key::video_capture::mission_cam::HEIGHT).range(1, 4320);
     s.required<int>(cfg_key::video_capture::mission_cam::FPS).range(1, 240);
     s.optional<std::string>(cfg_key::video_capture::mission_cam::BACKEND)
-        .one_of({"simulated", "v4l2", "libargus", "gazebo"});
+        .one_of({"simulated", "v4l2", "libargus", "gazebo", "cosys_airsim"});
     s.optional<int>(cfg_key::video_capture::stereo_cam::WIDTH).range(1, 7680);
     s.optional<int>(cfg_key::video_capture::stereo_cam::HEIGHT).range(1, 4320);
     s.optional<int>(cfg_key::video_capture::stereo_cam::FPS).range(1, 240);
     s.optional<std::string>(cfg_key::video_capture::stereo_cam::BACKEND)
-        .one_of({"simulated", "v4l2", "libargus", "gazebo"});
+        .one_of({"simulated", "v4l2", "libargus", "gazebo", "cosys_airsim"});
     return s;
 }
 

@@ -115,10 +115,15 @@ endif()
 
 # Forward compiler and toolchain settings so cross-compilation and
 # non-default compilers work consistently with the external build.
-set(_AIRSIM_COMPILER_ARGS
-    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-    -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-)
+# If CMAKE_C_COMPILER or CMAKE_CXX_COMPILER are not set, we allow CMake
+# to auto-detect them in the external build (don't pass empty strings).
+set(_AIRSIM_COMPILER_ARGS)
+if(CMAKE_C_COMPILER)
+    list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})
+endif()
+if(CMAKE_CXX_COMPILER)
+    list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER})
+endif()
 if(CMAKE_TOOLCHAIN_FILE)
     list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
 endif()
