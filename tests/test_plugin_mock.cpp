@@ -30,7 +30,7 @@ public:
         frame.stride       = 640 * 3;
         frame.timestamp_ns = 12345;
         frame.sequence     = seq_++;
-        frame.data         = dummy_data_.data();
+        frame.data         = dummy_data_;  // copy — each frame owns its data
         frame.valid        = opened_;
         return frame;
     }

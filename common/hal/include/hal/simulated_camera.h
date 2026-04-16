@@ -59,7 +59,7 @@ public:
         f.height   = height_;
         f.channels = channels_;
         f.stride   = stride_;
-        f.data     = buffer_.data();
+        f.data     = buffer_;  // copy — simulated backend reuses buffer_ as working canvas
         f.valid    = true;
 
         return f;

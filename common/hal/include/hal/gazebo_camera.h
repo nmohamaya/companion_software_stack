@@ -126,8 +126,11 @@ public:
         frame.height       = last_height_;
         frame.channels     = last_channels_;
         frame.stride       = last_width_ * last_channels_;
-        frame.data         = front_buffer_.data();
-        frame.valid        = true;
+        // Copy only the valid pixel region (front_buffer_ may be larger than the frame)
+        const auto pixel_bytes = static_cast<size_t>(last_width_) * last_height_ * last_channels_;
+        frame.data.assign(front_buffer_.begin(),
+                          front_buffer_.begin() + static_cast<ptrdiff_t>(pixel_bytes));
+        frame.valid = true;
 
         return frame;
     }
