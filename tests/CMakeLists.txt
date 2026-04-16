@@ -391,6 +391,9 @@ target_compile_definitions(test_integration_fault_cascade PRIVATE
     PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
 )
 
+# ── Perception Pipeline Drain tests (Issue #446) ───────────
+add_drone_test(test_perception_drain test_perception_drain.cpp)
+
 # ── Model Presets + Config Overlay tests (Issue #433) ───────
 add_drone_test(test_model_presets    test_model_presets.cpp)
 target_compile_definitions(test_model_presets PRIVATE

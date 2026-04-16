@@ -136,6 +136,9 @@ inline constexpr const char* HEIGHT_PRIORS_TREE     = "perception.fusion.height_
 inline constexpr const char* BBOX_HEIGHT_NOISE_PX   = "perception.fusion.bbox_height_noise_px";
 }  // namespace fusion
 
+// Shutdown drain behaviour (Issue #446)
+inline constexpr const char* DRAIN_TIMEOUT_MS = "perception.drain_timeout_ms";
+
 }  // namespace perception
 
 // ═══════════════════════════════════════════════════════════
