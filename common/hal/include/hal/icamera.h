@@ -16,7 +16,7 @@ struct CapturedFrame {
     uint32_t             height{0};
     uint32_t             channels{0};  // 1=GRAY, 3=RGB
     uint32_t             stride{0};
-    std::vector<uint8_t> data;  // owned pixel data — valid for the lifetime of this frame
+    std::vector<uint8_t> data;  // owned pixel data; size == height * stride when valid
     bool                 valid{false};
 };
 

@@ -118,18 +118,14 @@ TEST_F(CameraLifetimeTest, FrameDataSurvivesAfterClose) {
     ASSERT_TRUE(frame.valid);
     ASSERT_FALSE(frame.data.empty());
 
-    const size_t data_size = frame.data.size();
+    // Save snapshot before close for content integrity check
+    const std::vector<uint8_t> snapshot(frame.data.begin(), frame.data.end());
 
     // Close the camera — frame data must remain valid (owned by frame)
     cam_.close();
 
-    EXPECT_EQ(frame.data.size(), data_size);
-    // Verify we can still read the data without crashing
-    uint8_t sum = 0;
-    for (uint8_t byte : frame.data) {
-        sum ^= byte;
-    }
-    (void)sum;  // just verifying access doesn't crash
+    EXPECT_EQ(frame.data.size(), snapshot.size());
+    EXPECT_EQ(frame.data, snapshot);
 }
 
 }  // namespace

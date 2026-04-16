@@ -64,15 +64,15 @@ static void mission_cam_thread(drone::hal::ICamera&                            c
         ipc_frame.channels        = frame.channels;
         ipc_frame.stride          = frame.stride;
 
-        // Copy pixel data into IPC frame
-        size_t copy_size = std::min(static_cast<size_t>(frame.height) * frame.stride,
-                                    sizeof(ipc_frame.pixel_data));
+        // Copy pixel data into IPC frame — clamp to both IPC buffer and actual data size
+        size_t copy_size = std::min({static_cast<size_t>(frame.height) * frame.stride,
+                                     sizeof(ipc_frame.pixel_data), frame.data.size()});
         if (!frame.data.empty()) {
             std::copy(frame.data.data(), frame.data.data() + copy_size, ipc_frame.pixel_data);
         } else {
             ++null_data_count;
             ++drop_count;
-            diag.add_error("Camera", "Frame marked valid but data is empty (null #" +
+            diag.add_error("Camera", "Frame marked valid but data is empty (empty #" +
                                          std::to_string(null_data_count) + ")");
             if (null_data_count == 1 || null_data_count % 100 == 0) {
                 diag.log_summary("MissionCam");
@@ -159,12 +159,13 @@ static void stereo_cam_thread(drone::hal::ICamera& left_cam, drone::hal::ICamera
         ipc_frame.width           = left_frame.width;
         ipc_frame.height          = left_frame.height;
 
-        // Copy left and right data using height * stride for correct padding
-        size_t copy_size_left = std::min(static_cast<size_t>(left_frame.height) * left_frame.stride,
-                                         sizeof(ipc_frame.left_data));
+        // Copy left and right data — clamp to IPC buffer and actual data size
+        size_t copy_size_left =
+            std::min({static_cast<size_t>(left_frame.height) * left_frame.stride,
+                      sizeof(ipc_frame.left_data), left_frame.data.size()});
         size_t copy_size_right =
-            std::min(static_cast<size_t>(right_frame.height) * right_frame.stride,
-                     sizeof(ipc_frame.right_data));
+            std::min({static_cast<size_t>(right_frame.height) * right_frame.stride,
+                      sizeof(ipc_frame.right_data), right_frame.data.size()});
 
         // Treat empty data as a dropped pair — don't publish corrupted
         // frames into SLAM.
