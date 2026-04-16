@@ -18,6 +18,9 @@
 FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS builder
 
 ARG MODEL_PRESET=edge
+# Override at build time: --build-arg ALLOW_INSECURE_ZENOH=ON (dev/testing only).
+# Default OFF for production — requires TLS certificates for Zenoh transport.
+ARG ALLOW_INSECURE_ZENOH=OFF
 ARG DEBIAN_FRONTEND=noninteractive
 
 LABEL stage="builder"
@@ -98,7 +101,7 @@ COPY . /app/
 RUN mkdir -p build && cd build && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
-        -DALLOW_INSECURE_ZENOH=ON \
+        -DALLOW_INSECURE_ZENOH=${ALLOW_INSECURE_ZENOH} \
         -DMODEL_PRESET="${MODEL_PRESET}" \
         -DCMAKE_CXX_FLAGS="-Werror -Wall -Wextra" && \
     make -j$(nproc)

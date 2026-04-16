@@ -176,7 +176,7 @@ TEST(TripleBufferTest, HighContentionStress) {
         }
         // Write continuously until stop is signalled
         uint64_t i = 0;
-        while (!stop.load(std::memory_order_relaxed)) {
+        while (!stop.load(std::memory_order_acquire)) {
             buf.write(++i);
             // Yield occasionally to let consumer run on single-core CI
             if ((i & 0xFF) == 0) std::this_thread::yield();
@@ -189,7 +189,7 @@ TEST(TripleBufferTest, HighContentionStress) {
             std::this_thread::yield();
         }
         uint64_t prev = 0;
-        while (!stop.load(std::memory_order_relaxed)) {
+        while (!stop.load(std::memory_order_acquire)) {
             auto v = buf.read();
             if (v.has_value()) {
                 // Monotonically increasing — no corruption

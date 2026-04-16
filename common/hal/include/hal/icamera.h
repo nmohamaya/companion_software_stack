@@ -32,7 +32,8 @@ public:
     /// Close the camera and release resources.
     virtual void close() = 0;
 
-    /// Capture one frame. Blocks until a frame is ready (or timeout).
+    /// Capture one frame. May block (V4L2) or return immediately with the latest
+    /// available frame (SimulatedCamera, CosysCamera). Check CapturedFrame::valid.
     /// The returned CapturedFrame::data pointer is valid until the next call to capture().
     [[nodiscard]] virtual CapturedFrame capture() = 0;
 

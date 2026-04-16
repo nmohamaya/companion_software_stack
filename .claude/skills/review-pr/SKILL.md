@@ -38,6 +38,30 @@ Display: PR title, state, base branch, files changed count, CI status.
 
 If the PR is merged or closed, warn the user and ask whether to proceed.
 
+### Step 1.5: Checkout PR Branch in Worktree [SEQUENTIAL]
+
+Review agents need to read the actual PR branch files, not the current working directory (which may be on `main` or a different branch). Create a temporary git worktree for the PR branch:
+
+```bash
+# Fetch the PR branch
+git fetch origin <headRefName>
+
+# Create a worktree INSIDE the project directory (not /tmp)
+# Agents have restricted file access — paths outside the project tree are denied.
+PR_WORKTREE="<project_root>/.pr-review-<pr_number>"
+git worktree remove "$PR_WORKTREE" --force 2>/dev/null || true
+git worktree add "$PR_WORKTREE" "origin/<headRefName>" --detach
+
+# Verify the worktree has the PR files
+ls "$PR_WORKTREE"
+```
+
+Store the `PR_WORKTREE` path — all agent prompts will reference it.
+
+**IMPORTANT:** The worktree MUST be inside the project directory (e.g., `.pr-review-472/`), not under `/tmp/`. Review agents have sandboxed file access restricted to the project tree — they cannot read files under `/tmp/` or other external paths. The `.pr-review-*` prefix keeps it hidden and gitignored.
+
+**Why worktree instead of passing the diff?** Passing the full diff inflates agent prompts by thousands of tokens, exhausting context on large PRs. A worktree gives agents direct file access via `Read` with no Bash requirement — they just read from `$PR_WORKTREE/path/to/file` instead of the working directory path. This is cheaper, more accurate (agents can navigate includes and cross-reference), and works for any PR size.
+
 ### Step 2: Analyze Diff for Review Routing
 
 Examine the diff to determine which Pass 1 agents to launch:
@@ -79,20 +103,33 @@ Spawn Pass 1 agents in **parallel** using `subagent_type` to reference each cust
 Agent(
   description: "Review PR #<N> — memory safety",
   subagent_type: "review-memory-safety",   // loads .claude/agents/review-memory-safety.md
-  prompt: "Review this PR diff for memory safety issues.\n\n<PR diff or summary>\n\nReport findings with severity (P1/P2/P3) and file:line references. Cap output to 200 words if clean."
+  prompt: "Review PR #<N> for memory safety issues.
+
+IMPORTANT: The PR branch files are checked out at: <PR_WORKTREE>
+Read files from that path (e.g., <PR_WORKTREE>/common/hal/include/hal/foo.h), NOT from the main
+working directory. The working directory may be on a different branch.
+
+Key files changed in this PR:
+<list of changed files from Step 1>
+
+<Brief summary of what the PR does — 2-3 sentences from PR body>
+
+Report findings with severity (P1/P2/P3) and file:line references. Cap output to 200 words if clean."
 )
 Agent(
   description: "Review PR #<N> — security",
   subagent_type: "review-security",
-  prompt: "..."
+  prompt: "... (same PR_WORKTREE instructions) ..."
 )
 Agent(
   description: "Review PR #<N> — unit tests",
   subagent_type: "test-unit",
-  prompt: "..."
+  prompt: "... (same PR_WORKTREE instructions) ..."
 )
 // Add conditional agents (review-concurrency, review-fault-recovery, test-scenario) if triggered
 ```
+
+**Critical:** Every agent prompt MUST include the `PR_WORKTREE` path and explicit instructions to read files from there. Agents that read from the working directory will review stale code from whatever branch is currently checked out.
 
 Wait for all Pass 1 agents to complete. Collect findings.
 
@@ -100,36 +137,59 @@ Wait for all Pass 1 agents to complete. Collect findings.
 
 Skip if `--pass1-only` was specified.
 
-Spawn Pass 2 agents in **parallel** using `subagent_type`. Provide Pass 1 findings as context in the prompt:
+Spawn Pass 2 agents in **parallel** using `subagent_type`. Provide Pass 1 findings as context AND the `PR_WORKTREE` path:
 
 ```
 Agent(
   description: "Review PR #<N> — test quality",
   subagent_type: "review-test-quality",    // loads .claude/agents/review-test-quality.md
-  prompt: "Review test quality.\n\nPass 1 findings:\n<merged results>\n\nPR diff:\n<diff>\n\nCap output to 200 words if clean."
+  prompt: "Review test quality for PR #<N>.
+
+IMPORTANT: The PR branch files are checked out at: <PR_WORKTREE>
+Read files from that path, NOT from the main working directory.
+
+Key files changed: <list>
+
+Pass 1 findings (for context):
+<merged Pass 1 results — summarized to ~200 words max>
+
+Cap output to 200 words if clean."
 )
 Agent(
   description: "Review PR #<N> — API contracts",
   subagent_type: "review-api-contract",
-  prompt: "..."
+  prompt: "... (same PR_WORKTREE instructions + Pass 1 context) ..."
 )
 Agent(
   description: "Review PR #<N> — code quality",
   subagent_type: "review-code-quality",
-  prompt: "..."
+  prompt: "... (same PR_WORKTREE instructions + Pass 1 context) ..."
 )
 Agent(
   description: "Review PR #<N> — performance",
   subagent_type: "review-performance",
-  prompt: "..."
+  prompt: "... (same PR_WORKTREE instructions + Pass 1 context) ..."
 )
 ```
 
+**Critical:** Same as Pass 1 — every agent prompt must include the `PR_WORKTREE` path.
+
 Wait for all Pass 2 agents to complete. Collect findings.
+
+### Step 4.5: Check Copilot/Bot Review Comments
+
+Before synthesizing, check for existing review comments from Copilot or other bots:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/<pr_number>/comments --jq '.[] | select(.user.type == "Bot") | {user: .user.login, body: .body, path: .path, line: .line}' | head -50
+gh api repos/{owner}/{repo}/pulls/<pr_number>/reviews --jq '.[] | select(.user.type == "Bot") | {user: .user.login, state: .state, body: .body}'
+```
+
+Copilot comments overlap ~60% with our agents. Focus on the unique edge cases they catch that our agents might miss. Include any non-duplicate Copilot findings in the synthesis with `[Copilot]` attribution.
 
 ### Step 5: Synthesize Findings
 
-Merge findings from both passes. As tech-lead, synthesize:
+Merge findings from both passes AND Copilot/bot comments. As tech-lead, synthesize:
 
 1. **Deduplicate** — multiple agents may flag the same issue
 2. **Prioritize** — rank by severity (P1 > P2 > P3)
@@ -181,5 +241,19 @@ If posting, format the comment with:
 - Severity-tagged findings with file:line references
 - Collapsible sections for P3 issues (use `<details>` tags)
 - Agent attribution for each finding
+
+### Step 7: Cleanup
+
+Remove the PR branch worktree created in Step 1.5:
+
+```bash
+git worktree remove "$PR_WORKTREE" --force 2>/dev/null || true
+```
+
+Do this after posting (or after the user chooses "skip"). Don't leave stale worktrees.
+
+**IMPORTANT:** The worktree MUST always be inside the project workspace directory (e.g., `<project_root>/.pr-review-<N>`). Never use `/tmp/`, `~/.claude/`, or any path outside the project root. Agents are sandboxed to the project directory and cannot read external paths.
+
+---
 
 If the user provided arguments, use them as context: $ARGUMENTS

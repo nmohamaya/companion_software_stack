@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -89,22 +90,23 @@ public:
                 "CosysDepthBackend: invalid channel count (0)");
         }
 
-        // Use with_client() to prevent TOCTOU race on disconnect
-        using namespace msr::airlib;
-        std::vector<ImageCaptureBase::ImageResponse> responses;
-        bool got_data = client_->with_client([&](auto& rpc) {
-            std::vector<ImageCaptureBase::ImageRequest> requests = {ImageCaptureBase::ImageRequest(
-                camera_name_, ImageCaptureBase::ImageType::DepthPerspective,
-                /* pixels_as_float */ true, /* compress */ false)};
-            responses = rpc.simGetImages(requests, vehicle_name_);
-        });
-
-        if (!got_data) {
-            return drone::util::Result<DepthMap, std::string>::err(
-                "CosysDepthBackend: RPC client not connected");
-        }
-
         try {
+            // Use with_client() to prevent TOCTOU race on disconnect.
+            // Must be inside try/catch — simGetImages() can throw on RPC failure.
+            using namespace msr::airlib;
+            std::vector<ImageCaptureBase::ImageResponse> responses;
+            bool got_data = client_->with_client([&](auto& rpc) {
+                std::vector<ImageCaptureBase::ImageRequest> requests = {
+                    ImageCaptureBase::ImageRequest(
+                        camera_name_, ImageCaptureBase::ImageType::DepthPerspective,
+                        /* pixels_as_float */ true, /* compress */ false)};
+                responses = rpc.simGetImages(requests, vehicle_name_);
+            });
+
+            if (!got_data) {
+                return drone::util::Result<DepthMap, std::string>::err(
+                    "CosysDepthBackend: RPC client not connected");
+            }
             if (responses.empty()) {
                 return drone::util::Result<DepthMap, std::string>::err(
                     "CosysDepthBackend: simGetImages returned empty response");
@@ -137,16 +139,24 @@ public:
             std::copy(resp.image_data_float.begin(),
                       resp.image_data_float.begin() + static_cast<ptrdiff_t>(total_pixels),
                       depth_map.data.begin());
+
+            // Sanitise depth values: NaN/Inf from rendering artifacts → 0 (invalid)
+            for (auto& d : depth_map.data) {
+                if (!std::isfinite(d) || d < 0.0f) {
+                    d = 0.0f;
+                }
+            }
+
             depth_map.scale = 1.0f;  // AirSim returns metric depth in metres
 
             // Ground truth from simulator — high confidence but not perfect
             // due to rendering artifacts and floating-point precision
             depth_map.confidence = 0.95f;
 
-            depth_map.timestamp_ns =
-                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                          std::chrono::steady_clock::now().time_since_epoch())
-                                          .count());
+            const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+            depth_map.timestamp_ns = static_cast<uint64_t>(std::max(decltype(now_ns){0}, now_ns));
 
             // Record source frame dimensions for bbox-to-depth coordinate mapping
             depth_map.source_width  = width;
