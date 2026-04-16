@@ -94,10 +94,10 @@ public:
             return false;
         }
 
-        width_    = width;
-        height_   = height;
-        fps_      = fps;
-        sequence_ = 0;
+        width_  = width;
+        height_ = height;
+        fps_    = fps;
+        sequence_.store(0, std::memory_order_relaxed);
 
         open_.store(true, std::memory_order_release);
 
@@ -162,7 +162,8 @@ private:
     CapturedFrame build_frame(const FrameData& data, bool new_frame) {
         CapturedFrame frame;
         frame.timestamp_ns = data.timestamp_ns;
-        frame.sequence     = new_frame ? sequence_++ : sequence_;
+        frame.sequence     = new_frame ? sequence_.fetch_add(1, std::memory_order_relaxed)
+                                       : sequence_.load(std::memory_order_relaxed);
         frame.width        = data.width;
         frame.height       = data.height;
         frame.channels     = data.channels;
@@ -185,17 +186,16 @@ private:
 
         constexpr uint32_t kRGBChannels = 3;
 
+        // Hoist request vector outside the loop — same request every frame
+        std::vector<ImageCaptureBase::ImageRequest> requests = {
+            ImageCaptureBase::ImageRequest(camera_name_, ImageCaptureBase::ImageType::Scene,
+                                           /* pixels_as_float */ false,
+                                           /* compress */ false)};
+
         while (open_.load(std::memory_order_acquire)) {
             try {
                 // Use with_client() to prevent TOCTOU race on disconnect
                 bool got_frame = client_->with_client([&](auto& rpc) {
-                    // Request uncompressed RGB Scene image from AirSim
-                    std::vector<ImageCaptureBase::ImageRequest> requests = {
-                        ImageCaptureBase::ImageRequest(camera_name_,
-                                                       ImageCaptureBase::ImageType::Scene,
-                                                       /* pixels_as_float */ false,
-                                                       /* compress */ false)};
-
                     auto responses = rpc.simGetImages(requests, vehicle_name_);
 
                     if (responses.empty() || responses[0].image_data_uint8.empty()) {
@@ -227,13 +227,13 @@ private:
                     fd.pixels.assign(resp.image_data_uint8.begin(),
                                      resp.image_data_uint8.begin() +
                                          static_cast<ptrdiff_t>(expected));
-                    fd.width        = w;
-                    fd.height       = h;
-                    fd.channels     = kRGBChannels;
-                    fd.timestamp_ns = static_cast<uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch())
-                            .count());
+                    fd.width         = w;
+                    fd.height        = h;
+                    fd.channels      = kRGBChannels;
+                    const auto ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count();
+                    fd.timestamp_ns = static_cast<uint64_t>(std::max(decltype(ts_ns){0}, ts_ns));
 
                     frame_buffer_.write(std::move(fd));
                 });
@@ -264,10 +264,11 @@ private:
     std::mutex        state_mtx_;    ///< Guards open/close transitions only
     std::atomic<bool> open_{false};  ///< Atomic for lock-free checks in hot path
 
-    uint32_t width_{0};
-    uint32_t height_{0};
-    int      fps_{0};
-    uint64_t sequence_{0};
+    uint32_t              width_{0};
+    uint32_t              height_{0};
+    int                   fps_{0};
+    std::atomic<uint64_t> sequence_{
+        0};  ///< Frame sequence (atomic: written by capture(), read after open())
 
     // ── Lock-free frame handoff (hot path) ─────────────────
     // Producer (retrieval thread) writes via frame_buffer_.write()

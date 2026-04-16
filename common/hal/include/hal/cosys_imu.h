@@ -96,6 +96,7 @@ public:
     /// @param rate_hz  Polling rate; actual data rate depends on AirSim sensor config.
     /// @return true on successful startup
     bool init(int rate_hz) override {
+        std::lock_guard<std::mutex> lock(reading_mutex_);
         if (active_.load(std::memory_order_acquire)) {
             DRONE_LOG_WARN("[CosysIMU] Already initialised on imu='{}'", imu_name_);
             return false;
@@ -106,7 +107,11 @@ public:
             return false;
         }
 
-        rate_hz_ = rate_hz;
+        // Clamp rate_hz to [1, 1000] — non-positive creates hot-loop
+        rate_hz_ = std::clamp(rate_hz, 1, 1000);
+        if (rate_hz != rate_hz_) {
+            DRONE_LOG_WARN("[CosysIMU] rate_hz clamped from {} to {}", rate_hz, rate_hz_);
+        }
         active_.store(true, std::memory_order_release);
 
         // Start polling thread at the requested rate

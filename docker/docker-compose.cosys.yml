@@ -63,8 +63,8 @@ services:
       - ../config/cosys_settings.json:/home/airsim/Documents/AirSim/settings.json:ro
       - airsim-data:/home/airsim/data
     ports:
-      - "41451:41451"    # AirSim RPC API
-      - "14540:14540"    # PX4 SITL MAVLink
+      - "127.0.0.1:41451:41451"    # AirSim RPC API (localhost only)
+      - "127.0.0.1:14540:14540"    # PX4 SITL MAVLink (localhost only)
     healthcheck:
       # AirSim uses msgpack RPC (not HTTP) — check TCP port reachability
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/41451' || exit 1"]

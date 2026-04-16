@@ -29,6 +29,7 @@
 #include <cmath>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <string>
 #include <thread>
 
@@ -39,12 +40,13 @@ STRICT_MODE_ON
 
 namespace drone::hal {
 
-/// CosysRadarBackend — retrieves radar detections from Cosys-AirSim
-/// via the getRadarData() RPC endpoint.
+/// CosysRadarBackend — emulates radar using LiDAR point cloud data
+/// from Cosys-AirSim via the getLidarData() RPC endpoint.
 ///
 /// The polling thread runs at a fixed 20 Hz (kPollInterval = 50 ms)
-/// and converts AirSim's native radar data to our RadarDetectionList
-/// wire format. Ground returns with elevation < -30 degrees are filtered.
+/// and converts LiDAR point cloud (flat x,y,z triples) to our
+/// RadarDetectionList wire format. Ground returns with steep downward
+/// elevation (> +30° in NED) are filtered.
 ///
 /// AirSim uses NED body frame which maps directly to our FRD convention:
 /// X=forward, Y=right, Z=down — no coordinate negation needed.
@@ -81,6 +83,7 @@ public:
     CosysRadarBackend& operator=(CosysRadarBackend&&)      = delete;
 
     bool init() override {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (active_.load(std::memory_order_acquire)) {
             DRONE_LOG_WARN("[CosysRadar] Already initialised");
             return false;
@@ -137,10 +140,11 @@ private:
     /// Radar polling loop — runs at 20 Hz, converts AirSim radar data
     /// to our RadarDetectionList format with ground filtering.
     void poll_loop() {
-        constexpr auto  kPollInterval = std::chrono::milliseconds(50);  // 20 Hz
-        constexpr float kPiF          = 3.14159265358979f;
-        // Ground filter: skip returns looking more than 30 degrees below horizontal.
-        constexpr float kGroundElevationThreshold = -30.0f * kPiF / 180.0f;
+        constexpr auto kPollInterval = std::chrono::milliseconds(50);  // 20 Hz
+        // Ground filter: skip returns with steep downward elevation in NED frame.
+        // In NED (Z=down), ground points below the drone have positive elevation
+        // from asin(z/range). Threshold +30° filters steep ground returns.
+        constexpr float kGroundElevationThreshold = 30.0f * std::numbers::pi_v<float> / 180.0f;
         // Simplified radar equation: SNR = ref_snr - path_loss * log10(range)
         constexpr float kReferenceSNRdB    = 30.0f;  // SNR at 1m range
         constexpr float kSNRPathLossFactor = 20.0f;  // Free-space path loss exponent
@@ -161,9 +165,10 @@ private:
                 }
 
                 drone::ipc::RadarDetectionList list{};
-                const auto now    = std::chrono::steady_clock::now().time_since_epoch();
-                list.timestamp_ns = static_cast<uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+                const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        std::chrono::steady_clock::now().time_since_epoch())
+                                        .count();
+                list.timestamp_ns = static_cast<uint64_t>(std::max(decltype(now_ns){0}, now_ns));
 
                 // Convert each AirSim radar point to our RadarDetection format.
                 // AirSim RadarData contains point_cloud (x,y,z triples) and
@@ -173,19 +178,23 @@ private:
 
                     // AirSim radar point_cloud entries are (x, y, z) in NED body frame.
                     // Convert Cartesian to spherical: range, azimuth, elevation.
-                    const float x     = point.x;
-                    const float y     = point.y;
-                    const float z     = point.z;
+                    const float x = point.x;
+                    const float y = point.y;
+                    const float z = point.z;
+
+                    // Guard against NaN/Inf in radar point cloud data
+                    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
                     const float range = std::sqrt(x * x + y * y + z * z);
 
-                    // Skip zero-range or out-of-range returns
+                    // Skip zero-range or out-of-range returns (before trig ops)
                     if (range < 0.1f || range > max_range_m_) continue;
 
                     const float azimuth   = std::atan2(y, x);
                     const float elevation = std::asin(std::clamp(z / range, -1.0f, 1.0f));
 
-                    // Ground filter: skip returns with steep downward elevation
-                    if (elevation < kGroundElevationThreshold) continue;
+                    // Ground filter: in NED (Z=down), ground below has positive
+                    // elevation. Skip returns with steep downward angle.
+                    if (elevation > kGroundElevationThreshold) continue;
 
                     drone::ipc::RadarDetection det{};
                     det.timestamp_ns        = list.timestamp_ns;
@@ -231,7 +240,7 @@ private:
     std::shared_ptr<CosysRpcClient> client_;
 
     // ── Config ────────────────────────────────────────────────
-    std::string radar_name_;    ///< AirSim radar sensor name
+    std::string radar_name_;    ///< AirSim LiDAR sensor name (used as radar proxy)
     std::string vehicle_name_;  ///< AirSim vehicle name
     float       max_range_m_;   ///< Maximum detection range
 
@@ -244,7 +253,7 @@ private:
     drone::ipc::RadarDetectionList cached_detections_{};
 
     // ── Polling thread ────────────────────────────────────────
-    std::thread poll_thread_;  ///< Polls getRadarData() at 20 Hz
+    std::thread poll_thread_;  ///< Polls getLidarData() at 20 Hz (LiDAR as radar proxy)
 };
 
 }  // namespace drone::hal

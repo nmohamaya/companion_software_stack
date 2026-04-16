@@ -93,6 +93,9 @@ graphify-out/graph.json
 # claude script
 export_claude_context.sh
 
+# PR review worktrees (created by /review-pr skill, cleaned up after review)
+.pr-review-*
+
 # Agent artifacts (transient reports from deploy-issue/deploy-wave pipelines)
 AGENT_REPORT.md
 
