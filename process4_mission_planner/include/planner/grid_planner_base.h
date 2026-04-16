@@ -90,6 +90,12 @@ public:
     /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
     virtual void set_promotion_paused(bool paused) = 0;
 
+    /// Grid diagnostic counters — exposed on the interface so diagnostic
+    /// logging in tick_survey/tick_navigate can avoid dynamic_cast.
+    [[nodiscard]] virtual size_t grid_occupied_count() const = 0;
+    [[nodiscard]] virtual size_t grid_static_count() const   = 0;
+    [[nodiscard]] virtual int    grid_promoted_count() const = 0;
+
     /// Whether the planner has snapped the current goal to an alternate position.
     [[nodiscard]] virtual bool has_snapped_goal() const = 0;
 
@@ -131,6 +137,10 @@ public:
 
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
 
+    [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }
+    [[nodiscard]] size_t grid_static_count() const override { return grid_.static_count(); }
+    [[nodiscard]] int    grid_promoted_count() const override { return grid_.promoted_count(); }
+
     void invalidate_path() override {
         cached_path_.clear();
         path_index_ = 0;
@@ -170,16 +180,14 @@ public:
         float py = static_cast<float>(pose.translation[1]);
         float pz = static_cast<float>(pose.translation[2]);
 
-        // ── Target change detection — must force replan + snap invalidation
-        // even within the replan interval, otherwise we navigate to a stale goal.
-        const bool target_changed = (target.x != last_target_x_ || target.y != last_target_y_ ||
-                                     target.z != last_target_z_);
-
         // ── Re-plan on interval, missing path, or target change ─────
-        auto now = std::chrono::steady_clock::now();
-        bool need_replan =
-            target_changed || cached_path_.empty() || path_index_ >= cached_path_.size() ||
-            std::chrono::duration<float>(now - last_plan_time_).count() > config_.replan_interval_s;
+        // target_has_changed() is the single source of truth for target-change
+        // detection — also used by snap_goal() to invalidate the snap cache.
+        auto now         = std::chrono::steady_clock::now();
+        bool need_replan = target_has_changed(target) || cached_path_.empty() ||
+                           path_index_ >= cached_path_.size() ||
+                           std::chrono::duration<float>(now - last_plan_time_).count() >
+                               config_.replan_interval_s;
 
         if (need_replan) {
             GridCell start = grid_.world_to_grid(px, py, pz);
@@ -411,12 +419,19 @@ protected:
     OccupancyGrid3D   grid_;
 
 private:
+    /// Single source of truth for target-change detection.  Called from
+    /// plan() to force a replan and from snap_goal() to invalidate the snap
+    /// cache.  Compares against stored last_target_ and returns true if the
+    /// waypoint position has changed.  Does NOT update the stored target —
+    /// that is done in snap_goal() after the change is consumed.
+    [[nodiscard]] bool target_has_changed(const Waypoint& target) const {
+        return target.x != last_target_x_ || target.y != last_target_y_ ||
+               target.z != last_target_z_;
+    }
+
     /// Goal snapping — find nearest free cell when goal is occupied.
     GridCell snap_goal(const GridCell& start, const GridCell& raw_goal, const Waypoint& target) {
-        bool target_changed = (target.x != last_target_x_ || target.y != last_target_y_ ||
-                               target.z != last_target_z_);
-
-        if (target_changed) {
+        if (target_has_changed(target)) {
             snap_valid_    = false;
             last_target_x_ = target.x;
             last_target_y_ = target.y;

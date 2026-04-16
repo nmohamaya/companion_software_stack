@@ -84,7 +84,8 @@ TEST(PerceptionDrainTest, TrackerDrainsBeforeStopping) {
     std::atomic<int>  shutdown_phase{0};
     TripleBuffer<int> inference_to_tracker;
 
-    uint64_t items_processed = 0;
+    uint64_t          items_processed = 0;
+    std::atomic<bool> exited_via_drain{false};
 
     // Write data to the buffer BEFORE starting the tracker
     inference_to_tracker.write(42);
@@ -98,7 +99,8 @@ TEST(PerceptionDrainTest, TrackerDrainsBeforeStopping) {
             if (val.has_value()) {
                 ++items_processed;
             } else if (draining) {
-                // No data left and upstream is done
+                // No data left and upstream is done — exit via drain path
+                exited_via_drain.store(true, std::memory_order_release);
                 break;
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -109,15 +111,16 @@ TEST(PerceptionDrainTest, TrackerDrainsBeforeStopping) {
     // Allow tracker to start running
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    // Phase 1: stop inference — tracker enters drain mode
+    // Phase 1: stop inference — tracker enters drain mode.
+    // Do NOT immediately set phase 2 — give the drain path time to trigger.
     shutdown_phase.store(1, std::memory_order_release);
 
-    // Phase 2: allow tracker to exit (it should already be draining)
-    shutdown_phase.store(2, std::memory_order_release);
     t_tracker.join();
 
-    // Tracker must have processed the buffered item
+    // Tracker must have processed the buffered item AND exited via drain path
+    // (not via the outer while condition reaching phase >= 2).
     EXPECT_GE(items_processed, 1u);
+    EXPECT_TRUE(exited_via_drain.load(std::memory_order_acquire));
 }
 
 // ── Test 3: Drain timeout prevents hanging ──────────────────
@@ -133,7 +136,7 @@ TEST(PerceptionDrainTest, DrainTimeoutPreventsHanging) {
     std::atomic<bool> feeder_running{true};
     std::thread       feeder([&] {
         int counter = 0;
-        while (feeder_running.load(std::memory_order_relaxed)) {
+        while (feeder_running.load(std::memory_order_acquire)) {
             buffer.write(++counter);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -187,7 +190,7 @@ TEST(PerceptionDrainTest, DrainTimeoutPreventsHanging) {
     t_tracker.join();
 
     // Stop the feeder
-    feeder_running.store(false, std::memory_order_relaxed);
+    feeder_running.store(false, std::memory_order_release);
     feeder.join();
 
     // The tracker should have timed out because feeder kept writing

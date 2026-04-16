@@ -33,6 +33,8 @@
 
 using namespace drone::perception;
 
+// Only gates the main-thread health-check loop.  Worker threads use
+// g_shutdown_phase exclusively — do not read g_running from worker threads.
 static std::atomic<bool> g_running{true};
 
 // ── Phased shutdown (Issue #446) ────────────────────────────

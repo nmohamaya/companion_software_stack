@@ -250,13 +250,10 @@ private:
         cmd.target_z   = static_cast<float>(pose.translation[2]);
         traj_pub.publish(cmd);
 
-        // Access grid diagnostics via GridPlannerBase
-        auto* base = dynamic_cast<GridPlannerBase*>(grid_planner);
-
         // Log progress periodically
         if (survey_log_tick_++ % 30 == 0) {
-            int promoted = base ? base->grid().promoted_count() : 0;
-            int static_n = base ? static_cast<int>(base->grid().static_count()) : 0;
+            int promoted = grid_planner ? grid_planner->grid_promoted_count() : 0;
+            int static_n = grid_planner ? static_cast<int>(grid_planner->grid_static_count()) : 0;
             DRONE_LOG_INFO(
                 "[Survey] {:.0f}/{:.0f}s — {} static cells ({} promoted), yaw_rate={:.2f}",
                 elapsed_s, config_.survey_duration_s, static_n, promoted, config_.survey_yaw_rate);
@@ -264,8 +261,8 @@ private:
 
         // Survey complete — transition to NAVIGATE
         if (elapsed_s >= config_.survey_duration_s) {
-            int promoted = base ? base->grid().promoted_count() : 0;
-            int static_n = base ? static_cast<int>(base->grid().static_count()) : 0;
+            int promoted = grid_planner ? grid_planner->grid_promoted_count() : 0;
+            int static_n = grid_planner ? static_cast<int>(grid_planner->grid_static_count()) : 0;
             DRONE_LOG_INFO("[Planner] Survey complete ({:.0f}s) — {} static obstacles ({} promoted)"
                            " — NAVIGATE",
                            elapsed_s, static_n, promoted);
@@ -345,11 +342,8 @@ private:
             }();
 
             // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level.
-            // Grid diagnostics require GridPlannerBase downcast (only used here for
-            // logging counters — all functional code uses IGridPlanner interface).
             if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&
                 debug_tick_++ % 10 == 0) {
-                auto*       gpb_diag   = dynamic_cast<GridPlannerBase*>(grid_planner);
                 const float dpx        = static_cast<float>(pose.translation[0]);
                 const float dpy        = static_cast<float>(pose.translation[1]);
                 const float dpz        = static_cast<float>(pose.translation[2]);
@@ -360,10 +354,10 @@ private:
                 float       dist_to_wp = std::sqrt((dpx - wp->x) * (dpx - wp->x) +
                                                    (dpy - wp->y) * (dpy - wp->y) +
                                                    (dpz - wp->z) * (dpz - wp->z));
-                int  occ  = gpb_diag ? static_cast<int>(gpb_diag->grid().occupied_count()) : -1;
-                int  stat = gpb_diag ? static_cast<int>(gpb_diag->grid().static_count()) : -1;
-                int  prom = gpb_diag ? gpb_diag->grid().promoted_count() : -1;
-                bool fb   = grid_planner && grid_planner->using_direct_fallback();
+                int occ = grid_planner ? static_cast<int>(grid_planner->grid_occupied_count()) : -1;
+                int stat = grid_planner ? static_cast<int>(grid_planner->grid_static_count()) : -1;
+                int prom = grid_planner ? grid_planner->grid_promoted_count() : -1;
+                bool fb  = grid_planner && grid_planner->using_direct_fallback();
                 DRONE_LOG_DEBUG("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
                                 " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
                                 " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"

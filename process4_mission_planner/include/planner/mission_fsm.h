@@ -32,11 +32,11 @@ inline const char* state_name(MissionState s) {
 
 /// Waypoint for mission navigation.
 struct Waypoint {
-    float x, y, z;          // target position in world frame
-    float yaw;              // target heading
-    float radius;           // acceptance radius (m)
-    float speed;            // cruise speed (m/s)
-    bool  trigger_payload;  // trigger camera/gimbal at this waypoint
+    float x = 0.0f, y = 0.0f, z = 0.0f;  // target position in world frame
+    float yaw             = 0.0f;        // target heading
+    float radius          = 2.0f;        // acceptance radius (m)
+    float speed           = 2.0f;        // cruise speed (m/s)
+    bool  trigger_payload = false;       // trigger camera/gimbal at this waypoint
 };
 
 /// Mission planner FSM — manages the mission lifecycle.
@@ -182,7 +182,7 @@ public:
     [[nodiscard]] bool fault_triggered() const { return fault_triggered_; }
 
 private:
-    MissionState          state_;
+    MissionState          state_ = MissionState::IDLE;
     float                 overshoot_proximity_factor_{3.0f};
     std::vector<Waypoint> waypoints_;
     size_t                current_wp_      = 0;
