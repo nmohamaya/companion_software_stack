@@ -844,24 +844,20 @@ static bool shm_available() {
 }
 
 // --- SHM Provider tests -----------------------------------------------
-// Note: PosixShmProvider requires zenohc built with the shared-memory
-// cargo feature.  Pre-built release packages omit it, so these tests
-// gracefully skip when the provider cannot be created.
+// PosixShmProvider requires zenohc built with the shared-memory cargo
+// feature.  CI uses our custom .deb (see deploy/build_zenohc_deb.sh)
+// which includes this feature, so these tests run unconditionally.
 
 TEST(ZenohShmProvider, ProviderCreatesSuccessfully) {
     auto* provider = ZenohSession::instance().shm_provider();
-    if (!provider) {
-        GTEST_SKIP() << "SHM provider unavailable "
-                        "(zenohc built without shared-memory feature?)";
-    }
+    ASSERT_NE(provider, nullptr) << "SHM provider must be available "
+                                    "(zenohc must be built with shared-memory feature)";
     SUCCEED();  // provider != nullptr — creation works
 }
 
 TEST(ZenohShmProvider, AllocAndWriteBuffer) {
     auto* provider = ZenohSession::instance().shm_provider();
-    if (!provider) {
-        GTEST_SKIP() << "SHM provider unavailable";
-    }
+    ASSERT_NE(provider, nullptr) << "SHM provider required";
 
     constexpr std::size_t buf_size = 4096;
     auto                  result   = provider->alloc_gc_defrag_blocking(buf_size);
@@ -877,9 +873,7 @@ TEST(ZenohShmProvider, AllocAndWriteBuffer) {
 
 TEST(ZenohShmProvider, AllocLargeVideoFrameBuffer) {
     auto* provider = ZenohSession::instance().shm_provider();
-    if (!provider) {
-        GTEST_SKIP() << "SHM provider unavailable";
-    }
+    ASSERT_NE(provider, nullptr) << "SHM provider required";
 
     // Allocate a buffer the size of VideoFrame (~6.2 MB)
     auto  result = provider->alloc_gc_defrag_blocking(sizeof(VideoFrame));
@@ -909,10 +903,7 @@ TEST(ZenohShmPublish, SmallMessageUsesBytes) {
 }
 
 TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
-    if (!shm_available()) {
-        GTEST_SKIP() << "SHM provider unavailable — SHM path assertions "
-                        "cannot be verified";
-    }
+    ASSERT_TRUE(shm_available()) << "SHM provider required for SHM path assertions";
 
     // VideoFrame is ~6.2 MB — should use SHM provider path
     static_assert(sizeof(VideoFrame) > kShmPublishThreshold,
@@ -957,10 +948,7 @@ TEST(ZenohShmPublish, LargeVideoFrameUsesShmPath) {
 }
 
 TEST(ZenohShmPublish, StereoFrameUsesShmPath) {
-    if (!shm_available()) {
-        GTEST_SKIP() << "SHM provider unavailable — SHM path assertions "
-                        "cannot be verified";
-    }
+    ASSERT_TRUE(shm_available()) << "SHM provider required for SHM path assertions";
 
     // StereoFrame is ~614 KB — should use SHM provider path
     static_assert(sizeof(StereoFrame) > kShmPublishThreshold,
@@ -1074,10 +1062,7 @@ TEST(ZenohShmPublish, FactoryStereoRoundTrip) {
 // --- Sustained video publish test (simulates 30 Hz camera) -----------
 
 TEST(ZenohShmPublish, SustainedVideoPublish) {
-    if (!shm_available()) {
-        GTEST_SKIP() << "SHM provider unavailable — SHM path assertions "
-                        "cannot be verified";
-    }
+    ASSERT_TRUE(shm_available()) << "SHM provider required for SHM path assertions";
 
     ZenohPublisher<VideoFrame>  pub("drone/test/shm_sustained_video");
     ZenohSubscriber<VideoFrame> sub("drone/test/shm_sustained_video");
@@ -1156,11 +1141,8 @@ TEST(ZenohShmProvider, PoolSizeConfiguration) {
     EXPECT_EQ(kDefaultShmPoolBytes, 32u * 1024 * 1024);
     EXPECT_EQ(kShmPublishThreshold, 64u * 1024);
 
-    // Provider may be null if zenohc lacks shared-memory feature
     auto* provider = ZenohSession::instance().shm_provider();
-    if (!provider) {
-        GTEST_SKIP() << "SHM provider unavailable";
-    }
+    ASSERT_NE(provider, nullptr) << "SHM provider required";
     EXPECT_GT(ZenohSession::instance().shm_pool_bytes(), 0u);
 }
 
