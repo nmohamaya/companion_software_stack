@@ -75,7 +75,7 @@
             "imu_source": {
                 "backend": "cosys_airsim",
                 "endpoint": "127.0.0.1:41451",
-                "imu_name": "Imu",
+                "imu_name": "imu",
                 "vehicle_name": "Drone0",
                 "poll_interval_ms": 50
             },
@@ -181,10 +181,11 @@
             "_comment_waypoints": "5-waypoint mission through photorealistic Blocks environment. Perception stack discovers and avoids obstacles dynamically."
         },
         "comms": {
-            "fc_link": {
-                "backend": "mavsdk_px4_sitl",
-                "connection_uri": "udp://:14540",
-                "heartbeat_interval_s": 0.1
+            "mavlink": {
+                "backend": "mavlink",
+                "uri": "udp://:14540",
+                "heartbeat_rate_hz": 1,
+                "timeout_ms": 8000
             }
         },
         "system_monitor": {

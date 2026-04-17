@@ -30,8 +30,8 @@
                 }
             },
             "Sensors": {
-                "Imu": { "SensorType": 2, "Enabled": true },
-                "Lidar": {
+                "imu": { "SensorType": 2, "Enabled": true },
+                "lidar": {
                     "SensorType": 6,
                     "Enabled": true,
                     "Range": 100,
