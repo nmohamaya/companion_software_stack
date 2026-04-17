@@ -9,7 +9,7 @@
         "backend_requirements": {
             "video_capture.mission_cam.backend": "cosys_airsim",
             "video_capture.stereo_pair.backend": "cosys_airsim",
-            "perception.detector.backend": "yolov8_onnx",
+            "perception.detector.backend": "yolov8",
             "perception.depth_estimator.backend": "depth_anything_v2_onnx",
             "slam_vio_nav.imu_source.backend": "cosys_airsim",
             "slam_vio_nav.depth_source.backend": "cosys_airsim",
@@ -22,7 +22,7 @@
             "mission_cam": {
                 "backend": "cosys_airsim",
                 "endpoint": "127.0.0.1:41451",
-                "camera_name": "MissionCam",
+                "camera_name": "mission_cam",
                 "vehicle_name": "Drone0",
                 "width": 1280,
                 "height": 720,
@@ -30,30 +30,24 @@
                 "focal_length_mm": 25.0,
                 "sensor_width_mm": 4.0
             },
-            "stereo_pair": {
-                "backend": "cosys_airsim",
-                "endpoint": "127.0.0.1:41451",
-                "camera_name_left": "StereoCamLeft",
-                "camera_name_right": "StereoCamRight",
-                "vehicle_name": "Drone0",
+            "stereo_cam": {
+                "_comment": "Cosys-AirSim has no native stereo — use simulated until stereo cameras are configured in settings.json",
+                "backend": "simulated",
                 "width": 640,
                 "height": 480,
-                "fps": 20,
-                "baseline_m": 0.12,
-                "focal_length_mm": 18.0,
-                "sensor_width_mm": 3.0
+                "fps": 20
             }
         },
         "perception": {
             "detector": {
-                "backend": "yolov8_onnx",
+                "backend": "yolov8",
                 "model_path": "models/yolov8s.onnx",
                 "confidence_threshold": 0.5,
                 "iou_threshold": 0.45,
                 "use_cuda": true
             },
             "depth_estimator": {
-                "backend": "depth_anything_v2_onnx",
+                "backend": "depth_anything_v2",
                 "model_path": "models/depth_anything_v2_vits.onnx",
                 "use_cuda": true,
                 "input_height": 384,

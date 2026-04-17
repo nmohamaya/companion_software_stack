@@ -1,10 +1,11 @@
 {
-    "SettingsVersion": 1.2,
+    "_comment": "Cosys-AirSim settings.json — copy this to ~/Documents/AirSim/settings.json before launching UE5. Vehicle name 'Drone0' and sensor names match scenario 29.",
+    "SettingsVersion": 2.0,
     "SimMode": "Multirotor",
-    "ViewMode": "NoDisplay",
+    "ViewMode": "FlyWithMe",
     "ClockType": "SteppableClock",
     "Vehicles": {
-        "x500": {
+        "Drone0": {
             "VehicleType": "PX4Multirotor",
             "UseSerial": false,
             "LockStep": true,
@@ -12,36 +13,34 @@
             "TcpPort": 4560,
             "ControlPortLocal": 14540,
             "ControlPortRemote": 14580,
-            "Sensors": {
+            "Cameras": {
                 "mission_cam": {
-                    "SensorType": 0,
-                    "ImageType": 0,
-                    "Width": 1920,
-                    "Height": 1080,
-                    "FOV_Degrees": 90,
                     "CaptureSettings": [
-                        {
-                            "ImageType": 0,
-                            "Width": 1920,
-                            "Height": 1080
-                        }
-                    ]
+                        { "ImageType": 0, "Width": 1280, "Height": 720, "FOV_Degrees": 90 }
+                    ],
+                    "X": 0.5, "Y": 0, "Z": -0.1,
+                    "Pitch": 0, "Roll": 0, "Yaw": 0
                 },
-                "depth_cam": {
-                    "SensorType": 0,
-                    "ImageType": 2,
-                    "Width": 640,
-                    "Height": 480
-                },
-                "radar": {
-                    "SensorType": 8,
-                    "MaxDistance": 50,
-                    "HorizontalFOVDegrees": 60,
-                    "VerticalFOVDegrees": 30,
-                    "NumberOfReturns": 256
-                },
-                "imu": {
-                    "SensorType": 2
+                "DepthCam": {
+                    "CaptureSettings": [
+                        { "ImageType": 2, "Width": 640, "Height": 480, "FOV_Degrees": 90, "PixelsAsFloat": true }
+                    ],
+                    "X": 0.5, "Y": 0, "Z": -0.1,
+                    "Pitch": 0, "Roll": 0, "Yaw": 0
+                }
+            },
+            "Sensors": {
+                "Imu": { "SensorType": 2, "Enabled": true },
+                "Lidar": {
+                    "SensorType": 6,
+                    "Enabled": true,
+                    "Range": 100,
+                    "PointsPerSecond": 10000,
+                    "RotationsPerSecond": 10,
+                    "HorizontalFOVStart": -180,
+                    "HorizontalFOVEnd": 180,
+                    "VerticalFOVUpper": 30,
+                    "VerticalFOVLower": -30
                 }
             }
         }
