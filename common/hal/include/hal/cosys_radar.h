@@ -144,7 +144,8 @@ private:
         // Ground filter: skip returns with steep downward elevation in NED frame.
         // In NED (Z=down), ground points below the drone have positive elevation
         // from asin(z/range). Threshold +30° filters steep ground returns.
-        constexpr float kGroundElevationThreshold = 30.0f * std::numbers::pi_v<float> / 180.0f;
+        constexpr float kPI                       = 3.141592653589793f;
+        constexpr float kGroundElevationThreshold = 30.0f * kPI / 180.0f;
         // Simplified radar equation: SNR = ref_snr - path_loss * log10(range)
         constexpr float kReferenceSNRdB    = 30.0f;  // SNR at 1m range
         constexpr float kSNRPathLossFactor = 20.0f;  // Free-space path loss exponent
@@ -155,9 +156,14 @@ private:
         while (active_.load(std::memory_order_acquire)) {
             try {
                 // Use with_client() to prevent TOCTOU race on disconnect
-                msr::airlib::RadarData radar_data;
-                bool                   got_data = client_->with_client(
-                    [&](auto& rpc) { radar_data = rpc.getRadarData(radar_name_, vehicle_name_); });
+                // Note: AirSim does not have a native RadarData type, so we emulate
+                // radar from LiDAR point cloud (vehicle frame, NED convention).
+                msr::airlib::LidarData lidar_data;
+                bool                   got_data = client_->with_client([&](auto& rpc) {
+                    lidar_data =
+                        rpc.getLidarData(radar_name_,  // sensor name (typically "Radar" or "Lidar")
+                                                           vehicle_name_);
+                });
                 if (!got_data) {
                     DRONE_LOG_WARN("[CosysRadar] RPC disconnected — skipping scan");
                     std::this_thread::sleep_for(kPollInterval);
@@ -170,19 +176,19 @@ private:
                                         .count();
                 list.timestamp_ns = static_cast<uint64_t>(std::max(decltype(now_ns){0}, now_ns));
 
-                // Convert each AirSim radar point to our RadarDetection format.
-                // AirSim RadarData contains point_cloud (x,y,z triples) and
-                // additional per-point metadata.
-                for (const auto& point : radar_data.point_cloud) {
+                // Convert each AirSim LiDAR point to our RadarDetection format.
+                // AirSim LidarData contains point_cloud as a flat vector:
+                // [x1, y1, z1, x2, y2, z2, ...] in vehicle NED frame (3 floats per point).
+                // For radar emulation, we treat each LiDAR return as a radar detection.
+                for (size_t i = 0; i + 2 < lidar_data.point_cloud.size(); i += 3) {
                     if (list.num_detections >= drone::ipc::MAX_RADAR_DETECTIONS) break;
 
-                    // AirSim radar point_cloud entries are (x, y, z) in NED body frame.
-                    // Convert Cartesian to spherical: range, azimuth, elevation.
-                    const float x = point.x;
-                    const float y = point.y;
-                    const float z = point.z;
+                    // Extract x, y, z from the flat point cloud array (3 floats per point)
+                    const float x = lidar_data.point_cloud[i];
+                    const float y = lidar_data.point_cloud[i + 1];
+                    const float z = lidar_data.point_cloud[i + 2];
 
-                    // Guard against NaN/Inf in radar point cloud data
+                    // Guard against NaN/Inf in point cloud data
                     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
                     const float range = std::sqrt(x * x + y * y + z * z);
 
@@ -201,13 +207,13 @@ private:
                     det.range_m             = range;
                     det.azimuth_rad         = azimuth;
                     det.elevation_rad       = elevation;
-                    det.radial_velocity_mps = point.velocity;
+                    det.radial_velocity_mps = 0.0f;  // LiDAR point cloud does not provide velocity
                     // SNR model: inversely proportional to range (simplified radar equation)
                     det.snr_db     = std::max(0.0f,
                                               kReferenceSNRdB - kSNRPathLossFactor *
                                                                     std::log10(std::max(1.0f, range)));
                     det.confidence = std::clamp(det.snr_db / kReferenceSNRdB, 0.0f, 1.0f);
-                    det.rcs_dbsm   = 0.0f;  // Not provided by AirSim
+                    det.rcs_dbsm   = 0.0f;  // Not provided by AirSim LiDAR
                     det.track_id   = list.num_detections + 1;
 
                     list.detections[list.num_detections++] = det;

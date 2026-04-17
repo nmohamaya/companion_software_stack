@@ -41,6 +41,13 @@
 #include <gz/transport/Node.hh>
 #endif  // HAVE_GAZEBO
 
+// Forward-declare CosysRpcClient so the factory signature compiles whether or
+// not HAVE_COSYS_AIRSIM is defined. Actual type is used only inside the
+// HAVE_COSYS_AIRSIM guarded class.
+namespace drone::hal {
+class CosysRpcClient;
+}
+
 namespace drone::slam {
 
 // ─────────────────────────────────────────────────────────────
@@ -706,14 +713,151 @@ private:
 
 #endif  // HAVE_GAZEBO
 
+// ─────────────────────────────────────────────────────────────
+// Cosys-AirSim ground-truth VIO backend
+//
+// Polls Cosys-AirSim's simGetGroundTruthKinematics() at ~50 Hz and exposes
+// the pose to the VIO pipeline. Analogous to GazeboVIOBackend but uses RPC
+// instead of gz-transport. Ground truth — perfect pose, no feature extraction.
+//
+// Frame convention:
+//   AirSim NED: X=North, Y=East, Z=Down
+//   Our internal: X=North, Y=East, Z=Up
+//   → X passes through, Y passes through, Z is negated
+// ─────────────────────────────────────────────────────────────
+#ifdef HAVE_COSYS_AIRSIM
+
+#include "hal/cosys_rpc_client.h"
+
+class CosysVIOBackend final : public IVIOBackend {
+public:
+    /// @param client        Shared RPC client (manages connection lifecycle)
+    /// @param vehicle_name  AirSim vehicle name (e.g. "Drone0", "x500")
+    /// @param poll_hz       Pose polling rate (default 50 Hz)
+    explicit CosysVIOBackend(std::shared_ptr<drone::hal::CosysRpcClient> client,
+                             std::string vehicle_name, int poll_hz = 50)
+        : client_(std::move(client))
+        , vehicle_name_(std::move(vehicle_name))
+        , poll_interval_(std::chrono::milliseconds(std::max(1, 1000 / std::max(1, poll_hz))))
+        , health_(VIOHealth::INITIALIZING)
+        , active_(true) {
+        DRONE_LOG_INFO("[CosysVIOBackend] Started polling ground-truth kinematics for '{}' @ {} Hz",
+                       vehicle_name_, poll_hz);
+        poll_thread_ = std::thread(&CosysVIOBackend::poll_loop, this);
+    }
+
+    ~CosysVIOBackend() override {
+        active_.store(false, std::memory_order_release);
+        if (poll_thread_.joinable()) poll_thread_.join();
+    }
+
+    // Non-copyable, non-movable (owns polling thread)
+    CosysVIOBackend(const CosysVIOBackend&)            = delete;
+    CosysVIOBackend& operator=(const CosysVIOBackend&) = delete;
+
+    VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
+                                       const std::vector<ImuSample>& /*imu_samples*/) override {
+        VIOOutput output;
+        output.frame_id = frame.sequence_number;
+
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (!pose_valid_) {
+                output.health = VIOHealth::INITIALIZING;
+                return VIOResult<VIOOutput>::ok(std::move(output));
+            }
+            output.pose = cached_pose_;
+        }
+
+        output.health             = health_.load(std::memory_order_relaxed);
+        output.num_features       = -1;  // N/A — ground truth
+        output.num_stereo_matches = -1;
+        output.imu_samples_used   = 0;
+        return VIOResult<VIOOutput>::ok(std::move(output));
+    }
+
+    [[nodiscard]] VIOHealth health() const override {
+        return health_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] std::string name() const override {
+        return "CosysVIOBackend(" + vehicle_name_ + "@" + client_->endpoint() + ")";
+    }
+
+private:
+    void poll_loop() {
+        while (active_.load(std::memory_order_acquire)) {
+            try {
+                msr::airlib::Kinematics::State kin{};
+                bool                           got = client_->with_client(
+                    [&](auto& rpc) { kin = rpc.simGetGroundTruthKinematics(vehicle_name_); });
+                if (!got) {
+                    std::this_thread::sleep_for(poll_interval_);
+                    continue;
+                }
+
+                Pose p;
+                // Timestamp: steady_clock (same epoch as FaultManager for staleness checks)
+                p.timestamp = std::chrono::duration<double>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count();
+
+                // AirSim NED → our internal (X=N, Y=E, Z=Up): negate Z
+                p.position = Eigen::Vector3d(static_cast<double>(kin.pose.position.x()),
+                                             static_cast<double>(kin.pose.position.y()),
+                                             -static_cast<double>(kin.pose.position.z()));
+
+                // Quaternion: NED → ENU (negate Y, Z axes via conjugate around X-axis swap)
+                // For ground truth the simplest correct form is to negate Z component of
+                // the rotation axis, which is equivalent to:
+                Eigen::Quaterniond q_ned(kin.pose.orientation.w(), kin.pose.orientation.x(),
+                                         kin.pose.orientation.y(), kin.pose.orientation.z());
+                // NED → ENU-like (Z flipped): q_enu = R_x(pi) * q_ned * R_x(pi)^-1 simplification:
+                // Equivalent to negating y and z components of the quaternion (yaw sign flip + roll flip)
+                p.orientation = Eigen::Quaterniond(q_ned.w(), q_ned.x(), -q_ned.y(), -q_ned.z());
+
+                p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.001;
+                p.quality    = 3;  // excellent — ground truth
+
+                {
+                    std::lock_guard<std::mutex> lk(mtx_);
+                    cached_pose_ = p;
+                    pose_valid_  = true;
+                }
+                odom_count_.fetch_add(1, std::memory_order_relaxed);
+                health_.store(VIOHealth::NOMINAL, std::memory_order_relaxed);
+
+            } catch (const std::exception& e) {
+                DRONE_LOG_WARN("[CosysVIOBackend] RPC error: {}", e.what());
+            }
+
+            std::this_thread::sleep_for(poll_interval_);
+        }
+    }
+
+    std::shared_ptr<drone::hal::CosysRpcClient> client_;
+    std::string                                 vehicle_name_;
+    std::chrono::milliseconds                   poll_interval_;
+    mutable std::mutex                          mtx_;
+    Pose                                        cached_pose_;
+    bool                                        pose_valid_{false};
+    std::atomic<VIOHealth>                      health_;
+    std::atomic<uint64_t>                       odom_count_{0};
+    std::atomic<bool>                           active_;
+    std::thread                                 poll_thread_;
+};
+
+#endif  // HAVE_COSYS_AIRSIM
+
 // ── Factory ────────────────────────────────────────────────
 
 /// Create a VIO backend by name.
 ///
 /// Supported backends:
-///   "simulated"      — target-following dynamics (default; works without hardware)
-///   "gazebo"         — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO only)
+///   "simulated"       — target-following dynamics (default; works without hardware)
+///   "gazebo"          — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO only)
 ///   "gazebo_full_vio" — full pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO only)
+///   "cosys_airsim"    — Cosys-AirSim ground-truth kinematics via RPC (HAVE_COSYS_AIRSIM only)
 ///
 /// To add a real VIO algorithm (e.g. MSCKF), add a new class implementing
 /// IVIOBackend and register it here.  The rest of the stack is unchanged.
@@ -721,7 +865,9 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     const std::string& backend = "simulated", const StereoCalibration& calib = {},
     const ImuNoiseParams& imu_params = {},
     const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f,
-    double good_trace_max = 0.1, double degraded_trace_max = 1.0) {
+    double good_trace_max = 0.1, double degraded_trace_max = 1.0,
+    std::shared_ptr<drone::hal::CosysRpcClient> cosys_client       = nullptr,
+    const std::string&                          cosys_vehicle_name = "Drone0") {
 
     // Validate quality thresholds — good must be <= degraded for the
     // health state machine to make sense (NOMINAL < DEGRADED < LOST).
@@ -757,10 +903,27 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
                                                       good_trace_max, degraded_trace_max);
     }
 #endif
+#ifdef HAVE_COSYS_AIRSIM
+    if (backend == "cosys_airsim") {
+        if (!cosys_client) {
+            throw std::runtime_error("[VIOBackend] 'cosys_airsim' backend requires a shared "
+                                     "CosysRpcClient (pass via cosys_client parameter)");
+        }
+        (void)calib;       // ground truth — calibration not used
+        (void)imu_params;  // ground truth — IMU params not used
+        return std::make_unique<CosysVIOBackend>(cosys_client, cosys_vehicle_name);
+    }
+#else
+    (void)cosys_client;
+    (void)cosys_vehicle_name;
+#endif
     throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
                              "' (available: simulated"
 #ifdef HAVE_GAZEBO
                              ", gazebo, gazebo_full_vio"
+#endif
+#ifdef HAVE_COSYS_AIRSIM
+                             ", cosys_airsim"
 #endif
                              ")");
 }

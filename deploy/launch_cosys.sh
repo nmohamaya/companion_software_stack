@@ -9,7 +9,7 @@
 #   ./deploy/launch_cosys.sh --log-level debug     # pass args to stack
 #
 # Environment variables (override defaults):
-#   COSYS_DIR        Path to Cosys-AirSim          (default: ~/Cosys-AirSim)
+#   COSYS_DIR        Path to Cosys-AirSim          (default: third_party/cosys-airsim if submodule exists, else ~/Cosys-AirSim)
 #   PX4_DIR          Path to PX4-Autopilot          (default: ~/PX4-Autopilot)
 #   CONFIG_FILE      JSON config (overrides profile) (default: from --profile)
 #   LOG_DIR          Log output directory            (default: <project>/drone_logs)
@@ -29,7 +29,12 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BIN_DIR="${PROJECT_DIR}/build/bin"
 
 # ── Defaults ──────────────────────────────────────────────────
-COSYS_DIR="${COSYS_DIR:-${HOME}/Cosys-AirSim}"
+# Try to detect Cosys-AirSim from submodule first, then fall back to ~/Cosys-AirSim
+if [[ -d "${PROJECT_DIR}/third_party/cosys-airsim" ]]; then
+    COSYS_DIR="${COSYS_DIR:-${PROJECT_DIR}/third_party/cosys-airsim}"
+else
+    COSYS_DIR="${COSYS_DIR:-${HOME}/Cosys-AirSim}"
+fi
 PX4_DIR="${PX4_DIR:-${HOME}/PX4-Autopilot}"
 LOG_DIR="${LOG_DIR:-${PROJECT_DIR}/drone_logs}"
 COSYS_RPC_PORT="${COSYS_RPC_PORT:-41451}"
@@ -92,7 +97,10 @@ if [[ ! -d "$BIN_DIR" ]]; then
 fi
 if [[ ! -d "$COSYS_DIR" ]]; then
     echo "ERROR: Cosys-AirSim not found at ${COSYS_DIR}."
-    echo "       Set COSYS_DIR env or run: bash deploy/install_cosys.sh"
+    echo "       Options:"
+    echo "         1. Initialize submodule: git submodule update --init third_party/cosys-airsim"
+    echo "         2. Set COSYS_DIR env: export COSYS_DIR=/path/to/cosys-airsim"
+    echo "         3. Install: bash deploy/install_cosys.sh"
     exit 1
 fi
 if [[ ! -d "$PX4_DIR" ]]; then

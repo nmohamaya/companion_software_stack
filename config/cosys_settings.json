@@ -1,47 +1,47 @@
 {
-    "SettingsVersion": 1.2,
+    "_comment": "Cosys-AirSim settings.json — copy this to ~/Documents/AirSim/settings.json before launching UE5. Vehicle name 'Drone0' and sensor names match scenario 29.",
+    "_comment_lockstep": "LockStep=false + real-time clock avoids chicken-and-egg deadlock where neither AirSim nor PX4 sends the first HIL message. Use LockStep=true only if you need deterministic replays and are prepared to debug handshake issues.",
+    "_comment_ports": "ControlPortLocal=14541 / Remote=14581 avoid UDP conflict with PX4's default MAVLink API ports (PX4 listens on 14580, sends to 14540). Companion stack's MAVSDK binds udp://:14540 to receive PX4 telemetry directly — it does NOT route via AirSim's MAVLink bridge.",
+    "SettingsVersion": 2.0,
     "SimMode": "Multirotor",
-    "ViewMode": "NoDisplay",
-    "ClockType": "SteppableClock",
+    "ViewMode": "FlyWithMe",
     "Vehicles": {
-        "x500": {
+        "Drone0": {
             "VehicleType": "PX4Multirotor",
             "UseSerial": false,
-            "LockStep": true,
+            "LockStep": false,
             "UseTcp": true,
             "TcpPort": 4560,
-            "ControlPortLocal": 14540,
-            "ControlPortRemote": 14580,
-            "Sensors": {
+            "ControlPortLocal": 14541,
+            "ControlPortRemote": 14581,
+            "Cameras": {
                 "mission_cam": {
-                    "SensorType": 0,
-                    "ImageType": 0,
-                    "Width": 1920,
-                    "Height": 1080,
-                    "FOV_Degrees": 90,
                     "CaptureSettings": [
-                        {
-                            "ImageType": 0,
-                            "Width": 1920,
-                            "Height": 1080
-                        }
-                    ]
+                        { "ImageType": 0, "Width": 1280, "Height": 720, "FOV_Degrees": 90 }
+                    ],
+                    "X": 0.5, "Y": 0, "Z": -0.1,
+                    "Pitch": 0, "Roll": 0, "Yaw": 0
                 },
-                "depth_cam": {
-                    "SensorType": 0,
-                    "ImageType": 2,
-                    "Width": 640,
-                    "Height": 480
-                },
-                "radar": {
-                    "SensorType": 8,
-                    "MaxDistance": 50,
-                    "HorizontalFOVDegrees": 60,
-                    "VerticalFOVDegrees": 30,
-                    "NumberOfReturns": 256
-                },
-                "imu": {
-                    "SensorType": 2
+                "DepthCam": {
+                    "CaptureSettings": [
+                        { "ImageType": 2, "Width": 640, "Height": 480, "FOV_Degrees": 90, "PixelsAsFloat": true }
+                    ],
+                    "X": 0.5, "Y": 0, "Z": -0.1,
+                    "Pitch": 0, "Roll": 0, "Yaw": 0
+                }
+            },
+            "Sensors": {
+                "imu": { "SensorType": 2, "Enabled": true },
+                "lidar": {
+                    "SensorType": 6,
+                    "Enabled": true,
+                    "Range": 100,
+                    "PointsPerSecond": 10000,
+                    "RotationsPerSecond": 10,
+                    "HorizontalFOVStart": -180,
+                    "HorizontalFOVEnd": 180,
+                    "VerticalFOVUpper": 30,
+                    "VerticalFOVLower": -30
                 }
             }
         }

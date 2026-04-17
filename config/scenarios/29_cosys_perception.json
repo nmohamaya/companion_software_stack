@@ -1,0 +1,244 @@
+{
+    "_comment": "Scenario 29: Cosys-AirSim Perception — Tier 3 photorealistic simulation with YOLO + Depth Anything V2 + native radar emulation.",
+    "scenario": {
+        "name": "cosys_perception",
+        "description": "Full perception stack on Tier 3 photorealistic simulator. Flies a 5-waypoint mission with YOLO object detection (YOLOv8s dev / YOLOv8m cloud), Depth Anything V2 depth estimation, LiDAR-emulated radar fusion, and UKF tracking. Validates end-to-end ML perception pipeline with Cosys-AirSim camera, radar, IMU, and depth backends. No HD-map static obstacles — perception-driven avoidance only.",
+        "tier": 3,
+        "timeout_s": 180,
+        "requires_cosys_airsim": true,
+        "backend_requirements": {
+            "video_capture.mission_cam.backend": "cosys_airsim",
+            "video_capture.stereo_pair.backend": "cosys_airsim",
+            "perception.detector.backend": "yolov8",
+            "perception.depth_estimator.backend": "depth_anything_v2_onnx",
+            "slam_vio_nav.imu_source.backend": "cosys_airsim",
+            "slam_vio_nav.depth_source.backend": "cosys_airsim",
+            "mission_planner.radar.backend": "cosys_airsim",
+            "comms.fc_link.backend": "mavsdk_px4_sitl"
+        }
+    },
+    "config_overrides": {
+        "video_capture": {
+            "mission_cam": {
+                "backend": "cosys_airsim",
+                "endpoint": "127.0.0.1:41451",
+                "camera_name": "mission_cam",
+                "vehicle_name": "Drone0",
+                "width": 1280,
+                "height": 720,
+                "fps": 30,
+                "focal_length_mm": 25.0,
+                "sensor_width_mm": 4.0
+            },
+            "stereo_cam": {
+                "_comment": "Cosys-AirSim has no native stereo — use simulated until stereo cameras are configured in settings.json",
+                "backend": "simulated",
+                "width": 640,
+                "height": 480,
+                "fps": 20
+            }
+        },
+        "perception": {
+            "detector": {
+                "backend": "yolov8",
+                "model_path": "models/yolov8s.onnx",
+                "confidence_threshold": 0.5,
+                "iou_threshold": 0.45,
+                "use_cuda": true
+            },
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "models/depth_anything_v2_vits.onnx",
+                "use_cuda": true,
+                "input_height": 384,
+                "input_width": 384
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "max_age": 30,
+                "min_hits": 3
+            },
+            "fusion": {
+                "backend": "ukf",
+                "process_noise_factor": 0.05,
+                "measurement_noise_range": 0.1,
+                "measurement_noise_bearing": 0.05
+            }
+        },
+        "slam": {
+            "vio": {
+                "_comment": "Use cosys_airsim backend — ground-truth kinematics from UE5 via RPC",
+                "backend": "cosys_airsim"
+            }
+        },
+        "slam_vio_nav": {
+            "imu_source": {
+                "backend": "cosys_airsim",
+                "endpoint": "127.0.0.1:41451",
+                "imu_name": "imu",
+                "vehicle_name": "Drone0",
+                "poll_interval_ms": 50
+            },
+            "depth_source": {
+                "backend": "cosys_airsim",
+                "endpoint": "127.0.0.1:41451",
+                "camera_name": "DepthCam",
+                "vehicle_name": "Drone0"
+            }
+        },
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 3.0,
+            "overshoot_proximity_factor": 5.0,
+            "cruise_speed_mps": 2.0,
+            "survey_duration_s": 0,
+            "path_planner": {
+                "backend": "dstar_lite",
+                "max_search_time_ms": 2000,
+                "max_iterations": 250000,
+                "z_band_cells": 0,
+                "replan_interval_s": 0.5,
+                "look_ahead_m": 0.0,
+                "smoothing_alpha": 0.5,
+                "yaw_towards_travel": true,
+                "yaw_smoothing_rate": 0.3,
+                "snap_approach_bias": 0.5
+            },
+            "obstacle_avoider": {
+                "backend": "potential_field_3d"
+            },
+            "obstacle_avoidance": {
+                "min_distance_m": 2.5,
+                "influence_radius_m": 10.0,
+                "repulsive_gain": 3.0,
+                "max_correction_mps": 2.0,
+                "vertical_gain": 0.0,
+                "path_aware": true,
+                "_comment": "D* Lite primary avoidance. Avoider safety net: 10m influence, 2.0 max correction, gain=3.0."
+            },
+            "occupancy_grid": {
+                "resolution_m": 2.0,
+                "inflation_radius_m": 2.5,
+                "dynamic_obstacle_ttl_s": 2.0,
+                "min_confidence": 0.5,
+                "promotion_hits": 10,
+                "max_static_cells": 1000,
+                "_comment": "2m grid, 2.5m inflation, 2.0s TTL for dynamic obstacles. Radar+camera detection drives grid."
+            },
+            "static_obstacles": [],
+            "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via radar+camera+depth fusion.",
+            "geofence": {
+                "enabled": false,
+                "_comment": "Geofence disabled — D* Lite replanning may push drone toward boundary during perception-driven avoidance."
+            },
+            "waypoints": [
+                {
+                    "x": 0,
+                    "y": 20,
+                    "z": 5,
+                    "yaw": 1.57,
+                    "speed": 2.0,
+                    "payload_trigger": false,
+                    "_comment": "Fly north — primary search corridor. Radar+camera detect obstacles."
+                },
+                {
+                    "x": 15,
+                    "y": 20,
+                    "z": 5,
+                    "yaw": 0,
+                    "speed": 2.0,
+                    "payload_trigger": false,
+                    "_comment": "Fly east — clear turn."
+                },
+                {
+                    "x": 25,
+                    "y": 10,
+                    "z": 5,
+                    "yaw": -1.0,
+                    "speed": 2.0,
+                    "payload_trigger": false,
+                    "_comment": "Fly southeast — dense obstacle region."
+                },
+                {
+                    "x": 8,
+                    "y": 2,
+                    "z": 5,
+                    "yaw": -2.36,
+                    "speed": 2.0,
+                    "payload_trigger": false,
+                    "_comment": "Fly west — return leg."
+                },
+                {
+                    "x": 0,
+                    "y": 0,
+                    "z": 5,
+                    "yaw": 0,
+                    "speed": 2.0,
+                    "payload_trigger": false,
+                    "_comment": "Return home."
+                }
+            ],
+            "_comment_waypoints": "5-waypoint mission through photorealistic Blocks environment. Perception stack discovers and avoids obstacles dynamically."
+        },
+        "comms": {
+            "mavlink": {
+                "_comment": "PX4 SITL API/offboard link binds 14580 and sends telemetry to 14540 — bind 14540 locally to receive. AirSim's MAVLink bridge moved to 14541/14581 (see cosys_settings.json) to avoid conflict.",
+                "backend": "mavlink",
+                "uri": "udp://:14540",
+                "heartbeat_rate_hz": 1,
+                "timeout_ms": 8000
+            }
+        },
+        "system_monitor": {
+            "enable_thermal_monitoring": true,
+            "enable_memory_monitoring": true,
+            "watchdog_interval_ms": 500
+        }
+    },
+    "validation": {
+        "checks": [
+            {
+                "name": "YOLO detections",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[Detector\\].*detected \\d+ objects",
+                "min_matches": 5,
+                "_comment": "At least 5 log lines with object detections during mission."
+            },
+            {
+                "name": "Depth estimates",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[DepthAnything\\].*depth map.*m",
+                "min_matches": 5,
+                "_comment": "Depth Anything V2 producing valid estimates."
+            },
+            {
+                "name": "Radar detections (LiDAR proxy)",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[CosysRadar\\].*First scan:.*detections",
+                "min_matches": 1,
+                "_comment": "Radar backend receiving and converting LiDAR data."
+            },
+            {
+                "name": "UKF fusion active",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[UKF\\].*tracks:",
+                "min_matches": 3,
+                "_comment": "UKF fusion processing tracks."
+            },
+            {
+                "name": "No RPC errors",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[.*Radar\\|DepthCam\\].*RPC error|connection failed",
+                "min_matches": 0,
+                "_comment": "No critical RPC connection failures."
+            },
+            {
+                "name": "Mission completed",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[FSM\\].*LANDED",
+                "min_matches": 1,
+                "_comment": "FSM reached LANDED state (mission success)."
+            }
+        ]
+    }
+}
