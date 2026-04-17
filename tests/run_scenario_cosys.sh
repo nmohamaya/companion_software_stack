@@ -566,7 +566,8 @@ with open(sys.argv[1], 'w') as f:
     json.dump(s, f, indent=4)
 " "${AIRSIM_SETTINGS_DIR}/settings.json"
     fi
-    echo -e "  ${GREEN}✓${NC} AirSim settings deployed to ${AIRSIM_SETTINGS_DIR}/settings.json (ViewMode=$(python3 -c \"import json; print(json.load(open('${AIRSIM_SETTINGS_DIR}/settings.json')).get('ViewMode','default'))\"))"
+    VIEWMODE=$(python3 -c "import json; print(json.load(open('${AIRSIM_SETTINGS_DIR}/settings.json')).get('ViewMode','default'))" 2>/dev/null || echo "default")
+    echo -e "  ${GREEN}✓${NC} AirSim settings deployed to ${AIRSIM_SETTINGS_DIR}/settings.json (ViewMode=${VIEWMODE})"
 else
     echo -e "  ${YELLOW}WARNING: ${COSYS_SETTINGS} not found — using existing settings.json${NC}"
 fi

@@ -286,6 +286,8 @@ CMAKE_POLICY_VERSION_MINIMUM=3.5 ./build.sh
 
 #### Option A: Build from Source (Recommended)
 
+> **⚠ CRITICAL: Use UE5 version 5.5 specifically.** Newer versions (5.7+) cause **VK_ERROR_DEVICE_LOST** (Vulkan GPU crash) on Pascal GPUs like the GTX 1080 Ti, killing the simulation mid-run. Tested 2026-04-17: UE5 5.4.4 crashes, 5.5 works.
+
 Requires linking your Epic Games account to GitHub:
 1. Create Epic account: https://www.epicgames.com/id/register
 2. Link to GitHub: https://www.unrealengine.com/en-US/ue-on-github
