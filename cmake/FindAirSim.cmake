@@ -118,15 +118,23 @@ endif()
 # If CMAKE_C_COMPILER or CMAKE_CXX_COMPILER are not set, we allow CMake
 # to auto-detect them in the external build (don't pass empty strings).
 set(_AIRSIM_COMPILER_ARGS)
-if(CMAKE_C_COMPILER)
+# Only pass compiler paths if they are non-empty (empty string breaks ExternalProject)
+if(CMAKE_C_COMPILER AND NOT CMAKE_C_COMPILER STREQUAL "")
     list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})
 endif()
-if(CMAKE_CXX_COMPILER)
+if(CMAKE_CXX_COMPILER AND NOT CMAKE_CXX_COMPILER STREQUAL "")
     list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER})
 endif()
 if(CMAKE_TOOLCHAIN_FILE)
     list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
 endif()
+# Forward CMake 4.x compat policy so AirSim's vendored deps don't fail
+if(DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+    list(APPEND _AIRSIM_COMPILER_ARGS -DCMAKE_POLICY_VERSION_MINIMUM=${CMAKE_POLICY_VERSION_MINIMUM})
+endif()
+
+# AirSim uses `#include "Eigen/Dense"` — needs system Eigen parent dir on include path
+find_path(_EIGEN3_INCLUDE_DIR Eigen/Dense PATHS /usr/include/eigen3 /usr/local/include/eigen3)
 
 ExternalProject_Add(airsim_external
     SOURCE_DIR        "${AIRSIM_SUBMODULE_DIR}/cmake"
@@ -137,6 +145,7 @@ ExternalProject_Add(airsim_external
         -DCMAKE_CXX_STANDARD=17
         -DCMAKE_CXX_STANDARD_REQUIRED=ON
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+        -DCMAKE_CXX_FLAGS=-I${_EIGEN3_INCLUDE_DIR}
     BUILD_BYPRODUCTS
         "${AIRSIM_OUTPUT_LIB_DIR}/libAirLib.a"
         "${AIRSIM_OUTPUT_LIB_DIR}/librpc.a"
