@@ -44,6 +44,7 @@
 #ifdef HAVE_COSYS_AIRSIM
 #include "hal/cosys_camera.h"
 #include "hal/cosys_depth.h"
+#include "hal/cosys_fc_link.h"
 #include "hal/cosys_imu.h"
 #include "hal/cosys_radar.h"
 #include "hal/cosys_rpc_client.h"
@@ -169,7 +170,12 @@ template<typename Interface>
 #ifdef HAVE_MAVSDK
     if (backend == "mavlink") return std::make_unique<MavlinkFCLink>();
 #endif
-        // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
+#ifdef HAVE_COSYS_AIRSIM
+    if (backend == "cosys_rpc") {
+        return std::make_unique<CosysFCLink>(detail::get_shared_cosys_client(cfg), cfg, section);
+    }
+#endif
+    // Future: if (backend == "mavlink_v2") return std::make_unique<MavlinkV2Link>();
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
         return load_plugin<IFCLink>(cfg, section, "FC link");
