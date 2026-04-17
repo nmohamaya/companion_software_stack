@@ -33,18 +33,33 @@
 
 using namespace drone::perception;
 
+// Only gates the main-thread health-check loop.  Worker threads use
+// g_shutdown_phase exclusively — do not read g_running from worker threads.
 static std::atomic<bool> g_running{true};
 
+// ── Phased shutdown (Issue #446) ────────────────────────────
+// Phase 0 = running normally
+// Phase 1 = inference stopped  (detector no longer consuming frames)
+// Phase 2 = tracker stopped    (tracker drained inference buffer)
+// Phase 3 = fusion/depth/radar stopped (fusion drained tracker buffer)
+// Phase 4 = all stopped
+//
+// Each downstream stage drains its input TripleBuffer before exiting,
+// ensuring in-flight data is processed rather than dropped.
+static std::atomic<int> g_shutdown_phase{0};
+
 // ── Inference thread ────────────────────────────────────────
+// Stops when shutdown_phase >= 1.  No drain needed — inference is the
+// pipeline source; stopping it is what triggers downstream drains.
 static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                              drone::TripleBuffer<Detection2DList>&            output_queue,
-                             std::atomic<bool>& running, IDetector& detector) {
+                             std::atomic<int>& shutdown_phase, IDetector& detector) {
     DRONE_LOG_INFO("[Inference] Thread started — using detector: {}", detector.name());
 
     auto hb = drone::util::ScopedHeartbeat("inference", true);
 
     uint64_t frame_count = 0;
-    while (running.load(std::memory_order_relaxed)) {
+    while (shutdown_phase.load(std::memory_order_acquire) < 1) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         drone::ipc::VideoFrame frame;
         bool                   got_frame = video_sub.receive(frame);
@@ -85,17 +100,34 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
 }
 
 // ── Tracker thread ──────────────────────────────────────────
+// Stops when shutdown_phase >= 2.  When phase hits 1 (inference stopped),
+// the tracker drains any remaining data in the inference->tracker buffer
+// before exiting.
 static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
                            drone::TripleBuffer<TrackedObjectList>& output_queue,
-                           std::atomic<bool>& running, ITracker& tracker) {
+                           std::atomic<int>& shutdown_phase, ITracker& tracker,
+                           int drain_timeout_ms) {
     DRONE_LOG_INFO("[Tracker] Thread started — backend: {}", tracker.name());
 
     auto hb = drone::util::ScopedHeartbeat("tracker", true);
 
     constexpr uint64_t kStatusInterval = 50;  // Log tracker status every N cycles
     uint64_t           cycle_count     = 0;
-    while (running.load(std::memory_order_relaxed)) {
+
+    // Drain state: track when we enter drain mode and enforce a timeout.
+    bool tracker_draining    = false;
+    auto tracker_drain_start = std::chrono::steady_clock::now();
+
+    while (shutdown_phase.load(std::memory_order_acquire) < 2) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        // Enter drain mode when inference has stopped (phase >= 1)
+        if (!tracker_draining && shutdown_phase.load(std::memory_order_acquire) >= 1) {
+            tracker_draining    = true;
+            tracker_drain_start = std::chrono::steady_clock::now();
+            DRONE_LOG_INFO("[Tracker] Entering drain mode — consuming remaining detections");
+        }
+
         auto det_opt = input_queue.read();
         if (det_opt) {
             drone::util::FrameDiagnostics diag(det_opt->frame_sequence);
@@ -120,8 +152,22 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
             if (diag.has_warnings() || diag.has_errors()) {
                 diag.log_summary("Tracker");
             }
+        } else if (tracker_draining) {
+            // No new data and upstream is done — drain complete.
+            DRONE_LOG_INFO("[Tracker] Drain complete — no remaining data from inference");
+            break;
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        // Drain timeout: prevent hanging if TripleBuffer keeps producing
+        // stale reads during shutdown.
+        if (tracker_draining) {
+            const auto elapsed = std::chrono::steady_clock::now() - tracker_drain_start;
+            if (elapsed >= std::chrono::milliseconds(drain_timeout_ms)) {
+                DRONE_LOG_WARN("[Tracker] Drain timeout ({}ms) — forcing exit", drain_timeout_ms);
+                break;
+            }
         }
     }
     DRONE_LOG_INFO("[Tracker] Thread stopped — {} cycles, {} writes", cycle_count,
@@ -137,8 +183,9 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
                           drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
                           drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
                           drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
-                          std::atomic<bool>& running, IFusionEngine& engine, int fusion_rate_hz,
-                          drone::TripleBuffer<drone::hal::DepthMap>* depth_buf) {
+                          std::atomic<int>& shutdown_phase, IFusionEngine& engine,
+                          int fusion_rate_hz, drone::TripleBuffer<drone::hal::DepthMap>* depth_buf,
+                          int drain_timeout_ms) {
     DRONE_LOG_INFO("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
                    fusion_rate_hz);
 
@@ -154,8 +201,19 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
     const auto period    = std::chrono::milliseconds(1000 / fusion_rate_hz);
     auto       next_tick = std::chrono::steady_clock::now();
 
-    while (running.load(std::memory_order_relaxed)) {
+    // Drain tracking: once phase >= 2 (tracker stopped), consume remaining data.
+    bool fusion_draining    = false;
+    auto fusion_drain_start = std::chrono::steady_clock::now();
+
+    while (shutdown_phase.load(std::memory_order_acquire) < 3) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        // Enter drain mode when tracker has stopped (phase >= 2)
+        if (!fusion_draining && shutdown_phase.load(std::memory_order_acquire) >= 2) {
+            fusion_draining    = true;
+            fusion_drain_start = std::chrono::steady_clock::now();
+            DRONE_LOG_INFO("[Fusion] Entering drain mode — consuming remaining tracked data");
+        }
 
         // Read latest pose (ZenohSubscriber is latest-value, not queue — single read)
         {
@@ -323,6 +381,20 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             // Log IPC latency from the thread that owns receive()
             pose_sub.log_latency_if_due();
             radar_sub.log_latency_if_due();
+        } else if (fusion_draining) {
+            // No new tracked data and tracker is done — drain complete.
+            DRONE_LOG_INFO("[Fusion] Drain complete — no remaining tracked data");
+            break;
+        }
+
+        // Drain timeout: prevent hanging if TripleBuffer keeps producing
+        // stale reads during shutdown.
+        if (fusion_draining) {
+            const auto elapsed = std::chrono::steady_clock::now() - fusion_drain_start;
+            if (elapsed >= std::chrono::milliseconds(drain_timeout_ms)) {
+                DRONE_LOG_WARN("[Fusion] Drain timeout ({}ms) — forcing exit", drain_timeout_ms);
+                break;
+            }
         }
 
         // Rate-limited sleep — reset next_tick if we fell behind to avoid
@@ -341,9 +413,11 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 // ── Depth estimation thread (Issue #430) ───────────────────
 // Reads video frames, runs ML depth estimation, publishes results
 // to a triple buffer for consumption by the fusion thread.
+// Stops when shutdown_phase >= 3.  Depth is a leaf node (writes to fusion's
+// TripleBuffer) — no downstream drain needed, just stop consuming frames.
 static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                          drone::TripleBuffer<drone::hal::DepthMap>&       output_queue,
-                         std::atomic<bool>& running, drone::hal::IDepthEstimator& estimator,
+                         std::atomic<int>& shutdown_phase, drone::hal::IDepthEstimator& estimator,
                          int max_fps) {
     DRONE_LOG_INFO("[Depth] Thread started — backend: {}, max_fps: {}", estimator.name(), max_fps);
 
@@ -356,7 +430,7 @@ static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_
 
     uint64_t frame_count = 0;
     uint64_t fail_count  = 0;
-    while (running.load(std::memory_order_relaxed)) {
+    while (shutdown_phase.load(std::memory_order_acquire) < 3) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
 
         // Rate limit BEFORE receive() to avoid copying a ~6MB VideoFrame
@@ -407,9 +481,11 @@ static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_
 // ── Radar HAL read thread ──────────────────────────────────
 // Polls the radar HAL backend at its configured update rate and publishes
 // RadarDetectionList to IPC for consumption by the fusion thread.
+// Stops when shutdown_phase >= 3.  Radar is a leaf node (publishes to IPC
+// consumed by fusion) — no downstream drain needed, just stop polling.
 static void radar_read_thread(drone::hal::IRadar&                                     radar,
                               drone::ipc::IPublisher<drone::ipc::RadarDetectionList>& radar_pub,
-                              std::atomic<bool>& running, int update_rate_hz) {
+                              std::atomic<int>& shutdown_phase, int update_rate_hz) {
     // Clamp update rate to a sane range to prevent tight loops or division issues
     constexpr int kMinRateHz        = 1;
     constexpr int kMaxRateHz        = 1000;
@@ -431,7 +507,7 @@ static void radar_read_thread(drone::hal::IRadar&                               
 
     uint64_t read_count = 0;
 
-    while (running.load(std::memory_order_relaxed)) {
+    while (shutdown_phase.load(std::memory_order_acquire) < 3) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
 
         auto detections = radar.read();
@@ -583,6 +659,10 @@ int main(int argc, char* argv[]) {
                        "(perception.depth_estimator.enabled=false)");
     }
 
+    // ── Drain timeout (Issue #446) — configurable, default 500ms ──
+    const int drain_timeout_ms =
+        std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::DRAIN_TIMEOUT_MS, 500), 50, 5000);
+
     // ── Internal triple buffers (lock-free latest-value handoff) ──
     drone::TripleBuffer<Detection2DList>   inference_to_tracker;
     drone::TripleBuffer<TrackedObjectList> tracker_to_fusion;
@@ -591,10 +671,11 @@ int main(int argc, char* argv[]) {
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread, std::ref(*video_sub), std::ref(inference_to_tracker),
-                            std::ref(g_running), std::ref(*detector));
+                            std::ref(g_shutdown_phase), std::ref(*detector));
 
     std::thread t_tracker(tracker_thread, std::ref(inference_to_tracker),
-                          std::ref(tracker_to_fusion), std::ref(g_running), std::ref(*tracker));
+                          std::ref(tracker_to_fusion), std::ref(g_shutdown_phase),
+                          std::ref(*tracker), drain_timeout_ms);
 
     // Subscribe to drone pose for the camera→world transform in the fusion thread
     auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
@@ -606,9 +687,9 @@ int main(int argc, char* argv[]) {
     const int fusion_rate_hz =
         std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
-                         std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_running),
+                         std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_shutdown_phase),
                          std::ref(*fusion_engine), fusion_rate_hz,
-                         depth_enabled ? &depth_to_fusion : nullptr);
+                         depth_enabled ? &depth_to_fusion : nullptr, drain_timeout_ms);
 
     // Launch depth estimation thread if HAL is active (Issue #430)
     // Subscriber must outlive the thread — declare in outer scope (same pattern as pose_sub, radar_sub)
@@ -622,14 +703,15 @@ int main(int argc, char* argv[]) {
         const int depth_max_fps = std::clamp(
             ctx.cfg.get<int>(drone::cfg_key::perception::depth_estimator::MAX_FPS, 15), 0, 60);
         t_depth = std::thread(depth_thread, std::ref(*depth_video_sub), std::ref(depth_to_fusion),
-                              std::ref(g_running), std::ref(*depth_estimator), depth_max_fps);
+                              std::ref(g_shutdown_phase), std::ref(*depth_estimator),
+                              depth_max_fps);
     }
 
     // Launch radar read thread if HAL is active and publisher is ready
     std::thread t_radar;
     if (radar && radar_pub && radar_pub->is_ready()) {
         t_radar = std::thread(radar_read_thread, std::ref(*radar), std::ref(*radar_pub),
-                              std::ref(g_running), radar_update_rate_hz);
+                              std::ref(g_shutdown_phase), radar_update_rate_hz);
     } else if (radar) {
         DRONE_LOG_WARN("[Radar] HAL active but publisher not ready — radar read thread disabled");
     }
@@ -652,13 +734,33 @@ int main(int argc, char* argv[]) {
         DRONE_LOG_INFO("[HealthCheck] perception alive");
     }
 
+    // ── Phased shutdown (Issue #446) ───────────────────────
+    // Signal handler sets g_running=false.  We translate that into a phased
+    // drain sequence: stop inference first, let tracker drain, then fusion,
+    // then auxiliary threads.  Each phase transition uses release ordering
+    // so downstream threads see the updated phase with full memory visibility.
     drone::systemd::notify_stopping();
-    DRONE_LOG_INFO("Shutting down...");
+    DRONE_LOG_INFO("Shutting down — phased drain (timeout={}ms per stage)...", drain_timeout_ms);
+
+    // Phase 1: stop inference (pipeline source)
+    g_shutdown_phase.store(1, std::memory_order_release);
+    DRONE_LOG_INFO("[Shutdown] Phase 1 — stopping inference");
     t_inference.join();
+
+    // Phase 2: stop tracker (drains inference→tracker buffer)
+    g_shutdown_phase.store(2, std::memory_order_release);
+    DRONE_LOG_INFO("[Shutdown] Phase 2 — stopping tracker (draining)");
     t_tracker.join();
+
+    // Phase 3: stop fusion, depth, radar (fusion drains tracker→fusion buffer)
+    g_shutdown_phase.store(3, std::memory_order_release);
+    DRONE_LOG_INFO("[Shutdown] Phase 3 — stopping fusion, depth, radar (draining)");
     t_fusion.join();
     if (t_depth.joinable()) t_depth.join();
     if (t_radar.joinable()) t_radar.join();
+
+    // Phase 4: all stopped
+    g_shutdown_phase.store(4, std::memory_order_release);
 
     DRONE_LOG_INFO("=== Perception process stopped ===");
     return 0;

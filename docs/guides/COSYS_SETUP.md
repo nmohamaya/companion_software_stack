@@ -439,6 +439,41 @@ CLOUD (AWS g5.xlarge, A10G 24 GB)
 
 ---
 
+## Licensing Compliance
+
+### Unreal Engine 5 EULA
+
+UE5 is licensed under the [Unreal Engine End User License Agreement](https://www.unrealengine.com/eula). Our use case (internal SITL testing, not a shipped product) is well within the permissive zone:
+
+- **Internal use is unrestricted.** Running UE5 on owned or rented hardware (including AWS EC2) for testing is allowed. The EULA does not distinguish between owned and cloud infrastructure.
+- **No royalties apply.** We use UE5 as an internal development/testing tool. We do not distribute a product containing UE5 to customers. Even if we did, the $1M revenue threshold and the "non-interactive simulation" exemption would apply.
+- **Docker images must stay in a private registry.** UE5 binaries are classified as "Engine Tools" under EULA Section 1A. Engine Tools may be shared with team members via **private channels only** (e.g., AWS ECR). **Never push a UE5-containing Docker image to a public registry** (Docker Hub, GitHub Container Registry public, etc.).
+- **Each team member must be an Engine Licensee.** Anyone pulling or using a Docker image containing UE5 must have an [Epic Games account](https://www.epicgames.com/id/login) linked to their [GitHub account](https://www.unrealengine.com/ue-on-github). This is free — it grants access to the official UE5 base images at `ghcr.io/epicgames/unreal-engine`.
+
+### Cosys-AirSim License
+
+Cosys-AirSim is licensed under the **MIT License** (inherited from Microsoft AirSim, via Codex Laboratories and University of Antwerp). Fully permissive — no additional restrictions on use, modification, or distribution. See the [LICENSE file](https://github.com/Cosys-Lab/Cosys-AirSim/blob/main/LICENSE).
+
+### Compliance Checklist
+
+Before deploying to cloud or sharing Docker images:
+
+- [ ] All team members have linked Epic Games + GitHub accounts
+- [ ] Docker images containing UE5 are stored in **private** registries only (e.g., AWS ECR)
+- [ ] UE5-containing images are **never** pushed to public Docker Hub or public GHCR
+- [ ] `.dockerignore` excludes UE5 source code from any publicly distributed artifacts
+- [ ] Cloud instances are terminated after use (cost and security hygiene)
+
+### Industry Precedent
+
+This deployment pattern (UE5 in Docker on cloud GPUs for internal simulation) is well-established:
+
+- **CARLA** (autonomous driving simulator) uses the same setup, validated by Waymo, Cruise, and others
+- **AWS + Epic Games** have an official partnership with reference architectures for UE5 on EC2
+- **unrealcontainers.com** provides community tooling and EULA compliance documentation
+
+---
+
 ## Related Documentation
 
 - [ADR-011: Cosys-AirSim Photorealistic Simulation](../adr/ADR-011-cosys-airsim-photorealistic-simulation.md) -- Architecture decision record

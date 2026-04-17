@@ -20,6 +20,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -88,10 +89,28 @@ public:
 
     /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
     virtual void set_promotion_paused(bool paused) = 0;
+
+    /// Grid diagnostic counters — exposed on the interface so diagnostic
+    /// logging in tick_survey/tick_navigate can avoid dynamic_cast.
+    [[nodiscard]] virtual size_t grid_occupied_count() const = 0;
+    [[nodiscard]] virtual size_t grid_static_count() const   = 0;
+    [[nodiscard]] virtual int    grid_promoted_count() const = 0;
+
+    /// Whether the planner has snapped the current goal to an alternate position.
+    [[nodiscard]] virtual bool has_snapped_goal() const = 0;
+
+    /// Get the snapped world-frame position {x, y, z} if a snap is active.
+    /// Returns std::nullopt when no snap is active (has_snapped_goal() == false).
+    [[nodiscard]] virtual std::optional<std::array<float, 3>> snapped_goal_xyz() const = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
 // GridPlannerBase — shared logic for grid-based planners
+//
+// Thread safety: all methods must be called from the planning
+// loop thread only (P4 is single-threaded). The snap accessors
+// has_snapped_goal() and snapped_goal_xyz() are only safe to
+// call from the same thread that calls plan().
 // ─────────────────────────────────────────────────────────────
 
 class GridPlannerBase : public IGridPlanner {
@@ -118,6 +137,10 @@ public:
 
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
 
+    [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }
+    [[nodiscard]] size_t grid_static_count() const override { return grid_.static_count(); }
+    [[nodiscard]] int    grid_promoted_count() const override { return grid_.promoted_count(); }
+
     void invalidate_path() override {
         cached_path_.clear();
         path_index_ = 0;
@@ -126,13 +149,16 @@ public:
     }
 
     /// Whether the planner has snapped the current goal to an alternate position.
-    [[nodiscard]] bool has_snapped_goal() const { return snap_valid_; }
+    [[nodiscard]] bool has_snapped_goal() const override { return snap_valid_; }
 
     /// Get the snapped world-frame position {x, y, z}.
     /// Updated when a replan occurs; remains stable between replan cycles as
-    /// long as the goal is unchanged. Only meaningful when has_snapped_goal()
-    /// returns true. The acceptance radius remains wp.radius.
-    [[nodiscard]] const std::array<float, 3>& snapped_goal_xyz() const { return snapped_xyz_; }
+    /// long as the goal is unchanged. Returns std::nullopt when no snap is
+    /// active. The acceptance radius remains wp.radius.
+    [[nodiscard]] std::optional<std::array<float, 3>> snapped_goal_xyz() const override {
+        if (!snap_valid_) return std::nullopt;
+        return snapped_xyz_;
+    }
 
     /// Get the current obstacle grid (for diagnostics/testing).
     [[nodiscard]] const OccupancyGrid3D& grid() const { return grid_; }
@@ -154,9 +180,12 @@ public:
         float py = static_cast<float>(pose.translation[1]);
         float pz = static_cast<float>(pose.translation[2]);
 
-        // ── Re-plan on interval or if no path ───────────────
+        // ── Re-plan on interval, missing path, or target change ─────
+        // target_has_changed() is the single source of truth for target-change
+        // detection — also used by snap_goal() to invalidate the snap cache.
         auto now         = std::chrono::steady_clock::now();
-        bool need_replan = cached_path_.empty() || path_index_ >= cached_path_.size() ||
+        bool need_replan = target_has_changed(target) || cached_path_.empty() ||
+                           path_index_ >= cached_path_.size() ||
                            std::chrono::duration<float>(now - last_plan_time_).count() >
                                config_.replan_interval_s;
 
@@ -390,12 +419,19 @@ protected:
     OccupancyGrid3D   grid_;
 
 private:
+    /// Single source of truth for target-change detection.  Called from
+    /// plan() to force a replan and from snap_goal() to invalidate the snap
+    /// cache.  Compares against stored last_target_ and returns true if the
+    /// waypoint position has changed.  Does NOT update the stored target —
+    /// that is done in snap_goal() after the change is consumed.
+    [[nodiscard]] bool target_has_changed(const Waypoint& target) const {
+        return target.x != last_target_x_ || target.y != last_target_y_ ||
+               target.z != last_target_z_;
+    }
+
     /// Goal snapping — find nearest free cell when goal is occupied.
     GridCell snap_goal(const GridCell& start, const GridCell& raw_goal, const Waypoint& target) {
-        bool target_changed = (target.x != last_target_x_ || target.y != last_target_y_ ||
-                               target.z != last_target_z_);
-
-        if (target_changed) {
+        if (target_has_changed(target)) {
             snap_valid_    = false;
             last_target_x_ = target.x;
             last_target_y_ = target.y;
@@ -502,7 +538,17 @@ private:
             }
 
             if (snapped) {
-                snapped_xyz_            = grid_.grid_to_world(goal);
+                snapped_xyz_ = grid_.grid_to_world(goal);
+                // NaN/Inf guard — reject snaps that produce non-finite coordinates.
+                // This can happen if grid_to_world produces degenerate values from
+                // extreme cell indices near grid boundaries.
+                if (!std::isfinite(snapped_xyz_[0]) || !std::isfinite(snapped_xyz_[1]) ||
+                    !std::isfinite(snapped_xyz_[2])) {
+                    snap_valid_ = false;
+                    DRONE_LOG_WARN("[Planner] Snapped position contains NaN/Inf — "
+                                   "rejecting snap, using original goal");
+                    return raw_goal;
+                }
                 snap_valid_             = true;
                 last_snap_static_count_ = current_static;
                 const float snap_dist =

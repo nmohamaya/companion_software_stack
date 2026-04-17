@@ -2042,6 +2042,114 @@ TEST(DStarLiteIntegrationTest, SnapGoalPureNearestWhenBiasZero) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// Issue #398: Snap accessor integration tests
+// ═════════════════════════════════════════════════════════════
+
+TEST(DStarLiteIntegrationTest, SnapAccessorIntegration) {
+    // Place obstacle on goal, verify has_snapped_goal()==true and
+    // snapped_goal_xyz() returns a valid position near the original goal.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 10.0f;
+    config.inflation_radius_m = 0.5f;
+    DStarLitePlanner planner(config);
+
+    // Block the goal with an obstacle
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(objects, pose);
+
+    // Before planning, no snap exists
+    EXPECT_FALSE(planner.has_snapped_goal());
+    EXPECT_FALSE(planner.snapped_goal_xyz().has_value());
+
+    Waypoint target{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    auto     cmd = planner.plan(pose, target);
+
+    EXPECT_TRUE(cmd.valid);
+    EXPECT_TRUE(planner.has_snapped_goal());
+    auto snap = planner.snapped_goal_xyz();
+    ASSERT_TRUE(snap.has_value());
+
+    // Snapped position should be near original goal (within snap_search_radius cells)
+    float dx   = snap.value()[0] - 5.0f;
+    float dy   = snap.value()[1] - 0.0f;
+    float dist = std::sqrt(dx * dx + dy * dy);
+    EXPECT_LT(dist, static_cast<float>(config.snap_search_radius) * config.resolution_m + 1.0f);
+
+    // Snapped position coordinates must be finite
+    EXPECT_TRUE(std::isfinite(snap.value()[0]));
+    EXPECT_TRUE(std::isfinite(snap.value()[1]));
+    EXPECT_TRUE(std::isfinite(snap.value()[2]));
+}
+
+TEST(DStarLiteIntegrationTest, SnapInvalidatedAfterGoalChange) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 10.0f;
+    config.inflation_radius_m = 0.5f;
+    DStarLitePlanner planner(config);
+
+    // Block a goal with an obstacle to force snap
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    planner.update_obstacles(objects, pose);
+
+    Waypoint target1{5.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    planner.plan(pose, target1);
+    EXPECT_TRUE(planner.has_snapped_goal());
+
+    // Plan to a different, unoccupied goal — snap should be invalidated
+    // because target changed, and the new goal is free (no snap needed).
+    Waypoint target2{-3.0f, -3.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    planner.plan(pose, target2);
+    EXPECT_FALSE(planner.has_snapped_goal());
+    EXPECT_FALSE(planner.snapped_goal_xyz().has_value());
+}
+
+TEST(DStarLiteIntegrationTest, SnapNulloptReturnedViaIGridPlannerInterface) {
+    // Verify the IGridPlanner interface returns std::nullopt when no snap.
+    GridPlannerConfig config;
+    config.resolution_m  = 1.0f;
+    config.grid_extent_m = 10.0f;
+    DStarLitePlanner planner(config);
+
+    // Access through IGridPlanner pointer — no downcast needed
+    IGridPlanner* iface = &planner;
+    EXPECT_FALSE(iface->has_snapped_goal());
+    EXPECT_FALSE(iface->snapped_goal_xyz().has_value());
+
+    // Plan to an unoccupied goal — no snap needed
+    drone::ipc::Pose pose{};
+    pose.translation[0] = 0.0;
+    pose.translation[1] = 0.0;
+    pose.translation[2] = 5.0;
+    Waypoint target{3.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3.0f, false};
+    iface->plan(pose, target);
+
+    EXPECT_FALSE(iface->has_snapped_goal());
+    EXPECT_FALSE(iface->snapped_goal_xyz().has_value());
+}
+
+// ═════════════════════════════════════════════════════════════
 // Issue #337: Yaw-towards-travel tests
 // ═════════════════════════════════════════════════════════════
 

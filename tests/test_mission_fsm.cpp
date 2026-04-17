@@ -2,6 +2,10 @@
 // Unit tests for MissionFSM state machine and waypoint logic.
 #include "planner/mission_fsm.h"
 
+#include <cmath>
+#include <limits>
+#include <optional>
+
 #include <gtest/gtest.h>
 
 using namespace drone::planner;
@@ -280,4 +284,151 @@ TEST(MissionFSMTest, WaypointReachedWithinRadiusOfSnap) {
 
     // Drone 4.0m from snapped position — outside 3.0m radius
     EXPECT_FALSE(fsm.waypoint_reached(20.0f, 0.0f, 5.0f, wp, &snap_xyz));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Waypoint overshot with snap support — Issue #398
+// When the planner snaps a waypoint, waypoint_overshot() must
+// also check against the snapped position (OR-logic).
+// ═══════════════════════════════════════════════════════════
+
+TEST(MissionFSMTest, OvershotAtSnappedPosition) {
+    // 3 waypoints collinear along X: (0,0,5) → (10,0,5) → (20,0,5)
+    // Snap WP1 to (10,3,5) — 3m lateral offset in Y.
+    // Drone at (11,3,5) is past the snap along the approach direction (+X)
+    // and within proximity zone of the original WP.
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // Now at WP1 (10,0,5)
+
+    std::optional<std::array<float, 3>> snap = std::array<float, 3>{10.0f, 3.0f, 5.0f};
+
+    // Drone at (11,3,5) — 1m past snap along +X, within proximity of WP1
+    EXPECT_TRUE(fsm.waypoint_overshot(11.0f, 3.0f, 5.0f, snap));
+}
+
+TEST(MissionFSMTest, OvershotDisabledWhenFarFromSnap) {
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();
+
+    // Snap at (10,3,5). Drone at (25,3,5) — 15m from snap, 15m from original.
+    // proximity_r = 2.0 * 3.0 = 6.0m — both positions are outside proximity zone.
+    std::optional<std::array<float, 3>> snap = std::array<float, 3>{10.0f, 3.0f, 5.0f};
+    EXPECT_FALSE(fsm.waypoint_overshot(25.0f, 3.0f, 5.0f, snap));
+}
+
+TEST(MissionFSMTest, OvershotFallbackToOriginalWhenNoSnap) {
+    // Without snap (nullopt), overshoot behaves exactly like the original code.
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();
+
+    // Drone past WP1 along approach direction, within proximity
+    EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 0.0f, 5.0f, std::nullopt));
+
+    // Drone before WP1
+    EXPECT_FALSE(fsm.waypoint_overshot(5.0f, 0.0f, 5.0f, std::nullopt));
+}
+
+TEST(MissionFSMTest, OvershotWithZAxisSnapDisplacement) {
+    // Snap differs in Z: original WP at z=5, snap at z=8.
+    // Drone at (11,0,8) — near snap, past in +X direction.
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();
+
+    std::optional<std::array<float, 3>> snap = std::array<float, 3>{10.0f, 0.0f, 8.0f};
+
+    // Drone at (11,0,8) — 1m past snap in X, at same Z as snap
+    EXPECT_TRUE(fsm.waypoint_overshot(11.0f, 0.0f, 8.0f, snap));
+}
+
+// ═══════════════════════════════════════════════════════════
+// NaN/Inf robustness — Issue #398 item 4
+// Non-finite snap coordinates must be safely rejected.
+// ═══════════════════════════════════════════════════════════
+
+TEST(MissionFSMTest, NaNSnappedCoordinatesReachedFallsBackToOriginal) {
+    MissionFSM fsm;
+    Waypoint   wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+
+    // NaN snapped position — should be ignored, fall back to original check
+    const std::array<float, 3> nan_snap = {std::numeric_limits<float>::quiet_NaN(), 0.0f, 5.0f};
+
+    // Drone at original WP — reached via original check despite NaN snap
+    EXPECT_TRUE(fsm.waypoint_reached(10.0f, 0.0f, 5.0f, wp, &nan_snap));
+
+    // Drone far from original — NOT reached (NaN snap is ignored)
+    EXPECT_FALSE(fsm.waypoint_reached(50.0f, 0.0f, 5.0f, wp, &nan_snap));
+}
+
+TEST(MissionFSMTest, InfSnappedCoordinatesReachedFallsBackToOriginal) {
+    MissionFSM fsm;
+    Waypoint   wp{10.0f, 0.0f, 5.0f, 0.0f, 3.0f, 2.0f, false};
+
+    // Inf snapped position — should be ignored
+    const std::array<float, 3> inf_snap = {std::numeric_limits<float>::infinity(), 0.0f, 5.0f};
+    EXPECT_TRUE(fsm.waypoint_reached(10.0f, 0.0f, 5.0f, wp, &inf_snap));
+    EXPECT_FALSE(fsm.waypoint_reached(50.0f, 0.0f, 5.0f, wp, &inf_snap));
+}
+
+TEST(MissionFSMTest, NaNSnappedCoordinatesOvershotFallsBackToOriginal) {
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();
+
+    std::optional<std::array<float, 3>> nan_snap =
+        std::array<float, 3>{std::numeric_limits<float>::quiet_NaN(), 0.0f, 5.0f};
+
+    // NaN snap is ignored — overshoot check uses only original WP
+    EXPECT_TRUE(fsm.waypoint_overshot(15.0f, 0.0f, 5.0f, nan_snap));
+    EXPECT_FALSE(fsm.waypoint_overshot(5.0f, 0.0f, 5.0f, nan_snap));
+}
+
+TEST(MissionFSMTest, StaleZeroSnapDoesNotTriggerFalseOvershoot) {
+    // A stale snap at (0,0,0) should not trigger overshoot if the drone
+    // happens to be near the origin and "past" it in the dot-product sense.
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();  // WP1 at (10,0,5)
+
+    // Stale snap at (0,0,0). Drone at (5,0,5) — before WP1 in approach direction.
+    // The drone IS past the stale snap (0,0,0) in the +X approach direction,
+    // but 5m > proximity_r (6.0m from original, 7.07m from snap) — so the snap
+    // check should NOT trigger because dist from snap is outside proximity zone.
+    std::optional<std::array<float, 3>> stale_snap = std::array<float, 3>{0.0f, 0.0f, 0.0f};
+
+    // Drone at (5,0,5) — 5m from original WP, within proximity (6m) BUT behind
+    // WP in approach direction, AND snap at origin is 7.07m away (>6m proximity).
+    EXPECT_FALSE(fsm.waypoint_overshot(5.0f, 0.0f, 5.0f, stale_snap));
+}
+
+TEST(MissionFSMTest, ExactBoundaryAtAcceptanceRadiusOvershotStrictLessThan) {
+    // The proximity check uses <= (not <), so exactly at proximity boundary
+    // DOES qualify for the proximity test. But the dot-product determines direction.
+    MissionFSM fsm;
+    fsm.load_mission({{0, 0, 5, 0, 2.0f, 3.0f, false},
+                      {10, 0, 5, 0, 2.0f, 3.0f, false},
+                      {20, 0, 5, 0, 2.0f, 3.0f, false}});
+    (void)fsm.advance_waypoint();
+
+    // proximity_r = 2.0 * 3.0 = 6.0m
+    // Drone at exactly 6.0m past WP1 along +X: (16,0,5)
+    EXPECT_TRUE(fsm.waypoint_overshot(16.0f, 0.0f, 5.0f));
+
+    // Drone at 6.001m — just outside proximity zone
+    EXPECT_FALSE(fsm.waypoint_overshot(16.01f, 0.0f, 5.0f));
 }
