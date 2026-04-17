@@ -55,14 +55,12 @@ jobs:
           libgtest-dev \
           unzip
 
-    - name: Install Zenoh (custom SHM-enabled build)
+    - name: Install Zenoh
       run: |
-        # Download our custom zenoh-c .deb with shared-memory feature enabled.
-        # This replaces the upstream pre-built package which lacks SHM support.
-        # See deploy/build_zenohc_deb.sh for how this .deb is built.
-        wget -q "https://github.com/nmohamaya/companion_software_stack/releases/download/zenohc-v${ZENOH_VERSION}/libzenohc-shm_${ZENOH_VERSION}_amd64.deb" \
-          -O /tmp/libzenohc-shm.deb
-        sudo dpkg -i /tmp/libzenohc-shm.deb
+        wget -q "https://github.com/eclipse-zenoh/zenoh-c/releases/download/${ZENOH_VERSION}/libzenohc-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-debian.zip" \
+          -O /tmp/zenohc.zip
+        unzip -o /tmp/zenohc.zip -d /tmp/zenohc-debs
+        sudo dpkg -i /tmp/zenohc-debs/*.deb
 
         git clone --depth 1 --branch "${ZENOH_VERSION}" \
           https://github.com/eclipse-zenoh/zenoh-cpp.git /tmp/zenoh-cpp

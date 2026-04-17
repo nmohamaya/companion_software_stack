@@ -74,18 +74,21 @@ nm -D /usr/lib/libzenohc.so | grep -i shm | wc -l
 
 ### Current Status
 
-**RESOLVED (2026-04-16, Issue #387).** CI now installs a custom-built zenoh-c
-.deb with the `shared-memory` cargo feature enabled. All 7 SHM tests run
-unconditionally in CI. The `GTEST_SKIP()` guards have been replaced with
-`ASSERT_NE`/`ASSERT_TRUE` assertions that fail hard if SHM is unavailable.
+**SHM tests are SKIPPED on CI.** The following 7 tests skip when the SHM provider is unavailable:
+- `ZenohShmProvider.ProviderCreatesSuccessfully`
+- `ZenohShmProvider.AllocAndWriteBuffer`
+- `ZenohShmProvider.AllocLargeVideoFrameBuffer`
+- `ZenohShmProvider.PoolSizeConfiguration`
+- `ZenohShmPublish.LargeVideoFrameUsesShmPath`
+- `ZenohShmPublish.StereoFrameUsesShmPath`
+- `ZenohShmPublish.SustainedVideoPublish`
 
-See `deploy/build_zenohc_deb.sh` for the build script and `.github/workflows/ci.yml`
-for the installation step.
+The remaining Zenoh tests still run (pub/sub falls back to the bytes path).
 
 ### Prevention
 
 - When adding features that depend on **opt-in** capabilities of a third-party library, always check whether CI installs a version that includes that capability.
-- For capabilities that must work in CI, build and host custom packages rather than relying on upstream defaults.
+- Add `GTEST_SKIP()` guards for tests that depend on runtime-optional capabilities (SHM, GPU, hardware) so they degrade gracefully.
 
 ---
 
@@ -142,7 +145,7 @@ Added `(void)shm_pool_mb;` cast at the top of the function body to suppress the 
 | **Affected step** | "Build Zenoh from source" CI step |
 | **CI matrix** | `zenoh` backend only |
 | **Urgency** | **Medium** — SHM zero-copy is not tested in CI until this is resolved |
-| **Status** | **RESOLVED** — custom .deb hosted on GitHub Releases (Issue #387) |
+| **Status** | **OPEN** — workaround in place (tests skip), but SHM coverage gap exists |
 
 ### Symptoms
 
@@ -173,13 +176,9 @@ This is a **zenoh-c upstream issue**: their release process generates headers on
 
 The `dtolnay/rust-toolchain@stable` on CI may install a different Rust version than what zenoh-c 1.7.2 was built with, compounding the mismatch.
 
-### Resolution
+### Current Workaround
 
-**RESOLVED (2026-04-16, Issue #387).** Instead of building from source in CI
-(which triggers the opaque-type mismatch), we now pre-build the .deb locally
-with the exact pinned Rust toolchain from `rust-toolchain.toml` and host it on
-GitHub Releases. CI downloads and installs this pre-built .deb. This is
-"Solution 4" from the list below.
+Reverted CI to use **pre-built debian packages** (which lack SHM support). All SHM-dependent tests use `GTEST_SKIP()` so CI passes, but **7 tests are skipped** — zero-copy publishing is not validated in CI.
 
 ### Impact
 
