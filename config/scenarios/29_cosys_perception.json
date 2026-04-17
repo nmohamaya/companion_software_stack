@@ -182,6 +182,7 @@
         },
         "comms": {
             "mavlink": {
+                "_comment": "PX4 SITL API/offboard link binds 14580 and sends telemetry to 14540 — bind 14540 locally to receive. AirSim's MAVLink bridge moved to 14541/14581 (see cosys_settings.json) to avoid conflict.",
                 "backend": "mavlink",
                 "uri": "udp://:14540",
                 "heartbeat_rate_hz": 1,

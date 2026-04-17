@@ -468,6 +468,29 @@ fi
 
 mkdir -p "$SCENARIO_LOG_DIR"
 
+# ── Pre-flight: kill stale sim processes to free ports ────────
+# Without this, a zombie UE5/PX4 from a previous run holds TCP 4560 or UDP
+# 14540, causing "bind: Address already in use" or "PX4 server not running".
+echo ""
+echo "Pre-flight: clearing stale simulator processes..."
+STALE_COUNT=0
+for pat in "UnrealEditor" "Blocks-Linux" "AirSimEnv" "px4_sitl" "build/bin/px4" "PX4-Autopilot/build/px4_sitl"; do
+    if pgrep -f "$pat" >/dev/null 2>&1; then
+        STALE_COUNT=$((STALE_COUNT + 1))
+        pkill -9 -f "$pat" 2>/dev/null || true
+    fi
+done
+if [[ $STALE_COUNT -gt 0 ]]; then
+    sleep 2
+    echo -e "  ${YELLOW}Killed ${STALE_COUNT} stale process group(s)${NC}"
+fi
+# Release stuck TCP/UDP ports (best-effort)
+for port in 4560 14540 14541 14550 14580 14581 18570 41451; do
+    if ss -tlnp 2>/dev/null | grep -q ":${port} " || ss -ulnp 2>/dev/null | grep -q ":${port} "; then
+        echo -e "  ${YELLOW}Port ${port} still held — check manually if scenario fails to bind${NC}"
+    fi
+done
+
 # ── PIDs ──────────────────────────────────────────────────────
 UE5_PID=""
 COMPANION_PIDS=()
@@ -616,6 +639,34 @@ fi
 # Additional settle: UE5 needs time to finish loading the level after the port opens
 echo -e "  ${CYAN}Settling (5s) — waiting for level load...${NC}"
 sleep 5
+
+# ── Wait for HIL TCP port (AirSim server on 4560) ────────────
+# AirSim opens the RPC port (41451) during plugin init, but the HIL TCP server
+# (port 4560) is only opened once the vehicle is spawned in the game. Launching
+# PX4 before 4560 is bound causes simulator_mavlink to fail its initial connect.
+echo -n "  Waiting for AirSim HIL TCP port 4560"
+HIL_READY=false
+for _ in $(seq 1 30); do
+    if ss -tlnp 2>/dev/null | grep -q ":4560 "; then
+        HIL_READY=true
+        break
+    fi
+    if ! kill -0 "$UE5_PID" 2>/dev/null; then
+        echo ""
+        echo -e "  ${RED}ERROR: UE5 died before HIL server came up${NC}"
+        exit 2
+    fi
+    echo -n "."
+    sleep 1
+done
+echo ""
+if [[ "$HIL_READY" == "true" ]]; then
+    check "AirSim HIL TCP port 4560 ready" 0
+else
+    echo -e "  ${YELLOW}WARNING: HIL TCP port 4560 not detected after 30s — PX4 may fail to connect${NC}"
+    echo -e "  ${YELLOW}Hint: in GUI mode, ensure the game is actually playing (press Play if in editor)${NC}"
+    check "AirSim HIL TCP port 4560 ready" 1
+fi
 
 # ── Launch PX4 SITL ──────────────────────────────────────────
 echo ""
