@@ -27,7 +27,21 @@ Comprehensive setup guide for Tier 3 photorealistic simulation using Cosys-AirSi
 
 ### Why Tier 3?
 
-Gazebo validates flight dynamics, IPC wiring, FSM logic, and nav/planning -- it does this well and continues to. But Gazebo renders flat-shaded geometric primitives that ML models (YOLO, Depth Anything V2) cannot meaningfully process. Cosys-AirSim provides photorealistic UE5 rendering, native PX4 SITL integration, and a native radar sensor model -- the three capabilities needed to validate the ML perception pipeline.
+Gazebo validates flight dynamics, IPC wiring, FSM logic, and nav/planning -- it does this well and continues to. But Gazebo renders flat-shaded geometric primitives that ML models (YOLO, Depth Anything V2) cannot meaningfully process. Cosys-AirSim provides photorealistic UE5 rendering and a native radar sensor model -- two capabilities needed to validate the ML perception pipeline.
+
+### Flight Controller Choice: SimpleFlight (not PX4)
+
+Tier 3 uses AirSim's built-in **SimpleFlight** flight controller, driven through the AirSim RPC API by `CosysFCLink` (see `common/hal/include/hal/cosys_fc_link.h`). Tier 2 (Gazebo) continues to use **PX4 over MAVLink** via `MavlinkFCLink`.
+
+**Why not PX4 in Cosys-AirSim?** PX4+Cosys-AirSim Hardware-in-the-Loop integration is broken upstream ([PX4 #24033](https://github.com/PX4/PX4-Autopilot/issues/24033), [AirSim #5018](https://github.com/microsoft/AirSim/issues/5018)): the PX4 `ekf2` estimator never receives sensor data from the simulator, so the drone never arms. Six configuration variants were tested; all failed with `ekf2 missing data`. SimpleFlight unblocks the Epic #431 Tier 3 scenarios without waiting on an upstream fix.
+
+**Trade-offs:**
+- Flight dynamics remain realistic (physics engine unchanged).
+- ML perception + depth + radar pipeline unchanged — the whole validation purpose of Tier 3 still holds.
+- **Battery / RC / datalink fault simulation remains in Gazebo Tier 2** — SimpleFlight does not simulate them. Our fault-injection scenarios already run on Tier 2 where PX4 + MAVLink deliver the realistic failure semantics.
+- Mode mapping is simplified (`STAB → hover`, `GUIDED → velocity`, `AUTO → land`, `RTL → goHome`). See the header docstring for the full mapping.
+
+See ADR-011 amendment (2026-04-17) and issue [#490](https://github.com/nmohamaya/companion_software_stack/issues/490) for the full decision record.
 
 ---
 
@@ -200,7 +214,7 @@ docker compose -f docker/docker-compose.cosys.yml up --build
 
 This starts two containers:
 
-1. **cosys-airsim** -- UE5 headless rendering + PX4 SITL + AirSim RPC server
+1. **cosys-airsim** -- UE5 headless rendering + SimpleFlight + AirSim RPC server
 2. **companion-stack** -- 7-process drone stack with `MODEL_PRESET=cloud`
 
 The compose file includes a health check that waits up to 120 seconds for UE5 to load assets before starting the companion stack. The companion stack container starts only after the AirSim RPC server is healthy.
@@ -266,7 +280,7 @@ aws ec2 terminate-instances --instance-ids <instance-id>
 | **Resolution** | 1280x720 | 1920x1080 |
 | **UE5 rendering** | Rasterization (Pascal) | Nanite + Lumen (Ampere) |
 | **Radar backend** | `cosys_airsim` | `cosys_airsim` |
-| **PX4 connection** | `simulated` (local dev) | `mavlink` (tcp://cosys-airsim:14540) |
+| **Flight controller** | SimpleFlight via AirSim RPC (`cosys_rpc`) | SimpleFlight via AirSim RPC (`cosys_rpc`) |
 | **Deployment** | Native processes | Docker Compose (2 containers) |
 | **GPU minimum** | GTX 1080 Ti (11 GB) | A10G (24 GB) |
 | **Typical cost** | Electricity only | ~$0.35/hr (spot) |
@@ -300,7 +314,7 @@ A common source of confusion: UE5 and the ML inference pipeline use the GPU diff
 - **UE5 startup time:** 60-90 seconds for asset loading (vs ~5 seconds for Gazebo). Docker health check accounts for this with a 120-second `start_period`.
 - **Docker image size:** The Cosys-AirSim Docker image is ~15-20 GB. First pull takes significant time on slow connections.
 - **Cosys-AirSim maintenance:** Maintained by Cosys-Lab (University of Antwerp). MIT license allows forking if needed. Our HAL abstraction layer means swapping the simulator only requires new HAL backends.
-- **VIO backend:** The dev config currently uses the simulated VIO backend. PX4 EKF2 pose via `MavlinkFCLink` is used in cloud mode. A native Cosys-AirSim VIO backend is planned but not yet implemented.
+- **VIO backend:** The dev config currently uses the simulated VIO backend. A native Cosys-AirSim VIO backend (reading `simGetGroundTruthKinematics()`) is planned; until then, SimpleFlight does not publish an EKF2-equivalent fused pose.
 - **Spot instance interruptions:** AWS spot instances can be reclaimed with 2 minutes notice. Use checkpoint/retry logic for long-running test suites.
 
 ---
@@ -317,7 +331,7 @@ A common source of confusion: UE5 and the ML inference pipeline use the GPU diff
 | `CUDA error: out of memory` | VRAM budget exceeded | Close other GPU applications; reduce resolution in config; use smaller ML models |
 | UE5 crash on startup with `VK_ERROR_DEVICE_LOST` | GPU driver too old or incompatible | Update to NVIDIA driver 535+ (`sudo apt-get install nvidia-driver-535`) |
 | UE5 renders black screen (headless) | Missing Vulkan ICD in container | Ensure `NVIDIA_DRIVER_CAPABILITIES=graphics,display` in Docker environment |
-| `PX4 connection timeout` (cloud) | companion-stack started before PX4 ready | The compose health check handles this; if manual, wait for `ss -tlnp \| grep 14540` |
+| `CosysFCLink` open fails with "RPC client not connected" | companion-stack started before UE5/SimpleFlight ready | The compose health check handles this; if manual, wait for `ss -tlnp \| grep 41451` (AirSim RPC, not 14540 — Tier 3 does not use MAVLink) |
 | Docker `nvidia` runtime not found | NVIDIA Container Toolkit not installed | Install: `sudo apt-get install nvidia-container-toolkit && sudo systemctl restart docker` |
 | Slow ML inference (~2 FPS) | OpenCV DNN using CPU backend | Verify CUDA is available: build OpenCV with `-DWITH_CUDA=ON`. See [INSTALL.md Section 4c](INSTALL.md#option-c-build-from-source-with-cuda-gpu-accelerated-dnn) |
 | `ExternalProject` build failure for AirSim | Compiler version mismatch or missing dependencies | Check `build/airsim-build/airsim_external-prefix/src/airsim_external-stamp/` for logs |
@@ -382,7 +396,7 @@ Key settings for the dev profile (GTX 1080 Ti):
 | `perception.radar.backend` | `cosys_airsim` | Native AirSim radar |
 | `perception.depth_estimator.backend` | `depth_anything_v2` | ML depth (until ground-truth depth backend is wired) |
 | `slam.imu.backend` | `cosys_airsim` | AirSim IMU data |
-| `comms.mavlink.backend` | `simulated` | No PX4 in dev mode |
+| `comms.mavlink.backend` | `cosys_rpc` | SimpleFlight via AirSim RPC (see #490) |
 
 ### Cloud Config: `config/cosys_airsim.json`
 
@@ -396,8 +410,7 @@ Key differences from dev:
 | `perception.detector.backend` | `yolov8` | Full ML detection |
 | `perception.detector.model_path` | `models/yolov8m.onnx` | YOLOv8m for cloud |
 | `perception.depth_estimator.backend` | `cosys_airsim` | Ground-truth depth from simulator |
-| `comms.mavlink.backend` | `mavlink` | Real PX4 SITL via TCP |
-| `comms.mavlink.uri` | `tcp://cosys-airsim:14540` | PX4 inside AirSim container |
+| `comms.mavlink.backend` | `cosys_rpc` | SimpleFlight via AirSim RPC (see #490) |
 
 ---
 
@@ -424,7 +437,7 @@ CLOUD (AWS g5.xlarge, A10G 24 GB)
 +-------------------------------------------+
 |  Container 1: cosys-airsim                |
 |    +-- UE5 headless (Vulkan)   ~10 GB     |
-|    +-- PX4 SITL (MAVLink tcp:14540)       |
+|    +-- SimpleFlight (built-in FC)         |
 |    +-- AirSim RPC (port 41451)            |
 +-------------------------------------------+
          |  Docker bridge network
@@ -432,7 +445,7 @@ CLOUD (AWS g5.xlarge, A10G 24 GB)
 |  Container 2: companion-stack             |
 |    +-- 7 processes (P1-P7)                |
 |    +-- YOLOv8m + DA V2 ViT-B   ~4.5 GB   |
-|    +-- MavlinkFCLink (real PX4)           |
+|    +-- CosysFCLink (SimpleFlight via RPC) |
 |    +-- Zenoh IPC (SHM within container)   |
 +-------------------------------------------+
 ```
