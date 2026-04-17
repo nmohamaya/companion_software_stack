@@ -13,7 +13,12 @@ struct FCState {
     float    battery_voltage{0.0f};
     float    battery_current{0.0f};
     float    battery_percent{0.0f};
-    float    altitude_rel{0.0f};  // relative (AGL) altitude in meters
+    /// Relative altitude in meters (above takeoff/spawn point; not terrain-corrected AGL).
+    /// MavlinkFCLink sources this from MAVSDK Telemetry::Position::relative_altitude_m
+    /// (relative to the arm altitude). CosysFCLink reports altitude above spawn, since
+    /// SimpleFlight does not model terrain. Callers that require true AGL must correct
+    /// with a terrain model externally.
+    float    altitude_rel{0.0f};
     float    ground_speed{0.0f};
     uint8_t  satellites{0};
     uint8_t  flight_mode{0};  // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
@@ -35,6 +40,11 @@ public:
     [[nodiscard]] virtual bool is_connected() const = 0;
 
     /// Send a velocity+yaw trajectory command to the FC.
+    /// @param vx   Velocity north / forward (m/s). Frame per implementation docstring.
+    /// @param vy   Velocity east  / right   (m/s). Frame per implementation docstring.
+    /// @param vz   Velocity up / down       (m/s). Frame per implementation docstring.
+    /// @param yaw  Yaw angle in radians (0 = North, CW positive).
+    ///             Backends convert to their native FC unit internally.
     [[nodiscard]] virtual bool send_trajectory(float vx, float vy, float vz, float yaw) = 0;
 
     /// Send arm/disarm command.
