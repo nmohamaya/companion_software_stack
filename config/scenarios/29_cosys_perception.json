@@ -71,6 +71,12 @@
                 "measurement_noise_bearing": 0.05
             }
         },
+        "slam": {
+            "vio": {
+                "_comment": "Use cosys_airsim backend — ground-truth kinematics from UE5 via RPC",
+                "backend": "cosys_airsim"
+            }
+        },
         "slam_vio_nav": {
             "imu_source": {
                 "backend": "cosys_airsim",
@@ -84,11 +90,6 @@
                 "endpoint": "127.0.0.1:41451",
                 "camera_name": "DepthCam",
                 "vehicle_name": "Drone0"
-            },
-            "vio": {
-                "backend": "simulated_vio",
-                "drift_per_meter": 0.001,
-                "initial_covariance": 0.01
             }
         },
         "mission_planner": {
