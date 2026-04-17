@@ -396,7 +396,7 @@ int main(int argc, char* argv[]) {
     std::string                                 cosys_vehicle = "Drone0";
 #ifdef HAVE_COSYS_AIRSIM
     if (vio_backend_name == "cosys_airsim") {
-        cosys_client = drone::hal::detail::get_shared_cosys_client(ctx.cfg);
+        cosys_client  = drone::hal::detail::get_shared_cosys_client(ctx.cfg);
         cosys_vehicle = ctx.cfg.get<std::string>(
             std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0");
     }

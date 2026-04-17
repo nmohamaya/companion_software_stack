@@ -160,9 +160,9 @@ private:
                 // radar from LiDAR point cloud (vehicle frame, NED convention).
                 msr::airlib::LidarData lidar_data;
                 bool                   got_data = client_->with_client([&](auto& rpc) {
-                    lidar_data = rpc.getLidarData(
-                        radar_name_,  // sensor name (typically "Radar" or "Lidar")
-                        vehicle_name_);
+                    lidar_data =
+                        rpc.getLidarData(radar_name_,  // sensor name (typically "Radar" or "Lidar")
+                                                           vehicle_name_);
                 });
                 if (!got_data) {
                     DRONE_LOG_WARN("[CosysRadar] RPC disconnected — skipping scan");

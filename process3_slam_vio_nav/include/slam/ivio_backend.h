@@ -789,9 +789,8 @@ private:
         while (active_.load(std::memory_order_acquire)) {
             try {
                 msr::airlib::Kinematics::State kin{};
-                bool got = client_->with_client([&](auto& rpc) {
-                    kin = rpc.simGetGroundTruthKinematics(vehicle_name_);
-                });
+                bool                           got = client_->with_client(
+                    [&](auto& rpc) { kin = rpc.simGetGroundTruthKinematics(vehicle_name_); });
                 if (!got) {
                     std::this_thread::sleep_for(poll_interval_);
                     continue;
@@ -799,10 +798,9 @@ private:
 
                 Pose p;
                 // Timestamp: steady_clock (same epoch as FaultManager for staleness checks)
-                p.timestamp =
-                    std::chrono::duration<double>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                        .count();
+                p.timestamp = std::chrono::duration<double>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count();
 
                 // AirSim NED → our internal (X=N, Y=E, Z=Up): negate Z
                 p.position = Eigen::Vector3d(static_cast<double>(kin.pose.position.x()),
@@ -868,7 +866,7 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     const ImuNoiseParams& imu_params = {},
     const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f,
     double good_trace_max = 0.1, double degraded_trace_max = 1.0,
-    std::shared_ptr<drone::hal::CosysRpcClient> cosys_client = nullptr,
+    std::shared_ptr<drone::hal::CosysRpcClient> cosys_client       = nullptr,
     const std::string&                          cosys_vehicle_name = "Drone0") {
 
     // Validate quality thresholds — good must be <= degraded for the
