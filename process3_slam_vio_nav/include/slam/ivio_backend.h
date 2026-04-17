@@ -48,6 +48,15 @@ namespace drone::hal {
 class CosysRpcClient;
 }
 
+// Pull the full CosysRpcClient + MultirotorRpcLibClient headers BEFORE opening
+// our namespace. If the include lands inside `namespace drone::slam { ... }`
+// further down, AirSim's transitive `<locale>` inclusion is re-declared as
+// `drone::slam::std::codecvt`, which breaks anything that later uses <locale>
+// (observed on gcc-13 / libstdc++ 13). Keep this above the namespace block.
+#ifdef HAVE_COSYS_AIRSIM
+#include "hal/cosys_rpc_client.h"
+#endif
+
 namespace drone::slam {
 
 // ─────────────────────────────────────────────────────────────
@@ -727,7 +736,7 @@ private:
 // ─────────────────────────────────────────────────────────────
 #ifdef HAVE_COSYS_AIRSIM
 
-#include "hal/cosys_rpc_client.h"
+// cosys_rpc_client.h is pulled in above the namespace block — see note there.
 
 class CosysVIOBackend final : public IVIOBackend {
 public:

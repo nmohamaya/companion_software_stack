@@ -241,6 +241,9 @@ endif()
 # ── Tools ────────────────────────────────────────────────────
 add_subdirectory(tools/fault_injector)
 add_subdirectory(tools/flight_replay)
+if(COSYS_AIRSIM_FOUND)
+    add_subdirectory(tools/cosys_populate_scene)
+endif()
 
 # ── Tests ────────────────────────────────────────────────────
 enable_testing()

@@ -1,0 +1,76 @@
+{
+    "_comment": "Static-obstacle proving-ground scene for scenario 30. Coordinates: +X=North, +Y=East, +Z=Up (scenario convention). Simulator-agnostic: same file will drive Gazebo via the Phase-D adapter.",
+    "_epic": "#480",
+    "_issue": "#479",
+    "objects": [
+        {
+            "_comment": "Building (tall pillar) near waypoint 2 — obstacle for radar + D*Lite.",
+            "name": "pillar_01",
+            "asset": "Pillar_50x500",
+            "x": 8, "y": 12, "z": 0,
+            "yaw_deg": 0,
+            "scale": [2, 2, 3]
+        },
+        {
+            "_comment": "Second pillar creates a narrow gap with wall_01 — forces tight nav.",
+            "name": "pillar_02",
+            "asset": "Pillar_50x500",
+            "x": 22, "y": 14, "z": 0,
+            "yaw_deg": 0,
+            "scale": [2, 2, 3]
+        },
+        {
+            "name": "wall_01",
+            "asset": "Wall_400x400",
+            "x": 15, "y": 10, "z": 0,
+            "yaw_deg": 0,
+            "scale": 1.0
+        },
+        {
+            "name": "wall_02",
+            "asset": "Wall_400x400",
+            "x": 15, "y": 10, "z": 0,
+            "yaw_deg": 90,
+            "scale": 1.0
+        },
+        {
+            "_comment": "Furniture — COCO 'chair' class, exercises YOLO.",
+            "name": "chair_01",
+            "asset": "SM_Chair",
+            "x": 4, "y": 18, "z": 0,
+            "yaw_deg": 45,
+            "scale": 2.0
+        },
+        {
+            "_comment": "COCO 'couch' class.",
+            "name": "couch_01",
+            "asset": "SM_Couch",
+            "x": 20, "y": 12, "z": 0,
+            "yaw_deg": 180,
+            "scale": 2.0
+        },
+        {
+            "_comment": "COCO 'potted plant' — ish. Big bush stands in.",
+            "name": "bush_01",
+            "asset": "SM_Bush",
+            "x": 10, "y": 5, "z": 0,
+            "yaw_deg": 0,
+            "scale": 3.0
+        },
+        {
+            "_comment": "Stationary human — YOLO 'person' class.",
+            "name": "person_01",
+            "asset": "SK_Mannequin",
+            "x": 12, "y": 18, "z": 0,
+            "yaw_deg": 45,
+            "scale": 1.0
+        },
+        {
+            "name": "person_02",
+            "asset": "SK_Mannequin",
+            "x": 6, "y": 3, "z": 0,
+            "yaw_deg": 90,
+            "scale": 1.0
+        }
+    ]
+}
