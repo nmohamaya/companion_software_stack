@@ -115,4 +115,16 @@ TEST(CosysFCLinkTest, CloseIsSafeWhenNeverOpened) {
     EXPECT_FALSE(fc->is_connected());
 }
 
+#else  // !HAVE_COSYS_AIRSIM
+
+// When the AirSim SDK is not available we still register a GTEST_SKIP()
+// stub so this translation unit contributes one test to the aggregate count
+// and the "Total Tests" baseline stays stable across build configurations.
+// Without this, a build that disables HAVE_COSYS_AIRSIM would silently drop
+// 8 tests and mask regressions in the rest of the suite.
+#include <gtest/gtest.h>
+TEST(CosysFCLinkTest, SkippedNoCosysSDK) {
+    GTEST_SKIP() << "HAVE_COSYS_AIRSIM not defined — Cosys SDK unavailable";
+}
+
 #endif  // HAVE_COSYS_AIRSIM

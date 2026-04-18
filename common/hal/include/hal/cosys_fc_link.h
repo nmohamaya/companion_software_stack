@@ -38,6 +38,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -122,8 +123,18 @@ public:
             return false;
         }
 
+        // Set the flag before constructing the thread so poll_loop's first
+        // load(acquire) observes true. If std::thread construction throws
+        // (EAGAIN, OOM, pthread failure), reset the flag so a subsequent
+        // open() call doesn't observe a stuck "running" state with no thread.
         thread_running_.store(true, std::memory_order_release);
-        poll_thread_ = std::thread(&CosysFCLink::poll_loop, this);
+        try {
+            poll_thread_ = std::thread(&CosysFCLink::poll_loop, this);
+        } catch (const std::system_error& e) {
+            thread_running_.store(false, std::memory_order_release);
+            DRONE_LOG_ERROR("[CosysFCLink] Poll thread start failed: {}", e.what());
+            return false;
+        }
 
         DRONE_LOG_INFO("[CosysFCLink] Opened on {} vehicle='{}'", client_->endpoint(),
                        vehicle_name_);
@@ -165,6 +176,8 @@ public:
             std::lock_guard<std::mutex> st_lock(state_mtx_);
             cached_state_ = FCState{};
         }
+        // Clear the send_mode override so a subsequent open() starts fresh.
+        requested_mode_.store(UINT8_MAX, std::memory_order_release);
 
         DRONE_LOG_INFO("[CosysFCLink] Closed");
     }
@@ -215,6 +228,10 @@ public:
 
     bool send_arm(bool arm) override {
         std::lock_guard<std::mutex> lock(conn_mtx_);
+        // Guard against RPC during close()'s join window: close() releases
+        // conn_mtx_ while joining the poll thread, so a concurrent send_arm()
+        // could otherwise slip through after thread_running_ was cleared.
+        if (!thread_running_.load(std::memory_order_acquire)) return false;
         if (!client_->is_connected()) return false;
 
         bool rpc_result = false;
@@ -242,12 +259,18 @@ public:
     }
 
     /// Map IFCLink mode codes to AirSim drone commands:
-    ///   0 = STAB    → hoverAsync().waitOnLastTask() (safe stabilised hover)
+    ///   0 = STAB    → hoverAsync() (fire-and-forget; engaged by next tick)
     ///   1 = GUIDED  → no-op  (velocity commands drive SimpleFlight directly)
     ///   2 = AUTO    → landAsync() (we treat "AUTO" as auto-land for Tier 3)
     ///   3 = RTL     → goHomeAsync()
+    ///
+    /// All RPCs are fire-and-forget: blocking on waitOnLastTask() under
+    /// conn_mtx_ would stall every other command path (send_arm / trajectory /
+    /// mode) for up to the RPC's timeout. Caller is expected to poll
+    /// receive_state().flight_mode to confirm mode engagement.
     bool send_mode(uint8_t mode) override {
         std::lock_guard<std::mutex> lock(conn_mtx_);
+        if (!thread_running_.load(std::memory_order_acquire)) return false;
         if (!client_->is_connected()) return false;
 
         if (mode > 3) {
@@ -259,8 +282,8 @@ public:
         bool ok     = client_->with_client([&](auto& rpc) {
             try {
                 switch (mode) {
-                    case 0:  // STAB → hover (blocking until engaged)
-                        rpc.hoverAsync(vehicle_name_)->waitOnLastTask();
+                    case 0:  // STAB → hover (non-blocking)
+                        rpc.hoverAsync(vehicle_name_);
                         break;
                     case 1:  // GUIDED → no-op; send_trajectory drives motion
                         break;
@@ -278,19 +301,27 @@ public:
         });
         if (!ok || !rpc_ok) return false;
 
-        {
-            std::lock_guard<std::mutex> st_lock(state_mtx_);
-            cached_state_.flight_mode = mode;
-        }
+        // Record the explicitly requested mode so the poll loop can report it
+        // back verbatim. Using a dedicated atomic (with UINT8_MAX as the
+        // "never set" sentinel) avoids the 0 == STAB == "never set" collision
+        // that existed when we piggy-backed on cached_state_.flight_mode.
+        requested_mode_.store(mode, std::memory_order_release);
         DRONE_LOG_INFO("[CosysFCLink] Mode changed to {}", mode);
         return true;
     }
 
-    /// Autonomous takeoff.  Uses AirSim's built-in takeoffAsync() to leave
-    /// the ground (blocking), then fires a non-blocking moveToZAsync to
-    /// climb to the requested AGL altitude (NED → negate z).
+    /// Autonomous takeoff — fire-and-forget.
+    ///
+    /// Fires AirSim's takeoffAsync() followed by a non-blocking moveToZAsync
+    /// to the requested altitude (caller-frame +up; NED → negate z). Neither
+    /// RPC is awaited here — blocking on waitOnLastTask() under conn_mtx_
+    /// would stall the trajectory/arm/mode paths for up to 20 s.
+    ///
+    /// The caller (mission-planner FSM) is expected to poll
+    /// `receive_state().altitude_rel` to detect takeoff completion.
     bool send_takeoff(float altitude_m) override {
         std::lock_guard<std::mutex> lock(conn_mtx_);
+        if (!thread_running_.load(std::memory_order_acquire)) return false;
         if (!client_->is_connected()) return false;
 
         constexpr float kTakeoffTimeoutSec = 20.0f;
@@ -300,8 +331,8 @@ public:
         bool rpc_ok = false;
         bool ok     = client_->with_client([&](auto& rpc) {
             try {
-                rpc.takeoffAsync(kTakeoffTimeoutSec, vehicle_name_)->waitOnLastTask();
-                // Non-blocking climb to target altitude
+                // Fire-and-forget: don't waitOnLastTask() under conn_mtx_.
+                rpc.takeoffAsync(kTakeoffTimeoutSec, vehicle_name_);
                 rpc.moveToZAsync(ned_z, kClimbSpeedMps, /*timeout_sec*/ 60.0f,
                                      msr::airlib::YawMode(), /*lookahead*/ -1.0f,
                                      /*adaptive_lookahead*/ 1.0f, vehicle_name_);
@@ -312,7 +343,7 @@ public:
         });
         if (!ok || !rpc_ok) return false;
 
-        DRONE_LOG_INFO("[CosysFCLink] Takeoff to {:.1f}m initiated", altitude_m);
+        DRONE_LOG_INFO("[CosysFCLink] Takeoff to {:.1f}m initiated (non-blocking)", altitude_m);
         return true;
     }
 
@@ -334,7 +365,9 @@ private:
 
         while (thread_running_.load(std::memory_order_acquire)) {
             try {
-                msr::airlib::MultirotorState ms;
+                // Value-initialise every poll iteration so previous-tick fields
+                // cannot bleed into the next snapshot on a partial RPC failure.
+                msr::airlib::MultirotorState ms{};
                 bool                         got = client_->with_client(
                     [&](auto& rpc) { ms = rpc.getMultirotorState(vehicle_name_); });
                 if (!got) {
@@ -349,7 +382,11 @@ private:
                                        .count();
                 s.timestamp_ns = static_cast<uint64_t>(std::max(decltype(ts_ns){0}, ts_ns));
 
-                // Altitude: NED (+down) → AGL (+up), so negate z
+                // Altitude above spawn: AirSim position is NED (+down), so
+                // negate z to report +up (above spawn). This is not true AGL
+                // — SimpleFlight does not model terrain. See FCState docstring
+                // in ifc_link.h.
+                // NOTE: SimpleFlight reports altitude above spawn, not true AGL.
                 s.altitude_rel = static_cast<float>(-ms.kinematics_estimated.pose.position.z());
 
                 // Ground speed from horizontal NED velocity
@@ -372,16 +409,22 @@ private:
                 s.satellites                              = kStubSatellites;
                 s.flight_mode                             = kSimpleFlightModeGuided;
 
+                // Apply explicitly-requested mode override. requested_mode_
+                // is UINT8_MAX while no send_mode() has been called; any
+                // real code (0-3) takes precedence over the GUIDED default.
+                // This fixes the bug where send_mode(0) (STAB) collided with
+                // the "never set" sentinel when piggy-backing on flight_mode.
+                const uint8_t override_mode =
+                    requested_mode_.load(std::memory_order_acquire);
+                if (override_mode != UINT8_MAX) {
+                    s.flight_mode = override_mode;
+                }
+
                 {
                     std::lock_guard<std::mutex> lock(state_mtx_);
                     // Preserve armed state set by send_arm() / last poll so it
                     // is not clobbered when SimpleFlight does not expose it.
-                    s.armed = cached_state_.armed;
-                    // Preserve flight_mode from last send_mode() if caller
-                    // explicitly set STAB/AUTO/RTL; otherwise default GUIDED.
-                    if (cached_state_.flight_mode != 0) {
-                        s.flight_mode = cached_state_.flight_mode;
-                    }
+                    s.armed       = cached_state_.armed;
                     cached_state_ = s;
                 }
             } catch (const std::exception& e) {
@@ -405,6 +448,14 @@ private:
     std::mutex         state_mtx_;              ///< Guards cached_state_
     FCState            cached_state_{};         ///< Latest telemetry snapshot
     std::atomic<bool>  thread_running_{false};  ///< Poll thread run flag
+
+    /// Explicitly requested flight mode (set by send_mode, read by poll_loop).
+    /// UINT8_MAX = never set → poll loop leaves s.flight_mode at its default
+    /// (GUIDED = 1). Any real IFCLink mode (0-3) takes precedence, so
+    /// send_mode(0) (STAB) is correctly reflected — unlike the previous
+    /// implementation which piggy-backed on cached_state_.flight_mode and
+    /// conflated STAB with "no mode ever requested".
+    std::atomic<uint8_t> requested_mode_{UINT8_MAX};
 
     // ── Poll thread ────────────────────────────────────────
     std::thread poll_thread_;  ///< Polls getMultirotorState() at 10 Hz
