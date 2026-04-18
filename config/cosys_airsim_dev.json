@@ -7,7 +7,8 @@
         "host": "127.0.0.1",
         "port": 41451,
         "camera_name": "front_center",
-        "radar_name": "radar",
+        "radar_name": "lidar",
+        "_comment_radar_name": "Matches the Lidar sensor declared in cosys_settings.json. AirSim sensor lookup is exact-match.",
         "imu_name": "imu",
         "vehicle_name": "Drone0"
     },

@@ -1194,6 +1194,8 @@ injects timed faults via the `fault_injector` CLI tool, and verifies pass criter
 | 16 — VIO Failure | 2 | Yes | 6 | VIO degradation fault → LOITER/RTL escalation (geofence disabled — VIO drift crosses boundary in SITL) |
 | 17 — Radar Gazebo | 2 | Yes | 8 | GazeboRadarBackend subscribes to gpu_lidar scan topic, converts to RadarDetectionList, UKF fusion consumes detections |
 | 18 — Perception Avoidance | 2 | Yes | 8 | Camera + radar obstacle avoidance with UKF fusion — no HD-map, D* Lite dynamic layer replans from color_contour detections and radar tracks |
+| 29 — Cosys Perception (mixed) | 3 | No (UE5) | 6 | Tier 3 Cosys-AirSim + PX4 HIL. Plumbing-fix only in Phase A; populated world lands via epic #480 Phase B (issue #482). |
+| 30 — Cosys Static | 3 | No (UE5) | 7 | Tier 3 Cosys-AirSim + PX4 HIL. 9 RPC-spawned static obstacles (pillars, walls, chair, couch, bush, 2 mannequins). Exercises radar→grid→D* Lite→avoider + YOLOv8 + DA V2. Run via `tests/run_scenario_cosys.sh`. |
 
 **Run (Tier 1 — simulated, no Gazebo):**
 ```bash

@@ -240,3 +240,230 @@ Phases 1 + 2 can run in parallel. Phase 3 requires both. Phase 4 is future/optio
 - `config/gazebo_sitl.json` — Tier 2 base config
 - `config/cosys_airsim.json` — Tier 3 base config (to be created)
 - `common/hal/include/hal/hal_factory.h` — HAL backend factory
+
+---
+
+## 7. Amendment 2026-04-17: Flight Controller Split — Gazebo for PX4, AirSim for SimpleFlight
+
+### Context
+
+Section 2 ("HAL Integration") of this ADR originally stated:
+
+> **VIO:** Reuse PX4 EKF2 pose via existing `MavlinkFCLink` — PX4 SITL already runs inside Cosys-AirSim and publishes odometry. No new VIO backend needed.
+
+After exhaustive debugging on 2026-04-17 (session memory `project_session_2026_04_17_px4_hil_blocked.md`), **PX4 SITL HIL integration with Cosys-AirSim does not work** on the desktop setup. Six configurations were attempted:
+
+| Config | Result |
+|---|---|
+| LockStep=false + minimal Sensors | `ekf2 missing data` — no HIL flow |
+| Explicit Sensors (imu/baro/gps/mag) | Only gyros/mags arrive, no GPS |
+| LockStep=true + SteppableClock | PX4 never receives sim connection (deadlock) |
+| Canonical config + OriginGeopoint + NAV_RCL_ACT | Same `ekf2 missing data` |
+| PX4 main branch | Same failure |
+| PX4 v1.16.1 stable | Same failure |
+
+Matches unresolved upstream bugs: [PX4 #24033](https://github.com/PX4/PX4-Autopilot/issues/24033), [AirSim #5018](https://github.com/microsoft/AirSim/issues/5018). The 2026-04-16 smoke test memory explicitly noted PX4 SITL integration was **"Not Yet Done"** — only the direct HAL↔AirSim RPC path was verified.
+
+### Decision
+
+**Split flight controller by simulation tier:**
+
+| Tier | Simulator | Flight Controller | Purpose |
+|---|---|---|---|
+| **Tier 2** | Gazebo | PX4 SITL (MAVLink) | Flight-critical: FC interaction, fault recovery, mission logic, MAVLink compliance |
+| **Tier 3** | Cosys-AirSim | SimpleFlight (AirSim RPC) | Perception-critical: ML, photorealistic scenes, visual fidelity, synthetic data |
+
+This matches industry practice — perception teams use photorealistic sims (CARLA, AirSim, NVIDIA Isaac); flight control teams use physics sims (Gazebo, jMAVSim). Using one simulator for both roles is an anti-pattern.
+
+### Rationale
+
+1. **PX4+Cosys HIL is broken and upstream fixes are unavailable.** Both [PX4 #24033](https://github.com/PX4/PX4-Autopilot/issues/24033) and [AirSim #5018](https://github.com/microsoft/AirSim/issues/5018) are marked stale with no resolution. Waiting for upstream fixes blocks Epic #431 indefinitely.
+2. **SimpleFlight is the AirSim-recommended default** (per Cosys-AirSim docs: *"Unless you have at least intermediate level of experience with PX4 stack, we recommend you use simple_flight"*).
+3. **Gazebo+PX4 is already validated** — 20+ Tier 2 scenarios run reliably on this path. PX4-specific code (EKF, fault escalation, MAVLink parsing) is exercised there.
+4. **No test coverage loss.** Perception code paths in AirSim don't need FC realism. FC code paths in Gazebo don't need photorealism. The matrix is complementary, not overlapping.
+5. **Preserves hardware transfer path.** Gazebo+PX4 is the industry-standard smooth transition to real Pixhawk hardware. AirSim+SimpleFlight is dev/test only — not intended for production.
+6. **Both HAL backends coexist.** `MavlinkFCLink` is unchanged. Add a new `CosysFCLink` that uses AirSim RPC (`takeoffAsync`, `moveToPositionAsync`, `hoverAsync`, `armAsync`, `landAsync`). Config-selectable per scenario.
+
+### HAL Addition
+
+New IFCLink backend:
+
+| Backend | Interface | Used by | Transport |
+|---------|-----------|---------|-----------|
+| `MavlinkFCLink` | `IFCLink` | Tier 2 (Gazebo+PX4) | MAVLink over UDP (14540/14580) |
+| `CosysFCLink` (new) | `IFCLink` | Tier 3 (AirSim+SimpleFlight) | AirSim RPC (port 41451) |
+
+Compile guard: `HAVE_COSYS_AIRSIM`. Config: `comms.mavlink.backend: "cosys_rpc"` (or new key). Factory selection in `hal_factory.h`.
+
+Scenario config selects which backend to use:
+- Tier 2 (Gazebo): `"backend": "mavlink"` (existing)
+- Tier 3 (AirSim): `"backend": "cosys_rpc"` (new)
+
+### Consequences (Amendment)
+
+**Positive:**
+- Unblocks Epic #431 Tier 3 scenarios immediately — no more PX4 HIL debugging
+- Clean separation of concerns: flight control in Gazebo, perception in AirSim
+- No new dependencies, no upstream bug waits
+- SimpleFlight is zero-config — reduces onboarding friction for perception work
+
+**Negative:**
+- Two FC code paths to maintain (`MavlinkFCLink` + `CosysFCLink`)
+- AirSim scenarios can't validate MAVLink-specific behaviour — must be tested in Gazebo
+- SimpleFlight has no fault injection realism (motor failures, GPS loss, EKF divergence) — all fault tests stay in Gazebo
+- Developers switching between tiers must know which backend applies
+- Future PX4+Cosys HIL fix upstream would require revisiting this split
+
+**Risks:**
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Divergent flight behaviour between tiers | Medium | Medium | Document explicit: "takeoff tested in Gazebo, perception tested in AirSim" — not one-vs-other |
+| Fault scenarios untested against PX4 | Low | High | All fault injection stays in Tier 2 (Gazebo) where it's proven to work |
+| `CosysFCLink` API drift | Low | Low | AirSim RPC is thin and stable; pin version in submodule |
+
+### Implementation
+
+See Issue #TBD (created as follow-up to this amendment) — `CosysFCLink` HAL backend for AirSim SimpleFlight.
+
+### When to Revisit
+
+- PX4 releases a stable SITL integration with Cosys-AirSim that's verified to work
+- Or: we switch Tier 3 to a simulator with working PX4 HIL (e.g., Isaac Sim via Pegasus wrapper)
+- Or: we add HITL tier (real Pixhawk) — in which case Tier 3 AirSim continues to use SimpleFlight for perception work only
+
+---
+
+## 8. Amendment 2026-04-17 (Part 2): Comprehensive Simulator Landscape Analysis
+
+After the PX4+Cosys failure, we conducted a broader "tool evaluation phase" analysis — since we'll commit to this stack for weeks or months, we wanted to be rigorous about alternatives before locking in.
+
+### Candidates Evaluated
+
+| ID | Name | Verdict |
+|---|---|---|
+| A | Simulated HAL | Keep for T1 (CI) |
+| B | Gazebo + PX4 SITL | **Keep for T2** |
+| C | Cosys-AirSim + SimpleFlight | **Adopt for T3a** |
+| D | Pegasus Simulator + Isaac Sim + PX4 | Park (future cloud T3b) |
+| E | Webots + PX4 | Rejected — no unique value |
+| F | jMAVSim | Optional CI add-on |
+| — | FlightForge (CTU-MRS) | Rejected — not PX4-compatible (uses MRS protocol) |
+| — | ArduPilot SITL + AirSim | Rejected — GPL v3 license concerns for commercial path |
+| — | FPV/consumer sims (VelociDrone, Liftoff, TRYP, Zephyr, DJI, etc.) | Rejected — wrong category (pilot training, not dev) |
+| — | Enterprise sims (rFpro, Ansys, dSpace, Cognata, Applied Intuition) | Rejected — automotive-first, expensive, no drone fit |
+| — | CARLA | Rejected — autonomous driving domain, not drones |
+| — | Flightmare (UZH) | Rejected — mostly inactive since 2022 |
+| — | MuJoCo / Drake | Rejected — physics-only, no rendering or FC |
+
+### Scoring Across 10 Dimensions
+
+Each candidate was evaluated on: cost/time, exit cost, coverage matrix, hardware transfer path, onboarding/teaming, compliance, obsolescence risk, performance, data generation, multi-vehicle support.
+
+### Key Surfaces From the Analysis
+
+#### 1. The tier split is architecturally sound, not just pragmatic
+
+Coverage matrix analysis shows Gazebo and Cosys-AirSim are genuinely complementary:
+
+| Test category | Gazebo+PX4 | Cosys+SimpleFlight |
+|---|---|---|
+| FC arm/disarm, MAVLink compliance | ✓ | Fake (SimpleFlight is not MAVLink) |
+| EKF convergence, fault injection, RC/link loss | ✓ | ✗ |
+| Mission waypoint execution | ✓ | via RPC |
+| YOLO object detection on photorealistic scenes | ✗ | ✓ |
+| Depth Anything V2 depth estimation | ✗ | ✓ |
+| Synthetic data generation for ML training | ✗ | ✓ |
+| Weather/lighting variation | Limited | ✓ |
+| Native radar sensor | LiDAR proxy | LiDAR proxy (base SDK has no radar) |
+
+**No overlap is wasted.** Each tier validates what the other cannot. Consolidation into a single sim would require Isaac Sim + Pegasus (Dimension 4 below).
+
+#### 2. Cosys-AirSim is our highest obsolescence risk
+
+Single-lab maintained (University of Antwerp, Cosys-Lab), already a fork of the abandoned Microsoft AirSim mainline, niche community. **Mitigation is structural:** our HAL abstraction (ADR-006) means swapping to Isaac/Webots takes ~2-3 weeks of backend work, not a full rewrite. But it is the piece most likely to force a migration in 2-3 years. Accepting the risk because (a) alternatives have different problems, (b) HAL abstraction limits migration cost.
+
+#### 3. Hardware transfer path dead-ends at SimpleFlight
+
+SimpleFlight runs only inside AirSim — it does not exist on Pixhawk hardware. **Anything we verify in SimpleFlight must be re-verified on PX4 before hardware deployment.** This is acceptable for perception code (same camera, same depth model on hardware) but would be wrong for FC logic. This is the core reason the tier split is correct: SimpleFlight must be scoped to perception only.
+
+| Simulator | SITL→HITL→Real drone transferability |
+|---|---|
+| B (Gazebo+PX4) | Clean — swap `SIMULATOR` env var → Pixhawk serial |
+| C (Cosys+SimpleFlight) | **Path breaks** — SimpleFlight never runs on hardware |
+| D (Isaac+PX4 via Pegasus) | Clean — same as Gazebo |
+
+#### 4. Isaac Sim via Pegasus is the only "consolidated" option
+
+Of all candidates, only **Pegasus Simulator + Isaac Sim + PX4** provides PX4 SITL + photorealistic rendering + full fault injection in a single simulator. But it is hardware-gated:
+
+- Requires NVIDIA Ampere (RTX 30-series) or newer — our GTX 1080 Ti cannot run it
+- Cloud A10G instance at ~$0.50-1.00/hr on spot pricing
+- NVIDIA Omniverse account and familiarity curve
+- MIT-licensed wrapper (Pegasus) over NVIDIA-licensed Isaac Sim
+
+**Parked as future Tier 3b.** Revisit when we have consistent cloud budget (~$300+/mo) OR an upgraded dev machine (RTX 3080+) OR decide single-sim consolidation is worth the cost.
+
+#### 5. Compliance does NOT demand high simulator fidelity
+
+We are not in a regulated domain where simulator output is cert evidence. Real-world flight testing is always required regardless. **This lowers the bar for sim fidelity** — "good enough to build confidence" beats "perfect but fragile." Reinforces: don't over-invest in simulator quality.
+
+#### 6. Exit cost analysis validates Gazebo as durable
+
+~2 months of scenario configs, world files, and mission tests accumulated in Gazebo. Migrating away would be 4-6 weeks. **Gazebo is our most durable tool commitment.** Cosys-AirSim is by-design more replaceable — the HAL keeps it loosely coupled.
+
+#### 7. Performance gaps validate CI strategy
+
+Cosys and Isaac take 60-120 seconds just to start UE5. They are **interactive-only**; per-PR CI must remain Gazebo-based. **This validates our existing CI design** — Cosys perception runs as "advisory" workflow (#436), not blocking.
+
+#### 8. Real drone hardware may be better than cloud Isaac Sim
+
+If Cosys-AirSim Tier 3 proves the perception stack, a programmable drone (~$500-2000 one-time) provides:
+- Real-world validation that no simulator can match (lighting variance, real camera noise, real GPS multipath)
+- Cheaper than 12 months of cloud Isaac Sim ($6k+/yr spot)
+- Forces us to solve real-hardware problems earlier rather than discovering them post-simulation
+
+**Implication:** Isaac Sim cloud tier may be skipped entirely in favor of Cosys-AirSim (perception) → real hardware (FC/flight), bypassing the "consolidated sim" step. This is aligned with PX4's own recommended SITL→HITL→real progression.
+
+### Rejected Alternatives — Brief Rationale
+
+**FlightForge (CTU-MRS):** Uses proprietary MRS UAV protocol, not PX4 MAVLink. Integration would require building a custom HIL bridge — weeks of engineering with no guarantee. Despite BSD-3 license and UE5 rendering, not compatible with our PX4-centric stack.
+
+**ArduPilot + AirSim:** Documentation suggests ArduPilot HIL works better with AirSim than PX4 HIL does. However, **GPL v3** license creates commercial friction: linking ArduPilot code into any distributed product propagates GPL. MAVLink-only communication (no linkage) is permissible but requires careful build isolation. Priority on BSD-clean commercial future argues against adoption.
+
+**Webots + PX4:** Working combination with reasonable rendering and native radar. But middle ground solves no specific pain — rendering is not photorealistic enough to validate ML perception, yet adds a third simulator to maintain. Not worth the cost.
+
+**FPV/consumer sims (VelociDrone, Liftoff, Uncrashed, TRYP FPV, DRL, DJI, Zephyr, Tiny Whoop):** Different category entirely — pilot training for human FPV/racing. No SDK, no PX4, no MAVLink, no programmatic API. Irrelevant to autonomous stack development.
+
+**Enterprise sims (rFpro, Ansys AVxcelerate, dSPACE, Cognata, Applied Intuition, Siemens Simcenter):** Expensive ($$$$+), automotive-primary, closed source, no drone-first fit. Only relevant if we pivot to automotive-adjacent work or take major enterprise funding.
+
+### Scope: One-Command Simulator Switching
+
+The architectural target (modular enough to swap sims with minimal code change):
+
+```bash
+# Target developer experience:
+bash tests/run_scenario.sh --scenario 30 --sim gazebo   # Tier 2: PX4+Gazebo
+bash tests/run_scenario.sh --scenario 30 --sim airsim   # Tier 3a: SimpleFlight+Cosys
+bash tests/run_scenario.sh --scenario 30 --sim isaac    # Tier 3b: PX4+Pegasus (future)
+```
+
+Already ~70% in place:
+- ✓ HAL abstraction enables backend swap via config
+- ✓ Separate config overlays per tier (`gazebo_sitl.json`, `cosys_airsim_dev.json`, `cosys_airsim.json`)
+- ✓ Backend factory in `hal_factory.h`
+- ✓ Per-sim runner scripts (`run_scenario_gazebo.sh`, `run_scenario_cosys.sh`)
+
+Remaining work:
+- `CosysFCLink` HAL backend (issue #490)
+- Unified runner `run_scenario.sh` with `--sim` flag
+- Future: Isaac Sim backends + `isaac_sim.json` overlay when Tier 3b is pursued
+
+### Final Decision
+
+**T1: Simulated HAL** — unchanged, CI/unit tests
+**T2: Gazebo + PX4 SITL** — FC, nav, fault, mission (80% of test matrix)
+**T3a: Cosys-AirSim + SimpleFlight** — perception, ML, synthetic data generation (this session's #490 work)
+**T3b: Pegasus + Isaac Sim + PX4** — PARKED. Revisit if/when (a) cloud budget available, (b) RTX 30+ hardware, (c) real drone hardware proves insufficient for FC validation.
+
+**Probable real path forward:** Cosys-AirSim for perception → real programmable drone (Holybro X500, Modal AI Voxl2, etc.) for FC/flight validation. This **skips the Isaac Sim tier entirely** — cheaper, more realistic, forces early hardware-level problem discovery.

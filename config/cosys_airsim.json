@@ -5,7 +5,7 @@
         "host": "cosys-airsim",
         "port": 41451,
         "camera_name": "mission_cam",
-        "radar_name": "radar",
+        "radar_name": "lidar",
         "imu_name": "imu",
         "vehicle_name": "x500"
     },

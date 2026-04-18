@@ -159,11 +159,17 @@ ExternalProject_Add(airsim_external
 # These targets depend on airsim_external so they are built before use.
 
 # AirSim::AirLib
+# AirSim headers do `#include "Eigen/Dense"` — propagate system Eigen path to
+# every consumer via INTERFACE_INCLUDE_DIRECTORIES so downstream tools don't
+# need to re-find Eigen themselves.
 add_library(AirSim::AirLib STATIC IMPORTED GLOBAL)
+set(_AIRLIB_INCLUDES "${AIRSIM_SUBMODULE_DIR}/AirLib/include")
+if(_EIGEN3_INCLUDE_DIR)
+    list(APPEND _AIRLIB_INCLUDES "${_EIGEN3_INCLUDE_DIR}")
+endif()
 set_target_properties(AirSim::AirLib PROPERTIES
     IMPORTED_LOCATION "${AIRSIM_OUTPUT_LIB_DIR}/libAirLib.a"
-    INTERFACE_INCLUDE_DIRECTORIES
-        "${AIRSIM_SUBMODULE_DIR}/AirLib/include"
+    INTERFACE_INCLUDE_DIRECTORIES "${_AIRLIB_INCLUDES}"
 )
 add_dependencies(AirSim::AirLib airsim_external)
 

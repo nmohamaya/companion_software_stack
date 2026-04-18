@@ -494,12 +494,22 @@ done
 # ── PIDs ──────────────────────────────────────────────────────
 UE5_PID=""
 COMPANION_PIDS=()
+SCENE_STAMP=""    # Populated if scenario declares scene.file and spawn succeeds
 
 cleanup_scenario() {
     echo ""
     echo "Cleaning up Cosys-AirSim scenario..."
     if [[ -n "${SCENARIO_LOG_DIR:-}" && "$SCENARIO_LOG_DIR" == *_RUNNING ]]; then
         SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    fi
+    # Destroy RPC-spawned scene objects while UE5 is still alive.
+    # Best-effort: failures are non-fatal (stamp file left behind for manual cleanup).
+    if [[ -n "$SCENE_STAMP" && -f "$SCENE_STAMP" ]] \
+       && [[ -x "${BIN_DIR}/cosys_populate_scene" ]] \
+       && [[ -n "$UE5_PID" ]] && kill -0 "$UE5_PID" 2>/dev/null; then
+        echo "  Destroying spawned scene objects..."
+        "${BIN_DIR}/cosys_populate_scene" destroy --stamp "$SCENE_STAMP" \
+            >> "${SCENARIO_LOG_DIR}/scene_populate.log" 2>&1 || true
     fi
     # Stop companion processes
     for pid in "${COMPANION_PIDS[@]}"; do
@@ -650,6 +660,39 @@ echo ""
 echo "Phase 2b: SimpleFlight controller active (no PX4 needed for Tier 3)"
 echo -e "  ${CYAN}Settling (5s) for SimpleFlight to stabilize...${NC}"
 sleep 5
+
+# ── Phase 2c: Populate scene (RPC-spawned obstacles) ─────────
+# If the scenario declares `scene.file`, call cosys_populate_scene to spawn
+# the listed assets via simSpawnObject RPC. Part of epic #480 (proving-ground).
+# Non-fatal: if the binary is missing or UE5 rejects a spawn, we log WARN and
+# continue — the scenario can still pass with a subset of objects.
+SCENE_FILE=$(json_get "$SCENARIO_FILE" "scenario.scene.file")
+if [[ -n "$SCENE_FILE" && "$SCENE_FILE" != "None" ]]; then
+    # Resolve relative scene paths against PROJECT_DIR
+    if [[ "$SCENE_FILE" != /* ]]; then
+        SCENE_FILE="${PROJECT_DIR}/${SCENE_FILE}"
+    fi
+    echo ""
+    echo "Phase 2c: Populating scene from ${SCENE_FILE}..."
+    if [[ ! -f "$SCENE_FILE" ]]; then
+        echo -e "  ${YELLOW}WARNING: scene file not found — skipping spawn${NC}"
+    elif [[ ! -x "${BIN_DIR}/cosys_populate_scene" ]]; then
+        echo -e "  ${YELLOW}WARNING: ${BIN_DIR}/cosys_populate_scene not built — skipping spawn${NC}"
+        echo -e "  ${YELLOW}         Rebuild with Cosys-AirSim support to enable populated scenes.${NC}"
+    else
+        SCENE_STAMP="${SCENARIO_LOG_DIR}/spawned.txt"
+        if "${BIN_DIR}/cosys_populate_scene" spawn \
+                --scene "$SCENE_FILE" --stamp "$SCENE_STAMP" \
+                > "${SCENARIO_LOG_DIR}/scene_populate.log" 2>&1; then
+            SPAWNED_COUNT=$(wc -l < "$SCENE_STAMP" 2>/dev/null || echo 0)
+            echo -e "  ${GREEN}✓${NC} Spawned ${SPAWNED_COUNT} scene objects"
+        else
+            echo -e "  ${YELLOW}WARNING: scene populate failed — see scene_populate.log${NC}"
+            tail -5 "${SCENARIO_LOG_DIR}/scene_populate.log" 2>/dev/null || true
+            SCENE_STAMP=""  # Don't try to destroy nothing on cleanup
+        fi
+    fi
+fi
 
 # ── Phase 3: Launch companion stack ──────────────────────────
 echo ""

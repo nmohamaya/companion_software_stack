@@ -466,6 +466,36 @@ ctest --output-on-failure -j$(nproc)
 
 ---
 
+## Phase 11b: Proving-Ground Assets (optional, for scenarios 30+)
+
+Epic #480 scenarios (starting with scenario 30 `cosys_static`) spawn people, furniture, and buildings into the Blocks env via `simSpawnObject` RPC. The assets must live inside the Blocks project before UE5 launches so its asset registry indexes them.
+
+One-time import:
+
+```bash
+bash deploy/setup_blocks_assets.sh              # copies DynamicObjects + StarterContent
+# re-runnable; idempotent (uses rsync --update).
+```
+
+The script copies:
+
+- `DynamicObjects/Content/GroupedAI/` → SK_Mannequin humans (YOLO `person`).
+- UE5 `StarterContent/Architecture/` → walls, pillars, doors (obstacles for radar + grid).
+- UE5 `StarterContent/Props/` → chairs, couches, bushes (COCO `chair`/`couch`/`potted plant`).
+
+…all into `third_party/cosys-airsim/Unreal/Environments/Blocks/Content/Imported/`. No UE5 rebuild is required — pure `.uasset` additions; launching Blocks once after import is enough for the registry to pick them up.
+
+Once imported, scenario 30 will spawn objects automatically via the scenario runner:
+
+```bash
+bash tests/run_scenario_cosys.sh \
+     config/scenarios/30_cosys_static.json \
+     --base-config config/cosys_airsim_dev.json \
+     --gui --verbose
+```
+
+---
+
 ## Phase 12: End-to-End Smoke Test
 
 With UE5 running Blocks and Play pressed:

@@ -2964,4 +2964,36 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #70 (Issue #490). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #71 — Epic #480 Phase A: Cosys Proving-Ground Foundation (Issue #479)
+
+**Date:** 2026-04-17
+**Category:** Feature / Integration — Tier 3 simulation
+**Issues:** [#479](https://github.com/nmohamaya/companion_software_stack/issues/479)
+**Epic:** [#480 — Cosys-AirSim Proving Ground](https://github.com/nmohamaya/companion_software_stack/issues/480)
+
+**What:**
+
+- **Plumbing fixes** — Closed three latent gaps surfaced by the first live scenario 29 run:
+  - `cosys_airsim.radar_name`: `"radar"` → `"lidar"` (matches the LiDAR sensor declared in `cosys_settings.json`; AirSim's `findSensorByName()` does exact-match, so the mismatch was throwing every 50 ms).
+  - Scenario detector model: `yolov8s.onnx` → `yolov8n.onnx` (nano weights actually ship in `models/`).
+  - Scenario opts into DA V2: `perception.depth_estimator.enabled=true` (defaults to `false` in `config/default.json`).
+- **Simulator-agnostic scene schema** — New `config/scenes/*.json` format describing objects (class hint, pose, scale, dynamics). Designed so a Gazebo adapter (Phase D, #484) can consume the same file.
+- **Scene loader tool** — `tools/cosys_populate_scene` (C++) calls `simSpawnObject`/`simDestroyObject` via the existing `CosysRpcClient::with_client` pattern; writes a stamp file for teardown.
+- **Asset import** — `deploy/setup_blocks_assets.sh` (idempotent) copies UE5 StarterContent (Architecture + Props) and DynamicObjects GroupedAI (SK_Mannequin) into `Blocks/Content/Imported/` so `simSpawnObject` can reference them by name. No UE5 rebuild required.
+- **Scenario 30 `cosys_static`** — new scenario file + scene JSON with 9 stationary obstacles (pillars, walls, chair, couch, bush, two mannequins) along a 5-waypoint route. Dynamic and mixed scenarios (31 / 29-mixed) are Phase B follow-ups (#481, #482).
+- **Runner integration** — `tests/run_scenario_cosys.sh` reads `scenario.scene.file` and calls the loader pre-flight (post-HIL); `cleanup_scenario` trap destroys spawned objects on exit.
+- **Pre-existing bug fixes exposed during the build:**
+  - `ivio_backend.h` was `#include`-ing `cosys_rpc_client.h` *inside* `namespace drone::slam`, which leaked AirSim's transitive `<locale>` as `drone::slam::std::codecvt` and broke `test_vio_backend` / `test_perception_drain` whenever `HAVE_COSYS_AIRSIM` was defined. Undetected because CI doesn't populate the submodule. Moved the include above the namespace block.
+  - `test_perception_drain.cpp` was missing `#include <mutex>`; relying on a transitive path the above fix invalidated.
+  - `FindAirSim.cmake` now propagates the system Eigen include path via `AirSim::AirLib`'s `INTERFACE_INCLUDE_DIRECTORIES`, so downstream consumers (our new tool) don't need to re-find Eigen.
+
+**Files added:** `tools/cosys_populate_scene/{main.cpp,CMakeLists.txt}`, `config/scenes/cosys_static.json`, `config/scenarios/30_cosys_static.json`, `deploy/setup_blocks_assets.sh`
+**Files modified:** `config/cosys_airsim.json`, `config/cosys_airsim_dev.json`, `config/scenarios/29_cosys_perception.json`, `tests/run_scenario_cosys.sh`, `cmake/FindAirSim.cmake`, `CMakeLists.txt`, `process3_slam_vio_nav/include/slam/ivio_backend.h`, `tests/test_perception_drain.cpp`
+
+**Why:** Scenario 29's run on 2026-04-17 flew the drone end-to-end but produced `Tracker writes=0`, no `[DepthAnything]` lines, and `rpc::rpc_error` every 50 ms — every perception stage was running but none was actually firing. This PR establishes the foundation (schema + tool + runner hooks) the whole epic builds on, and ships scenario 30 as the first populated scenario. Dynamic and mixed variants are follow-ups so each code path is validated in isolation.
+
+**Test count:** no new gtests added (scene testing is via scenario run). Current total remains at the pre-PR baseline; see [tests/TESTS.md](../../tests/TESTS.md).
+
+---
+
+_Last updated after Improvement #71 (issue #479). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

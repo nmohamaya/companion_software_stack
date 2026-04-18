@@ -48,9 +48,11 @@ namespace drone::hal {
 class CosysRpcClient;
 }
 
-// Include cosys_rpc_client.h at top-level scope (never inside a user namespace
-// — system headers pulled in transitively would resolve to the wrong scope
-// under GCC 13, breaking `test_vio_backend.cpp` which pulls in std headers).
+// Pull the full CosysRpcClient + MultirotorRpcLibClient headers BEFORE opening
+// our namespace. If the include lands inside `namespace drone::slam { ... }`
+// further down, AirSim's transitive `<locale>` inclusion is re-declared as
+// `drone::slam::std::codecvt`, which breaks anything that later uses <locale>
+// (observed on gcc-13 / libstdc++ 13). Keep this above the namespace block.
 #ifdef HAVE_COSYS_AIRSIM
 #include "hal/cosys_rpc_client.h"
 #endif
@@ -733,7 +735,7 @@ private:
 //   → X passes through, Y passes through, Z is negated
 // ─────────────────────────────────────────────────────────────
 #ifdef HAVE_COSYS_AIRSIM
-// cosys_rpc_client.h is already included at top-level above.
+// cosys_rpc_client.h is pulled in above the namespace block — see note there.
 
 class CosysVIOBackend final : public IVIOBackend {
 public:
