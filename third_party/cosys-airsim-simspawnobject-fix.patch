@@ -1,8 +1,8 @@
 diff --git a/Unreal/Plugins/AirSim/Source/AirBlueprintLib.cpp b/Unreal/Plugins/AirSim/Source/AirBlueprintLib.cpp
-index f3782ab..ac1d10c 100644
+index f3782ab..2fb7c28 100644
 --- a/Unreal/Plugins/AirSim/Source/AirBlueprintLib.cpp
 +++ b/Unreal/Plugins/AirSim/Source/AirBlueprintLib.cpp
-@@ -394,6 +394,11 @@ void UAirBlueprintLib::GenerateAssetRegistryMap(const UObject* context, TMap<FSt
+@@ -394,13 +394,27 @@ void UAirBlueprintLib::GenerateAssetRegistryMap(const UObject* context, TMap<FSt
          Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
          Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
          Filter.bRecursivePaths = true;
@@ -14,9 +14,17 @@ index f3782ab..ac1d10c 100644
  
          auto world = context->GetWorld();
          TArray<FAssetData> AssetData;
-@@ -401,6 +406,7 @@ void UAirBlueprintLib::GenerateAssetRegistryMap(const UObject* context, TMap<FSt
+ 
          // Find mesh in /Game and /AirSim asset registry. When more plugins are added this function will have to change
          FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
++        // PATCH (issue #495): In -game mode, the asset registry does not
++        // auto-scan. Force a synchronous scan of /Game and /AirSim so the
++        // asset_map gets populated before simSpawnObject calls arrive.
++        TArray<FString> ScanPaths;
++        ScanPaths.Add(TEXT("/Game"));
++        ScanPaths.Add(TEXT("/AirSim"));
++        AssetRegistryModule.Get().ScanPathsSynchronous(ScanPaths, /*bForceRescan=*/true);
++        AssetRegistryModule.Get().SearchAllAssets(/*bSynchronousSearch=*/true);
          AssetRegistryModule.Get().GetAssets(Filter, AssetData);
 +        UE_LOG(LogTemp, Log, TEXT("[AirSim PATCH] GenerateAssetRegistryMap: found %d assets"), AssetData.Num());
  
