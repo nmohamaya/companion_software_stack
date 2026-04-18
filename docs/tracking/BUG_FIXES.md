@@ -651,6 +651,14 @@ else
 
 **Impact:** Dev-profile perception stack now receives the configured 1280×720 frames. Future misconfigurations of the same class will surface within seconds of the first successful frame instead of silently propagating a 30× resolution downgrade through the IPC bus. The precedence ladder also unblocks multi-camera Tier 3 setups (mission + depth + front-center), where each backend instance needs to map to a distinct AirSim camera.
 
+**Follow-up (PR #501 review):** Review flagged the same bug class in three adjacent files. Fixes extended as part of the same PR:
+
+- `common/hal/include/hal/cosys_depth.h` — constructor was reading `cosys_airsim.camera_name` / `vehicle_name` directly and discarding the `section` parameter with `(void)section`. Now calls the shared resolver so per-section overrides work for depth too.
+- `config/default.json` — `cosys_airsim.camera_name` was still `"front_center"` (matched the dev-profile bug, not the canonical `settings.json` name). Changed to `"mission_cam"` with an inline `_camera_name_comment` explaining that the value must match the server-side `settings.json` Cameras entry.
+- `tools/cosys_smoke_test.cpp` — hardcoded `"front_center"` in the RGB and depth requests. Now loads `config/default.json` and uses the shared resolver; prints the resolved camera name at startup so developers can see which AirSim camera the smoke test is targeting.
+- `common/hal/include/hal/cosys_name_resolver.h` (new) — consolidated `resolve_camera_name` / `resolve_vehicle_name` as free functions atop a single `resolve_airsim_name(cfg, section, subkey, top_level_key, default)` primitive. `CosysCameraBackend`'s static methods become 1-line wrappers preserving the existing unit-test surface.
+- `tests/test_cosys_camera_config.cpp` — added symmetric `EmptyPerSectionVehicleNameTreatedAsAbsent` test so the empty-value-not-shadowing guarantee is verified for both resolvers. Hardened temp-file writer with an `ofstream::good()` guard. Test count in this file rose 5 → 6.
+
 **Found by:** Live scenario 30 run on 2026-04-17 — drone flew waypoints successfully but `TrackerSink` reported 0 frames published and YOLO inference completed with 0 detections across 39 frames. Root-caused by inspecting AirSim's `AirSimSettings::getCamera()` auto-create behaviour against the dev-profile's `camera_name` value.
 
 ---

@@ -6,8 +6,14 @@
 //   1. Start UE5 with Blocks, press Play (server listens on 41451)
 //   2. Compile via tools/build_cosys_smoke_test.sh
 //   3. Run the binary
+//
+// Camera/vehicle names come from `config/default.json` (via the shared
+// cosys_name_resolver), so the smoke test stays in lock-step with the runtime
+// stack instead of hard-coding "front_center" (Issue #499).
 #define HAVE_COSYS_AIRSIM 1
+#include "hal/cosys_name_resolver.h"
 #include "hal/cosys_rpc_client.h"
+#include "util/config.h"
 
 #include <common/common_utils/StrictMode.hpp>
 STRICT_MODE_OFF
@@ -17,12 +23,30 @@ STRICT_MODE_ON
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <string>
 #include <thread>
 
 int main() {
     using namespace msr::airlib;
 
     std::cout << "=== Cosys-AirSim Smoke Test ===" << std::endl;
+
+    // Load config so the smoke test targets the same AirSim camera/vehicle
+    // names as the runtime stack. If the config is missing or unloadable,
+    // fall through to resolver defaults ("front_center" / "Drone0").
+    drone::Config cfg;
+    const char*   cfg_path = "config/default.json";
+    if (!cfg.load(cfg_path)) {
+        std::cout << "[warn] Could not load " << cfg_path
+                  << " — using resolver defaults (front_center / Drone0)" << std::endl;
+    }
+    // Pass empty section: smoke test has no per-section context, so the
+    // resolver falls through to the top-level `cosys_airsim.*` keys.
+    const std::string camera_name  = drone::hal::resolve_camera_name(cfg, "");
+    const std::string vehicle_name = drone::hal::resolve_vehicle_name(cfg, "");
+    std::cout << "[config] Targeting camera='" << camera_name << "' vehicle='" << vehicle_name
+              << "'" << std::endl;
+
     drone::hal::CosysRpcClient client("127.0.0.1", 41451);
 
     if (!client.connect()) {
@@ -62,13 +86,14 @@ int main() {
     // ── Test 2: Camera (RGB Scene) ──────────────────────────
     // NOTE: Pass vehicle_name — wrong/missing name has caused UE5 crashes in the past
     // (ASimModeBase::getCamera segfault when camera not found).
-    std::cout << "\n[2/3] Camera RGB (simGetImages Scene, front_center, Drone0)" << std::endl;
+    std::cout << "\n[2/3] Camera RGB (simGetImages Scene, " << camera_name << ", " << vehicle_name
+              << ")" << std::endl;
     client.with_client([&](auto& rpc) {
         try {
             std::vector<ImageCaptureBase::ImageRequest> requests = {
-                ImageCaptureBase::ImageRequest("front_center", ImageCaptureBase::ImageType::Scene,
+                ImageCaptureBase::ImageRequest(camera_name, ImageCaptureBase::ImageType::Scene,
                                                /*pixels_as_float*/ false, /*compress*/ false)};
-            auto responses = rpc.simGetImages(requests, "");
+            auto responses = rpc.simGetImages(requests, vehicle_name);
             if (responses.empty()) {
                 std::cerr << "  [FAIL] empty response" << std::endl;
                 ++failed;
@@ -92,13 +117,14 @@ int main() {
     });
 
     // ── Test 3: Depth ───────────────────────────────────────
-    std::cout << "\n[3/3] Depth (simGetImages DepthPerspective, front_center, Drone0)" << std::endl;
+    std::cout << "\n[3/3] Depth (simGetImages DepthPerspective, " << camera_name << ", "
+              << vehicle_name << ")" << std::endl;
     client.with_client([&](auto& rpc) {
         try {
-            std::vector<ImageCaptureBase::ImageRequest> requests  = {ImageCaptureBase::ImageRequest(
-                "front_center", ImageCaptureBase::ImageType::DepthPerspective,
+            std::vector<ImageCaptureBase::ImageRequest> requests = {ImageCaptureBase::ImageRequest(
+                camera_name, ImageCaptureBase::ImageType::DepthPerspective,
                 /*pixels_as_float*/ true, /*compress*/ false)};
-            auto                                        responses = rpc.simGetImages(requests, "");
+            auto responses = rpc.simGetImages(requests, vehicle_name);
             if (responses.empty()) {
                 std::cerr << "  [FAIL] empty response" << std::endl;
                 ++failed;

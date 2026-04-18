@@ -51,6 +51,11 @@ std::string write_temp_config(const std::string& json_content) {
     std::ofstream ofs(path);
     ofs << json_content;
     ofs.close();
+    // Guard against silent write failures — a failed temp-file write would
+    // otherwise surface as a confusing cfg.load() assertion downstream.
+    if (!ofs.good()) {
+        ADD_FAILURE() << "Failed to write temp config at " << path;
+    }
     temp_files().push_back(path);
     return path;
 }
@@ -146,6 +151,25 @@ TEST(CosysCameraConfigTest, EmptyPerSectionValueTreatedAsAbsent) {
 
     EXPECT_EQ(drone::hal::CosysCameraBackend::resolve_camera_name(cfg, "video_capture.mission_cam"),
               "mission_cam");
+}
+
+TEST(CosysCameraConfigTest, EmptyPerSectionVehicleNameTreatedAsAbsent) {
+    // Symmetric check for vehicle_name — the empty-string-not-shadowing
+    // guarantee must apply equally to both resolvers so a scenario override
+    // with `"vehicle_name": ""` cannot silently route RPCs to the wrong
+    // vehicle (or, worse, to AirSim's empty-name default).
+    const auto    path = write_temp_config(R"({
+        "cosys_airsim": { "vehicle_name": "Hero" },
+        "video_capture": {
+            "mission_cam": { "vehicle_name": "" }
+        }
+    })");
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+
+    EXPECT_EQ(
+        drone::hal::CosysCameraBackend::resolve_vehicle_name(cfg, "video_capture.mission_cam"),
+        "Hero");
 }
 
 #endif  // HAVE_COSYS_AIRSIM

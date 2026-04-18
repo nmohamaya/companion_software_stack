@@ -19,6 +19,7 @@
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_name_resolver.h"
 #include "hal/cosys_rpc_client.h"
 #include "hal/idepth_estimator.h"
 #include "util/config.h"
@@ -45,27 +46,26 @@ namespace drone::hal {
 /// to get metric depth per pixel. Returns DepthMap with confidence=0.95
 /// (ground truth from simulator, not perfect due to rendering artifacts).
 ///
-/// Config keys:
-///   cosys_airsim.host         (default "127.0.0.1")
-///   cosys_airsim.port         (default 41451)
-///   cosys_airsim.camera_name  (default "front_center")
-///   cosys_airsim.vehicle_name (default "Drone0")
+/// Config keys (with precedence: `<section>.<subkey>` → top-level → default):
+///   `<section>.camera_name`  → `cosys_airsim.camera_name`  (default "front_center")
+///   `<section>.vehicle_name` → `cosys_airsim.vehicle_name` (default "Drone0")
+///   cosys_airsim.host        (default "127.0.0.1")
+///   cosys_airsim.port        (default 41451)
 class CosysDepthBackend : public IDepthEstimator {
 public:
     /// Construct from shared RPC client and config.
     /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
-    /// @param section  Config path prefix (e.g. "perception.depth_estimator")
+    /// @param section  Config path prefix (e.g. "perception.depth_estimator").
+    ///                 Per-section `camera_name`/`vehicle_name` override the
+    ///                 top-level `cosys_airsim.*` keys — see Issue #499 Bug #1.
     explicit CosysDepthBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
                                const std::string& section)
         : client_(std::move(client))
-        , camera_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::CAMERA_NAME),
-                                            "front_center"))
-        , vehicle_name_(cfg.get<std::string>(
-              std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0")) {
-        (void)section;  // section reserved for future per-estimator config
-        DRONE_LOG_INFO("[CosysDepth] Created for {} camera='{}' vehicle='{}'", client_->endpoint(),
-                       camera_name_, vehicle_name_);
+        , camera_name_(drone::hal::resolve_camera_name(cfg, section))
+        , vehicle_name_(drone::hal::resolve_vehicle_name(cfg, section)) {
+        DRONE_LOG_INFO("[CosysDepth] Created for {} camera='{}' vehicle='{}' (section='{}')",
+                       client_->endpoint(), camera_name_, vehicle_name_, section);
     }
 
     // Non-copyable, non-movable (owns RPC connection state reference)
