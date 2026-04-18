@@ -58,34 +58,16 @@ public:
         uint64_t             timestamp_ns{0};  ///< Capture timestamp
     };
 
-    /// Resolve AirSim camera name with precedence:
-    ///   1. `<section>.camera_name` (e.g. "video_capture.mission_cam.camera_name")
-    ///   2. top-level `cosys_airsim.camera_name`
-    ///   3. literal default "front_center"
-    ///
-    /// Thin wrapper around the shared `drone::hal::resolve_camera_name` free
-    /// function. Kept as a static method on the backend to preserve the
-    /// call-sites and unit-test signature introduced in Issue #499.
-    [[nodiscard]] static std::string resolve_camera_name(const drone::Config& cfg,
-                                                         const std::string&   section) {
-        return drone::hal::resolve_camera_name(cfg, section);
-    }
-
-    /// Resolve AirSim vehicle name with the same precedence as `resolve_camera_name`,
-    /// defaulting to "Drone0". Thin wrapper around the shared free function.
-    [[nodiscard]] static std::string resolve_vehicle_name(const drone::Config& cfg,
-                                                          const std::string&   section) {
-        return drone::hal::resolve_vehicle_name(cfg, section);
-    }
-
     /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
+    ///                 Per-section `camera_name`/`vehicle_name` override the
+    ///                 top-level `cosys_airsim.*` keys — see Issue #499 Bug #1.
     explicit CosysCameraBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
                                 const std::string& section)
         : client_(std::move(client))
-        , camera_name_(resolve_camera_name(cfg, section))
-        , vehicle_name_(resolve_vehicle_name(cfg, section)) {
+        , camera_name_(drone::hal::resolve_camera_name(cfg, section))
+        , vehicle_name_(drone::hal::resolve_vehicle_name(cfg, section)) {
         DRONE_LOG_INFO("[CosysCamera] Created for {} camera='{}' vehicle='{}' (section='{}')",
                        client_->endpoint(), camera_name_, vehicle_name_, section);
     }

@@ -14,7 +14,7 @@
 //   3. Defaults ("front_center" / "Drone0") apply when neither key is set
 #ifdef HAVE_COSYS_AIRSIM
 
-#include "hal/cosys_camera.h"
+#include "hal/cosys_name_resolver.h"
 #include "util/config.h"
 
 #include <atomic>
@@ -86,11 +86,8 @@ TEST(CosysCameraConfigTest, PerSectionOverridesTopLevel) {
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
 
-    EXPECT_EQ(drone::hal::CosysCameraBackend::resolve_camera_name(cfg, "video_capture.mission_cam"),
-              "mission_cam");
-    EXPECT_EQ(
-        drone::hal::CosysCameraBackend::resolve_vehicle_name(cfg, "video_capture.mission_cam"),
-        "Hero");
+    EXPECT_EQ(drone::hal::resolve_camera_name(cfg, "video_capture.mission_cam"), "mission_cam");
+    EXPECT_EQ(drone::hal::resolve_vehicle_name(cfg, "video_capture.mission_cam"), "Hero");
 }
 
 TEST(CosysCameraConfigTest, TopLevelUsedWhenPerSectionAbsent) {
@@ -104,11 +101,8 @@ TEST(CosysCameraConfigTest, TopLevelUsedWhenPerSectionAbsent) {
     ASSERT_TRUE(cfg.load(path));
 
     // No per-section camera_name → falls back to cosys_airsim.camera_name
-    EXPECT_EQ(drone::hal::CosysCameraBackend::resolve_camera_name(cfg, "video_capture.mission_cam"),
-              "mission_cam");
-    EXPECT_EQ(
-        drone::hal::CosysCameraBackend::resolve_vehicle_name(cfg, "video_capture.mission_cam"),
-        "Drone0");
+    EXPECT_EQ(drone::hal::resolve_camera_name(cfg, "video_capture.mission_cam"), "mission_cam");
+    EXPECT_EQ(drone::hal::resolve_vehicle_name(cfg, "video_capture.mission_cam"), "Drone0");
 }
 
 TEST(CosysCameraConfigTest, DefaultUsedWhenNeitherSet) {
@@ -117,11 +111,8 @@ TEST(CosysCameraConfigTest, DefaultUsedWhenNeitherSet) {
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
 
-    EXPECT_EQ(drone::hal::CosysCameraBackend::resolve_camera_name(cfg, "video_capture.mission_cam"),
-              "front_center");
-    EXPECT_EQ(
-        drone::hal::CosysCameraBackend::resolve_vehicle_name(cfg, "video_capture.mission_cam"),
-        "Drone0");
+    EXPECT_EQ(drone::hal::resolve_camera_name(cfg, "video_capture.mission_cam"), "front_center");
+    EXPECT_EQ(drone::hal::resolve_vehicle_name(cfg, "video_capture.mission_cam"), "Drone0");
 }
 
 TEST(CosysCameraConfigTest, EmptySectionFallsThroughToTopLevel) {
@@ -133,7 +124,7 @@ TEST(CosysCameraConfigTest, EmptySectionFallsThroughToTopLevel) {
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
 
-    EXPECT_EQ(drone::hal::CosysCameraBackend::resolve_camera_name(cfg, ""), "mission_cam");
+    EXPECT_EQ(drone::hal::resolve_camera_name(cfg, ""), "mission_cam");
 }
 
 TEST(CosysCameraConfigTest, EmptyPerSectionValueTreatedAsAbsent) {
@@ -149,8 +140,7 @@ TEST(CosysCameraConfigTest, EmptyPerSectionValueTreatedAsAbsent) {
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
 
-    EXPECT_EQ(drone::hal::CosysCameraBackend::resolve_camera_name(cfg, "video_capture.mission_cam"),
-              "mission_cam");
+    EXPECT_EQ(drone::hal::resolve_camera_name(cfg, "video_capture.mission_cam"), "mission_cam");
 }
 
 TEST(CosysCameraConfigTest, EmptyPerSectionVehicleNameTreatedAsAbsent) {
@@ -167,9 +157,7 @@ TEST(CosysCameraConfigTest, EmptyPerSectionVehicleNameTreatedAsAbsent) {
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
 
-    EXPECT_EQ(
-        drone::hal::CosysCameraBackend::resolve_vehicle_name(cfg, "video_capture.mission_cam"),
-        "Hero");
+    EXPECT_EQ(drone::hal::resolve_vehicle_name(cfg, "video_capture.mission_cam"), "Hero");
 }
 
 #endif  // HAVE_COSYS_AIRSIM
