@@ -219,8 +219,7 @@ int do_spawn(const Args& args) {
                 msr::airlib_rpclib::RpcLibAdaptorsBase::Vector3r(scale), physics, false);
             const auto returned = rpc_result.template as<std::string>();
             std::cout << "  + " << name << "  <-  " << asset << "  at (" << x << ", " << y << ", "
-                      << z << ", yaw=" << yaw_deg << "deg)"
-                      << "  -> " << returned << "\n";
+                      << z << ", yaw=" << yaw_deg << "deg)  -> " << returned << "\n";
             stamp << returned << "\n";
             ++spawned;
         } catch (const std::exception& e) {
