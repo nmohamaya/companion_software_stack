@@ -95,25 +95,16 @@ public:
     [[nodiscard]] bool is_stuck(TimePoint now) const {
         if (!cfg_.enabled) return false;
         if (samples_.size() < 2) return false;
-        // Need a full window of history.
+        // Need a (near-)full window of history.
         const float span_s = std::chrono::duration<float>(now - samples_.front().first).count();
-        // DIAG(#503): periodic state dump so we can tell, in a stuck live run,
-        // exactly which gate is preventing the detector from firing.  Logs at
-        // ~1 Hz (every 10 calls at 10 Hz tick rate).  Remove once the detector
-        // is confirmed firing in sim.
-        static thread_local uint64_t log_tick = 0;
-        if (++log_tick % 10 == 0 && samples_.size() >= 2) {
-            const auto& f = samples_.front().second;
-            const auto& l = samples_.back().second;
-            const float ddx = l[0] - f[0], ddy = l[1] - f[1], ddz = l[2] - f[2];
-            DRONE_LOG_INFO(
-                "[StuckDetector] samples={} span={:.2f}s window={:.2f}s "
-                "first=({:.2f},{:.2f},{:.2f}) last=({:.2f},{:.2f},{:.2f}) "
-                "moved={:.3f} min_movement={:.2f}",
-                samples_.size(), span_s, cfg_.window_s, f[0], f[1], f[2], l[0], l[1], l[2],
-                std::sqrt(ddx * ddx + ddy * ddy + ddz * ddz), cfg_.min_movement_m);
-        }
-        if (span_s < cfg_.window_s) return false;
+        // The push_sample deque cleanup drops entries older than window_s, so
+        // at steady state the remaining samples span approximately
+        // (window_s - tick_interval).  Under 10 Hz tick + scheduler jitter
+        // that's ~2.9 s for a 3 s window — strict `span < window_s` is never
+        // false and the detector never fires.  Accept 80% of the window as
+        // "full enough"; this still requires at least ~2.4 s of history for
+        // the default 3 s window but is robust to realistic tick jitter.
+        if (span_s < cfg_.window_s * 0.8f) return false;
         // Compare current pose vs window-start pose.
         const auto& first = samples_.front().second;
         const auto& last  = samples_.back().second;
