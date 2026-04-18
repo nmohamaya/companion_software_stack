@@ -153,6 +153,17 @@
             "quality": {
                 "good_trace_max": 0.1,
                 "degraded_trace_max": 1.0
+            },
+            "swvio": {
+                "max_clones": 15,
+                "min_track_length": 3,
+                "max_gn_iterations": 5,
+                "convergence_threshold": 1e-6,
+                "chi2_threshold": 5.991,
+                "gravity": [0, 0, -9.81],
+                "noise_image_pixel": 1.0,
+                "init_frames": 10,
+                "enable_marginalization_prior": true
             }
         },
         "imu": {

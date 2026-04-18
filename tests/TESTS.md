@@ -129,7 +129,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
-| **Total** | **70 C++ + 5 shell** | **1553 + 42 + 250+** | |
+| **Total** | **71 C++ + 5 shell** | **1588 + 42 + 250+** | |
 
 ---
 
@@ -1078,17 +1078,30 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 **Key files under test:** `slam/imu_preintegrator.h`, `imu_preintegrator.cpp`
 
-### test_vio_backend.cpp — 15 tests
+### test_vio_backend.cpp — 34 tests
 
 **What it tests:** `IVIOBackend` and `SimulatedVIOBackend` — full VIO pipeline and health state machine.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `VIOBackendTest` | 13 | Frame processing, INITIALIZING→NOMINAL health transition, valid pose, IMU consumption, zero-IMU fallback, frame_id propagation, feature/match counts, advancing trajectory, timing recorded, factory create/throw, invalid frame dimensions |
+| `VIOBackendTest` | 18 | Frame processing, INITIALIZING→NOMINAL health transition, valid pose, IMU consumption, zero-IMU fallback, frame_id propagation, feature/match counts, advancing trajectory, timing recorded, factory create/throw, invalid frame dimensions, covariance quality thresholds |
+| `VIOCovarianceTest` | 8 | Covariance-based quality thresholds, trace-to-health mapping |
+| `GazeboFullVIOTest` | 6 | Gazebo full-pipeline VIO backend processing and health |
 | `VIOHealthTest` | 1 | Health enum name strings |
 | `VIOErrorTest` | 1 | `VIOError::to_string()` format |
 
-**Key files under test:** `slam/ivio_backend.h`, `slam/vio_types.h`
+**Key files under test:** `slam/ivio_backend.h`, `slam/ivio_interface.h`, `slam/vio_types.h`
+
+### test_swvio_backend.cpp — 17 tests
+
+**What it tests:** `SlidingWindowVIOBackend` (SWVIO) Phase 1 — IMU propagation, state augmentation, covariance, health transitions; `slam_math.h` SO(3) utilities.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `SWVIOBackendTest` | 8 | Factory registration ("swvio"), frame processing, constant-acceleration IMU propagation (quadratic position), stationary gravity compensation, covariance growth, sliding window augmentation up to max_clones, health INITIALIZING→NOMINAL transition, empty IMU samples edge case |
+| `SlamMathTest` | 9 | exp_map identity/small angle/90-degree, log_map inverse-of-exp/identity, skew antisymmetry + cross product equivalence, left Jacobian identity/non-trivial, right Jacobian = left(-phi) |
+
+**Key files under test:** `slam/swvio_backend.h`, `slam/swvio_types.h`, `slam/slam_math.h`
 
 ---
 

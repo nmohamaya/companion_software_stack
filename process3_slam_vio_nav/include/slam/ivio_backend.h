@@ -19,6 +19,7 @@
 #include "slam/ifeature_extractor.h"
 #include "slam/imu_preintegrator.h"
 #include "slam/istereo_matcher.h"
+#include "slam/ivio_interface.h"
 #include "slam/types.h"
 #include "slam/vio_types.h"
 #include "util/diagnostic.h"
@@ -59,33 +60,8 @@ class CosysRpcClient;
 
 namespace drone::slam {
 
-// ─────────────────────────────────────────────────────────────
-// Interface
-// ─────────────────────────────────────────────────────────────
-
-class IVIOBackend {
-public:
-    virtual ~IVIOBackend() = default;
-
-    /// Process one stereo frame + buffered IMU data and produce a VIO output.
-    ///
-    /// @param frame        The stereo frame from the camera.
-    /// @param imu_samples  IMU readings accumulated since the last call.
-    /// @return Ok(VIOOutput) on success, Err(VIOError) on critical failure.
-    virtual VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
-                                               const std::vector<ImuSample>&  imu_samples) = 0;
-
-    /// Current pipeline health.
-    [[nodiscard]] virtual VIOHealth health() const = 0;
-
-    /// Human-readable name for logging.
-    [[nodiscard]] virtual std::string name() const = 0;
-
-    /// Set trajectory target for simulated navigation.
-    /// Only meaningful for simulated backends — real/Gazebo backends get pose
-    /// from actual sensors and ignore this. Default implementation is a no-op.
-    virtual void set_trajectory_target(float /*x*/, float /*y*/, float /*z*/, float /*yaw*/) {}
-};
+// IVIOBackend interface is defined in slam/ivio_interface.h (extracted to
+// break circular includes with swvio_backend.h).
 
 // ─────────────────────────────────────────────────────────────
 // Simulated VIO backend
@@ -857,12 +833,23 @@ private:
 
 #endif  // HAVE_COSYS_AIRSIM
 
+}  // namespace drone::slam
+
+// ── SWVIO backend (included here so the factory can instantiate it) ──
+// Must come after IVIOBackend is fully defined to avoid circular includes.
+// Included outside the namespace block because swvio_backend.h opens its own
+// drone::slam namespace — nesting would cause double-namespace errors.
+#include "slam/swvio_backend.h"
+
+namespace drone::slam {
+
 // ── Factory ────────────────────────────────────────────────
 
 /// Create a VIO backend by name.
 ///
 /// Supported backends:
 ///   "simulated"       — target-following dynamics (default; works without hardware)
+///   "swvio"           — sliding-window VIO with IMU propagation (Phase 1)
 ///   "gazebo"          — Gazebo ground-truth odometry via gz-transport (HAVE_GAZEBO only)
 ///   "gazebo_full_vio" — full pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO only)
 ///   "cosys_airsim"    — Cosys-AirSim ground-truth kinematics via RPC (HAVE_COSYS_AIRSIM only)
@@ -925,8 +912,13 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     (void)cosys_client;
     (void)cosys_vehicle_name;
 #endif
+    if (backend == "swvio") {
+        SWVIOParams swvio_params;  // defaults
+        return std::make_unique<SlidingWindowVIOBackend>(calib, imu_params, swvio_params, 5,
+                                                         good_trace_max, degraded_trace_max);
+    }
     throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
-                             "' (available: simulated"
+                             "' (available: simulated, swvio"
 #ifdef HAVE_GAZEBO
                              ", gazebo, gazebo_full_vio"
 #endif

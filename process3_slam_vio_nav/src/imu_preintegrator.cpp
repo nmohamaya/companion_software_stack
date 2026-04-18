@@ -9,29 +9,15 @@
 
 #include "slam/imu_preintegrator.h"
 
+#include "slam/slam_math.h"
+
 #include <cmath>
 
 namespace drone::slam {
 
-// ── Exp map: so(3) → SO(3) ──────────────────────────────────
-// Rodrigues' formula for the exponential map.
-static Eigen::Quaterniond exp_map(const Eigen::Vector3d& omega_dt) {
-    double theta = omega_dt.norm();
-    if (theta < 1e-10) {
-        // First-order approximation for small angles
-        return Eigen::Quaterniond(1.0, omega_dt.x() * 0.5, omega_dt.y() * 0.5, omega_dt.z() * 0.5)
-            .normalized();
-    }
-    Eigen::Vector3d axis = omega_dt / theta;
-    return Eigen::Quaterniond(Eigen::AngleAxisd(theta, axis));
-}
-
-// ── Skew-symmetric matrix [v]× ──────────────────────────────
-static Eigen::Matrix3d skew(const Eigen::Vector3d& v) {
-    Eigen::Matrix3d m;
-    m << 0, -v.z(), v.y(), v.z(), 0, -v.x(), -v.y(), v.x(), 0;
-    return m;
-}
+// exp_map() and skew() are now in slam/slam_math.h (shared with SWVIO backend)
+using drone::slam::exp_map;
+using drone::slam::skew;
 
 ImuPreintegrator::ImuPreintegrator(ImuNoiseParams params) : params_(params) {}
 
