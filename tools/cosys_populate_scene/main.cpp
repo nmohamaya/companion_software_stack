@@ -29,9 +29,10 @@
 
 #include <common/common_utils/StrictMode.hpp>
 STRICT_MODE_OFF
-#include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
-#include <rpc/client.h>
 #include "api/RpcLibAdaptorsBase.hpp"
+
+#include <rpc/client.h>
+#include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
 STRICT_MODE_ON
 
 #include <cmath>
@@ -213,9 +214,8 @@ int do_spawn(const Args& args) {
         // match the server signature. See comment above raw_rpc declaration.
         bool ok = true;
         try {
-            auto       rpc_result = raw_rpc.call(
-                "simSpawnObject", name, asset,
-                msr::airlib_rpclib::RpcLibAdaptorsBase::Pose(pose),
+            auto rpc_result = raw_rpc.call(
+                "simSpawnObject", name, asset, msr::airlib_rpclib::RpcLibAdaptorsBase::Pose(pose),
                 msr::airlib_rpclib::RpcLibAdaptorsBase::Vector3r(scale), physics, false);
             const auto returned = rpc_result.template as<std::string>();
             std::cout << "  + " << name << "  <-  " << asset << "  at (" << x << ", " << y << ", "
