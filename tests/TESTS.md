@@ -130,7 +130,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
 | [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--5-tests) | 1 | 5 | CosysCameraBackend name-resolution precedence: per-section → top-level → default (gated on `HAVE_COSYS_AIRSIM`) |
-| **Total** | **71 C++ + 5 shell** | **1571 (no SDK) / 1576 (+SDK) + 42 + 250+** | |
+| **Total** | **71 C++ + 5 shell** | **1554 (no SDK) / 1590 (+SDK) + 42 + 250+** | |
 
 ---
 
