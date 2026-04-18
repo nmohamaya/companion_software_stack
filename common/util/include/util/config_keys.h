@@ -255,6 +255,9 @@ inline constexpr const char* PREDICTION_DT_S = "mission_planner.obstacle_avoidan
 inline constexpr const char* VERTICAL_GAIN   = "mission_planner.obstacle_avoidance.vertical_gain";
 inline constexpr const char* MAX_AGE_MS      = "mission_planner.obstacle_avoidance.max_age_ms";
 inline constexpr const char* PATH_AWARE      = "mission_planner.obstacle_avoidance.path_aware";
+inline constexpr const char* PATH_AWARE_BYPASS_HYSTERESIS_M =
+    "mission_planner.obstacle_avoidance.path_aware_bypass_hysteresis_m";
+inline constexpr const char* LOG_CORRECTIONS = "mission_planner.obstacle_avoidance.log_corrections";
 }  // namespace obstacle_avoidance
 
 namespace obstacle_avoider {

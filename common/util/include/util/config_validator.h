@@ -387,6 +387,10 @@ inline ConfigSchema mission_planner_schema() {
     s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::PREDICTION_DT_S)
         .range(0.0, 60.0);
     s.optional<int>(cfg_key::mission_planner::obstacle_avoidance::MAX_AGE_MS).range(0, 60000);
+    s.optional<bool>(cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE_BYPASS_HYSTERESIS_M)
+        .range(0.0, 10.0);
+    s.optional<bool>(cfg_key::mission_planner::obstacle_avoidance::LOG_CORRECTIONS);
     // Geofence
     s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M).range(-1000.0, 10000.0);
     s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M).range(0.0, 10000.0);

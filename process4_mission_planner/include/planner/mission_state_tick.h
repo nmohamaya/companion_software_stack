@@ -358,14 +358,30 @@ private:
                 int stat = grid_planner ? static_cast<int>(grid_planner->grid_static_count()) : -1;
                 int prom = grid_planner ? grid_planner->grid_promoted_count() : -1;
                 bool fb  = grid_planner && grid_planner->using_direct_fallback();
+
+                // Active-object count (Issue #503): obstacles within the avoider
+                // influence radius at current pose.  Useful to cross-reference
+                // when the avoider emits no correction despite obstacles nearby.
+                int active_obj = 0;
+                for (uint32_t i = 0; i < objects.num_objects; ++i) {
+                    const auto& o  = objects.objects[i];
+                    const float ox = o.position_x - dpx;
+                    const float oy = o.position_y - dpy;
+                    const float oz = o.position_z - dpz;
+                    const float d  = std::sqrt(ox * ox + oy * oy + oz * oz);
+                    if (d < 10.0f) ++active_obj;  // ~avoider influence_radius_m
+                }
+
                 DRONE_LOG_DEBUG("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
                                 " dist={:.1f}m plan_v=({:.2f},{:.2f},{:.2f})"
                                 " avoid_v=({:.2f},{:.2f},{:.2f}) |delta|={:.2f}"
-                                " grid: occ={} static={} promoted={} fallback={}",
+                                " grid: occ={} static={} promoted={} fallback={}"
+                                " active_obj={}",
                                 dpx, dpy, dpz, fsm.current_wp_index() + 1, fsm.total_waypoints(),
                                 wp->x, wp->y, wp->z, dist_to_wp, planned.velocity_x,
                                 planned.velocity_y, planned.velocity_z, traj.velocity_x,
-                                traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb);
+                                traj.velocity_y, traj.velocity_z, dmag, occ, stat, prom, fb,
+                                active_obj);
             }
 
             traj_pub.publish(traj);

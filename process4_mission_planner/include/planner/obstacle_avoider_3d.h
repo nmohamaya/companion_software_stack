@@ -30,12 +30,21 @@ namespace drone::planner {
 struct ObstacleAvoider3DConfig {
     float    influence_radius_m = 5.0f;            // max distance at which obstacles exert force
     float    repulsive_gain     = 2.0f;            // strength of repulsive field
-    float    max_correction_mps = 3.0f;            // max velocity correction per axis
+    float    max_correction_mps = 3.0f;            // max Euclidean magnitude of correction vector
     float    min_confidence     = 0.3f;            // minimum object confidence to consider
     float    prediction_dt_s    = 0.5f;            // look-ahead time for velocity-based prediction
     float    vertical_gain      = 1.0f;            // scale factor for Z repulsion (0=lateral only)
     uint64_t max_age_ns         = 500'000'000ULL;  // max age of object data (500ms)
     bool     path_aware         = true;            // remove repulsion opposing planned direction
+    // Close-regime authority — Issue #503.
+    // When the closest obstacle distance falls below min_distance_m, path-aware
+    // stripping is bypassed so the avoider can push against the planner.
+    // Hysteresis prevents chatter at the boundary.
+    float min_distance_m                 = 2.0f;
+    float path_aware_bypass_hysteresis_m = 0.5f;
+    // Per-obstacle INFO log when its contribution exceeds ~0.5 m/s.  Gated so
+    // scenarios that want quiet avoider output can disable it (Issue #503).
+    bool log_corrections = true;
 };
 
 class ObstacleAvoider3D final : public IObstacleAvoider {
@@ -76,6 +85,15 @@ public:
         config_.max_age_ns = static_cast<uint64_t>(max_age_ms) * 1'000'000ULL;
         config_.path_aware = cfg.get<bool>(
             drone::cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE, config_.path_aware);
+        config_.min_distance_m =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_DISTANCE_M,
+                           config_.min_distance_m);
+        config_.path_aware_bypass_hysteresis_m = cfg.get<float>(
+            drone::cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE_BYPASS_HYSTERESIS_M,
+            config_.path_aware_bypass_hysteresis_m);
+        config_.log_corrections =
+            cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::LOG_CORRECTIONS,
+                          config_.log_corrections);
     }
 
     drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
@@ -105,9 +123,14 @@ public:
         float total_rep_y = 0.0f;
         float total_rep_z = 0.0f;
 
+        // Observability counters (Issue #503).
+        uint32_t considered = 0;
+        uint32_t active     = 0;
+
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             if (obj.confidence < config_.min_confidence) continue;
+            ++considered;
 
             // Predicted object position (if velocity is available)
             float ox = obj.position_x + obj.velocity_x * config_.prediction_dt_s;
@@ -122,17 +145,35 @@ public:
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
             if (dist < config_.influence_radius_m && dist > 0.01f) {
+                ++active;
                 // Inverse-square repulsive force (decays with distance)
                 float repulsion = config_.repulsive_gain / (dist * dist);
 
+                // Per-obstacle contribution vector (so we can log its magnitude).
+                const float cx = -(dx / dist) * repulsion;
+                const float cy = -(dy / dist) * repulsion;
+                const float cz = -(dz / dist) * repulsion * config_.vertical_gain;
+
                 // Direction: away from obstacle (negative of relative vector)
-                total_rep_x -= (dx / dist) * repulsion;
-                total_rep_y -= (dy / dist) * repulsion;
-                total_rep_z -= (dz / dist) * repulsion * config_.vertical_gain;
+                total_rep_x += cx;
+                total_rep_y += cy;
+                total_rep_z += cz;
 
                 DRONE_LOG_DEBUG("[Avoider3D] Obstacle at ({:.1f},{:.1f},{:.1f}), "
                                 "dist={:.1f}m, rep={:.2f}",
                                 ox, oy, oz, dist, repulsion);
+
+                // Promote per-obstacle log to INFO when its contribution is
+                // significant (> 0.5 m/s magnitude).  Gated on log_corrections
+                // so quiet scenarios can disable it (Issue #503).
+                if (config_.log_corrections) {
+                    const float cmag = std::sqrt(cx * cx + cy * cy + cz * cz);
+                    if (cmag > 0.5f) {
+                        DRONE_LOG_INFO("[Avoider] obstacle d={:.1f}m rep={:.2f} |c|={:.2f}m/s at "
+                                       "({:.1f},{:.1f},{:.1f})",
+                                       dist, repulsion, cmag, ox, oy, oz);
+                    }
+                }
             }
         }
 
@@ -147,6 +188,7 @@ public:
         // Path-aware repulsion: remove the component that opposes the planned
         // direction.  This prevents the avoider from fighting the planner when
         // obstacles sit between the drone and its goal (Issue #229).
+        uint32_t path_aware_strip_count = 0;
         if (config_.path_aware) {
             if (config_.vertical_gain == 0.0f) {
                 // 2D stripping — never inject Z from XY repulsion (Issue #237).
@@ -163,6 +205,7 @@ public:
                     if (along < 0.0f) {
                         total_rep_x -= along * dx;
                         total_rep_y -= along * dy;
+                        ++path_aware_strip_count;
                         // total_rep_z stays at 0 — no Z injection
                     }
                 }
@@ -184,6 +227,7 @@ public:
                         total_rep_x -= along * dir_x;
                         total_rep_y -= along * dir_y;
                         total_rep_z -= along * dir_z;
+                        ++path_aware_strip_count;
                     }
                 }
             }
@@ -192,6 +236,20 @@ public:
         cmd.velocity_x += total_rep_x;
         cmd.velocity_y += total_rep_y;
         cmd.velocity_z += total_rep_z;
+
+        // Single-line summary at the end of every avoid() call (Issue #503).
+        // INFO-gated on log_corrections + meaningful delta so quiet ticks stay
+        // at DEBUG.  Magnitude is the Euclidean size of the total correction
+        // applied to the planned velocity.
+        if (config_.log_corrections) {
+            const float delta_mag = std::sqrt(
+                total_rep_x * total_rep_x + total_rep_y * total_rep_y + total_rep_z * total_rep_z);
+            if (active > 0 || delta_mag > 0.1f) {
+                DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
+                               "path_aware_strip={}",
+                               considered, active, delta_mag, path_aware_strip_count);
+            }
+        }
 
         return cmd;
     }
