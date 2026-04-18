@@ -32,14 +32,14 @@ STRICT_MODE_OFF
 #include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
 STRICT_MODE_ON
 
-#include <nlohmann/json.hpp>
-
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
@@ -77,7 +77,7 @@ bool parse_args(int argc, char** argv, Args& out) {
         return false;
     }
     for (int i = 2; i < argc; ++i) {
-        const std::string a = argv[i];
+        const std::string a         = argv[i];
         auto              need_next = [&](const char* flag) -> const char* {
             if (i + 1 >= argc) {
                 std::cerr << "Missing value after " << flag << "\n";
@@ -128,8 +128,8 @@ msr::airlib::Pose make_pose(double x, double y, double z, double yaw_rad) {
     using namespace msr::airlib;
     Vector3r pos(static_cast<float>(x), static_cast<float>(y), static_cast<float>(-z));
     // Yaw about +Z (world up); AirSim quaternion uses NED so rotate about -Z.
-    const float            half = static_cast<float>(-yaw_rad * 0.5);
-    Quaternionr            q(std::cos(half), 0.f, 0.f, std::sin(half));
+    const float half = static_cast<float>(-yaw_rad * 0.5);
+    Quaternionr q(std::cos(half), 0.f, 0.f, std::sin(half));
     return Pose(pos, q);
 }
 
@@ -146,8 +146,8 @@ msr::airlib::Vector3r parse_scale(const json& obj) {
     if (s.is_array() && s.size() == 3) {
         return Vector3r(s[0].get<float>(), s[1].get<float>(), s[2].get<float>());
     }
-    std::cerr << "  WARN: scale must be scalar or [x,y,z], got "
-              << s.dump() << " — defaulting to 1.0\n";
+    std::cerr << "  WARN: scale must be scalar or [x,y,z], got " << s.dump()
+              << " — defaulting to 1.0\n";
     return Vector3r(1.f, 1.f, 1.f);
 }
 
@@ -171,8 +171,8 @@ int do_spawn(const Args& args) {
 
     drone::hal::CosysRpcClient client(args.host, args.port);
     if (!client.connect()) {
-        std::cerr << "Failed to connect to Cosys-AirSim at "
-                  << args.host << ":" << args.port << "\n";
+        std::cerr << "Failed to connect to Cosys-AirSim at " << args.host << ":" << args.port
+                  << "\n";
         return 2;
     }
     std::cout << "Connected to " << client.endpoint() << "\n";
@@ -204,14 +204,14 @@ int do_spawn(const Args& args) {
         bool ok = client.with_client([&](auto& rpc) {
             try {
                 const auto returned = rpc.simSpawnObject(name, asset, pose, scale, physics);
-                std::cout << "  + " << name << "  <-  " << asset << "  at ("
-                          << x << ", " << y << ", " << z << ", yaw=" << yaw_deg << "°)"
+                std::cout << "  + " << name << "  <-  " << asset << "  at (" << x << ", " << y
+                          << ", " << z << ", yaw=" << yaw_deg << "°)"
                           << "  -> " << returned << "\n";
                 stamp << returned << "\n";
                 ++spawned;
             } catch (const std::exception& e) {
-                std::cerr << "  ! spawn failed for " << name << " (" << asset << "): "
-                          << e.what() << "\n";
+                std::cerr << "  ! spawn failed for " << name << " (" << asset << "): " << e.what()
+                          << "\n";
                 ++failed;
             }
         });
@@ -270,8 +270,8 @@ int do_destroy(const Args& args) {
     }
 
     client.disconnect();
-    std::cout << "Destroyed " << destroyed << " / " << names.size()
-              << " objects (" << failed << " failed)\n";
+    std::cout << "Destroyed " << destroyed << " / " << names.size() << " objects (" << failed
+              << " failed)\n";
 
     // Remove the stamp file on fully-successful teardown.
     if (failed == 0) {
