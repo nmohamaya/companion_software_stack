@@ -632,3 +632,96 @@ A real-world log of issues hit during setup, in chronological order:
 14. **UE5 downloads are huge (~90GB extracted)** — partial extraction left 69GB orphan, had to clean + retry
 
 Total resolution time: ~4-6 hours across two sessions.
+
+---
+
+## Time Estimates
+
+| Step | Time | Notes |
+|---|---|---|
+| Core deps (apt) | 5 min | |
+| GCC 13 + clang-format-18 | 5 min | PPA + LLVM repo |
+| Clang 18 + libc++ 18 | 5 min | Required for AirSim ABI |
+| Zenoh (download + install) | 2 min | .deb from GitHub |
+| CUDA 12.6 toolkit | 10 min | Large download |
+| OpenCV 4.10 from source (with CUDA) | 20-30 min | 12 cores |
+| MAVSDK from source | 15-30 min | Downloads MAVLink defs during build |
+| Gazebo Harmonic (apt) | 5 min | |
+| PX4 SITL (clone + build) | 30-40 min | Recursive submodules |
+| Cosys-AirSim (setup + build) | 10 min | After submodule init |
+| UE5 5.4 download (pre-built) | 30-60 min | ~20GB zip, ~90GB extracted |
+| ML models (YOLO + DA V2) | 5 min | Python venv + export |
+| **Total (sequential)** | **~3-4 hours** | Parallelise downloads to save time |
+
+---
+
+## Running Tier 3 Cosys-AirSim Scenario (Post-Setup)
+
+### Step 1: Launch UE5
+
+Terminal 1:
+```bash
+/opt/UnrealEngine/Engine/Binaries/Linux/UnrealEditor \
+    ~/Projects/companion_software_stack/third_party/cosys-airsim/Unreal/Environments/Blocks/Blocks.uproject
+```
+
+Wait for "AirSim plugin started" in the bottom-left log. Verify:
+```bash
+timeout 3 bash -c '</dev/tcp/127.0.0.1/41451' && echo "RPC OK" || echo "RPC not available"
+```
+
+### Step 2: Launch Companion Stack
+
+Terminal 2:
+```bash
+cd ~/Projects/companion_software_stack
+CONFIG_FILE=config/cosys_airsim_dev.json
+./build/bin/system_monitor --config ${CONFIG_FILE} &
+./build/bin/video_capture --config ${CONFIG_FILE} &
+./build/bin/perception --config ${CONFIG_FILE} &
+./build/bin/slam_vio_nav --config ${CONFIG_FILE} &
+./build/bin/mission_planner --config ${CONFIG_FILE} &
+./build/bin/comms --config ${CONFIG_FILE} &
+./build/bin/payload_manager --config ${CONFIG_FILE} &
+wait
+```
+
+### Step 3: Monitor
+
+Terminal 3:
+```bash
+tail -f drone_logs/*.log | grep -E "HealthCheck|DepthAnything|CosysRadar|UKF|FSM"
+```
+
+Expected sequence (~30s in):
+```
+[video_capture] Published mission frame #1
+[perception] Detector initialized: yolov8s.onnx
+[perception] Depth estimator initialized: depth_anything_v2_vits.onnx
+[slam_vio_nav] VIO pose: (0.00, 0.00, 0.00) q=1 health=NOMINAL
+[mission_planner] FSM state: ARMED → TAKING_OFF
+```
+
+### Cleanup
+
+```bash
+pkill -f "video_capture|perception|slam_vio_nav|mission_planner|comms|payload_manager|system_monitor"
+```
+
+### Troubleshooting
+
+| Issue | Fix |
+|---|---|
+| RPC not available | UE5 not running — check port 41451 |
+| No YOLO detections | Verify `models/yolov8n.onnx` exists |
+| Processes don't stop on Ctrl+C | Launched with `&` — use `pkill` |
+| UE5 "Vulkan Driver required" | Must use UE5 5.4, not 5.7+ |
+| High latencies (>1s) | Close other apps, check `nvidia-smi` |
+
+### Scenario Configuration
+
+Scenario file: `config/scenarios/29_cosys_perception.json`
+- 5 waypoints, 2.0 m/s cruise, 5m altitude, ~120s flight
+- YOLO v8n + Depth Anything V2 ViT-S (dev profile)
+- D* Lite planner + 3D potential field, 2m min distance
+- UKF fuses radar (LiDAR proxy) + camera + depth

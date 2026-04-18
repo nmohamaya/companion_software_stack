@@ -35,11 +35,14 @@ public:
         return connected_;
     }
 
+    /// @param yaw Yaw angle in radians (0 = North, CW positive) — per IFCLink contract.
+    ///            SimulatedFCLink does not act on yaw (no simulated FC dynamics);
+    ///            it is only logged for debugging.
     bool send_trajectory(float vx, float vy, float vz, float yaw) override {
         std::lock_guard<std::mutex> lock(mtx_);
         if (!connected_) return false;
         DRONE_LOG_DEBUG(
-            "[SimulatedFCLink] SET_POSITION_TARGET vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}", vx,
+            "[SimulatedFCLink] SET_POSITION_TARGET vx={:.2f} vy={:.2f} vz={:.2f} yaw={:.2f}rad", vx,
             vy, vz, yaw);
         last_vx_ = vx;
         last_vy_ = vy;

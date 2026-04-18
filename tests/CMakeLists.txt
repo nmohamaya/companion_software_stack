@@ -246,6 +246,11 @@ endif()
 # ── Cosys-AirSim HAL backend tests (Issue #434) ────────────
 add_drone_test(test_cosys_hal_backends test_cosys_hal_backends.cpp)
 
+# ── Cosys-AirSim FC link tests (Issue #490) ───────────────
+# SimpleFlight-via-AirSim-RPC backend — tests run without a live AirSim
+# server; all command paths should return false when disconnected.
+add_drone_test(test_cosys_fc_link test_cosys_fc_link.cpp)
+
 # ── Diagnostic Collector tests ──────────────────────────────
 add_drone_test(test_diagnostic      test_diagnostic.cpp)
 

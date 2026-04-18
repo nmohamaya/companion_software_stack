@@ -151,8 +151,10 @@ public:
     /// Starts offboard mode automatically on the first call.
     /// @param vx  North velocity (m/s)
     /// @param vy  East velocity  (m/s)
-    /// @param vz  Down velocity  (m/s, positive = descend)
-    /// @param yaw Yaw angle (degrees, 0 = North, CW positive)
+    /// @param vz  Up velocity    (m/s, positive = climb; internally negated to NED)
+    /// @param yaw Yaw angle (radians, 0 = North, CW positive — per IFCLink contract).
+    ///            Converted to degrees internally before hand-off to MAVSDK
+    ///            VelocityNedYaw, which expects degrees.
     bool send_trajectory(float vx, float vy, float vz, float yaw) override {
         std::lock_guard<std::mutex> lock(conn_mtx_);
         if (!offboard_ || !system_ || !system_->is_connected()) return false;
@@ -161,7 +163,8 @@ public:
         cmd.north_m_s = vx;
         cmd.east_m_s  = vy;
         cmd.down_m_s  = -vz;  // Convert from +up (ENU) to +down (NED)
-        cmd.yaw_deg   = yaw;
+        // IFCLink contract: yaw is radians. MAVSDK VelocityNedYaw expects degrees.
+        cmd.yaw_deg = yaw * 180.0f / static_cast<float>(M_PI);
 
         // Must set an initial setpoint before starting offboard
         auto set_result = offboard_->set_velocity_ned(cmd);
@@ -183,8 +186,8 @@ public:
             DRONE_LOG_INFO("[MavlinkFCLink] Offboard mode started");
         }
 
-        DRONE_LOG_DEBUG("[MavlinkFCLink] velocity cmd N={:.2f} E={:.2f} D={:.2f} yaw={:.1f}°", vx,
-                        vy, vz, yaw);
+        DRONE_LOG_DEBUG("[MavlinkFCLink] velocity cmd N={:.2f} E={:.2f} U={:.2f} yaw={:.1f}°", vx,
+                        vy, vz, cmd.yaw_deg);
         return true;
     }
 

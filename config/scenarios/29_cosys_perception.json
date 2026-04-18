@@ -14,7 +14,7 @@
             "slam_vio_nav.imu_source.backend": "cosys_airsim",
             "slam_vio_nav.depth_source.backend": "cosys_airsim",
             "mission_planner.radar.backend": "cosys_airsim",
-            "comms.fc_link.backend": "mavsdk_px4_sitl"
+            "comms.fc_link.backend": "cosys_rpc"
         }
     },
     "config_overrides": {
@@ -182,11 +182,9 @@
         },
         "comms": {
             "mavlink": {
-                "_comment": "PX4 SITL API/offboard link binds 14580 and sends telemetry to 14540 — bind 14540 locally to receive. AirSim's MAVLink bridge moved to 14541/14581 (see cosys_settings.json) to avoid conflict.",
-                "backend": "mavlink",
-                "uri": "udp://:14540",
-                "heartbeat_rate_hz": 1,
-                "timeout_ms": 8000
+                "_comment": "Tier 3 uses SimpleFlight via AirSim RPC (CosysFCLink). PX4+Cosys HIL is blocked upstream — see ADR-011 amendment for #490.",
+                "backend": "cosys_rpc",
+                "heartbeat_rate_hz": 1
             }
         },
         "system_monitor": {

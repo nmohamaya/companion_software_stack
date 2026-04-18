@@ -48,6 +48,13 @@ namespace drone::hal {
 class CosysRpcClient;
 }
 
+// Include cosys_rpc_client.h at top-level scope (never inside a user namespace
+// — system headers pulled in transitively would resolve to the wrong scope
+// under GCC 13, breaking `test_vio_backend.cpp` which pulls in std headers).
+#ifdef HAVE_COSYS_AIRSIM
+#include "hal/cosys_rpc_client.h"
+#endif
+
 namespace drone::slam {
 
 // ─────────────────────────────────────────────────────────────
@@ -726,8 +733,7 @@ private:
 //   → X passes through, Y passes through, Z is negated
 // ─────────────────────────────────────────────────────────────
 #ifdef HAVE_COSYS_AIRSIM
-
-#include "hal/cosys_rpc_client.h"
+// cosys_rpc_client.h is already included at top-level above.
 
 class CosysVIOBackend final : public IVIOBackend {
 public:

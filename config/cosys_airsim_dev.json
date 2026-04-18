@@ -147,7 +147,8 @@
 
     "comms": {
         "mavlink": {
-            "backend": "simulated",
+            "_comment": "Tier 3 uses SimpleFlight via AirSim RPC (see ADR-011 amendment for #490).",
+            "backend": "cosys_rpc",
             "timeout_ms": 8000,
             "heartbeat_rate_hz": 1,
             "tx_rate_hz": 20,

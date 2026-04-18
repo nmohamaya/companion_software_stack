@@ -154,10 +154,11 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
         drone::ipc::TrajectoryCmd cmd{};
         if (traj_sub.receive(cmd) && cmd.valid && cmd.timestamp_ns > last_traj_ts) {
             last_traj_ts = cmd.timestamp_ns;
-            // target_yaw is stored in radians (TrajectoryCmd contract);
-            // MavlinkFCLink::send_trajectory expects degrees (PX4 VelocityNedYaw).
-            const float yaw_deg = cmd.target_yaw * (180.0f / static_cast<float>(M_PI));
-            if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z, yaw_deg)) {
+            // TrajectoryCmd stores target_yaw in radians, and IFCLink::send_trajectory
+            // now takes yaw in radians by contract — backends convert to their native
+            // unit internally. Pass through unchanged.
+            if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z,
+                                    cmd.target_yaw)) {
                 ++traj_send_fail;
                 if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
                     DRONE_LOG_WARN("[Comms] Trajectory send failed (#{}) — "

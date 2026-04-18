@@ -2939,4 +2939,29 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #69 (PR #427). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #70 — CosysFCLink: SimpleFlight via AirSim RPC for Tier 3 (Issue #490)
+
+**Date:** 2026-04-17
+**Category:** Feature / HAL — Flight Controller
+**Issue:** [#490](https://github.com/nmohamaya/companion_software_stack/issues/490)
+**ADR amendment:** ADR-011 (2026-04-17) — Tier 3 flight controller split
+
+**What:**
+
+- **`CosysFCLink` HAL backend** — implements `IFCLink` on top of AirSim's `MultirotorRpcLibClient`. Uses shared `CosysRpcClient` (same connection as camera / radar / IMU / depth) and a 10 Hz state poll thread. Commands map as: `takeoffAsync` + `moveToZAsync` for takeoff, `moveByVelocityAsync` for trajectory (ENU→NED: `vz` negated), `armDisarm`, `hoverAsync` (STAB), `landAsync` (AUTO), `goHomeAsync` (RTL). Battery / GPS fields are stubbed (SimpleFlight doesn't simulate them).
+- **HAL factory wiring** — `comms.mavlink.backend: "cosys_rpc"` selects `CosysFCLink` under `#ifdef HAVE_COSYS_AIRSIM`. Unknown backend keeps throwing `std::runtime_error`.
+- **Config updates** — `config/cosys_airsim_dev.json` + `config/cosys_airsim.json` both now use `comms.mavlink.backend: "cosys_rpc"`. `config/cosys_settings.json` switched from `PX4Multirotor` (TCP HIL + LockStep + control ports) to `SimpleFlight` with `DefaultVehicleState: Armed`; PX4-specific fields removed.
+- **Unit tests** — `tests/test_cosys_fc_link.cpp` — 8 tests covering construction, name, pre-open state, disconnected-client failure paths for all command methods, unknown-mode rejection, and idempotent close.
+- **Docs** — `docs/guides/COSYS_SETUP.md` gained a "Flight Controller Choice" section explaining the SimpleFlight decision, the PX4+Cosys HIL upstream blocker (PX4 #24033, AirSim #5018), and the trade-offs (fault-injection stays in Tier 2).
+
+**Files created:** `common/hal/include/hal/cosys_fc_link.h`, `common/hal/src/cosys_fc_link.cpp`, `tests/test_cosys_fc_link.cpp`
+
+**Files modified:** `common/hal/include/hal/hal_factory.h`, `common/hal/CMakeLists.txt`, `tests/CMakeLists.txt`, `config/cosys_airsim_dev.json`, `config/cosys_airsim.json`, `config/cosys_settings.json`, `docs/guides/COSYS_SETUP.md`, `docs/tracking/PROGRESS.md`, `tests/TESTS.md`
+
+**Why:** PX4+Cosys-AirSim Hardware-in-the-Loop integration is blocked upstream (six configs tested, all fail `ekf2 missing data`). SimpleFlight is AirSim's built-in flight controller and unblocks Epic #431 Tier 3 scenarios. Tier 2 (Gazebo) continues to use PX4+MAVLink via `MavlinkFCLink` — the two tiers now have distinct flight-controller backends selected by config, matching their distinct test purposes (physics / fault sim vs. ML perception / photorealistic rendering).
+
+**Test count:** 1479 → 1487 (+8 CosysFCLinkTest tests, all passing).
+
+---
+
+_Last updated after Improvement #70 (Issue #490). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
