@@ -111,12 +111,15 @@
                 "backend": "potential_field_3d"
             },
             "obstacle_avoidance": {
+                "_comment": "WP3→WP4 gap: planner cruises at cruise_speed_mps=2.0, so a 2.0 clamp leaves no headroom for lateral repulsion to redirect the trajectory. Raised to 3.5 m/s (Issue #503). path_aware_bypass_hysteresis_m controls the re-enable distance once the drone clears the close regime (min_distance_m + hysteresis).",
                 "min_distance_m": 2.5,
                 "influence_radius_m": 10.0,
                 "repulsive_gain": 3.0,
-                "max_correction_mps": 2.0,
+                "max_correction_mps": 3.5,
                 "vertical_gain": 0.0,
-                "path_aware": true
+                "path_aware": true,
+                "path_aware_bypass_hysteresis_m": 0.5,
+                "log_corrections": true
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,

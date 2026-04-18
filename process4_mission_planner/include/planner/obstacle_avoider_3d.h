@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace drone::planner {
@@ -126,6 +127,9 @@ public:
         // Observability counters (Issue #503).
         uint32_t considered = 0;
         uint32_t active     = 0;
+        // Track nearest active obstacle for the path-aware bypass hysteresis
+        // (Issue #503).  Only updated when an obstacle is within influence.
+        float min_active_dist = std::numeric_limits<float>::infinity();
 
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
@@ -146,6 +150,7 @@ public:
 
             if (dist < config_.influence_radius_m && dist > 0.01f) {
                 ++active;
+                if (dist < min_active_dist) min_active_dist = dist;
                 // Inverse-square repulsive force (decays with distance)
                 float repulsion = config_.repulsive_gain / (dist * dist);
 
@@ -177,19 +182,47 @@ public:
             }
         }
 
-        // Clamp corrections
-        total_rep_x = std::clamp(total_rep_x, -config_.max_correction_mps,
-                                 config_.max_correction_mps);
-        total_rep_y = std::clamp(total_rep_y, -config_.max_correction_mps,
-                                 config_.max_correction_mps);
-        total_rep_z = std::clamp(total_rep_z, -config_.max_correction_mps,
-                                 config_.max_correction_mps);
+        // Clamp Euclidean magnitude of the correction vector (Issue #503).
+        // The old per-axis clamp allowed the 3-vector magnitude to exceed
+        // max_correction_mps by sqrt(N_axes) — e.g. (1.0, 1.0, 0) has magnitude
+        // 1.41 under a 1.0 cap.  Clamping the magnitude preserves direction
+        // and honours the configured authority limit exactly.
+        {
+            const float mag_sq = total_rep_x * total_rep_x + total_rep_y * total_rep_y +
+                                 total_rep_z * total_rep_z;
+            const float max_sq = config_.max_correction_mps * config_.max_correction_mps;
+            if (mag_sq > max_sq && mag_sq > 0.0f) {
+                const float scale = config_.max_correction_mps / std::sqrt(mag_sq);
+                total_rep_x *= scale;
+                total_rep_y *= scale;
+                total_rep_z *= scale;
+            }
+        }
+
+        // Path-aware bypass hysteresis (Issue #503).
+        // When the closest active obstacle falls below min_distance_m, path-aware
+        // stripping is wrong — in the close regime we want the avoider to push
+        // back against the planner.  Hysteresis: enter the bypass below
+        // min_distance_m, exit only once the distance rises above
+        // min_distance_m + hysteresis_m.  This matches the contract: path-aware
+        // stripping is disabled in the close regime and re-enabled when clearance
+        // is comfortably re-established.
+        if (std::isfinite(min_active_dist)) {
+            if (!close_regime_active_ && min_active_dist < config_.min_distance_m) {
+                close_regime_active_ = true;
+            } else if (close_regime_active_ &&
+                       min_active_dist >
+                           config_.min_distance_m + config_.path_aware_bypass_hysteresis_m) {
+                close_regime_active_ = false;
+            }
+        }
+        const bool apply_path_aware = config_.path_aware && !close_regime_active_;
 
         // Path-aware repulsion: remove the component that opposes the planned
         // direction.  This prevents the avoider from fighting the planner when
         // obstacles sit between the drone and its goal (Issue #229).
         uint32_t path_aware_strip_count = 0;
-        if (config_.path_aware) {
+        if (apply_path_aware) {
             if (config_.vertical_gain == 0.0f) {
                 // 2D stripping — never inject Z from XY repulsion (Issue #237).
                 // With vertical_gain=0, total_rep_z is guaranteed zero from the
@@ -246,8 +279,9 @@ public:
                 total_rep_x * total_rep_x + total_rep_y * total_rep_y + total_rep_z * total_rep_z);
             if (active > 0 || delta_mag > 0.1f) {
                 DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
-                               "path_aware_strip={}",
-                               considered, active, delta_mag, path_aware_strip_count);
+                               "path_aware_strip={} close_regime={}",
+                               considered, active, delta_mag, path_aware_strip_count,
+                               close_regime_active_ ? 1 : 0);
             }
         }
 
@@ -256,8 +290,16 @@ public:
 
     std::string name() const override { return "ObstacleAvoider3D"; }
 
+    /// Whether the avoider is currently in close-regime (path-aware bypassed).
+    /// Exposed for tests and diagnostics.
+    [[nodiscard]] bool close_regime_active() const { return close_regime_active_; }
+
 private:
     ObstacleAvoider3DConfig config_;
+    // Path-aware bypass hysteresis state (Issue #503).
+    // Enters when closest obstacle < min_distance_m; exits when it rises
+    // above min_distance_m + path_aware_bypass_hysteresis_m.
+    bool close_regime_active_ = false;
 };
 
 }  // namespace drone::planner

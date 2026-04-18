@@ -130,7 +130,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
 | [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--6-tests) | 1 | 6 | CosysCameraBackend name-resolution precedence: per-section → top-level → default, plus symmetric empty-value-not-shadowing for vehicle_name (gated on `HAVE_COSYS_AIRSIM`) |
-| **Total** | **71 C++ + 5 shell** | **1554 (no SDK) / 1591 (+SDK) + 42 + 250+** | |
+| **Total** | **71 C++ + 5 shell** | **1564 (no SDK) / 1601 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -527,14 +527,15 @@ occlusion recovery, config/factory integration.
 
 ## P4 — Mission Planner
 
-### test_mission_fsm.cpp — 19 tests
+### test_mission_fsm.cpp — 25 tests
 
-**What it tests:** `MissionFSM` state machine — the core flight mission
-lifecycle.
+**What it tests:** `MissionFSM` state machine + `StuckDetector` — the core
+flight mission lifecycle plus the Issue #503 stuck detector.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionFSMTest` | 19 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → survey → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor, SURVEY state transition, snap offset acceptance (Issue #394: snapped position, far-from-both, no-snap fallback, within-radius boundary) |
+| `MissionFSMTest` | 20 | Start state (`IDLE`), full lifecycle (arm → preflight → takeoff → survey → navigate → loiter → RTL → land → idle), waypoint load/advance/reached, emergency transition from any state, overshoot detection (past WP, before WP, last WP, lateral offset, far from WP), next_waypoint accessor, SURVEY state transition, snap offset acceptance (Issue #394: snapped position, far-from-both, no-snap fallback, within-radius boundary), NAVIGATE ↔ NAVIGATE_UNSTUCK transitions (#503) |
+| `StuckDetectorTest` | 5 | Triggers when pose stationary + avoider active over the full window, gated off when avoider inactive, resets on movement > min_movement_m, disabled never fires, window-not-full does not fire (#503) |
 
 **Key files under test:** `planner/mission_fsm.h`
 
@@ -593,24 +594,25 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 14 tests
+### test_mission_state_tick.cpp — 15 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
-states (PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND) with tracking variables.
+states (PREFLIGHT, TAKEOFF, NAVIGATE, NAVIGATE_UNSTUCK, RTL, LAND) with
+tracking variables.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionStateTickTest` | 14 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π] |
+| `MissionStateTickTest` | 15 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, NAVIGATE_UNSTUCK disarm-abort (#503), RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π] |
 
 **Key files under test:** `planner/mission_state_tick.h`
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 21 tests
+### test_obstacle_avoider_3d.cpp — 24 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
-path-aware mode.
+path-aware mode, Euclidean-magnitude clamp and close-regime path-aware bypass (Issue #503).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -620,6 +622,7 @@ path-aware mode.
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
 | `ObstacleAvoider3DTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
 | `ObstacleAvoider3DTest` | 4 | Path-aware mode: strips backward repulsion, preserves lateral, preserves same-direction, disabled fallback |
+| `ObstacleAvoider3DTest` | 3 | Euclidean-magnitude clamp (not per-axis), close-regime bypass pushes opposite planner, bypass hysteresis prevents flip-flop (Issue #503) |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 

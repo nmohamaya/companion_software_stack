@@ -3019,4 +3019,27 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #72 (issue #499, Bug #1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #73 — Avoider Observability + Stuck Detector + Authority Fix (Issue #503)
+
+**Date:** 2026-04-18
+**Category:** Bug Fix — Mission planner / obstacle avoidance
+**Issues:** [#503](https://github.com/nmohamaya/companion_software_stack/issues/503)
+
+**What:** Scenario 30's 2026-04-17 run reached WP3 and stalled indefinitely — radar, occupancy grid, and D\*Lite all worked (539 occupied cells, 339 replans, 19 radar tracks) but the avoider produced no visible INFO output and the drone made no progress through the WP3→WP4 gap. Landed in three phases:
+
+- **Phase A — Observability.** Promoted per-obstacle avoider DEBUG log to INFO when contribution magnitude > 0.5 m/s (gated by new `mission_planner.obstacle_avoidance.log_corrections`). Added a single end-of-tick summary line `[Avoider] considered=N active=M |delta|=X m/s path_aware_strip=K close_regime=0/1`. Extended the ~1 Hz DIAG line in `tick_navigate` with an `active_obj` count (obstacles within ~10 m).
+- **Phase B — Stuck detector.** Added `StuckDetector` sliding-window class and new `MissionState::NAVIGATE_UNSTUCK`. Transitions NAVIGATE → NAVIGATE_UNSTUCK when the drone hasn't moved > `min_movement_m` over `window_s` AND the avoider has been active in that window. The unstuck state commands a capped-magnitude backoff along `-planned_velocity` for `backoff_duration_s` then returns to NAVIGATE so the next replan routes wider. Gated to NAVIGATE only — SURVEY/LAND/RTL/TAKEOFF unaffected. New config keys: `mission_planner.stuck_detector.{enabled, window_s, min_movement_m, backoff_duration_s, backoff_speed_mps}`.
+- **Phase C — Avoider authority.** Fixed the per-axis clamp to clamp the Euclidean magnitude of the 3-vector (pinned by new unit test). Added path-aware bypass: when the nearest active obstacle is below `min_distance_m`, path-aware stripping is skipped so the avoider can push opposite the planner direction. Hysteresis via `path_aware_bypass_hysteresis_m` (default 0.5 m) prevents flip-flop at the boundary. `config/scenarios/30_cosys_static.json`: `max_correction_mps` 2.0 → 3.5 (planner cruise speed is 2.0, so 2.0 left no lateral headroom), with explanatory `_comment`.
+
+**Files added:** none (tests extended in-place).
+**Files modified:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`, `process4_mission_planner/include/planner/mission_fsm.h`, `process4_mission_planner/include/planner/mission_state_tick.h`, `process4_mission_planner/include/planner/gcs_command_handler.h`, `process4_mission_planner/src/main.cpp`, `common/ipc/include/ipc/ipc_types.h`, `common/util/include/util/config_keys.h`, `common/util/include/util/config_validator.h`, `config/scenarios/30_cosys_static.json`, `tests/test_mission_fsm.cpp`, `tests/test_mission_state_tick.cpp`, `tests/test_obstacle_avoider_3d.cpp`, `tests/TESTS.md`, `docs/tracking/BUG_FIXES.md`.
+
+**Why:** Three compounding defects blocked scenario 30 — (1) the avoider was invisible in logs (couldn't diagnose from output alone), (2) the authority cap was barely above cruise speed (no lateral headroom in tight corridors), (3) path-aware stripping was always on (disabled avoider whenever it mattered most). The stuck detector is the safety backstop: even if the tuning is wrong for a novel scenario the FSM notices a multi-second hang and performs a defined backoff.
+
+**Test count:** +10 (Phase B: 5 `StuckDetectorTest` + 1 FSM transition test + 1 NAVIGATE_UNSTUCK disarm-abort integration test; Phase C: 3 avoider tests for Euclidean clamp, close-regime bypass, hysteresis). Baseline 1591 → 1601 with Cosys SDK. See [tests/TESTS.md](../../tests/TESTS.md).
+
+**Related:** #505 (grid inflation ↔ avoider influence coupling) and #506 (real-hardware IMU-jerk collision detection) remain out of scope; both are tracked separately.
+
+---
+
+_Last updated after Improvement #73 (issue #503). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
