@@ -12,7 +12,7 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
+#include <deque>
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -30,6 +30,8 @@ struct SWVIOParams {
     double noise_image_pixel     = 1.0;    // image measurement noise (pixels)
     int    init_frames           = 10;     // frames before transitioning out of INITIALIZING
     bool   enable_marginalization_prior = true;
+    double good_trace_max               = 0.1;  // position trace threshold for NOMINAL health
+    double degraded_trace_max           = 1.0;  // position trace threshold for DEGRADED health
 
     // Gravity vector in world frame (NED convention: [0,0,9.81] for "up"
     // in accelerometer reading, but gravity acceleration is [0,0,-9.81])
@@ -38,6 +40,12 @@ struct SWVIOParams {
     // IMU-camera extrinsic transformation (identity = co-located sensors)
     Eigen::Quaterniond T_imu_cam_rotation{Eigen::Quaterniond::Identity()};
     Eigen::Vector3d    T_imu_cam_translation{Eigen::Vector3d::Zero()};
+
+    [[nodiscard]] bool validate() const {
+        return max_clones > 0 && max_clones <= 30 && init_frames > 0 && good_trace_max > 0.0 &&
+               degraded_trace_max > good_trace_max && noise_image_pixel > 0.0 &&
+               chi2_threshold > 0.0;
+    }
 };
 
 /// IMU state: full nominal state (position, velocity, orientation, biases).
@@ -61,9 +69,9 @@ struct CameraClone {
 
 /// Full SWVIO state: IMU state + sliding window of camera clones + covariance.
 struct SWVIOState {
-    IMUState                 imu;
-    std::vector<CameraClone> clones;
-    Eigen::MatrixXd          covariance;  // (15 + 6*N_clones) x (15 + 6*N_clones)
+    IMUState                imu;
+    std::deque<CameraClone> clones;
+    Eigen::MatrixXd         covariance;  // (15 + 6*N_clones) x (15 + 6*N_clones)
 
     // ── Error state indices ─────────────────────────────────
     static constexpr int kIdxTheta      = 0;   // orientation error (3)

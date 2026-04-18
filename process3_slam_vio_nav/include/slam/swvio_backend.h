@@ -26,36 +26,36 @@ namespace drone::slam {
 
 class SlidingWindowVIOBackend : public IVIOBackend {
 public:
-    /// @param calib             Stereo camera calibration parameters.
-    /// @param imu_params        IMU noise parameters (from datasheet/calibration).
-    /// @param params            SWVIO-specific parameters (window size, thresholds).
-    /// @param init_frames       Frames before transitioning out of INITIALIZING.
-    /// @param good_trace_max    Position trace threshold for NOMINAL health.
-    /// @param degraded_trace_max Position trace threshold for DEGRADED health.
+    /// @param calib      Stereo camera calibration parameters.
+    /// @param imu_params IMU noise parameters (from datasheet/calibration).
+    /// @param params     SWVIO-specific parameters (window size, thresholds, health).
     SlidingWindowVIOBackend(const StereoCalibration& calib, const ImuNoiseParams& imu_params,
-                            const SWVIOParams& params, int init_frames, double good_trace_max,
-                            double degraded_trace_max);
+                            const SWVIOParams& params);
 
-    VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
-                                       const std::vector<ImuSample>&  imu_samples) override;
+    SlidingWindowVIOBackend(const SlidingWindowVIOBackend&)            = delete;
+    SlidingWindowVIOBackend& operator=(const SlidingWindowVIOBackend&) = delete;
+
+    [[nodiscard]] VIOResult<VIOOutput> process_frame(
+        const drone::ipc::StereoFrame& frame, const std::vector<ImuSample>& imu_samples) override;
 
     [[nodiscard]] VIOHealth health() const override;
 
     [[nodiscard]] std::string name() const override;
 
+    [[nodiscard]] int clone_count() const { return static_cast<int>(state_.clones.size()); }
+    [[nodiscard]] int state_dim() const { return state_.state_dim(); }
+
 private:
     // ── Core SWVIO operations ──────────────────────────────
-    /// Propagate IMU state and covariance through a sequence of IMU samples.
     void propagate_imu(const std::vector<ImuSample>& imu_samples);
-
-    /// Clone the current IMU pose into the sliding window.
     void augment_state(double timestamp);
-
-    /// Remove the oldest camera clone when the window exceeds max_clones.
     void marginalize_oldest_clone();
 
-    /// Update health state machine based on feature count and covariance.
-    void update_health(int num_features, int num_matches);
+    /// Update health based on position covariance trace and initialization frame count.
+    void update_health();
+
+    /// Enforce covariance symmetry (call once per frame, not per IMU step).
+    void enforce_symmetry();
 
     // ── State ──────────────────────────────────────────────
     SWVIOState        state_;
@@ -63,18 +63,18 @@ private:
     StereoCalibration calib_;
     ImuNoiseParams    imu_params_;
 
+    // ── Precomputed (constant across lifetime) ─────────────
+    Eigen::Matrix<double, 12, 12> Q_c_;          // continuous-time noise covariance
+    Eigen::MatrixXd               scratch_cov_;  // pre-allocated scratch for augment/marginalize
+
     // ── Sub-components ─────────────────────────────────────
     std::unique_ptr<IFeatureExtractor> extractor_;
     std::unique_ptr<IStereoMatcher>    matcher_;
 
     // ── Health state machine ───────────────────────────────
-    VIOHealth health_             = VIOHealth::INITIALIZING;
-    int       frames_processed_   = 0;
-    int       init_frames_        = 10;
-    double    good_trace_max_     = 0.1;
-    double    degraded_trace_max_ = 1.0;
-
-    uint64_t next_clone_id_ = 0;
+    VIOHealth health_           = VIOHealth::INITIALIZING;
+    int       frames_processed_ = 0;
+    uint64_t  next_clone_id_    = 0;
 };
 
 }  // namespace drone::slam

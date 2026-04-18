@@ -913,9 +913,10 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
     (void)cosys_vehicle_name;
 #endif
     if (backend == "swvio") {
-        SWVIOParams swvio_params;  // defaults
-        return std::make_unique<SlidingWindowVIOBackend>(calib, imu_params, swvio_params, 5,
-                                                         good_trace_max, degraded_trace_max);
+        SWVIOParams swvio_params;
+        swvio_params.good_trace_max     = good_trace_max;
+        swvio_params.degraded_trace_max = degraded_trace_max;
+        return std::make_unique<SlidingWindowVIOBackend>(calib, imu_params, swvio_params);
     }
     throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
                              "' (available: simulated, swvio"

@@ -1092,14 +1092,14 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 **Key files under test:** `slam/ivio_backend.h`, `slam/ivio_interface.h`, `slam/vio_types.h`
 
-### test_swvio_backend.cpp — 17 tests
+### test_swvio_backend.cpp — 26 tests
 
-**What it tests:** `SlidingWindowVIOBackend` (SWVIO) Phase 1 — IMU propagation, state augmentation, covariance, health transitions; `slam_math.h` SO(3) utilities.
+**What it tests:** `SlidingWindowVIOBackend` (SWVIO) Phase 1 — IMU propagation, state augmentation, marginalization, covariance dimensions, all health states (INITIALIZING/NOMINAL/DEGRADED/LOST), edge cases (NaN, negative dt, timestamp overflow); `slam_math.h` SO(3) utilities.
 
-| Suite | Tests | What is validated |
-|-------|-------|-------------------|
-| `SWVIOBackendTest` | 8 | Factory registration ("swvio"), frame processing, constant-acceleration IMU propagation (quadratic position), stationary gravity compensation, covariance growth, sliding window augmentation up to max_clones, health INITIALIZING→NOMINAL transition, empty IMU samples edge case |
-| `SlamMathTest` | 9 | exp_map identity/small angle/90-degree, log_map inverse-of-exp/identity, skew antisymmetry + cross product equivalence, left Jacobian identity/non-trivial, right Jacobian = left(-phi) |
+| Suite              | Tests | What is validated |
+|--------------------|-------|-------------------|
+| `SWVIOBackendTest` | 16    | Factory registration ("swvio"), frame processing, constant-acceleration IMU propagation (quadratic position with tighter tolerances), stationary gravity compensation, covariance growth, sliding window augmentation with clone_count/state_dim verification, marginalization caps window at max_clones, covariance dimensions match state, health INITIALIZING→NOMINAL/DEGRADED/LOST transitions (4 tests), warmup stays INITIALIZING, empty IMU samples, NaN IMU rejection, negative dt skipping, timestamp overflow rejection |
+| `SlamMathTest`     | 10    | exp_map identity/small angle/90-degree/180-degree boundary, log_map inverse-of-exp/identity, skew antisymmetry + cross product equivalence, left Jacobian identity/non-trivial, right Jacobian = left(-phi) |
 
 **Key files under test:** `slam/swvio_backend.h`, `slam/swvio_types.h`, `slam/slam_math.h`
 

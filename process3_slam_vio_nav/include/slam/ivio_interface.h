@@ -26,8 +26,8 @@ public:
     /// @param frame        The stereo frame from the camera.
     /// @param imu_samples  IMU readings accumulated since the last call.
     /// @return Ok(VIOOutput) on success, Err(VIOError) on critical failure.
-    virtual VIOResult<VIOOutput> process_frame(const drone::ipc::StereoFrame& frame,
-                                               const std::vector<ImuSample>&  imu_samples) = 0;
+    [[nodiscard]] virtual VIOResult<VIOOutput> process_frame(
+        const drone::ipc::StereoFrame& frame, const std::vector<ImuSample>& imu_samples) = 0;
 
     /// Current pipeline health.
     [[nodiscard]] virtual VIOHealth health() const = 0;
