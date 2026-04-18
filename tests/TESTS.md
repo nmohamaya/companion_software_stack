@@ -129,7 +129,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
-| **Total** | **70 C++ + 5 shell** | **1553 + 42 + 250+** | |
+| [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--5-tests) | 1 | 5 | CosysCameraBackend name-resolution precedence: per-section → top-level → default (gated on `HAVE_COSYS_AIRSIM`) |
+| **Total** | **71 C++ + 5 shell** | **1571 (no SDK) / 1576 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -337,6 +338,22 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 **Key files under test:** `hal/cosys_fc_link.h`, `hal/cosys_rpc_client.h`, `hal/hal_factory.h`
 
 **Why:** Tier 3 (Cosys-AirSim) uses SimpleFlight instead of PX4 because PX4+Cosys HIL is broken upstream (PX4 #24033, AirSim #5018). This backend is the Tier-3 counterpart to `MavlinkFCLink`. The tests verify the failure paths that flight-critical code depends on (no crash, no hang, no arbitrary truthy result when the simulator isn't running).
+
+---
+
+## HAL — Cosys-AirSim Camera Config
+
+### test_cosys_camera_config.cpp — 5 tests
+
+**What it tests:** `CosysCameraBackend::resolve_camera_name` / `resolve_vehicle_name` — the name-resolution precedence ladder introduced to fix Issue #499, Bug #1. Whole TU is gated on `HAVE_COSYS_AIRSIM`; machines without the SDK compile it to empty.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `CosysCameraConfigTest` | 5 | `<section>.camera_name` overrides `cosys_airsim.camera_name`; top-level used when per-section absent; defaults `"front_center"` / `"Drone0"` used when neither set; empty section falls through to top-level; empty per-section value treated as absent (does not shadow top-level) |
+
+**Key files under test:** `hal/cosys_camera.h` (static helpers `resolve_camera_name`, `resolve_vehicle_name`).
+
+**Why:** Regression test for the silent 256×144 downgrade that made scenario 30 produce zero detections for 39 YOLO inference frames. No RPC required — the helpers are `static` by design so the resolution logic can be unit-tested without instantiating the backend (which would need a live AirSim server). See BUG_FIXES.md → Fix #499a.
 
 ---
 

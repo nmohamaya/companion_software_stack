@@ -57,19 +57,47 @@ public:
         uint64_t             timestamp_ns{0};  ///< Capture timestamp
     };
 
+    /// Resolve AirSim camera name with precedence:
+    ///   1. `<section>.camera_name` (e.g. "video_capture.mission_cam.camera_name")
+    ///   2. top-level `cosys_airsim.camera_name`
+    ///   3. literal default "front_center"
+    ///
+    /// This lets each backend instance bind to its own AirSim camera (required
+    /// for multi-camera setups) while preserving a project-wide default.
+    /// Extracted as a static helper so it can be unit-tested without
+    /// instantiating the backend (which requires a live RPC client).
+    [[nodiscard]] static std::string resolve_camera_name(const drone::Config& cfg,
+                                                         const std::string&   section) {
+        if (!section.empty()) {
+            const auto per_section = cfg.get<std::string>(section + ".camera_name", "");
+            if (!per_section.empty()) return per_section;
+        }
+        return cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::CAMERA_NAME),
+                                    "front_center");
+    }
+
+    /// Resolve AirSim vehicle name with the same precedence as `resolve_camera_name`,
+    /// defaulting to "Drone0".
+    [[nodiscard]] static std::string resolve_vehicle_name(const drone::Config& cfg,
+                                                          const std::string&   section) {
+        if (!section.empty()) {
+            const auto per_section = cfg.get<std::string>(section + ".vehicle_name", "");
+            if (!per_section.empty()) return per_section;
+        }
+        return cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME),
+                                    "Drone0");
+    }
+
     /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
     explicit CosysCameraBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
                                 const std::string& section)
         : client_(std::move(client))
-        , camera_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::CAMERA_NAME),
-                                            "front_center"))
-        , vehicle_name_(cfg.get<std::string>(
-              std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0")) {
-        (void)section;  // section reserved for future per-camera config
-        DRONE_LOG_INFO("[CosysCamera] Created for {} camera='{}' vehicle='{}'", client_->endpoint(),
-                       camera_name_, vehicle_name_);
+        , camera_name_(resolve_camera_name(cfg, section))
+        , vehicle_name_(resolve_vehicle_name(cfg, section)) {
+        DRONE_LOG_INFO("[CosysCamera] Created for {} camera='{}' vehicle='{}' (section='{}')",
+                       client_->endpoint(), camera_name_, vehicle_name_, section);
     }
 
     ~CosysCameraBackend() override { close(); }
@@ -191,6 +219,12 @@ private:
                                            /* pixels_as_float */ false,
                                            /* compress */ false)};
 
+        // One-shot dimension verification on the first successful frame.
+        // Surfaces a class of silent failures where AirSim auto-creates a
+        // camera with default 256x144 CaptureSettings because the requested
+        // name is not declared in server-side settings.json (Bug #499 Bug #1).
+        bool first_frame_logged = false;
+
         while (open_.load(std::memory_order_acquire)) {
             try {
                 // Use with_client() to prevent TOCTOU race on disconnect
@@ -235,6 +269,27 @@ private:
                     fd.timestamp_ns = static_cast<uint64_t>(std::max(decltype(ts_ns){0}, ts_ns));
 
                     frame_buffer_.write(std::move(fd));
+
+                    // One-shot: verify AirSim returned the dimensions we requested.
+                    // If not, the camera name likely isn't declared in settings.json
+                    // and AirSim silently auto-created it with 256x144 defaults —
+                    // we WARN so the mismatch is obvious in the logs.
+                    if (!first_frame_logged) {
+                        first_frame_logged = true;
+                        if (w == width_ && h == height_) {
+                            DRONE_LOG_INFO(
+                                "[CosysCamera] First frame received: camera='{}' {}x{} (as "
+                                "requested)",
+                                camera_name_, w, h);
+                        } else {
+                            DRONE_LOG_WARN(
+                                "[CosysCamera] First frame dimension MISMATCH: camera='{}' "
+                                "returned {}x{} but {}x{} was requested. The camera name may "
+                                "not be declared in AirSim settings.json (server-side), causing "
+                                "AirSim to auto-create it with default CaptureSettings.",
+                                camera_name_, w, h, width_, height_);
+                        }
+                    }
                 });
 
                 if (!got_frame) {

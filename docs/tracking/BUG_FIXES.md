@@ -628,6 +628,33 @@ else
 
 ---
 
+### Fix #499a — Cosys Camera Silently Downgraded to 256×144 (Issue #499, Bug #1)
+
+**Date:** 2026-04-18
+**Severity:** High (perception non-functional in Tier 3 dev profile — 0 detections across 39 inference frames)
+**Files:** `config/cosys_airsim_dev.json`, `common/hal/include/hal/cosys_camera.h`, `tests/test_cosys_camera_config.cpp` (new), `tests/CMakeLists.txt`
+
+**Bug:** YOLO received 256×144 frames from `CosysCameraBackend` even though the config declared `video_capture.mission_cam.{width:1280,height:720}`. The backend's own log line cheerfully reported `"Opened camera='front_center' on 127.0.0.1:41451 (1280x720@30Hz)"` — every RPC response was a 256×144 thumbnail. Scenario 30 completed flight paths but produced 0 object detections.
+
+**Root Cause:** Three compounding issues:
+
+1. **Config mismatch.** `config/cosys_airsim_dev.json` declared `cosys_airsim.camera_name: "front_center"`, but the server-side `~/Documents/AirSim/settings.json` only declared `mission_cam` (1280×720) and `DepthCam` (640×480). When a client requests a camera name not in `settings.json`, AirSim's `AirSimSettings::getCamera()` auto-creates it with default `CaptureSettings` — **width=256, height=144** (confirmed at `third_party/cosys-airsim/AirLib/include/common/AirSimSettings.hpp:174`).
+2. **Dead per-section config.** The `CosysCameraBackend` constructor accepted a `section` parameter (e.g. `"video_capture.mission_cam"`) but ignored it with `(void)section`. Scenario 30 already had a correct per-camera override (`camera_name: "mission_cam"` under `video_capture.mission_cam`) — it was dead config that never routed to AirSim.
+3. **No dimension verification.** The open() log line printed the *requested* dimensions, never what AirSim actually returned. 30× resolution downgrade produced no observable signal in logs; only YOLO's zero-detection count eventually surfaced the problem.
+
+**Fix:**
+
+- `config/cosys_airsim_dev.json`: `cosys_airsim.camera_name` → `"mission_cam"` so the requested name matches `settings.json`.
+- `CosysCameraBackend`: added `static` helpers `resolve_camera_name` / `resolve_vehicle_name` implementing a precedence ladder `<section>.camera_name` → `cosys_airsim.camera_name` → default. Constructor wired to them. Static so the resolution logic is unit-testable without a live RPC client.
+- `retrieval_loop()`: one-shot first-frame dimension log. If `(resp.width, resp.height)` matches the requested `(width_, height_)` → INFO with "as requested". If it differs → WARN with the returned vs requested values plus a hint that the camera may not be declared in `settings.json`. Flag is a local variable in the thread loop — no member state required.
+- New unit test `tests/test_cosys_camera_config.cpp` (5 tests, gated on `HAVE_COSYS_AIRSIM`): per-section override, top-level fallback, default fallback, empty-section fallthrough, empty-value-treated-as-absent.
+
+**Impact:** Dev-profile perception stack now receives the configured 1280×720 frames. Future misconfigurations of the same class will surface within seconds of the first successful frame instead of silently propagating a 30× resolution downgrade through the IPC bus. The precedence ladder also unblocks multi-camera Tier 3 setups (mission + depth + front-center), where each backend instance needs to map to a distinct AirSim camera.
+
+**Found by:** Live scenario 30 run on 2026-04-17 — drone flew waypoints successfully but `TrackerSink` reported 0 frames published and YOLO inference completed with 0 detections across 39 frames. Root-caused by inspecting AirSim's `AirSimSettings::getCamera()` auto-create behaviour against the dev-profile's `camera_name` value.
+
+---
+
 ### Fix #51 — Depth Anything V2 ONNX Model Incompatible with OpenCV DNN (Issue #455)
 
 **Date:** 2026-04-14
