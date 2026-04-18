@@ -290,9 +290,31 @@ int main(int argc, char* argv[]) {
     const float collision_hover_duration = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S, 2.0f);
 
-    MissionStateTick      state_tick({takeoff_alt, rtl_acceptance_m, landed_alt_m, rtl_min_dwell_s,
-                                      survey_duration, survey_yaw_rate, collision_recovery_enabled,
-                                      collision_climb_delta, collision_hover_duration});
+    // Stuck detector config (Issue #503)
+    drone::planner::StuckDetector::Config stuck_cfg{};
+    stuck_cfg.enabled = ctx.cfg.get<bool>(drone::cfg_key::mission_planner::stuck_detector::ENABLED,
+                                          true);
+    stuck_cfg.window_s =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::stuck_detector::WINDOW_S, 3.0f);
+    stuck_cfg.min_movement_m =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::stuck_detector::MIN_MOVEMENT_M, 0.5f);
+    stuck_cfg.backoff_duration_s = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::stuck_detector::BACKOFF_DURATION_S, 2.0f);
+    stuck_cfg.backoff_speed_mps = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::stuck_detector::BACKOFF_SPEED_MPS, 1.0f);
+
+    drone::planner::StateTickConfig tick_cfg{};
+    tick_cfg.takeoff_alt_m              = takeoff_alt;
+    tick_cfg.rtl_acceptance_m           = rtl_acceptance_m;
+    tick_cfg.landed_alt_m               = landed_alt_m;
+    tick_cfg.rtl_min_dwell_s            = rtl_min_dwell_s;
+    tick_cfg.survey_duration_s          = survey_duration;
+    tick_cfg.survey_yaw_rate            = survey_yaw_rate;
+    tick_cfg.collision_recovery_enabled = collision_recovery_enabled;
+    tick_cfg.collision_climb_delta_m    = collision_climb_delta;
+    tick_cfg.collision_hover_duration_s = collision_hover_duration;
+    tick_cfg.stuck                      = stuck_cfg;
+    MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;
     auto                  send_fc = [&](drone::ipc::FCCommandType cmd, float p) {

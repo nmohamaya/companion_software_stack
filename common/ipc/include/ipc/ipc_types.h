@@ -138,7 +138,8 @@ enum class MissionState : uint8_t {
     LAND               = 6,
     EMERGENCY          = 7,
     SURVEY             = 8,  // Post-takeoff obstacle survey before navigation
-    COLLISION_RECOVERY = 9   // Post-collision recovery: hover → climb → replan
+    COLLISION_RECOVERY = 9,  // Post-collision recovery: hover → climb → replan
+    NAVIGATE_UNSTUCK   = 10  // Drone stationary with avoider active — back off, then resume
 };
 
 // ═══════════════════════════════════════════════════════════

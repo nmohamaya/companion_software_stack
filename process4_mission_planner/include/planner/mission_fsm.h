@@ -5,9 +5,12 @@
 #include "util/ilogger.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <deque>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace drone::planner {
@@ -26,9 +29,85 @@ inline const char* state_name(MissionState s) {
         case MissionState::EMERGENCY: return "EMERGENCY";
         case MissionState::SURVEY: return "SURVEY";
         case MissionState::COLLISION_RECOVERY: return "COLLISION_RECOVERY";
+        case MissionState::NAVIGATE_UNSTUCK: return "NAVIGATE_UNSTUCK";
         default: return "UNKNOWN";
     }
 }
+
+// ── StuckDetector (Issue #503) ──────────────────────────────
+// Sliding-window detector that flags the drone as stuck when:
+//   - Position has not moved more than min_movement_m over window_s
+//   - AND the avoider was active (non-zero correction) during the window
+//   - AND the window is full (i.e. we have at least window_s of samples)
+// Only NAVIGATE should feed samples in — SURVEY/LAND/RTL/etc. legitimately
+// hover and must not be flagged.  Gate at the caller.
+class StuckDetector {
+public:
+    using Clock     = std::chrono::steady_clock;
+    using TimePoint = Clock::time_point;
+
+    struct Config {
+        bool  enabled            = true;
+        float window_s           = 3.0f;
+        float min_movement_m     = 0.5f;
+        float backoff_speed_mps  = 1.0f;
+        float backoff_duration_s = 2.0f;
+    };
+
+    StuckDetector() = default;
+    explicit StuckDetector(const Config& cfg) : cfg_(cfg) {}
+
+    [[nodiscard]] const Config& config() const { return cfg_; }
+
+    /// Record a pose sample + whether the avoider produced non-zero correction
+    /// this tick.  Samples older than window_s are dropped.
+    void push_sample(TimePoint t, float x, float y, float z, bool avoider_active) {
+        samples_.emplace_back(t, std::array<float, 3>{x, y, z});
+        if (avoider_active) last_avoider_active_ = t;
+
+        // Drop samples older than window_s.
+        const auto window = std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<float>(cfg_.window_s));
+        while (!samples_.empty() && (t - samples_.front().first) > window) {
+            samples_.pop_front();
+        }
+    }
+
+    /// Clear history — call on state change or significant pose jump.
+    void reset() {
+        samples_.clear();
+        last_avoider_active_ = TimePoint{};
+    }
+
+    /// Evaluate stuck condition using the samples collected so far.
+    [[nodiscard]] bool is_stuck(TimePoint now) const {
+        if (!cfg_.enabled) return false;
+        if (samples_.size() < 2) return false;
+        // Need a full window of history.
+        const float span_s = std::chrono::duration<float>(now - samples_.front().first).count();
+        if (span_s < cfg_.window_s) return false;
+        // Avoider must have fired within the window.
+        const float since_avoider_s =
+            std::chrono::duration<float>(now - last_avoider_active_).count();
+        if (last_avoider_active_ == TimePoint{} || since_avoider_s > cfg_.window_s) return false;
+        // Compare current pose vs window-start pose.
+        const auto& first = samples_.front().second;
+        const auto& last  = samples_.back().second;
+        const float dx    = last[0] - first[0];
+        const float dy    = last[1] - first[1];
+        const float dz    = last[2] - first[2];
+        const float moved = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return moved < cfg_.min_movement_m;
+    }
+
+    /// Whether at least one sample has been recorded (for tests).
+    [[nodiscard]] bool has_samples() const { return !samples_.empty(); }
+
+private:
+    Config                                                 cfg_{};
+    std::deque<std::pair<TimePoint, std::array<float, 3>>> samples_;
+    TimePoint                                              last_avoider_active_{};
+};
 
 /// Waypoint for mission navigation.
 struct Waypoint {
@@ -62,6 +141,8 @@ public:
     void on_emergency() { transition(MissionState::EMERGENCY); }
     void on_collision_recovery() { transition(MissionState::COLLISION_RECOVERY); }
     void on_recovery_complete() { transition(MissionState::NAVIGATE); }
+    void on_stuck() { transition(MissionState::NAVIGATE_UNSTUCK); }
+    void on_unstuck() { transition(MissionState::NAVIGATE); }
 
     /// Check if waypoint is reached (within acceptance radius).
     /// When a planner snaps the goal to avoid occupied cells, pass the snapped

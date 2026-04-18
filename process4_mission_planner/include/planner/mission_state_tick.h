@@ -38,13 +38,18 @@ struct StateTickConfig {
     bool  collision_recovery_enabled{true};
     float collision_climb_delta_m{3.0f};     // altitude gain during recovery climb
     float collision_hover_duration_s{2.0f};  // hover-in-place duration before climb
+
+    // Stuck detector (Issue #503) — flags NAVIGATE hangs where the avoider
+    // is producing correction but the vehicle isn't moving.
+    StuckDetector::Config stuck{};
 };
 
 /// Per-tick state machine logic for the mission planner.
 /// Owns tracking variables and implements the FSM tick for each state.
 class MissionStateTick {
 public:
-    explicit MissionStateTick(const StateTickConfig& config) : config_(config) {}
+    explicit MissionStateTick(const StateTickConfig& config)
+        : config_(config), stuck_detector_(config.stuck) {}
 
     /// Execute one tick of the state machine.
     void tick(MissionFSM& fsm, const drone::ipc::Pose& pose, const drone::ipc::FCState& fc_state,
@@ -76,6 +81,9 @@ public:
             case MissionState::NAVIGATE:
                 tick_navigate(fsm, pose, fc_state, objects, planner, grid_planner, avoider,
                               obstacle_layer, traj_pub, payload_pub, send_fc, correlation_id, diag);
+                break;
+            case MissionState::NAVIGATE_UNSTUCK:
+                tick_navigate_unstuck(fsm, pose, fc_state, traj_pub);
                 break;
             case MissionState::COLLISION_RECOVERY:
                 tick_collision_recovery(fsm, pose, fc_state, grid_planner, traj_pub);
@@ -128,6 +136,14 @@ private:
     RecoveryPhase                         recovery_phase_   = RecoveryPhase::HOVER;
     std::chrono::steady_clock::time_point recovery_start_time_{};
     float                                 recovery_target_alt_ = 0.0f;
+
+    // Stuck detector / NAVIGATE_UNSTUCK (Issue #503)
+    StuckDetector                         stuck_detector_;
+    std::chrono::steady_clock::time_point unstuck_start_time_{};
+    std::chrono::steady_clock::time_point unstuck_clear_since_{};
+    float                                 unstuck_vx_ = 0.0f;  // backoff velocity at entry
+    float                                 unstuck_vy_ = 0.0f;
+    float                                 unstuck_vz_ = 0.0f;
 
     // ── PREFLIGHT: retry ARM until FC confirms ────────────────
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
@@ -384,6 +400,36 @@ private:
                                 active_obj);
             }
 
+            // Stuck detector (Issue #503) — feed before publish so any stuck
+            // transition is recognised before the next replan cycle.  Only
+            // fires in NAVIGATE; the enclosing switch guarantees that.
+            {
+                const float dvx       = traj.velocity_x - planned.velocity_x;
+                const float dvy       = traj.velocity_y - planned.velocity_y;
+                const float dvz       = traj.velocity_z - planned.velocity_z;
+                const float corr_mag  = std::sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
+                const bool  active    = corr_mag > 0.1f;
+                const float sx        = static_cast<float>(pose.translation[0]);
+                const float sy        = static_cast<float>(pose.translation[1]);
+                const float sz        = static_cast<float>(pose.translation[2]);
+                const auto  now_clock = std::chrono::steady_clock::now();
+                stuck_detector_.push_sample(now_clock, sx, sy, sz, active);
+                if (stuck_detector_.is_stuck(now_clock)) {
+                    DRONE_LOG_INFO("[FSM] STUCK detected at ({:.1f},{:.1f},{:.1f}) — backing off",
+                                   sx, sy, sz);
+                    // Remember the last meaningful velocity so unstuck can
+                    // back off along the opposite direction.
+                    unstuck_vx_          = planned.velocity_x;
+                    unstuck_vy_          = planned.velocity_y;
+                    unstuck_vz_          = planned.velocity_z;
+                    unstuck_start_time_  = now_clock;
+                    unstuck_clear_since_ = std::chrono::steady_clock::time_point{};
+                    stuck_detector_.reset();
+                    fsm.on_stuck();
+                    return;
+                }
+            }
+
             traj_pub.publish(traj);
 
             const float px = static_cast<float>(pose.translation[0]);
@@ -533,6 +579,78 @@ private:
                 fsm.on_recovery_complete();
                 break;
             }
+        }
+    }
+
+    // ── NAVIGATE_UNSTUCK: back off opposite planned velocity, then resume ──
+    // Issue #503 — when the stuck detector fires, we know the avoider was
+    // pushing but the vehicle hadn't moved in window_s.  Commanding a short
+    // backoff (typically away from the planner-desired direction) breaks the
+    // deadlock so the next NAVIGATE replan picks a wider route.
+    void tick_navigate_unstuck(MissionFSM& fsm, const drone::ipc::Pose& pose,
+                               const drone::ipc::FCState&                         fc_state,
+                               drone::ipc::IPublisher<drone::ipc::TrajectoryCmd>& traj_pub) {
+        // Abort gracefully if the vehicle disarms mid-maneuver.
+        if (!fc_state.armed) {
+            DRONE_LOG_WARN("[Unstuck] Disarmed during backoff — transitioning to IDLE");
+            fsm.on_landed();
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (unstuck_start_time_ == std::chrono::steady_clock::time_point{}) {
+            unstuck_start_time_ = now;
+        }
+        const float elapsed_s = std::chrono::duration<float>(now - unstuck_start_time_).count();
+
+        // Invert the planned velocity and clamp its magnitude to
+        // backoff_speed_mps.  This pushes the drone opposite to the direction
+        // that got it stuck.
+        float       vx  = -unstuck_vx_;
+        float       vy  = -unstuck_vy_;
+        float       vz  = -unstuck_vz_;
+        const float mag = std::sqrt(vx * vx + vy * vy + vz * vz);
+        const float cap = config_.stuck.backoff_speed_mps;
+        if (mag > cap && mag > 1e-3f) {
+            const float s = cap / mag;
+            vx *= s;
+            vy *= s;
+            vz *= s;
+        } else if (mag < 1e-3f) {
+            // Fallback — if we had no planned velocity to invert, hover.
+            vx = vy = vz = 0.0f;
+        }
+
+        // Extract current yaw from pose quaternion [w, x, y, z] to hold heading
+        double      qw          = pose.quaternion[0];
+        double      qx          = pose.quaternion[1];
+        double      qy          = pose.quaternion[2];
+        double      qz          = pose.quaternion[3];
+        const float current_yaw = static_cast<float>(
+            std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+
+        drone::ipc::TrajectoryCmd cmd{};
+        cmd.timestamp_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+        cmd.valid      = true;
+        cmd.velocity_x = vx;
+        cmd.velocity_y = vy;
+        cmd.velocity_z = vz;
+        cmd.target_x   = static_cast<float>(pose.translation[0]);
+        cmd.target_y   = static_cast<float>(pose.translation[1]);
+        cmd.target_z   = static_cast<float>(pose.translation[2]);
+        cmd.target_yaw = current_yaw;
+        traj_pub.publish(cmd);
+
+        // Exit when backoff duration expires.  Resume NAVIGATE and clear
+        // detector history so the first seconds of new motion aren't counted
+        // as "stuck".
+        if (elapsed_s >= config_.stuck.backoff_duration_s) {
+            DRONE_LOG_INFO("[Unstuck] Backoff complete ({:.1f}s) — resuming NAVIGATE", elapsed_s);
+            unstuck_start_time_  = std::chrono::steady_clock::time_point{};
+            unstuck_clear_since_ = std::chrono::steady_clock::time_point{};
+            stuck_detector_.reset();
+            fsm.on_unstuck();
         }
     }
 

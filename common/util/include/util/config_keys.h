@@ -280,6 +280,15 @@ inline constexpr const char* HOVER_DURATION_S =
     "mission_planner.collision_recovery.hover_duration_s";
 }  // namespace collision_recovery
 
+namespace stuck_detector {
+inline constexpr const char* ENABLED        = "mission_planner.stuck_detector.enabled";
+inline constexpr const char* WINDOW_S       = "mission_planner.stuck_detector.window_s";
+inline constexpr const char* MIN_MOVEMENT_M = "mission_planner.stuck_detector.min_movement_m";
+inline constexpr const char* BACKOFF_DURATION_S =
+    "mission_planner.stuck_detector.backoff_duration_s";
+inline constexpr const char* BACKOFF_SPEED_MPS = "mission_planner.stuck_detector.backoff_speed_mps";
+}  // namespace stuck_detector
+
 }  // namespace mission_planner
 
 // ═══════════════════════════════════════════════════════════

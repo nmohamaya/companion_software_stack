@@ -402,6 +402,13 @@ inline ConfigSchema mission_planner_schema() {
         .range(0.0, 100.0);
     s.optional<double>(cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S)
         .range(0.0, 60.0);
+    // Stuck detector (Issue #503)
+    s.optional<bool>(cfg_key::mission_planner::stuck_detector::ENABLED);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::WINDOW_S).range(0.5, 60.0);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::MIN_MOVEMENT_M).range(0.01, 100.0);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::BACKOFF_DURATION_S)
+        .range(0.0, 30.0);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::BACKOFF_SPEED_MPS).range(0.0, 10.0);
     // fault_manager section
     s.optional<int>(cfg_key::fault_manager::POSE_STALE_TIMEOUT_MS).range(1, 60000);
     s.optional<double>(cfg_key::fault_manager::BATTERY_WARN_PERCENT).range(1.0, 100.0);

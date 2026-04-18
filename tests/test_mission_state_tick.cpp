@@ -297,6 +297,21 @@ TEST_F(MissionStateTickTest, LandStaysIfLandNotSent) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// NAVIGATE_UNSTUCK: disarm during backoff transitions to IDLE
+// ═══════════════════════════════════════════════════════════
+TEST_F(MissionStateTickTest, NavigateUnstuckAbortsOnDisarm) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_stuck();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE_UNSTUCK);
+
+    auto pose = make_pose(5, 5, 5);
+    auto fc   = make_fc(false, 5.0f);  // disarmed
+    do_tick(pose, fc);
+    EXPECT_EQ(fsm.state(), MissionState::IDLE);
+}
+
+// ═══════════════════════════════════════════════════════════
 // NAVIGATE: waypoint overshoot advances to next (Issue #236)
 // ═══════════════════════════════════════════════════════════
 TEST_F(MissionStateTickTest, WaypointOvershootAdvancesToNext) {

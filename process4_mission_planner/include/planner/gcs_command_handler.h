@@ -150,7 +150,7 @@ private:
         auto state = fsm.state();
         if (state == MissionState::RTL || state == MissionState::LAND ||
             state == MissionState::EMERGENCY || state == MissionState::TAKEOFF ||
-            state == MissionState::COLLISION_RECOVERY) {
+            state == MissionState::COLLISION_RECOVERY || state == MissionState::NAVIGATE_UNSTUCK) {
             DRONE_LOG_WARN("[Planner] MISSION_UPLOAD rejected — unsafe FSM state '{}' corr={:#x}",
                            static_cast<int>(state), correlation_id);
             ++state_rejected_count_;

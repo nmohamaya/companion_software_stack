@@ -432,3 +432,110 @@ TEST(MissionFSMTest, ExactBoundaryAtAcceptanceRadiusOvershotStrictLessThan) {
     // Drone at 6.001m — just outside proximity zone
     EXPECT_FALSE(fsm.waypoint_overshot(16.01f, 0.0f, 5.0f));
 }
+
+// ═════════════════════════════════════════════════════════════
+// StuckDetector tests — Issue #503
+// ═════════════════════════════════════════════════════════════
+
+TEST(StuckDetectorTest, TriggersWhenPoseStationaryAndAvoiderActive) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Feed 12 samples over >window_s, all at the same pose, avoider active.
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f, true);
+    }
+    const auto now = t0 + std::chrono::milliseconds(1200);
+    EXPECT_TRUE(det.is_stuck(now));
+}
+
+TEST(StuckDetectorTest, DoesNotTriggerWhenAvoiderInactive) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f, /*avoider_active=*/false);
+    }
+    const auto now = t0 + std::chrono::milliseconds(1200);
+    EXPECT_FALSE(det.is_stuck(now));
+}
+
+TEST(StuckDetectorTest, ResetsOnMovement) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Stationary samples long enough to trigger.
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 0.0f, 0.0f, 5.0f, true);
+    }
+    EXPECT_TRUE(det.is_stuck(t0 + std::chrono::milliseconds(1200)));
+
+    // Drone moves 0.1 m/tick (×12 ticks = 1.2 m) — well beyond min_movement_m.
+    // Samples span a full new window at the new location.
+    for (int i = 13; i <= 24; ++i) {
+        auto        t = t0 + std::chrono::milliseconds(100 * i);
+        const float x = 0.1f * static_cast<float>(i - 12);
+        det.push_sample(t, x, 0.0f, 5.0f, true);
+    }
+    EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(2400)));
+}
+
+TEST(StuckDetectorTest, DisabledNeverTriggers) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = false;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f, true);
+    }
+    EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(1200)));
+}
+
+TEST(StuckDetectorTest, WindowNotYetFull) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 3.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Only 1s of samples — below window_s=3s.
+    for (int i = 0; i <= 10; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 0.0f, 0.0f, 5.0f, true);
+    }
+    EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(1000)));
+}
+
+TEST(MissionFSMTest, StuckEventTransitionsToNavigateUnstuck) {
+    MissionFSM fsm;
+    fsm.on_arm();
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    fsm.on_stuck();
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE_UNSTUCK);
+
+    fsm.on_unstuck();
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}
