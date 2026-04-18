@@ -158,6 +158,7 @@ class IVIOBackend {
 | `SimulatedVIOBackend` | `"simulated"` | Circular trajectory with noise. Runs full pipeline (extract → match → preintegrate) but generates pose independently. |
 | `GazeboVIOBackend` | `"gazebo"` | Reads ground-truth odometry from gz-transport topic. Ignores stereo/IMU data. Requires `HAVE_GAZEBO` build flag. |
 | `GazeboFullVIOBackend` | `"gazebo_full_vio"` | Runs the **full VIO pipeline** (feature extraction → stereo matching → IMU pre-integration) on each frame, but obtains the final pose from Gazebo ground truth. Unlike `GazeboVIOBackend` (which skips the pipeline entirely), this exercises all estimation code paths while still producing a reliable pose for downstream consumers. Uses covariance-based health assessment (see below). Requires `HAVE_GAZEBO`. Used in scenario 26 for VIO validation. Source: `ivio_backend.h`. |
+| `SlidingWindowVIOBackend` | `"swvio"` | Custom sliding-window optimization VIO — the project's real sensor-fusion backend. Propagates IMU error state with covariance, maintains a sliding window of camera pose clones, and (when complete) will perform Gauss-Newton optimization over reprojection and IMU residuals. Being implemented in phases; see the [SWVIO Implementation Guide](swvio_implementation.md) for detailed design. |
 
 ### SimulatedVIOBackend Pipeline
 
@@ -487,11 +488,13 @@ non-airborne states (IDLE, PREFLIGHT), and VIO reaches NOMINAL well before TAKEO
 
 ## Known Limitations
 
-1. **No real VIO fusion:** The Simulated backend generates poses independently of visual/IMU data.
-   Full sensor fusion (optimiser backend) is planned for Phase 2B.
+1. **VIO fusion in progress:** The `SlidingWindowVIOBackend` ("swvio") implements real IMU
+   propagation with error-state covariance (Phase 1 complete). Optimization-based vision
+   updates are in development (Phase 2). The Simulated backend still generates poses
+   independently of sensor data.
 2. **No keyframe selection:** Keyframe config keys exist but no keyframe decision logic runs yet.
-3. **No loop closure:** No place recognition or loop closure optimisation.
+3. **No loop closure:** No place recognition or loop closure optimisation (planned Phase 4).
 4. **No relocalization:** Once tracking is LOST, there is no recovery path — the health
-   stays LOST until the process is restarted.
+   stays LOST until the process is restarted (planned Phase 3).
 5. **Fixed stereo calibration:** Calibration parameters are loaded at startup and cannot
    be updated at runtime.

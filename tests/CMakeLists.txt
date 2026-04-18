@@ -269,6 +269,13 @@ add_drone_test(test_imu_preintegrator test_imu_preintegrator.cpp
 # ── VIO Backend tests ───────────────────────────────────────
 add_drone_test(test_vio_backend     test_vio_backend.cpp
     ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
+    ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/swvio_backend.cpp
+)
+
+# ── SWVIO Backend tests (Issue #498) ────────────────────────
+add_drone_test(test_swvio_backend   test_swvio_backend.cpp
+    ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/swvio_backend.cpp
+    ${PROJECT_SOURCE_DIR}/process3_slam_vio_nav/src/imu_preintegrator.cpp
 )
 endif()
 

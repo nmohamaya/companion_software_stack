@@ -205,8 +205,8 @@ int do_spawn(const Args& args) {
             try {
                 const auto returned = rpc.simSpawnObject(name, asset, pose, scale, physics);
                 std::cout << "  + " << name << "  <-  " << asset << "  at (" << x << ", " << y
-                          << ", " << z << ", yaw=" << yaw_deg << "°)"
-                          << "  -> " << returned << "\n";
+                          << ", " << z << ", yaw=" << yaw_deg << "°)" << "  -> " << returned
+                          << "\n";
                 stamp << returned << "\n";
                 ++spawned;
             } catch (const std::exception& e) {
