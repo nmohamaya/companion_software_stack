@@ -101,3 +101,5 @@ AGENT_REPORT.md
 
 # Local-only deep documentation (not committed — personal reference)
 docs/design/modularity_guide.md
+docs/adr/ADR-012-stereo-inertial-vio-algorithm-selection.md
+docs/design/swvio_implementation.md
