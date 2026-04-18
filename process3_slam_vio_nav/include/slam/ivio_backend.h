@@ -735,7 +735,6 @@ private:
 //   → X passes through, Y passes through, Z is negated
 // ─────────────────────────────────────────────────────────────
 #ifdef HAVE_COSYS_AIRSIM
-
 // cosys_rpc_client.h is pulled in above the namespace block — see note there.
 
 class CosysVIOBackend final : public IVIOBackend {

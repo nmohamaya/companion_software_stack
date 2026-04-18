@@ -42,6 +42,7 @@ if(COSYS_AIRSIM_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_radar.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_imu.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_depth.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cosys_fc_link.cpp
     )
     target_link_libraries(drone_hal INTERFACE AirSim::All)
 endif()

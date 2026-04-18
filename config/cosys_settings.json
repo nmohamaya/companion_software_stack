@@ -1,19 +1,13 @@
 {
     "_comment": "Cosys-AirSim settings.json — copy this to ~/Documents/AirSim/settings.json before launching UE5. Vehicle name 'Drone0' and sensor names match scenario 29.",
-    "_comment_lockstep": "LockStep=false + real-time clock avoids chicken-and-egg deadlock where neither AirSim nor PX4 sends the first HIL message. Use LockStep=true only if you need deterministic replays and are prepared to debug handshake issues.",
-    "_comment_ports": "ControlPortLocal=14541 / Remote=14581 avoid UDP conflict with PX4's default MAVLink API ports (PX4 listens on 14580, sends to 14540). Companion stack's MAVSDK binds udp://:14540 to receive PX4 telemetry directly — it does NOT route via AirSim's MAVLink bridge.",
+    "_comment_simpleflight": "Tier 3 uses SimpleFlight (AirSim's built-in FC) via AirSim RPC. PX4+Cosys HIL integration is broken upstream (PX4 #24033, AirSim #5018) — see ADR-011 amendment for #490. Companion stack drives SimpleFlight via CosysFCLink (MultirotorRpcLibClient). Battery / RC / datalink fault simulation remains in Gazebo Tier 2.",
     "SettingsVersion": 2.0,
     "SimMode": "Multirotor",
     "ViewMode": "FlyWithMe",
     "Vehicles": {
         "Drone0": {
-            "VehicleType": "PX4Multirotor",
-            "UseSerial": false,
-            "LockStep": false,
-            "UseTcp": true,
-            "TcpPort": 4560,
-            "ControlPortLocal": 14541,
-            "ControlPortRemote": 14581,
+            "VehicleType": "SimpleFlight",
+            "DefaultVehicleState": "Armed",
             "Cameras": {
                 "mission_cam": {
                     "CaptureSettings": [

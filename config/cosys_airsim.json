@@ -43,8 +43,8 @@
     },
     "comms": {
         "mavlink": {
-            "backend": "mavlink",
-            "uri": "tcp://cosys-airsim:14540"
+            "_comment": "Tier 3 cloud profile uses SimpleFlight via AirSim RPC (see ADR-011 amendment for #490). PX4+Cosys HIL is blocked upstream.",
+            "backend": "cosys_rpc"
         }
     }
 }

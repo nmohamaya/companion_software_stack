@@ -324,6 +324,22 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ---
 
+## HAL — Cosys-AirSim Flight Controller
+
+### test_cosys_fc_link.cpp — 8 tests
+
+**What it tests:** `CosysFCLink` — SimpleFlight flight controller driven through AirSim RPC (Issue #490). Compiled under `HAVE_COSYS_AIRSIM`.  Tests run WITHOUT a live AirSim RPC server: they construct the backend against an unconnected `CosysRpcClient` and verify that every command path returns false rather than crashing or hanging.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `CosysFCLinkTest` | 8 | Construction with a disconnected client; `name() == "CosysFCLink"`; default `FCState{}` before `open()`; `is_connected()` false before open; `open("", 0)` returns false when the RPC server is unreachable; `send_arm/send_mode/send_takeoff/send_trajectory` all return false when disconnected; unknown flight-mode codes (4, 255) rejected without RPC; `close()` is idempotent on a never-opened link |
+
+**Key files under test:** `hal/cosys_fc_link.h`, `hal/cosys_rpc_client.h`, `hal/hal_factory.h`
+
+**Why:** Tier 3 (Cosys-AirSim) uses SimpleFlight instead of PX4 because PX4+Cosys HIL is broken upstream (PX4 #24033, AirSim #5018). This backend is the Tier-3 counterpart to `MavlinkFCLink`. The tests verify the failure paths that flight-critical code depends on (no crash, no hang, no arbitrary truthy result when the simulator isn't running).
+
+---
+
 ## HAL — Radar
 
 ### test_radar_hal.cpp — 30 tests
@@ -1295,4 +1311,4 @@ pytest test suite, separate from the C++ GTest suite tracked by ctest.
 
 ---
 
-*Last updated: April 2026 — 1479 C++ unit tests across 66 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. Epic #419 Wave 1: covariance-weighted depth fusion (4 tests), multi-class height priors (3 tests), radar-learned object heights (4 tests), depth confidence (4 tests), depth edge cases (2 tests), world transform quaternion rotation (5 tests). All 1479 C++ tests passing.*
+*Last updated: April 2026 — 1487 C++ unit tests across 67 files + 77 Python orchestrator tests across 3 files + 42 E2E checks (5 shell scripts) + 250+ scenario checks across 25 scenarios (20 Tier 1 + 5 Tier 2). All Tier 1 scenarios passing. Epic #419 Wave 1: covariance-weighted depth fusion (4 tests), multi-class height priors (3 tests), radar-learned object heights (4 tests), depth confidence (4 tests), depth edge cases (2 tests), world transform quaternion rotation (5 tests). Issue #490: CosysFCLink SimpleFlight-via-AirSim-RPC (+8 tests). All 1487 C++ tests passing.*
