@@ -97,6 +97,22 @@ public:
         if (samples_.size() < 2) return false;
         // Need a full window of history.
         const float span_s = std::chrono::duration<float>(now - samples_.front().first).count();
+        // DIAG(#503): periodic state dump so we can tell, in a stuck live run,
+        // exactly which gate is preventing the detector from firing.  Logs at
+        // ~1 Hz (every 10 calls at 10 Hz tick rate).  Remove once the detector
+        // is confirmed firing in sim.
+        static thread_local uint64_t log_tick = 0;
+        if (++log_tick % 10 == 0 && samples_.size() >= 2) {
+            const auto& f = samples_.front().second;
+            const auto& l = samples_.back().second;
+            const float ddx = l[0] - f[0], ddy = l[1] - f[1], ddz = l[2] - f[2];
+            DRONE_LOG_INFO(
+                "[StuckDetector] samples={} span={:.2f}s window={:.2f}s "
+                "first=({:.2f},{:.2f},{:.2f}) last=({:.2f},{:.2f},{:.2f}) "
+                "moved={:.3f} min_movement={:.2f}",
+                samples_.size(), span_s, cfg_.window_s, f[0], f[1], f[2], l[0], l[1], l[2],
+                std::sqrt(ddx * ddx + ddy * ddy + ddz * ddz), cfg_.min_movement_m);
+        }
         if (span_s < cfg_.window_s) return false;
         // Compare current pose vs window-start pose.
         const auto& first = samples_.front().second;
