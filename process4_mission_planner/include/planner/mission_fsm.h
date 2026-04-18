@@ -52,6 +52,18 @@ public:
         float min_movement_m     = 0.5f;
         float backoff_speed_mps  = 1.0f;
         float backoff_duration_s = 2.0f;
+        // Min correction magnitude to count the avoider as "active" in a tick.
+        // Default 0.01 — live scenario-30 runs show the avoider producing
+        // |correction| as small as 0.02 m/s when obstacles are in the moderate
+        // regime (between min_distance_m and influence_radius_m), and we need
+        // the detector to see those as active so the stuck condition fires.
+        // Tune higher in scenarios where you want to only catch hard pushes.
+        float min_avoider_correction_mps = 0.01f;
+        // Cap on STUCK→UNSTUCK→NAVIGATE oscillations within a mission.
+        // When exceeded, caller escalates to LOITER with fault_triggered=true
+        // so the operator sees persistent stall in health telemetry instead
+        // of silent oscillation.  0 disables the cap.
+        uint32_t max_stuck_count = 3;
     };
 
     StuckDetector() = default;
@@ -245,9 +257,11 @@ public:
     [[nodiscard]] size_t current_wp_index() const { return current_wp_; }
     [[nodiscard]] size_t total_waypoints() const { return waypoints_.size(); }
 
-    /// Returns true if the FSM is in a fault-handling state (LOITER from
-    /// fault, RTL, LAND, or EMERGENCY) and should not be overridden by
-    /// normal mission logic.
+    /// Returns true if the FSM is in a fault-handling state and should not
+    /// be overridden by normal mission logic.  Checked states:
+    /// LOITER (fault-triggered only), RTL, LAND, EMERGENCY, COLLISION_RECOVERY.
+    /// NAVIGATE_UNSTUCK is deliberately NOT included — it is a recovery state
+    /// driven by the stuck detector, not a FaultManager-level fault.
     [[nodiscard]] bool is_in_fault_state() const {
         return fault_triggered_ &&
                (state_ == MissionState::LOITER || state_ == MissionState::RTL ||

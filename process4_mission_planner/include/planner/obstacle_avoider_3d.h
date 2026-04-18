@@ -76,8 +76,13 @@ public:
         config_.vertical_gain =
             cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::VERTICAL_GAIN,
                            config_.vertical_gain);
-        const int default_max_age_ms = static_cast<int>(config_.max_age_ns / 1'000'000ULL);
-        int       max_age_ms         = cfg.get<int>(
+        // Clamp BEFORE casting: a config value > INT_MAX ms would wrap to
+        // a negative int and (pre-clamp-guard below) silently disable
+        // staleness filtering.  Cap at INT_MAX so the cast is well-defined.
+        const uint64_t default_ms_u64     = config_.max_age_ns / 1'000'000ULL;
+        const int      default_max_age_ms = static_cast<int>(std::min<uint64_t>(
+            default_ms_u64, static_cast<uint64_t>(std::numeric_limits<int>::max())));
+        int            max_age_ms         = cfg.get<int>(
             drone::cfg_key::mission_planner::obstacle_avoidance::MAX_AGE_MS, default_max_age_ms);
         if (max_age_ms < 0) {
             DRONE_LOG_WARN("[ObstacleAvoider3D] max_age_ms ({}) < 0, clamping to 0", max_age_ms);

@@ -4,6 +4,8 @@
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
 
+#include <chrono>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -309,6 +311,78 @@ TEST_F(MissionStateTickTest, NavigateUnstuckAbortsOnDisarm) {
     auto fc   = make_fc(false, 5.0f);  // disarmed
     do_tick(pose, fc);
     EXPECT_EQ(fsm.state(), MissionState::IDLE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATE_UNSTUCK: timer expiry transitions back to NAVIGATE
+// (Issue #503 — was a P1 coverage gap: tick loop's timer-based
+//  exit path was not exercised by any test.)
+// ═══════════════════════════════════════════════════════════
+TEST(MissionStateTickUnstuckTest, ExitsOnTimerExpiry) {
+    // Short backoff so the test doesn't need real wall-clock sleeps.
+    StateTickConfig cfg{};
+    cfg.takeoff_alt_m                     = 10.0f;
+    cfg.stuck_detector.enabled            = true;
+    cfg.stuck_detector.backoff_duration_s = 0.1f;
+    cfg.stuck_detector.backoff_speed_mps  = 1.0f;
+    MissionStateTick short_tick(cfg);
+
+    MissionFSM local_fsm;
+    local_fsm.load_mission({{10, 0, 5, 0, 2, 3, false}});
+    local_fsm.on_arm();
+    local_fsm.on_takeoff();
+    local_fsm.on_navigate();
+    local_fsm.on_stuck();
+    ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE_UNSTUCK);
+
+    auto                local_planner = create_path_planner("dstar_lite");
+    auto                local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+    StaticObstacleLayer local_layer;
+
+    Pose                          pose = make_pose(5, 5, 5);
+    FCState                       fc   = make_fc(true, 5.0f);
+    MockPublisher<TrajectoryCmd>  traj_p;
+    MockPublisher<PayloadCommand> pay_p;
+    auto                          null_fc = [](FCCommandType, float) {
+    };
+    drone::util::FrameDiagnostics diag(0);
+
+    // Tick once to set unstuck_start_time_, then wait past backoff_duration_s.
+    short_tick.tick(local_fsm, pose, fc, DetectedObjectList{}, *local_planner, nullptr,
+                    *local_avoider, local_layer, traj_p, pay_p, null_fc, 0, diag);
+    ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE_UNSTUCK);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    short_tick.tick(local_fsm, pose, fc, DetectedObjectList{}, *local_planner, nullptr,
+                    *local_avoider, local_layer, traj_p, pay_p, null_fc, 0, diag);
+    EXPECT_EQ(local_fsm.state(), MissionState::NAVIGATE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATE_UNSTUCK: zero-velocity entry commands hover, not garbage
+// (Defensive: drone should not fly off in a random direction if
+//  it got stuck during a hover with zero planned velocity.)
+// ═══════════════════════════════════════════════════════════
+TEST_F(MissionStateTickTest, NavigateUnstuckHoversWhenEnteredAtZeroVelocity) {
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    fsm.on_stuck();  // enter NAVIGATE_UNSTUCK
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE_UNSTUCK);
+
+    // unstuck_vx_/vy_/vz_ were never set (default-zero'd) since we didn't go
+    // through the stuck_detector's is_stuck() path in the tick.  This mirrors
+    // "stuck fired while planned velocity was ≈0" — hover is the right
+    // defensive behaviour.
+    auto pose = make_pose(5, 5, 5);
+    auto fc   = make_fc(true, 5.0f);
+    do_tick(pose, fc);
+
+    ASSERT_FALSE(traj_pub.messages().empty());
+    const auto& cmd = traj_pub.messages().back();
+    EXPECT_NEAR(cmd.velocity_x, 0.0f, 1e-3f);
+    EXPECT_NEAR(cmd.velocity_y, 0.0f, 1e-3f);
+    EXPECT_NEAR(cmd.velocity_z, 0.0f, 1e-3f);
 }
 
 // ═══════════════════════════════════════════════════════════

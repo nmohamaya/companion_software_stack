@@ -302,6 +302,15 @@ int main(int argc, char* argv[]) {
         drone::cfg_key::mission_planner::stuck_detector::BACKOFF_DURATION_S, 2.0f);
     stuck_cfg.backoff_speed_mps = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::stuck_detector::BACKOFF_SPEED_MPS, 1.0f);
+    stuck_cfg.min_avoider_correction_mps = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::stuck_detector::MIN_AVOIDER_CORRECTION_MPS, 0.01f);
+    stuck_cfg.max_stuck_count = static_cast<uint32_t>(
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::stuck_detector::MAX_STUCK_COUNT, 3));
+
+    // Cache avoider's influence_radius so mission_state_tick's DIAG counter
+    // uses the same value the avoider actually uses (was a magic 10.0f).
+    const float avoider_influence_radius = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::obstacle_avoidance::INFLUENCE_RADIUS_M, 5.0f);
 
     drone::planner::StateTickConfig tick_cfg{};
     tick_cfg.takeoff_alt_m              = takeoff_alt;
@@ -313,7 +322,8 @@ int main(int argc, char* argv[]) {
     tick_cfg.collision_recovery_enabled = collision_recovery_enabled;
     tick_cfg.collision_climb_delta_m    = collision_climb_delta;
     tick_cfg.collision_hover_duration_s = collision_hover_duration;
-    tick_cfg.stuck                      = stuck_cfg;
+    tick_cfg.stuck_detector             = stuck_cfg;
+    tick_cfg.avoider_influence_radius_m = avoider_influence_radius;
     MissionStateTick      state_tick(tick_cfg);
     FaultResponseExecutor fault_exec;
     GCSCommandHandler     gcs_handler;

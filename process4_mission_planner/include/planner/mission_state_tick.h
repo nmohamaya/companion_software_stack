@@ -1,6 +1,8 @@
 // process4_mission_planner/include/planner/mission_state_tick.h
 // Per-tick state machine logic for the mission planner.
-// Handles PREFLIGHT, TAKEOFF, NAVIGATE, RTL, LAND state transitions.
+// Handles all FSM states: PREFLIGHT, TAKEOFF, SURVEY, NAVIGATE,
+// NAVIGATE_UNSTUCK (Issue #503), COLLISION_RECOVERY (Issue #226), RTL, LAND.
+// IDLE / EMERGENCY are explicit no-op cases.
 //
 // Extracted from main.cpp as part of Issue #154.
 // Updated in Issue #158: AStarPathPlanner* → IGridPlanner*.
@@ -41,7 +43,12 @@ struct StateTickConfig {
 
     // Stuck detector (Issue #503) — flags NAVIGATE hangs where the avoider
     // is producing correction but the vehicle isn't moving.
-    StuckDetector::Config stuck{};
+    StuckDetector::Config stuck_detector{};
+    // Cached avoider influence radius, so the NAVIGATE DIAG line and any
+    // "objects within influence radius" calculation use the same value the
+    // avoider actually uses.  Populated by main.cpp at startup from
+    // mission_planner.obstacle_avoidance.influence_radius_m.
+    float avoider_influence_radius_m = 5.0f;
 };
 
 /// Per-tick state machine logic for the mission planner.
@@ -49,7 +56,7 @@ struct StateTickConfig {
 class MissionStateTick {
 public:
     explicit MissionStateTick(const StateTickConfig& config)
-        : config_(config), stuck_detector_(config.stuck) {}
+        : config_(config), stuck_detector_(config.stuck_detector) {}
 
     /// Execute one tick of the state machine.
     void tick(MissionFSM& fsm, const drone::ipc::Pose& pose, const drone::ipc::FCState& fc_state,
@@ -72,6 +79,8 @@ public:
             grid_planner->set_promotion_paused(landing);
         }
 
+        // No `default:` — exhaustive switch enables -Wswitch to catch new
+        // MissionState values the moment they're added (CLAUDE.md safety rule).
         switch (fsm.state()) {
             case MissionState::PREFLIGHT: tick_preflight(fsm, fc_state, send_fc); break;
             case MissionState::TAKEOFF: tick_takeoff(fsm, pose, fc_state, send_fc); break;
@@ -91,8 +100,8 @@ public:
             case MissionState::RTL: tick_rtl(fsm, pose, fc_state, send_fc); break;
             case MissionState::LAND: tick_land(fsm, fc_state); break;
             case MissionState::IDLE:
-            case MissionState::EMERGENCY:
-            default: break;
+            case MissionState::LOITER:
+            case MissionState::EMERGENCY: break;  // no per-tick work
         }
     }
 
@@ -140,10 +149,24 @@ private:
     // Stuck detector / NAVIGATE_UNSTUCK (Issue #503)
     StuckDetector                         stuck_detector_;
     std::chrono::steady_clock::time_point unstuck_start_time_{};
-    std::chrono::steady_clock::time_point unstuck_clear_since_{};
     float                                 unstuck_vx_ = 0.0f;  // backoff velocity at entry
     float                                 unstuck_vy_ = 0.0f;
     float                                 unstuck_vz_ = 0.0f;
+    // STUCK transition counter — when it exceeds stuck.max_stuck_count we
+    // escalate to LOITER with fault_triggered so the operator sees repeated
+    // stall in health telemetry instead of silent oscillation.  Reset on
+    // waypoint advance or mission restart (IDLE re-entry).
+    uint32_t stuck_transition_count_ = 0;
+
+    // Extract yaw (rad) from pose quaternion [w, x, y, z].  Used in three
+    // places that previously had identical inline atan2 blocks.  Keeps the
+    // sign convention in one location so future frame changes only touch here.
+    static float yaw_from_pose(const drone::ipc::Pose& pose) {
+        const double qw = pose.quaternion[0], qx = pose.quaternion[1];
+        const double qy = pose.quaternion[2], qz = pose.quaternion[3];
+        return static_cast<float>(
+            std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+    }
 
     // ── PREFLIGHT: retry ARM until FC confirms ────────────────
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
@@ -385,7 +408,7 @@ private:
                     const float oy = o.position_y - dpy;
                     const float oz = o.position_z - dpz;
                     const float d  = std::sqrt(ox * ox + oy * oy + oz * oz);
-                    if (d < 10.0f) ++active_obj;  // ~avoider influence_radius_m
+                    if (d < config_.avoider_influence_radius_m) ++active_obj;
                 }
 
                 DRONE_LOG_DEBUG("[DIAG] pos=({:.1f},{:.1f},{:.1f}) wp{}/{}=({:.0f},{:.0f},{:.0f})"
@@ -404,26 +427,50 @@ private:
             // transition is recognised before the next replan cycle.  Only
             // fires in NAVIGATE; the enclosing switch guarantees that.
             {
-                const float dvx       = traj.velocity_x - planned.velocity_x;
-                const float dvy       = traj.velocity_y - planned.velocity_y;
-                const float dvz       = traj.velocity_z - planned.velocity_z;
-                const float corr_mag  = std::sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
-                const bool  active    = corr_mag > 0.1f;
+                const float dvx     = traj.velocity_x - planned.velocity_x;
+                const float dvy     = traj.velocity_y - planned.velocity_y;
+                const float dvz     = traj.velocity_z - planned.velocity_z;
+                const float corr_sq = dvx * dvx + dvy * dvy + dvz * dvz;
+                // Squared compare — avoids a per-tick sqrt on the hot path
+                // while giving the same truth value as `sqrt(corr_sq) > thresh`.
+                const float thresh    = stuck_detector_.config().min_avoider_correction_mps;
+                const float thresh_sq = thresh * thresh;
+                const bool  active    = corr_sq > thresh_sq;
                 const float sx        = static_cast<float>(pose.translation[0]);
                 const float sy        = static_cast<float>(pose.translation[1]);
                 const float sz        = static_cast<float>(pose.translation[2]);
                 const auto  now_clock = std::chrono::steady_clock::now();
                 stuck_detector_.push_sample(now_clock, sx, sy, sz, active);
                 if (stuck_detector_.is_stuck(now_clock)) {
-                    DRONE_LOG_INFO("[FSM] STUCK detected at ({:.1f},{:.1f},{:.1f}) — backing off",
-                                   sx, sy, sz);
+                    // Rate-cap: if we've re-triggered STUCK max_stuck_count
+                    // times this mission, escalate to LOITER with
+                    // fault_triggered so the operator sees persistent stall
+                    // in health telemetry.  Silent oscillation is the worst
+                    // outcome: the drone keeps bouncing off the obstacle but
+                    // the fault-recovery chain never engages.
+                    const auto& stuck_cfg = stuck_detector_.config();
+                    ++stuck_transition_count_;
+                    if (stuck_cfg.max_stuck_count > 0 &&
+                        stuck_transition_count_ > stuck_cfg.max_stuck_count) {
+                        DRONE_LOG_WARN("[FSM] STUCK count {} exceeded cap {} — escalating to "
+                                       "LOITER at ({:.1f},{:.1f},{:.1f})",
+                                       stuck_transition_count_, stuck_cfg.max_stuck_count, sx, sy,
+                                       sz);
+                        publish_stop_trajectory(traj_pub, correlation_id);
+                        stuck_detector_.reset();
+                        fsm.set_fault_triggered(true);
+                        fsm.on_loiter();
+                        return;
+                    }
+                    DRONE_LOG_INFO("[FSM] STUCK detected ({}/{}) at ({:.1f},{:.1f},{:.1f}) "
+                                   "— backing off",
+                                   stuck_transition_count_, stuck_cfg.max_stuck_count, sx, sy, sz);
                     // Remember the last meaningful velocity so unstuck can
                     // back off along the opposite direction.
-                    unstuck_vx_          = planned.velocity_x;
-                    unstuck_vy_          = planned.velocity_y;
-                    unstuck_vz_          = planned.velocity_z;
-                    unstuck_start_time_  = now_clock;
-                    unstuck_clear_since_ = std::chrono::steady_clock::time_point{};
+                    unstuck_vx_         = planned.velocity_x;
+                    unstuck_vy_         = planned.velocity_y;
+                    unstuck_vz_         = planned.velocity_z;
+                    unstuck_start_time_ = now_clock;
                     stuck_detector_.reset();
                     fsm.on_stuck();
                     return;
@@ -465,6 +512,10 @@ private:
                     payload_pub.publish(pay_cmd);
                 }
 
+                // Progress → clear STUCK counter. Each waypoint gets a fresh
+                // allowance; repeated stalls against the SAME obstacle still
+                // escalate, but a legitimate wider mission isn't punished.
+                stuck_transition_count_ = 0;
                 if (!fsm.advance_waypoint()) {
                     DRONE_LOG_INFO("[Planner] Mission complete — RTL");
                     send_fc(drone::ipc::FCCommandType::RTL, 0.0f);
@@ -514,11 +565,7 @@ private:
         const float pz        = static_cast<float>(pose.translation[2]);
         float       elapsed_s = std::chrono::duration<float>(now - recovery_start_time_).count();
 
-        // Extract current yaw from pose quaternion [w, x, y, z] to avoid yaw snap
-        double qw = pose.quaternion[0], qx = pose.quaternion[1];
-        double qy = pose.quaternion[2], qz = pose.quaternion[3];
-        float  current_yaw = static_cast<float>(
-            std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+        const float current_yaw = yaw_from_pose(pose);
 
         switch (recovery_phase_) {
             case RecoveryPhase::HOVER: {
@@ -610,7 +657,7 @@ private:
         float       vy  = -unstuck_vy_;
         float       vz  = -unstuck_vz_;
         const float mag = std::sqrt(vx * vx + vy * vy + vz * vz);
-        const float cap = config_.stuck.backoff_speed_mps;
+        const float cap = config_.stuck_detector.backoff_speed_mps;
         if (mag > cap && mag > 1e-3f) {
             const float s = cap / mag;
             vx *= s;
@@ -621,13 +668,7 @@ private:
             vx = vy = vz = 0.0f;
         }
 
-        // Extract current yaw from pose quaternion [w, x, y, z] to hold heading
-        double      qw          = pose.quaternion[0];
-        double      qx          = pose.quaternion[1];
-        double      qy          = pose.quaternion[2];
-        double      qz          = pose.quaternion[3];
-        const float current_yaw = static_cast<float>(
-            std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+        const float current_yaw = yaw_from_pose(pose);
 
         drone::ipc::TrajectoryCmd cmd{};
         cmd.timestamp_ns = static_cast<uint64_t>(
@@ -645,10 +686,9 @@ private:
         // Exit when backoff duration expires.  Resume NAVIGATE and clear
         // detector history so the first seconds of new motion aren't counted
         // as "stuck".
-        if (elapsed_s >= config_.stuck.backoff_duration_s) {
+        if (elapsed_s >= config_.stuck_detector.backoff_duration_s) {
             DRONE_LOG_INFO("[Unstuck] Backoff complete ({:.1f}s) — resuming NAVIGATE", elapsed_s);
-            unstuck_start_time_  = std::chrono::steady_clock::time_point{};
-            unstuck_clear_since_ = std::chrono::steady_clock::time_point{};
+            unstuck_start_time_ = std::chrono::steady_clock::time_point{};
             stuck_detector_.reset();
             fsm.on_unstuck();
         }
