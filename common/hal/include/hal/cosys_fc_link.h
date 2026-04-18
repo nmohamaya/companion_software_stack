@@ -414,8 +414,7 @@ private:
                 // real code (0-3) takes precedence over the GUIDED default.
                 // This fixes the bug where send_mode(0) (STAB) collided with
                 // the "never set" sentinel when piggy-backing on flight_mode.
-                const uint8_t override_mode =
-                    requested_mode_.load(std::memory_order_acquire);
+                const uint8_t override_mode = requested_mode_.load(std::memory_order_acquire);
                 if (override_mode != UINT8_MAX) {
                     s.flight_mode = override_mode;
                 }

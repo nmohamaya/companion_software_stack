@@ -18,11 +18,11 @@ struct FCState {
     /// (relative to the arm altitude). CosysFCLink reports altitude above spawn, since
     /// SimpleFlight does not model terrain. Callers that require true AGL must correct
     /// with a terrain model externally.
-    float    altitude_rel{0.0f};
-    float    ground_speed{0.0f};
-    uint8_t  satellites{0};
-    uint8_t  flight_mode{0};  // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
-    bool     armed{false};
+    float   altitude_rel{0.0f};
+    float   ground_speed{0.0f};
+    uint8_t satellites{0};
+    uint8_t flight_mode{0};  // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
+    bool    armed{false};
 };
 
 /// Abstract flight controller link interface.
