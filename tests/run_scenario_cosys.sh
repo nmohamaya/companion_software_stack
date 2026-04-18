@@ -556,7 +556,8 @@ with open(sys.argv[1], 'w') as f:
     json.dump(s, f, indent=4)
 " "${AIRSIM_SETTINGS_DIR}/settings.json"
     fi
-    echo -e "  ${GREEN}✓${NC} AirSim settings deployed to ${AIRSIM_SETTINGS_DIR}/settings.json (ViewMode=$(python3 -c \"import json; print(json.load(open('${AIRSIM_SETTINGS_DIR}/settings.json')).get('ViewMode','default'))\"))"
+    VIEW_MODE=$(python3 -c "import json; print(json.load(open('${AIRSIM_SETTINGS_DIR}/settings.json')).get('ViewMode', 'default'))" 2>/dev/null || echo "default")
+    echo -e "  ${GREEN}✓${NC} AirSim settings deployed to ${AIRSIM_SETTINGS_DIR}/settings.json (ViewMode=${VIEW_MODE})"
 else
     echo -e "  ${YELLOW}WARNING: ${COSYS_SETTINGS} not found — using existing settings.json${NC}"
 fi
@@ -640,83 +641,15 @@ fi
 echo -e "  ${CYAN}Settling (5s) — waiting for level load...${NC}"
 sleep 5
 
-# ── Wait for HIL TCP port (AirSim server on 4560) ────────────
-# AirSim opens the RPC port (41451) during plugin init, but the HIL TCP server
-# (port 4560) is only opened once the vehicle is spawned in the game. Launching
-# PX4 before 4560 is bound causes simulator_mavlink to fail its initial connect.
-echo -n "  Waiting for AirSim HIL TCP port 4560"
-HIL_READY=false
-for _ in $(seq 1 30); do
-    if ss -tlnp 2>/dev/null | grep -q ":4560 "; then
-        HIL_READY=true
-        break
-    fi
-    if ! kill -0 "$UE5_PID" 2>/dev/null; then
-        echo ""
-        echo -e "  ${RED}ERROR: UE5 died before HIL server came up${NC}"
-        exit 2
-    fi
-    echo -n "."
-    sleep 1
-done
+# NOTE: Tier 3 uses AirSim's built-in SimpleFlight controller (not PX4 HIL).
+# SimpleFlight is driven via AirSim RPC (port 41451) — no PX4, no MAVLink, no
+# HIL TCP port 4560. Companion stack uses CosysFCLink via MultirotorRpcLibClient.
+# PX4+Cosys HIL integration is broken upstream (PX4 #24033, AirSim #5018).
+# See ADR-011 amendment for #490, config/cosys_settings.json comment.
 echo ""
-if [[ "$HIL_READY" == "true" ]]; then
-    check "AirSim HIL TCP port 4560 ready" 0
-else
-    echo -e "  ${YELLOW}WARNING: HIL TCP port 4560 not detected after 30s — PX4 may fail to connect${NC}"
-    echo -e "  ${YELLOW}Hint: in GUI mode, ensure the game is actually playing (press Play if in editor)${NC}"
-    check "AirSim HIL TCP port 4560 ready" 1
-fi
-
-# ── Launch PX4 SITL ──────────────────────────────────────────
-echo ""
-echo "Phase 2b: Launching PX4 SITL..."
-PX4_BIN="${PX4_DIR}/build/px4_sitl_default/bin/px4"
-PX4_ETC="${PX4_DIR}/build/px4_sitl_default/etc"
-PX4_ROOTFS="${PX4_DIR}/build/px4_sitl_default/rootfs"
-if [[ ! -x "$PX4_BIN" ]]; then
-    echo -e "  ${RED}ERROR: PX4 SITL binary not found at ${PX4_BIN}${NC}"
-    echo -e "  ${RED}       Run: cd ${PX4_DIR} && make px4_sitl_default${NC}"
-    exit 2
-fi
-mkdir -p "${PX4_ROOTFS}"
-# PX4_SIM_MODEL=none_iris → autostart 10016 (none_iris, no Gazebo). Do NOT set
-# PX4_SYS_AUTOSTART — it overrides PX4_SIM_MODEL and 4001 maps to 4001_gz_x500.
-export PX4_SIM_MODEL="none_iris" # none = no Gazebo; AirSim provides physics/sensors
-export PX4_SIM_HOSTNAME=127.0.0.1
-pushd "${PX4_ROOTFS}" > /dev/null
-"${PX4_BIN}" \
-    -d "${PX4_ETC}" \
-    -s "${PX4_ETC}/init.d-posix/rcS" \
-    > "${SCENARIO_LOG_DIR}/px4_sitl.log" 2>&1 &
-PX4_PID=$!
-popd > /dev/null
-echo -e "  ${GREEN}✓${NC} PX4 SITL launched (PID=${PX4_PID})"
-
-# Wait for PX4 MAVLink UDP port 14540
-echo -n "  Waiting for PX4 MAVLink port 14540"
-PX4_READY=false
-for _ in $(seq 1 30); do
-    if ss -ulnp 2>/dev/null | grep -q ":14540"; then
-        PX4_READY=true
-        break
-    fi
-    if ! kill -0 "$PX4_PID" 2>/dev/null; then
-        echo ""
-        echo -e "  ${RED}ERROR: PX4 died — check ${SCENARIO_LOG_DIR}/px4_sitl.log${NC}"
-        tail -10 "${SCENARIO_LOG_DIR}/px4_sitl.log" 2>/dev/null || true
-        exit 2
-    fi
-    echo -n "."
-    sleep 1
-done
-echo ""
-if [[ "$PX4_READY" == "true" ]]; then
-    check "PX4 SITL MAVLink port 14540 ready" 0
-else
-    echo -e "  ${YELLOW}WARNING: MAVLink port not detected after 30s — continuing${NC}"
-    check "PX4 SITL MAVLink port 14540 ready" 1
-fi
+echo "Phase 2b: SimpleFlight controller active (no PX4 needed for Tier 3)"
+echo -e "  ${CYAN}Settling (5s) for SimpleFlight to stabilize...${NC}"
+sleep 5
 
 # ── Phase 3: Launch companion stack ──────────────────────────
 echo ""
