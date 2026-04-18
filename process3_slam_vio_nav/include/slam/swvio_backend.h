@@ -19,6 +19,7 @@
 #include "slam/types.h"
 #include "slam/vio_types.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -32,8 +33,10 @@ public:
     SlidingWindowVIOBackend(const StereoCalibration& calib, const ImuNoiseParams& imu_params,
                             const SWVIOParams& params);
 
-    SlidingWindowVIOBackend(const SlidingWindowVIOBackend&)            = delete;
-    SlidingWindowVIOBackend& operator=(const SlidingWindowVIOBackend&) = delete;
+    SlidingWindowVIOBackend(const SlidingWindowVIOBackend&)                = delete;
+    SlidingWindowVIOBackend& operator=(const SlidingWindowVIOBackend&)     = delete;
+    SlidingWindowVIOBackend(SlidingWindowVIOBackend&&) noexcept            = default;
+    SlidingWindowVIOBackend& operator=(SlidingWindowVIOBackend&&) noexcept = default;
 
     [[nodiscard]] VIOResult<VIOOutput> process_frame(
         const drone::ipc::StereoFrame& frame, const std::vector<ImuSample>& imu_samples) override;
@@ -62,19 +65,24 @@ private:
     SWVIOParams       params_;
     StereoCalibration calib_;
     ImuNoiseParams    imu_params_;
+    int               active_cov_dim_ = 0;  // active rows/cols in state_.covariance
 
     // ── Precomputed (constant across lifetime) ─────────────
-    Eigen::Matrix<double, 12, 12> Q_c_;          // continuous-time noise covariance
-    Eigen::MatrixXd               scratch_cov_;  // pre-allocated scratch for augment/marginalize
+    Eigen::Matrix<double, 12, 12> Q_c_;  // continuous-time noise covariance
+
+    // ── Pre-allocated scratch buffers (no hot-path heap alloc) ──
+    Eigen::MatrixXd scratch_cov_;    // for augment/marginalize covariance ops
+    Eigen::MatrixXd cross_scratch_;  // 15 x max_clone_cols, for IMU-clone cross-correlation
+    Eigen::MatrixXd jp_scratch_;     // 6 x max_dim, for augmentation J*P product
 
     // ── Sub-components ─────────────────────────────────────
     std::unique_ptr<IFeatureExtractor> extractor_;
     std::unique_ptr<IStereoMatcher>    matcher_;
 
     // ── Health state machine ───────────────────────────────
-    VIOHealth health_           = VIOHealth::INITIALIZING;
-    int       frames_processed_ = 0;
-    uint64_t  next_clone_id_    = 0;
+    std::atomic<VIOHealth> health_{VIOHealth::INITIALIZING};
+    int                    frames_processed_ = 0;
+    uint64_t               next_clone_id_    = 0;
 };
 
 }  // namespace drone::slam

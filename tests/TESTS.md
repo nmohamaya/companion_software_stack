@@ -110,7 +110,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
 | [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
 | [Utility](#utility) | 5 | 147 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
-| [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 49 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend (covariance quality) |
+| [P3 — SLAM / VIO](#p3--slam--vio) | 5 | 100 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend, SWVIO backend (Phase 1), slam_math |
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [P4 — Collision Recovery](#p4--collision-recovery) | 1 | 14 | Post-collision FSM state, waypoint skip, recovery logic |
 | [P4 — Obstacle Prediction](#p4--obstacle-prediction) | 1 | 10 | Dynamic obstacle prediction via UKF velocity vectors |
@@ -129,7 +129,7 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — PluginLoader](#hal--pluginloader) | 2 | 13 | PluginHandle RAII, PluginLoader dlopen/dlsym, PluginRegistry (HAVE_PLUGINS only) |
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
-| **Total** | **71 C++ + 5 shell** | **1588 + 42 + 250+** | |
+| **Total** | **73 C++ + 5 shell** | **1600 + 42 + 250+** | |
 
 ---
 
@@ -1092,13 +1092,13 @@ Path planner and obstacle avoider tests removed in Issue #207 (covered by
 
 **Key files under test:** `slam/ivio_backend.h`, `slam/ivio_interface.h`, `slam/vio_types.h`
 
-### test_swvio_backend.cpp — 26 tests
+### test_swvio_backend.cpp — 29 tests
 
-**What it tests:** `SlidingWindowVIOBackend` (SWVIO) Phase 1 — IMU propagation, state augmentation, marginalization, covariance dimensions, all health states (INITIALIZING/NOMINAL/DEGRADED/LOST), edge cases (NaN, negative dt, timestamp overflow); `slam_math.h` SO(3) utilities.
+**What it tests:** `SlidingWindowVIOBackend` (SWVIO) Phase 1 — IMU propagation, state augmentation, marginalization, covariance dimensions, all health states (INITIALIZING/NOMINAL/DEGRADED/LOST), edge cases (NaN, negative dt, zero timestamp, timestamp boundary/overflow); `slam_math.h` SO(3) utilities.
 
 | Suite              | Tests | What is validated |
 |--------------------|-------|-------------------|
-| `SWVIOBackendTest` | 16    | Factory registration ("swvio"), frame processing, constant-acceleration IMU propagation (quadratic position with tighter tolerances), stationary gravity compensation, covariance growth, sliding window augmentation with clone_count/state_dim verification, marginalization caps window at max_clones, covariance dimensions match state, health INITIALIZING→NOMINAL/DEGRADED/LOST transitions (4 tests), warmup stays INITIALIZING, empty IMU samples, NaN IMU rejection, negative dt skipping, timestamp overflow rejection |
+| `SWVIOBackendTest` | 19    | Factory registration ("swvio"), frame processing, constant-acceleration IMU propagation (quadratic position, 0.005 tolerance), stationary gravity compensation, covariance growth, sliding window augmentation with clone_count/state_dim verification, marginalization caps window at max_clones, covariance dimensions match state, health INITIALIZING→NOMINAL/DEGRADED/LOST transitions (4 tests), warmup stays INITIALIZING, empty IMU samples, NaN IMU rejection with position assertion, negative dt skipping, zero timestamp rejection, timestamp at-boundary acceptance, timestamp beyond-boundary rejection, timestamp overflow rejection |
 | `SlamMathTest`     | 10    | exp_map identity/small angle/90-degree/180-degree boundary, log_map inverse-of-exp/identity, skew antisymmetry + cross product equivalence, left Jacobian identity/non-trivial, right Jacobian = left(-phi) |
 
 **Key files under test:** `slam/swvio_backend.h`, `slam/swvio_types.h`, `slam/slam_math.h`

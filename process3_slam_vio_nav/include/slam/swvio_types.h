@@ -41,7 +41,7 @@ struct SWVIOParams {
     Eigen::Quaterniond T_imu_cam_rotation{Eigen::Quaterniond::Identity()};
     Eigen::Vector3d    T_imu_cam_translation{Eigen::Vector3d::Zero()};
 
-    [[nodiscard]] bool validate() const {
+    [[nodiscard]] constexpr bool validate() const {
         return max_clones > 0 && max_clones <= 30 && init_frames > 0 && good_trace_max > 0.0 &&
                degraded_trace_max > good_trace_max && noise_image_pixel > 0.0 &&
                chi2_threshold > 0.0;
@@ -71,7 +71,8 @@ struct CameraClone {
 struct SWVIOState {
     IMUState                imu;
     std::deque<CameraClone> clones;
-    Eigen::MatrixXd         covariance;  // (15 + 6*N_clones) x (15 + 6*N_clones)
+    // Covariance is pre-allocated to max capacity; active_cov_dim_ tracks the used region.
+    Eigen::MatrixXd covariance;  // (15 + 6*N_clones) x (15 + 6*N_clones)
 
     // ── Error state indices ─────────────────────────────────
     static constexpr int kIdxTheta      = 0;   // orientation error (3)

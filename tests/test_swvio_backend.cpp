@@ -128,7 +128,7 @@ TEST(SWVIOBackendTest, IMUPropagationConstantAccel) {
 
     // After ~0.33s at 1 m/s^2: position ~ 0.5 * 1 * 0.33^2 ~ 0.054m
     const double expected_x = 0.5 * 1.0 * 0.33 * 0.33;
-    EXPECT_NEAR(last_pos.x(), expected_x, 0.02) << "Should approximate s = 0.5*a*t^2";
+    EXPECT_NEAR(last_pos.x(), expected_x, 0.005) << "Should approximate s = 0.5*a*t^2";
     EXPECT_NEAR(last_pos.y(), 0.0, 0.005) << "No lateral motion expected";
     EXPECT_NEAR(last_pos.z(), 0.0, 0.005) << "No vertical motion (gravity compensated)";
 }
@@ -295,9 +295,10 @@ TEST(SWVIOBackendTest, HealthDegradedWhenTraceExceedsGoodMax) {
 
 TEST(SWVIOBackendTest, HealthLostWhenTraceExceedsDegradedMax) {
     SWVIOParams params;
-    params.init_frames        = 1;
-    params.good_trace_max     = 1e-10;
-    params.degraded_trace_max = 1e-10;  // impossibly tight — will exceed both thresholds
+    params.init_frames    = 1;
+    params.good_trace_max = 1e-10;
+    params.degraded_trace_max =
+        2e-10;  // both impossibly tight, but degraded > good (validate() contract)
 
     auto backend = make_swvio(params);
 
@@ -366,9 +367,11 @@ TEST(SWVIOBackendTest, NaNIMUSampleRejected) {
     s1.gyro      = Eigen::Vector3d::Zero();
     samples.push_back(s1);
 
-    // Should not crash; NaN sample is skipped
+    // Should not crash; NaN sample is skipped, state stays near origin
     auto result = backend->process_frame(frame, samples);
     ASSERT_TRUE(result.is_ok());
+    EXPECT_LT(result.value().pose.position.norm(), 0.01)
+        << "NaN sample should be skipped — position must stay near origin";
 }
 
 TEST(SWVIOBackendTest, NegativeDtIMUSamplesSkipped) {
@@ -401,6 +404,16 @@ TEST(SWVIOBackendTest, NegativeDtIMUSamplesSkipped) {
     EXPECT_LT(result.value().pose.position.norm(), 0.05);
 }
 
+TEST(SWVIOBackendTest, ZeroTimestampRejected) {
+    auto backend       = create_vio_backend("swvio");
+    auto frame         = make_frame(1);
+    frame.timestamp_ns = 0;
+
+    auto imu    = make_imu_stationary(0.0, 0.033);
+    auto result = backend->process_frame(frame, imu);
+    EXPECT_TRUE(result.is_err()) << "Should reject zero timestamp";
+}
+
 TEST(SWVIOBackendTest, TimestampOverflowRejected) {
     auto backend = create_vio_backend("swvio");
     auto frame   = make_frame(1);
@@ -411,6 +424,31 @@ TEST(SWVIOBackendTest, TimestampOverflowRejected) {
     auto imu    = make_imu_stationary(0.0, 0.033);
     auto result = backend->process_frame(frame, imu);
     EXPECT_TRUE(result.is_err()) << "Should reject implausible timestamp";
+}
+
+TEST(SWVIOBackendTest, TimestampAtBoundaryAccepted) {
+    auto backend = create_vio_backend("swvio");
+    auto frame   = make_frame(1);
+
+    // 10 years in nanoseconds — the maximum accepted value
+    constexpr uint64_t kMaxTimestampNs = 10ULL * 365ULL * 24ULL * 3600ULL * 1'000'000'000ULL;
+    frame.timestamp_ns                 = kMaxTimestampNs;
+
+    auto imu    = make_imu_stationary(0.0, 0.033);
+    auto result = backend->process_frame(frame, imu);
+    EXPECT_TRUE(result.is_ok()) << "Timestamp at 10-year boundary should be accepted";
+}
+
+TEST(SWVIOBackendTest, TimestampBeyondBoundaryRejected) {
+    auto backend = create_vio_backend("swvio");
+    auto frame   = make_frame(1);
+
+    constexpr uint64_t kMaxTimestampNs = 10ULL * 365ULL * 24ULL * 3600ULL * 1'000'000'000ULL;
+    frame.timestamp_ns                 = kMaxTimestampNs + 1;
+
+    auto imu    = make_imu_stationary(0.0, 0.033);
+    auto result = backend->process_frame(frame, imu);
+    EXPECT_TRUE(result.is_err()) << "Timestamp beyond 10-year boundary should be rejected";
 }
 
 // ═══════════════════════════════════════════════════════════

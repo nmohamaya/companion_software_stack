@@ -25,7 +25,8 @@ namespace drone::slam {
 constexpr double   kMaxImuAccelMps2  = 200.0;  // ~20g
 constexpr double   kMaxImuGyroRadSec = 35.0;   // ~2000 deg/s
 constexpr double   kMaxDtSec         = 0.1;    // no IMU gap > 100ms
-constexpr uint64_t kMaxTimestampNs   = 10ULL * 365 * 24 * 3600 * 1'000'000'000ULL;  // ~10 years
+constexpr uint64_t kMaxTimestampNs   = 10ULL * 365ULL * 24ULL * 3600ULL *
+                                     1'000'000'000ULL;  // ~10 years
 
 // ── Constructor ─────────────────────────────────────────────
 SlidingWindowVIOBackend::SlidingWindowVIOBackend(const StereoCalibration& calib,
@@ -37,6 +38,16 @@ SlidingWindowVIOBackend::SlidingWindowVIOBackend(const StereoCalibration& calib,
     , extractor_(std::make_unique<SimulatedFeatureExtractor>())
     , matcher_(std::make_unique<SimulatedStereoMatcher>(calib)) {
 
+    if (!params_.validate()) {
+        DRONE_LOG_WARN("[SWVIO] Invalid SWVIOParams — using defaults");
+        params_ = SWVIOParams{};
+    }
+
+    // Maximum covariance dimension (with +1 for transient augmentation overshoot)
+    const int max_dim = SWVIOState::kImuStateDim +
+                        SWVIOState::kCloneStateDim * (params_.max_clones + 1);
+    const int max_clone_cols = max_dim - SWVIOState::kImuStateDim;
+
     // Initialize IMU state at origin with identity orientation
     state_.imu.orientation = Eigen::Quaterniond::Identity();
     state_.imu.position    = Eigen::Vector3d::Zero();
@@ -45,9 +56,10 @@ SlidingWindowVIOBackend::SlidingWindowVIOBackend(const StereoCalibration& calib,
     state_.imu.accel_bias  = Eigen::Vector3d::Zero();
     state_.imu.timestamp   = 0.0;
 
-    // Initialize covariance: 15x15 for IMU error state only (no clones yet)
+    // Covariance pre-allocated to max capacity; active region tracked by active_cov_dim_
     constexpr int kDim = SWVIOState::kImuStateDim;
-    state_.covariance  = Eigen::MatrixXd::Zero(kDim, kDim);
+    state_.covariance  = Eigen::MatrixXd::Zero(max_dim, max_dim);
+    active_cov_dim_    = kDim;
 
     state_.covariance.block<3, 3>(SWVIOState::kIdxTheta,
                                   SWVIOState::kIdxTheta) = Eigen::Matrix3d::Identity() * 1e-3;
@@ -72,11 +84,10 @@ SlidingWindowVIOBackend::SlidingWindowVIOBackend(const StereoCalibration& calib,
     Q_c_.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * sbg2;
     Q_c_.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * sba2;
 
-    // Pre-allocate scratch covariance buffer — +1 because augmentation
-    // temporarily grows the window to max_clones+1 before marginalization.
-    const int max_dim = SWVIOState::kImuStateDim +
-                        SWVIOState::kCloneStateDim * (params_.max_clones + 1);
-    scratch_cov_ = Eigen::MatrixXd::Zero(max_dim, max_dim);
+    // Pre-allocate all scratch buffers (zero hot-path heap allocation)
+    scratch_cov_   = Eigen::MatrixXd::Zero(max_dim, max_dim);
+    cross_scratch_ = Eigen::MatrixXd::Zero(15, max_clone_cols);
+    jp_scratch_    = Eigen::MatrixXd::Zero(6, max_dim);
 }
 
 // ── IMU state propagation ───────────────────────────────────
@@ -125,41 +136,45 @@ void SlidingWindowVIOBackend::propagate_imu(const std::vector<ImuSample>& imu_sa
         // ── Error-state transition matrix F (15x15) ─────────
         Eigen::Matrix<double, 15, 15> F = Eigen::Matrix<double, 15, 15>::Identity();
 
-        // Cache R*skew(accel_mid) — used in both velocity and position blocks
+        // Cache R-derived products used in multiple F/G blocks
         const Eigen::Matrix3d R_skew_a = R * skew(accel_mid);
+        const Eigen::Matrix3d R_dt     = R * dt;
+        const Eigen::Matrix3d R_dt2    = R_dt * dt;
 
         F.block<3, 3>(SWVIOState::kIdxTheta, SWVIOState::kIdxTheta) -= skew(gyro_mid) * dt;
         F.block<3, 3>(SWVIOState::kIdxTheta, SWVIOState::kIdxBg) = -Eigen::Matrix3d::Identity() *
                                                                    dt;
         F.block<3, 3>(SWVIOState::kIdxVel, SWVIOState::kIdxTheta) = -R_skew_a * dt;
-        F.block<3, 3>(SWVIOState::kIdxVel, SWVIOState::kIdxBa)    = -R * dt;
+        F.block<3, 3>(SWVIOState::kIdxVel, SWVIOState::kIdxBa)    = -R_dt;
         F.block<3, 3>(SWVIOState::kIdxPos, SWVIOState::kIdxVel) = Eigen::Matrix3d::Identity() * dt;
         F.block<3, 3>(SWVIOState::kIdxPos, SWVIOState::kIdxTheta) = -0.5 * R_skew_a * dt * dt;
-        F.block<3, 3>(SWVIOState::kIdxPos, SWVIOState::kIdxBa)    = -0.5 * R * dt * dt;
+        F.block<3, 3>(SWVIOState::kIdxPos, SWVIOState::kIdxBa)    = -0.5 * R_dt2;
 
         // ── Noise Jacobian G (15x12) ────────────────────────
         Eigen::Matrix<double, 15, 12> G = Eigen::Matrix<double, 15, 12>::Zero();
 
         G.block<3, 3>(SWVIOState::kIdxTheta, 0) = -Eigen::Matrix3d::Identity() * dt;
-        G.block<3, 3>(SWVIOState::kIdxVel, 3)   = -R * dt;
-        G.block<3, 3>(SWVIOState::kIdxPos, 3)   = -0.5 * R * dt * dt;
+        G.block<3, 3>(SWVIOState::kIdxVel, 3)   = -R_dt;
+        G.block<3, 3>(SWVIOState::kIdxPos, 3)   = -0.5 * R_dt2;
         G.block<3, 3>(SWVIOState::kIdxBg, 6)    = Eigen::Matrix3d::Identity() * dt;
         G.block<3, 3>(SWVIOState::kIdxBa, 9)    = Eigen::Matrix3d::Identity() * dt;
 
         // ── Covariance propagation (fixed-size for IMU block) ──
-        const int n = state_.state_dim();
+        const int n = active_cov_dim_;
 
         // IMU-IMU block: P_ii = F * P_ii * F^T + G * Q_c * G^T
         const Eigen::Matrix<double, 15, 15> P_ii =
             F * state_.covariance.block<15, 15>(0, 0) * F.transpose() + G * Q_c_ * G.transpose();
         state_.covariance.block<15, 15>(0, 0) = P_ii;
 
-        // IMU-clone cross-correlations: P_ij = F * P_ij for each clone j
+        // IMU-clone cross-correlations using pre-allocated scratch (no heap alloc)
         if (n > 15) {
-            state_.covariance.block(0, 15, 15, n - 15) = F *
-                                                         state_.covariance.block(0, 15, 15, n - 15);
-            state_.covariance.block(15, 0, n - 15,
-                                    15) = state_.covariance.block(0, 15, 15, n - 15).transpose();
+            const int clone_cols                           = n - 15;
+            cross_scratch_.leftCols(clone_cols).noalias()  = F * state_.covariance.block(0, 15, 15,
+                                                                                         clone_cols);
+            state_.covariance.block(0, 15, 15, clone_cols) = cross_scratch_.leftCols(clone_cols);
+            state_.covariance.block(15, 0, clone_cols,
+                                    15) = cross_scratch_.leftCols(clone_cols).transpose();
         }
     }
 }
@@ -180,22 +195,19 @@ void SlidingWindowVIOBackend::augment_state(double timestamp) {
     J.block<3, 3>(0, SWVIOState::kIdxTheta) = Eigen::Matrix3d::Identity();
     J.block<3, 3>(3, SWVIOState::kIdxPos)   = Eigen::Matrix3d::Identity();
 
-    // Expand covariance from (old_dim) to (old_dim + 6) using pre-allocated scratch
-    const int old_dim = state_.state_dim() - SWVIOState::kCloneStateDim;
-    const int new_dim = state_.state_dim();
+    const int old_dim = active_cov_dim_;
+    const int new_dim = old_dim + SWVIOState::kCloneStateDim;
 
-    scratch_cov_.block(0, 0, old_dim, old_dim) = state_.covariance.block(0, 0, old_dim, old_dim);
-
-    // Cross-correlation: J * P_imu (first 15 cols of each row)
-    const Eigen::MatrixXd JP                   = J * state_.covariance.block(0, 0, 15, old_dim);
-    scratch_cov_.block(old_dim, 0, 6, old_dim) = JP;
-    scratch_cov_.block(0, old_dim, old_dim, 6) = JP.transpose();
+    // Cross-correlation J*P using pre-allocated scratch (no heap alloc)
+    jp_scratch_.leftCols(old_dim).noalias() = J * state_.covariance.block(0, 0, 15, old_dim);
+    state_.covariance.block(old_dim, 0, 6, old_dim) = jp_scratch_.leftCols(old_dim);
+    state_.covariance.block(0, old_dim, old_dim, 6) = jp_scratch_.leftCols(old_dim).transpose();
 
     // New clone's self-covariance: J * P_imu * J^T
-    scratch_cov_.block<6, 6>(old_dim, old_dim) = J * state_.covariance.block<15, 15>(0, 0) *
-                                                 J.transpose();
+    state_.covariance.block<6, 6>(old_dim, old_dim) = J * state_.covariance.block<15, 15>(0, 0) *
+                                                      J.transpose();
 
-    state_.covariance = scratch_cov_.block(0, 0, new_dim, new_dim);
+    active_cov_dim_ = new_dim;
 }
 
 // ── Marginalize oldest clone ────────────────────────────────
@@ -213,36 +225,48 @@ void SlidingWindowVIOBackend::marginalize_oldest_clone() {
     // Remove rows/cols [15..20] from covariance (the oldest clone's 6 DOF)
     const int remove_start = SWVIOState::kImuStateDim;
     const int remove_end   = remove_start + SWVIOState::kCloneStateDim;
-    const int old_dim      = static_cast<int>(state_.covariance.rows());
+    const int old_dim      = active_cov_dim_;
     const int new_dim      = old_dim - SWVIOState::kCloneStateDim;
 
-    // Copy into pre-allocated scratch, skipping the removed block
-    scratch_cov_.block(0, 0, remove_start,
-                       remove_start) = state_.covariance.block(0, 0, remove_start, remove_start);
-
+    // Shift blocks in-place via scratch to handle overlapping source/dest regions.
+    // Copy each block through scratch sequentially (side-by-side would exceed scratch width).
     const int after = old_dim - remove_end;
     if (after > 0) {
-        scratch_cov_.block(remove_start, remove_start, after,
-                           after) = state_.covariance.block(remove_end, remove_end, after, after);
-        scratch_cov_.block(0, remove_start, remove_start,
+        // Block 1: IMU-to-remaining cross-correlation
+        scratch_cov_.block(0, 0, remove_start,
                            after) = state_.covariance.block(0, remove_end, remove_start, after);
-        scratch_cov_.block(remove_start, 0, after, remove_start) =
+        state_.covariance.block(0, remove_start, remove_start,
+                                after) = scratch_cov_.block(0, 0, remove_start, after);
+
+        // Block 2: Remaining clones self-covariance (after x after, may overlap source)
+        scratch_cov_.block(0, 0, after, after) = state_.covariance.block(remove_end, remove_end,
+                                                                         after, after);
+        state_.covariance.block(remove_start, remove_start, after,
+                                after)         = scratch_cov_.block(0, 0, after, after);
+
+        // Block 3: Remaining-to-IMU cross-correlation
+        scratch_cov_.block(0, 0, after, remove_start) =
             state_.covariance.block(remove_end, 0, after, remove_start);
+        state_.covariance.block(remove_start, 0, after,
+                                remove_start) = scratch_cov_.block(0, 0, after, remove_start);
     }
 
-    state_.covariance = scratch_cov_.block(0, 0, new_dim, new_dim);
+    active_cov_dim_ = new_dim;
 }
 
 // ── Enforce covariance symmetry ─────────────────────────────
 void SlidingWindowVIOBackend::enforce_symmetry() {
-    state_.covariance = 0.5 * (state_.covariance + state_.covariance.transpose());
+    const int n = active_cov_dim_;
+    // Use selfadjointView to avoid allocating a full temporary
+    state_.covariance.topLeftCorner(n, n) =
+        state_.covariance.topLeftCorner(n, n).selfadjointView<Eigen::Upper>();
 }
 
 // ── Health state machine ────────────────────────────────────
 // Transitions between INITIALIZING -> NOMINAL / DEGRADED / LOST
 // based on initialization frame count and position covariance trace.
 void SlidingWindowVIOBackend::update_health() {
-    VIOHealth new_health = health_;
+    VIOHealth new_health = health_.load(std::memory_order_relaxed);
 
     if (frames_processed_ < params_.init_frames) {
         new_health = VIOHealth::INITIALIZING;
@@ -259,10 +283,11 @@ void SlidingWindowVIOBackend::update_health() {
         }
     }
 
-    if (new_health != health_) {
-        DRONE_LOG_INFO("[SWVIO] Health: {} -> {}", vio_health_name(health_),
+    const VIOHealth old_health = health_.load(std::memory_order_relaxed);
+    if (new_health != old_health) {
+        DRONE_LOG_INFO("[SWVIO] Health: {} -> {}", vio_health_name(old_health),
                        vio_health_name(new_health));
-        health_ = new_health;
+        health_.store(new_health, std::memory_order_release);
     }
 }
 
@@ -274,8 +299,8 @@ VIOResult<VIOOutput> SlidingWindowVIOBackend::process_frame(
     const uint64_t                seq            = frame.sequence_number;
     drone::util::FrameDiagnostics diag(seq);
 
-    // Validate frame timestamp
-    if (frame.timestamp_ns > kMaxTimestampNs) {
+    // Validate frame timestamp (reject zero and implausibly large values)
+    if (frame.timestamp_ns == 0 || frame.timestamp_ns > kMaxTimestampNs) {
         return VIOResult<VIOOutput>::err(VIOError{VIOErrorCode::TrackingLost, "SWVIOBackend",
                                                   "timestamp_ns out of plausible range", seq});
     }
@@ -292,7 +317,7 @@ VIOResult<VIOOutput> SlidingWindowVIOBackend::process_frame(
     // ── 2. Feature extraction ───────────────────────────────
     auto feat_result = extractor_->extract(frame, diag);
     if (feat_result.is_err()) {
-        output.health = health_;
+        output.health = health_.load(std::memory_order_acquire);
         return VIOResult<VIOOutput>::err(std::move(feat_result.error()));
     }
 
@@ -321,7 +346,7 @@ VIOResult<VIOOutput> SlidingWindowVIOBackend::process_frame(
     // ── 7. Health state machine ─────────────────────────────
     ++frames_processed_;
     update_health();
-    output.health = health_;
+    output.health = health_.load(std::memory_order_acquire);
 
     // ── 8. Build output pose from current IMU state ─────────
     output.pose.position    = state_.imu.position;
@@ -336,7 +361,8 @@ VIOResult<VIOOutput> SlidingWindowVIOBackend::process_frame(
                                                                              SWVIOState::kIdxPos);
 
     // Map health to pose quality
-    switch (health_) {
+    const VIOHealth current_health = health_.load(std::memory_order_acquire);
+    switch (current_health) {
         case VIOHealth::LOST: output.pose.quality = 0; break;
         case VIOHealth::INITIALIZING: [[fallthrough]];
         case VIOHealth::DEGRADED: output.pose.quality = 1; break;
@@ -355,11 +381,12 @@ VIOResult<VIOOutput> SlidingWindowVIOBackend::process_frame(
 }
 
 VIOHealth SlidingWindowVIOBackend::health() const {
-    return health_;
+    return health_.load(std::memory_order_acquire);
 }
 
 std::string SlidingWindowVIOBackend::name() const {
-    return "SlidingWindowVIO";
+    static const std::string kName = "SlidingWindowVIO";
+    return kName;
 }
 
 }  // namespace drone::slam
