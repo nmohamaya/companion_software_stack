@@ -29,6 +29,9 @@
 
 #include <common/common_utils/StrictMode.hpp>
 STRICT_MODE_OFF
+#include "api/RpcLibAdaptorsBase.hpp"
+
+#include <rpc/client.h>
 #include <vehicles/multirotor/api/MultirotorRpcLibClient.hpp>
 STRICT_MODE_ON
 
@@ -177,6 +180,12 @@ int do_spawn(const Args& args) {
     }
     std::cout << "Connected to " << client.endpoint() << "\n";
 
+    // AirSim's client-side simSpawnObject sends 5 args, but the server expects 6
+    // (object_name, load_component, pose, scale, physics_enabled, is_blueprint).
+    // Workaround: open our own rpclib connection and call with the correct arity.
+    rpc::client raw_rpc(args.host, args.port);
+    raw_rpc.set_timeout(5000);
+
     std::ofstream stamp(args.stamp, std::ios::out | std::ios::trunc);
     if (!stamp) {
         std::cerr << "Cannot write stamp file: " << args.stamp << "\n";
@@ -201,19 +210,23 @@ int do_spawn(const Args& args) {
         const auto   pose    = make_pose(x, y, z, yaw_deg * (M_PI / 180.0));
         const auto   scale   = parse_scale(obj);
 
-        bool ok = client.with_client([&](auto& rpc) {
-            try {
-                const auto returned = rpc.simSpawnObject(name, asset, pose, scale, physics);
-                std::cout << "  + " << name << "  <-  " << asset << "  at (" << x << ", " << y
-                          << ", " << z << ", yaw=" << yaw_deg << "deg)  -> " << returned << "\n";
-                stamp << returned << "\n";
-                ++spawned;
-            } catch (const std::exception& e) {
-                std::cerr << "  ! spawn failed for " << name << " (" << asset << "): " << e.what()
-                          << "\n";
-                ++failed;
-            }
-        });
+        // Call simSpawnObject directly with 6 args (is_blueprint=false) to
+        // match the server signature. See comment above raw_rpc declaration.
+        bool ok = true;
+        try {
+            auto rpc_result = raw_rpc.call(
+                "simSpawnObject", name, asset, msr::airlib_rpclib::RpcLibAdaptorsBase::Pose(pose),
+                msr::airlib_rpclib::RpcLibAdaptorsBase::Vector3r(scale), physics, false);
+            const auto returned = rpc_result.template as<std::string>();
+            std::cout << "  + " << name << "  <-  " << asset << "  at (" << x << ", " << y << ", "
+                      << z << ", yaw=" << yaw_deg << "deg)  -> " << returned << "\n";
+            stamp << returned << "\n";
+            ++spawned;
+        } catch (const std::exception& e) {
+            std::cerr << "  ! spawn failed for " << name << " (" << asset << "): " << e.what()
+                      << "\n";
+            ++failed;
+        }
         if (!ok) {
             std::cerr << "  ! RPC client disconnected while spawning " << name << "\n";
             ++failed;
