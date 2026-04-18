@@ -52,13 +52,6 @@ public:
         float min_movement_m     = 0.5f;
         float backoff_speed_mps  = 1.0f;
         float backoff_duration_s = 2.0f;
-        // Min correction magnitude to count the avoider as "active" in a tick.
-        // Default 0.01 — live scenario-30 runs show the avoider producing
-        // |correction| as small as 0.02 m/s when obstacles are in the moderate
-        // regime (between min_distance_m and influence_radius_m), and we need
-        // the detector to see those as active so the stuck condition fires.
-        // Tune higher in scenarios where you want to only catch hard pushes.
-        float min_avoider_correction_mps = 0.01f;
         // Cap on STUCK→UNSTUCK→NAVIGATE oscillations within a mission.
         // When exceeded, caller escalates to LOITER with fault_triggered=true
         // so the operator sees persistent stall in health telemetry instead
@@ -71,11 +64,10 @@ public:
 
     [[nodiscard]] const Config& config() const { return cfg_; }
 
-    /// Record a pose sample + whether the avoider produced non-zero correction
-    /// this tick.  Samples older than window_s are dropped.
-    void push_sample(TimePoint t, float x, float y, float z, bool avoider_active) {
+    /// Record a pose sample.  Samples older than window_s are dropped.
+    /// Caller pushes only in states where hover is abnormal (NAVIGATE).
+    void push_sample(TimePoint t, float x, float y, float z) {
         samples_.emplace_back(t, std::array<float, 3>{x, y, z});
-        if (avoider_active) last_avoider_active_ = t;
 
         // Drop samples older than window_s.
         const auto window = std::chrono::duration_cast<Clock::duration>(
@@ -86,22 +78,26 @@ public:
     }
 
     /// Clear history — call on state change or significant pose jump.
-    void reset() {
-        samples_.clear();
-        last_avoider_active_ = TimePoint{};
-    }
+    void reset() { samples_.clear(); }
 
     /// Evaluate stuck condition using the samples collected so far.
+    ///
+    /// Caller is responsible for only pushing samples in states where hover
+    /// is abnormal (i.e. NAVIGATE).  This function therefore does NOT gate
+    /// on "avoider was active recently" — an earlier iteration of this check
+    /// failed precisely when the drone was most stuck, because collision
+    /// with geometry caused LiDAR-derived DetectedObjectList.num_objects to
+    /// go to zero (the obstacle intersects the drone body → no returns) and
+    /// the avoider became inactive.  The drone was stuck *because* perception
+    /// lost the obstacle, and the detector silently decided "not stuck".
+    /// Moving the liveness check out of the detector and relying on the
+    /// caller's state gating is the correct fix.
     [[nodiscard]] bool is_stuck(TimePoint now) const {
         if (!cfg_.enabled) return false;
         if (samples_.size() < 2) return false;
         // Need a full window of history.
         const float span_s = std::chrono::duration<float>(now - samples_.front().first).count();
         if (span_s < cfg_.window_s) return false;
-        // Avoider must have fired within the window.
-        const float since_avoider_s =
-            std::chrono::duration<float>(now - last_avoider_active_).count();
-        if (last_avoider_active_ == TimePoint{} || since_avoider_s > cfg_.window_s) return false;
         // Compare current pose vs window-start pose.
         const auto& first = samples_.front().second;
         const auto& last  = samples_.back().second;
@@ -118,7 +114,6 @@ public:
 private:
     Config                                                 cfg_{};
     std::deque<std::pair<TimePoint, std::array<float, 3>>> samples_;
-    TimePoint                                              last_avoider_active_{};
 };
 
 /// Waypoint for mission navigation.

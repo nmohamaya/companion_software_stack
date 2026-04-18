@@ -425,22 +425,18 @@ private:
 
             // Stuck detector (Issue #503) — feed before publish so any stuck
             // transition is recognised before the next replan cycle.  Only
-            // fires in NAVIGATE; the enclosing switch guarantees that.
+            // fires in NAVIGATE; the enclosing switch guarantees that.  The
+            // detector intentionally does NOT gate on avoider activity —
+            // when the drone collides with geometry, LiDAR returns drop
+            // (mesh intersects drone body) and the avoider goes inactive
+            // precisely when we most need to detect the stall.  Pose-based
+            // "not moving in NAVIGATE" is the authoritative signal.
             {
-                const float dvx     = traj.velocity_x - planned.velocity_x;
-                const float dvy     = traj.velocity_y - planned.velocity_y;
-                const float dvz     = traj.velocity_z - planned.velocity_z;
-                const float corr_sq = dvx * dvx + dvy * dvy + dvz * dvz;
-                // Squared compare — avoids a per-tick sqrt on the hot path
-                // while giving the same truth value as `sqrt(corr_sq) > thresh`.
-                const float thresh    = stuck_detector_.config().min_avoider_correction_mps;
-                const float thresh_sq = thresh * thresh;
-                const bool  active    = corr_sq > thresh_sq;
                 const float sx        = static_cast<float>(pose.translation[0]);
                 const float sy        = static_cast<float>(pose.translation[1]);
                 const float sz        = static_cast<float>(pose.translation[2]);
                 const auto  now_clock = std::chrono::steady_clock::now();
-                stuck_detector_.push_sample(now_clock, sx, sy, sz, active);
+                stuck_detector_.push_sample(now_clock, sx, sy, sz);
                 if (stuck_detector_.is_stuck(now_clock)) {
                     // Rate-cap: if we've re-triggered STUCK max_stuck_count
                     // times this mission, escalate to LOITER with

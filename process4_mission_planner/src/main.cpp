@@ -302,8 +302,6 @@ int main(int argc, char* argv[]) {
         drone::cfg_key::mission_planner::stuck_detector::BACKOFF_DURATION_S, 2.0f);
     stuck_cfg.backoff_speed_mps = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::stuck_detector::BACKOFF_SPEED_MPS, 1.0f);
-    stuck_cfg.min_avoider_correction_mps = ctx.cfg.get<float>(
-        drone::cfg_key::mission_planner::stuck_detector::MIN_AVOIDER_CORRECTION_MPS, 0.01f);
     stuck_cfg.max_stuck_count = static_cast<uint32_t>(
         ctx.cfg.get<int>(drone::cfg_key::mission_planner::stuck_detector::MAX_STUCK_COUNT, 3));
 

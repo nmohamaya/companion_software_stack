@@ -437,7 +437,7 @@ TEST(MissionFSMTest, ExactBoundaryAtAcceptanceRadiusOvershotStrictLessThan) {
 // StuckDetector tests — Issue #503
 // ═════════════════════════════════════════════════════════════
 
-TEST(StuckDetectorTest, TriggersWhenPoseStationaryAndAvoiderActive) {
+TEST(StuckDetectorTest, TriggersWhenPoseStationary) {
     StuckDetector::Config cfg;
     cfg.enabled        = true;
     cfg.window_s       = 1.0f;
@@ -445,16 +445,25 @@ TEST(StuckDetectorTest, TriggersWhenPoseStationaryAndAvoiderActive) {
     StuckDetector det{cfg};
 
     const auto t0 = StuckDetector::Clock::now();
-    // Feed 12 samples over >window_s, all at the same pose, avoider active.
+    // Feed 12 samples over >window_s, all at the same pose.
+    // Caller gates on NAVIGATE state; the detector does not gate on
+    // avoider activity (see comment in is_stuck: LiDAR loses obstacle
+    // returns when the drone collides with geometry, so avoider can go
+    // inactive precisely when we most need to detect the stall).
     for (int i = 0; i <= 12; ++i) {
         auto t = t0 + std::chrono::milliseconds(100 * i);
-        det.push_sample(t, 5.0f, 5.0f, 5.0f, true);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
     }
     const auto now = t0 + std::chrono::milliseconds(1200);
     EXPECT_TRUE(det.is_stuck(now));
 }
 
-TEST(StuckDetectorTest, DoesNotTriggerWhenAvoiderInactive) {
+// Issue #503 log-evidence-driven test: even when the avoider has been silent
+// (active=0) for the whole window — e.g. the drone is inside a collision
+// body and LiDAR has lost obstacle returns — the detector must still fire
+// purely on "pose not moving in NAVIGATE".  Prior gate on avoider activity
+// meant the detector failed in exactly the case it was built to catch.
+TEST(StuckDetectorTest, TriggersEvenWhenAvoiderWasNeverActive) {
     StuckDetector::Config cfg;
     cfg.enabled        = true;
     cfg.window_s       = 1.0f;
@@ -464,10 +473,10 @@ TEST(StuckDetectorTest, DoesNotTriggerWhenAvoiderInactive) {
     const auto t0 = StuckDetector::Clock::now();
     for (int i = 0; i <= 12; ++i) {
         auto t = t0 + std::chrono::milliseconds(100 * i);
-        det.push_sample(t, 5.0f, 5.0f, 5.0f, /*avoider_active=*/false);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
     }
     const auto now = t0 + std::chrono::milliseconds(1200);
-    EXPECT_FALSE(det.is_stuck(now));
+    EXPECT_TRUE(det.is_stuck(now));
 }
 
 TEST(StuckDetectorTest, ResetsOnMovement) {
@@ -481,7 +490,7 @@ TEST(StuckDetectorTest, ResetsOnMovement) {
     // Stationary samples long enough to trigger.
     for (int i = 0; i <= 12; ++i) {
         auto t = t0 + std::chrono::milliseconds(100 * i);
-        det.push_sample(t, 0.0f, 0.0f, 5.0f, true);
+        det.push_sample(t, 0.0f, 0.0f, 5.0f);
     }
     EXPECT_TRUE(det.is_stuck(t0 + std::chrono::milliseconds(1200)));
 
@@ -490,7 +499,7 @@ TEST(StuckDetectorTest, ResetsOnMovement) {
     for (int i = 13; i <= 24; ++i) {
         auto        t = t0 + std::chrono::milliseconds(100 * i);
         const float x = 0.1f * static_cast<float>(i - 12);
-        det.push_sample(t, x, 0.0f, 5.0f, true);
+        det.push_sample(t, x, 0.0f, 5.0f);
     }
     EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(2400)));
 }
@@ -505,7 +514,7 @@ TEST(StuckDetectorTest, DisabledNeverTriggers) {
     const auto t0 = StuckDetector::Clock::now();
     for (int i = 0; i <= 12; ++i) {
         auto t = t0 + std::chrono::milliseconds(100 * i);
-        det.push_sample(t, 5.0f, 5.0f, 5.0f, true);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
     }
     EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(1200)));
 }
@@ -521,7 +530,7 @@ TEST(StuckDetectorTest, WindowNotYetFull) {
     // Only 1s of samples — below window_s=3s.
     for (int i = 0; i <= 10; ++i) {
         auto t = t0 + std::chrono::milliseconds(100 * i);
-        det.push_sample(t, 0.0f, 0.0f, 5.0f, true);
+        det.push_sample(t, 0.0f, 0.0f, 5.0f);
     }
     EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(1000)));
 }

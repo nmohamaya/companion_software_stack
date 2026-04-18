@@ -287,9 +287,7 @@ inline constexpr const char* MIN_MOVEMENT_M = "mission_planner.stuck_detector.mi
 inline constexpr const char* BACKOFF_DURATION_S =
     "mission_planner.stuck_detector.backoff_duration_s";
 inline constexpr const char* BACKOFF_SPEED_MPS = "mission_planner.stuck_detector.backoff_speed_mps";
-inline constexpr const char* MIN_AVOIDER_CORRECTION_MPS =
-    "mission_planner.stuck_detector.min_avoider_correction_mps";
-inline constexpr const char* MAX_STUCK_COUNT = "mission_planner.stuck_detector.max_stuck_count";
+inline constexpr const char* MAX_STUCK_COUNT   = "mission_planner.stuck_detector.max_stuck_count";
 }  // namespace stuck_detector
 
 }  // namespace mission_planner

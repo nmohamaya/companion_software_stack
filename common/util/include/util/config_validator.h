@@ -413,8 +413,6 @@ inline ConfigSchema mission_planner_schema() {
     s.optional<double>(cfg_key::mission_planner::stuck_detector::BACKOFF_DURATION_S)
         .range(0.1, 30.0);
     s.optional<double>(cfg_key::mission_planner::stuck_detector::BACKOFF_SPEED_MPS).range(0.0, 10.0);
-    s.optional<double>(cfg_key::mission_planner::stuck_detector::MIN_AVOIDER_CORRECTION_MPS)
-        .range(0.0, 10.0);
     s.optional<int>(cfg_key::mission_planner::stuck_detector::MAX_STUCK_COUNT).range(0, 100);
     // fault_manager section
     s.optional<int>(cfg_key::fault_manager::POSE_STALE_TIMEOUT_MS).range(1, 60000);
