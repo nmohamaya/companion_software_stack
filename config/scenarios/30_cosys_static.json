@@ -42,13 +42,13 @@
             }
         },
         "perception": {
-            "_comment_detector": "Switched to color_contour for #513 hypothesis test: YOLOv8-nano+COCO is blind to the scenario's geometry (pillars, walls, native Blocks cubes are not COCO classes), which under-produces camera bboxes for ByteTrack, which starves the UKF fusion of camera-anchored tracks, which leaves the grid sparsely populated and D*Lite plans through ostensibly-free cells. color_contour gives bboxes for any visual contrast — pairs well with LiDAR-as-radar for scenario 30's static-geometry load.",
+            "_comment_detector": "color_contour for scenario 30 (#513). Validated 2026-04-19: drone successfully navigated the previously-impassable WP2→WP3 gap when color_contour was active (vs 0% with yolov8 on COCO — none of the scenario's obstacles are COCO classes). bush_01's green + UE5 environment colour variation is enough to populate the tracker for fusion with LiDAR-as-radar. Tightened params here to prevent over-promotion (previous run saturated 1000 static cells + 8725 occupied — D*Lite couldn't find a path on WP3→WP4).",
             "detector": {
                 "backend": "color_contour",
-                "min_contour_area": 500,
-                "confidence_threshold": 0.25,
+                "min_contour_area": 2000,
+                "confidence_threshold": 0.4,
                 "max_fps": 30,
-                "min_bbox_height_px": 20,
+                "min_bbox_height_px": 60,
                 "max_aspect_ratio": 5.0
             },
             "depth_estimator": {
@@ -124,12 +124,13 @@
                 "log_corrections": true
             },
             "occupancy_grid": {
+                "_comment": "Scenario 30 grid tuning post-#513 color_contour switch: previous run hit max_static_cells=1000 cap with 8725 total occupied cells — D*Lite saw walls everywhere and couldn't find a path. Raised promotion_hits 5→10 so a cell needs more confident observations before sticking; reduced max_static_cells 1000→500 so the grid stays tractable for D*Lite search. inflation_radius_m kept at 2.5 (drone footprint + margin).",
                 "resolution_m": 2.0,
                 "inflation_radius_m": 2.5,
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
-                "promotion_hits": 5,
-                "max_static_cells": 1000
+                "promotion_hits": 10,
+                "max_static_cells": 500
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via radar+camera+depth fusion — the RPC-spawned scene objects are the world.",
