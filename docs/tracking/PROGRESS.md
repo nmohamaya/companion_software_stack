@@ -2996,4 +2996,27 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #71 (issue #479). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #72 — Cosys Camera Config Lookup + First-Frame Dimension Log (Issue #499, Bug #1)
+
+**Date:** 2026-04-18
+**Category:** Bug Fix — Perception / Tier 3 simulation
+**Issues:** [#499](https://github.com/nmohamaya/companion_software_stack/issues/499)
+
+**What:**
+
+- **Config fix** — `config/cosys_airsim_dev.json`: `cosys_airsim.camera_name` changed from `"front_center"` to `"mission_cam"` so the requested camera matches the name declared in the server-side `settings.json`. Previously, AirSim silently auto-created the `"front_center"` camera with default 256×144 `CaptureSettings` (confirmed at `third_party/cosys-airsim/AirLib/include/common/AirSimSettings.hpp:174`) — YOLO received 256×144 thumbnails and produced 0 detections across 39 inference frames.
+- **Per-section lookup** — `CosysCameraBackend` now resolves `camera_name` / `vehicle_name` with a precedence ladder: `<section>.camera_name` → `cosys_airsim.camera_name` → default `"front_center"` (`"Drone0"` for vehicle). The constructor previously ignored its `section` parameter with `(void)section`, so scenario 30's per-camera override (already present in `scenarios/30_cosys_static.json`) was dead config. The new logic also enables multi-camera setups (e.g. mission + depth + front-center) to map each backend instance to a distinct AirSim camera.
+- **Name resolution helpers** — Extracted as `static` members (`resolve_camera_name`, `resolve_vehicle_name`) so they can be unit-tested without instantiating the backend (which would require a live RPC client).
+- **First-frame dimension log** — `retrieval_loop()` now emits a one-shot log line on the first successful frame showing the AirSim-returned `(width, height)`. If they differ from what was requested, the log level is WARN and the message explicitly suggests the camera may not be declared in server-side `settings.json`. This would have surfaced Bug #1 within seconds of the first run instead of letting 256×144 frames silently propagate through IPC. Flag is a local variable in the thread loop — no member state needed.
+- **New unit test** — `tests/test_cosys_camera_config.cpp` (5 tests, gated on `HAVE_COSYS_AIRSIM`): per-section overrides top-level, top-level used when per-section absent, defaults apply when neither set, empty section falls through, empty per-section value treated as absent. No RPC required.
+
+**Files added:** `tests/test_cosys_camera_config.cpp`
+**Files modified:** `config/cosys_airsim_dev.json`, `common/hal/include/hal/cosys_camera.h`, `tests/CMakeLists.txt`
+
+**Why:** This is Bug #1 of Issue #499. Scenario 30's 2026-04-17 runs flew waypoints but produced zero detections — the cause was not a model or detector issue but a silent 30× resolution downgrade at the camera-HAL boundary. The fix is defence-in-depth: (1) a correct default on the dev profile so the immediate symptom goes away, (2) a precedence ladder so scenario overrides actually take effect, and (3) a first-frame dimension log so any future mismatch is loud instead of silent. Bug #2 (collide-and-stick at WP3) is tracked as a separate follow-up.
+
+**Test count:** +5 (gated on `HAVE_COSYS_AIRSIM`; machines without the SDK compile the TU to empty, so the CI baseline is unchanged — see [tests/TESTS.md](../../tests/TESTS.md)).
+
+---
+
+_Last updated after Improvement #72 (issue #499, Bug #1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

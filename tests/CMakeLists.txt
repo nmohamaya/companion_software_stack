@@ -246,6 +246,13 @@ endif()
 # ── Cosys-AirSim HAL backend tests (Issue #434) ────────────
 add_drone_test(test_cosys_hal_backends test_cosys_hal_backends.cpp)
 
+# ── Cosys camera config-lookup tests (Issue #499, Bug #1) ──
+# Verifies the per-section → top-level → default precedence ladder used by
+# CosysCameraBackend. Whole test body is gated on HAVE_COSYS_AIRSIM (set as
+# INTERFACE definition on drone_hal when the SDK is found); without the SDK
+# the translation unit compiles to an empty TU, which is harmless.
+add_drone_test(test_cosys_camera_config test_cosys_camera_config.cpp)
+
 # ── Cosys-AirSim FC link tests (Issue #490) ───────────────
 # SimpleFlight-via-AirSim-RPC backend — tests run without a live AirSim
 # server; all command paths should return false when disconnected.

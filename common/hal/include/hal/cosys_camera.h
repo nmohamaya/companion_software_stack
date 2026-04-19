@@ -13,6 +13,7 @@
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_name_resolver.h"
 #include "hal/cosys_rpc_client.h"
 #include "hal/icamera.h"
 #include "util/config.h"
@@ -60,16 +61,15 @@ public:
     /// @param client   Shared RPC client (manages connection lifecycle)
     /// @param cfg      Loaded configuration
     /// @param section  Config path prefix (e.g. "video_capture.mission_cam")
+    ///                 Per-section `camera_name`/`vehicle_name` override the
+    ///                 top-level `cosys_airsim.*` keys — see Issue #499 Bug #1.
     explicit CosysCameraBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
                                 const std::string& section)
         : client_(std::move(client))
-        , camera_name_(cfg.get<std::string>(std::string(drone::cfg_key::cosys_airsim::CAMERA_NAME),
-                                            "front_center"))
-        , vehicle_name_(cfg.get<std::string>(
-              std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0")) {
-        (void)section;  // section reserved for future per-camera config
-        DRONE_LOG_INFO("[CosysCamera] Created for {} camera='{}' vehicle='{}'", client_->endpoint(),
-                       camera_name_, vehicle_name_);
+        , camera_name_(drone::hal::resolve_camera_name(cfg, section))
+        , vehicle_name_(drone::hal::resolve_vehicle_name(cfg, section)) {
+        DRONE_LOG_INFO("[CosysCamera] Created for {} camera='{}' vehicle='{}' (section='{}')",
+                       client_->endpoint(), camera_name_, vehicle_name_, section);
     }
 
     ~CosysCameraBackend() override { close(); }
@@ -161,14 +161,18 @@ private:
     CapturedFrame build_frame(const FrameData& data, bool new_frame) {
         CapturedFrame frame;
         frame.timestamp_ns = data.timestamp_ns;
-        frame.sequence     = new_frame ? sequence_.fetch_add(1, std::memory_order_relaxed)
-                                       : sequence_.load(std::memory_order_relaxed);
-        frame.width        = data.width;
-        frame.height       = data.height;
-        frame.channels     = data.channels;
-        frame.stride       = data.width * data.channels;
-        frame.data         = data.pixels;  // copy from cached FrameData
-        frame.valid        = true;
+        // memory_order_relaxed: ICamera is single-consumer per contract — only one
+        // thread ever calls capture(), so the sequence counter needs no
+        // cross-thread synchronisation. The atomic guarantees read tearing
+        // safety vs. open() which also writes sequence_ during initialisation.
+        frame.sequence = new_frame ? sequence_.fetch_add(1, std::memory_order_relaxed)
+                                   : sequence_.load(std::memory_order_relaxed);
+        frame.width    = data.width;
+        frame.height   = data.height;
+        frame.channels = data.channels;
+        frame.stride   = data.width * data.channels;
+        frame.data     = data.pixels;  // copy from cached FrameData
+        frame.valid    = true;
         return frame;
     }
 
@@ -191,10 +195,19 @@ private:
                                            /* pixels_as_float */ false,
                                            /* compress */ false)};
 
+        // One-shot dimension verification on the first successful frame.
+        // Surfaces a class of silent failures where AirSim auto-creates a
+        // camera with default 256x144 CaptureSettings because the requested
+        // name is not declared in server-side settings.json (Bug #499 Bug #1).
+        bool first_frame_verified = false;
+
         while (open_.load(std::memory_order_acquire)) {
             try {
-                // Use with_client() to prevent TOCTOU race on disconnect
-                bool got_frame = client_->with_client([&](auto& rpc) {
+                // Use with_client() to prevent TOCTOU race on disconnect.
+                // `rpc_executed` reflects whether the client was available and
+                // the lambda ran — NOT whether a frame was decoded (that check
+                // lives inside the lambda, which returns void).
+                bool rpc_executed = client_->with_client([&](auto& rpc) {
                     auto responses = rpc.simGetImages(requests, vehicle_name_);
 
                     if (responses.empty() || responses[0].image_data_uint8.empty()) {
@@ -235,10 +248,32 @@ private:
                     fd.timestamp_ns = static_cast<uint64_t>(std::max(decltype(ts_ns){0}, ts_ns));
 
                     frame_buffer_.write(std::move(fd));
+
+                    // One-shot: verify AirSim returned the dimensions we requested.
+                    // If not, the camera name likely isn't declared in settings.json
+                    // and AirSim silently auto-created it with 256x144 defaults —
+                    // we WARN so the mismatch is obvious in the logs.
+                    if (!first_frame_verified) {
+                        first_frame_verified = true;
+                        if (w == width_ && h == height_) {
+                            DRONE_LOG_INFO(
+                                "[CosysCamera] First frame received: camera='{}' {}x{} (as "
+                                "requested)",
+                                camera_name_, w, h);
+                        } else {
+                            DRONE_LOG_WARN(
+                                "[CosysCamera] First frame dimension MISMATCH: camera='{}' "
+                                "returned {}x{} but {}x{} was requested. The camera name may "
+                                "not be declared in AirSim settings.json (server-side), causing "
+                                "AirSim to auto-create it with default CaptureSettings.",
+                                camera_name_, w, h, width_, height_);
+                        }
+                    }
                 });
 
-                if (!got_frame) {
-                    // RPC client disconnected — skip this tick
+                if (!rpc_executed) {
+                    // RPC client disconnected — with_client() short-circuited
+                    // without running the lambda, so no frame was fetched.
                     DRONE_LOG_WARN("[CosysCamera] RPC disconnected — skipping frame");
                 }
 

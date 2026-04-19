@@ -276,7 +276,8 @@
         "_comment": "Cosys-AirSim simulation settings (used when backend=cosys_airsim)",
         "host": "127.0.0.1",
         "port": 41451,
-        "camera_name": "front_center",
+        "camera_name": "mission_cam",
+        "_camera_name_comment": "Must match a Cameras entry in ~/Documents/AirSim/settings.json — unknown names get silently downgraded to 256x144 (Issue #499)",
         "radar_name": "radar",
         "imu_name": "imu",
         "vehicle_name": "Drone0"
