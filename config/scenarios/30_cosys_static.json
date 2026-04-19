@@ -13,7 +13,7 @@
         },
         "backend_requirements": {
             "video_capture.mission_cam.backend": "cosys_airsim",
-            "perception.detector.backend": "yolov8",
+            "perception.detector.backend": "color_contour",
             "perception.depth_estimator.backend": "depth_anything_v2",
             "slam_vio_nav.imu_source.backend": "cosys_airsim",
             "slam_vio_nav.depth_source.backend": "cosys_airsim",
@@ -190,11 +190,11 @@
                 "_comment": "CosysRadar backend successfully polled LiDAR data at least once."
             },
             {
-                "name": "YOLO detections (non-zero)",
+                "name": "Detector detections (non-zero)",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[OpenCvYoloDetector\\].*detections=[1-9]",
+                "pattern": "\\[(OpenCvYoloDetector|ColorContourDetector)\\].*detections=[1-9]",
                 "min_matches": 10,
-                "_comment": "YOLOv8 fired on the spawned objects — at least 10 non-empty detection frames."
+                "_comment": "Detector (yolov8 or color_contour) fired on the spawned/environment objects — at least 10 non-empty detection frames. Regex matches both backends so the check stays valid as the scenario's detector choice evolves."
             },
             {
                 "name": "Depth Anything V2 running",

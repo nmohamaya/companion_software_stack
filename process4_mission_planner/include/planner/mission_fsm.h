@@ -59,8 +59,11 @@ public:
         uint32_t max_stuck_count = 3;
     };
 
-    StuckDetector() = default;
-    explicit StuckDetector(const Config& cfg) : cfg_(cfg) {}
+    StuckDetector() : StuckDetector(Config{}) {}
+    explicit StuckDetector(const Config& cfg)
+        : cfg_(cfg)
+        , window_duration_(std::chrono::duration_cast<Clock::duration>(
+              std::chrono::duration<float>(cfg.window_s))) {}
 
     [[nodiscard]] const Config& config() const { return cfg_; }
 
@@ -69,10 +72,10 @@ public:
     void push_sample(TimePoint t, float x, float y, float z) {
         samples_.emplace_back(t, std::array<float, 3>{x, y, z});
 
-        // Drop samples older than window_s.
-        const auto window = std::chrono::duration_cast<Clock::duration>(
-            std::chrono::duration<float>(cfg_.window_s));
-        while (!samples_.empty() && (t - samples_.front().first) > window) {
+        // Drop samples older than window_s.  Window cached at construction —
+        // cfg_.window_s is a float, but the conversion + cast is not free at
+        // 10 Hz and the window is immutable after construction.
+        while (!samples_.empty() && (t - samples_.front().first) > window_duration_) {
             samples_.pop_front();
         }
     }
@@ -120,6 +123,7 @@ public:
 
 private:
     Config                                                 cfg_{};
+    Clock::duration                                        window_duration_{};
     std::deque<std::pair<TimePoint, std::array<float, 3>>> samples_;
 };
 
@@ -264,6 +268,11 @@ public:
     /// LOITER (fault-triggered only), RTL, LAND, EMERGENCY, COLLISION_RECOVERY.
     /// NAVIGATE_UNSTUCK is deliberately NOT included — it is a recovery state
     /// driven by the stuck detector, not a FaultManager-level fault.
+    /// Note: a stuck-escalated LOITER (MissionStateTick sets fault_triggered
+    /// and calls on_loiter() when stuck_transition_count_ exceeds
+    /// max_stuck_count) DOES make this return true — the set_fault_triggered
+    /// path is shared, by design, so the stuck stall inhibits normal mission
+    /// resumption until an operator intervenes.
     [[nodiscard]] bool is_in_fault_state() const {
         return fault_triggered_ &&
                (state_ == MissionState::LOITER || state_ == MissionState::RTL ||

@@ -33,6 +33,12 @@ struct SharedFlightState {
     bool                                  land_sent{false};
     bool                                  nav_was_armed{false};
     std::chrono::steady_clock::time_point rtl_start_time{};
+    // Set by MissionStateTick when the stuck detector escalates to LOITER
+    // (Issue #503 review finding: FAULT_STUCK must surface in the
+    // /drone_mission_status active_faults bitmask so the operator's GCS
+    // and P7 health monitor register the stall).  Cleared on transition
+    // back to NAVIGATE or IDLE.  OR'd into active_faults by main.cpp.
+    bool stuck_fault_active{false};
 };
 
 /// Handles GCS commands received via IPC: RTL, LAND, MISSION_PAUSE/START/ABORT/UPLOAD.

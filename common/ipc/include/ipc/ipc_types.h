@@ -181,6 +181,7 @@ enum class FaultType : uint32_t {
     FAULT_BATTERY_RTL      = 1 << 9,   // battery below RTL threshold
     FAULT_VIO_DEGRADED     = 1 << 10,  // VIO quality degraded → LOITER
     FAULT_VIO_LOST         = 1 << 11,  // VIO tracking lost → RTL
+    FAULT_STUCK            = 1 << 12,  // stuck-detector escalated to LOITER (Issue #503)
 };
 
 /// Bitwise operators for FaultType bitmask usage with uint32_t.
@@ -224,6 +225,7 @@ inline std::string fault_flags_string(uint32_t flags) {
         {static_cast<uint32_t>(FaultType::FAULT_BATTERY_RTL), "FAULT_BATTERY_RTL"},
         {static_cast<uint32_t>(FaultType::FAULT_VIO_DEGRADED), "FAULT_VIO_DEGRADED"},
         {static_cast<uint32_t>(FaultType::FAULT_VIO_LOST), "FAULT_VIO_LOST"},
+        {static_cast<uint32_t>(FaultType::FAULT_STUCK), "FAULT_STUCK"},
     };
     uint32_t known = 0;
     for (const auto& f : kFlags) {

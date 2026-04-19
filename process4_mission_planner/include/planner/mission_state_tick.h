@@ -79,6 +79,17 @@ public:
             grid_planner->set_promotion_paused(landing);
         }
 
+        // Clear stuck-detector mission-scoped state when back in IDLE
+        // (Issue #503 review): the counter and FAULT_STUCK flag must not
+        // persist across missions.  Covers every path to IDLE — disarm,
+        // landing, mission abort — without needing per-transition hooks.
+        if (fsm.state() == MissionState::IDLE) {
+            if (stuck_transition_count_ != 0 || flight_state_.stuck_fault_active) {
+                stuck_transition_count_          = 0;
+                flight_state_.stuck_fault_active = false;
+            }
+        }
+
         // No `default:` — exhaustive switch enables -Wswitch to catch new
         // MissionState values the moment they're added (CLAUDE.md safety rule).
         switch (fsm.state()) {
@@ -128,7 +139,7 @@ private:
     bool     home_recorded_    = false;
     bool     home_warn_logged_ = false;
     bool     fault_exec_reset_ = false;
-    uint64_t debug_tick_       = 0;  // DEBUG(#234): periodic avoider comparison logging
+    uint64_t diag_tick_        = 0;  // Throttle counter for periodic DIAG log in tick_navigate.
 
     // Survey state
     bool                                  survey_started_ = false;
@@ -239,11 +250,7 @@ private:
         if (!survey_started_) {
             survey_start_time_ = now;
             survey_started_    = true;
-            // Extract initial yaw from pose quaternion [w, x, y, z]
-            double qw = pose.quaternion[0], qx = pose.quaternion[1];
-            double qy = pose.quaternion[2], qz = pose.quaternion[3];
-            survey_start_yaw_ = static_cast<float>(
-                std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+            survey_start_yaw_  = yaw_from_pose(pose);
             DRONE_LOG_INFO("[Survey] Start yaw={:.2f} rad, rotating at {:.2f} rad/s for {:.0f}s",
                            survey_start_yaw_, config_.survey_yaw_rate, config_.survey_duration_s);
         }
@@ -382,7 +389,7 @@ private:
 
             // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level.
             if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&
-                debug_tick_++ % 10 == 0) {
+                diag_tick_++ % 10 == 0) {
                 const float dpx        = static_cast<float>(pose.translation[0]);
                 const float dpy        = static_cast<float>(pose.translation[1]);
                 const float dpz        = static_cast<float>(pose.translation[2]);
@@ -455,6 +462,10 @@ private:
                         publish_stop_trajectory(traj_pub, correlation_id);
                         stuck_detector_.reset();
                         fsm.set_fault_triggered(true);
+                        // Surface FAULT_STUCK in the published fault bitmask
+                        // so GCS + P7 health monitor register the stall.
+                        // Cleared on resume to NAVIGATE or transition to IDLE.
+                        flight_state_.stuck_fault_active = true;
                         fsm.on_loiter();
                         return;
                     }
@@ -636,6 +647,10 @@ private:
         // Abort gracefully if the vehicle disarms mid-maneuver.
         if (!fc_state.armed) {
             DRONE_LOG_WARN("[Unstuck] Disarmed during backoff — transitioning to IDLE");
+            // Reset stuck state so a fresh mission arm starts with a clean
+            // counter/flag (Issue #503 review: stale counter across missions).
+            stuck_transition_count_          = 0;
+            flight_state_.stuck_fault_active = false;
             fsm.on_landed();
             return;
         }
@@ -686,6 +701,10 @@ private:
             DRONE_LOG_INFO("[Unstuck] Backoff complete ({:.1f}s) — resuming NAVIGATE", elapsed_s);
             unstuck_start_time_ = std::chrono::steady_clock::time_point{};
             stuck_detector_.reset();
+            // Backoff completing is "we got out" — the stuck-escalated LOITER
+            // fault (if any) is no longer applicable.  Clear the wire-format
+            // flag so GCS + P7 monitor see the drone as healthy again.
+            flight_state_.stuck_fault_active = false;
             fsm.on_unstuck();
         }
     }

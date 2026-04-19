@@ -319,11 +319,12 @@ TEST_F(MissionStateTickTest, NavigateUnstuckAbortsOnDisarm) {
 //  exit path was not exercised by any test.)
 // ═══════════════════════════════════════════════════════════
 TEST(MissionStateTickUnstuckTest, ExitsOnTimerExpiry) {
-    // Short backoff so the test doesn't need real wall-clock sleeps.
+    // Short backoff, wide safety margin for CI scheduler jitter (Issue #503
+    // review: 50 ms margin was flaky under ASAN/TSAN/parallel ctest).
     StateTickConfig cfg{};
     cfg.takeoff_alt_m                     = 10.0f;
     cfg.stuck_detector.enabled            = true;
-    cfg.stuck_detector.backoff_duration_s = 0.1f;
+    cfg.stuck_detector.backoff_duration_s = 0.05f;  // 50 ms
     cfg.stuck_detector.backoff_speed_mps  = 1.0f;
     MissionStateTick short_tick(cfg);
 
@@ -347,16 +348,71 @@ TEST(MissionStateTickUnstuckTest, ExitsOnTimerExpiry) {
     };
     drone::util::FrameDiagnostics diag(0);
 
-    // Tick once to set unstuck_start_time_, then wait past backoff_duration_s.
+    // Tick once to set unstuck_start_time_, then wait well past
+    // backoff_duration_s (4× the backoff).  Under heavy CI load the sleep
+    // may overshoot; extra margin tolerates that without requiring a mock
+    // clock.  We only care that the transition fires eventually.
     short_tick.tick(local_fsm, pose, fc, DetectedObjectList{}, *local_planner, nullptr,
                     *local_avoider, local_layer, traj_p, pay_p, null_fc, 0, diag);
     ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE_UNSTUCK);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     short_tick.tick(local_fsm, pose, fc, DetectedObjectList{}, *local_planner, nullptr,
                     *local_avoider, local_layer, traj_p, pay_p, null_fc, 0, diag);
     EXPECT_EQ(local_fsm.state(), MissionState::NAVIGATE);
+}
+
+// ═══════════════════════════════════════════════════════════
+// End-to-end: stationary pose samples through tick_navigate()
+// cause StuckDetector to fire and the FSM to auto-transition
+// to NAVIGATE_UNSTUCK (Issue #503 review: bypass of the detector
+// via direct on_stuck() was leaving this wiring untested).
+// ═══════════════════════════════════════════════════════════
+TEST(MissionStateTickUnstuckTest, NavigateTickDetectsStuckAndTransitions) {
+    StateTickConfig cfg{};
+    cfg.takeoff_alt_m                     = 10.0f;
+    cfg.stuck_detector.enabled            = true;
+    cfg.stuck_detector.window_s           = 0.2f;  // small so 3 ticks are enough
+    cfg.stuck_detector.min_movement_m     = 0.5f;
+    cfg.stuck_detector.backoff_duration_s = 0.5f;
+    cfg.stuck_detector.max_stuck_count    = 100;  // don't escalate to LOITER in this test
+    MissionStateTick tick_obj(cfg);
+
+    MissionFSM local_fsm;
+    local_fsm.load_mission({{10, 0, 5, 0, 2, 3, false}});
+    local_fsm.on_arm();
+    local_fsm.on_takeoff();
+    local_fsm.on_navigate();
+    ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE);
+
+    auto                local_planner = create_path_planner("dstar_lite");
+    auto                local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+    StaticObstacleLayer local_layer;
+
+    Pose                          pose = make_pose(5, 5, 5);
+    FCState                       fc   = make_fc(true, 5.0f);
+    MockPublisher<TrajectoryCmd>  traj_p;
+    MockPublisher<PayloadCommand> pay_p;
+    auto                          null_fc = [](FCCommandType, float) {
+    };
+    drone::util::FrameDiagnostics diag(0);
+
+    // Feed stationary pose over a window_s + margin (0.2 s + margin).  Each
+    // tick pushes a sample; after samples span >= 0.8 × window_s and the drone
+    // hasn't moved, is_stuck() should return true and tick_navigate() must
+    // call fsm.on_stuck(), producing the NAVIGATE → NAVIGATE_UNSTUCK
+    // transition automatically.
+    for (int i = 0; i < 8; ++i) {
+        tick_obj.tick(local_fsm, pose, fc, DetectedObjectList{}, *local_planner, nullptr,
+                      *local_avoider, local_layer, traj_p, pay_p, null_fc, 0, diag);
+        if (local_fsm.state() == MissionState::NAVIGATE_UNSTUCK) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+    EXPECT_EQ(local_fsm.state(), MissionState::NAVIGATE_UNSTUCK)
+        << "tick_navigate should auto-transition to NAVIGATE_UNSTUCK when the "
+           "drone is stationary and is_stuck() fires — this was the P1 coverage "
+           "gap flagged in the #503 review round.";
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -383,6 +439,11 @@ TEST_F(MissionStateTickTest, NavigateUnstuckHoversWhenEnteredAtZeroVelocity) {
     EXPECT_NEAR(cmd.velocity_x, 0.0f, 1e-3f);
     EXPECT_NEAR(cmd.velocity_y, 0.0f, 1e-3f);
     EXPECT_NEAR(cmd.velocity_z, 0.0f, 1e-3f);
+    // Hover must also hold position, not just zero velocity — verify target
+    // is the current pose so a confused-FC doesn't drift (Issue #503 review).
+    EXPECT_NEAR(cmd.target_x, pose.translation[0], 1e-3f);
+    EXPECT_NEAR(cmd.target_y, pose.translation[1], 1e-3f);
+    EXPECT_NEAR(cmd.target_z, pose.translation[2], 1e-3f);
 }
 
 // ═══════════════════════════════════════════════════════════

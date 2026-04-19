@@ -458,12 +458,11 @@ TEST(StuckDetectorTest, TriggersWhenPoseStationary) {
     EXPECT_TRUE(det.is_stuck(now));
 }
 
-// Issue #503 log-evidence-driven test: even when the avoider has been silent
-// (active=0) for the whole window — e.g. the drone is inside a collision
-// body and LiDAR has lost obstacle returns — the detector must still fire
-// purely on "pose not moving in NAVIGATE".  Prior gate on avoider activity
-// meant the detector failed in exactly the case it was built to catch.
-TEST(StuckDetectorTest, TriggersEvenWhenAvoiderWasNeverActive) {
+// Issue #503 span-gate boundary: the is_stuck span check accepts 80% of
+// window_s (tolerates deque-cleanup asymmetry at the rate boundary).
+// Verify both sides of that threshold so a future tweak can't silently
+// relax to 70% or tighten to 90% without a test flip.
+TEST(StuckDetectorTest, SpanBoundaryBelowThresholdDoesNotFire) {
     StuckDetector::Config cfg;
     cfg.enabled        = true;
     cfg.window_s       = 1.0f;
@@ -471,11 +470,29 @@ TEST(StuckDetectorTest, TriggersEvenWhenAvoiderWasNeverActive) {
     StuckDetector det{cfg};
 
     const auto t0 = StuckDetector::Clock::now();
-    for (int i = 0; i <= 12; ++i) {
+    // Samples spanning 0.75 s — below the 0.8 s × window_s gate.
+    for (int i = 0; i <= 7; ++i) {
         auto t = t0 + std::chrono::milliseconds(100 * i);
         det.push_sample(t, 5.0f, 5.0f, 5.0f);
     }
-    const auto now = t0 + std::chrono::milliseconds(1200);
+    const auto now = t0 + std::chrono::milliseconds(700);  // span ≈ 0.7 s
+    EXPECT_FALSE(det.is_stuck(now));
+}
+
+TEST(StuckDetectorTest, SpanBoundaryAboveThresholdFires) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Samples spanning 0.85 s — above the 0.8 s × window_s gate.
+    for (int i = 0; i <= 9; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
+    }
+    const auto now = t0 + std::chrono::milliseconds(850);
     EXPECT_TRUE(det.is_stuck(now));
 }
 

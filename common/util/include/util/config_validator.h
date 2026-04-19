@@ -305,6 +305,13 @@ inline ConfigSchema video_capture_schema() {
 inline ConfigSchema perception_schema() {
     auto s = common_schema();
     s.required_section(cfg_key::perception::SECTION);
+    // Allowlist for detector backend — catches typos like "colour_contour"
+    // that would previously fall through to detector_factory's default
+    // branch silently (Issue #503 review).  Keep this in sync with
+    // process2_perception/src/detector_factory.cpp.
+    s.optional<std::string>(cfg_key::perception::detector::BACKEND)
+        .one_of({std::string("yolov8"), std::string("color_contour"), std::string("simulated"),
+                 std::string("plugin")});
     s.optional<double>(cfg_key::perception::detector::CONFIDENCE_THRESHOLD).range(0.0, 1.0);
     s.optional<double>(cfg_key::perception::detector::NMS_THRESHOLD).range(0.0, 1.0);
     s.optional<int>(cfg_key::perception::detector::MAX_DETECTIONS).range(1, 10000);

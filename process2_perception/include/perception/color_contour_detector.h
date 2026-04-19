@@ -311,6 +311,11 @@ private:
     std::vector<uint8_t> color_map_;
     std::vector<int>     parent_buf_;
     std::vector<int>     rank_buf_;
+    // Reusable components map for extract_bboxes — avoids per-call heap
+    // allocation of an unordered_map (was ~180 heap ops/sec at 30 fps ×
+    // 6 color ranges, flagged P2 in #503 review).  Cleared at entry
+    // instead of default-constructed.
+    std::unordered_map<int, ComponentBBox> components_buf_;
 
     void init_default_colors() {
         color_ranges_.clear();
@@ -395,14 +400,17 @@ private:
             }
         }
 
-        std::unordered_map<int, ComponentBBox> components;
+        // Reuse the member buffer — clear() preserves bucket capacity across
+        // calls, sparing the per-call allocation that an unordered_map
+        // constructor would perform.
+        components_buf_.clear();
         for (int y = 0; y < hs; ++y) {
             for (int x = 0; x < ws; ++x) {
                 if (color_map_[y * ws + x] != color_idx) continue;
                 int  root = uf_find(y * ws + x);
-                auto it   = components.find(root);
-                if (it == components.end()) {
-                    components[root] = {x, y, x, y, 1};
+                auto it   = components_buf_.find(root);
+                if (it == components_buf_.end()) {
+                    components_buf_[root] = {x, y, x, y, 1};
                 } else {
                     auto& bb = it->second;
                     bb.x_min = std::min(bb.x_min, x);
@@ -418,8 +426,8 @@ private:
         // pixel_count is scaled by subsample_^2 so area tests remain in real-pixel units.
         const int                  sub = subsample_;
         std::vector<ComponentBBox> result;
-        result.reserve(components.size());
-        for (auto& [root, bbox] : components) {
+        result.reserve(components_buf_.size());
+        for (auto& [root, bbox] : components_buf_) {
             ComponentBBox fb;
             fb.x_min       = bbox.x_min * sub;
             fb.y_min       = bbox.y_min * sub;

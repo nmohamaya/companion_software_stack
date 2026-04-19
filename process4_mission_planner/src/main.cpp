@@ -305,6 +305,26 @@ int main(int argc, char* argv[]) {
     stuck_cfg.max_stuck_count = static_cast<uint32_t>(
         ctx.cfg.get<int>(drone::cfg_key::mission_planner::stuck_detector::MAX_STUCK_COUNT, 3));
 
+    // Sanity-warn if min_movement_m is loose vs the slowest waypoint speed
+    // (Issue #503 review).  The detector fires when displacement over the
+    // window falls below min_movement_m; at a legitimately slow cruise the
+    // drone might cover less than min_movement_m per window_s and
+    // erroneously trigger STUCK.  Warn if any waypoint's expected
+    // displacement (speed × window_s) is less than min_movement_m.
+    if (stuck_cfg.enabled && !wp_json.is_null() && wp_json.is_array()) {
+        const float cruise_default =
+            ctx.cfg.get<float>(drone::cfg_key::mission_planner::CRUISE_SPEED_MPS, 2.0f);
+        for (const auto& w : wp_json) {
+            const float speed         = w.value("speed", cruise_default);
+            const float expected_disp = speed * stuck_cfg.window_s;
+            if (expected_disp < stuck_cfg.min_movement_m) {
+                DRONE_LOG_WARN("[StuckDetector] waypoint speed {:.2f} m/s × window {:.2f} s "
+                               "= {:.2f} m < min_movement_m {:.2f} m — may false-positive",
+                               speed, stuck_cfg.window_s, expected_disp, stuck_cfg.min_movement_m);
+            }
+        }
+    }
+
     // Cache avoider's influence_radius so mission_state_tick's DIAG counter
     // uses the same value the avoider actually uses (was a magic 10.0f).
     const float avoider_influence_radius = ctx.cfg.get<float>(
@@ -465,8 +485,15 @@ int main(int argc, char* argv[]) {
                                       ? 100.0f * fsm.current_wp_index() / fsm.total_waypoints()
                                       : 0.0f;
         status.mission_active   = (fsm.state() != MissionState::IDLE);
-        status.active_faults    = fault.active_faults;
-        status.fault_action     = static_cast<uint8_t>(fault.recommended_action);
+        // Synthesize FAULT_STUCK into the published bitmask when the stuck
+        // detector has escalated to LOITER (Issue #503 review): without this,
+        // GCS + P7 health monitor would see active_faults=0 while the drone
+        // is in fault-triggered LOITER waiting for operator intervention.
+        status.active_faults = fault.active_faults;
+        if (state_tick.flight_state().stuck_fault_active) {
+            status.active_faults |= drone::ipc::FaultType::FAULT_STUCK;
+        }
+        status.fault_action = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);
 
         ++health_tick;
