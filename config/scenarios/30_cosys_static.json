@@ -42,12 +42,14 @@
             }
         },
         "perception": {
+            "_comment_detector": "Switched to color_contour for #513 hypothesis test: YOLOv8-nano+COCO is blind to the scenario's geometry (pillars, walls, native Blocks cubes are not COCO classes), which under-produces camera bboxes for ByteTrack, which starves the UKF fusion of camera-anchored tracks, which leaves the grid sparsely populated and D*Lite plans through ostensibly-free cells. color_contour gives bboxes for any visual contrast — pairs well with LiDAR-as-radar for scenario 30's static-geometry load.",
             "detector": {
-                "backend": "yolov8",
-                "model_path": "models/yolov8n.onnx",
-                "confidence_threshold": 0.4,
-                "iou_threshold": 0.45,
-                "use_cuda": true
+                "backend": "color_contour",
+                "min_contour_area": 500,
+                "confidence_threshold": 0.25,
+                "max_fps": 30,
+                "min_bbox_height_px": 20,
+                "max_aspect_ratio": 5.0
             },
             "depth_estimator": {
                 "backend": "depth_anything_v2",
