@@ -3019,4 +3019,30 @@ Directory lifecycle: `_RUNNING` → `_PASS`/`_FAIL` on completion, `_ABORTED` on
 
 ---
 
-_Last updated after Improvement #72 (issue #499, Bug #1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #73 — Avoider Observability + Stuck Detector + Authority Fix (Issue #503)
+
+**Date:** 2026-04-18
+**Category:** Bug Fix — Mission planner / obstacle avoidance
+**Issues:** [#503](https://github.com/nmohamaya/companion_software_stack/issues/503)
+
+**What:** Scenario 30's 2026-04-17 run reached WP3 and stalled indefinitely — radar, occupancy grid, and D\*Lite all worked (539 occupied cells, 339 replans, 19 radar tracks) but the avoider produced no visible INFO output and the drone made no progress through the WP3→WP4 gap. Landed in three phases plus a review-fix pass that addressed all findings from the combined full review:
+
+- **Phase A — Observability.** Promoted per-obstacle avoider DEBUG log to INFO when contribution magnitude > 0.5 m/s (gated by new `mission_planner.obstacle_avoidance.log_corrections`). Added a single end-of-tick summary line `[Avoider] considered=N active=M |delta|=X m/s path_aware_strip=K close_regime=0/1`. Extended the ~1 Hz DIAG line in `tick_navigate` with an `active_obj` count (obstacles within the avoider's cached influence radius).
+- **Phase B — Stuck detector.** Added `StuckDetector` sliding-window class and new `MissionState::NAVIGATE_UNSTUCK`. Transitions NAVIGATE → NAVIGATE_UNSTUCK when the drone hasn't moved > `min_movement_m` over `window_s` (live-flight debugging proved the original avoider-activity gate must be REMOVED — LiDAR loses returns on geometry collision, so a gate would suppress firing in exactly the scenario it was built to catch). Unstuck commands a capped-magnitude backoff along `-planned_velocity` for `backoff_duration_s` then returns to NAVIGATE. After `max_stuck_count` re-triggers, escalate to LOITER with a new `FaultType::FAULT_STUCK` wire-format bit surfaced in `MissionStatus.active_faults` so GCS + P7 health monitor see the persistent stall. New config keys: `mission_planner.stuck_detector.{enabled, window_s, min_movement_m, backoff_duration_s, backoff_speed_mps, max_stuck_count}`.
+- **Phase C — Avoider authority.** Fixed the per-axis clamp to clamp the Euclidean magnitude of the 3-vector (pinned by new unit test). Added path-aware bypass: when the nearest active obstacle is below `min_distance_m`, path-aware stripping is skipped so the avoider can push opposite the planner direction. Hysteresis via `path_aware_bypass_hysteresis_m` (default 0.5 m) prevents flip-flop at the boundary.
+- **Review-fix pass.** Addressed all P1/P2/P3 findings from the 9-agent combined review: FAULT_STUCK wire format + set/clear lifecycle, end-to-end integration test for the stuck→unstuck chain, stale counter reset on IDLE, span-gate boundary tests, low-speed WP config sanity warning, ColorContourDetector allocation hoist, detector backend allowlist, and doc consistency across BUG_FIXES / TESTS.md.
+
+Scenario 30 also switched to the `color_contour` detector (live-validated: drone successfully navigated the previously-impassable WP2→WP3 gap — YOLOv8-nano+COCO was blind to the scenario's geometry, starving ByteTrack of camera-anchored tracks).
+
+**Files added:** `common/ipc/include/ipc/ipc_types.h` (FAULT_STUCK bit).
+**Files modified:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`, `mission_fsm.h`, `mission_state_tick.h`, `gcs_command_handler.h`, `src/main.cpp`, `common/ipc/include/ipc/ipc_types.h`, `common/util/include/util/config_keys.h`, `config_validator.h`, `config/scenarios/30_cosys_static.json`, `process2_perception/include/perception/color_contour_detector.h` (hot-path alloc hoist), `tests/test_mission_fsm.cpp`, `test_mission_state_tick.cpp`, `test_obstacle_avoider_3d.cpp`, `tests/TESTS.md`, `docs/tracking/BUG_FIXES.md`.
+
+**Why:** Three compounding defects blocked scenario 30 — the avoider was invisible in logs, the authority cap was barely above cruise speed, and path-aware stripping was always on. The stuck detector is the safety backstop. FAULT_STUCK was added after the review round revealed the operator telemetry would otherwise show `active_faults=0` during a permanent stall.
+
+**Test count:** +14 across all commits (Phase B: 7 StuckDetector + 2 FSM/tick transition tests; Phase C: 3 avoider tests; review-fix: +2 span-boundary + 1 end-to-end integration). 1591 → 1605 (+SDK). See [tests/TESTS.md](../../tests/TESTS.md).
+
+**Related:** #505 (grid inflation ↔ avoider influence coupling), #506 (real-hardware IMU-jerk collision detection), #512 (dynamic-obstacle smart recovery: trap-zone inflate + skip-unreachable-waypoint), #513 (avoider brake + adaptive replan) remain out of scope; all tracked separately as follow-up work.
+
+---
+
+_Last updated after Improvement #73 (issue #503). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

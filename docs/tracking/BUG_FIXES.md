@@ -834,6 +834,45 @@ grep 'No path' drone_logs/scenarios_gazebo/*/mission_planner.log | tail -5
 
 ---
 
+### Fix #503 — Drone Stalled at Scenario-30 WP3 with No Avoider Output (Issue #503)
+
+**Date fixed:** 2026-04-18
+**Severity:** High
+**Status:** FIXED
+**Files:** `process4_mission_planner/include/planner/obstacle_avoider_3d.h`,
+           `process4_mission_planner/include/planner/mission_fsm.h`,
+           `process4_mission_planner/include/planner/mission_state_tick.h`,
+           `process4_mission_planner/include/planner/gcs_command_handler.h`,
+           `process4_mission_planner/src/main.cpp`,
+           `common/ipc/include/ipc/ipc_types.h`,
+           `common/util/include/util/config_keys.h`,
+           `common/util/include/util/config_validator.h`,
+           `config/scenarios/30_cosys_static.json`,
+           `tests/test_mission_fsm.cpp`,
+           `tests/test_mission_state_tick.cpp`,
+           `tests/test_obstacle_avoider_3d.cpp`
+
+**Bug:** In scenario 30, the drone reached WP3 and stalled. Radar + occupancy grid + D\*Lite all worked (539 cells occupied, 339 replans, 19 radar tracks), yet the avoider produced no visible INFO output and the vehicle made no forward progress through the WP3→WP4 gap. Three compounding defects were found.
+
+**Root cause:**
+
+1. `ObstacleAvoider3D::avoid()` clamped correction vectors per-axis — a limit of `max_correction_mps=2.0` allowed the Euclidean magnitude to exceed 2.0 by up to `sqrt(3)`, but also meant the correction was directionally distorted. More importantly, 2.0 m/s was barely larger than the planner cruise speed (also 2.0 m/s), so the avoider had no headroom to push lateral corrections.
+2. `path_aware` stripping ran unconditionally. When obstacles sat between the drone and its goal the avoider's -planner-direction component was always stripped — correct at range, catastrophic in the close regime.
+3. The avoider emitted per-obstacle DEBUG logs only. With scenario 30 running at INFO, there was no visible evidence the avoider had fired.
+4. No FSM-level stuck detector existed, so a multi-second hang could not escalate into a recovery maneuver.
+
+**Fix (three phases):**
+
+- **Phase A (observability):** promoted per-obstacle log to INFO when contribution magnitude > 0.5 m/s (gated by new `obstacle_avoidance.log_corrections`); added a single end-of-tick summary line `[Avoider] considered=N active=M |delta|=X m/s path_aware_strip=K close_regime=0/1`; extended the 10 Hz DIAG line with an `active_obj` count.
+- **Phase B (stuck detector):** added `StuckDetector` (sliding-window, gated by `stuck_detector.enabled/window_s/min_movement_m`) and a new `MissionState::NAVIGATE_UNSTUCK` state. Transitions NAVIGATE → NAVIGATE_UNSTUCK when the drone hasn't moved > `min_movement_m` over `window_s` while in NAVIGATE. The avoider-activity gate (originally proposed here) was explicitly REMOVED during live-flight debugging — when the drone collides with geometry, LiDAR loses returns, the avoider goes silent, and a gate requiring avoider-active-in-window would never fire in the exact scenario it was built to catch. The NAVIGATE-only state gate at the call site is the sole liveness guard (see is_stuck() comment in mission_fsm.h). Unstuck backs off -planned-velocity for `backoff_duration_s` then re-enters NAVIGATE so the next replan routes wider. After `max_stuck_count` re-triggers, escalate to LOITER with `FAULT_STUCK` surfaced in `MissionStatus.active_faults` so operator telemetry sees the persistent stall.
+- **Phase C (avoider authority):** replaced per-axis clamp with Euclidean-magnitude clamp; added path-aware bypass in the close regime (when the nearest active obstacle falls below `min_distance_m`) with hysteresis `path_aware_bypass_hysteresis_m` (default 0.5 m) to prevent flip-flop; raised scenario-30 `max_correction_mps` from 2.0 → 3.5 with documentation.
+
+**Impact:** the avoider now has headroom and authority in close-quarters scenarios, emits visible INFO when it fires, and if the drone still hangs the FSM detects the stall within ~3 s and performs a brief backoff. New unit tests cover the clamp contract, the bypass transition, the hysteresis re-enable, and all stuck-detector gating paths (+10 tests).
+
+**Found by:** scenario 30 Cosys proving-ground run (dev-desktop, 2026-04-17).
+
+---
+
 ### Fix #30 — A* Obstacle Grid Cleared Every Planning Frame (No TTL Persistence)
 
 **Date fixed:** 2026-03-09

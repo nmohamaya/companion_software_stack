@@ -13,7 +13,7 @@
         },
         "backend_requirements": {
             "video_capture.mission_cam.backend": "cosys_airsim",
-            "perception.detector.backend": "yolov8",
+            "perception.detector.backend": "color_contour",
             "perception.depth_estimator.backend": "depth_anything_v2",
             "slam_vio_nav.imu_source.backend": "cosys_airsim",
             "slam_vio_nav.depth_source.backend": "cosys_airsim",
@@ -42,12 +42,14 @@
             }
         },
         "perception": {
+            "_comment_detector": "color_contour for scenario 30 (#513). Validated 2026-04-19: drone successfully navigated the previously-impassable WP2→WP3 gap when color_contour was active (vs 0% with yolov8 on COCO — none of the scenario's obstacles are COCO classes). bush_01's green + UE5 environment colour variation is enough to populate the tracker for fusion with LiDAR-as-radar. Tightened params here to prevent over-promotion (previous run saturated 1000 static cells + 8725 occupied — D*Lite couldn't find a path on WP3→WP4).",
             "detector": {
-                "backend": "yolov8",
-                "model_path": "models/yolov8n.onnx",
+                "backend": "color_contour",
+                "min_contour_area": 2000,
                 "confidence_threshold": 0.4,
-                "iou_threshold": 0.45,
-                "use_cuda": true
+                "max_fps": 30,
+                "min_bbox_height_px": 60,
+                "max_aspect_ratio": 5.0
             },
             "depth_estimator": {
                 "backend": "depth_anything_v2",
@@ -111,20 +113,24 @@
                 "backend": "potential_field_3d"
             },
             "obstacle_avoidance": {
+                "_comment": "WP3→WP4 gap: planner cruises at cruise_speed_mps=2.0, so a 2.0 clamp leaves no headroom for lateral repulsion to redirect the trajectory. Raised to 3.5 m/s (Issue #503). path_aware_bypass_hysteresis_m controls the re-enable distance once the drone clears the close regime (min_distance_m + hysteresis).",
                 "min_distance_m": 2.5,
                 "influence_radius_m": 10.0,
                 "repulsive_gain": 3.0,
-                "max_correction_mps": 2.0,
+                "max_correction_mps": 3.5,
                 "vertical_gain": 0.0,
-                "path_aware": true
+                "path_aware": true,
+                "path_aware_bypass_hysteresis_m": 0.5,
+                "log_corrections": true
             },
             "occupancy_grid": {
+                "_comment": "Scenario 30 grid tuning post-#513 color_contour switch: previous run hit max_static_cells=1000 cap with 8725 total occupied cells — D*Lite saw walls everywhere and couldn't find a path. Raised promotion_hits 5→10 so a cell needs more confident observations before sticking; reduced max_static_cells 1000→500 so the grid stays tractable for D*Lite search. inflation_radius_m kept at 2.5 (drone footprint + margin).",
                 "resolution_m": 2.0,
                 "inflation_radius_m": 2.5,
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
-                "promotion_hits": 5,
-                "max_static_cells": 1000
+                "promotion_hits": 10,
+                "max_static_cells": 500
             },
             "static_obstacles": [],
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via radar+camera+depth fusion — the RPC-spawned scene objects are the world.",
@@ -184,11 +190,11 @@
                 "_comment": "CosysRadar backend successfully polled LiDAR data at least once."
             },
             {
-                "name": "YOLO detections (non-zero)",
+                "name": "Detector detections (non-zero)",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[OpenCvYoloDetector\\].*detections=[1-9]",
+                "pattern": "\\[(OpenCvYoloDetector|ColorContourDetector)\\].*detections=[1-9]",
                 "min_matches": 10,
-                "_comment": "YOLOv8 fired on the spawned objects — at least 10 non-empty detection frames."
+                "_comment": "Detector (yolov8 or color_contour) fired on the spawned/environment objects — at least 10 non-empty detection frames. Regex matches both backends so the check stays valid as the scenario's detector choice evolves."
             },
             {
                 "name": "Depth Anything V2 running",

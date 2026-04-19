@@ -33,6 +33,12 @@ struct SharedFlightState {
     bool                                  land_sent{false};
     bool                                  nav_was_armed{false};
     std::chrono::steady_clock::time_point rtl_start_time{};
+    // Set by MissionStateTick when the stuck detector escalates to LOITER
+    // (Issue #503 review finding: FAULT_STUCK must surface in the
+    // /drone_mission_status active_faults bitmask so the operator's GCS
+    // and P7 health monitor register the stall).  Cleared on transition
+    // back to NAVIGATE or IDLE.  OR'd into active_faults by main.cpp.
+    bool stuck_fault_active{false};
 };
 
 /// Handles GCS commands received via IPC: RTL, LAND, MISSION_PAUSE/START/ABORT/UPLOAD.
@@ -150,7 +156,7 @@ private:
         auto state = fsm.state();
         if (state == MissionState::RTL || state == MissionState::LAND ||
             state == MissionState::EMERGENCY || state == MissionState::TAKEOFF ||
-            state == MissionState::COLLISION_RECOVERY) {
+            state == MissionState::COLLISION_RECOVERY || state == MissionState::NAVIGATE_UNSTUCK) {
             DRONE_LOG_WARN("[Planner] MISSION_UPLOAD rejected — unsafe FSM state '{}' corr={:#x}",
                            static_cast<int>(state), correlation_id);
             ++state_rejected_count_;

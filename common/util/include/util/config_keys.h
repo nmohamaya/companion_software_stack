@@ -255,6 +255,9 @@ inline constexpr const char* PREDICTION_DT_S = "mission_planner.obstacle_avoidan
 inline constexpr const char* VERTICAL_GAIN   = "mission_planner.obstacle_avoidance.vertical_gain";
 inline constexpr const char* MAX_AGE_MS      = "mission_planner.obstacle_avoidance.max_age_ms";
 inline constexpr const char* PATH_AWARE      = "mission_planner.obstacle_avoidance.path_aware";
+inline constexpr const char* PATH_AWARE_BYPASS_HYSTERESIS_M =
+    "mission_planner.obstacle_avoidance.path_aware_bypass_hysteresis_m";
+inline constexpr const char* LOG_CORRECTIONS = "mission_planner.obstacle_avoidance.log_corrections";
 }  // namespace obstacle_avoidance
 
 namespace obstacle_avoider {
@@ -276,6 +279,16 @@ inline constexpr const char* CLIMB_DELTA_M = "mission_planner.collision_recovery
 inline constexpr const char* HOVER_DURATION_S =
     "mission_planner.collision_recovery.hover_duration_s";
 }  // namespace collision_recovery
+
+namespace stuck_detector {
+inline constexpr const char* ENABLED        = "mission_planner.stuck_detector.enabled";
+inline constexpr const char* WINDOW_S       = "mission_planner.stuck_detector.window_s";
+inline constexpr const char* MIN_MOVEMENT_M = "mission_planner.stuck_detector.min_movement_m";
+inline constexpr const char* BACKOFF_DURATION_S =
+    "mission_planner.stuck_detector.backoff_duration_s";
+inline constexpr const char* BACKOFF_SPEED_MPS = "mission_planner.stuck_detector.backoff_speed_mps";
+inline constexpr const char* MAX_STUCK_COUNT   = "mission_planner.stuck_detector.max_stuck_count";
+}  // namespace stuck_detector
 
 }  // namespace mission_planner
 

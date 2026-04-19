@@ -432,3 +432,136 @@ TEST(MissionFSMTest, ExactBoundaryAtAcceptanceRadiusOvershotStrictLessThan) {
     // Drone at 6.001m — just outside proximity zone
     EXPECT_FALSE(fsm.waypoint_overshot(16.01f, 0.0f, 5.0f));
 }
+
+// ═════════════════════════════════════════════════════════════
+// StuckDetector tests — Issue #503
+// ═════════════════════════════════════════════════════════════
+
+TEST(StuckDetectorTest, TriggersWhenPoseStationary) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Feed 12 samples over >window_s, all at the same pose.
+    // Caller gates on NAVIGATE state; the detector does not gate on
+    // avoider activity (see comment in is_stuck: LiDAR loses obstacle
+    // returns when the drone collides with geometry, so avoider can go
+    // inactive precisely when we most need to detect the stall).
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
+    }
+    const auto now = t0 + std::chrono::milliseconds(1200);
+    EXPECT_TRUE(det.is_stuck(now));
+}
+
+// Issue #503 span-gate boundary: the is_stuck span check accepts 80% of
+// window_s (tolerates deque-cleanup asymmetry at the rate boundary).
+// Verify both sides of that threshold so a future tweak can't silently
+// relax to 70% or tighten to 90% without a test flip.
+TEST(StuckDetectorTest, SpanBoundaryBelowThresholdDoesNotFire) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Samples spanning 0.75 s — below the 0.8 s × window_s gate.
+    for (int i = 0; i <= 7; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
+    }
+    const auto now = t0 + std::chrono::milliseconds(700);  // span ≈ 0.7 s
+    EXPECT_FALSE(det.is_stuck(now));
+}
+
+TEST(StuckDetectorTest, SpanBoundaryAboveThresholdFires) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Samples spanning 0.85 s — above the 0.8 s × window_s gate.
+    for (int i = 0; i <= 9; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
+    }
+    const auto now = t0 + std::chrono::milliseconds(850);
+    EXPECT_TRUE(det.is_stuck(now));
+}
+
+TEST(StuckDetectorTest, ResetsOnMovement) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Stationary samples long enough to trigger.
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 0.0f, 0.0f, 5.0f);
+    }
+    EXPECT_TRUE(det.is_stuck(t0 + std::chrono::milliseconds(1200)));
+
+    // Drone moves 0.1 m/tick (×12 ticks = 1.2 m) — well beyond min_movement_m.
+    // Samples span a full new window at the new location.
+    for (int i = 13; i <= 24; ++i) {
+        auto        t = t0 + std::chrono::milliseconds(100 * i);
+        const float x = 0.1f * static_cast<float>(i - 12);
+        det.push_sample(t, x, 0.0f, 5.0f);
+    }
+    EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(2400)));
+}
+
+TEST(StuckDetectorTest, DisabledNeverTriggers) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = false;
+    cfg.window_s       = 1.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    for (int i = 0; i <= 12; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 5.0f, 5.0f, 5.0f);
+    }
+    EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(1200)));
+}
+
+TEST(StuckDetectorTest, WindowNotYetFull) {
+    StuckDetector::Config cfg;
+    cfg.enabled        = true;
+    cfg.window_s       = 3.0f;
+    cfg.min_movement_m = 0.5f;
+    StuckDetector det{cfg};
+
+    const auto t0 = StuckDetector::Clock::now();
+    // Only 1s of samples — below window_s=3s.
+    for (int i = 0; i <= 10; ++i) {
+        auto t = t0 + std::chrono::milliseconds(100 * i);
+        det.push_sample(t, 0.0f, 0.0f, 5.0f);
+    }
+    EXPECT_FALSE(det.is_stuck(t0 + std::chrono::milliseconds(1000)));
+}
+
+TEST(MissionFSMTest, StuckEventTransitionsToNavigateUnstuck) {
+    MissionFSM fsm;
+    fsm.on_arm();
+    fsm.on_takeoff();
+    fsm.on_navigate();
+    ASSERT_EQ(fsm.state(), MissionState::NAVIGATE);
+
+    fsm.on_stuck();
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE_UNSTUCK);
+
+    fsm.on_unstuck();
+    EXPECT_EQ(fsm.state(), MissionState::NAVIGATE);
+}

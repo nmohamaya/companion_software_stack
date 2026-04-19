@@ -464,6 +464,124 @@ TEST(ObstacleAvoider3DTest, PathAwareNoZLeakWhenVerticalGainZero) {
     EXPECT_GE(result.velocity_x, cmd.velocity_x - 0.01f);
 }
 
+// ═════════════════════════════════════════════════════════════
+// Euclidean-magnitude clamp — Issue #503
+// The clamp must limit the 3-vector magnitude, not each axis
+// independently.  Previous per-axis behavior allowed magnitude
+// up to max_correction_mps * sqrt(N_axes).
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, ClampsEuclideanMagnitudeNotPerAxis) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 50.0f;  // strong enough to saturate
+    config.max_correction_mps = 1.0f;
+    config.path_aware         = false;  // isolate clamp behavior
+    config.vertical_gain      = 0.0f;   // 2D for clarity
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    // Planner hovering, single obstacle diagonally ahead — repulsion points
+    // back along the -X/-Y diagonal.  Per-axis clamp would allow |c|≈sqrt(2).
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.0f;
+    objects.objects[0].position_y = 1.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto        result = avoider.avoid(cmd, pose, objects);
+    const float dx     = result.velocity_x - cmd.velocity_x;
+    const float dy     = result.velocity_y - cmd.velocity_y;
+    const float dz     = result.velocity_z - cmd.velocity_z;
+    const float mag    = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Must be clamped to max_correction_mps (within float tolerance).
+    EXPECT_NEAR(mag, config.max_correction_mps, 1e-4f);
+    EXPECT_LE(mag, config.max_correction_mps + 1e-4f);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Close-regime path-aware bypass — Issue #503
+// When closest obstacle < min_distance_m, path-aware stripping
+// must be bypassed so the avoider can push opposite to planner
+// direction.  Hysteresis prevents chatter at the boundary.
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, BypassesPathAwareInCloseRegime) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m             = 10.0f;
+    config.repulsive_gain                 = 2.0f;
+    config.max_correction_mps             = 3.0f;
+    config.path_aware                     = true;
+    config.min_distance_m                 = 2.5f;  // close regime below this
+    config.path_aware_bypass_hysteresis_m = 0.5f;
+    config.log_corrections                = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);  // planner pushing +X
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Obstacle at distance = 1.0m — well inside min_distance_m.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.0f;  // head-on
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Bypass active → path-aware stripping skipped → avoider pushes -X
+    // (against planner direction) to maintain clearance.
+    EXPECT_LT(result.velocity_x, cmd.velocity_x - 0.1f);
+    EXPECT_TRUE(avoider.close_regime_active());
+}
+
+TEST(ObstacleAvoider3DTest, BypassHysteresisPreventsFlipFlop) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m             = 10.0f;
+    config.repulsive_gain                 = 2.0f;
+    config.max_correction_mps             = 3.0f;
+    config.path_aware                     = true;
+    config.min_distance_m                 = 2.5f;
+    config.path_aware_bypass_hysteresis_m = 0.5f;  // exit at > 3.0m
+    config.log_corrections                = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Tick 1 — obstacle at 1.0m → enter close regime.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+    (void)avoider.avoid(cmd, pose, objects);
+    ASSERT_TRUE(avoider.close_regime_active());
+
+    // Tick 2 — obstacle at 2.8m (above min_distance_m, below min+hysteresis).
+    // Must NOT exit close regime yet.
+    objects.objects[0].position_x = 2.8f;
+    objects.timestamp_ns          = now_ns();
+    (void)avoider.avoid(cmd, pose, objects);
+    EXPECT_TRUE(avoider.close_regime_active());
+
+    // Tick 3 — obstacle at 3.5m (above min+hysteresis=3.0m).  Exit.
+    objects.objects[0].position_x = 3.5f;
+    objects.timestamp_ns          = now_ns();
+    (void)avoider.avoid(cmd, pose, objects);
+    EXPECT_FALSE(avoider.close_regime_active());
+}
+
 TEST(ObstacleAvoider3DTest, PathAwareDisabledFallback) {
     // path_aware=false → old isotropic behavior (obstacle ahead reduces vx).
     ObstacleAvoider3DConfig config;

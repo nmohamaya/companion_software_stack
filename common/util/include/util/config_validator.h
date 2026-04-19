@@ -305,6 +305,13 @@ inline ConfigSchema video_capture_schema() {
 inline ConfigSchema perception_schema() {
     auto s = common_schema();
     s.required_section(cfg_key::perception::SECTION);
+    // Allowlist for detector backend — catches typos like "colour_contour"
+    // that would previously fall through to detector_factory's default
+    // branch silently (Issue #503 review).  Keep this in sync with
+    // process2_perception/src/detector_factory.cpp.
+    s.optional<std::string>(cfg_key::perception::detector::BACKEND)
+        .one_of({std::string("yolov8"), std::string("color_contour"), std::string("simulated"),
+                 std::string("plugin")});
     s.optional<double>(cfg_key::perception::detector::CONFIDENCE_THRESHOLD).range(0.0, 1.0);
     s.optional<double>(cfg_key::perception::detector::NMS_THRESHOLD).range(0.0, 1.0);
     s.optional<int>(cfg_key::perception::detector::MAX_DETECTIONS).range(1, 10000);
@@ -387,6 +394,10 @@ inline ConfigSchema mission_planner_schema() {
     s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::PREDICTION_DT_S)
         .range(0.0, 60.0);
     s.optional<int>(cfg_key::mission_planner::obstacle_avoidance::MAX_AGE_MS).range(0, 60000);
+    s.optional<bool>(cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE);
+    s.optional<double>(cfg_key::mission_planner::obstacle_avoidance::PATH_AWARE_BYPASS_HYSTERESIS_M)
+        .range(0.0, 10.0);
+    s.optional<bool>(cfg_key::mission_planner::obstacle_avoidance::LOG_CORRECTIONS);
     // Geofence
     s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_FLOOR_M).range(-1000.0, 10000.0);
     s.optional<double>(cfg_key::mission_planner::geofence::ALTITUDE_CEILING_M).range(0.0, 10000.0);
@@ -398,6 +409,18 @@ inline ConfigSchema mission_planner_schema() {
         .range(0.0, 100.0);
     s.optional<double>(cfg_key::mission_planner::collision_recovery::HOVER_DURATION_S)
         .range(0.0, 60.0);
+    // Stuck detector (Issue #503)
+    s.optional<bool>(cfg_key::mission_planner::stuck_detector::ENABLED);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::WINDOW_S).range(0.5, 60.0);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::MIN_MOVEMENT_M).range(0.01, 100.0);
+    // Lower bound 0.1s — zero-duration backoff would exit NAVIGATE_UNSTUCK
+    // immediately, producing a no-op transition that doesn't move the
+    // vehicle away from geometry.  0.1s is the practical minimum that
+    // lets the FC controller register the reversed setpoint.
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::BACKOFF_DURATION_S)
+        .range(0.1, 30.0);
+    s.optional<double>(cfg_key::mission_planner::stuck_detector::BACKOFF_SPEED_MPS).range(0.0, 10.0);
+    s.optional<int>(cfg_key::mission_planner::stuck_detector::MAX_STUCK_COUNT).range(0, 100);
     // fault_manager section
     s.optional<int>(cfg_key::fault_manager::POSE_STALE_TIMEOUT_MS).range(1, 60000);
     s.optional<double>(cfg_key::fault_manager::BATTERY_WARN_PERCENT).range(1.0, 100.0);

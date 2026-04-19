@@ -5,9 +5,12 @@
 #include "util/ilogger.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <deque>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace drone::planner {
@@ -26,9 +29,103 @@ inline const char* state_name(MissionState s) {
         case MissionState::EMERGENCY: return "EMERGENCY";
         case MissionState::SURVEY: return "SURVEY";
         case MissionState::COLLISION_RECOVERY: return "COLLISION_RECOVERY";
+        case MissionState::NAVIGATE_UNSTUCK: return "NAVIGATE_UNSTUCK";
         default: return "UNKNOWN";
     }
 }
+
+// ── StuckDetector (Issue #503) ──────────────────────────────
+// Sliding-window detector that flags the drone as stuck when:
+//   - Position has not moved more than min_movement_m over window_s
+//   - AND the avoider was active (non-zero correction) during the window
+//   - AND the window is full (i.e. we have at least window_s of samples)
+// Only NAVIGATE should feed samples in — SURVEY/LAND/RTL/etc. legitimately
+// hover and must not be flagged.  Gate at the caller.
+class StuckDetector {
+public:
+    using Clock     = std::chrono::steady_clock;
+    using TimePoint = Clock::time_point;
+
+    struct Config {
+        bool  enabled            = true;
+        float window_s           = 3.0f;
+        float min_movement_m     = 0.5f;
+        float backoff_speed_mps  = 1.0f;
+        float backoff_duration_s = 2.0f;
+        // Cap on STUCK→UNSTUCK→NAVIGATE oscillations within a mission.
+        // When exceeded, caller escalates to LOITER with fault_triggered=true
+        // so the operator sees persistent stall in health telemetry instead
+        // of silent oscillation.  0 disables the cap.
+        uint32_t max_stuck_count = 3;
+    };
+
+    StuckDetector() : StuckDetector(Config{}) {}
+    explicit StuckDetector(const Config& cfg)
+        : cfg_(cfg)
+        , window_duration_(std::chrono::duration_cast<Clock::duration>(
+              std::chrono::duration<float>(cfg.window_s))) {}
+
+    [[nodiscard]] const Config& config() const { return cfg_; }
+
+    /// Record a pose sample.  Samples older than window_s are dropped.
+    /// Caller pushes only in states where hover is abnormal (NAVIGATE).
+    void push_sample(TimePoint t, float x, float y, float z) {
+        samples_.emplace_back(t, std::array<float, 3>{x, y, z});
+
+        // Drop samples older than window_s.  Window cached at construction —
+        // cfg_.window_s is a float, but the conversion + cast is not free at
+        // 10 Hz and the window is immutable after construction.
+        while (!samples_.empty() && (t - samples_.front().first) > window_duration_) {
+            samples_.pop_front();
+        }
+    }
+
+    /// Clear history — call on state change or significant pose jump.
+    void reset() { samples_.clear(); }
+
+    /// Evaluate stuck condition using the samples collected so far.
+    ///
+    /// Caller is responsible for only pushing samples in states where hover
+    /// is abnormal (i.e. NAVIGATE).  This function therefore does NOT gate
+    /// on "avoider was active recently" — an earlier iteration of this check
+    /// failed precisely when the drone was most stuck, because collision
+    /// with geometry caused LiDAR-derived DetectedObjectList.num_objects to
+    /// go to zero (the obstacle intersects the drone body → no returns) and
+    /// the avoider became inactive.  The drone was stuck *because* perception
+    /// lost the obstacle, and the detector silently decided "not stuck".
+    /// Moving the liveness check out of the detector and relying on the
+    /// caller's state gating is the correct fix.
+    [[nodiscard]] bool is_stuck(TimePoint now) const {
+        if (!cfg_.enabled) return false;
+        if (samples_.size() < 2) return false;
+        // Need a (near-)full window of history.
+        const float span_s = std::chrono::duration<float>(now - samples_.front().first).count();
+        // The push_sample deque cleanup drops entries older than window_s, so
+        // at steady state the remaining samples span approximately
+        // (window_s - tick_interval).  Under 10 Hz tick + scheduler jitter
+        // that's ~2.9 s for a 3 s window — strict `span < window_s` is never
+        // false and the detector never fires.  Accept 80% of the window as
+        // "full enough"; this still requires at least ~2.4 s of history for
+        // the default 3 s window but is robust to realistic tick jitter.
+        if (span_s < cfg_.window_s * 0.8f) return false;
+        // Compare current pose vs window-start pose.
+        const auto& first = samples_.front().second;
+        const auto& last  = samples_.back().second;
+        const float dx    = last[0] - first[0];
+        const float dy    = last[1] - first[1];
+        const float dz    = last[2] - first[2];
+        const float moved = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return moved < cfg_.min_movement_m;
+    }
+
+    /// Whether at least one sample has been recorded (for tests).
+    [[nodiscard]] bool has_samples() const { return !samples_.empty(); }
+
+private:
+    Config                                                 cfg_{};
+    Clock::duration                                        window_duration_{};
+    std::deque<std::pair<TimePoint, std::array<float, 3>>> samples_;
+};
 
 /// Waypoint for mission navigation.
 struct Waypoint {
@@ -62,6 +159,8 @@ public:
     void on_emergency() { transition(MissionState::EMERGENCY); }
     void on_collision_recovery() { transition(MissionState::COLLISION_RECOVERY); }
     void on_recovery_complete() { transition(MissionState::NAVIGATE); }
+    void on_stuck() { transition(MissionState::NAVIGATE_UNSTUCK); }
+    void on_unstuck() { transition(MissionState::NAVIGATE); }
 
     /// Check if waypoint is reached (within acceptance radius).
     /// When a planner snaps the goal to avoid occupied cells, pass the snapped
@@ -164,9 +263,16 @@ public:
     [[nodiscard]] size_t current_wp_index() const { return current_wp_; }
     [[nodiscard]] size_t total_waypoints() const { return waypoints_.size(); }
 
-    /// Returns true if the FSM is in a fault-handling state (LOITER from
-    /// fault, RTL, LAND, or EMERGENCY) and should not be overridden by
-    /// normal mission logic.
+    /// Returns true if the FSM is in a fault-handling state and should not
+    /// be overridden by normal mission logic.  Checked states:
+    /// LOITER (fault-triggered only), RTL, LAND, EMERGENCY, COLLISION_RECOVERY.
+    /// NAVIGATE_UNSTUCK is deliberately NOT included — it is a recovery state
+    /// driven by the stuck detector, not a FaultManager-level fault.
+    /// Note: a stuck-escalated LOITER (MissionStateTick sets fault_triggered
+    /// and calls on_loiter() when stuck_transition_count_ exceeds
+    /// max_stuck_count) DOES make this return true — the set_fault_triggered
+    /// path is shared, by design, so the stuck stall inhibits normal mission
+    /// resumption until an operator intervenes.
     [[nodiscard]] bool is_in_fault_state() const {
         return fault_triggered_ &&
                (state_ == MissionState::LOITER || state_ == MissionState::RTL ||
