@@ -18,6 +18,24 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ### 2026-04-20
 
+#### 3. `compute_ap` — O(11 × log nP) via max-precision envelope
+
+- **Priority:** P3
+- **Category:** test-infra (benchmark harness performance)
+- **Source:** deferred from `review-performance` agent on PR #590
+- **Current state:** `compute_ap` in `tests/benchmark/perception_metrics.cpp` runs an O(11 × nP) scan over the precision-recall curve for each of the 11 VOC recall checkpoints. Measured ≈5 ms at N=1000, well under the 100 ms AC.
+- **Proposed fix:** Standard VOC trick — sweep the precision curve right-to-left once to build a max-precision envelope (`max_precision[i] = max(precision_curve[i..end])`), then binary-search for each recall checkpoint. Reduces the interpolation step from O(11 × nP) to O(11 × log nP). Net: one extra O(nP) pass.
+- **When worth doing:** benchmark harness scales to N ≥ 10 000 detections per scenario, or profiling shows `compute_ap` on a hot path.
+
+#### 4. `std::stable_sort` in `compute_ap` / `match_frame` for cross-run determinism
+
+- **Priority:** P3
+- **Category:** test-infra (benchmark harness reproducibility)
+- **Source:** deferred from `review-performance` agent on PR #590
+- **Current state:** both `std::sort` call sites (confidence-desc sorting in `compute_ap` and `match_frame`) use unstable sort. Tie-broken predictions can land in implementation-defined order, producing non-deterministic TP/FP assignments (and therefore AP) across platforms when two predictions share the exact same confidence.
+- **Proposed fix:** swap to `std::stable_sort`. ~10–20% slower at N=100 000 but still well within budget.
+- **When worth doing:** CI gates AP across Linux × macOS runners, or an investigation chases a flaky AP delta to tie-breaking.
+
 #### 1. Ninja/Unix-Makefiles generator mismatch on `airsim-build` blocks rebuild
 - **Priority:** P2
 - **Category:** build

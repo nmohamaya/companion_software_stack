@@ -88,7 +88,13 @@ struct DetectionMetrics {
 
     // Confusion matrix: confusion_matrix[gt_class][pred_class] = count.
     // Sized [num_classes + 1] x [num_classes + 1]; index num_classes is the
-    // "background" / unmatched slot for FNs (gt) or FPs (pred).
+    // background/unmatched slot. Axis semantics:
+    //   - confusion_matrix[gt_class][bg]    = FNs (GT of gt_class had no matching prediction).
+    //   - confusion_matrix[bg][pred_class]  = pure-hallucination FPs (prediction with no GT overlap).
+    //   - confusion_matrix[gt_class][pred_class] (off-diagonal) = class confusion
+    //     (prediction overlapped a GT of a different class above the IoU threshold).
+    // Summing the background column gives total FN; summing the background row gives
+    // total pure-hallucination FP.
     std::vector<std::vector<uint32_t>> confusion_matrix{};
 
     uint32_t num_classes{0};
@@ -140,23 +146,31 @@ struct TrackingMetrics {
     uint32_t num_matches{0};     // # matched pairs (MOTP denominator)
 
     // MOTA = 1 - (fn + fp + id_switches) / total_gt
+    // Returns 0.0 when total_gt == 0 (undefined case; convention avoids divide-by-zero).
     [[nodiscard]] double mota() const noexcept;
 
     // MOTP = sum_iou / num_matches  (IoU-form MOTP; CLEAR-MOT's original uses
     // distance error, but IoU is the standard for 2D bbox trackers).
+    // Returns 0.0 when num_matches == 0 (no matches to average).
     [[nodiscard]] double motp() const noexcept;
 };
 
 // Compute tracking metrics across a sequence of frames.
 // Requires predictions to carry stable `pred_track_id` values and GT to carry
-// stable `gt_track_id` values; zero IDs are treated as untracked and will not
-// contribute to ID-switch / fragmentation counts.
+// stable `gt_track_id` values; a value of 0 on either side is treated as
+// "untracked" — neither `gt_track_id == 0` nor `pred_track_id == 0` contributes
+// to ID-switch or fragmentation counts. TP/FP/FN counting is unaffected.
 [[nodiscard]] TrackingMetrics compute_tracking_metrics(const std::vector<FrameData>& frames,
                                                        float                         iou_threshold);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Single-class AP (11-point interpolation) — exposed for testing and for
 // callers that want to compute AP on a pre-filtered set.
+//
+// ScoredPrediction and ScoredGroundTruth are intentionally separate types (not
+// a single "ScoredBox"): ScoredGroundTruth has no confidence field, so the
+// distinct types prevent callers from accidentally passing a GT where a
+// prediction is expected (and vice versa) at compile time.
 // ────────────────────────────────────────────────────────────────────────────
 
 // Flattened prediction used by compute_ap.
@@ -173,6 +187,8 @@ struct ScoredGroundTruth {
 };
 
 // PASCAL VOC 11-point Average Precision.
+// Returns 0.0 when `gts` is empty (undefined in the VOC definition; zero is
+// the convention used by COCO/TorchMetrics when no positives exist).
 [[nodiscard]] double compute_ap(std::vector<ScoredPrediction>  preds,
                                 std::vector<ScoredGroundTruth> gts, float iou_threshold);
 

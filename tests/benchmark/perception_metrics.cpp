@@ -20,11 +20,6 @@ constexpr float kMinArea = 1e-6F;
 constexpr std::array<double, 11> kVocRecallPoints = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5,
                                                      0.6, 0.7, 0.8, 0.9, 1.0};
 
-// Background index sentinel for confusion matrix rows/columns.
-[[nodiscard]] std::size_t background_index(uint32_t num_classes) noexcept {
-    return static_cast<std::size_t>(num_classes);
-}
-
 }  // namespace
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -88,28 +83,31 @@ double ClassMetrics::f1() const noexcept {
 // DetectionMetrics aggregates
 // ────────────────────────────────────────────────────────────────────────────
 
-uint32_t DetectionMetrics::total_tp() const noexcept {
+namespace {
+
+// Sum a single uint32_t field across every ClassMetrics entry in the map.
+// Takes a pointer-to-member so callers name the field once at the call site.
+[[nodiscard]] uint32_t sum_class_field(const std::map<uint32_t, ClassMetrics>& per_class,
+                                       uint32_t ClassMetrics::*field) noexcept {
     uint32_t sum = 0;
     for (const auto& [_, m] : per_class) {
-        sum += m.tp;
+        sum += m.*field;
     }
     return sum;
+}
+
+}  // namespace
+
+uint32_t DetectionMetrics::total_tp() const noexcept {
+    return sum_class_field(per_class, &ClassMetrics::tp);
 }
 
 uint32_t DetectionMetrics::total_fp() const noexcept {
-    uint32_t sum = 0;
-    for (const auto& [_, m] : per_class) {
-        sum += m.fp;
-    }
-    return sum;
+    return sum_class_field(per_class, &ClassMetrics::fp);
 }
 
 uint32_t DetectionMetrics::total_fn() const noexcept {
-    uint32_t sum = 0;
-    for (const auto& [_, m] : per_class) {
-        sum += m.fn;
-    }
-    return sum;
+    return sum_class_field(per_class, &ClassMetrics::fn);
 }
 
 double DetectionMetrics::micro_precision() const noexcept {
@@ -173,9 +171,13 @@ MatchResult match_frame(const FrameData& frame, float iou_threshold) {
     });
 
     for (const std::size_t p_idx : order) {
-        const PredictedDetection& pred     = frame.predictions[p_idx];
-        float                     best_iou = iou_threshold;  // must strictly exceed (or equal) this
-        int32_t                   best_gt  = -1;
+        const PredictedDetection& pred = frame.predictions[p_idx];
+        // Initialise to the threshold so the `iou_val >= best_iou` comparison
+        // in the inner loop rejects anything below it. Once a match is found,
+        // best_iou holds the actual IoU — which is what we record into
+        // pred_match_iou when best_gt >= 0. Never read when best_gt == -1.
+        float   best_iou = iou_threshold;
+        int32_t best_gt  = -1;
         for (std::size_t g_idx = 0; g_idx < nG; ++g_idx) {
             if (m.gt_to_pred[g_idx] != -1) {
                 continue;  // GT already matched
@@ -323,7 +325,7 @@ DetectionMetrics compute_detection_metrics(const std::vector<FrameData>& frames,
     std::map<uint32_t, std::vector<ScoredPrediction>>  per_class_preds;
     std::map<uint32_t, std::vector<ScoredGroundTruth>> per_class_gts;
 
-    const std::size_t bg = background_index(num_classes);
+    const std::size_t bg = static_cast<std::size_t>(num_classes);
 
     for (std::size_t frame_i = 0; frame_i < frames.size(); ++frame_i) {
         const FrameData&  frame = frames[frame_i];
@@ -374,12 +376,15 @@ DetectionMetrics compute_detection_metrics(const std::vector<FrameData>& frames,
         }
     }
 
-    // Per-class AP.
-    for (const auto& [cls, preds] : per_class_preds) {
+    // Per-class AP. Move both preds and gts into compute_ap — the map entries
+    // are not read again after this loop, so the move avoids copying vectors
+    // that may be tens of MB per class at the harness' upper bounds.
+    for (auto& [cls, preds] : per_class_preds) {
         auto                           gt_it = per_class_gts.find(cls);
-        std::vector<ScoredGroundTruth> gts =
-            gt_it == per_class_gts.end() ? std::vector<ScoredGroundTruth>{} : gt_it->second;
-        out.per_class_ap[cls] = compute_ap(preds, std::move(gts), iou_threshold);
+        std::vector<ScoredGroundTruth> gts   = gt_it == per_class_gts.end()
+                                                   ? std::vector<ScoredGroundTruth>{}
+                                                   : std::move(gt_it->second);
+        out.per_class_ap[cls] = compute_ap(std::move(preds), std::move(gts), iou_threshold);
     }
     // Also record AP=0 for classes that have GT but no predictions (so mean_ap is fair).
     for (const auto& [cls, gts] : per_class_gts) {
@@ -438,15 +443,10 @@ TrackingMetrics compute_tracking_metrics(const std::vector<FrameData>& frames,
 
         const MatchResult m = match_frame(frame, iou_threshold);
 
-        // Track which GT IDs appear in this frame so we can detect "present but
-        // unmatched" for fragmentation.
-        std::unordered_map<uint32_t, bool /*matched*/> gt_present_this_frame;
-
         for (std::size_t g_idx = 0; g_idx < frame.ground_truth.size(); ++g_idx) {
             const GroundTruthDetection& gt        = frame.ground_truth[g_idx];
             const int32_t               match_idx = m.gt_to_pred[g_idx];
             const bool                  matched   = match_idx >= 0;
-            gt_present_this_frame[gt.gt_track_id] = matched;
 
             if (matched) {
                 tm.total_tp += 1;

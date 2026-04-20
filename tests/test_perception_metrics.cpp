@@ -106,6 +106,11 @@ TEST(DetectionMetrics, DetectionsButNoGroundTruthAllFP) {
     EXPECT_EQ(out.total_fp(), 2U);
     EXPECT_EQ(out.total_fn(), 0U);
     EXPECT_DOUBLE_EQ(out.micro_precision(), 0.0);
+    // Pure-hallucination FPs (no GT overlap at all) must accumulate in the
+    // background row of the confusion matrix, keyed by predicted class.
+    constexpr std::size_t kBg = 2;  // num_classes == 2 → bg index = 2
+    EXPECT_EQ(out.confusion_matrix[kBg][0], 1U);
+    EXPECT_EQ(out.confusion_matrix[kBg][1], 1U);
 }
 
 TEST(DetectionMetrics, GroundTruthButNoDetectionsAllFN) {
@@ -224,6 +229,43 @@ TEST(AP, PerfectRecallPerfectPrecision) {
     EXPECT_NEAR(db::compute_ap(preds, gts, 0.5F), 1.0, 1e-9);
 }
 
+TEST(AP, PartialPrecisionRecallInterpolates) {
+    // Two GTs, three predictions — highest confidence is a TP, middle is an FP,
+    // lowest is a TP. The precision-recall curve walks:
+    //   after conf=0.9: TP=1, FP=0 → recall=0.5, precision=1.00
+    //   after conf=0.7: TP=1, FP=1 → recall=0.5, precision=0.50
+    //   after conf=0.5: TP=2, FP=1 → recall=1.0, precision≈0.667
+    // 11-point interpolated AP takes max precision at recall ≥ each point:
+    //   r ∈ [0.0, 0.5] → 1.00 (from the 1st point)
+    //   r ∈ [0.6, 1.0] → 0.667 (from the 3rd point; the 2nd is dominated)
+    //   → AP = (6 × 1.00 + 5 × 0.667) / 11 ≈ 0.848
+    std::vector<db::ScoredPrediction> preds = {
+        {0, 0.9F, bbox(0, 0, 10, 10)},      // hits GT #1
+        {0, 0.7F, bbox(500, 500, 10, 10)},  // no GT → FP
+        {0, 0.5F, bbox(100, 100, 10, 10)},  // hits GT #2
+    };
+    std::vector<db::ScoredGroundTruth> gts = {
+        {0, bbox(0, 0, 10, 10)},
+        {0, bbox(100, 100, 10, 10)},
+    };
+    const double expected = (6.0 * 1.0 + 5.0 * (2.0 / 3.0)) / 11.0;
+    EXPECT_NEAR(db::compute_ap(preds, gts, 0.5F), expected, 1e-6);
+}
+
+TEST(DetectionMetrics, MeanAPAcrossMultipleClasses) {
+    // Class 0 has a perfect prediction (AP=1); class 1 has only a GT with no
+    // predictions (AP=0). mean_ap must be the simple average, 0.5.
+    db::FrameData f;
+    f.ground_truth.push_back(gt(0, bbox(0, 0, 10, 10)));
+    f.ground_truth.push_back(gt(1, bbox(100, 100, 10, 10)));
+    f.predictions.push_back(pred(0, bbox(0, 0, 10, 10), 0.9F));
+    const auto out = db::compute_detection_metrics({f}, 0.5F, /*num_classes=*/2);
+    ASSERT_EQ(out.per_class_ap.size(), 2U);
+    EXPECT_NEAR(out.per_class_ap.at(0), 1.0, 1e-9);
+    EXPECT_DOUBLE_EQ(out.per_class_ap.at(1), 0.0);
+    EXPECT_NEAR(out.mean_ap(), 0.5, 1e-9);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Tracking metrics — MOTA / MOTP / ID switches / fragmentations
 // ────────────────────────────────────────────────────────────────────────────
@@ -332,8 +374,21 @@ TEST(Performance, LargeFrameUnder100ms) {
     const auto t1  = std::chrono::steady_clock::now();
     const auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-    // Sanity: we built N GT and N predictions.
+    // Sanity: we built N GT and N predictions, so each GT is in exactly one of
+    // {TP, FN} and each prediction in exactly one of {TP, FP}.
     EXPECT_EQ(out.total_tp() + out.total_fn(), N);
     EXPECT_EQ(out.total_tp() + out.total_fp(), N);
+
+    // Correctness floor: half the predictions were built as 1-pixel-offset
+    // near-duplicates of real GTs (class-matched), so the scorer must recover
+    // them — not just produce the trivial all-FN/all-FP accounting that
+    // already satisfies the sanity asserts above. N/2 is the exact number of
+    // "matchable" preds we planted; we allow slack in case a few land just
+    // outside the IoU=0.5 cut for extreme aspect ratios.
+    constexpr std::size_t kMinExpectedTP = N / 2 - 50;
+    EXPECT_GT(out.total_tp(), kMinExpectedTP)
+        << "Scorer recovered only " << out.total_tp() << " TPs (expected > " << kMinExpectedTP
+        << "). A no-op implementation would still pass the sanity asserts above.";
+
     EXPECT_LT(ms, 100) << "Metrics took " << ms << "ms (target <100ms)";
 }
