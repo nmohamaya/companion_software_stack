@@ -632,3 +632,110 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 - If an operator needs to write benchmark data to a custom location, the allow-list is intentionally a compile-time list — add it with code review rather than config. If this friction becomes a real burden, we can add a CLI-only override flag that bypasses validation.
 
 **Date:** 2026-04-20 (during PR #593 review fix round)
+
+---
+
+## DR-025: GtClassMap — Alphabetical Pattern Ordering Documented, Not Fixed
+
+**Question:** PR #595 review flagged that `GtClassMap::lookup` docstring says "first match wins" but the implementation of `GtClassMap::load` iterates a `nlohmann::json` object, which is backed by `std::map` (alphabetical), not insertion order. Should we switch to `nlohmann::ordered_json`?
+
+**For switching to ordered_json:**
+- Matches user intuition: "I listed specific patterns first, they should win."
+- Removes the trap where `"SM_Car*"` written before `"SM_*"` in config is silently overridden.
+
+**For documenting and keeping std::map:**
+- `ordered_json` is a breaking change project-wide — every `drone::Config` consumer would be affected.
+- Alphabetical order is stable, deterministic, and greppable.
+- Users can work around it by naming patterns so desired winners sort first (e.g. `zzz_fallback*`).
+- Direct construction via `PatternEntry` vector still preserves caller order — the only case where order matters is `load()`.
+
+**Decision:** Document clearly (see `GtClassMap::lookup` docstring in `tests/benchmark/gt_emitter.h`) and add `LoadFromConfigUsesAlphabeticalOrder` test to lock the semantic. Revisit if we hit a real scenario where alphabetical-naming workaround is insufficient.
+
+**Revisit when:** A scenario config needs insertion-order semantics that alphabetical naming can't express, OR we move `drone::Config` to `ordered_json` for other reasons.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-026: GT Class Map — `class_id = 0` as Valid (COCO "person") Not as Sentinel
+
+**Question:** PR #595 review flagged that `GtClassMap::Entry::class_id` defaults to `0`, but COCO class 0 is "person" — a real class. Should we use `std::optional<Entry>` semantics throughout, or add a validity sentinel?
+
+**For optional/sentinel:**
+- Defends against bugs where a default-constructed Entry is silently returned instead of `nullopt`.
+- Makes the "not mapped" state explicit.
+
+**For keeping class_id = 0 as valid:**
+- `lookup()` already returns `std::optional<Entry>` — the "not mapped" case IS explicit at the API boundary.
+- A default-constructed `Entry` inside a `GtClassMap` only exists if the user writes one — tests don't show that happening.
+- Changing to a sentinel (e.g. `UINT32_MAX`) creates a separate class of bug where the sentinel is accidentally serialised into JSONL output.
+- Using `std::optional<Entry>` everywhere makes the API noisier for no real safety gain, since the lookup already returns an optional.
+
+**Decision:** Keep `class_id = 0` as a valid class. The default value of `Entry{}` is only reached if code inside the class intentionally returns a default — which it doesn't. The `lookup()` optional return is the defensible boundary.
+
+**Revisit when:** A new caller pattern emerges that passes `Entry{}` around without going through `lookup()`.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-027: GtClassMap — Silent Skip of Entries Missing `class_id` / `class_name`
+
+**Question:** PR #595 review flagged that `GtClassMap::load` silently drops entries that are malformed (missing `class_id` or `class_name`, or whose value is not an object). Should we WARN on each skip or throw?
+
+**For warn/throw:**
+- Catches config typos at startup rather than silently producing a smaller map.
+- `LoadFromConfigSkipsMalformedEntries` test exists but nobody reads test output.
+
+**For silent skip:**
+- `GtClassMap` is used at scenario-run time, not at production runtime. A scenario author running the scenario will see GT miss and investigate.
+- The outer WARN ("gt_class_map key is present but not a JSON object") already catches the whole-section typo case — added in this PR.
+- Per-entry warn adds log noise for a tooling-only harness.
+- If we want strict validation, that belongs in a separate `validate_scenario_config.py` pre-run tool, not in the emitter.
+
+**Decision:** Keep silent per-entry skip. Outer WARN covers the likely-to-happen whole-section typo. Scenario-config validation is a separate concern.
+
+**Revisit when:** A scenario ships with silently-dropped GT entries and nobody notices until a baseline regression.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-028: `register_filters` Kept Public on CosysGtEmitter (anonymous namespace class)
+
+**Question:** PR #595 review flagged that `CosysGtEmitter::register_filters` is public but the class lives in an anonymous namespace (no external callers possible). Should it be private and called from the constructor?
+
+**For private + constructor-call:**
+- Expresses the invariant that filters are always registered before any `emit()` call.
+- Removes the chance of a future refactor forgetting to call it.
+
+**For keeping as-is:**
+- The class is in an anonymous namespace — there ARE no external callers, so the exposure risk is nil.
+- Moving RPC calls into the constructor means construction can fail (via RPC error) but constructors can't return null. We'd have to throw — adding exception-handling paths to the factory.
+- The factory currently calls `register_filters` explicitly and logs a WARN on failure without aborting emitter creation. This "partial filter set is still useful" behaviour would be lost.
+
+**Decision:** Keep `register_filters` public and called from the factory. The anonymous-namespace scope already provides the isolation the reviewer wanted, and the explicit-call + WARN pattern preserves graceful-degradation semantics.
+
+**Revisit when:** We move `CosysGtEmitter` out of the anonymous namespace (e.g. for direct testing), at which point re-evaluate.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-029: GtClassMap — Linear Scan Not Unordered Map
+
+**Question:** PR #595 review flagged that `GtClassMap::lookup` does a linear scan through `patterns_`. Should it be an `unordered_map` with exact matches resolved first and wildcards as a fallback list?
+
+**For unordered_map:**
+- O(1) exact-match lookup vs O(N) linear scan.
+
+**For keeping linear scan:**
+- Typical class maps are <20 entries. Linear scan of 20 entries is a handful of ns — not a real hot path.
+- `lookup()` is called per-detection, ~30 times per frame at 30 Hz — ~900 calls/sec max. Even at 100 entries, ~100 µs total per second — 0.01% of tick budget.
+- Wildcards MUST be scanned linearly regardless; mixing exact-hash and wildcard-scan adds code complexity for no measurable gain.
+- Simple code is easier to reason about for a benchmark-harness-only component.
+
+**Decision:** Keep linear scan. Revisit if a real scenario emerges with >100 patterns, measured impact > 1% of tick budget.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
