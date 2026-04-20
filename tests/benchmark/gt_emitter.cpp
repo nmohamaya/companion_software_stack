@@ -7,7 +7,9 @@
 #include "benchmark/gt_emitter.h"
 
 #include "util/config.h"
+#include "util/ilogger.h"
 
+#include <cmath>
 #include <sstream>
 
 #include <nlohmann/json.hpp>
@@ -25,7 +27,17 @@ GtClassMap GtClassMap::load(const drone::Config& scenario_cfg) {
     // the returned section is an empty object — we produce an empty map,
     // which disables GT emission for the scenario (callers short-circuit).
     const auto map_json = scenario_cfg.section("gt_class_map");
-    if (!map_json.is_object() || map_json.empty()) {
+    if (!map_json.is_object()) {
+        // Key present but not an object (e.g. a config typo:
+        //   "gt_class_map": "forgot_to_expand"). Log a warning so the
+        // silent-drop is noticed during scenario development.
+        if (!map_json.is_null()) {
+            DRONE_LOG_WARN("[GtClassMap] `gt_class_map` key is present but not a JSON object — "
+                           "GT emission disabled for this scenario");
+        }
+        return GtClassMap{{}};
+    }
+    if (map_json.empty()) {
         return GtClassMap{{}};
     }
 
@@ -93,12 +105,15 @@ std::string to_json_line(const FrameGroundTruth& frame) {
     nlohmann::json objects = nlohmann::json::array();
     for (const auto& o : frame.objects) {
         nlohmann::json obj;
-        obj["class_id"]    = o.class_id;
-        obj["class_name"]  = o.class_name;
-        obj["gt_track_id"] = o.gt_track_id;
-        obj["bbox"]        = {{"x", o.bbox.x}, {"y", o.bbox.y}, {"w", o.bbox.w}, {"h", o.bbox.h}};
-        obj["occlusion"]   = o.occlusion;
-        obj["distance_m"]  = o.distance_m;
+        obj["class_id"]     = o.class_id;
+        obj["class_name"]   = o.class_name;
+        obj["gt_object_id"] = o.gt_object_id;
+        obj["bbox"]         = {{"x", o.bbox.x}, {"y", o.bbox.y}, {"w", o.bbox.w}, {"h", o.bbox.h}};
+        obj["occlusion"]    = o.occlusion;
+        // Guard against NaN/Inf in distance: nlohmann serialises them as `null`
+        // which silently breaks downstream consumers expecting a float. Replace
+        // with 0.0 and count on the caller's consistency check catching it.
+        obj["distance_m"] = std::isfinite(o.distance_m) ? o.distance_m : 0.0F;
         objects.push_back(std::move(obj));
     }
     j["objects"] = std::move(objects);
