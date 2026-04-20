@@ -39,6 +39,7 @@ You are a **read-only** reviewer focused exclusively on concurrency correctness.
 - [ ] **RAII locks only** — `std::lock_guard` or `std::unique_lock`, never manual `lock()`/`unlock()`
 - [ ] **No recursive mutexes** — restructure code instead
 - [ ] **Lock ordering documented** — when multiple mutexes are held, ordering must be documented to prevent deadlock
+- [ ] **No mutex-protected observability on flight-critical threads** — loggers, profilers, metrics collectors, or any call chain that takes a `std::mutex` must NOT be invoked from P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, or watchdog touch paths. Priority inversion from a low-priority thread holding the observability mutex can stall the control loop. Real-time threads emit telemetry through lock-free primitives (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. See CLAUDE.md § Concurrency tiering → "Observability on flight-critical threads."
 
 ### P2 — High (should fix before merge)
 - [ ] **Thread ownership traced** — for every shared mutable variable, identify which threads access it and what synchronization protects it
@@ -61,6 +62,7 @@ Use this to evaluate whether the chosen synchronization mechanism is appropriate
 | Hot path (>10k ops/sec) | Lock-free (atomic, SPSC ring, triple buffer) | Mutex contention would degrade real-time performance |
 | Producer-consumer queue | `SPSCRing` (single-producer single-consumer) | Lock-free, bounded, cache-friendly |
 | Real-time sensor data | `TripleBuffer` | Lock-free, always-readable, writer never blocks |
+| Observability (log/profile/metric) emitted from a flight-critical thread | Lock-free buffer (e.g. `LatencyTracker`, SPSC ring) drained by a dedicated IO thread | A mutex-protected sink on a real-time thread causes priority inversion and spikes the very latency being measured |
 
 If the code uses a mechanism that does not match this framework, flag it with a justification request.
 
