@@ -3141,4 +3141,56 @@ The `LatencyProfiler` holds a `std::mutex`, which conflicts with the observabili
 
 ---
 
-_Last updated after Improvement #76 (profiler wiring, #571 follow-up). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #77 — Ground-truth Emitter (Issue #594, Epic #523 CP0 part 3)
+
+**Date:** 2026-04-20
+**Category:** Testing / Benchmark harness
+**Issues:** [#594](https://github.com/nmohamaya/companion_software_stack/issues/594) · parent [#523](https://github.com/nmohamaya/companion_software_stack/issues/523) · meta-epic [#514](https://github.com/nmohamaya/companion_software_stack/issues/514)
+
+**What:** Per-frame ground-truth emitter — the second prerequisite for #573 baseline capture. Queries the simulator for visible objects and produces JSONL records consumable by the #570 metrics framework.
+
+Shape:
+
+- `IGroundTruthEmitter` interface + `GtDetection` / `FrameGroundTruth` / `GtCameraPose` types in `tests/benchmark/gt_emitter.h`.
+- `GtClassMap` — loads per-scenario `gt_class_map` config, supports exact-match + trailing-`*` wildcard patterns, translates simulator object names to `{class_id, class_name}`.
+- `to_json_line()` — single-line JSONL serialiser, round-trips cleanly through `nlohmann::json::parse`.
+- **Cosys-AirSim backend** (PR 1, this commit) using AirSim's built-in detection API (`simAddDetectionFilterMeshName` + `simGetDetections`) — bbox + relative pose + object name come from the simulator pre-computed. Stable `gt_track_id` derived from object name via `std::hash`. Occlusion placeholder (0.0) since the detection API filters to visible-only; proper occlusion score tracked in IMPROVEMENTS.md as a follow-up.
+- **Gazebo backend** (PR 2, follow-up) — covers scenarios #02/#18/#21.
+
+Design decisions captured in `docs/design/perception_v2_detailed_design.md` §13 (ground-truth emitter section):
+
+1. **Approach B (per-frame dynamic)** over static-config GT — honest for dynamic scenes.
+2. **Stable `gt_track_id` across FoV exits** — the simulator has omniscient identity, so no dormant-track guessing needed. Out-of-FoV → emit nothing; re-enter → same track_id.
+3. **Per-scenario `gt_class_map`** — each scenario's config file is self-contained.
+4. **Occlusion as first-class field** with a placeholder value for now.
+
+**Files added:**
+- `tests/benchmark/gt_emitter.h` — interface + types (~160 lines)
+- `tests/benchmark/gt_emitter.cpp` — shared impl (GtClassMap::load, lookup, to_json_line) (~110 lines)
+- `tests/benchmark/cosys_gt_emitter.cpp` — Cosys backend (~220 lines, HAVE_COSYS_AIRSIM-gated)
+- `tests/test_gt_emitter.cpp` — 11 unit tests (shared layer only; Cosys needs live AirSim)
+
+**Files modified:**
+- `config/scenarios/29_cosys_perception.json` + `30_cosys_static.json` — add `gt_class_map`
+- `docs/design/perception_v2_detailed_design.md` — §13 ground-truth emitter section (gitignored draft)
+- `docs/architecture/SIMULATION_ARCHITECTURE.md` — scope note clarifying Gazebo focus + pointers to Cosys docs
+- `docs/guides/CONFIG_GUIDE.md` — `gt_class_map` scenario-config key documentation
+- `docs/tracking/IMPROVEMENTS.md` — entry #10 for a future `COSYS_SIMULATION_ARCHITECTURE.md`
+- `tests/CMakeLists.txt` — new `test_gt_emitter` target
+- `tests/TESTS.md` — suite entry + total count
+
+**Why:** Baseline capture (#573) needs per-frame GT bboxes to compute TP/FP/FN, MOTA, ID-switch, fragmentation against the pre-rewrite pipeline's output. Without this emitter those numbers can't be produced honestly on scenes with dynamic objects (3 of 5 target scenarios). The Cosys-first split lets us start baseline capture on #29/#30 while the Gazebo backend (PR 2) comes online for #02/#18/#21.
+
+**Test count:** +11 in `test_gt_emitter`. 1650 → 1661 (+SDK).
+
+**Universal acceptance criteria:** design doc updated; no license obligations change.
+
+**Follow-ups tracked in IMPROVEMENTS.md:**
+
+- Gazebo GT emitter (PR 2 under the same issue #594).
+- Proper occlusion score via segmentation-mask pixel accounting.
+- `COSYS_SIMULATION_ARCHITECTURE.md` parallel to the Gazebo doc.
+
+---
+
+_Last updated after Improvement #77 (GT emitter PR 1, #594). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

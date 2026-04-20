@@ -110,6 +110,23 @@ add_drone_test(test_latency_profiler test_latency_profiler.cpp)
 # Guards the wiring contract without needing a full scenario run.
 add_drone_test(test_latency_profiler_dump test_latency_profiler_dump.cpp)
 
+# ── GT emitter tests (Issue #594 — Epic #523, PR 1 Cosys backend) ─
+# Shared-layer tests only (GtClassMap + to_json_line). The Cosys backend
+# itself needs a live AirSim server and is covered by scenario tests #29/#30.
+# When built with HAVE_COSYS_AIRSIM, the Cosys .cpp is linked in and the
+# factory resolves at link time; otherwise the backend .cpp is empty.
+add_drone_test(test_gt_emitter
+    test_gt_emitter.cpp
+    benchmark/gt_emitter.cpp
+    benchmark/cosys_gt_emitter.cpp
+)
+target_include_directories(test_gt_emitter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_gt_emitter PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
 
