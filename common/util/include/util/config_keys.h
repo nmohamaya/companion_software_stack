@@ -424,6 +424,18 @@ inline constexpr const char* NOISE_VELOCITY_STD_MPS  = ".noise.velocity_std_mps"
 }  // namespace hal
 
 // ═══════════════════════════════════════════════════════════
+// Benchmark harness settings (Epic #523 — perception rewrite baseline)
+// ═══════════════════════════════════════════════════════════
+// All keys are opt-in. Default configs leave the profiler disabled so
+// production builds pay zero overhead. Scenario configs that want a
+// baseline capture override `benchmark.profiler.enabled: true`.
+namespace benchmark {
+inline constexpr const char* SECTION              = "benchmark";
+inline constexpr const char* PROFILER_ENABLED     = "benchmark.profiler.enabled";
+inline constexpr const char* PROFILER_OUTPUT_DIR  = "benchmark.profiler.output_dir";
+}  // namespace benchmark
+
+// ═══════════════════════════════════════════════════════════
 // Cosys-AirSim simulation settings
 // ═══════════════════════════════════════════════════════════
 namespace cosys_airsim {

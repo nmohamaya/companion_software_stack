@@ -34,9 +34,12 @@
 #include "util/iclock.h"
 #include "util/latency_tracker.h"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <map>
@@ -44,6 +47,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -191,6 +195,64 @@ public:
         return os.str();
     }
 
+    /// Result of `dump_to_file`.
+    enum class DumpStatus : uint8_t {
+        Ok,                     // Wrote JSON to disk.
+        PathRejected,           // Path canonicalised outside the allow-list (security).
+        DirectoryCreateFailed,  // filesystem::create_directories returned an error.
+        OpenFailed,             // ofstream failed to open.
+    };
+
+    /// Write `to_json()` output to `path`. Performs:
+    ///   1. Path validation — `path` is canonicalised and must resolve to either
+    ///      (a) inside the current working directory (dev/local runs), or
+    ///      (b) under one of a compile-time production allow-list
+    ///          (`/var/log/drone`, `/tmp`). Paths with `..` traversal or
+    ///          outside the allow-list are rejected — no I/O performed.
+    ///   2. Create the parent directory (best-effort, ignores "already exists").
+    ///   3. Open the file and stream `to_json()` output.
+    ///
+    /// Thread-safe. Does not acquire the profiler mutex during file I/O —
+    /// only during the internal `to_json()` snapshot (which takes the mutex
+    /// for as long as the two-phase snapshot takes, then releases).
+    ///
+    /// Consolidates the dump logic that both P2 and P4 main.cpp used to
+    /// duplicate. See DR-022 for the flight-critical-thread justification and
+    /// DR-024 for the path-validation allow-list rationale.
+    [[nodiscard]] DumpStatus dump_to_file(const std::filesystem::path& path) const {
+        if (!is_safe_output_path(path)) {
+            return DumpStatus::PathRejected;
+        }
+        std::error_code ec;
+        const auto      parent = path.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, ec);
+            if (ec) {
+                return DumpStatus::DirectoryCreateFailed;
+            }
+        }
+        std::ofstream out(path);
+        if (!out) {
+            return DumpStatus::OpenFailed;
+        }
+        out << to_json();
+        return DumpStatus::Ok;
+    }
+
+    /// Human-readable error string for a `DumpStatus`. Used by the P2/P4 main
+    /// logging paths to produce consistent WARN/ERROR messages.
+    [[nodiscard]] static const char* describe(DumpStatus s) noexcept {
+        switch (s) {
+            case DumpStatus::Ok: return "ok";
+            case DumpStatus::PathRejected:
+                return "path rejected: canonicalises outside the allow-list "
+                       "(CWD / /var/log/drone / /tmp)";
+            case DumpStatus::DirectoryCreateFailed: return "create_directories failed";
+            case DumpStatus::OpenFailed: return "ofstream open failed";
+        }
+        return "unknown";
+    }
+
     /// Clear all per-stage state and the trace ring. Thread-safe.
     void reset() {
         const std::lock_guard<std::mutex> lock(mtx_);
@@ -213,6 +275,54 @@ public:
     }
 
 private:
+    // Return true iff `p` resolves under the current working directory OR
+    // under a compile-time production allow-list (/var/log/drone, /tmp).
+    // Rejects `..`-traversal by canonicalising first — a relative path like
+    // "drone_logs/../../etc/cron.d" canonicalises to an absolute path outside
+    // the CWD, which then fails the allow-list check.
+    //
+    // This is a security boundary: `benchmark.profiler.output_dir` comes from
+    // config, and a tampered config must not be able to cause file writes to
+    // arbitrary locations. See DR-024 and review-security P2 on PR #593.
+    [[nodiscard]] static bool is_safe_output_path(const std::filesystem::path& p) {
+        std::error_code ec;
+        // weakly_canonical handles non-existent paths (we may be creating the
+        // file) while still resolving `..` segments, unlike canonical which
+        // requires the path to exist.
+        const auto resolved = std::filesystem::weakly_canonical(std::filesystem::absolute(p, ec),
+                                                                ec);
+        if (ec) {
+            return false;
+        }
+
+        const auto path_is_under = [](const std::filesystem::path& candidate,
+                                      const std::filesystem::path& root) {
+            const std::string cs = candidate.string();
+            const std::string rs = root.string();
+            if (cs.size() < rs.size()) return false;
+            if (cs.compare(0, rs.size(), rs) != 0) return false;
+            // Must be exactly the root or followed by a separator —
+            // prevents "/etc/foo" matching "/etc/f" as a prefix.
+            return cs.size() == rs.size() || cs[rs.size()] == '/';
+        };
+
+        const auto cwd = std::filesystem::current_path(ec);
+        if (!ec && path_is_under(resolved, cwd)) {
+            return true;
+        }
+
+        static const std::array<std::filesystem::path, 2> kSafeRoots = {
+            std::filesystem::path{"/var/log/drone"},
+            std::filesystem::path{"/tmp"},
+        };
+        for (const auto& root : kSafeRoots) {
+            if (path_is_under(resolved, root)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Walk the trace ring oldest-first. Caller must hold `mtx_`.
     [[nodiscard]] std::vector<LatencyTrace> collect_traces_locked() const {
         if (trace_capacity_ == 0) {

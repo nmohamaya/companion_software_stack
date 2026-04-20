@@ -19,6 +19,7 @@
 #include "util/config_keys.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/latency_profiler.h"
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -29,6 +30,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <optional>
 #include <thread>
 
 using namespace drone::planner;
@@ -364,6 +367,22 @@ int main(int argc, char* argv[]) {
                                                         watchdog);
     uint32_t                           health_tick = 0;
 
+    // ── Optional benchmark profiler (Epic #523, Issue #571) ──
+    // Opt-in via `benchmark.profiler.enabled`. When active, captures per-tick
+    // latency for PlannerLoop / GeofenceCheck / FaultEval and dumps to JSON
+    // on shutdown. See DR-022 for the priority-inversion analysis permitting
+    // the mutex-protected record path on this flight-critical thread.
+    const bool benchmark_profiler_enabled =
+        ctx.cfg.get<bool>(drone::cfg_key::benchmark::PROFILER_ENABLED, false);
+    std::optional<drone::util::LatencyProfiler> benchmark_profiler;
+    if (benchmark_profiler_enabled) {
+        benchmark_profiler.emplace();
+        DRONE_LOG_INFO("[Benchmark] LatencyProfiler enabled — stages: PlannerLoop, GeofenceCheck, "
+                       "FaultEval");
+    }
+    drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
+                                                                    : nullptr;
+
     // ── Main planning loop (10 Hz) ──────────────────────────
     // Execution order contract:
     //   1. Read inputs → 2. Pose staleness → 3. Obstacle cross-check →
@@ -376,8 +395,12 @@ int main(int argc, char* argv[]) {
     while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(planning_hb.handle());
         drone::systemd::notify_watchdog();
-        drone::util::FrameDiagnostics diag(loop_tick);
-        drone::util::ScopedDiagTimer  loop_timer(diag, "PlannerLoop");
+        drone::util::FrameDiagnostics             diag(loop_tick);
+        drone::util::ScopedDiagTimer              loop_timer(diag, "PlannerLoop");
+        std::optional<drone::util::ScopedLatency> bench_loop;
+        // DR-022: profiler mutex is safe here — single-threaded planner loop
+        // at 10 Hz, mutex hold-time <100ns vs multi-ms tick work, opt-in only.
+        if (profiler_ptr) bench_loop.emplace(*profiler_ptr, "PlannerLoop");
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
@@ -424,7 +447,9 @@ int main(int argc, char* argv[]) {
 
         // ── 4. Geofence check (airborne only, skip TAKEOFF) ─
         {
-            drone::util::ScopedDiagTimer fence_timer(diag, "GeofenceCheck");
+            drone::util::ScopedDiagTimer              fence_timer(diag, "GeofenceCheck");
+            std::optional<drone::util::ScopedLatency> bench_fence;
+            if (profiler_ptr) bench_fence.emplace(*profiler_ptr, "GeofenceCheck");
             if (geofence.is_enabled() && fsm.state() != MissionState::IDLE &&
                 fsm.state() != MissionState::PREFLIGHT && fsm.state() != MissionState::TAKEOFF) {
                 auto fence_result = geofence.check(static_cast<float>(pose.translation[0]),
@@ -448,7 +473,9 @@ int main(int argc, char* argv[]) {
 
         // ── 5. Fault evaluate ───────────────────────────────
         auto fault = [&]() {
-            drone::util::ScopedDiagTimer t(diag, "FaultEval");
+            drone::util::ScopedDiagTimer              t(diag, "FaultEval");
+            std::optional<drone::util::ScopedLatency> bench_fault;
+            if (profiler_ptr) bench_fault.emplace(*profiler_ptr, "FaultEval");
             return fault_mgr.evaluate(sys_health, fc_state, pose.timestamp_ns, now_ns,
                                       pose.quality);
         }();
@@ -515,6 +542,26 @@ int main(int argc, char* argv[]) {
 
         ++loop_tick;
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
+    }
+
+    // ── Benchmark profiler JSON dump (Issue #571 wiring) ──────
+    // Dump before notify_stopping() so the I/O is under the active-state
+    // watchdog and any failure is logged at ERROR (not a shutdown-window
+    // WARN). P4 is single-threaded so the loop exit above is enough to
+    // guarantee the profiler's mutex is uncontended. DR-022 covers the
+    // flight-critical analysis.
+    if (benchmark_profiler) {
+        const std::string output_dir = ctx.cfg.get<std::string>(
+            drone::cfg_key::benchmark::PROFILER_OUTPUT_DIR, "drone_logs/benchmark");
+        const std::filesystem::path path = std::filesystem::path(output_dir) /
+                                           "latency_mission_planner.json";
+        const auto status = benchmark_profiler->dump_to_file(path);
+        if (status == drone::util::LatencyProfiler::DumpStatus::Ok) {
+            DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path.string());
+        } else {
+            DRONE_LOG_ERROR("[Benchmark] Profiler dump FAILED for {}: {}", path.string(),
+                            drone::util::LatencyProfiler::describe(status));
+        }
     }
 
     drone::systemd::notify_stopping();

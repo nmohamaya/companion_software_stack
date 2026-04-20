@@ -272,6 +272,14 @@
         "loiter_escalation_timeout_s": 30
     },
 
+    "benchmark": {
+        "_comment": "Benchmark harness (Epic #523 — perception-rewrite baseline). Profiler is opt-in; default off to keep production overhead at zero.",
+        "profiler": {
+            "enabled": false,
+            "output_dir": "drone_logs/benchmark"
+        }
+    },
+
     "cosys_airsim": {
         "_comment": "Cosys-AirSim simulation settings (used when backend=cosys_airsim)",
         "host": "127.0.0.1",

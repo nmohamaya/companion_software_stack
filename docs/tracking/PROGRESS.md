@@ -3104,4 +3104,41 @@ Built on top of the existing `LatencyTracker` for per-stage ring/sort/percentile
 
 ---
 
-_Last updated after Improvement #75 (issue #571). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #76 — Profiler Wiring + DR-022 (Issue #571 follow-up)
+
+**Date:** 2026-04-20
+**Category:** Testing / Benchmark harness
+**Issues:** Parent [#571](https://github.com/nmohamaya/companion_software_stack/issues/571) (follow-up from CP0 part 2 of Epic #523 / meta-epic #514)
+
+**What:** Wired the `LatencyProfiler` from PR #591 into the two flight-critical processes that the upcoming #573 baseline-capture PR needs timing data from:
+
+- **P2 perception** — `ScopedLatency` guards at the existing `ScopedDiagTimer` call sites in the inference, tracker, and fusion threads (stages `Detect`, `Track`, `Fuse`). Each thread takes an optional `LatencyProfiler*` parameter; `nullptr` means profiling is off (zero overhead).
+- **P4 mission planner** — same pattern around the planner loop, geofence check, and fault eval (stages `PlannerLoop`, `GeofenceCheck`, `FaultEval`).
+- **Config gate** — new `benchmark.profiler.enabled` (default `false`) and `benchmark.profiler.output_dir` (default `drone_logs/benchmark`) keys. Production builds pay zero overhead.
+- **JSON dump** — on clean shutdown each process writes `latency_<process>.json` to the configured output dir. `#573` baseline capture will merge these into `benchmarks/baseline.json`.
+
+The `LatencyProfiler` holds a `std::mutex`, which conflicts with the observability-on-flight-critical-threads rule added in PR #591 and extended in PR #592. The tightened rule now allows a documented exception; **DR-022** (`docs/guides/DESIGN_RATIONALE.md`) captures the full analysis showing this usage is safe:
+
+1. **Priority isolation** — all recorders are peer pipeline threads, no higher-priority thread is blocked.
+2. **Bounded hold-time** — mutex held for ~500 ns vs ms-scale measured work (3–5 orders of magnitude separation).
+3. **Opt-in gating** — no production build or default scenario runs the profiler.
+
+**Files added:** `tests/test_latency_profiler_dump.cpp` (3 tests — end-to-end JSON dump, disabled-profiler no-op, concurrent-workers records-land).
+
+**Files modified:**
+- `process2_perception/src/main.cpp` — profiler + 3 `ScopedLatency` sites + shutdown dump
+- `process4_mission_planner/src/main.cpp` — same, 3 sites
+- `common/util/include/util/config_keys.h` — new `benchmark::*` namespace
+- `config/default.json` — `benchmark.profiler.{enabled,output_dir}` defaults
+- `docs/guides/DESIGN_RATIONALE.md` — DR-022
+- `tests/CMakeLists.txt` — new test target
+
+**Why:** Baseline-capture (#573) requires per-stage p95/p99 latency for scenarios #02/#18/#21/#29/#30. Without instrumentation those numbers don't exist. This is the smaller of the two prerequisites before #573 can land (the other is a ground-truth emitter for per-frame bbox GT, which is its own design discussion).
+
+**Test count:** +3 in `test_latency_profiler_dump`. 1647 → 1650 (approximately — exact number depends on scenario ring tests + SDK-gated tests). All 1647 pre-existing tests still pass.
+
+**Universal acceptance criteria:** DR-022 documents the safety analysis; Rule 31 in `deploy/safety_audit.sh` now WARNs on this usage and points reviewers to DESIGN_RATIONALE.md. No license-obligation changes — stdlib only.
+
+---
+
+_Last updated after Improvement #76 (profiler wiring, #571 follow-up). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

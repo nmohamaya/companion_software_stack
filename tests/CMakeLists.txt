@@ -104,6 +104,12 @@ add_drone_test(test_latency_tracker test_latency_tracker.cpp)
 # so no additional sources; lives in common/util alongside latency_tracker.
 add_drone_test(test_latency_profiler test_latency_profiler.cpp)
 
+# ── LatencyProfiler wiring smoke test (Issue #571 wiring PR) ─────
+# Simulates the P2/P4 profiler-wiring pattern end-to-end: concurrent
+# workers record via ScopedLatency, dump to JSON on disk, parse back.
+# Guards the wiring contract without needing a full scenario run.
+add_drone_test(test_latency_profiler_dump test_latency_profiler_dump.cpp)
+
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
 
