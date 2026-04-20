@@ -473,3 +473,61 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **When to revisit:** If the benchmark harness graduates into streaming / online evaluation where `compute_ap` runs 1000× per second, or if profiling shows the hash cost dominates.
 
 **Date:** 2026-04-20 (during PR #590 review fix round)
+
+---
+
+## DR-020: LatencyProfiler — `std::string` in `LatencyTrace` vs Fixed `char[N]` Array
+
+**Question:** The review-performance agent (PR #591) flagged that `LatencyTrace::stage` is a `std::string`, which makes `LatencyTrace` non-trivially-copyable and forces a (potentially heap-allocating) string assignment on every `record()` call into the trace ring. They suggested replacing with `char stage[32]{}` so the struct becomes trivially copyable and the trace-ring write is a `memcpy`.
+
+**For switching to `char[N]`:**
+
+- `LatencyTrace` becomes trivially copyable — bulk ring snapshots via `memcpy` instead of a per-element copy constructor.
+- Eliminates the SSO dependency on typical stage-name lengths (currently safe because names like `"detector"` fit in ~15-char SSO buffers, but not guaranteed).
+- Tighter bounded memory footprint — no silent heap growth if a stage name happens to be long.
+
+**For keeping `std::string`:**
+
+- Unbounded stage names stay supported without silent truncation. A `char[32]` truncates; the resulting JSON output then has two different stages with the same truncated key colliding in `stages`.
+- The dominant cost on the `record()` path isn't the string copy — it's the mutex, `now_ns()`, and the map find. Stage-name assignment is < 100 ns per call when SSO applies.
+- The `collect_traces_locked()` snapshot already copies `LatencyTrace` by value into a `std::vector<LatencyTrace>` — switching to `char[N]` makes that bulk copy faster, but it's not on the hot path.
+- A fixed char array forces every caller to audit stage-name lengths across the codebase; adding a debug assert or documented contract to cap stage names is the work we'd need to do regardless.
+
+**Decision:** Keep `std::string`. The complaint is structurally valid but practically marginal — the SSO optimisation covers typical usage, the mutex dominates the record-path cost, and the bounded-footprint argument doesn't hold up against silent-truncation collisions. The heterogeneous-comparator fix landed on the map key (avoiding the per-record `std::string` allocation for the map lookup) captures the biggest concrete win the review identified.
+
+**When to revisit:**
+
+- If profiling shows the trace-ring write (not the map lookup) as the dominant cost — e.g. if we start firing `record()` from tight loops where stage names are pre-computed longer strings.
+- If we add a hard real-time pipeline stage (> 1 kHz) that uses the profiler directly instead of the intended `LatencyTracker` fast-path.
+- If bounded allocation guarantees become a regulatory/certification constraint.
+
+**Date:** 2026-04-20 (during PR #591 review fix round)
+
+---
+
+## DR-021: LatencyProfiler — `summaries()` Sorts Under the Profiler Mutex
+
+**Question:** The review-performance and review-concurrency agents (PR #591) flagged that `LatencyProfiler::summaries()` calls `LatencyTracker::summary()` for each stage while holding the profiler mutex, and each `summary()` call sorts its sample ring (O(N log N)). With 10 stages × 1024 samples that's roughly 100 000 compare ops — ~100-200 µs of mutex hold time on an Orin Nano — during which concurrent `record()` callers block. They suggested exposing a raw-snapshot method on `LatencyTracker` and sorting outside the profiler lock.
+
+**For offloading the sort outside the lock:**
+
+- Shorter critical section → lower worst-case block time for concurrent recorders.
+- Predictable: under-lock cost becomes O(N) memcpy per stage rather than O(N log N) sort.
+- Avoids the scenario where `summaries()` can spike the very latency it's measuring.
+
+**For keeping the sort under the lock:**
+
+- `summaries()` is explicitly a periodic-dump path, not per-tick. The benchmark harness calls it at window boundaries (scenario-end or checkpoint), not 30 Hz. A 200 µs pause once every few seconds is invisible in the measured pipeline.
+- Splitting introduces a new coupling: `LatencyTracker` would need a public `snapshot()` returning the raw sample vector, which leaks the ring-buffer implementation detail into callers. `LatencyTracker`'s current API is tight (`record`, `summary`, `reset`) — opening it up for the profiler's benefit is backwards.
+- The concurrent-read-while-write test added in this PR catches any correctness regression; it doesn't catch a 200 µs pause, but that's not a correctness issue.
+- The alternative (copy raw samples under lock, sort outside) still holds the lock for O(N × stages) memcpy — the absolute win is smaller than the refactor cost.
+
+**Decision:** Keep the sort under the profiler mutex. The problem is real in theory but not triggered by the benchmark-harness usage pattern. If we ever call `summaries()` from a hot path, the right fix is to move the call off the hot path, not to re-architect the lock discipline.
+
+**When to revisit:**
+
+- If `summaries()` moves onto the per-tick path (e.g. a live dashboard reading current state at 30 Hz).
+- If TSan or profiling shows recorder threads blocking on `mtx_` for measurable stretches during dumps.
+- If `LatencyTracker` grows a snapshot API for other reasons — then this optimisation becomes free to land.
+
+**Date:** 2026-04-20 (during PR #591 review fix round)

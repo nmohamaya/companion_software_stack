@@ -324,6 +324,8 @@ This is a **safety-critical drone software stack**. Use appropriate C++ construc
 - **Mutex (`std::lock_guard`):** Non-hot-path shared state — config access, ring buffers, logging. Always use RAII (`lock_guard`/`unique_lock`), never manual `lock()`/`unlock()`.
 - **Avoid:** Recursive mutexes (restructure code instead), `memory_order_relaxed` without justification, bare `lock()`/`unlock()` calls.
 
+**Observability on flight-critical threads:** Mutex-protected observability primitives (loggers, profilers, metrics collectors, diagnostic collectors — e.g. `LatencyProfiler`, `JsonLogSink`, `FrameDiagnostics`) must NOT be called from flight-critical or real-time threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog paths). A mutex on a control-loop thread introduces priority-inversion risk and can spike the very latency being measured. If a real-time thread needs to emit telemetry, buffer into a lock-free primitive (e.g. `LatencyTracker`, SPSC ring) and let a dedicated IO thread drain into the shared observability. Each observability primitive's header must document the constraint (e.g. "For >10 kHz hot loops, prefer the single-threaded `LatencyTracker` directly and merge off-line").
+
 ### Root Cause Analysis
 
 **Always fix the root cause** of issues rather than fixing symptoms or updating tests without understanding the underlying problem. When a test fails, investigate *why* the code produced that output before changing the test. If a fix requires changing test expectations, explain why the new expectation is correct. Treating symptoms masks real bugs that will resurface in production.

@@ -3066,4 +3066,42 @@ Matching is greedy confidence-ordered per class — standard COCO-style evaluati
 
 ---
 
-_Last updated after Improvement #74 (issue #570). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #75 — Latency Profiler (Issue #571, Epic #523)
+
+**Date:** 2026-04-20
+**Category:** Testing / Benchmark harness
+**Issues:** [#571](https://github.com/nmohamaya/companion_software_stack/issues/571) · parent [#523](https://github.com/nmohamaya/companion_software_stack/issues/523) · meta-epic [#514](https://github.com/nmohamaya/companion_software_stack/issues/514)
+
+**What:** Landed the second building block of the perception-rewrite benchmark harness: a thread-safe, per-stage latency profiler with correlation-ID-tagged end-to-end traces. Pure C++17 header-only library in `common/util/include/util/latency_profiler.h`, sitting next to the existing single-threaded `LatencyTracker` primitive.
+
+Public API:
+
+- `LatencyProfiler` — owns a `std::map<std::string, LatencyTracker>` for per-stage percentile aggregation plus a bounded `LatencyTrace` ring for end-to-end traces. `record()`, `summaries()`, `traces()`, `to_json()`, `reset()` are all thread-safe via an internal mutex.
+- `ScopedLatency` — RAII timer. Captures start-time and the thread-local `CorrelationContext::get()` at construction; records the duration on destruction. Defends against non-monotonic clocks by clamping to zero.
+- `LatencyProfiler::to_json()` — stable JSON snapshot (lexicographically ordered stages + oldest-first trace ring) suitable for consumption by the benchmark harness baseline file.
+
+Built on top of the existing `LatencyTracker` for per-stage ring/sort/percentile logic — reuses the lock-free sample ring and scratch-buffer optimisation already tested and shipped.
+
+**Files added:** `common/util/include/util/latency_profiler.h`, `tests/test_latency_profiler.cpp`.
+**Files modified:** `tests/CMakeLists.txt` (new `test_latency_profiler` target), `docs/design/perception_v2_detailed_design.md` (§13 landed status + explainer).
+
+**Why:** Sub-issue #573 (baseline capture) needs p95 latency per scenario. Without this profiler we'd hand-wire timestamps at every stage. This gives the harness a single uniform API (`ScopedLatency guard(profiler, "detector")`) that every stage in P2 will adopt in a follow-up PR. Correlation-ID tagging means per-frame traces are coherent across processes — essential for "why did frame 17 blow its budget" investigations that regression gating will surface.
+
+**Test count:** +15 tests in `test_latency_profiler`:
+
+- `LatencyProfiler` suite (9): empty-profiler guards, per-stage tracker population, reset, percentile correctness against injected 1..100 ns durations, trace ring ordering, trace wrap-on-overflow (cap 4, write 10 → keep last 4), zero-capacity ring disables tracing but keeps aggregates, thread-safe concurrent writes (4 threads × 500 records), stages/traces structure via `to_json`.
+- `ScopedLatency` suite (3): records duration on destruction (MockClock 42 µs → tracker min_ns == 42 000), captures correlation ID at construction (changes mid-scope are ignored), non-monotonic clock → zero duration (defensive).
+- `LatencyProfiler.ToJsonEscapesStageNames`, `ToJsonEmptyProfilerIsValid`, `OverheadUnderBudget` (10 000 guarded records under 5 µs per record — several orders under the < 2 % tick budget).
+
+1605 → 1620 (baseline pre-PR was without PR #590's 25 tests; this branch is off `feature/perception-v2-integration` which now has PR #590 merged).
+
+**Universal acceptance criteria:** updated `docs/design/perception_v2_detailed_design.md` §13 with the profiler's public API + usage + overhead note. No license-obligation changes, so ADR-012 / LICENSE untouched.
+
+**Follow-ups:**
+
+- Wire `ScopedLatency` guards into P2 pipeline stages (detector, tracker, grid update, planner tick) — separate PR to keep review surface small.
+- #573 baseline capture — consumes this profiler's JSON output and merges with #570's detection-metrics JSON into `benchmarks/baseline.json`.
+
+---
+
+_Last updated after Improvement #75 (issue #571). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
