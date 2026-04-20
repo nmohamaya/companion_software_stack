@@ -130,8 +130,9 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
 | [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--6-tests) | 1 | 6 | CosysCameraBackend name-resolution precedence: per-section → top-level → default, plus symmetric empty-value-not-shadowing for vehicle_name (gated on `HAVE_COSYS_AIRSIM`) |
-| [Benchmark — Perception Metrics](#test_perception_metricscpp--23-tests) | 1 | 23 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
-| **Total** | **72 C++ + 5 shell** | **1589 (no SDK) / 1628 (+SDK) + 42 + 250+** | |
+| [Benchmark — Perception Metrics](#test_perception_metricscpp--25-tests) | 1 | 25 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
+| [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
+| **Total** | **73 C++ + 5 shell** | **1606 (no SDK) / 1645 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -358,7 +359,7 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ---
 
-### test_perception_metrics.cpp — 23 tests
+### test_perception_metrics.cpp — 25 tests
 
 **What it tests:** `drone::benchmark::perception_metrics` — pure-C++ metrics library that scores the perception pipeline against ground truth. Foundation layer for the Epic #523 benchmark harness; consumed by later sub-issues (latency profiler, CI gating, dashboard).
 
@@ -1034,6 +1035,21 @@ capacity test validates the bitwise-mask wrap-around that avoids
 expensive modulo operations.
 
 **Key files under test:** `util/latency_tracker.h`
+
+---
+
+### test_latency_profiler.cpp — 15 tests
+
+**What it tests:** `LatencyProfiler` + `ScopedLatency` — the per-stage, thread-safe latency profiler that sits on top of `LatencyTracker` for the Epic #523 benchmark harness. Aggregates percentile stats per named stage, maintains a bounded correlation-ID-tagged trace ring, and emits a stable JSON snapshot for baseline files.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `LatencyProfiler` | 12 | Empty-profiler guards (no stages, no traces, summaries empty); per-stage tracker population from `record()`; `reset()` clears everything; percentile correctness against injected 1..100 ns durations (p50≈50, p90≈90, p95≈95, p99≈99 ±2); trace ring preserves oldest-first ordering of correlation IDs across mixed stages; ring-overflow test (cap 4, write 10 → retains last 4; per-stage aggregates still count all 10); zero-capacity trace ring disables tracing without affecting aggregates; 4-thread × 500-record concurrent-write stress (sum = 2000, no lost updates); `to_json()` contains both `stages` and `traces` sections even when empty; JSON escapes quotes and backslashes in stage names |
+| `ScopedLatency` | 3 | Records duration on destructor (MockClock 42 µs → `min_ns == 42 000`); captures `CorrelationContext::get()` at construction and ignores mid-scope changes; non-monotonic clock (time goes backward inside the scope) → duration clamped to 0 ns, not wrapped to 2^64 |
+
+**Why these tests matter:** The profiler is consumed by every subsequent PR in the perception-v2 rewrite (`ScopedLatency` guards wrap detector/tracker/grid-update/planner-tick). If percentile math is wrong, every baseline and every regression gate is wrong. The thread-safety test catches mutex gaps at lower cost than a TSan run. The non-monotonic-clock defence exists because sign extension bugs with signed durations have bitten us before (memory: `feedback_integer_conversion_safety.md`). The overhead sub-test (`OverheadUnderBudget`) measures `ScopedLatency` cost at 10 000 empty-scope records and asserts < 5 µs per record — three orders below the 2 % of a 30 Hz tick budget.
+
+**Key files under test:** `util/latency_profiler.h`
 
 ---
 

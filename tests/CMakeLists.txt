@@ -99,6 +99,11 @@ add_drone_test(test_result          test_result.cpp)
 # ── LatencyTracker tests ─────────────────────────────────────
 add_drone_test(test_latency_tracker test_latency_tracker.cpp)
 
+# ── LatencyProfiler tests (Issue #571 — Epic #523) ──────────
+# Per-stage latency profiler used by the benchmark harness. Header-only,
+# so no additional sources; lives in common/util alongside latency_tracker.
+add_drone_test(test_latency_profiler test_latency_profiler.cpp)
+
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
 
