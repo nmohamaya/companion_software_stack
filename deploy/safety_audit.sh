@@ -45,6 +45,8 @@
 #     7  goto
 #    30  Signed→unsigned casts on
 #        durations/sizes (warn)
+#    31  Mutex-protected observability
+#        on flight-critical threads (warn)
 #
 #   PREFER rules (flagged as FAIL/WARN if missing):
 #    17  [[nodiscard]] on Result    24  override keyword
@@ -376,6 +378,31 @@ else
     log_warn 30 "Possible signed→unsigned hazards" "$hits — verify clamp before cast"
     add_detail "### Rule 30: Integer conversion hazards (review needed)\n\`\`\`"
     add_detail "$int_hazard_hits"
+    add_detail "\`\`\`\n"
+fi
+
+# ── Rule 31: Mutex-protected observability on flight-critical threads ──
+# Flags every production-code use of a known MUTEX-PROTECTED observability
+# primitive. Each hit must be manually confirmed to run on a non-real-time
+# thread (periodic logger, scenario-end dump, etc.) — NOT on P2 detector/
+# tracker ticks, P3 VIO backend, P4 planner tick, IPC callbacks, or watchdog
+# touch paths. See CLAUDE.md § Concurrency tiering → "Observability on
+# flight-critical threads."
+#
+# OBS_PATTERNS lists only primitives that actually take a std::mutex in
+# their record/emit path. Lock-free primitives like FrameDiagnostics,
+# LatencyTracker (single-threaded), SPSCRing, TripleBuffer are explicitly
+# NOT in this list — they are safe on hot paths. Extend OBS_PATTERNS when
+# a new mutex-protected observability primitive lands.
+OBS_PATTERNS='\bScopedLatency\b\|\bLatencyProfiler\b'
+obs_hits=$(grep_prod "$OBS_PATTERNS" | grep -v '//\|latency_profiler\.h' || true)
+hits=$(count_lines "$obs_hits")
+if [ "$hits" -eq 0 ]; then
+    log_pass 31 "No mutex-protected observability in production code" "Zero call sites — add audit review if this changes"
+else
+    log_warn 31 "Mutex-protected observability in production code" "$hits — verify each caller is NOT a flight-critical thread"
+    add_detail "### Rule 31: Mutex-protected observability (priority-inversion hazard review)\n\`\`\`"
+    add_detail "$obs_hits"
     add_detail "\`\`\`\n"
 fi
 
