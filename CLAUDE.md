@@ -26,6 +26,8 @@ When working on any task, **always look for and suggest improvements** you notic
 - **Testing infrastructure:** Test runner bugs, scenario config gaps, flaky tests, coverage blind spots
 - **Design patterns:** Better abstractions, RAII opportunities, template patterns, API ergonomics
 - **Tools:** Developer experience improvements, debugging aids, profiling scripts, automation gaps
+- **Documentation:** Stale numbers (test counts, version refs), broken links, missing install steps, unclear examples, contradictory guidance across docs
+- **Scripts:** Install scripts, deploy scripts, CI workflows, build scripts — stale assumptions, missing error handling, outdated commands
 
 Flag these as suggestions (don't silently implement them). Use your judgement on severity — mention critical issues immediately, batch minor suggestions at the end of your response.
 

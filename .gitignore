@@ -1,6 +1,11 @@
 # Personal notes (local only)
 engineer_to_engineer_talk.md
 
+# Strategic/perception design drafts — kept local until ready to commit
+docs/design/hardware_strategy_plan.md
+docs/design/perception_architecture.md
+docs/design/perception_v2_detailed_design.md
+
 # Build output
 build/
 build-*/

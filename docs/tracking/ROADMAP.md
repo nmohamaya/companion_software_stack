@@ -442,6 +442,62 @@
 
 ---
 
+### Phase 13 — Perception Pipeline v2 (Rewrite)
+
+> **Meta-Epic:** [#514 — Perception Pipeline v2 (Rewrite)](https://github.com/nmohamaya/companion_software_stack/issues/514)
+>
+> **Goal:** Replace the current single-path YOLO+UKF+single-layer-grid perception with a 3-path (SAM/detector + monocular depth + radar-Doppler), class-conditional IMM tracker, and dual-layer grid. Fixes known bugs (#506 haunted cells, YOLO blindness to non-COCO objects) and adds primary drone-detection capability via radar-Doppler.
+>
+> **Design docs (gitignored):** `docs/design/perception_architecture.md` (spec), `docs/design/perception_rewrite_log.md` (living build log), [ADR-012](../adr/ADR-012-detector-licensing-yolo-vs-rtdetr.md) (detector licensing).
+>
+> **Universal acceptance criteria on every sub-issue:**
+> 1. Update `docs/design/perception_rewrite_log.md` with a beginner-friendly component section + code links.
+> 2. Update `LICENSE` and/or ADR-012 if the work introduces new license obligations (new third-party deps, model weights, datasets).
+
+#### Foundations (Phase 13a — no-training, pure-algo)
+
+| Epic | Title | Scope |
+|------|-------|-------|
+| E1 | **HAL Interface Layer** | `IInferenceBackend`, `IVolumetricMap`, `ISemanticProjector`, `IEventCamera` slot reservation. CPU/ORT reference backend. |
+| E2 | **Dual-Layer Grid + Free-Space Ray-Casting** | Replace single-layer grid with STATIC (log-odds) + DYNAMIC (track-referenced) layers + ray-cast demotion. Class tags. Compat adapter to existing D*Lite. |
+| E3 | **Class-Conditional IMM Tracker** | Replace single-model UKF with IMM over CV/CTRV/CTRA/constant-jerk/random-walk. Class→model lookup. Prediction-cone rasteriser. |
+| E4 | **Per-Class Config Schema** | Config keys for per-class safety margins, motion-model assignments, prediction horizons. |
+| E13 | **Hardware-Adaptive Runtime & Dev Patterns** | Per-path enable/disable flags, `HardwareCapabilityProbe`, auto model-variant selection, dev-pattern docs. Lands alongside E1 so downstream epics ship with flags from day one. |
+
+#### New perception paths (Phase 13b — v1 uses pretrained weights only)
+
+| Epic | Title | Scope |
+|------|-------|-------|
+| E5 | **PATH A — SAM + Detector** | SAM backend (class-agnostic masks) + YOLOv8-seg wrapper + mask-detection assignment + mask×depth projection + COCO/VisDrone altitude switching. |
+| E6 | **PATH C — Radar-Doppler Pipeline** | CFAR + clustering + rule-based micro-Doppler classifier (drone/bird/human) + Doppler attachment + radar-camera decision-level fusion. |
+| E7 | **M-Detector Static/Dynamic Dispatcher** | Point-level static-vs-dynamic classification before grid update. |
+
+#### Evaluation + guardrails (Phase 13c)
+
+| Epic | Title | Scope |
+|------|-------|-------|
+| E8 | **Perception Benchmark Harness** | TP/FP/FN framework, latency profiler, CI-gated regression detection. |
+| E9 | **RT-DETR Parallel Backend** | Per ADR-012. `OpenCvRtDetrDetector` alongside YOLO, scenario validation. Not the default until commercial gate. |
+| E10 | **Collision-Confirmed Permanent Cells** | Closes #506 — IMU-jerk trigger freezes cells at collision location. |
+| E12 | **AirSim Evaluation Scenarios** | Cluttered scenes, fast movers, adversarial lighting, drone-vs-drone, multi-obstacle. Full-pipeline stress tests. |
+
+#### Parallel track (Phase 13d — independent of perception)
+
+| Epic | Title | Scope |
+|------|-------|-------|
+| E11 ([#497](https://github.com/nmohamaya/companion_software_stack/issues/497)) | **Custom SWVIO — Sliding-Window Optimization VIO** | MIT-licensed custom stereo-inertial VIO with loop closure. Eigen-only. Multi-sensor integration (radar fusion, dynamic object masking, ML depth priors) designed-in. 5 phases, ~4240 lines. Supersedes #527 (OpenVINS proposal, closed). |
+
+**Open design decisions for #497** (don't block start, can defer):
+
+- **Stereo vs mono camera** — Phase 1-2 of #497 are camera-agnostic. Decision point is before Phase 3 (feature tracking). Affects hardware BOM and `ICamera` shape.
+- **Hardware plan (α/β/γ — NVIDIA-tuned vs agnostic vs middle-ground)** — #497 is Eigen-only → hardware-agnostic. Any GPU acceleration of feature tracking is additive and deferred until real-hardware deployment.
+
+**Each Phase 13a/b/c epic also carries ONE targeted integration scenario** as a sub-issue (e.g., "Scenario 31 — dual-layer grid ghost-cell regression") — these land alongside the component. E12's scenarios stress the fully-integrated pipeline.
+
+**Exit Criteria (Phase 13):** Full pipeline passes AirSim evaluation scenarios with improved metrics over baseline; Gazebo scenarios pass or explicitly have twinned "new-pipeline" variants; `docs/design/perception_rewrite_log.md` covers every component; LICENSE updated for any new deps.
+
+---
+
 ## Issue Tracking
 
 ### Epics
