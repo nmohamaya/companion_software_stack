@@ -531,3 +531,37 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 - If `LatencyTracker` grows a snapshot API for other reasons — then this optimisation becomes free to land.
 
 **Date:** 2026-04-20 (during PR #591 review fix round)
+
+---
+
+## DR-022: LatencyProfiler (Mutex-Protected) on Flight-Critical Threads — Opt-in Wiring in P2/P4
+
+**Question:** The observability-on-flight-critical-threads rule in CLAUDE.md (and `deploy/safety_audit.sh` Rule 31) says mutex-protected observability primitives SHOULD NOT be called from flight-critical threads without documented justification. The profiler-wiring PR adds `ScopedLatency` guards in P2's detector/tracker/fusion threads (~30 Hz) and P4's planner loop (10 Hz) — each of which is a flight-critical path. Is this a violation or a justified exception?
+
+**The rule targets two failure modes:**
+
+1. **Priority inversion** — a lower-priority thread holding the profiler's mutex blocks a higher-priority control-loop thread.
+2. **Observation affecting measurement** — the mutex cost contaminates the latency being measured.
+
+**Analysis for this specific wiring:**
+
+- **Priority isolation.** All recorders are peer pipeline threads in the same process — no real-time priority boundaries are crossed. P2's inference / tracker / fusion threads run at similar priority; P4's planner loop is single-threaded. No higher-priority thread calls `record()`, so classic priority inversion cannot occur. (The OS scheduler may still preempt mid-record, but that's true of any code; the profiler adds no new inversion path.)
+- **Bounded mutex-hold-time dominated by measured work.** `LatencyProfiler::record()` takes a mutex, does a `std::map` find (heterogeneous `string_view` lookup — no alloc on hit), a `LatencyTracker::record()` (O(1) ring write), and a single string-assign into the trace ring. Measured cost is ~500 ns per call. Compared to detector work (tens of ms), tracker (~1–5 ms), fusion (~200 µs), planner-loop (<1 ms): the mutex hold is three-to-five orders of magnitude below the measured work. Measurement contamination is negligible.
+- **Opt-in via config.** The guards live behind `benchmark.profiler.enabled` (default false in `config/default.json`). Production builds and every default scenario pay zero overhead — not even the optional-construction cost. Only scenarios that explicitly set the flag (currently only the upcoming #573 baseline-capture runs) activate the profiler.
+- **No cross-thread data escape.** The `ScopedLatency` instances are stack-local to each stage's lambda; the profiler is a stack-local `std::optional<LatencyProfiler>` in `main()` whose lifetime covers all worker threads.
+
+**Decision:** Accepted — safe exception to the rule. The three criteria the rule demands (priority isolation, bounded hold-time, explicit gating) are all met.
+
+**Concrete implementation choices flowing from this analysis:**
+
+- Pointer-optional pattern (`std::optional<ScopedLatency> bench; if (profiler) bench.emplace(...);`) rather than a compile-time switch, because we want the same binary to run both with and without profiling — switching a scenario's config is all it should take.
+- No fallback to a lock-free per-thread buffer. Would be the correct answer for >1 kHz paths, but at 10–30 Hz the mutex is cheaper than maintaining per-thread ring buffers + a merge path. Keeping the single-profiler model simpler.
+- JSON dump happens after all worker threads have joined (P2) or after the main loop exits (P4) so the mutex is uncontended during the dump.
+
+**When to revisit:**
+
+- If profiling is ever used to instrument an IPC callback handler, Zenoh read-path thread, or a future >1 kHz stage — those DO have priority hazards the current analysis does not cover.
+- If the profiler's `record()` internal cost grows past ~5 µs — re-evaluate contamination ratio.
+- If the config flag is ever flipped to `true` by default — the "opt-in" leg of the justification disappears and the analysis must be redone.
+
+**Date:** 2026-04-20 (during perception-v2 profiler-wiring PR)

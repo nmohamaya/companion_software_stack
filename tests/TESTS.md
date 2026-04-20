@@ -132,7 +132,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--6-tests) | 1 | 6 | CosysCameraBackend name-resolution precedence: per-section → top-level → default, plus symmetric empty-value-not-shadowing for vehicle_name (gated on `HAVE_COSYS_AIRSIM`) |
 | [Benchmark — Perception Metrics](#test_perception_metricscpp--25-tests) | 1 | 25 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
 | [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
-| **Total** | **73 C++ + 5 shell** | **1606 (no SDK) / 1645 (+SDK) + 42 + 250+** | |
+| [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
+| **Total** | **74 C++ + 5 shell** | **1609 (no SDK) / 1650 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -1050,6 +1051,20 @@ expensive modulo operations.
 **Why these tests matter:** The profiler is consumed by every subsequent PR in the perception-v2 rewrite (`ScopedLatency` guards wrap detector/tracker/grid-update/planner-tick). If percentile math is wrong, every baseline and every regression gate is wrong. The thread-safety test catches mutex gaps at lower cost than a TSan run. The non-monotonic-clock defence exists because sign extension bugs with signed durations have bitten us before (memory: `feedback_integer_conversion_safety.md`). The overhead sub-test (`OverheadUnderBudget`) measures `ScopedLatency` cost at 10 000 empty-scope records and asserts < 5 µs per record — three orders below the 2 % of a 30 Hz tick budget.
 
 **Key files under test:** `util/latency_profiler.h`
+
+---
+
+### test_latency_profiler_dump.cpp — 3 tests
+
+**What it tests:** The profiler-wiring pattern used in `process2_perception/src/main.cpp` and `process4_mission_planner/src/main.cpp`. Exercises the end-to-end contract — simulated worker threads record via `ScopedLatency`, main() dumps `LatencyProfiler::to_json()` to disk, the file parses back cleanly, and concurrent workers land all records (no mutex / ordering bugs).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `LatencyProfilerDump` | 3 | (1) Simulated 3-stage perception run (100 frames × `Detect`/`Track`/`Fuse`) → valid JSON on disk → parse back, per-stage counts match, percentiles non-zero; (2) Disabled-profiler path: empty `std::optional<LatencyProfiler>` means no file gets written; (3) Concurrent 6-thread × 500-record stress confirms every `ScopedLatency` record lands (total count invariant) — same shape as P2's 6 threads |
+
+**Why these tests matter:** DR-022 permits mutex-protected `ScopedLatency` on flight-critical threads under three conditions (priority isolation, bounded hold-time, config gating). This test guards condition 3 (the `std::optional` null path actually produces zero I/O) and the lossless-record invariant (no race dropping records). Without this, a refactor that breaks the "profiler → file" pipeline would only surface during a full scenario run.
+
+**Key files under test:** `util/latency_profiler.h`, plus the main.cpp wiring patterns in `process2_perception/` and `process4_mission_planner/`.
 
 ---
 
