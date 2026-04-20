@@ -21,6 +21,10 @@ ExecStart=/opt/drone/bin/perception --config /etc/drone/config.json --json-logs
 Restart=on-failure
 RestartSec=2s
 WatchdogSec=10s
+# TimeoutStopSec not overridden — defaults to 90s, which comfortably covers
+# the benchmark profiler's JSON dump (~5ms worst case) during shutdown. If
+# you override this below ~5s and `benchmark.profiler.enabled: true`, the
+# dump may be truncated. See DR-022 in docs/guides/DESIGN_RATIONALE.md.
 
 # Resource limits
 MemoryMax=1G

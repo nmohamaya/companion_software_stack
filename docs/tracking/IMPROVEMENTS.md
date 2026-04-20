@@ -18,6 +18,52 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ### 2026-04-20
 
+#### 5. Stage-name constants (eliminate magic-string drift across P2/P4/tests)
+
+- **Priority:** P3
+- **Category:** architecture (benchmark harness consistency)
+- **Source:** deferred from `review-code-quality` agent on PR #593
+- **Current state:** Stage names like `"Detect"`, `"Track"`, `"Fuse"`, `"PlannerLoop"`, `"GeofenceCheck"`, `"FaultEval"` appear as string literals at each `ScopedLatency` site across `process2_perception/src/main.cpp`, `process4_mission_planner/src/main.cpp`, and `tests/test_latency_profiler_dump.cpp`. A rename at one site wouldn't break the build — the baseline harness would silently see a new stage name while the old name disappears.
+- **Proposed fix:** `namespace drone::cfg_key::benchmark::stage_names { inline constexpr std::string_view DETECT = "Detect"; ... }` in `util/config_keys.h`. All three locations (P2, P4, test) use the constants.
+- **When worth doing:** when a third consumer (dashboard / CI gating) needs to reference the same stage names, OR when a rename has to happen for real (e.g. renaming `"Detect"` to `"Detection"` to match a schema).
+
+#### 6. `LatencyTrace::stage` as `char[N]` for trivially-copyable ring (perf)
+
+- **Priority:** P3
+- **Category:** test-infra (benchmark harness performance)
+- **Source:** deferred from `review-performance` agent on PR #593 (also `review-performance` on PR #591, documented in DR-020)
+- **Current state:** `LatencyTrace` holds a `std::string stage`. SSO keeps typical stage names (≤15 chars) allocation-free, but every `record()` call still does a `slot.stage.assign()` under the mutex — ~10 ns of unnecessary work per call on the hot path.
+- **Proposed fix:** switch `LatencyTrace::stage` to `char stage[32]` (or `std::array<char, 32>`). Makes `LatencyTrace` trivially copyable, allows `memcpy`-based bulk snapshot in `traces()`, eliminates SSO dependency.
+- **When worth doing:** when a hot-path consumer records at >1 kHz (current max is 30 Hz), or when a certification audit flags the SSO assumption as an unbounded-allocation risk.
+- **Trade-off:** silent truncation of stage names longer than 31 chars — manageable with a static assert on each stage-name literal.
+
+#### 7. TSan run for `AllRecordsLandUnderConcurrentWorkers` test
+
+- **Priority:** P3
+- **Category:** test-infra (coverage)
+- **Source:** deferred from `review-test-quality` agent on PR #593
+- **Current state:** The 6-thread × 500-record stress test guards against count mismatches but can't catch memory-ordering bugs without ThreadSanitizer. CI runs the test under default GCC; no TSan pipeline runs on each PR.
+- **Proposed fix:** add a `bash deploy/run_ci_local.sh --job TSAN` step that runs `test_latency_profiler*` under TSan, and require it pass before landing changes to `common/util/include/util/latency_profiler.h`.
+- **When worth doing:** when a real TSan finding slips through to main, or as part of a broader CI-coverage uplift.
+
+#### 8. `[[likely]]` / `[[unlikely]]` on the profiler gate
+
+- **Priority:** P3
+- **Category:** code quality (micro-optimisation)
+- **Source:** deferred from `review-performance` agent on PR #593
+- **Current state:** `if (profiler) bench.emplace(...)` — branch predictor handles it perfectly after the first few frames, but an explicit `[[unlikely]]` on the null-branch would improve code layout in the default (disabled) path.
+- **Proposed fix:** `if (profiler_ptr) [[unlikely]] { ... }` at each of the 6 call sites.
+- **When worth doing:** when profiling shows the disabled-path overhead is measurable. Currently it's sub-nanosecond — not worth the readability cost.
+
+#### 9. `= nullptr` default on `LatencyProfiler*` thread-function parameters
+
+- **Priority:** P3
+- **Category:** api-ergonomics
+- **Source:** deferred from `review-api-contract` agent on PR #593
+- **Current state:** P2's `inference_thread`, `tracker_thread`, `fusion_thread` all take `LatencyProfiler* profiler` as the final positional parameter with no default value. Every current caller passes it explicitly, but a future caller could forget and get a compile error instead of a safe-by-default null.
+- **Proposed fix:** add `= nullptr` to the parameter in the function declaration.
+- **When worth doing:** when a second caller of any of these thread functions appears (e.g. a test harness that wants to run the thread function with a mock detector).
+
 #### 3. `compute_ap` — O(11 × log nP) via max-precision envelope
 
 - **Priority:** P3

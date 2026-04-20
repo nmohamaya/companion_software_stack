@@ -558,6 +558,11 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 - No fallback to a lock-free per-thread buffer. Would be the correct answer for >1 kHz paths, but at 10–30 Hz the mutex is cheaper than maintaining per-thread ring buffers + a merge path. Keeping the single-profiler model simpler.
 - JSON dump happens after all worker threads have joined (P2) or after the main loop exits (P4) so the mutex is uncontended during the dump.
 
+**Addendum (2026-04-20, PR #593 review-fix round):**
+
+- **AC denominator clarification.** The "< 2 % of tick time" claim refers to the **full pipeline tick**, not individual sub-stages. For P4's short sub-stages (`GeofenceCheck`, `FaultEval` at ~10 µs in the IDLE/PREFLIGHT fast-path early-return), the ~200 ns profiler overhead approaches 2 % of that sub-stage's own duration but stays well under 2 % of the 1–5 ms full `PlannerLoop` tick. This is acceptable — the AC is about per-tick pipeline budget, not per-sub-stage. If we later move the AC numerator to "per call-site" this sub-stage fast-path needs a second look.
+- **Fast-path caveat for P4.** `GeofenceCheck` and `FaultEval` are profiled even when they early-return at IDLE/PREFLIGHT/TAKEOFF (short atomic-set path). The recorded p50/p95 will be noisier at these states because the profiler cost is comparable to the measured work. This is intentional — skipping profiling at IDLE would hide a real regression if the fast-path regressed. Baselines should segment by FSM state if this noise becomes a problem.
+
 **When to revisit:**
 
 - If profiling is ever used to instrument an IPC callback handler, Zenoh read-path thread, or a future >1 kHz stage — those DO have priority hazards the current analysis does not cover.
@@ -565,3 +570,65 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 - If the config flag is ever flipped to `true` by default — the "opt-in" leg of the justification disappears and the analysis must be redone.
 
 **Date:** 2026-04-20 (during perception-v2 profiler-wiring PR)
+
+---
+
+## DR-023: LatencyProfiler — Raw `LatencyProfiler*` Aliasing `std::optional<LatencyProfiler>` for Thread Pass-Through
+
+**Question:** The review-code-quality agent (PR #593) flagged that P2/P4 main.cpp construct a `std::optional<LatencyProfiler> benchmark_profiler` and then derive a raw pointer `LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler : nullptr;` to pass into worker thread functions. Two names alias the same underlying object — is this pattern justified?
+
+**For an alternative (construct the profiler inside each thread, gate via `enabled` flag internally):**
+
+- Eliminates the second name.
+- No cross-scope pointer aliasing.
+- Slightly simpler call-site.
+
+**For keeping the current pattern:**
+
+- `LatencyProfiler` is non-copyable, non-movable (holds a `std::mutex`). It cannot be passed by value into a `std::thread` functor, and it cannot be stored inside the optional *and* passed by reference into a thread's argument list, because `std::thread` decays its arguments to stored values. The raw pointer is the idiomatic workaround — C++ standard library patterns (`std::ref`, pointer args) exist for exactly this.
+- The alternative "internal enable flag" would duplicate the gating logic into every `record()` call (plus every `ScopedLatency` dtor) for a hot-path branch — a cost that's absent when the pointer is null. Keeping gating outside the profiler also keeps the profiler's public API honest: if you have a profiler, it records. Period.
+- The pointer is written exactly once in `main()` immediately after the optional's construction, and the `std::thread` ctor that follows provides a happens-before fence — the worker threads see a fully-constructed profiler via a stable pointer for their entire lifetime. No mutation, no race.
+- The optional's storage is a local in `main()`; the main thread outlives every worker (it joins them before returning). Lifetime is trivially safe.
+- Two names (`benchmark_profiler`, `profiler_ptr`) add a small cognitive cost but are unambiguous — `grep` finds both, code comments at the declaration site explain the relationship.
+
+**Decision:** Keep the current pattern. The aliasing reads unusual at first glance but is load-bearing given `LatencyProfiler`'s non-movability and the C++ thread-argument contract. Internal gating would move cost into the hot path without improving clarity.
+
+**When to revisit:**
+
+- If `LatencyProfiler` becomes movable (breaking change to its mutex ownership) — then the optional could be moved directly into a thread's capture.
+- If we add more call sites and the pattern duplication becomes a readability tax — factor a `ThreadedProfilerHandle` wrapper that hides the aliasing.
+
+**Date:** 2026-04-20 (during PR #593 review fix round)
+
+---
+
+## DR-024: LatencyProfiler — Path Validation Allow-List (CWD + `/var/log/drone` + `/tmp`)
+
+**Question:** The review-security agent (PR #593) flagged that `benchmark.profiler.output_dir` is taken from config without validation, enabling path-traversal writes on a tampered config. `LatencyProfiler::dump_to_file()` now canonicalises the path and checks membership in a fixed allow-list. What should the allow-list contain?
+
+**For a minimal allow-list (production only — `/var/log/drone`):**
+
+- Single documented safe root matches the hardened systemd `ReadWritePaths`.
+- Dev workflows break: running a process from a shell dir expects the default `drone_logs/benchmark` (relative to CWD) to work.
+- Would force every dev-machine run to set `output_dir` explicitly.
+
+**For a permissive allow-list (CWD + `/var/log/drone` + `/tmp`):**
+
+- **CWD** — lets dev runs use the default `drone_logs/benchmark` (relative path canonicalises under the launch directory). This is how every developer's local environment works today and matches the `.gitignore` assumption that `drone_logs/` is a per-machine artifact.
+- **`/var/log/drone`** — the production `ReadWritePaths` entry. When the hardened systemd units eventually deploy, `benchmark.profiler.output_dir` can be set to an absolute path here.
+- **`/tmp`** — tmpfs, safe for CI / smoke-test dumps that shouldn't persist. The test suite uses this.
+
+**Against any absolute path outside the three:**
+
+- Path traversal via `../../etc/systemd/system` is rejected after canonicalisation.
+- Absolute paths to `/etc`, `/root`, `/boot`, `/usr` are refused — a tampered config cannot cause writes to arbitrary locations.
+- The profiler is diagnostic-only; the feature is opt-in and off by default. A site with a legitimate unusual output path can add it to the allow-list in a small code change rather than a config-only change.
+
+**Decision:** Adopt the permissive allow-list. Dev + production + CI all work without config gymnastics, while the security goal (no arbitrary writes from tampered config) is met. Failures produce `DumpStatus::PathRejected` and log at ERROR (since the user explicitly enabled profiling).
+
+**When to revisit:**
+
+- If a second observability sink needs disk output, factor the validation into a shared helper rather than duplicating the allow-list.
+- If an operator needs to write benchmark data to a custom location, the allow-list is intentionally a compile-time list — add it with code review rather than config. If this friction becomes a real burden, we can add a CLI-only override flag that bypasses validation.
+
+**Date:** 2026-04-20 (during PR #593 review fix round)

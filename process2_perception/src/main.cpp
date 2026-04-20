@@ -29,7 +29,6 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <thread>
 
@@ -55,6 +54,10 @@ static std::atomic<int> g_shutdown_phase{0};
 // ── Inference thread ────────────────────────────────────────
 // Stops when shutdown_phase >= 1.  No drain needed — inference is the
 // pipeline source; stopping it is what triggers downstream drains.
+// @param profiler nullable — pass nullptr to disable per-stage latency
+//                 profiling. See DR-022 for the safety analysis of
+//                 mutex-protected recording from this flight-critical
+//                 thread.
 static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                              drone::TripleBuffer<Detection2DList>&            output_queue,
                              std::atomic<int>& shutdown_phase, IDetector& detector,
@@ -74,12 +77,12 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
 
             auto dets = [&]() {
                 drone::util::ScopedDiagTimer              timer(diag, "Detect");
-                std::optional<drone::util::ScopedLatency> bench;
+                std::optional<drone::util::ScopedLatency> bench_detect;
                 // See DR-022 (docs/guides/DESIGN_RATIONALE.md): mutex-protected
                 // profiler on a flight-critical thread is accepted because
                 // recorders share priority, mutex hold is <100ns dominated by
                 // the detector's ms-scale work, and gated by benchmark.profiler.enabled.
-                if (profiler) bench.emplace(*profiler, "Detect");
+                if (profiler) bench_detect.emplace(*profiler, "Detect");
                 return detector.detect(frame.pixel_data, frame.width, frame.height, frame.channels);
             }();
 
@@ -114,6 +117,7 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
 // Stops when shutdown_phase >= 2.  When phase hits 1 (inference stopped),
 // the tracker drains any remaining data in the inference->tracker buffer
 // before exiting.
+// @param profiler nullable — see inference_thread docstring and DR-022.
 static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
                            drone::TripleBuffer<TrackedObjectList>& output_queue,
                            std::atomic<int>& shutdown_phase, ITracker& tracker,
@@ -145,8 +149,8 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
 
             auto tracked = [&]() {
                 drone::util::ScopedDiagTimer              timer(diag, "Track");
-                std::optional<drone::util::ScopedLatency> bench;
-                if (profiler) bench.emplace(*profiler, "Track");
+                std::optional<drone::util::ScopedLatency> bench_track;  // See DR-022
+                if (profiler) bench_track.emplace(*profiler, "Track");
                 return tracker.update(*det_opt);
             }();
 
@@ -192,6 +196,7 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
 //             Used to rotate camera-frame detections into world frame.
 // radar_sub — IPC subscriber for radar detections (RadarDetectionList).
 //             Fed into fusion engine for camera+radar multi-sensor fusion.
+// @param profiler nullable — see inference_thread docstring and DR-022.
 static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&                  tracked_queue,
                           drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
                           drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
@@ -282,8 +287,8 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 
             auto fused = [&]() {
                 drone::util::ScopedDiagTimer              timer(diag, "Fuse");
-                std::optional<drone::util::ScopedLatency> bench;
-                if (profiler) bench.emplace(*profiler, "Fuse");
+                std::optional<drone::util::ScopedLatency> bench_fuse;  // See DR-022
+                if (profiler) bench_fuse.emplace(*profiler, "Fuse");
                 return engine.fuse(*topt);
             }();
 
@@ -773,7 +778,12 @@ int main(int argc, char* argv[]) {
     // drain sequence: stop inference first, let tracker drain, then fusion,
     // then auxiliary threads.  Each phase transition uses release ordering
     // so downstream threads see the updated phase with full memory visibility.
-    drone::systemd::notify_stopping();
+    //
+    // notify_stopping() is called AFTER the profiler dump (if any) — that
+    // way the dump happens while systemd still considers the service
+    // "running" (fault-recovery review, PR #593), and any dump failure is
+    // logged at full severity rather than during the narrower stop-timeout
+    // window.
     DRONE_LOG_INFO("Shutting down — phased drain (timeout={}ms per stage)...", drain_timeout_ms);
 
     // Phase 1: stop inference (pipeline source)
@@ -797,30 +807,29 @@ int main(int argc, char* argv[]) {
     g_shutdown_phase.store(4, std::memory_order_release);
 
     // ── Benchmark profiler JSON dump (Issue #571 wiring) ──────
-    // Runs AFTER all worker threads have joined so the profiler's mutex is
-    // uncontended and the captured window covers the full run. Errors here
-    // are logged but do not change the process exit status — the profiler
-    // is diagnostic, its output is not flight-critical.
+    // All worker threads have joined — the profiler's mutex is uncontended
+    // and the captured window covers the full run. Dump before
+    // notify_stopping() so we remain under the active-state watchdog and
+    // the user (who explicitly enabled the feature) sees an ERROR if it
+    // fails rather than a quiet WARN lost in the shutdown log noise.
+    // DR-022 covers the broader flight-critical-thread analysis.
     if (benchmark_profiler) {
         const std::string output_dir = ctx.cfg.get<std::string>(
             drone::cfg_key::benchmark::PROFILER_OUTPUT_DIR, "drone_logs/benchmark");
-        std::error_code ec;
-        std::filesystem::create_directories(output_dir, ec);
-        if (ec) {
-            DRONE_LOG_WARN("[Benchmark] Could not create {} ({}) — skipping profiler dump",
-                           output_dir, ec.message());
+        const std::filesystem::path path = std::filesystem::path(output_dir) /
+                                           "latency_perception.json";
+        const auto status = benchmark_profiler->dump_to_file(path);
+        if (status == drone::util::LatencyProfiler::DumpStatus::Ok) {
+            DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path.string());
         } else {
-            const std::string path = output_dir + "/latency_perception.json";
-            std::ofstream     out(path);
-            if (out) {
-                out << benchmark_profiler->to_json();
-                DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path);
-            } else {
-                DRONE_LOG_WARN("[Benchmark] Could not open {} for writing", path);
-            }
+            // Profiler was explicitly enabled — the user wanted this output;
+            // losing it is a real failure, not a warning.
+            DRONE_LOG_ERROR("[Benchmark] Profiler dump FAILED for {}: {}", path.string(),
+                            drone::util::LatencyProfiler::describe(status));
         }
     }
 
+    drone::systemd::notify_stopping();
     DRONE_LOG_INFO("=== Perception process stopped ===");
     return 0;
 }

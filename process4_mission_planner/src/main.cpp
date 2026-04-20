@@ -31,7 +31,6 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <thread>
 
@@ -545,31 +544,27 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(loop_sleep_ms));
     }
 
-    drone::systemd::notify_stopping();
-
     // ── Benchmark profiler JSON dump (Issue #571 wiring) ──────
-    // P4 is single-threaded, so we can dump right after the loop exits —
-    // no workers to join. Errors are logged but do not affect exit status.
+    // Dump before notify_stopping() so the I/O is under the active-state
+    // watchdog and any failure is logged at ERROR (not a shutdown-window
+    // WARN). P4 is single-threaded so the loop exit above is enough to
+    // guarantee the profiler's mutex is uncontended. DR-022 covers the
+    // flight-critical analysis.
     if (benchmark_profiler) {
         const std::string output_dir = ctx.cfg.get<std::string>(
             drone::cfg_key::benchmark::PROFILER_OUTPUT_DIR, "drone_logs/benchmark");
-        std::error_code ec;
-        std::filesystem::create_directories(output_dir, ec);
-        if (ec) {
-            DRONE_LOG_WARN("[Benchmark] Could not create {} ({}) — skipping profiler dump",
-                           output_dir, ec.message());
+        const std::filesystem::path path = std::filesystem::path(output_dir) /
+                                           "latency_mission_planner.json";
+        const auto status = benchmark_profiler->dump_to_file(path);
+        if (status == drone::util::LatencyProfiler::DumpStatus::Ok) {
+            DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path.string());
         } else {
-            const std::string path = output_dir + "/latency_mission_planner.json";
-            std::ofstream     out(path);
-            if (out) {
-                out << benchmark_profiler->to_json();
-                DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path);
-            } else {
-                DRONE_LOG_WARN("[Benchmark] Could not open {} for writing", path);
-            }
+            DRONE_LOG_ERROR("[Benchmark] Profiler dump FAILED for {}: {}", path.string(),
+                            drone::util::LatencyProfiler::describe(status));
         }
     }
 
+    drone::systemd::notify_stopping();
     DRONE_LOG_INFO("=== Mission Planner stopped ===");
     return 0;
 }
