@@ -383,11 +383,12 @@ fi
 
 # ── Rule 31: Mutex-protected observability on flight-critical threads ──
 # Flags every production-code use of a known MUTEX-PROTECTED observability
-# primitive. Each hit must be manually confirmed to run on a non-real-time
-# thread (periodic logger, scenario-end dump, etc.) — NOT on P2 detector/
-# tracker ticks, P3 VIO backend, P4 planner tick, IPC callbacks, or watchdog
-# touch paths. See CLAUDE.md § Concurrency tiering → "Observability on
-# flight-critical threads."
+# primitive. Each hit requires EITHER (a) manual confirmation that the
+# caller runs on a non-real-time thread (periodic logger, scenario-end
+# dump, etc.) OR (b) a DR-NNN entry in docs/guides/DESIGN_RATIONALE.md
+# documenting the hazard analysis: priority isolation + bounded hold-time
+# + config gating. See CLAUDE.md § Concurrency tiering → "Observability
+# on flight-critical threads."
 #
 # OBS_PATTERNS lists only primitives that actually take a std::mutex in
 # their record/emit path. Lock-free primitives like FrameDiagnostics,
@@ -400,8 +401,8 @@ hits=$(count_lines "$obs_hits")
 if [ "$hits" -eq 0 ]; then
     log_pass 31 "No mutex-protected observability in production code" "Zero call sites — add audit review if this changes"
 else
-    log_warn 31 "Mutex-protected observability in production code" "$hits — verify each caller is NOT a flight-critical thread"
-    add_detail "### Rule 31: Mutex-protected observability (priority-inversion hazard review)\n\`\`\`"
+    log_warn 31 "Mutex-protected observability in production code" "$hits — verify caller is non-RT OR a DR entry exists in DESIGN_RATIONALE.md"
+    add_detail "### Rule 31: Mutex-protected observability (requires non-RT caller or DR-NNN justification)\n\`\`\`"
     add_detail "$obs_hits"
     add_detail "\`\`\`\n"
 fi
