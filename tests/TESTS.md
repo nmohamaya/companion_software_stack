@@ -133,7 +133,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Perception Metrics](#test_perception_metricscpp--25-tests) | 1 | 25 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
 | [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
 | [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
-| **Total** | **74 C++ + 5 shell** | **1609 (no SDK) / 1650 (+SDK) + 42 + 250+** | |
+| [Benchmark — GT Emitter](#test_gt_emittercpp--11-tests) | 1 | 11 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping |
+| **Total** | **75 C++ + 5 shell** | **1624 (no SDK) / 1665 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -1065,6 +1066,21 @@ expensive modulo operations.
 **Why these tests matter:** DR-022 permits mutex-protected `ScopedLatency` on flight-critical threads under three conditions (priority isolation, bounded hold-time, config gating). This test guards condition 3 (the `std::optional` null path actually produces zero I/O) and the lossless-record invariant (no race dropping records). Without this, a refactor that breaks the "profiler → file" pipeline would only surface during a full scenario run.
 
 **Key files under test:** `util/latency_profiler.h`, plus the main.cpp wiring patterns in `process2_perception/` and `process4_mission_planner/`.
+
+---
+
+### test_gt_emitter.cpp — 11 tests
+
+**What it tests:** `drone::benchmark::GtClassMap` (scenario-config-driven class mapping) + `to_json_line` (JSONL serialisation) — the shared layer of the ground-truth emitter (#594 / Epic #523). The Cosys backend itself needs a live AirSim server and is covered by scenario integration tests (#29, #30).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `GtClassMap` | 8 | Empty map → every lookup is nullopt; exact-match patterns (no wildcard) hit only the literal name; trailing `*` wildcard matches any prefix; first-registered pattern wins on overlap; `load(drone::Config)` reads the `gt_class_map` section correctly; missing key → empty map (no crash); malformed entries (non-object, missing `class_id`/`class_name`) are silently dropped; `patterns()` returns the registered pattern strings in order |
+| `GtEmitterJson` | 3 | `to_json_line` produces single-line JSON (no embedded newlines), parses cleanly via `nlohmann::json`, round-trips every field (timestamp, frame_sequence, camera pose, per-object class/bbox/gt_track_id/occlusion/distance_m); empty objects array serialises cleanly; class_name containing `"` and `\` characters round-trips through parse without corruption |
+
+**Why these tests matter:** The GT emitter is consumed by every baseline-capture run (#573) and every subsequent perception-v2 PR's scoring. A silent drop on a malformed config entry, an off-by-one on wildcard matching, or a JSON-escape bug in `to_json_line` would silently corrupt the TP/FP/FN numbers the whole rewrite is measured against.
+
+**Key files under test:** `tests/benchmark/gt_emitter.h`, `tests/benchmark/gt_emitter.cpp`. The Cosys backend (`tests/benchmark/cosys_gt_emitter.cpp`) compiles into the test target for link-coverage but is not directly exercised (needs a live AirSim server).
 
 ---
 
