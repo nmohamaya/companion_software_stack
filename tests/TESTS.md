@@ -130,7 +130,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
 | [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--6-tests) | 1 | 6 | CosysCameraBackend name-resolution precedence: per-section → top-level → default, plus symmetric empty-value-not-shadowing for vehicle_name (gated on `HAVE_COSYS_AIRSIM`) |
-| **Total** | **71 C++ + 5 shell** | **1566 (no SDK) / 1605 (+SDK) + 42 + 250+** | |
+| [Benchmark — Perception Metrics](#test_perception_metricscpp--23-tests) | 1 | 23 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
+| **Total** | **72 C++ + 5 shell** | **1589 (no SDK) / 1628 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -354,6 +355,25 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 **Key files under test:** `hal/cosys_name_resolver.h` (free functions `resolve_camera_name`, `resolve_vehicle_name`, `resolve_airsim_name`), `hal/cosys_camera.h` (thin static wrappers).
 
 **Why:** Regression test for the silent 256×144 downgrade that made scenario 30 produce zero detections for 39 YOLO inference frames. No RPC required — the helpers are `static` by design so the resolution logic can be unit-tested without instantiating the backend (which would need a live AirSim server). See BUG_FIXES.md → Fix #499a.
+
+---
+
+### test_perception_metrics.cpp — 23 tests
+
+**What it tests:** `drone::benchmark::perception_metrics` — pure-C++ metrics library that scores the perception pipeline against ground truth. Foundation layer for the Epic #523 benchmark harness; consumed by later sub-issues (latency profiler, CI gating, dashboard).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `BBox2D` | 4 | `area()` and identity IoU=1; disjoint boxes → IoU 0; zero-area box → IoU 0; half-overlap IoU = 50/150 |
+| `ClassMetrics` | 2 | `precision/recall/f1` math; zero denominators don't NaN |
+| `DetectionMetrics` | 9 | Empty frames; all-FP when no GT; all-FN when no predictions; perfect overlap → all TP, mAP=1; class mismatch → FP+FN with confusion-matrix cell filled; below-IoU-threshold pair is FP+FN (same pair passes at lower threshold); greedy matches highest-confidence prediction first; confusion-matrix dimensions are `[num_classes+1]²` with background slot; multi-IoU returns one `DetectionMetrics` per threshold |
+| `AP` | 2 | Empty preds or empty GT → AP 0; perfect preds across multiple classes → AP 1 |
+| `Tracking` | 5 | Empty frames → zero metrics; perfect track over 5 frames → MOTA=MOTP=1, no switches/fragmentations; ID swap between frames detected as id_switch=1; 3-frame sequence with a 1-frame gap detected as fragmentation=1; unmatched prediction counts as FP with total_gt=0 yielding MOTA=0 (defined, not -∞) |
+| `Performance` | 1 | N=1000 preds × 1000 GT in < 100 ms (measured ≈5 ms) |
+
+**Why these tests matter:** Every subsequent PR in the perception-v2 rewrite (Epics E2-E11) has to prove it doesn't regress detection/tracking quality. The scorer is the shared contract — if this math is wrong, every downstream comparison is wrong. Corner-case tests enforce the "no zero-denominator NaN" invariant used by CI gating; the perf test keeps the scorer fast enough to run on every scenario run without bloating wall-clock.
+
+**Key files under test:** `tests/benchmark/perception_metrics.h`, `tests/benchmark/perception_metrics.cpp`
 
 ---
 

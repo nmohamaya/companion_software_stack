@@ -403,3 +403,73 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **Decision:** Keep rpclib in the submodule tree. The cost of a "dirty" submodule is low (add to `.gitignore`), while patching AirSim's build creates maintenance burden on every upstream update.
 
 **Revisit when:** AirSim's CMake is refactored to accept external rpclib paths, or we fork the repo and can control the build system.
+
+---
+
+## DR-017: Perception Metrics — Inline vs Split `compute_detection_metrics` / `compute_tracking_metrics`
+
+**Question:** The review-code-quality agent (PR #590) flagged that `compute_detection_metrics` (~80 lines) and `compute_tracking_metrics` (~80 lines) exceed the 40-line function-split heuristic and suggested splitting each into helpers. Should we split them?
+
+**For splitting:**
+- Shorter functions read faster in isolation
+- Aligns with the general function-length guideline
+- Future additions (e.g., class-agnostic AP variant) could reuse the per-frame-accumulate helper without duplicating the post-processing pass
+
+**For keeping inline:**
+- Both functions follow the same two-phase shape: a per-frame accumulate loop (mutating `out` / `tm`) followed by a short post-processing pass (per-class AP; AP=0 injection). Splitting them forces callers to pass the large output struct, several per-class maps, and the ground-truth inventory into a helper — so the helper signatures become long and the split buys line count, not clarity.
+- The state each phase mutates is visible at a glance in-line (confusion matrix, per-class maps). Splitting would obscure the fact that `per_class_preds`/`per_class_gts` are scratch-local and only live across the same function.
+- No current caller wants to skip the per-class AP pass or the AP=0 injection, so the phases aren't independently reusable.
+- The test file exercises the full shape end-to-end via `compute_detection_metrics`; no test would gain clarity from the split.
+- The tracking function has similar per-GT state (`gt_state` map) whose lifetime is the whole call — splitting would require passing it through a helper parameter for no readability gain.
+
+**Decision:** Keep both functions inline. Readability of a two-phase flow is easier when both phases share locals by visibility, not by parameter threading. Accept the 80-line length here — the logic reads linearly.
+
+**When to revisit:**
+- If a new caller wants to consume only the per-frame phase (e.g. streaming / online evaluation), split the per-frame loop into a helper at that point.
+- If a third metric function lands with the same two-phase shape — three repetitions would justify a shared helper.
+
+**Date:** 2026-04-20 (during PR #590 review fix round)
+
+---
+
+## DR-018: Perception Metrics — `ScoredPrediction` / `ScoredGroundTruth` as Separate Types
+
+**Question:** The review-code-quality agent (PR #590) noted that `ScoredGroundTruth` is a strict subset of `ScoredPrediction` (no confidence field) and suggested merging or making the relationship explicit. Should we unify them?
+
+**For merging:**
+- Drops one struct definition; one type to learn instead of two.
+- A field addition would only need to land once.
+
+**For keeping separate:**
+- Type safety at the boundary: `compute_ap` takes predictions and ground truth as distinct parameters. Using separate types means the compiler catches an accidental swap (passing GTs where preds are expected); a unified type would let the swap compile and only fail at runtime when confidence turned out to be zero-valued GT.
+- `confidence` has no meaning for a ground-truth box; carrying it on the unified type invites callers to pass uninitialised or sentinel values.
+- Size is tiny (24 vs 28 bytes); there's no measurable memory cost to keeping them distinct.
+- The narrowing is the *point* — `ScoredGroundTruth` being a subset-shape of `ScoredPrediction` mirrors the real-world relationship: GT is what a prediction would look like if it were guaranteed correct.
+
+**Decision:** Keep as separate types. A header comment now documents the intentional narrowing so readers don't mistake it for accidental duplication.
+
+**When to revisit:** If we add many fields that belong on both (e.g. frame-level metadata, timing), and the manual field duplication becomes burdensome, factor a common base struct rather than merging the leaf types.
+
+**Date:** 2026-04-20 (during PR #590 review fix round)
+
+---
+
+## DR-019: Perception Metrics — `std::unordered_map` Instead of Dense Vector for `gt_by_frame`
+
+**Question:** The review-performance agent (PR #590) noted that `compute_ap` uses `std::unordered_map<uint64_t, vector<size_t>> gt_by_frame`, but frame indices are densely packed 0..N-1 from the calling frame loop. A `std::vector<vector<size_t>>` indexed by frame would be O(1) access with no hashing. Should we switch?
+
+**For switching to vector:**
+- O(1) lookup vs unordered_map's hash + possible chain walk.
+- Better cache locality.
+- No bucket heap allocations.
+
+**For keeping unordered_map:**
+- `compute_ap` is a public entry point in the header — callers can pass `ScoredPrediction` / `ScoredGroundTruth` with arbitrary `frame_index` values, not necessarily dense 0-based. The caller that happens to use dense indices today (`compute_detection_metrics`) isn't the only supported caller.
+- Switching to vector requires the caller to either (a) promise dense indices (silently breaks if violated), or (b) compute max frame index first and size the outer vector accordingly — which is itself O(N).
+- Performance at the current AC (N=1000) is already 5 ms against a 100 ms budget. The hash cost is not on the critical path.
+
+**Decision:** Keep `unordered_map`. The public-API flexibility is worth the small hash cost. If a future caller demands dense-index performance, expose a second `compute_ap` overload that takes the pre-grouped vector directly.
+
+**When to revisit:** If the benchmark harness graduates into streaming / online evaluation where `compute_ap` runs 1000× per second, or if profiling shows the hash cost dominates.
+
+**Date:** 2026-04-20 (during PR #590 review fix round)
