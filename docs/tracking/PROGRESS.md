@@ -3045,4 +3045,25 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-_Last updated after Improvement #73 (issue #503). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #74 — Perception Metrics Framework (Issue #570, Epic #523)
+
+**Date:** 2026-04-20
+**Category:** Testing / Benchmark harness
+**Issues:** [#570](https://github.com/nmohamaya/companion_software_stack/issues/570) · parent [#523](https://github.com/nmohamaya/companion_software_stack/issues/523) · meta-epic [#514](https://github.com/nmohamaya/companion_software_stack/issues/514)
+
+**What:** Landed the first building block of the perception-rewrite benchmark harness: a pure-C++ metrics library that consumes per-frame `{ground_truth, predictions}` and emits per-class TP/FP/FN, precision/recall/F1, per-class AP (PASCAL VOC 11-point interpolation), confusion matrix with a background slot, and tracking metrics (MOTA, MOTP, ID switches, fragmentations). No ML deps, CPU only, lives under `tests/benchmark/` so it isn't shipped in production binaries.
+
+Matching is greedy confidence-ordered per class — standard COCO-style evaluation. Confusion matrix is sized `[num_classes+1] × [num_classes+1]` where the trailing row/column is the background bucket (unmatched GTs contribute to `M[gt_class][bg]`, unmatched predictions land in `M[bg][pred_class]` or a class-confused row when they overlap a different-class GT). Tracking metrics track per-GT `(last_pred_id, last_tracked_frame)` state across frames to detect switches (same GT, different pred ID frame-to-frame) and fragmentations (GT lost for ≥1 frame and then re-acquired).
+
+**Files added:** `tests/benchmark/perception_metrics.h`, `tests/benchmark/perception_metrics.cpp`, `tests/test_perception_metrics.cpp`.
+**Files modified:** `tests/CMakeLists.txt` (new test target), `docs/design/perception_v2_detailed_design.md` (metric explainer section, landed status).
+
+**Why:** Every subsequent PR in the perception-v2 rewrite has to prove it doesn't regress detection/tracking quality. Without a stable scoring library, "is it better?" is anecdotal. This is CP0 part 1 of the perception-v2 integration branch (`feature/perception-v2-integration`); part 2 is #573 baseline capture on scenarios #02/#18/#21/#29/#30.
+
+**Test count:** +23 tests in `test_perception_metrics` covering IoU math, ClassMetrics corner cases (zero denominator), detection corner cases (no-GT, no-preds, all-TP, class mismatch, below-IoU, greedy highest-confidence, multi-IoU), AP edge cases, tracking (perfect track, ID switch, fragmentation, unmatched pred as FP), plus a perf test proving N=1000×1000 completes in ~5 ms (target < 100 ms). 1605 → 1628.
+
+**Universal acceptance criteria:** updated `docs/design/perception_v2_detailed_design.md` §13 with the beginner-friendly explainer of each metric (inherited requirement from meta-epic #514). No license-obligation changes, so ADR-012 / LICENSE untouched.
+
+---
+
+_Last updated after Improvement #74 (issue #570). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

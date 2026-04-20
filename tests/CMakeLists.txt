@@ -411,3 +411,14 @@ add_drone_test(test_model_presets    test_model_presets.cpp)
 target_compile_definitions(test_model_presets PRIVATE
     PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
 )
+
+# ── Perception metrics framework tests (Issue #570 — Epic #523) ─
+# Pure C++, no ML deps. Measures TP/FP/FN, per-class AP, MOTA/MOTP,
+# confusion matrix. Used by the benchmark harness for regression gating.
+add_drone_test(test_perception_metrics
+    test_perception_metrics.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_perception_metrics PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
