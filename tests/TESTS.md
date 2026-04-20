@@ -133,8 +133,9 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Perception Metrics](#test_perception_metricscpp--25-tests) | 1 | 25 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
 | [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
 | [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
-| [Benchmark — GT Emitter](#test_gt_emittercpp--11-tests) | 1 | 11 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping |
-| **Total** | **75 C++ + 5 shell** | **1624 (no SDK) / 1665 (+SDK) + 42 + 250+** | |
+| [Benchmark — GT Emitter](#test_gt_emittercpp--13-tests) | 1 | 13 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping; review fixes: config key validation, error path coverage |
+| [Benchmark — Baseline Capture](#test_baseline_capturecpp--11-tests) | 1 | 11 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load), latency passthrough, tracking metrics, empty/nonexistent/duplicate scenarios |
+| **Total** | **76 C++ + 5 shell** | **1655 (no SDK) / 1696 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -1069,7 +1070,7 @@ expensive modulo operations.
 
 ---
 
-### test_gt_emitter.cpp — 11 tests
+### test_gt_emitter.cpp — 13 tests
 
 **What it tests:** `drone::benchmark::GtClassMap` (scenario-config-driven class mapping) + `to_json_line` (JSONL serialisation) — the shared layer of the ground-truth emitter (#594 / Epic #523). The Cosys backend itself needs a live AirSim server and is covered by scenario integration tests (#29, #30).
 
@@ -1081,6 +1082,18 @@ expensive modulo operations.
 **Why these tests matter:** The GT emitter is consumed by every baseline-capture run (#573) and every subsequent perception-v2 PR's scoring. A silent drop on a malformed config entry, an off-by-one on wildcard matching, or a JSON-escape bug in `to_json_line` would silently corrupt the TP/FP/FN numbers the whole rewrite is measured against.
 
 **Key files under test:** `tests/benchmark/gt_emitter.h`, `tests/benchmark/gt_emitter.cpp`. The Cosys backend (`tests/benchmark/cosys_gt_emitter.cpp`) compiles into the test target for link-coverage but is not directly exercised (needs a live AirSim server).
+
+### test_baseline_capture.cpp — 11 tests
+
+**What it tests:** `drone::benchmark::BaselineCapture` — the metric accumulation and JSON serialisation layer that produces `benchmarks/baseline.json` (#573 / Epic #523). Consumes the same `FrameData` / `DetectionMetrics` / `TrackingMetrics` types from #570 and latency JSON from #571.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `BaselineCaptureTest` | 11 | Perfect detection (10 TP, precision/recall = 1.0); mixed TP/FP/FN counts; per-class breakdown with class-name map; multiple scenarios in insertion order; JSON round-trip (write to file, load back, all fields preserved); latency JSON passthrough (embedded as structured object, not string); tracking metrics (MOTP > 0, zero ID switches on stable track); empty scenario (all zeros, no crash); load from nonexistent path returns false; nonexistent scenario returns nullptr; duplicate scenario name reuses existing entry |
+
+**Why these tests matter:** The baseline is the single reference point the entire perception v2 rewrite is measured against. A serialisation bug that silently drops a field, a finalise() that miscounts TP/FP, or a load() that corrupts the class breakdown would make every subsequent delta measurement wrong — and we wouldn't notice until live testing on hardware.
+
+**Key files under test:** `tests/benchmark/baseline_capture.h`, `tests/benchmark/baseline_capture.cpp`. Delegates to `perception_metrics.h/cpp` (#570) for the actual TP/FP/FN and MOTA/MOTP computation.
 
 ---
 
