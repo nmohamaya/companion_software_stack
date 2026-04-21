@@ -222,37 +222,20 @@ TEST(KalmanBoxTrackerTest, MotionModelFromString) {
 }
 
 TEST(KalmanBoxTrackerTest, ConstantAccelerationHigherVelocityNoise) {
-    // CONSTANT_ACCELERATION should produce higher process noise on velocity
-    // states, making the filter more responsive to speed changes.
     Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::DRONE, 0, 0};
 
     KalmanBoxTracker cv_tracker(det, 1, MotionModel::CONSTANT_VELOCITY);
     KalmanBoxTracker ca_tracker(det, 2, MotionModel::CONSTANT_ACCELERATION);
 
-    // Both start at the same position.  After several predictions with no
-    // updates, the CA tracker should have more uncertainty (larger P matrix
-    // diagonal for velocity states) because its process noise is higher.
-    for (int i = 0; i < 10; ++i) {
-        cv_tracker.predict();
-        ca_tracker.predict();
-    }
-
-    // The CA tracker's velocity should diverge more from zero because
-    // higher Q allows the state to move faster.  We verify indirectly:
-    // both trackers predicted the same initial bbox, but after 10 unupdated
-    // predictions, the CA tracker's predicted bbox should be at least as
-    // uncertain (wider predicted position spread is hard to test directly
-    // without exposing P).  Instead, verify the predicted bboxes differ.
-    auto cv_pred = cv_tracker.predicted_bbox();
-    auto ca_pred = ca_tracker.predicted_bbox();
-    // Both should be similar (same initial state, just noise differs),
-    // but the key invariant is that the construction succeeded.
-    EXPECT_FLOAT_EQ(cv_pred.confidence, ca_pred.confidence);
+    // CA model uses 10x higher velocity process noise (0.1 vs 0.01).
+    EXPECT_FLOAT_EQ(cv_tracker.process_noise_velocity(), 0.01f);
+    EXPECT_FLOAT_EQ(ca_tracker.process_noise_velocity(), 0.1f);
+    EXPECT_GT(ca_tracker.process_noise_velocity(), cv_tracker.process_noise_velocity());
 }
 
 TEST(KalmanBoxTrackerTest, DefaultMotionModelIsConstantVelocity) {
     Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
     KalmanBoxTracker tracker(det, 1);
-    // Default construction should work (constant_velocity).
-    EXPECT_EQ(tracker.track_id, 1u);
+    // Default model is CONSTANT_VELOCITY — verify via process noise.
+    EXPECT_FLOAT_EQ(tracker.process_noise_velocity(), 0.01f);
 }

@@ -137,7 +137,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **78 C++ + 5 shell + 1 Python** | **1704 (no SDK) / 1745 (+SDK) + 42 + 29 + 250+** | |
+| **Total** | **78 C++ + 5 shell + 1 Python** | **1707 (no SDK) / 1748 (+SDK) + 42 + 29 + 250+** | |
 
 ---
 
@@ -635,17 +635,17 @@ tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 27 tests
+### test_obstacle_avoider_3d.cpp — 29 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
 path-aware mode, Euclidean-magnitude clamp, close-regime path-aware bypass (Issue #503),
-and per-class config overrides (Epic #519).
+per-class config overrides (Epic #519), OOB class_id safety, and Result<>-based factory errors.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `ObstacleAvoider3DTest` | 7 | No objects pass-through, stale objects ignored, close object repels in XYZ, low confidence ignored, correction clamped, prediction shifts repulsion, NaN pose pass-through |
-| `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown throws |
+| `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown returns Result error |
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
 | `ObstacleAvoider3DTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
@@ -653,6 +653,8 @@ and per-class config overrides (Epic #519).
 | `ObstacleAvoider3DTest` | 3 | Euclidean-magnitude clamp (not per-axis), close-regime bypass pushes opposite planner, bypass hysteresis prevents flip-flop (Issue #503) |
 | `ObstacleAvoider3DTest` | 3 | Per-class influence radius (PERSON vs TRUCK at same distance), per-class confidence threshold (DRONE filtered at 0.5 when threshold=0.8), per-class prediction dt (BUILDING stationary vs DRONE aggressive prediction) (Epic #519) |
 | `ObstacleAvoider3DTest` | 1 | Config-driven constructor loads per-class from JSON |
+| `ObstacleAvoider3DTest` | 1 | OOB class_id (255) is safely skipped — no repulsion applied |
+| `ObstacleAvoider3DTest` | 1 | Config-driven per-class loading from JSON (PERSON influence=3.0, default=5.0) |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 
@@ -1000,7 +1002,7 @@ per-class section validation (Epic #519).
 
 ---
 
-### test_per_class_config.cpp — 12 tests
+### test_per_class_config.cpp — 13 tests
 
 **What it tests:** `per_class_config.h` — per-class config lookup utility (Epic #519).
 Maps JSON sections like `{ "default": 5.0, "person": 2.0 }` into `std::array<T, 8>`
@@ -1009,7 +1011,7 @@ indexed by `ObjectClass` enum values.
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `PerClassConfig` | 2 | `class_name_to_index()` — all 8 valid class names, invalid name returns -1 |
-| `PerClassConfig` | 7 | `load_per_class<T>()` — all classes specified, default fallback for unspecified, no default uses fallback, missing section, unknown keys collected, `_comment` keys ignored, string type support |
+| `PerClassConfig` | 8 | `load_per_class<T>()` — all classes specified, default fallback for unspecified, no default uses fallback, missing section, unknown keys collected, `_comment` keys ignored, type mismatch falls back to compiled default, string type support |
 | `PerClassConfig` | 3 | `validate_per_class_section()` — valid section clean, unknown class name detected, missing section returns empty |
 
 **Key files under test:** `util/per_class_config.h`

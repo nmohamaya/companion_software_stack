@@ -126,6 +126,17 @@ TEST(PerClassConfig, LoadPerClass_CommentKeysIgnored) {
     EXPECT_FLOAT_EQ(result[1], 2.0f);
 }
 
+TEST(PerClassConfig, LoadPerClass_TypeMismatchUsesFallback) {
+    // "default" is a string but we load as float → type mismatch, should use compiled fallback.
+    nlohmann::json data   = {{"sec", {{"default", "not_a_number"}, {"person", "also_not"}}}};
+    auto           cfg    = make_config(data);
+    auto           result = load_per_class<float>(cfg, "sec", 42.0f);
+
+    for (uint8_t i = 0; i < kPerClassCount; ++i) {
+        EXPECT_FLOAT_EQ(result[i], 42.0f);
+    }
+}
+
 TEST(PerClassConfig, LoadPerClass_StringType) {
     nlohmann::json data = {
         {"sec", {{"default", "constant_velocity"}, {"drone", "constant_acceleration"}}}};

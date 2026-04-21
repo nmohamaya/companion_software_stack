@@ -9,21 +9,23 @@
 #include "planner/dstar_lite_planner.h"
 #include "planner/grid_planner_base.h"
 #include "planner/ipath_planner.h"
+#include "util/result.h"
 
 #include <memory>
-#include <stdexcept>
 #include <string>
 
 namespace drone::planner {
 
 /// Create a path planner by backend name.
 /// D* Lite accepts a GridPlannerConfig.
-inline std::unique_ptr<IPathPlanner> create_path_planner(const std::string& backend = "dstar_lite",
-                                                         const GridPlannerConfig& config = {}) {
+[[nodiscard]] inline drone::util::Result<std::unique_ptr<IPathPlanner>> create_path_planner(
+    const std::string& backend = "dstar_lite", const GridPlannerConfig& config = {}) {
+    using R = drone::util::Result<std::unique_ptr<IPathPlanner>>;
     if (backend == "dstar_lite") {
-        return std::make_unique<DStarLitePlanner>(config);
+        return R::ok(std::make_unique<DStarLitePlanner>(config));
     }
-    throw std::runtime_error("Unknown path planner: " + backend);
+    return R::err(drone::util::Error(drone::util::ErrorCode::InvalidValue,
+                                     "Unknown path planner: " + backend));
 }
 
 }  // namespace drone::planner

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "util/config.h"
+#include "util/ilogger.h"
 
 #include <array>
 #include <cstdint>
@@ -52,7 +53,8 @@ std::array<T, kPerClassCount> load_per_class(const Config& cfg, const std::strin
         try {
             base = section["default"].get<T>();
         } catch (...) {
-            // Type mismatch — stick with compiled fallback.
+            DRONE_LOG_WARN("[per_class_config] Type mismatch for 'default' in section '{}'",
+                           section_key);
         }
     }
     result.fill(base);
@@ -71,7 +73,8 @@ std::array<T, kPerClassCount> load_per_class(const Config& cfg, const std::strin
         try {
             result[static_cast<uint8_t>(idx)] = it.value().get<T>();
         } catch (...) {
-            // Type mismatch for this class — keep the default.
+            DRONE_LOG_WARN("[per_class_config] Type mismatch for '{}' in section '{}'", key,
+                           section_key);
         }
     }
 

@@ -212,25 +212,27 @@ TEST(ObstacleAvoider3DTest, NaNPosePassesThrough) {
 // ═════════════════════════════════════════════════════════════
 
 TEST(ObstacleAvoiderFactory, ThreeDBackendRegistered) {
-    auto avoider = create_obstacle_avoider("3d");
-    EXPECT_NE(avoider, nullptr);
-    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+    auto result = create_obstacle_avoider("3d");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_NE(result.value(), nullptr);
+    EXPECT_EQ(result.value()->name(), "ObstacleAvoider3D");
 }
 
 TEST(ObstacleAvoiderFactory, AlternateNameRegistered) {
-    auto avoider = create_obstacle_avoider("obstacle_avoider_3d");
-    EXPECT_NE(avoider, nullptr);
-    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+    auto result = create_obstacle_avoider("obstacle_avoider_3d");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "ObstacleAvoider3D");
 }
 
 TEST(ObstacleAvoiderFactory, PotentialField3DRegistered) {
-    auto avoider = create_obstacle_avoider("potential_field_3d");
-    EXPECT_NE(avoider, nullptr);
-    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+    auto result = create_obstacle_avoider("potential_field_3d");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "ObstacleAvoider3D");
 }
 
-TEST(ObstacleAvoiderFactory, UnknownThrows) {
-    EXPECT_THROW(create_obstacle_avoider("nonexistent"), std::runtime_error);
+TEST(ObstacleAvoiderFactory, UnknownReturnsError) {
+    auto result = create_obstacle_avoider("nonexistent");
+    EXPECT_TRUE(result.is_err());
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -689,6 +691,82 @@ TEST(ObstacleAvoider3DTest, PerClassPredictionDt) {
 
     // DRONE should get stronger repulsion (predicted closer).
     EXPECT_LT(result_drone.velocity_x, result_building.velocity_x);
+}
+
+TEST(ObstacleAvoider3DTest, OobClassIdSkipped) {
+    // An IPC message with class_id >= 8 must not cause OOB array access.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.objects[0].class_id   = static_cast<drone::ipc::ObjectClass>(255);
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    // Object with invalid class_id should be skipped — no repulsion.
+    EXPECT_FLOAT_EQ(result.velocity_x, cmd.velocity_x);
+    EXPECT_FLOAT_EQ(result.velocity_y, cmd.velocity_y);
+    EXPECT_FLOAT_EQ(result.velocity_z, cmd.velocity_z);
+}
+
+TEST(ObstacleAvoider3DTest, ConfigDrivenPerClassLoading) {
+    // Verify the Config-driven constructor loads per-class overrides from JSON.
+    std::string tmp = "/tmp/drone_test_avoider_cfg_" + std::to_string(::getpid()) + ".json";
+    {
+        std::ofstream ofs(tmp);
+        ofs << R"({
+            "mission_planner": {
+                "obstacle_avoidance": {
+                    "influence_radius_m": 5.0,
+                    "repulsive_gain": 2.0,
+                    "path_aware": false,
+                    "log_corrections": false,
+                    "per_class": {
+                        "influence_radius_m": { "default": 5.0, "person": 3.0 }
+                    }
+                }
+            }
+        })";
+    }
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(tmp));
+    std::remove(tmp.c_str());
+
+    ObstacleAvoider3D avoider(cfg);
+    // PERSON (idx 1) should have influence_radius=3.0, others 5.0.
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 4.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    // PERSON at 4m — outside per-class radius (3.0), no repulsion.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::PERSON;
+    auto result_person          = avoider.avoid(cmd, pose, objects);
+    EXPECT_FLOAT_EQ(result_person.velocity_x, cmd.velocity_x);
+
+    // UNKNOWN at 4m — inside default radius (5.0), gets repulsion.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::UNKNOWN;
+    auto result_unknown         = avoider.avoid(cmd, pose, objects);
+    EXPECT_LT(result_unknown.velocity_x, cmd.velocity_x);
 }
 
 TEST(ObstacleAvoider3DTest, PathAwareDisabledFallback) {

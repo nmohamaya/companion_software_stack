@@ -19,6 +19,7 @@
 #include "util/config_keys.h"
 #include "util/ilogger.h"
 #include "util/per_class_config.h"
+#include "util/result.h"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,10 @@
 #include <string>
 
 namespace drone::planner {
+
+static_assert(drone::util::kPerClassCount ==
+                  static_cast<uint8_t>(drone::ipc::ObjectClass::TREE) + 1,
+              "kPerClassCount must match ObjectClass enum size");
 
 /// Configuration for the 3D obstacle avoider.
 struct ObstacleAvoider3DConfig {
@@ -168,6 +173,7 @@ public:
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
             const auto  ci  = static_cast<uint8_t>(obj.class_id);
+            if (ci >= drone::util::kPerClassCount) continue;
 
             if (obj.confidence < config_.min_confidence_per_class[ci]) continue;
             ++considered;
@@ -211,9 +217,9 @@ public:
                 if (config_.log_corrections) {
                     const float cmag = std::sqrt(cx * cx + cy * cy + cz * cz);
                     if (cmag > 0.5f) {
-                        DRONE_LOG_INFO("[Avoider] obstacle d={:.1f}m rep={:.2f} |c|={:.2f}m/s at "
-                                       "({:.1f},{:.1f},{:.1f})",
-                                       dist, repulsion, cmag, ox, oy, oz);
+                        DRONE_LOG_DEBUG("[Avoider] obstacle d={:.1f}m rep={:.2f} |c|={:.2f}m/s "
+                                        "at ({:.1f},{:.1f},{:.1f})",
+                                        dist, repulsion, cmag, ox, oy, oz);
                     }
                 }
             }
@@ -362,16 +368,18 @@ private:
 // is fully visible — avoids circular-include issues.
 namespace drone::planner {
 
-inline std::unique_ptr<IObstacleAvoider> create_obstacle_avoider(
+[[nodiscard]] inline drone::util::Result<std::unique_ptr<IObstacleAvoider>> create_obstacle_avoider(
     const std::string& backend = "potential_field_3d", float influence_radius = 5.0f,
     float repulsive_gain = 2.0f, const drone::Config* cfg = nullptr) {
+    using R = drone::util::Result<std::unique_ptr<IObstacleAvoider>>;
     if (backend == "3d" || backend == "obstacle_avoider_3d" || backend == "potential_field_3d") {
         if (cfg) {
-            return std::make_unique<ObstacleAvoider3D>(*cfg);
+            return R::ok(std::make_unique<ObstacleAvoider3D>(*cfg));
         }
-        return std::make_unique<ObstacleAvoider3D>(influence_radius, repulsive_gain);
+        return R::ok(std::make_unique<ObstacleAvoider3D>(influence_radius, repulsive_gain));
     }
-    throw std::runtime_error("Unknown obstacle avoider: " + backend);
+    return R::err(drone::util::Error(drone::util::ErrorCode::InvalidValue,
+                                     "Unknown obstacle avoider: " + backend));
 }
 
 }  // namespace drone::planner

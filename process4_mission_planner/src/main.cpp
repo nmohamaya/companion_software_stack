@@ -229,7 +229,12 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS,
                            planner_cfg.snap_approach_bias);
 
-    auto path_planner = drone::planner::create_path_planner(planner_backend, planner_cfg);
+    auto planner_result = drone::planner::create_path_planner(planner_backend, planner_cfg);
+    if (planner_result.is_err()) {
+        DRONE_LOG_ERROR("[P4] {}", planner_result.error().message());
+        return EXIT_FAILURE;
+    }
+    auto path_planner = std::move(planner_result).value();
     DRONE_LOG_INFO("Path planner: {}", path_planner->name());
     auto* grid_planner = dynamic_cast<drone::planner::IGridPlanner*>(path_planner.get());
 
@@ -239,8 +244,13 @@ int main(int argc, char* argv[]) {
 
     auto avoider_backend = ctx.cfg.get<std::string>(
         drone::cfg_key::mission_planner::obstacle_avoider::BACKEND, "potential_field");
-    auto avoider = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
-                                                           repulsive_gain, &ctx.cfg);
+    auto avoider_result = drone::planner::create_obstacle_avoider(avoider_backend, influence_radius,
+                                                                  repulsive_gain, &ctx.cfg);
+    if (avoider_result.is_err()) {
+        DRONE_LOG_ERROR("[P4] {}", avoider_result.error().message());
+        return EXIT_FAILURE;
+    }
+    auto avoider = std::move(avoider_result).value();
     DRONE_LOG_INFO("Obstacle avoider: {}", avoider->name());
 
     // ── Geofence setup ─────────────────────────────────────

@@ -75,9 +75,9 @@ protected:
         fsm.on_arm();  // → PREFLIGHT
     }
 
-    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite");
-    std::unique_ptr<IObstacleAvoider> avoider_ = create_obstacle_avoider("potential_field_3d", 5.0f,
-                                                                         2.0f);
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite").value();
+    std::unique_ptr<IObstacleAvoider> avoider_ =
+        create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
 
     void do_tick(const Pose& pose, const FCState& fc_state) {
         DetectedObjectList            objects{};
@@ -336,8 +336,8 @@ TEST(MissionStateTickUnstuckTest, ExitsOnTimerExpiry) {
     local_fsm.on_stuck();
     ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE_UNSTUCK);
 
-    auto                local_planner = create_path_planner("dstar_lite");
-    auto                local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+    auto local_planner = create_path_planner("dstar_lite").value();
+    auto local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
     StaticObstacleLayer local_layer;
 
     Pose                          pose = make_pose(5, 5, 5);
@@ -386,8 +386,8 @@ TEST(MissionStateTickUnstuckTest, NavigateTickDetectsStuckAndTransitions) {
     local_fsm.on_navigate();
     ASSERT_EQ(local_fsm.state(), MissionState::NAVIGATE);
 
-    auto                local_planner = create_path_planner("dstar_lite");
-    auto                local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f);
+    auto local_planner = create_path_planner("dstar_lite").value();
+    auto local_avoider = create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
     StaticObstacleLayer local_layer;
 
     Pose                          pose = make_pose(5, 5, 5);
