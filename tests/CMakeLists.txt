@@ -466,3 +466,34 @@ target_include_directories(test_baseline_capture PRIVATE
 target_link_libraries(test_baseline_capture PRIVATE
     nlohmann_json::nlohmann_json
 )
+
+# ── Baseline comparator tests (Issue #572 — Epic #523) ──────────
+# Validates regression detection against configurable thresholds:
+# recall, precision, mAP, MOTA, latency p95.
+add_drone_test(test_baseline_comparator
+    test_baseline_comparator.cpp
+    benchmark/baseline_comparator.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_baseline_comparator PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_baseline_comparator PRIVATE
+    nlohmann_json::nlohmann_json
+)
+
+# ── Baseline comparison CLI tool (Issue #572) ────────────────────
+# Standalone executable: compare current run against stored baseline.
+add_executable(compare_to_baseline
+    benchmark/compare_to_baseline_main.cpp
+    benchmark/baseline_comparator.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(compare_to_baseline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(compare_to_baseline PRIVATE
+    nlohmann_json::nlohmann_json
+)

@@ -3221,4 +3221,31 @@ Also cherry-picked review fixes from PR #595 (`fe2e84a`): GT emitter config key 
 
 ---
 
-_Last updated after Improvement #78 (baseline capture, #573). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #79 — CI gating: baseline comparison tool + regression detection (Issue #572, Epic #523)
+
+**Date:** 2026-04-20
+
+**What:** Baseline comparator that fails CI when a PR regresses perception quality beyond configurable thresholds. Compares a current benchmark run against `benchmarks/baseline.json` using percentage-based relative thresholds for detection (recall, precision, mAP), tracking (MOTA, MOTP), and latency (per-stage p95). Includes a CLI tool (`compare_to_baseline`) for local and CI use, and a CI workflow step in `ci-perception.yml`.
+
+**Files added:**
+
+- `tests/benchmark/baseline_comparator.h` — `ComparisonThresholds`, `MetricDelta`, `ScenarioComparison`, `ComparisonResult` types + `compare_baselines()` / `format_comparison()` APIs
+- `tests/benchmark/baseline_comparator.cpp` — comparison engine: higher-is-better (recall, precision, mAP, MOTA, MOTP), lower-is-better (latency p95), zero-baseline skip, Markdown table formatter
+- `tests/benchmark/compare_to_baseline_main.cpp` — CLI: `--baseline <path> --current <path>` with per-metric threshold overrides, exit 0/1
+- `tests/test_baseline_comparator.cpp` — 11 GTest cases: improvement, regression, within-threshold, missing scenario, zero baseline, latency regression, format output, extra scenario, custom thresholds, tracking regression, partial failure
+
+**Files modified:**
+
+- `tests/CMakeLists.txt` — `test_baseline_comparator` test target + `compare_to_baseline` executable target
+- `.github/workflows/ci-perception.yml` — baseline regression gate step between perception run and PR comment
+- `tests/TESTS.md` — suite entry + detailed section + total count update
+
+**Why:** Without automated regression detection, perception quality regressions can slip through code review. The comparator enforces that recall, precision, mAP, MOTA, MOTP, and latency don't degrade beyond thresholds (default 5% for accuracy, 20% for latency). Zero-baseline skip ensures the all-zeros seed baseline passes gracefully until real data is captured. Advisory in CI until baselines have real values.
+
+**Test count:** +11 in `test_baseline_comparator`. 1661 → 1672.
+
+**Universal acceptance criteria:** CI workflow updated; no license obligations change.
+
+---
+
+*Last updated after Improvement #79 (CI gating comparator, #572). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
