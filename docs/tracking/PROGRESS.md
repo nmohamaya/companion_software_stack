@@ -3045,4 +3045,261 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-_Last updated after Improvement #73 (issue #503). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #74 — Skip Cosys Integration Tests Without AirSim Server (PR #494)
+
+**Date:** 2026-04-18
+**Category:** Infrastructure — Build / CI
+**PR:** [#494](https://github.com/nmohamaya/companion_software_stack/pull/494)
+
+**What:**
+
+- Cosys integration tests (`test_cosys_hal_backends`) and tools (`cosys_populate_scene`) now gracefully skip when no AirSim RPC server is reachable, instead of hard-failing CI.
+- CMake summary now shows whether Cosys-AirSim support was found, improving developer orientation.
+
+**Files modified:** `CMakeLists.txt`, `tests/test_cosys_hal_backends.cpp`, `tools/cosys_populate_scene/main.cpp`
+
+**Why:** CI runs on machines without a running Cosys-AirSim instance. Without this fix, any test suite including Cosys tests would fail on standard CI runners and developer machines without the full sim stack.
+
+**Test count:** No new tests. Existing Cosys tests now skip cleanly instead of aborting.
+
+---
+
+### Improvement #75 — Patch Cosys-AirSim simSpawnObject Crash on UE5 5.4 (Issue #495, PR #496)
+
+**Date:** 2026-04-18
+**Category:** Bug Fix — Tier 3 simulation / third-party
+**Issue:** [#495](https://github.com/nmohamaya/companion_software_stack/issues/495)
+**PR:** [#496](https://github.com/nmohamaya/companion_software_stack/pull/496)
+
+**What:**
+
+- **Root cause:** Two bugs in the vendored Cosys-AirSim submodule exposed by UE5 5.4. (1) `AirBlueprintLib.cpp:390` `GenerateAssetRegistryMap` uses `FARFilter` without `PackagePaths` — default behaviour of `GetAssets()` changed in UE5 5.4+ so the asset map is never populated. (2) `WorldSimApi.cpp:94-96` dereferences `TMap::Find` result without null-check — crashes when the map is empty.
+- **Fix:** Local patch (`third_party/cosys-airsim-simspawnobject-fix.patch`) adds `PackagePaths` and null-checks. Idempotent apply script (`third_party/apply_cosys_patches.sh`) checks if already applied.
+- Scenario 30 updated to use the corrected spawn paths.
+
+**Files added:** `third_party/cosys-airsim-simspawnobject-fix.patch`, `third_party/apply_cosys_patches.sh`
+**Files modified:** `config/scenarios/30_cosys_static.json`, `tools/cosys_populate_scene/main.cpp`
+
+**Why:** `simSpawnObject` segfaulted on every call, completely blocking scenario 30's obstacle spawning and any dynamic scene composition for Tier 3 testing.
+
+**Test count:** No new tests. Fix verified via live Cosys-AirSim scenario 30 run.
+
+---
+
+### Improvement #76 — SWVIO Phase 1: IMU State Propagation + State Augmentation (Issue #498, PR #500)
+
+**Date:** 2026-04-18
+**Category:** Feature — Navigation / VIO
+**Issue:** [#498](https://github.com/nmohamaya/companion_software_stack/issues/498)
+**PR:** [#500](https://github.com/nmohamaya/companion_software_stack/pull/500)
+**Epic:** [#497 — Custom Sliding-Window Optimization VIO (SWVIO)](https://github.com/nmohamaya/companion_software_stack/issues/497)
+
+**What:**
+
+- **SlidingWindowVIOBackend** — Phase 1 of the custom stereo-inertial VIO. Implements IMU error-state propagation with full 15-dim covariance (position, velocity, rotation, gyro bias, accel bias), camera clone augmentation into a sliding window (default 10 clones), and oldest-clone Schur-complement marginalization.
+- **slam_math.h** — Extracted shared SO(3)/SE(3) math utilities (exp_map, log_map, skew, left/right Jacobian) from `imu_preintegrator.cpp` into a reusable header.
+- **ivio_interface.h** — Extracted `IVIOBackend` pure interface to break circular include dependency. Factory registers `"swvio"` backend.
+- **Health FSM** — INIT → PROPAGATING → HEALTHY → DEGRADED state machine tracking covariance growth and measurement staleness.
+- **Config section** — `slam.vio.swvio.*` with 8 tunable parameters (gravity magnitude, noise densities, window size, marginalization strategy).
+
+**Files added:** `slam_math.h`, `swvio_types.h`, `swvio_backend.h`, `ivio_interface.h`, `swvio_backend.cpp`, `test_swvio_backend.cpp`
+**Files modified:** `imu_preintegrator.cpp`, `ivio_backend.h`, `default.json`, `CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Phase 1 of the custom VIO system (Epic #497). The existing `SimulatedVIOBackend` and `GazeboVIOBackend` don't run real estimation — they proxy ground truth from the simulator. SWVIO is the first backend that does real IMU propagation with proper uncertainty tracking, required for Phase 2 (sliding-window Gauss-Newton optimization) and eventually Phase 3 (stereo visual updates + loop closure).
+
+**Test count:** +17 (8 backend tests: construction, propagation physics, stationarity, covariance growth, augmentation, marginalization, health FSM, factory registration; 9 slam_math tests: exp/log map, skew, Jacobians, identity properties). 1588 total after merge.
+
+---
+
+### Improvement #77 — Observability Safety Rule: Mutex-Protected Primitives on Flight-Critical Threads (PR #592)
+
+**Date:** 2026-04-20
+**Category:** Infrastructure — Safety audit
+**PR:** [#592](https://github.com/nmohamaya/companion_software_stack/pull/592)
+
+**What:**
+
+- **safety_audit.sh Rule 31** — New static analysis rule that detects mutex-protected observability primitives (`LatencyProfiler`, `JsonLogSink`, `FrameDiagnostics`) called from flight-critical threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog paths).
+- **CLAUDE.md codified** — Added "Observability on flight-critical threads" section to safety-critical C++ practices, documenting the constraint and the escape hatch (lock-free `LatencyTracker` + dedicated IO drain thread).
+- **review-concurrency agent** updated to check for this pattern during code review.
+- Rule allows documented justifications (via `// SAFETY: profiler justified` comments) for cases where the team has analyzed the priority-inversion risk and accepted it.
+
+**Files modified:** `deploy/safety_audit.sh`, `CLAUDE.md`, `.claude/agents/review-concurrency.md`
+
+**Why:** The new `LatencyProfiler` (PR #591) uses a mutex internally. If called from a 30+ Hz control loop, the mutex introduces priority-inversion risk and can spike the very latency being measured. This rule prevents accidental adoption in hot paths while allowing justified use in lower-frequency paths (documented via DR-022).
+
+**Test count:** No new tests. Rule verified via `bash deploy/safety_audit.sh` on the codebase.
+
+---
+
+## Phase 13b — Perception Pipeline v2 (Integration Branch)
+
+*The following improvements landed on `feature/perception-v2-integration` and will merge to main when the integration branch is ready. They are tracked here for completeness.*
+
+### Improvement #78 — Perception Metrics Framework: TP/FP/FN, AP, MOTA/MOTP (Issue #570, PR #590)
+
+**Date:** 2026-04-20
+**Category:** Feature — Perception / Benchmark harness
+**Issue:** [#570](https://github.com/nmohamaya/companion_software_stack/issues/570)
+**PR:** [#590](https://github.com/nmohamaya/companion_software_stack/pull/590)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- Pure C++17 scorer under `tests/benchmark/` — detection metrics (per-class TP/FP/FN, precision/recall/F1, per-class AP via PASCAL VOC 11-point interpolation, confusion matrix) and tracking metrics (MOTA, MOTP, ID switches, fragmentations).
+- Greedy confidence-ordered matching (COCO-style) over Hungarian for determinism and simplicity.
+- IoU-form MOTP (standard for 2D bbox trackers). Per-GT track-state keeps ID-switch/fragmentation bookkeeping O(total_GT).
+
+**Files added:** `tests/benchmark/perception_metrics.h`, `tests/benchmark/perception_metrics.cpp`, `tests/test_perception_metrics.cpp`
+**Files modified:** `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** CP0 foundation for Epic #523. Every subsequent perception-v2 PR will be graded against these metrics. No ML deps, no OpenCV — pure C++17 for CI reproducibility.
+
+**Test count:** +23. 1605 → 1628.
+
+---
+
+### Improvement #79 — Latency Profiler: Per-Stage Percentiles + Correlation-Tagged Traces (Issue #571, PRs #591 + #593)
+
+**Date:** 2026-04-20
+**Category:** Feature — Observability / Benchmark harness
+**Issue:** [#571](https://github.com/nmohamaya/companion_software_stack/issues/571)
+**PRs:** [#591](https://github.com/nmohamaya/companion_software_stack/pull/591), [#593](https://github.com/nmohamaya/companion_software_stack/pull/593)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- **PR #591** — Header-only `LatencyProfiler` (`common/util/`) with `ScopedLatency` RAII guards, thread-safe per-stage percentile computation (p50/p95/p99), correlation-ID-tagged end-to-end traces, non-monotonic clock defence. 15 unit tests.
+- **PR #593** — Wired `ScopedLatency` into P2 (Detect/Track/Fuse) and P4 (PlannerLoop/GeofenceCheck/FaultEval). Opt-in config gate (`benchmark.profiler.enabled`, default false) for zero production overhead. DR-022 documents mutex safety analysis. 3 smoke tests.
+
+**Files added:** `common/util/include/util/latency_profiler.h`, `tests/test_latency_profiler.cpp`, `tests/test_latency_profiler_dump.cpp`
+**Files modified:** `process2_perception/src/main.cpp`, `process4_mission_planner/src/main.cpp`, `config/default.json`, `common/util/include/util/config_keys.h`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** The benchmark harness needs per-stage latency data alongside detection/tracking accuracy. The profiler composites with the metrics framework (#570) into `benchmarks/baseline.json` for regression detection.
+
+**Test count:** +18 (15 profiler + 3 wiring smoke). 1628 → 1648.
+
+---
+
+### Improvement #80 — Ground-Truth Emitter: Per-Frame GT for Baseline Capture (Issue #594, PR #595)
+
+**Date:** 2026-04-20
+**Category:** Feature — Perception / Benchmark harness
+**Issue:** [#594](https://github.com/nmohamaya/companion_software_stack/issues/594)
+**PR:** [#595](https://github.com/nmohamaya/companion_software_stack/pull/595)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- Pluggable `IGroundTruthEmitter` interface with Cosys-AirSim backend using AirSim's built-in detection API (`simGetDetections`).
+- Per-frame dynamic GT (not static-config) — handles moving objects. Stable `gt_track_id` via `std::hash<string_view>` folded to 32 bits.
+- Per-scenario `gt_class_map` in scenario JSON for auditable class mapping.
+- Out-of-FoV/occluded objects not emitted (AirSim filters visible-only).
+
+**Files added:** `tests/benchmark/gt_emitter.h`, `tests/benchmark/gt_emitter.cpp`, `tests/benchmark/cosys_gt_emitter.cpp`, `tests/test_gt_emitter.cpp`
+**Files modified:** `config/scenarios/29_cosys_perception.json`, `config/scenarios/30_cosys_static.json`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Detection/tracking metrics (#570) need ground-truth bboxes per frame. Static GT configs would produce misleading baselines for the 3 of 5 target scenarios with dynamic content.
+
+**Test count:** +13 (11 initial + 2 review fixes). 1648 → 1655.
+
+---
+
+### Improvement #81 — Baseline Capture Infrastructure + Seed Baseline (Issue #573, PR #596)
+
+**Date:** 2026-04-21
+**Category:** Feature — Perception / Benchmark harness
+**Issue:** [#573](https://github.com/nmohamaya/companion_software_stack/issues/573)
+**PR:** [#596](https://github.com/nmohamaya/companion_software_stack/pull/596)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- `BaselineCapture` class — accumulates per-scenario detection + tracking metrics and latency summaries, serialises to `benchmarks/baseline.json`. Delegates to the #570 metrics framework.
+- Seed baseline (`benchmarks/baseline.json`) — structure for 5 target scenarios (#02, #18, #21, #29, #30), zero-valued until first live capture run.
+
+**Files added:** `tests/benchmark/baseline_capture.h`, `tests/benchmark/baseline_capture.cpp`, `tests/test_baseline_capture.cpp`, `benchmarks/baseline.json`, `benchmarks/README.md`
+**Files modified:** `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Connects the metrics framework (#570), latency profiler (#571), and GT emitter (#594) into a single capture pipeline that feeds the CI comparator (#572) and dashboard (#574).
+
+**Test count:** +11. 1655 → 1672 (includes GT emitter review-fix cherry-pick).
+
+---
+
+### Improvement #82 — CI Gating: Baseline Comparison Tool + Regression Detection (Issue #572, PR #597)
+
+**Date:** 2026-04-21
+**Category:** Feature — CI / Benchmark harness
+**Issue:** [#572](https://github.com/nmohamaya/companion_software_stack/issues/572)
+**PR:** [#597](https://github.com/nmohamaya/companion_software_stack/pull/597)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- `BaselineComparator` class — compares current benchmark run against baseline with configurable percentage thresholds (5% for detection/tracking, 20% for latency p95).
+- CLI tool (`compare_to_baseline`) with `--baseline`/`--current` args and per-metric threshold overrides.
+- CI integration — advisory baseline regression gate step in `ci-perception.yml`.
+- Zero-baseline skip — all-zeros baseline passes until real data is captured.
+
+**Files added:** `tests/benchmark/baseline_comparator.h`, `tests/benchmark/baseline_comparator.cpp`, `tests/benchmark/compare_to_baseline_main.cpp`, `tests/test_baseline_comparator.cpp`
+**Files modified:** `.github/workflows/ci-perception.yml`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Automated regression detection — PRs that degrade perception metrics beyond threshold get flagged in CI before merge.
+
+**Test count:** +11. 1672 → 1683.
+
+---
+
+### Improvement #83 — Dashboard Renderer: HTML/MD Benchmark Report (Issue #574, PR #598)
+
+**Date:** 2026-04-21
+**Category:** Feature — CI / Benchmark harness
+**Issue:** [#574](https://github.com/nmohamaya/companion_software_stack/issues/574)
+**PR:** [#598](https://github.com/nmohamaya/companion_software_stack/pull/598)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- Zero-dependency Python dashboard renderer (`tests/benchmark/dashboard_renderer.py`) producing human-readable benchmark reports from BaselineCapture JSON.
+- Two output modes: `--mode pr-comment` (~50 lines for GitHub PR comments with summary table + top-3 changes) and `--mode full` (per-class breakdowns, latency stage tables).
+- CI integration — new "Generate benchmark dashboard" step in `ci-perception.yml` with graceful fallback.
+- Completes Epic #523 (Perception Benchmark Harness).
+
+**Files added:** `tests/benchmark/dashboard_renderer.py`, `tests/benchmark/test_dashboard_renderer.py`
+**Files modified:** `.github/workflows/ci-perception.yml`, `tests/TESTS.md`
+
+**Why:** The comparator (#572) gives pass/fail; the dashboard gives humans the context to understand *why* and *where* metrics changed. Closes out the benchmark harness epic.
+
+**Test count:** +14 (Python unittest). 1683 → 1697 (Python tests counted separately in TESTS.md).
+
+---
+
+### Improvement #84 — Per-Class Config Schema: load_per_class<T>() + Avoider/Tracker Integration (Epic #519, PR #599)
+
+**Date:** 2026-04-21
+**Category:** Feature — Infrastructure / Perception / Navigation
+**Epic:** [#519 — Per-Class Config Schema](https://github.com/nmohamaya/companion_software_stack/issues/519) (all 5 sub-issues: #550–#554)
+**PR:** [#599](https://github.com/nmohamaya/companion_software_stack/pull/599)
+
+**What:**
+
+- **`per_class_config.h`** — Generic `load_per_class<T>()` template utility that reads JSON sections like `{ "default": 5.0, "person": 2.0 }` into `std::array<T, 8>` indexed by `ObjectClass`. Includes `class_name_to_index()`, `validate_per_class_section()`, and compile-time `static_assert` tying `kPerClassCount` to the `ObjectClass` enum.
+- **Obstacle avoider** — 5 per-class arrays (influence_radius, repulsive_gain, min_distance, prediction_dt, min_confidence) loaded at startup, used in the avoid() hot loop via class_id index. OOB bounds check for untrusted IPC data.
+- **Kalman tracker** — Per-class motion model (CONSTANT_VELOCITY / CONSTANT_ACCELERATION) with different process noise Q_ matrices. ByteTrack selects model at track creation.
+- **Config validation** — `per_class_section()` schema rule rejects unknown class names at startup. Wired into both mission_planner and perception schemas.
+- **Factory refactor** — `planner_factory.h` and `obstacle_avoider_3d.h` factories converted from `throw` to `Result<T,E>` pattern.
+- **config/default.json** — Populated with per-class defaults for all avoider and tracker parameters.
+- **CI fix** — `run_perception_ci.sh` dry-run `KeyError: 'metrics'` fixed (baseline format mismatch from PR #596).
+
+**Files added:** `common/util/include/util/per_class_config.h`, `tests/test_per_class_config.cpp`
+**Files modified:** `config_keys.h`, `config_validator.h`, `obstacle_avoider_3d.h`, `planner_factory.h`, `kalman_tracker.h`, `bytetrack_tracker.h/cpp`, `P4 main.cpp`, `config/default.json`, `run_perception_ci.sh`, 6 test files
+**Docs:** `CI_ISSUES.md` (CI-012), `IMPROVEMENTS.md` (#12, #13)
+
+**Why:** Per-class behaviour (margins, motion models, prediction horizons) was hardcoded to global values. This epic moves all per-class tuning into `drone::Config` with a standard hierarchy, a reusable lookup utility, and startup validation. Zero runtime cost — arrays loaded once at startup.
+
+**Test count:** +13 new tests (per_class_config, OOB bounds, config-driven avoider, motion model, type mismatch). Factory tests updated from throw→Result. 1697 → 1707 on integration branch.
+
+---
+
+_Last updated after Improvement #84 (Epic #519). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
