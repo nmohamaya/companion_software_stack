@@ -46,6 +46,11 @@ jobs:
       SPOT_MAX_PRICE: "0.50"
       ARTIFACT_STORE_URL: ${{ vars.ARTIFACT_STORE_URL }}
       RUN_ID: "pr-${{ github.event.pull_request.number }}-${{ github.run_number }}"
+      # Canonical baseline path — used by both compare_to_baseline and dashboard_renderer.
+      # NOTE: Currently read from the PR branch checkout. Before promoting to a
+      # required check, pin to origin/main or an artifact store to prevent
+      # PR authors from weakening thresholds.
+      BASELINE_PATH: benchmarks/baseline.json
 
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +66,7 @@ jobs:
             DRY_RUN_FLAG="--dry-run"
           fi
           bash tests/run_perception_ci.sh \
-            --baseline tests/perception_baseline.json \
+            --baseline "$BASELINE_PATH" \
             --output /tmp/perception-results.json \
             $DRY_RUN_FLAG
         env:
@@ -75,13 +80,10 @@ jobs:
           # Compare structured baseline metrics if a current-run baseline exists.
           # The compare_to_baseline tool loads BaselineCapture JSON format.
           #
-          # NOTE: baseline is read from the PR branch checkout. Before promoting
-          # this to a required check, pin the baseline to the default branch or
-          # an artifact store to prevent PR authors from weakening thresholds.
           if [[ -f /tmp/current-run-baseline.json ]]; then
             echo "Running baseline comparison..."
             ./build/bin/compare_to_baseline \
-              --baseline benchmarks/baseline.json \
+              --baseline "$BASELINE_PATH" \
               --current /tmp/current-run-baseline.json \
               | tee /tmp/baseline-comparison.md
           else
@@ -94,7 +96,7 @@ jobs:
         run: |
           if [[ -f /tmp/current-run-baseline.json ]]; then
             python3 tests/benchmark/dashboard_renderer.py \
-              --baseline benchmarks/baseline.json \
+              --baseline "$BASELINE_PATH" \
               --current /tmp/current-run-baseline.json \
               --mode pr-comment \
               > /tmp/dashboard-comment.md || true
@@ -128,8 +130,8 @@ jobs:
                 }
                 body += `\n**Cost:** $${results.cost || 'N/A'} | **Duration:** ${results.duration_min || 'N/A'} min`;
               } catch (e) {
+                core.warning(`Perception results parse error: ${e.message}`);
                 body += 'Could not parse perception results. Check workflow logs.\n';
-                body += `Error: ${e.message}`;
               }
               body += '\n\n> Advisory check — does not block merge.';
             }

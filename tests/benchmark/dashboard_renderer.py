@@ -81,17 +81,19 @@ def load_baseline(path: str) -> Optional[dict]:
     return data
 
 
+_METRIC_TO_THRESHOLD_KEY = {
+    "micro_recall": "recall",
+    "micro_precision": "precision",
+    "mean_ap": "ap",
+    "mota": "mota",
+    "motp": "motp",
+}
+
+
 def _threshold_for(metric_name: str, thresholds: dict) -> float:
-    if metric_name == "micro_recall":
-        return thresholds.get("recall", 0.05)
-    if metric_name == "micro_precision":
-        return thresholds.get("precision", 0.05)
-    if metric_name == "mean_ap":
-        return thresholds.get("ap", 0.05)
-    if metric_name == "mota":
-        return thresholds.get("mota", 0.05)
-    if metric_name == "motp":
-        return thresholds.get("motp", 0.05)
+    key = _METRIC_TO_THRESHOLD_KEY.get(metric_name)
+    if key:
+        return thresholds.get(key, 0.05)
     if "latency" in metric_name:
         return thresholds.get("latency", 0.20)
     return 0.05
@@ -175,23 +177,24 @@ def compare_scenarios(baseline: dict, current: dict,
     return result
 
 
+def _deserialize_latency(val) -> Optional[dict]:
+    """Deserialize a latency value that may be a dict or JSON string."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return val if isinstance(val, dict) else None
+
+
 def _compare_latency(bl_s: dict, cur_s: dict, thresholds: dict,
                      sc: ScenarioResult) -> None:
-    bl_lat = bl_s.get("latency")
-    cur_lat = cur_s.get("latency")
+    bl_lat = _deserialize_latency(bl_s.get("latency"))
+    cur_lat = _deserialize_latency(cur_s.get("latency"))
     if not bl_lat or not cur_lat:
         return
-
-    if isinstance(bl_lat, str):
-        try:
-            bl_lat = json.loads(bl_lat)
-        except (json.JSONDecodeError, TypeError):
-            return
-    if isinstance(cur_lat, str):
-        try:
-            cur_lat = json.loads(cur_lat)
-        except (json.JSONDecodeError, TypeError):
-            return
 
     bl_stages = bl_lat.get("stages", {})
     cur_stages = cur_lat.get("stages", {})
@@ -234,6 +237,13 @@ def _top_changes(result: ComparisonResult, n: int = 3):
     return regressions[:n], improvements[:n]
 
 
+def _sanitize_md(text: str) -> str:
+    """Strip characters that break Markdown table cells or enable injection."""
+    for ch in ("|", "`", "<", ">", "\n", "\r"):
+        text = text.replace(ch, "_")
+    return text
+
+
 def _fmt_val(val: float, name: str) -> str:
     if "latency" in name:
         ms = val / 1_000_000
@@ -247,8 +257,9 @@ def _fmt_delta(delta_pct: float) -> str:
 
 def _scenario_summary_row(sc: ScenarioResult) -> str:
     """Render one row of the summary table."""
+    safe_name = _sanitize_md(sc.name)
     if not sc.found_in_current:
-        return f"| {sc.name} | — | — | — | — | — | **MISSING** |"
+        return f"| {safe_name} | — | — | — | — | — | **MISSING** |"
 
     by_name: Dict[str, MetricDelta] = {m.name: m for m in sc.metrics}
 
@@ -262,13 +273,13 @@ def _scenario_summary_row(sc: ScenarioResult) -> str:
     lat_cell = cell(lat_key) if lat_key else "—"
 
     status = "\u2705" if sc.passed else "\u274c"
-    return (f"| {sc.name} | {cell('micro_recall')} | {cell('micro_precision')} "
+    return (f"| {safe_name} | {cell('micro_recall')} | {cell('micro_precision')} "
             f"| {cell('mean_ap')} | {cell('mota')} | {lat_cell} | {status} |")
 
 
 def render_pr_comment(result: ComparisonResult,
                       thresholds: Optional[dict] = None) -> str:
-    """Render a condensed ~50-line Markdown report for PR comments."""
+    """Render a condensed Markdown report (~50-60 lines) for PR comments."""
     if thresholds is None:
         thresholds = DEFAULT_THRESHOLDS
 
@@ -289,6 +300,14 @@ def render_pr_comment(result: ComparisonResult,
     for sc in result.scenarios:
         lines.append(_scenario_summary_row(sc))
 
+    if result.scenarios_checked > 0 and result.metrics_checked == 0:
+        lines.extend([
+            "",
+            "> \u26a0\ufe0f **All baseline metrics are zero (placeholder).** "
+            "No real comparison was performed. Populate baselines to enable "
+            "regression detection.",
+        ])
+
     regressions, improvements = _top_changes(result)
 
     lines.extend(["", "### Top Changes", ""])
@@ -299,7 +318,7 @@ def render_pr_comment(result: ComparisonResult,
     else:
         for i, (sname, m) in enumerate(regressions, 1):
             lines.append(
-                f"{i}. {sname} / {m.name}: "
+                f"{i}. {_sanitize_md(sname)} / {_sanitize_md(m.name)}: "
                 f"{_fmt_val(m.baseline, m.name)} \u2192 "
                 f"{_fmt_val(m.current, m.name)} ({_fmt_delta(m.delta_pct)})"
             )
@@ -311,17 +330,17 @@ def render_pr_comment(result: ComparisonResult,
     else:
         for i, (sname, m) in enumerate(improvements, 1):
             lines.append(
-                f"{i}. {sname} / {m.name}: "
+                f"{i}. {_sanitize_md(sname)} / {_sanitize_md(m.name)}: "
                 f"{_fmt_val(m.baseline, m.name)} \u2192 "
                 f"{_fmt_val(m.current, m.name)} ({_fmt_delta(m.delta_pct)})"
             )
 
-    acc_t = int(thresholds.get("recall", 0.05) * 100)
+    recall_t = int(thresholds.get("recall", 0.05) * 100)
     lat_t = int(thresholds.get("latency", 0.20) * 100)
     lines.extend([
         "",
         f"> Advisory \u2014 does not block merge. "
-        f"Thresholds: {acc_t}% accuracy, {lat_t}% latency.",
+        f"Thresholds: {recall_t}% recall, {lat_t}% latency.",
     ])
 
     return "\n".join(lines) + "\n"
@@ -339,7 +358,8 @@ def render_full_report(result: ComparisonResult, baseline: dict,
     parts.append("\n---\n\n### Detailed Breakdown\n")
 
     for sc in result.scenarios:
-        parts.append(f"\n#### {sc.name}\n")
+        safe_sc = _sanitize_md(sc.name)
+        parts.append(f"\n#### {safe_sc}\n")
 
         if not sc.found_in_current:
             parts.append("**Status:** MISSING in current run\n")
@@ -348,15 +368,16 @@ def render_full_report(result: ComparisonResult, baseline: dict,
         parts.append("| Metric | Baseline | Current | Delta | Threshold | Status |")
         parts.append("|--------|----------|---------|-------|-----------|--------|")
         for m in sc.metrics:
+            safe_m = _sanitize_md(m.name)
             if m.skipped:
                 parts.append(
-                    f"| {m.name} | {_fmt_val(m.baseline, m.name)} | "
+                    f"| {safe_m} | {_fmt_val(m.baseline, m.name)} | "
                     f"{_fmt_val(m.current, m.name)} | — | — | skipped |"
                 )
                 continue
             status = "PASS" if m.passed else "**FAIL**"
             parts.append(
-                f"| {m.name} | {_fmt_val(m.baseline, m.name)} | "
+                f"| {safe_m} | {_fmt_val(m.baseline, m.name)} | "
                 f"{_fmt_val(m.current, m.name)} | {_fmt_delta(m.delta_pct)} "
                 f"| {m.threshold_pct:.0f}% | {status} |"
             )
@@ -364,12 +385,14 @@ def render_full_report(result: ComparisonResult, baseline: dict,
         cur_s = current.get("scenarios", {}).get(sc.name, {})
         per_class = cur_s.get("per_class", [])
         if per_class:
-            parts.append(f"\n**Per-class breakdown ({sc.name}):**\n")
+            parts.append(f"\n**Per-class breakdown ({safe_sc}):**\n")
             parts.append("| Class | Precision | Recall | F1 | AP | Count |")
             parts.append("|-------|-----------|--------|----|----|-------|")
             for pc in per_class:
+                cls_name = _sanitize_md(
+                    str(pc.get('class_name', pc.get('class_id', '?'))))
                 parts.append(
-                    f"| {pc.get('class_name', pc.get('class_id', '?'))} "
+                    f"| {cls_name} "
                     f"| {pc.get('precision', 0):.2f} "
                     f"| {pc.get('recall', 0):.2f} "
                     f"| {pc.get('f1', 0):.2f} "
@@ -377,24 +400,21 @@ def render_full_report(result: ComparisonResult, baseline: dict,
                     f"| {pc.get('detection_count', 0)} |"
                 )
 
-        cur_lat = cur_s.get("latency")
-        if cur_lat:
-            if isinstance(cur_lat, str):
-                try:
-                    cur_lat = json.loads(cur_lat)
-                except (json.JSONDecodeError, TypeError):
-                    cur_lat = None
-            if cur_lat and "stages" in cur_lat:
-                parts.append(f"\n**Latency stages ({sc.name}):**\n")
-                parts.append("| Stage | p50 | p95 | p99 |")
-                parts.append("|-------|-----|-----|-----|")
-                for stage, vals in cur_lat["stages"].items():
-                    p50 = vals.get("p50_ns", 0) / 1_000_000
-                    p95 = vals.get("p95_ns", 0) / 1_000_000
-                    p99 = vals.get("p99_ns", 0) / 1_000_000
-                    parts.append(f"| {stage} | {p50:.1f}ms | {p95:.1f}ms | {p99:.1f}ms |")
+        cur_lat = _deserialize_latency(cur_s.get("latency"))
+        if cur_lat and "stages" in cur_lat:
+            parts.append(f"\n**Latency stages ({safe_sc}):**\n")
+            parts.append("| Stage | p50 | p95 | p99 |")
+            parts.append("|-------|-----|-----|-----|")
+            for stage, vals in cur_lat["stages"].items():
+                safe_stage = _sanitize_md(stage)
+                p50 = vals.get("p50_ns", 0) / 1_000_000
+                p95 = vals.get("p95_ns", 0) / 1_000_000
+                p99 = vals.get("p99_ns", 0) / 1_000_000
+                parts.append(
+                    f"| {safe_stage} | {p50:.1f}ms | {p95:.1f}ms "
+                    f"| {p99:.1f}ms |")
 
-    parts.append(f"\n### Thresholds\n")
+    parts.append("\n### Thresholds\n")
     parts.append("| Metric | Threshold |")
     parts.append("|--------|-----------|")
     for k, v in thresholds.items():
@@ -428,10 +448,15 @@ def main():
     if args.thresholds:
         try:
             overrides = json.loads(args.thresholds)
-            thresholds.update(overrides)
         except json.JSONDecodeError as e:
             print(f"Error: invalid thresholds JSON: {e}", file=sys.stderr)
             return 2
+        for k, v in overrides.items():
+            if not isinstance(v, (int, float)) or v <= 0.0 or v > 1.0:
+                print(f"Error: threshold '{k}' must be in (0.0, 1.0], "
+                      f"got {v}", file=sys.stderr)
+                return 2
+        thresholds.update(overrides)
 
     result = compare_scenarios(baseline, current, thresholds)
 
