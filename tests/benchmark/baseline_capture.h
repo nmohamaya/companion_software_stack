@@ -80,34 +80,47 @@ struct ScenarioBaseline {
 // Accumulates baselines for multiple scenarios and serialises to JSON.
 class BaselineCapture {
 public:
-    // Add a new scenario to capture. Returns a mutable reference for frame
-    // accumulation. Scenario names must be unique — duplicate names overwrite.
+    BaselineCapture()                                  = default;
+    ~BaselineCapture()                                 = default;
+    BaselineCapture(const BaselineCapture&)            = delete;
+    BaselineCapture& operator=(const BaselineCapture&) = delete;
+    BaselineCapture(BaselineCapture&&)                 = default;
+    BaselineCapture& operator=(BaselineCapture&&)      = default;
+
+    // Add a new scenario or return the existing one. Returns a mutable reference
+    // for frame accumulation. Duplicate names return the existing entry (idempotent).
     ScenarioBaseline& add_scenario(const std::string& name);
 
     // Compute detection + tracking metrics from accumulated frames.
     // Must be called after all frames are added for a scenario.
-    void finalise(const std::string& scenario_name, float iou_threshold, uint32_t num_classes);
+    // Returns false if the scenario name was not previously added.
+    [[nodiscard]] bool finalise(const std::string& scenario_name, float iou_threshold,
+                                uint32_t num_classes);
 
     // Finalise with a class-name map so per-class entries get human-readable names.
     // class_names: class_id -> class_name.
-    void finalise(const std::string& scenario_name, float iou_threshold, uint32_t num_classes,
-                  const std::map<uint32_t, std::string>& class_names);
+    // Returns false if the scenario name was not previously added.
+    [[nodiscard]] bool finalise(const std::string& scenario_name, float iou_threshold,
+                                uint32_t                               num_classes,
+                                const std::map<uint32_t, std::string>& class_names);
 
     // Access a scenario baseline (returns nullptr if not found).
     [[nodiscard]] const ScenarioBaseline* scenario(const std::string& name) const;
 
     // All scenario names in insertion order.
-    [[nodiscard]] std::vector<std::string> scenario_names() const;
+    [[nodiscard]] const std::vector<std::string>& scenario_names() const;
 
     // Serialise the full baseline to a JSON string (pretty-printed, stable order).
     [[nodiscard]] std::string to_json() const;
 
-    // Write to a file. Returns true on success.
+    // Write to a file. Returns true on success. On failure, the output file may
+    // be partially written or truncated.
     [[nodiscard]] bool write_json(const std::string& path) const;
 
     // Load an existing baseline from JSON. Returns true on success.
     // Loaded baselines have empty `frames` vectors (raw data is not stored in
-    // the JSON — only the computed metrics).
+    // the JSON — only the computed metrics). On failure, existing state is
+    // preserved (parse uses temporaries before committing).
     [[nodiscard]] bool load_json(const std::string& path);
 
     [[nodiscard]] std::size_t size() const { return order_.size(); }

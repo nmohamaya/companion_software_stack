@@ -56,11 +56,13 @@ bash tests/run_scenario.sh 21 --baseline-capture
 
 ### Merge Results
 
-After capturing individual scenarios, merge them into the single baseline:
+After capturing individual scenarios, merge them into the single baseline.
+The merge script is planned but not yet implemented — for now, merge manually
+by copying per-scenario entries into `baseline.json`:
 
 ```bash
-# The capture tool writes per-scenario JSON; merge into baseline.json
-python3 benchmarks/merge_baselines.py benchmarks/baseline.json
+# (Planned) Automated merge:
+# python3 benchmarks/merge_baselines.py benchmarks/baseline.json
 ```
 
 ## When to Update

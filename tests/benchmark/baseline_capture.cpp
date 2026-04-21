@@ -5,8 +5,10 @@
 #include "benchmark/perception_metrics.h"
 
 #include <algorithm>
+#include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <system_error>
 
@@ -24,22 +26,23 @@ ScenarioBaseline& BaselineCapture::add_scenario(const std::string& name) {
     return it->second;
 }
 
-void BaselineCapture::finalise(const std::string& scenario_name, float iou_threshold,
+bool BaselineCapture::finalise(const std::string& scenario_name, float iou_threshold,
                                uint32_t num_classes) {
-    finalise(scenario_name, iou_threshold, num_classes, {});
+    return finalise(scenario_name, iou_threshold, num_classes, {});
 }
 
-void BaselineCapture::finalise(const std::string& scenario_name, float iou_threshold,
+bool BaselineCapture::finalise(const std::string& scenario_name, float iou_threshold,
                                uint32_t                               num_classes,
                                const std::map<uint32_t, std::string>& class_names) {
     auto it = scenarios_.find(scenario_name);
     if (it == scenarios_.end()) {
-        return;
+        return false;
     }
     ScenarioBaseline& s = it->second;
     s.iou_threshold     = iou_threshold;
     s.num_classes       = num_classes;
-    s.frame_count       = static_cast<uint32_t>(s.frames.size());
+    assert(s.frames.size() <= std::numeric_limits<uint32_t>::max());
+    s.frame_count = static_cast<uint32_t>(s.frames.size());
 
     // Detection metrics.
     const DetectionMetrics det = compute_detection_metrics(s.frames, iou_threshold, num_classes);
@@ -82,6 +85,7 @@ void BaselineCapture::finalise(const std::string& scenario_name, float iou_thres
     s.motp                    = trk.motp();
     s.id_switches             = trk.id_switches;
     s.fragmentations          = trk.fragmentations;
+    return true;
 }
 
 const ScenarioBaseline* BaselineCapture::scenario(const std::string& name) const {
@@ -89,7 +93,7 @@ const ScenarioBaseline* BaselineCapture::scenario(const std::string& name) const
     return it != scenarios_.end() ? &it->second : nullptr;
 }
 
-std::vector<std::string> BaselineCapture::scenario_names() const {
+const std::vector<std::string>& BaselineCapture::scenario_names() const {
     return order_;
 }
 
@@ -165,6 +169,9 @@ std::string BaselineCapture::to_json() const {
 }
 
 bool BaselineCapture::write_json(const std::string& path) const {
+    if (path.empty()) {
+        return false;
+    }
     std::error_code ec;
     const auto      parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) {
@@ -187,10 +194,10 @@ bool BaselineCapture::load_json(const std::string& path) {
         return false;
     }
 
-    nlohmann::json root;
-    try {
-        in >> root;
-    } catch (const nlohmann::json::parse_error&) {
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    auto root = nlohmann::json::parse(ss.str(), nullptr, false);
+    if (root.is_discarded()) {
         return false;
     }
 
@@ -198,15 +205,18 @@ bool BaselineCapture::load_json(const std::string& path) {
         return false;
     }
 
-    order_.clear();
-    scenarios_.clear();
+    // Parse into temporaries so existing state is preserved on failure.
+    std::vector<std::string>                new_order;
+    std::map<std::string, ScenarioBaseline> new_scenarios;
+
+    constexpr std::size_t kMaxPerClassEntries = 1000;
 
     for (auto it = root["scenarios"].begin(); it != root["scenarios"].end(); ++it) {
         const std::string& name = it.key();
         const auto&        sj   = it.value();
 
-        order_.push_back(name);
-        ScenarioBaseline& s = scenarios_[name];
+        new_order.push_back(name);
+        ScenarioBaseline& s = new_scenarios[name];
         s.scenario_name     = name;
         s.frame_count       = sj.value("frame_count", 0U);
         s.iou_threshold     = sj.value("iou_threshold", 0.5F);
@@ -223,6 +233,9 @@ bool BaselineCapture::load_json(const std::string& path) {
         }
 
         if (sj.contains("per_class") && sj["per_class"].is_array()) {
+            if (sj["per_class"].size() > kMaxPerClassEntries) {
+                return false;
+            }
             for (const auto& cj : sj["per_class"]) {
                 PerClassBaseline pcb;
                 pcb.class_id        = cj.value("class_id", 0U);
@@ -252,6 +265,8 @@ bool BaselineCapture::load_json(const std::string& path) {
         }
     }
 
+    order_     = std::move(new_order);
+    scenarios_ = std::move(new_scenarios);
     return true;
 }
 

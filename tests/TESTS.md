@@ -134,8 +134,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
 | [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
 | [Benchmark — GT Emitter](#test_gt_emittercpp--13-tests) | 1 | 13 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping; review fixes: config key validation, error path coverage |
-| [Benchmark — Baseline Capture](#test_baseline_capturecpp--11-tests) | 1 | 11 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load), latency passthrough, tracking metrics, empty/nonexistent/duplicate scenarios |
-| **Total** | **76 C++ + 5 shell** | **1655 (no SDK) / 1696 (+SDK) + 42 + 250+** | |
+| [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
+| **Total** | **76 C++ + 5 shell** | **1661 (no SDK) / 1702 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -1083,13 +1083,13 @@ expensive modulo operations.
 
 **Key files under test:** `tests/benchmark/gt_emitter.h`, `tests/benchmark/gt_emitter.cpp`. The Cosys backend (`tests/benchmark/cosys_gt_emitter.cpp`) compiles into the test target for link-coverage but is not directly exercised (needs a live AirSim server).
 
-### test_baseline_capture.cpp — 11 tests
+### test_baseline_capture.cpp — 17 tests
 
 **What it tests:** `drone::benchmark::BaselineCapture` — the metric accumulation and JSON serialisation layer that produces `benchmarks/baseline.json` (#573 / Epic #523). Consumes the same `FrameData` / `DetectionMetrics` / `TrackingMetrics` types from #570 and latency JSON from #571.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `BaselineCaptureTest` | 11 | Perfect detection (10 TP, precision/recall = 1.0); mixed TP/FP/FN counts; per-class breakdown with class-name map; multiple scenarios in insertion order; JSON round-trip (write to file, load back, all fields preserved); latency JSON passthrough (embedded as structured object, not string); tracking metrics (MOTP > 0, zero ID switches on stable track); empty scenario (all zeros, no crash); load from nonexistent path returns false; nonexistent scenario returns nullptr; duplicate scenario name reuses existing entry |
+| `BaselineCaptureTest` | 17 | Perfect detection (10 TP, precision/recall = 1.0, mean_ap = 1.0); mixed TP/FP/FN counts; per-class breakdown with class-name map; multiple scenarios in insertion order; JSON round-trip (write + load with full field verification: detection, tracking, per-class, mean_ap); latency content fidelity (parsed JSON equality, not just non-empty); tracking metrics (MOTP bounded ≈0.81, zero ID switches on stable track); tracking ID switch detection (pred track ID change); tracking fragmentation detection (track lost then reacquired); finalise unknown scenario returns false; empty scenario (all zeros); load from nonexistent path; load malformed JSON; load wrong-schema JSON; state preserved on load failure; nonexistent scenario returns nullptr; duplicate scenario name reuses existing entry |
 
 **Why these tests matter:** The baseline is the single reference point the entire perception v2 rewrite is measured against. A serialisation bug that silently drops a field, a finalise() that miscounts TP/FP, or a load() that corrupts the class breakdown would make every subsequent delta measurement wrong — and we wouldn't notice until live testing on hardware.
 
