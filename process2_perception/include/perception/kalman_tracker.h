@@ -12,6 +12,17 @@
 
 namespace drone::perception {
 
+/// Per-class motion model for Kalman process noise tuning (Epic #519).
+enum class MotionModel : uint8_t {
+    CONSTANT_VELOCITY     = 0,
+    CONSTANT_ACCELERATION = 1,
+};
+
+inline MotionModel motion_model_from_string(const std::string& s) {
+    if (s == "constant_acceleration") return MotionModel::CONSTANT_ACCELERATION;
+    return MotionModel::CONSTANT_VELOCITY;
+}
+
 class KalmanBoxTracker {
 public:
     static constexpr int STATE_DIM = 8;  // [x, y, w, h, vx, vy, vw, vh]
@@ -22,7 +33,8 @@ public:
     using MeasVec  = Eigen::Matrix<float, MEAS_DIM, 1>;
     using MeasMat  = Eigen::Matrix<float, MEAS_DIM, STATE_DIM>;
 
-    KalmanBoxTracker(const Detection2D& initial_det, uint32_t id);
+    KalmanBoxTracker(const Detection2D& initial_det, uint32_t id,
+                     MotionModel model = MotionModel::CONSTANT_VELOCITY);
     void                          predict(float dt = 1.0f / 30.0f);
     void                          update(const Detection2D& det);
     [[nodiscard]] Detection2D     predicted_bbox() const;

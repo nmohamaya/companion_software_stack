@@ -7,7 +7,9 @@
 
 #include "perception/itracker.h"
 #include "perception/kalman_tracker.h"
+#include "util/per_class_config.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -21,6 +23,8 @@ struct ByteTrackParams {
     double   max_iou_cost        = 0.7;
     uint32_t max_age             = 10;
     uint32_t min_hits            = 3;
+    // Per-class motion model (Epic #519).  Indexed by ObjectClass value.
+    std::array<MotionModel, drone::util::kPerClassCount> motion_models{};
 };
 
 /// ByteTrack tracker: two-stage Hungarian association on IoU cost.

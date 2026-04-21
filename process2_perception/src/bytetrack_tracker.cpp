@@ -137,7 +137,9 @@ TrackedObjectList ByteTrackTracker::update(const Detection2DList& det_list) {
     // Low-conf detections never create new tracks.
     for (size_t d = 0; d < high_dets.size(); ++d) {
         if (!high_det_matched[d]) {
-            tracks_.emplace_back(high_dets[d], next_id_++);
+            auto ci    = static_cast<uint8_t>(high_dets[d].class_id);
+            auto model = params_.motion_models[ci];
+            tracks_.emplace_back(high_dets[d], next_id_++, model);
         }
     }
 

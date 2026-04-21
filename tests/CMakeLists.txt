@@ -62,6 +62,9 @@ add_drone_test(test_fault_manager   test_fault_manager.cpp)
 # ── Geofence tests ──────────────────────────────────────────
 add_drone_test(test_geofence        test_geofence.cpp)
 
+# ── Per-class config utility tests (Epic #519) ─────────────
+add_drone_test(test_per_class_config test_per_class_config.cpp)
+
 # ── 3D Obstacle Avoider tests ───────────────────────────────
 add_drone_test(test_obstacle_avoider_3d test_obstacle_avoider_3d.cpp)
 
