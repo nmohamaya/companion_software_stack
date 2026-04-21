@@ -93,6 +93,11 @@ const ScenarioBaseline* BaselineCapture::scenario(const std::string& name) const
     return it != scenarios_.end() ? &it->second : nullptr;
 }
 
+ScenarioBaseline* BaselineCapture::scenario(const std::string& name) {
+    auto it = scenarios_.find(name);
+    return it != scenarios_.end() ? &it->second : nullptr;
+}
+
 const std::vector<std::string>& BaselineCapture::scenario_names() const {
     return order_;
 }

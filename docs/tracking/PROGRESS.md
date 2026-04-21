@@ -3242,7 +3242,7 @@ Also cherry-picked review fixes from PR #595 (`fe2e84a`): GT emitter config key 
 
 **Why:** Without automated regression detection, perception quality regressions can slip through code review. The comparator enforces that recall, precision, mAP, MOTA, MOTP, and latency don't degrade beyond thresholds (default 5% for accuracy, 20% for latency). Zero-baseline skip ensures the all-zeros seed baseline passes gracefully until real data is captured. Advisory in CI until baselines have real values.
 
-**Test count:** +11 in `test_baseline_comparator`. 1661 → 1672.
+**Test count:** +21 in `test_baseline_comparator`. 1661 → 1682.
 
 **Universal acceptance criteria:** CI workflow updated; no license obligations change.
 

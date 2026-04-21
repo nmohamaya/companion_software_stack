@@ -33,13 +33,18 @@ void set_detection_metrics(BaselineCapture& capture, const std::string& name, do
 
 void set_tracking_metrics(BaselineCapture& capture, const std::string& name, double mota,
                           double motp, uint32_t id_switches) {
-    auto* s = const_cast<ScenarioBaseline*>(capture.scenario(name));
-    if (s == nullptr) {
-        return;
-    }
+    auto* s = capture.scenario(name);
+    ASSERT_NE(s, nullptr) << "Scenario '" << name << "' must be added before setting tracking";
     s->mota        = mota;
     s->motp        = motp;
     s->id_switches = id_switches;
+}
+
+void set_latency(BaselineCapture& capture, const std::string& name,
+                 const std::string& latency_json) {
+    auto* s = capture.scenario(name);
+    ASSERT_NE(s, nullptr) << "Scenario '" << name << "' must be added before setting latency";
+    s->latency_json = latency_json;
 }
 
 }  // namespace
@@ -56,6 +61,7 @@ TEST(BaselineComparatorTest, ImprovementPasses) {
     auto result = compare_baselines(baseline, current);
     EXPECT_TRUE(result.passed);
     EXPECT_EQ(result.metrics_failed, 0U);
+    EXPECT_GT(result.metrics_checked, 0U);
 }
 
 // -- Regression beyond threshold fails ----------------------------------------
@@ -65,14 +71,13 @@ TEST(BaselineComparatorTest, RegressionFails) {
     set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
 
     BaselineCapture current;
-    // 10% recall drop (0.80 → 0.70) exceeds 5% threshold.
+    // 10% recall drop (0.80 -> 0.70) exceeds 5% threshold.
     set_detection_metrics(current, "s1", 0.70, 0.85, 0.75, 70, 15, 30);
 
     auto result = compare_baselines(baseline, current);
     EXPECT_FALSE(result.passed);
     EXPECT_GE(result.metrics_failed, 1U);
 
-    // Find the recall metric.
     bool found_recall_fail = false;
     for (const auto& sc : result.scenarios) {
         for (const auto& m : sc.metrics) {
@@ -91,11 +96,56 @@ TEST(BaselineComparatorTest, WithinThresholdPasses) {
     set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
 
     BaselineCapture current;
-    // 3% recall drop (0.80 → 0.776) is within 5% threshold.
+    // 3% recall drop (0.80 -> 0.776) is within 5% threshold.
     set_detection_metrics(current, "s1", 0.776, 0.83, 0.73, 78, 17, 22);
 
     auto result = compare_baselines(baseline, current);
     EXPECT_TRUE(result.passed);
+}
+
+// -- Exact boundary passes (>= check) ----------------------------------------
+
+TEST(BaselineComparatorTest, ExactBoundaryPasses) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+
+    BaselineCapture current;
+    // current = baseline * (1 - threshold) = 0.80 * 0.95 = 0.76 exactly.
+    set_detection_metrics(current, "s1", 0.76, 0.85, 0.75, 76, 15, 24);
+
+    auto result = compare_baselines(baseline, current);
+    // Should pass — >= boundary is inclusive.
+    bool recall_passed = false;
+    for (const auto& sc : result.scenarios) {
+        for (const auto& m : sc.metrics) {
+            if (m.name == "micro_recall") {
+                recall_passed = m.passed;
+            }
+        }
+    }
+    EXPECT_TRUE(recall_passed);
+}
+
+// -- Just below boundary fails ------------------------------------------------
+
+TEST(BaselineComparatorTest, BelowBoundaryFails) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+
+    BaselineCapture current;
+    // current = 0.759 < 0.76 boundary.
+    set_detection_metrics(current, "s1", 0.759, 0.85, 0.75, 76, 15, 24);
+
+    auto result        = compare_baselines(baseline, current);
+    bool recall_failed = false;
+    for (const auto& sc : result.scenarios) {
+        for (const auto& m : sc.metrics) {
+            if (m.name == "micro_recall") {
+                recall_failed = !m.passed;
+            }
+        }
+    }
+    EXPECT_TRUE(recall_failed);
 }
 
 // -- Missing scenario in current run fails ------------------------------------
@@ -118,17 +168,19 @@ TEST(BaselineComparatorTest, MissingScenarioFails) {
 TEST(BaselineComparatorTest, ZeroBaselineSkipped) {
     BaselineCapture baseline;
     set_detection_metrics(baseline, "s1", 0.0, 0.0, 0.0, 0, 0, 0);
+    set_latency(baseline, "s1", R"({"stages":{"detector":{"p95_ns":0}}})");
 
     BaselineCapture current;
     set_detection_metrics(current, "s1", 0.5, 0.5, 0.5, 50, 50, 50);
+    set_latency(current, "s1", R"({"stages":{"detector":{"p95_ns":1000000}}})");
 
     auto result = compare_baselines(baseline, current);
     EXPECT_TRUE(result.passed);
 
-    // All detection metrics should be skipped.
+    // All metrics (detection + latency) with zero baselines should be skipped.
     for (const auto& sc : result.scenarios) {
         for (const auto& m : sc.metrics) {
-            if (m.direction == "higher_is_better") {
+            if (m.baseline == 0.0) {
                 EXPECT_TRUE(m.skipped) << "Metric " << m.name << " should be skipped";
             }
         }
@@ -140,14 +192,12 @@ TEST(BaselineComparatorTest, ZeroBaselineSkipped) {
 TEST(BaselineComparatorTest, LatencyRegressionFails) {
     BaselineCapture baseline;
     set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
-    auto* bl_s         = const_cast<ScenarioBaseline*>(baseline.scenario("s1"));
-    bl_s->latency_json = R"({"stages":{"detector":{"p95_ns":5000000}}})";
+    set_latency(baseline, "s1", R"({"stages":{"detector":{"p95_ns":5000000}}})");
 
     BaselineCapture current;
     set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
-    auto* cur_s = const_cast<ScenarioBaseline*>(current.scenario("s1"));
     // 30% latency increase exceeds 20% threshold.
-    cur_s->latency_json = R"({"stages":{"detector":{"p95_ns":6500000}}})";
+    set_latency(current, "s1", R"({"stages":{"detector":{"p95_ns":6500000}}})");
 
     auto result = compare_baselines(baseline, current);
     EXPECT_FALSE(result.passed);
@@ -161,6 +211,82 @@ TEST(BaselineComparatorTest, LatencyRegressionFails) {
         }
     }
     EXPECT_TRUE(found_latency_fail);
+}
+
+// -- Latency improvement passes -----------------------------------------------
+
+TEST(BaselineComparatorTest, LatencyImprovementPasses) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_latency(baseline, "s1", R"({"stages":{"detector":{"p95_ns":5000000}}})");
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    // 20% latency decrease — improvement.
+    set_latency(current, "s1", R"({"stages":{"detector":{"p95_ns":4000000}}})");
+
+    auto result = compare_baselines(baseline, current);
+    EXPECT_TRUE(result.passed);
+}
+
+// -- Latency within threshold passes ------------------------------------------
+
+TEST(BaselineComparatorTest, LatencyWithinThresholdPasses) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_latency(baseline, "s1", R"({"stages":{"detector":{"p95_ns":5000000}}})");
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    // 15% latency increase within 20% threshold.
+    set_latency(current, "s1", R"({"stages":{"detector":{"p95_ns":5750000}}})");
+
+    auto result = compare_baselines(baseline, current);
+    EXPECT_TRUE(result.passed);
+}
+
+// -- Latency stage absent in current silently skips ---------------------------
+
+TEST(BaselineComparatorTest, LatencyMissingStageSilentlySkips) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_latency(baseline, "s1",
+                R"({"stages":{"detector":{"p95_ns":5000000},"tracker":{"p95_ns":3000000}}})");
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    // Current only has "detector" — "tracker" is absent.
+    set_latency(current, "s1", R"({"stages":{"detector":{"p95_ns":5000000}}})");
+
+    auto result = compare_baselines(baseline, current);
+    // Missing stage is silently skipped — only "detector" is compared.
+    EXPECT_TRUE(result.passed);
+
+    uint32_t latency_metrics = 0;
+    for (const auto& sc : result.scenarios) {
+        for (const auto& m : sc.metrics) {
+            if (m.name.find("latency") != std::string::npos) {
+                ++latency_metrics;
+            }
+        }
+    }
+    EXPECT_EQ(latency_metrics, 1U);
+}
+
+// -- Latency with malformed JSON does not crash or fail -----------------------
+
+TEST(BaselineComparatorTest, LatencyMalformedJsonSafe) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_latency(baseline, "s1", "{not valid json!!}");
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_latency(current, "s1", R"({"stages":{"detector":{"p95_ns":5000000}}})");
+
+    auto result = compare_baselines(baseline, current);
+    // Malformed baseline latency is silently ignored — detection metrics still checked.
+    EXPECT_TRUE(result.passed);
 }
 
 // -- Format produces Markdown table -------------------------------------------
@@ -178,8 +304,38 @@ TEST(BaselineComparatorTest, FormatTableOutput) {
     EXPECT_NE(table.find("## Baseline Comparison"), std::string::npos);
     EXPECT_NE(table.find("| Scenario"), std::string::npos);
     EXPECT_NE(table.find("micro_recall"), std::string::npos);
-    EXPECT_NE(table.find("PASS"), std::string::npos);
     EXPECT_NE(table.find("**PASS**"), std::string::npos);
+}
+
+// -- Format renders MISSING for absent scenarios ------------------------------
+
+TEST(BaselineComparatorTest, FormatMissingScenario) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "absent", 0.80, 0.85, 0.75, 80, 15, 20);
+
+    BaselineCapture current;
+    set_detection_metrics(current, "other", 0.80, 0.85, 0.75, 80, 15, 20);
+
+    auto result = compare_baselines(baseline, current);
+    auto table  = format_comparison(result);
+
+    EXPECT_NE(table.find("**MISSING**"), std::string::npos);
+    EXPECT_NE(table.find("absent"), std::string::npos);
+}
+
+// -- Format renders FAIL for regressed metrics --------------------------------
+
+TEST(BaselineComparatorTest, FormatFailRendered) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.60, 0.85, 0.75, 60, 15, 40);
+
+    auto result = compare_baselines(baseline, current);
+    auto table  = format_comparison(result);
+
+    EXPECT_NE(table.find("**FAIL**"), std::string::npos);
 }
 
 // -- Extra scenario in current is ignored -------------------------------------
@@ -216,9 +372,9 @@ TEST(BaselineComparatorTest, CustomThresholds) {
     EXPECT_TRUE(compare_baselines(baseline, current, relaxed).passed);
 }
 
-// -- Tracking regression detected ---------------------------------------------
+// -- Tracking MOTA regression detected ----------------------------------------
 
-TEST(BaselineComparatorTest, TrackingRegressionFails) {
+TEST(BaselineComparatorTest, TrackingMOTARegressionFails) {
     BaselineCapture baseline;
     set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
     set_tracking_metrics(baseline, "s1", 0.85, 0.78, 2);
@@ -230,6 +386,71 @@ TEST(BaselineComparatorTest, TrackingRegressionFails) {
 
     auto result = compare_baselines(baseline, current);
     EXPECT_FALSE(result.passed);
+
+    bool mota_failed = false;
+    for (const auto& sc : result.scenarios) {
+        for (const auto& m : sc.metrics) {
+            if (m.name == "mota" && !m.passed) {
+                mota_failed = true;
+            }
+        }
+    }
+    EXPECT_TRUE(mota_failed);
+}
+
+// -- Tracking MOTP-only regression detected -----------------------------------
+
+TEST(BaselineComparatorTest, MOTPOnlyRegressionFails) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_tracking_metrics(baseline, "s1", 0.85, 0.80, 2);
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    // MOTA stays the same. MOTP drops from 0.80 to 0.65 — 18.75% drop, exceeds 5%.
+    set_tracking_metrics(current, "s1", 0.85, 0.65, 2);
+
+    auto result = compare_baselines(baseline, current);
+    EXPECT_FALSE(result.passed);
+
+    bool motp_failed = false;
+    for (const auto& sc : result.scenarios) {
+        for (const auto& m : sc.metrics) {
+            if (m.name == "motp" && !m.passed) {
+                motp_failed = true;
+            }
+        }
+    }
+    EXPECT_TRUE(motp_failed);
+}
+
+// -- MOTP uses independent threshold from MOTA --------------------------------
+
+TEST(BaselineComparatorTest, MOTPUsesOwnThreshold) {
+    BaselineCapture baseline;
+    set_detection_metrics(baseline, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    set_tracking_metrics(baseline, "s1", 0.85, 0.80, 2);
+
+    BaselineCapture current;
+    set_detection_metrics(current, "s1", 0.80, 0.85, 0.75, 80, 15, 20);
+    // 10% MOTP drop — exceeds 5% but within 15%.
+    set_tracking_metrics(current, "s1", 0.85, 0.72, 2);
+
+    ComparisonThresholds t;
+    t.mota_drop_pct = 0.05;
+    t.motp_drop_pct = 0.15;
+    auto result     = compare_baselines(baseline, current, t);
+
+    // MOTP 10% drop within the relaxed 15% motp threshold — should pass.
+    bool motp_passed = false;
+    for (const auto& sc : result.scenarios) {
+        for (const auto& m : sc.metrics) {
+            if (m.name == "motp") {
+                motp_passed = m.passed;
+            }
+        }
+    }
+    EXPECT_TRUE(motp_passed);
 }
 
 // -- Multiple scenarios — partial failure -------------------------------------

@@ -106,6 +106,7 @@ public:
 
     // Access a scenario baseline (returns nullptr if not found).
     [[nodiscard]] const ScenarioBaseline* scenario(const std::string& name) const;
+    [[nodiscard]] ScenarioBaseline*       scenario(const std::string& name);
 
     // All scenario names in insertion order.
     [[nodiscard]] const std::vector<std::string>& scenario_names() const;

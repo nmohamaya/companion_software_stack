@@ -1,7 +1,8 @@
 // tests/benchmark/compare_to_baseline_main.cpp
 //
 // CLI tool: compare current perception run metrics against a stored baseline.
-// Exits 0 if all metrics are within thresholds, 1 if any regression detected.
+// Exits 0 if all metrics are within thresholds, 1 if any regression detected,
+// 2 on usage/parse error.
 //
 // Usage:
 //   compare_to_baseline --baseline benchmarks/baseline.json --current run.json
@@ -10,9 +11,11 @@
 #include "benchmark/baseline_capture.h"
 #include "benchmark/baseline_comparator.h"
 
+#include <charconv>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -23,8 +26,23 @@ void print_usage(const char* argv0) {
               << "  --precision-threshold <pct>  Max precision drop  (default: 0.05)\n"
               << "  --ap-threshold <pct>         Max mAP drop        (default: 0.05)\n"
               << "  --mota-threshold <pct>       Max MOTA drop       (default: 0.05)\n"
+              << "  --motp-threshold <pct>       Max MOTP drop       (default: 0.05)\n"
               << "  --latency-threshold <pct>    Max latency p95 rise (default: 0.20)\n"
               << "  --help                       Show this message\n";
+}
+
+bool parse_threshold(const char* str, double& out) {
+    std::string_view sv(str);
+    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), out);
+    if (ec != std::errc{} || ptr != sv.data() + sv.size()) {
+        std::cerr << "Error: invalid threshold value: " << str << "\n";
+        return false;
+    }
+    if (out <= 0.0 || out > 1.0) {
+        std::cerr << "Error: threshold must be in (0.0, 1.0]: " << str << "\n";
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -35,7 +53,7 @@ int main(int argc, char* argv[]) {
     drone::benchmark::ComparisonThresholds thresholds;
 
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+        std::string_view arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -45,15 +63,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--current" && i + 1 < argc) {
             current_path = argv[++i];
         } else if (arg == "--recall-threshold" && i + 1 < argc) {
-            thresholds.recall_drop_pct = std::stod(argv[++i]);
+            if (!parse_threshold(argv[++i], thresholds.recall_drop_pct)) return 2;
         } else if (arg == "--precision-threshold" && i + 1 < argc) {
-            thresholds.precision_drop_pct = std::stod(argv[++i]);
+            if (!parse_threshold(argv[++i], thresholds.precision_drop_pct)) return 2;
         } else if (arg == "--ap-threshold" && i + 1 < argc) {
-            thresholds.ap_drop_pct = std::stod(argv[++i]);
+            if (!parse_threshold(argv[++i], thresholds.ap_drop_pct)) return 2;
         } else if (arg == "--mota-threshold" && i + 1 < argc) {
-            thresholds.mota_drop_pct = std::stod(argv[++i]);
+            if (!parse_threshold(argv[++i], thresholds.mota_drop_pct)) return 2;
+        } else if (arg == "--motp-threshold" && i + 1 < argc) {
+            if (!parse_threshold(argv[++i], thresholds.motp_drop_pct)) return 2;
         } else if (arg == "--latency-threshold" && i + 1 < argc) {
-            thresholds.latency_rise_pct = std::stod(argv[++i]);
+            if (!parse_threshold(argv[++i], thresholds.latency_rise_pct)) return 2;
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             print_usage(argv[0]);

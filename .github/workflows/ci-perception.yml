@@ -74,6 +74,10 @@ jobs:
         run: |
           # Compare structured baseline metrics if a current-run baseline exists.
           # The compare_to_baseline tool loads BaselineCapture JSON format.
+          #
+          # NOTE: baseline is read from the PR branch checkout. Before promoting
+          # this to a required check, pin the baseline to the default branch or
+          # an artifact store to prevent PR authors from weakening thresholds.
           if [[ -f /tmp/current-run-baseline.json ]]; then
             echo "Running baseline comparison..."
             ./build/bin/compare_to_baseline \
@@ -96,9 +100,10 @@ jobs:
               body += `| Metric | Baseline | Current | Delta | Status |\n`;
               body += `|--------|----------|---------|-------|--------|\n`;
               for (const [key, val] of Object.entries(results.metrics || {})) {
+                const safeKey = key.replace(/[|`<>\n\r]/g, '_');
                 const delta = (val.current - val.baseline).toFixed(3);
                 const status = val.passed ? '✅' : '⚠️';
-                body += `| ${key} | ${val.baseline} | ${val.current} | ${delta} | ${status} |\n`;
+                body += `| ${safeKey} | ${val.baseline} | ${val.current} | ${delta} | ${status} |\n`;
               }
               body += `\n**Cost:** $${results.cost || 'N/A'} | **Duration:** ${results.duration_min || 'N/A'} min`;
             } catch (e) {
