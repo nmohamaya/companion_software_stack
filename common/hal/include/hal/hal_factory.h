@@ -16,18 +16,26 @@
 // Future backends: "v4l2", "udp", "siyi", "bmi088", etc.
 #pragma once
 
+#include "hal/cpu_semantic_projector.h"
 #include "hal/icamera.h"
+#include "hal/ievent_camera.h"
 #include "hal/ifc_link.h"
 #include "hal/igcs_link.h"
 #include "hal/igimbal.h"
 #include "hal/iimu_source.h"
+#include "hal/iinference_backend.h"
+#include "hal/isemantic_projector.h"
+#include "hal/ivolumetric_map.h"
 #include "hal/simulated_camera.h"
 #include "hal/simulated_depth_estimator.h"
+#include "hal/simulated_event_camera.h"
 #include "hal/simulated_fc_link.h"
 #include "hal/simulated_gcs_link.h"
 #include "hal/simulated_gimbal.h"
 #include "hal/simulated_imu.h"
+#include "hal/simulated_inference_backend.h"
 #include "hal/simulated_radar.h"
+#include "hal/simulated_volumetric_map.h"
 
 
 // Optional backends — only included when the dependency is found by CMake
@@ -332,6 +340,90 @@ template<typename Interface>
 #endif
 
     throw std::runtime_error("[HAL] Unknown depth estimator backend: " + backend);
+}
+
+/// Create an inference backend from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.inference_backend")
+[[nodiscard]] inline std::unique_ptr<IInferenceBackend> create_inference_backend(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::inference_backend::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating inference backend '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedInferenceBackend>(cfg, section);
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IInferenceBackend>(cfg, section, "inference backend");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown inference backend: " + backend);
+}
+
+/// Create a volumetric map from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.volumetric_map")
+[[nodiscard]] inline std::unique_ptr<IVolumetricMap> create_volumetric_map(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::volumetric_map::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating volumetric map '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedVolumetricMap>(cfg, section);
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IVolumetricMap>(cfg, section, "volumetric map");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown volumetric map backend: " + backend);
+}
+
+/// Create an event camera from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.event_camera")
+[[nodiscard]] inline std::unique_ptr<IEventCamera> create_event_camera(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::event_camera::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "simulated");
+    DRONE_LOG_INFO("[HAL] Creating event camera '{}' backend='{}'", section, backend);
+
+    if (backend == "simulated") {
+        return std::make_unique<SimulatedEventCamera>();
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<IEventCamera>(cfg, section, "event camera");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown event camera backend: " + backend);
+}
+
+/// Create a semantic projector from config.
+/// @param cfg      Loaded configuration
+/// @param section  Config path prefix (e.g. "perception.semantic_projector")
+[[nodiscard]] inline std::unique_ptr<ISemanticProjector> create_semantic_projector(
+    const drone::Config& cfg,
+    const std::string&   section = drone::cfg_key::perception::semantic_projector::SECTION) {
+    auto backend = cfg.get<std::string>(section + drone::cfg_key::hal::BACKEND, "cpu");
+    DRONE_LOG_INFO("[HAL] Creating semantic projector '{}' backend='{}'", section, backend);
+
+    if (backend == "cpu") {
+        return std::make_unique<CpuSemanticProjector>();
+    }
+#ifdef HAVE_PLUGINS
+    if (backend == "plugin") {
+        return load_plugin<ISemanticProjector>(cfg, section, "semantic projector");
+    }
+#endif
+
+    throw std::runtime_error("[HAL] Unknown semantic projector backend: " + backend);
 }
 
 }  // namespace drone::hal

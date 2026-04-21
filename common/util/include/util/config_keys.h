@@ -136,6 +136,25 @@ inline constexpr const char* HEIGHT_PRIORS_TREE     = "perception.fusion.height_
 inline constexpr const char* BBOX_HEIGHT_NOISE_PX   = "perception.fusion.bbox_height_noise_px";
 }  // namespace fusion
 
+namespace inference_backend {
+inline constexpr const char* SECTION    = "perception.inference_backend";
+inline constexpr const char* MODEL_PATH = "perception.inference_backend.model_path";
+inline constexpr const char* INPUT_SIZE = "perception.inference_backend.input_size";
+}  // namespace inference_backend
+
+namespace volumetric_map {
+inline constexpr const char* SECTION      = "perception.volumetric_map";
+inline constexpr const char* RESOLUTION_M = "perception.volumetric_map.resolution_m";
+}  // namespace volumetric_map
+
+namespace event_camera {
+inline constexpr const char* SECTION = "perception.event_camera";
+}  // namespace event_camera
+
+namespace semantic_projector {
+inline constexpr const char* SECTION = "perception.semantic_projector";
+}  // namespace semantic_projector
+
 // Shutdown drain behaviour (Issue #446)
 inline constexpr const char* DRAIN_TIMEOUT_MS = "perception.drain_timeout_ms";
 

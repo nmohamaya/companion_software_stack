@@ -120,6 +120,12 @@ add_drone_test(test_hal             test_hal.cpp)
 # ── HAL Camera Lifetime tests (Issue #452) ───────────────────
 add_drone_test(test_hal_camera_lifetime test_hal_camera_lifetime.cpp)
 
+# ── HAL Perception v2 interface tests (Epic #515) ────────────
+add_drone_test(test_inference_backend  test_inference_backend.cpp)
+add_drone_test(test_volumetric_map     test_volumetric_map.cpp)
+add_drone_test(test_event_camera       test_event_camera.cpp)
+add_drone_test(test_semantic_projector test_semantic_projector.cpp)
+
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
 

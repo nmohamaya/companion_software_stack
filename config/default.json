@@ -103,6 +103,21 @@
             "false_alarm_rate": 0.02,
             "num_targets": 3
         },
+        "inference_backend": {
+            "backend": "simulated",
+            "model_path": "",
+            "input_size": 640
+        },
+        "volumetric_map": {
+            "backend": "simulated",
+            "resolution_m": 0.2
+        },
+        "event_camera": {
+            "backend": "simulated"
+        },
+        "semantic_projector": {
+            "backend": "cpu"
+        },
         "fusion": {
             "rate_hz": 30,
             "camera_weight": 1.0,
