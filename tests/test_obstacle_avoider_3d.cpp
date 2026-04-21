@@ -212,25 +212,27 @@ TEST(ObstacleAvoider3DTest, NaNPosePassesThrough) {
 // ═════════════════════════════════════════════════════════════
 
 TEST(ObstacleAvoiderFactory, ThreeDBackendRegistered) {
-    auto avoider = create_obstacle_avoider("3d");
-    EXPECT_NE(avoider, nullptr);
-    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+    auto result = create_obstacle_avoider("3d");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_NE(result.value(), nullptr);
+    EXPECT_EQ(result.value()->name(), "ObstacleAvoider3D");
 }
 
 TEST(ObstacleAvoiderFactory, AlternateNameRegistered) {
-    auto avoider = create_obstacle_avoider("obstacle_avoider_3d");
-    EXPECT_NE(avoider, nullptr);
-    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+    auto result = create_obstacle_avoider("obstacle_avoider_3d");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "ObstacleAvoider3D");
 }
 
 TEST(ObstacleAvoiderFactory, PotentialField3DRegistered) {
-    auto avoider = create_obstacle_avoider("potential_field_3d");
-    EXPECT_NE(avoider, nullptr);
-    EXPECT_EQ(avoider->name(), "ObstacleAvoider3D");
+    auto result = create_obstacle_avoider("potential_field_3d");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "ObstacleAvoider3D");
 }
 
-TEST(ObstacleAvoiderFactory, UnknownThrows) {
-    EXPECT_THROW(create_obstacle_avoider("nonexistent"), std::runtime_error);
+TEST(ObstacleAvoiderFactory, UnknownReturnsError) {
+    auto result = create_obstacle_avoider("nonexistent");
+    EXPECT_TRUE(result.is_err());
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -580,6 +582,191 @@ TEST(ObstacleAvoider3DTest, BypassHysteresisPreventsFlipFlop) {
     objects.timestamp_ns          = now_ns();
     (void)avoider.avoid(cmd, pose, objects);
     EXPECT_FALSE(avoider.close_regime_active());
+}
+
+// ═════════════════════════════════════════════════════════════
+// Per-class config (Epic #519)
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, PerClassInfluenceRadius) {
+    // PERSON (idx 1) with influence_radius=3.0 gets no avoidance at 4m,
+    // but VEHICLE_TRUCK (idx 3) with influence_radius=8.0 does.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+
+    ObstacleAvoider3D avoider(config);
+    // Set per-class overrides after construction (constructor syncs from globals).
+    avoider.mutable_config().influence_radius_per_class[1] = 3.0f;  // PERSON
+    avoider.mutable_config().influence_radius_per_class[3] = 8.0f;  // VEHICLE_TRUCK
+
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Object at 4m — outside PERSON radius (3.0) but inside TRUCK radius (8.0).
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 4.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    // As PERSON — no repulsion (outside influence radius).
+    objects.objects[0].class_id = drone::ipc::ObjectClass::PERSON;
+    auto result_person          = avoider.avoid(cmd, pose, objects);
+    EXPECT_FLOAT_EQ(result_person.velocity_x, cmd.velocity_x);
+
+    // As VEHICLE_TRUCK — gets repulsion.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::VEHICLE_TRUCK;
+    auto result_truck           = avoider.avoid(cmd, pose, objects);
+    EXPECT_LT(result_truck.velocity_x, cmd.velocity_x);
+}
+
+TEST(ObstacleAvoider3DTest, PerClassConfidenceThreshold) {
+    // DRONE (idx 4) has min_confidence=0.8, so a 0.5-confidence drone is filtered.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+
+    ObstacleAvoider3D avoider(config);
+    // Set per-class override after construction (constructor syncs from globals).
+    avoider.mutable_config().min_confidence_per_class[4] = 0.8f;  // DRONE
+
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.5f;
+    objects.objects[0].class_id   = drone::ipc::ObjectClass::DRONE;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    // Filtered out — no repulsion.
+    EXPECT_FLOAT_EQ(result.velocity_x, cmd.velocity_x);
+}
+
+TEST(ObstacleAvoider3DTest, PerClassPredictionDt) {
+    // BUILDING (idx 6) with prediction_dt=0.0 ignores velocity.
+    // DRONE (idx 4) with prediction_dt=1.0 predicts forward.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+
+    ObstacleAvoider3D avoider(config);
+    // Set per-class overrides after construction (constructor syncs from globals).
+    avoider.mutable_config().prediction_dt_per_class[6] = 0.0f;  // BUILDING — stationary
+    avoider.mutable_config().prediction_dt_per_class[4] = 1.0f;  // DRONE — aggressive prediction
+
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Object at 8m, approaching at 6 m/s.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 8.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].velocity_x = -6.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    // As BUILDING (prediction_dt=0): predicted pos = 8m, within influence.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::BUILDING;
+    auto result_building        = avoider.avoid(cmd, pose, objects);
+
+    // As DRONE (prediction_dt=1.0): predicted pos = 8+(-6)*1 = 2m, much closer.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::DRONE;
+    auto result_drone           = avoider.avoid(cmd, pose, objects);
+
+    // DRONE should get stronger repulsion (predicted closer).
+    EXPECT_LT(result_drone.velocity_x, result_building.velocity_x);
+}
+
+TEST(ObstacleAvoider3DTest, OobClassIdSkipped) {
+    // An IPC message with class_id >= 8 must not cause OOB array access.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.objects[0].class_id   = static_cast<drone::ipc::ObjectClass>(255);
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    // Object with invalid class_id should be skipped — no repulsion.
+    EXPECT_FLOAT_EQ(result.velocity_x, cmd.velocity_x);
+    EXPECT_FLOAT_EQ(result.velocity_y, cmd.velocity_y);
+    EXPECT_FLOAT_EQ(result.velocity_z, cmd.velocity_z);
+}
+
+TEST(ObstacleAvoider3DTest, ConfigDrivenPerClassLoading) {
+    // Verify the Config-driven constructor loads per-class overrides from JSON.
+    std::string tmp = "/tmp/drone_test_avoider_cfg_" + std::to_string(::getpid()) + ".json";
+    {
+        std::ofstream ofs(tmp);
+        ofs << R"({
+            "mission_planner": {
+                "obstacle_avoidance": {
+                    "influence_radius_m": 5.0,
+                    "repulsive_gain": 2.0,
+                    "path_aware": false,
+                    "log_corrections": false,
+                    "per_class": {
+                        "influence_radius_m": { "default": 5.0, "person": 3.0 }
+                    }
+                }
+            }
+        })";
+    }
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(tmp));
+    std::remove(tmp.c_str());
+
+    ObstacleAvoider3D avoider(cfg);
+    // PERSON (idx 1) should have influence_radius=3.0, others 5.0.
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 4.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    // PERSON at 4m — outside per-class radius (3.0), no repulsion.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::PERSON;
+    auto result_person          = avoider.avoid(cmd, pose, objects);
+    EXPECT_FLOAT_EQ(result_person.velocity_x, cmd.velocity_x);
+
+    // UNKNOWN at 4m — inside default radius (5.0), gets repulsion.
+    objects.objects[0].class_id = drone::ipc::ObjectClass::UNKNOWN;
+    auto result_unknown         = avoider.avoid(cmd, pose, objects);
+    EXPECT_LT(result_unknown.velocity_x, cmd.velocity_x);
 }
 
 TEST(ObstacleAvoider3DTest, PathAwareDisabledFallback) {

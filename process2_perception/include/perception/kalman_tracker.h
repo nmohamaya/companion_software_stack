@@ -5,12 +5,28 @@
 #pragma once
 #include "perception/itracker.h"
 #include "perception/types.h"
+#include "util/ilogger.h"
 
 #include <vector>
 
 #include <Eigen/Dense>
 
 namespace drone::perception {
+
+/// Per-class motion model for Kalman process noise tuning (Epic #519).
+enum class MotionModel : uint8_t {
+    CONSTANT_VELOCITY     = 0,
+    CONSTANT_ACCELERATION = 1,
+};
+
+inline MotionModel motion_model_from_string(const std::string& s) {
+    if (s == "constant_acceleration") return MotionModel::CONSTANT_ACCELERATION;
+    if (s != "constant_velocity") {
+        DRONE_LOG_WARN("[MotionModel] Unknown motion model '{}', defaulting to constant_velocity",
+                       s);
+    }
+    return MotionModel::CONSTANT_VELOCITY;
+}
 
 class KalmanBoxTracker {
 public:
@@ -22,7 +38,8 @@ public:
     using MeasVec  = Eigen::Matrix<float, MEAS_DIM, 1>;
     using MeasMat  = Eigen::Matrix<float, MEAS_DIM, STATE_DIM>;
 
-    KalmanBoxTracker(const Detection2D& initial_det, uint32_t id);
+    KalmanBoxTracker(const Detection2D& initial_det, uint32_t id,
+                     MotionModel model = MotionModel::CONSTANT_VELOCITY);
     void                          predict(float dt = 1.0f / 30.0f);
     void                          update(const Detection2D& det);
     [[nodiscard]] Detection2D     predicted_bbox() const;
@@ -35,8 +52,9 @@ public:
     uint32_t    hits               = 0;
     uint32_t    consecutive_misses = 0;
 
-    [[nodiscard]] bool is_confirmed() const { return hits >= 3; }
-    [[nodiscard]] bool is_stale() const { return consecutive_misses > 10; }
+    [[nodiscard]] bool  is_confirmed() const { return hits >= 3; }
+    [[nodiscard]] bool  is_stale() const { return consecutive_misses > 10; }
+    [[nodiscard]] float process_noise_velocity() const { return Q_(4, 4); }
 
 private:
     StateVec x_ = StateVec::Zero();

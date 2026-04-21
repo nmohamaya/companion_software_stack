@@ -3273,4 +3273,35 @@ Also cherry-picked review fixes from PR #595 (`fe2e84a`): GT emitter config key 
 
 ---
 
-*Last updated after Improvement #80 (dashboard renderer, #574). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #81 — Per-Class Config Schema (Epic #519)
+
+**Date:** 2026-04-21
+
+**What:** Reusable per-class config infrastructure — `load_per_class<T>()` template reads JSON sections like `{ "default": 5.0, "person": 2.0 }` into `std::array<T, 8>` indexed by ObjectClass enum. Applied across obstacle avoidance (5 parameters: influence radius, repulsive gain, min distance, prediction horizon, confidence threshold) and tracker motion model (constant_velocity vs constant_acceleration per class). Startup validation rejects typo class names. Two-phase initialization: constructors sync per-class arrays from global scalars (backward compat), then Config-driven constructors overwrite from JSON.
+
+**Files added:**
+- `common/util/include/util/per_class_config.h` — header-only utility: `kClassName[]`, `class_name_to_index()`, `load_per_class<T>()`, `validate_per_class_section()`
+- `tests/test_per_class_config.cpp` — 12 tests for class name mapping, load variants, validation
+
+**Files modified:**
+- `common/util/include/util/config_keys.h` — 6 new per-class config key constants
+- `common/util/include/util/config_validator.h` — `per_class_section()` method, schema updates for mission_planner + perception
+- `process4_mission_planner/include/planner/obstacle_avoider_3d.h` — 5 per-class arrays, `sync_per_class_from_globals()`, `mutable_config()`, per-class lookups in `avoid()` loop
+- `process2_perception/include/perception/kalman_tracker.h` — `MotionModel` enum, `motion_model_from_string()`
+- `process2_perception/include/perception/bytetrack_tracker.h` — per-class motion model array in `ByteTrackParams`
+- `process2_perception/src/kalman_tracker.cpp` — motion-model-aware velocity noise, per-class load from config
+- `process2_perception/src/bytetrack_tracker.cpp` — per-class motion model at track creation
+- `config/default.json` — per-class sections for obstacle_avoidance and tracker
+- `tests/test_obstacle_avoider_3d.cpp` — +3 per-class tests (influence radius, confidence, prediction dt)
+- `tests/test_kalman_tracker.cpp` — +3 tests (motion model mapping, noise, default)
+- `tests/test_config_validator.cpp` — +4 tests (per-class section validation)
+
+**Why:** Per-class tuning enables different avoidance margins for people vs trucks vs buildings, different motion models for fast-moving drones vs stationary structures, and per-class confidence gating. All driven from JSON config — no code changes needed to tune per-class behavior.
+
+**Test count:** +22 (12 per_class_config + 3 avoider + 3 kalman + 4 validator). Total: 1704.
+
+**Universal acceptance criteria:** design doc updated; no license obligations change.
+
+---
+
+*Last updated after Improvement #81 (per-class config, Epic #519). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

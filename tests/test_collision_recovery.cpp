@@ -147,9 +147,9 @@ protected:
         fsm.on_arm();
     }
 
-    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite");
-    std::unique_ptr<IObstacleAvoider> avoider_ = create_obstacle_avoider("potential_field_3d", 5.0f,
-                                                                         2.0f);
+    std::unique_ptr<IPathPlanner>     planner_ = create_path_planner("dstar_lite").value();
+    std::unique_ptr<IObstacleAvoider> avoider_ =
+        create_obstacle_avoider("potential_field_3d", 5.0f, 2.0f).value();
 
     void do_tick(const Pose& pose, const FCState& fc_state) {
         DetectedObjectList            objects{};

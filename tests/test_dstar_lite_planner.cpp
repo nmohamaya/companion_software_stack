@@ -368,13 +368,15 @@ TEST(GridCellHashTest, SameCellSameHash) {
 }
 
 TEST(PathPlannerFactory, FactoryCreatesDStarLite) {
-    auto planner = create_path_planner("dstar_lite");
-    EXPECT_NE(planner, nullptr);
-    EXPECT_EQ(planner->name(), "DStarLitePlanner");
+    auto result = create_path_planner("dstar_lite");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_NE(result.value(), nullptr);
+    EXPECT_EQ(result.value()->name(), "DStarLitePlanner");
 }
 
-TEST(PathPlannerFactory, UnknownThrows) {
-    EXPECT_THROW(create_path_planner("nonexistent"), std::runtime_error);
+TEST(PathPlannerFactory, UnknownReturnsError) {
+    auto result = create_path_planner("nonexistent");
+    EXPECT_TRUE(result.is_err());
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -945,9 +947,9 @@ TEST(DStarLiteIntegrationTest, UpdateObstaclesIntegration) {
 }
 
 TEST(DStarLiteIntegrationTest, FactoryRegistered) {
-    auto planner = create_path_planner("dstar_lite");
-    EXPECT_NE(planner, nullptr);
-    EXPECT_EQ(planner->name(), "DStarLitePlanner");
+    auto result = create_path_planner("dstar_lite");
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value()->name(), "DStarLitePlanner");
 }
 
 // ═════════════════════════════════════════════════════════════

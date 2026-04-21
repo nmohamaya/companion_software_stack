@@ -5,6 +5,8 @@
 
 #include "perception/bytetrack_tracker.h"
 #include "util/config.h"
+#include "util/config_keys.h"
+#include "util/per_class_config.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +22,7 @@ namespace drone::perception {
 // ═══════════════════════════════════════════════════════════
 // KalmanBoxTracker
 // ═══════════════════════════════════════════════════════════
-KalmanBoxTracker::KalmanBoxTracker(const Detection2D& det, uint32_t id)
+KalmanBoxTracker::KalmanBoxTracker(const Detection2D& det, uint32_t id, MotionModel model)
     : track_id(id)
     , class_id(det.class_id)
     , confidence(det.confidence)
@@ -51,12 +53,15 @@ KalmanBoxTracker::KalmanBoxTracker(const Detection2D& det, uint32_t id)
     P_(6, 6) = 1000.0f;
     P_(7, 7) = 1000.0f;
 
-    // Process noise
-    Q_       = StateMat::Identity() * 1.0f;
-    Q_(4, 4) = 0.01f;
-    Q_(5, 5) = 0.01f;
-    Q_(6, 6) = 0.0001f;
-    Q_(7, 7) = 0.0001f;
+    // Process noise — tuned by motion model (Epic #519).
+    // CONSTANT_ACCELERATION uses higher velocity noise to accommodate
+    // rapid speed changes (manoeuvring targets like drones/animals).
+    const float vel_noise = (model == MotionModel::CONSTANT_ACCELERATION) ? 0.1f : 0.01f;
+    Q_                    = StateMat::Identity() * 1.0f;
+    Q_(4, 4)              = vel_noise;
+    Q_(5, 5)              = vel_noise;
+    Q_(6, 6)              = 0.0001f;
+    Q_(7, 7)              = 0.0001f;
 
     // Measurement noise
     R_ = Eigen::Matrix<float, MEAS_DIM, MEAS_DIM>::Identity() * 1.0f;
@@ -230,13 +235,18 @@ TrackerResult create_tracker(const std::string&                    backend,
     auto make_bytetrack = [&]() -> std::unique_ptr<ITracker> {
         ByteTrackTracker::Params params;
         if (cfg) {
-            params.high_conf_threshold = cfg->get<float>("perception.tracker.high_conf_threshold",
-                                                         0.5f);
-            params.low_conf_threshold  = cfg->get<float>("perception.tracker.low_conf_threshold",
-                                                         0.1f);
-            params.max_iou_cost        = cfg->get<double>("perception.tracker.max_iou_cost", 0.7);
-            params.max_age             = cfg->get<uint32_t>("perception.tracker.max_age", 10);
-            params.min_hits            = cfg->get<uint32_t>("perception.tracker.min_hits", 3);
+            namespace tk               = drone::cfg_key::perception::tracker;
+            params.high_conf_threshold = cfg->get<float>(tk::HIGH_CONF_THRESHOLD, 0.5f);
+            params.low_conf_threshold  = cfg->get<float>(tk::LOW_CONF_THRESHOLD, 0.1f);
+            params.max_iou_cost        = cfg->get<double>(tk::MAX_IOU_COST, 0.7);
+            params.max_age             = cfg->get<uint32_t>(tk::MAX_AGE, 10);
+            params.min_hits            = cfg->get<uint32_t>(tk::MIN_HITS, 3);
+            // Per-class motion models (Epic #519).
+            auto model_strings = drone::util::load_per_class<std::string>(
+                *cfg, tk::PER_CLASS_MOTION_MODEL, "constant_velocity");
+            for (uint8_t i = 0; i < drone::util::kPerClassCount; ++i) {
+                params.motion_models[i] = motion_model_from_string(model_strings[i]);
+            }
         }
         return std::make_unique<ByteTrackTracker>(params);
     };
