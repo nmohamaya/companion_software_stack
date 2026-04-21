@@ -450,3 +450,19 @@ add_drone_test(test_perception_metrics
 target_include_directories(test_perception_metrics PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# ── Baseline capture tests (Issue #573 — Epic #523) ─────────────
+# Validates BaselineCapture metric accumulation, per-class breakdown,
+# JSON round-trip, and latency passthrough. Links perception_metrics
+# for TP/FP/FN computation (same lib the capture class delegates to).
+add_drone_test(test_baseline_capture
+    test_baseline_capture.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_baseline_capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_baseline_capture PRIVATE
+    nlohmann_json::nlohmann_json
+)

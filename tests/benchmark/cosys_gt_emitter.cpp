@@ -17,6 +17,7 @@
 
 #include "benchmark/gt_emitter.h"
 #include "hal/cosys_rpc_client.h"
+#include "hal/hal_factory.h"  // detail::get_shared_cosys_client
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
@@ -42,11 +43,15 @@ constexpr float                                    kDefaultDetectionRadiusM = 10
 constexpr msr::airlib::ImageCaptureBase::ImageType kImageType =
     msr::airlib::ImageCaptureBase::ImageType::Scene;
 
-// Hash a simulator object name into a stable uint32 track id. Same input →
+// Hash a simulator object name into a stable uint32 object id. Same input →
 // same output across processes / runs; different names → different ids with
 // overwhelming probability. The GT consumer only needs stability across
 // frames of a single run, which this easily provides.
-[[nodiscard]] uint32_t stable_track_id_from_name(std::string_view name) {
+//
+// This is a GT-side object identifier (what the simulator KNOWS), distinct
+// from perception-tracker track ids (ByteTrack/UKF) which are what the
+// tracker GUESSES. The benchmark compares the two.
+[[nodiscard]] uint32_t stable_object_id_from_name(std::string_view name) {
     const std::uint64_t h = std::hash<std::string_view>{}(name);
     // Fold 64 → 32 bits; lower 32 are fine because we don't need the id to
     // round-trip back to the name.
@@ -132,10 +137,10 @@ public:
             }
 
             GtDetection g;
-            g.class_id    = cls->class_id;
-            g.class_name  = cls->class_name;
-            g.gt_track_id = stable_track_id_from_name(d.name);
-            g.bbox        = to_bbox(d.box2D);
+            g.class_id     = cls->class_id;
+            g.class_name   = cls->class_name;
+            g.gt_object_id = stable_object_id_from_name(d.name);
+            g.bbox         = to_bbox(d.box2D);
             // AirSim's detection API filters to visible objects already, so
             // everything we see is at least partly visible. A proper occlusion
             // ratio requires segmentation-mask accounting — tracked as a
@@ -195,25 +200,26 @@ std::unique_ptr<IGroundTruthEmitter> create_cosys_gt_emitter(const drone::Config
         return nullptr;
     }
 
-    const std::string host   = full_cfg.get<std::string>(drone::cfg_key::cosys_airsim::HOST,
-                                                         "127.0.0.1");
-    const int         port   = full_cfg.get<int>(drone::cfg_key::cosys_airsim::PORT, 41451);
+    // Use the HAL-side shared RPC client rather than constructing a second
+    // connection to the same AirSim server. This keeps the benchmark harness
+    // and the HAL backends on a single RPC session and matches whatever
+    // connect-retry policy CosysRpcClient uses.
+    auto rpc = drone::hal::detail::get_shared_cosys_client(full_cfg);
+    if (!rpc || !rpc->is_connected()) {
+        DRONE_LOG_WARN("[GT-Cosys] Shared RPC client not connected — emitter disabled");
+        return nullptr;
+    }
+
     const std::string camera = full_cfg.get<std::string>(drone::cfg_key::cosys_airsim::CAMERA_NAME,
                                                          kDefaultCameraName);
     const std::string vehicle =
         full_cfg.get<std::string>(drone::cfg_key::cosys_airsim::VEHICLE_NAME, kDefaultVehicleName);
-    const float radius_m = full_cfg.get<float>("benchmark.gt_detection_radius_m",
+    const float radius_m = full_cfg.get<float>(drone::cfg_key::benchmark::GT_DETECTION_RADIUS_M,
                                                kDefaultDetectionRadiusM);
 
-    auto rpc = std::make_shared<drone::hal::CosysRpcClient>(host, static_cast<uint16_t>(port));
-    if (!rpc->connect()) {
-        DRONE_LOG_WARN("[GT-Cosys] Could not connect to {}:{} — emitter disabled", host, port);
-        return nullptr;
-    }
-
     const auto patterns = class_map.patterns();
-    auto       emitter = std::make_unique<CosysGtEmitter>(std::move(rpc), camera, vehicle, radius_m,
-                                                          std::move(class_map));
+    auto       emitter  = std::make_unique<CosysGtEmitter>(rpc, camera, vehicle, radius_m,
+                                                           std::move(class_map));
     if (!emitter->register_filters(patterns)) {
         DRONE_LOG_WARN(
             "[GT-Cosys] Filter registration failed — emitter constructed but may emit nothing");

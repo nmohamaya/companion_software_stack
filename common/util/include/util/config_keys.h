@@ -430,9 +430,10 @@ inline constexpr const char* NOISE_VELOCITY_STD_MPS  = ".noise.velocity_std_mps"
 // production builds pay zero overhead. Scenario configs that want a
 // baseline capture override `benchmark.profiler.enabled: true`.
 namespace benchmark {
-inline constexpr const char* SECTION              = "benchmark";
-inline constexpr const char* PROFILER_ENABLED     = "benchmark.profiler.enabled";
-inline constexpr const char* PROFILER_OUTPUT_DIR  = "benchmark.profiler.output_dir";
+inline constexpr const char* SECTION               = "benchmark";
+inline constexpr const char* PROFILER_ENABLED      = "benchmark.profiler.enabled";
+inline constexpr const char* PROFILER_OUTPUT_DIR   = "benchmark.profiler.output_dir";
+inline constexpr const char* GT_DETECTION_RADIUS_M = "benchmark.gt_detection_radius_m";
 }  // namespace benchmark
 
 // ═══════════════════════════════════════════════════════════

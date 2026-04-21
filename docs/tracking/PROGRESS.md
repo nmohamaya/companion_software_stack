@@ -3193,4 +3193,32 @@ Design decisions captured in `docs/design/perception_v2_detailed_design.md` §13
 
 ---
 
-_Last updated after Improvement #77 (GT emitter PR 1, #594). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #78 — Baseline capture: `benchmarks/baseline.json` + `BaselineCapture` class (Issue #573, Epic #523)
+
+**Date:** 2026-04-20
+
+**What:** Baseline capture infrastructure for the perception benchmark harness. `BaselineCapture` class accumulates per-scenario detection + tracking metrics and latency summaries from live scenario runs, then serialises to `benchmarks/baseline.json`. Seed baseline checked in with structure for 5 scenarios (#02, #18, #21, #29, #30) — values populate on first live capture.
+
+**Files added:**
+- `tests/benchmark/baseline_capture.h` — `BaselineCapture` class + `ScenarioBaseline` / `PerClassBaseline` types
+- `tests/benchmark/baseline_capture.cpp` — implementation: metric accumulation via `compute_detection_metrics` / `compute_tracking_metrics`, JSON serialisation (nlohmann ordered_json), file I/O with round-trip load
+- `tests/test_baseline_capture.cpp` — 11 GTest cases: perfect detection, mixed TP/FP/FN, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip, latency passthrough, tracking metrics, empty/invalid/duplicate scenarios
+- `benchmarks/baseline.json` — seed baseline with all 5 scenario structures
+- `benchmarks/README.md` — regeneration instructions, scenario table, metric interpretation guide
+
+**Files modified:**
+- `tests/CMakeLists.txt` — `test_baseline_capture` target
+- `tests/TESTS.md` — suite entry + total count update
+- `docs/design/perception_v2_detailed_design.md` — status marker + pointer to baseline
+
+Also cherry-picked review fixes from PR #595 (`fe2e84a`): GT emitter config key validation, error path coverage (+2 tests → 13 total in `test_gt_emitter`).
+
+**Why:** Every perception-v2 PR needs a reference point to measure against. Without `baseline.json`, "does this PR improve detection?" is subjective. The capture class computes TP/FP/FN, mAP, MOTA/MOTP, ID switches, and per-stage latency percentiles — the same metrics the CI gating (#572) will enforce. Seed baseline provides the schema; values populate when scenarios run on Gazebo (Tier 2) or Cosys-AirSim (Tier 3).
+
+**Test count:** +11 in `test_baseline_capture`, +2 in `test_gt_emitter` (review fixes). 1642 → 1655.
+
+**Universal acceptance criteria:** design doc updated; no license obligations change.
+
+---
+
+_Last updated after Improvement #78 (baseline capture, #573). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
