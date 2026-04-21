@@ -135,7 +135,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
 | [Benchmark — GT Emitter](#test_gt_emittercpp--13-tests) | 1 | 13 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping; review fixes: config key validation, error path coverage |
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
-| **Total** | **76 C++ + 5 shell** | **1661 (no SDK) / 1702 (+SDK) + 42 + 250+** | |
+| [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
+| **Total** | **77 C++ + 5 shell** | **1682 (no SDK) / 1723 (+SDK) + 42 + 250+** | |
 
 ---
 
@@ -1094,6 +1095,20 @@ expensive modulo operations.
 **Why these tests matter:** The baseline is the single reference point the entire perception v2 rewrite is measured against. A serialisation bug that silently drops a field, a finalise() that miscounts TP/FP, or a load() that corrupts the class breakdown would make every subsequent delta measurement wrong — and we wouldn't notice until live testing on hardware.
 
 **Key files under test:** `tests/benchmark/baseline_capture.h`, `tests/benchmark/baseline_capture.cpp`. Delegates to `perception_metrics.h/cpp` (#570) for the actual TP/FP/FN and MOTA/MOTP computation.
+
+---
+
+### test_baseline_comparator.cpp — 21 tests
+
+**What it tests:** `drone::benchmark::compare_baselines()` and `format_comparison()` — the regression detection engine that compares a current benchmark run against a stored baseline (#572 / Epic #523). Consumes `BaselineCapture` objects from #573 and enforces configurable percentage thresholds on detection, tracking, and latency metrics.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `BaselineComparatorTest` | 21 | Improvement passes (higher metrics → pass, metrics_checked > 0); regression beyond threshold fails (10% recall drop exceeds 5% threshold); regression within threshold passes (3% drop within 5%); exact boundary passes (current = baseline × 0.95 → pass, >= inclusive); below boundary fails (current = 0.759 < 0.76 boundary); missing scenario in current run fails; zero-valued baseline metrics skipped (detection + latency with zero baselines → always pass); latency regression fails (30% p95 increase exceeds 20% threshold); latency improvement passes (20% decrease); latency within threshold passes (15% increase within 20%); latency missing stage silently skips (only present stages compared); latency malformed JSON safe (no crash or false fail); format produces Markdown table with correct columns and summary; format renders **MISSING** for absent scenarios; format renders **FAIL** for regressed metrics; extra scenario in current ignored; custom thresholds respected (strict 5% fails, relaxed 15% passes); MOTA regression detected (17.6% drop exceeds 5%); MOTP-only regression detected (MOTA stable, MOTP drops 18.75%); MOTP uses independent threshold from MOTA (relaxed motp_drop_pct passes); multiple scenarios with partial failure (one good, one regressed) |
+
+**Why these tests matter:** This is the CI gate — a bug here either lets regressions through silently or blocks valid PRs with false alarms. The zero-baseline skip is critical because `benchmarks/baseline.json` is currently all zeros; without it, every comparison would fail. The latency defensive path tests ensure malformed/missing data doesn't crash the tool. The MOTP-specific tests caught a copy-paste bug where MOTP silently shared MOTA's threshold.
+
+**Key files under test:** `tests/benchmark/baseline_comparator.h`, `tests/benchmark/baseline_comparator.cpp`. Also tests the CLI tool `compare_to_baseline_main.cpp` indirectly (same comparison logic). Depends on `baseline_capture.h/cpp` (#573) for `BaselineCapture` and `ScenarioBaseline` types.
 
 ---
 
