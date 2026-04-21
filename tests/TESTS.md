@@ -136,7 +136,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — GT Emitter](#test_gt_emittercpp--13-tests) | 1 | 13 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping; review fixes: config key validation, error path coverage |
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
-| **Total** | **77 C++ + 5 shell** | **1682 (no SDK) / 1723 (+SDK) + 42 + 250+** | |
+| Benchmark — Dashboard Renderer | 4 | 14 | Baseline loading, scenario comparison (improvement/regression/zero-skip/missing), PR comment rendering, full report rendering, top-changes ranking |
+| **Total** | **77 C++ + 5 shell + 1 Python** | **1682 (no SDK) / 1723 (+SDK) + 42 + 14 + 250+** | |
 
 ---
 
