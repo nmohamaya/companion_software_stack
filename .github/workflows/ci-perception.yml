@@ -46,6 +46,11 @@ jobs:
       SPOT_MAX_PRICE: "0.50"
       ARTIFACT_STORE_URL: ${{ vars.ARTIFACT_STORE_URL }}
       RUN_ID: "pr-${{ github.event.pull_request.number }}-${{ github.run_number }}"
+      # Canonical baseline path — used by both compare_to_baseline and dashboard_renderer.
+      # NOTE: Currently read from the PR branch checkout. Before promoting to a
+      # required check, pin to origin/main or an artifact store to prevent
+      # PR authors from weakening thresholds.
+      BASELINE_PATH: benchmarks/baseline.json
 
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +66,7 @@ jobs:
             DRY_RUN_FLAG="--dry-run"
           fi
           bash tests/run_perception_ci.sh \
-            --baseline tests/perception_baseline.json \
+            --baseline "$BASELINE_PATH" \
             --output /tmp/perception-results.json \
             $DRY_RUN_FLAG
         env:
@@ -75,17 +80,26 @@ jobs:
           # Compare structured baseline metrics if a current-run baseline exists.
           # The compare_to_baseline tool loads BaselineCapture JSON format.
           #
-          # NOTE: baseline is read from the PR branch checkout. Before promoting
-          # this to a required check, pin the baseline to the default branch or
-          # an artifact store to prevent PR authors from weakening thresholds.
           if [[ -f /tmp/current-run-baseline.json ]]; then
             echo "Running baseline comparison..."
             ./build/bin/compare_to_baseline \
-              --baseline benchmarks/baseline.json \
+              --baseline "$BASELINE_PATH" \
               --current /tmp/current-run-baseline.json \
               | tee /tmp/baseline-comparison.md
           else
             echo "No current-run baseline found — skipping structured comparison"
+          fi
+
+      - name: Generate benchmark dashboard
+        id: dashboard
+        if: always() && steps.perception.conclusion == 'success'
+        run: |
+          if [[ -f /tmp/current-run-baseline.json ]]; then
+            python3 tests/benchmark/dashboard_renderer.py \
+              --baseline "$BASELINE_PATH" \
+              --current /tmp/current-run-baseline.json \
+              --mode pr-comment \
+              > /tmp/dashboard-comment.md || true
           fi
 
       - name: Post results as PR comment
@@ -94,29 +108,42 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let body = '## Perception Regression Results\n\n';
+            let body = '';
+
+            // Prefer the Python dashboard report when available.
             try {
-              const results = JSON.parse(fs.readFileSync('/tmp/perception-results.json', 'utf8'));
-              body += `| Metric | Baseline | Current | Delta | Status |\n`;
-              body += `|--------|----------|---------|-------|--------|\n`;
-              for (const [key, val] of Object.entries(results.metrics || {})) {
-                const safeKey = key.replace(/[|`<>\n\r]/g, '_');
-                const delta = (val.current - val.baseline).toFixed(3);
-                const status = val.passed ? '✅' : '⚠️';
-                body += `| ${safeKey} | ${val.baseline} | ${val.current} | ${delta} | ${status} |\n`;
+              body = fs.readFileSync('/tmp/dashboard-comment.md', 'utf8');
+            } catch (_) {}
+
+            // Fall back to inline rendering from the cloud GPU results.
+            if (!body) {
+              body = '## Perception Regression Results\n\n';
+              try {
+                const results = JSON.parse(fs.readFileSync('/tmp/perception-results.json', 'utf8'));
+                body += `| Metric | Baseline | Current | Delta | Status |\n`;
+                body += `|--------|----------|---------|-------|--------|\n`;
+                for (const [key, val] of Object.entries(results.metrics || {})) {
+                  const safeKey = key.replace(/[|`<>\n\r]/g, '_');
+                  const delta = (val.current - val.baseline).toFixed(3);
+                  const status = val.passed ? '✅' : '⚠️';
+                  body += `| ${safeKey} | ${val.baseline} | ${val.current} | ${delta} | ${status} |\n`;
+                }
+                body += `\n**Cost:** $${results.cost || 'N/A'} | **Duration:** ${results.duration_min || 'N/A'} min`;
+              } catch (e) {
+                core.warning(`Perception results parse error: ${e.message}`);
+                body += 'Could not parse perception results. Check workflow logs.\n';
               }
-              body += `\n**Cost:** $${results.cost || 'N/A'} | **Duration:** ${results.duration_min || 'N/A'} min`;
-            } catch (e) {
-              body += 'Could not parse perception results. Check workflow logs.\n';
-              body += `Error: ${e.message}`;
+              body += '\n\n> Advisory check — does not block merge.';
             }
-            body += '\n\n> Advisory check — does not block merge.';
 
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number
             });
-            const existing = comments.data.find(c => c.body.includes('Perception Regression Results'));
+            const existing = comments.data.find(c =>
+              c.body.includes('Perception Benchmark Report') ||
+              c.body.includes('Perception Regression Results')
+            );
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner, repo: context.repo.repo,

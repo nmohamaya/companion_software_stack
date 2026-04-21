@@ -3248,4 +3248,29 @@ Also cherry-picked review fixes from PR #595 (`fe2e84a`): GT emitter config key 
 
 ---
 
-*Last updated after Improvement #79 (CI gating comparator, #572). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #80 — Dashboard renderer: HTML/MD benchmark report (Issue #574, Epic #523)
+
+**Date:** 2026-04-21
+
+**What:** Python dashboard renderer that reads BaselineCapture JSON files (baseline + current run) and produces human-readable Markdown reports. Two output modes: condensed PR comment (~50 lines with summary table, top 3 regressions/improvements) and full report (per-class breakdowns, latency stage tables, threshold config). Zero-dependency — uses only Python stdlib (`json`, `argparse`, `dataclasses`).
+
+**Files added:**
+
+- `tests/benchmark/dashboard_renderer.py` — CLI tool + rendering engine: `load_baseline()`, `compare_scenarios()`, `render_pr_comment()`, `render_full_report()`, `_top_changes()`
+- `tests/benchmark/test_dashboard_renderer.py` — 14 unittest cases: loading (valid/missing/invalid), comparison (improvement/regression/zero-skip/missing/latency), rendering (PR comment sections, missing scenario, full report detail, skipped scenarios), top-changes (sorting, skip exclusion)
+
+**Files modified:**
+
+- `.github/workflows/ci-perception.yml` — added dashboard generation step, updated PR comment to prefer dashboard output with inline fallback
+- `tests/TESTS.md` — suite entry + total count update
+- `docs/design/perception_v2_detailed_design.md` — sample report snippet
+
+**Why:** Closes out Epic #523 (Perception Benchmark Harness). The C++ `compare_to_baseline` tool is the CI gate (exit code 0/1); the Python dashboard is the human-readable layer that makes results accessible to non-ML engineers. Top 3 highlights surface the most impactful changes without requiring engineers to parse full metric tables.
+
+**Test count:** +14 Python tests in `test_dashboard_renderer.py`.
+
+**Universal acceptance criteria:** design doc updated; no license obligations change.
+
+---
+
+*Last updated after Improvement #80 (dashboard renderer, #574). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
