@@ -67,6 +67,12 @@
                 "num_classes": 5
             }
         },
+        "detector_switcher": {
+            "_comment": "Altitude-based COCO/VisDrone dataset switching (Epic #520 E5.5)",
+            "altitude_threshold_m": 30.0,
+            "coco_model_path": "models/yolov8n-seg.onnx",
+            "visdrone_model_path": "models/yolov8n-visdrone-seg.onnx"
+        },
         "tracker": {
             "backend": "bytetrack",
             "max_age": 10,

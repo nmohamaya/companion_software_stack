@@ -82,6 +82,16 @@ inline constexpr const char* DATASET               = "perception.detector.datase
 inline constexpr const char* NUM_CLASSES           = "perception.detector.num_classes";
 }  // namespace detector
 
+// Altitude-based dataset switching (Epic #520, E5.5)
+namespace detector_switcher {
+inline constexpr const char* SECTION = "perception.detector_switcher";
+inline constexpr const char* ALTITUDE_THRESHOLD_M =
+    "perception.detector_switcher.altitude_threshold_m";
+inline constexpr const char* COCO_MODEL_PATH = "perception.detector_switcher.coco_model_path";
+inline constexpr const char* VISDRONE_MODEL_PATH =
+    "perception.detector_switcher.visdrone_model_path";
+}  // namespace detector_switcher
+
 namespace tracker {
 inline constexpr const char* SECTION              = "perception.tracker";
 inline constexpr const char* BACKEND              = "perception.tracker.backend";

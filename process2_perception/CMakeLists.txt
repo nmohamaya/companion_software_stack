@@ -8,6 +8,7 @@ add_executable(perception
     src/fusion_engine.cpp
     src/ukf_fusion_engine.cpp
     src/opencv_yolo_detector.cpp
+    src/yolo_seg_inference_backend.cpp
 )
 target_include_directories(perception PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

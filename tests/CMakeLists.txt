@@ -160,6 +160,12 @@ add_drone_test(test_semantic_projector test_semantic_projector.cpp)
 # ── E5 SAM + Detector Integration tests (Epic #520) ─────────
 add_drone_test(test_sam_backend          test_sam_backend.cpp)
 add_drone_test(test_mask_class_assigner  test_mask_class_assigner.cpp)
+if(ENABLE_PROCESS_PERCEPTION)
+add_drone_test(test_yolo_seg_backend     test_yolo_seg_backend.cpp
+    ${PROJECT_SOURCE_DIR}/process2_perception/src/yolo_seg_inference_backend.cpp
+)
+endif()
+add_drone_test(test_detector_switcher    test_detector_switcher.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
