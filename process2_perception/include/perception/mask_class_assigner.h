@@ -96,6 +96,8 @@ public:
         return intersection / union_area;
     }
 
+    [[nodiscard]] float iou_threshold() const { return iou_threshold_; }
+
 private:
     float iou_threshold_;
 };

@@ -166,6 +166,7 @@ add_drone_test(test_yolo_seg_backend     test_yolo_seg_backend.cpp
 )
 endif()
 add_drone_test(test_detector_switcher    test_detector_switcher.cpp)
+add_drone_test(test_mask_depth_projector test_mask_depth_projector.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)

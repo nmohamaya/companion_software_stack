@@ -809,7 +809,7 @@ Pass 2: <N> agents, <P1> findings, <P2> findings
 User choices:
 - **accept** → proceed to Phase 5
 - **fix** → fix issues, re-validate, re-review. **Always re-run BOTH Pass 1 AND Pass 2** — fixes frequently introduce new issues. Loop back to Step 4.2 (roster approval), not Phase 3.
-- **defer with rationale** → for P3 findings or comments where we disagree with the recommendation, document each decision in `docs/guides/DESIGN_RATIONALE.md` as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, trade-offs weighed, and the decision was intentional — not an oversight. Each entry needs: the question, arguments for both sides, our decision, and when to revisit.
+- **defer with rationale** → for P3 findings or comments where we disagree with the recommendation, document each decision in `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, trade-offs weighed, and the decision was intentional — not an oversight. Each entry needs: the question, arguments for both sides, our decision, and when to revisit.
 - **abort** → stop
 
 **On accept — write state + emit summary:**

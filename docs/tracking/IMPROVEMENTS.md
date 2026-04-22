@@ -16,6 +16,35 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-22
+
+#### 15. MaskClassAssigner copies full InferenceDetection (including mask pixel buffer) per mask per frame
+
+- **Priority:** P2
+- **Category:** architecture
+- **Noticed while:** PR #604 review (E5.4 MaskDepthProjector). Performance agent flagged mask pixel buffer copy.
+- **Current state:** `MaskAssignment` stores `hal::InferenceDetection mask_detection` by value. `assign()` copies each SAM mask's full struct — including the `std::vector<uint8_t> mask` pixel buffer — into `MaskAssignment`. At 30 fps with N SAM masks, this is N heap allocations per frame. Currently cheap (8×8=64 bytes per mask), but production SAM masks can be 28×28+ (784+ bytes).
+- **Proposed fix:** Store `const hal::InferenceDetection*` or `size_t mask_idx` in `MaskAssignment` instead of a value copy. `assign()` takes `sam_masks` by const ref and the result is consumed immediately in `project()`, so pointer/index is safe. Eliminates all mask pixel copies on the assignment path.
+- **When worth doing:** When integrating real SAM backend (non-simulated) — profile first to confirm it matters.
+
+#### 16. Three heap allocations per frame through PATH A pipeline (scratch buffers)
+
+- **Priority:** P3
+- **Category:** architecture
+- **Noticed while:** PR #604 review (E5.4 MaskDepthProjector). Performance agent flagged repeated allocations.
+- **Current state:** Each call to `MaskClassAssigner::assign()` allocates `det_order` and `mask_matched` vectors; `MaskDepthProjector::project()` allocates `classified` vector. Total: 3 heap allocs per frame on this path. All are bounded small vectors (10-50 elements).
+- **Proposed fix:** Add `mutable` scratch buffers to both classes, `resize()` and reuse each call. Reduces steady-state allocations to zero.
+- **When worth doing:** When PATH A is hot-path in production — profile first to confirm the 3 allocs are measurable vs CpuSemanticProjector's per-pixel work.
+
+#### 17. DRY: `make_depth_map()` test helper duplicated across 3 test files
+
+- **Priority:** P3
+- **Category:** test-infra
+- **Noticed while:** PR #604 review (E5.4 MaskDepthProjector). Code quality agent flagged duplication.
+- **Current state:** `make_depth_map()` is defined identically in `test_semantic_projector.cpp`, `test_mask_class_assigner.cpp`, and `test_mask_depth_projector.cpp`. Similar duplication for `make_sam_mask`/`make_det` helpers with divergent naming (make_mask vs make_sam_mask, make_det vs make_detector_output).
+- **Proposed fix:** Extract into `tests/test_perception_helpers.h` (inline statics). Align naming across all test files.
+- **When worth doing:** Next time any of these 3 test files are modified — or as a standalone cleanup PR.
+
 ### 2026-04-21
 
 #### 12. HAL factory functions use `throw` instead of `Result<T,E>`

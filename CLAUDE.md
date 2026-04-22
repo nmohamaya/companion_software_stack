@@ -34,7 +34,7 @@ Flag these as suggestions (don't silently implement them). Use your judgement on
 **Where deferred items are logged:** two destinations, never mixed:
 
 - **Proactive findings I noticed myself** (not in response to a review comment) → `docs/tracking/IMPROVEMENTS.md`. Backlog of nice-to-haves for quiet windows. Entries are dated, prioritised (P1/P2/P3), categorised, and moved to a **Resolved** section with a PR/commit reference once addressed.
-- **Declining or disagreeing with a review comment** (from agents, Copilot, or humans) → `docs/guides/DESIGN_RATIONALE.md` as a new DR-NNN entry. This is the audit trail proving the comment was evaluated and the call was intentional.
+- **Declining or disagreeing with a review comment** (from agents, Copilot, or humans) → `docs/tracking/DESIGN_RATIONALE.md` as a new DR-NNN entry. This is the audit trail proving the comment was evaluated and the call was intentional.
 
 When writing "Review Fixes" tables on a PR and marking an item deferred, always include a DR-NNN reference. When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
 
@@ -268,7 +268,7 @@ After addressing review comments:
 
 **Codebase-wide scope:** When a review comment identifies an issue that could apply elsewhere in the codebase (e.g., misleading comments, inconsistent log levels, missing test patterns), always search for and fix all occurrences — not just the one the reviewer pointed out. A review comment on one file is a signal to check the whole codebase for the same pattern.
 
-**Disagreeing with review comments:** When declining to fix a review comment (from Copilot, review agents, or humans) based on a justified rationale, **always document the decision in `docs/guides/DESIGN_RATIONALE.md`** as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, the trade-offs were weighed, and the decision was intentional — not an oversight. Include the question, arguments for both sides, our decision, and when to revisit. This applies to both P3 deferrals and genuine "we disagree" situations.
+**Disagreeing with review comments:** When declining to fix a review comment (from Copilot, review agents, or humans) based on a justified rationale, **always document the decision in `docs/tracking/DESIGN_RATIONALE.md`** as a new DR-NNN entry. This creates an audit trail showing the comment was evaluated, the trade-offs were weighed, and the decision was intentional — not an oversight. Include the question, arguments for both sides, our decision, and when to revisit. This applies to both P3 deferrals and genuine "we disagree" situations.
 
 ### Planning & Self-Correction (from `docs/guides/work_instructions.md`)
 - Enter plan mode for any non-trivial task (3+ steps or architectural decisions)
@@ -324,7 +324,7 @@ This is a **safety-critical drone software stack**. Use appropriate C++ construc
 - **Mutex (`std::lock_guard`):** Non-hot-path shared state — config access, ring buffers, logging. Always use RAII (`lock_guard`/`unique_lock`), never manual `lock()`/`unlock()`.
 - **Avoid:** Recursive mutexes (restructure code instead), `memory_order_relaxed` without justification, bare `lock()`/`unlock()` calls.
 
-**Observability on flight-critical threads:** Mutex-protected observability primitives (loggers, profilers, metrics collectors — e.g. `LatencyProfiler`, `JsonLogSink`) SHOULD NOT be called from flight-critical or real-time threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog touch paths) *without documented justification*. The default hazards are (a) **priority inversion** — a lower-priority thread holding the observability mutex can block a higher-priority control thread, and (b) **observation affecting measurement** — the mutex cost contaminates the latency being measured. If a control-loop thread needs to emit telemetry, the preferred pattern is to buffer into a lock-free primitive (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. If mutex-protected observability is used on a real-time thread anyway (e.g. benchmark-harness profiler wiring), record the analysis as a DR-NNN entry in `docs/guides/DESIGN_RATIONALE.md` showing (1) all recorders share similar priority (no inversion risk), (2) mutex-hold-time is bounded and dominated by the measured work, and (3) the usage is gated behind an explicit configuration flag so production builds don't pay the cost. Each observability primitive's header must document the constraint (e.g. "For >10 kHz hot loops, prefer `LatencyTracker` directly").
+**Observability on flight-critical threads:** Mutex-protected observability primitives (loggers, profilers, metrics collectors — e.g. `LatencyProfiler`, `JsonLogSink`) SHOULD NOT be called from flight-critical or real-time threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog touch paths) *without documented justification*. The default hazards are (a) **priority inversion** — a lower-priority thread holding the observability mutex can block a higher-priority control thread, and (b) **observation affecting measurement** — the mutex cost contaminates the latency being measured. If a control-loop thread needs to emit telemetry, the preferred pattern is to buffer into a lock-free primitive (`LatencyTracker`, `SPSCRing`, `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. If mutex-protected observability is used on a real-time thread anyway (e.g. benchmark-harness profiler wiring), record the analysis as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` showing (1) all recorders share similar priority (no inversion risk), (2) mutex-hold-time is bounded and dominated by the measured work, and (3) the usage is gated behind an explicit configuration flag so production builds don't pay the cost. Each observability primitive's header must document the constraint (e.g. "For >10 kHz hot loops, prefer `LatencyTracker` directly").
 
 ### Root Cause Analysis
 
@@ -356,7 +356,7 @@ After pushing review-fix commits, update the PR body right away. Don't wait to b
 - `docs/design/perception_design.md` — P2 pipeline detail
 - `docs/design/hardening-design.md` — Watchdog and systemd integration
 - `docs/guides/CPP_PATTERNS_GUIDE.md` — Project C++17 patterns (Result<T,E>, ScopedGuard, thread safety)
-- `docs/guides/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
+- `docs/tracking/DESIGN_RATIONALE.md` — Gray-area design decisions where both sides are defensible (DR-NNN entries)
 - `docs/tracking/BUG_FIXES.md` — 29 documented bugs fixed (good reference for common pitfalls)
 - `docs/adr/` — Architecture Decision Records
 - `docs/design/API.md` — IPC message type reference

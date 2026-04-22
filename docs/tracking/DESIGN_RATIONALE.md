@@ -763,3 +763,47 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 
 **Date:** 2026-04-22 (Epic #520, E5.2 implementation)
 
+## DR-031: MaskDepthProjector::project() Marked `const` Despite Non-Const Projector Reference
+
+**Question:** PR #604 review (review-api-contract agent, P1): `project()` is declared `const` but calls `ISemanticProjector::project()` which is a non-const virtual method. The `const` doesn't propagate through the reference member, so callers may incorrectly assume concurrent calls are safe.
+
+**For removing `const`:**
+
+- Honest about the mutation potential — if `ISemanticProjector` implementations become stateful, the `const` is misleading.
+- Prevents false safety assumptions about thread safety.
+
+**For keeping `const` (our decision):**
+
+- Standard C++ pattern — `const` on a method documents that *this object's* state doesn't change, not that every transitively reachable object is immutable. The same pattern is used throughout this codebase (any class holding a `Logger&`, `IPC&`, or `Config&` reference).
+- `CpuSemanticProjector::project()` is logically const (reads intrinsics, writes to output only). The non-const `override` is inherited from the interface, which is non-const to accommodate future GPU backends that may need to update internal state.
+- Removing `const` would be viral — callers holding `const MaskDepthProjector&` couldn't call `project()`, breaking composition patterns.
+- Thread safety is a separate concern from `const` correctness and should be documented independently if needed.
+
+**Decision:** Keep `const` on `project()`. The method correctly documents that `MaskDepthProjector` itself is immutable. Thread safety of the underlying `ISemanticProjector` is the caller's responsibility.
+
+**Revisit when:** If a stateful `ISemanticProjector` backend (e.g., GPU with internal batch state) is added and concurrent access becomes a real concern.
+
+**Date:** 2026-04-22 (PR #604 review, E5.4 MaskDepthProjector)
+
+## DR-032: GEOMETRIC_OBSTACLE Guarantee Delegated to MaskClassAssigner, Not Enforced in MaskDepthProjector
+
+**Question:** PR #604 review (review-api-contract agent, P1 downgraded to P3): `MaskDepthProjector` docstring claims "unmatched masks receive GEOMETRIC_OBSTACLE" but the guarantee lives in `MaskAssignment::assigned_class` default value, not enforced locally. If `MaskClassAssigner` changes its default, the claim silently breaks.
+
+**For local enforcement (assert after assign):**
+
+- Defense-in-depth: MaskDepthProjector would verify the invariant it advertises, independent of the assigner's implementation.
+- Catches future regressions if `MaskAssignment` default changes.
+
+**For delegation (our decision):**
+
+- `MaskClassAssigner` is the single authority for class assignment. Its struct `MaskAssignment` defaults `assigned_class` to `GEOMETRIC_OBSTACLE` — this is the documented contract of the assigner, not a coincidence.
+- Adding an assertion in `MaskDepthProjector` would duplicate the assigner's responsibility and create a coupling where changes to the assigner's class policy require updating two places.
+- The test suite (`ProjectSingleGeometricMask`, `ProjectMaskBelowIoUThreshold`) already verifies the end-to-end invariant through the full chain.
+- Updated docstring to clarify delegation: "via MaskClassAssigner default".
+
+**Decision:** Keep the guarantee in `MaskClassAssigner` where it belongs. `MaskDepthProjector` documents the delegation explicitly.
+
+**Revisit when:** If a second class-assignment strategy is introduced (e.g., embedding-based) that might use a different default.
+
+**Date:** 2026-04-22 (PR #604 review, E5.4 MaskDepthProjector)
+
