@@ -36,6 +36,15 @@ Running list of improvements noticed in passing while doing other work. Not urge
 - **Proposed fix:** Add a `validate()` method to `DetectedObjectList` or a free function that clamps/filters invalid class IDs before passing to downstream consumers. Log a warning when invalid IDs are received from IPC.
 - **When worth doing:** When touching IPC types or adding new consumers of DetectedObjectList.
 
+#### 14. CameraIntrinsics needs lens distortion model for real hardware (#601)
+- **Priority:** P3
+- **Category:** architecture
+- **Noticed while:** implementing E1 `CpuSemanticProjector` (PR #602)
+- **Symptom:** `CameraIntrinsics` only has pinhole parameters (fx, fy, cx, cy). Real drone cameras with 120–150° FoV lenses have significant barrel distortion — pixels near image edges can be off by 10–30px, causing 0.5–2m 3D position errors in the volumetric map.
+- **Fix:** Extend `CameraIntrinsics` with Brown-Conrady distortion coefficients (k1, k2, p1, p2, k3). Apply undistortion in `CpuSemanticProjector::backproject()` via iterative Newton's method. If fisheye lens selected, add Kannala-Brandt KB4 model.
+- **Trigger:** Implement when nav camera hardware is selected and calibration data exists. Zero impact in simulation (all coefficients default to 0).
+- **Issue:** #601
+
 ### 2026-04-20
 
 #### 10. `COSYS_SIMULATION_ARCHITECTURE.md` — parallel to the existing Gazebo doc
