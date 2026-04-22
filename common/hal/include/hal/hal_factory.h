@@ -35,6 +35,7 @@
 #include "hal/simulated_imu.h"
 #include "hal/simulated_inference_backend.h"
 #include "hal/simulated_radar.h"
+#include "hal/simulated_sam_backend.h"
 #include "hal/simulated_volumetric_map.h"
 
 
@@ -353,6 +354,9 @@ template<typename Interface>
 
     if (backend == "simulated") {
         return std::make_unique<SimulatedInferenceBackend>(cfg, section);
+    }
+    if (backend == "sam_simulated") {
+        return std::make_unique<SimulatedSAMBackend>(cfg, section);
     }
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {

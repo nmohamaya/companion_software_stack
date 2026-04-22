@@ -135,7 +135,9 @@ inline constexpr const char* HEIGHT_PRIORS_DRONE    = "perception.fusion.height_
 inline constexpr const char* HEIGHT_PRIORS_ANIMAL   = "perception.fusion.height_priors.animal";
 inline constexpr const char* HEIGHT_PRIORS_BUILDING = "perception.fusion.height_priors.building";
 inline constexpr const char* HEIGHT_PRIORS_TREE     = "perception.fusion.height_priors.tree";
-inline constexpr const char* BBOX_HEIGHT_NOISE_PX   = "perception.fusion.bbox_height_noise_px";
+inline constexpr const char* HEIGHT_PRIORS_GEOMETRIC_OBSTACLE =
+    "perception.fusion.height_priors.geometric_obstacle";
+inline constexpr const char* BBOX_HEIGHT_NOISE_PX = "perception.fusion.bbox_height_noise_px";
 }  // namespace fusion
 
 namespace inference_backend {
@@ -156,6 +158,18 @@ inline constexpr const char* SECTION = "perception.event_camera";
 namespace semantic_projector {
 inline constexpr const char* SECTION = "perception.semantic_projector";
 }  // namespace semantic_projector
+
+// PATH A — SAM + detector fusion (Epic #520)
+namespace path_a {
+inline constexpr const char* SECTION        = "perception.path_a";
+inline constexpr const char* ENABLED        = "perception.path_a.enabled";
+inline constexpr const char* SAM_BACKEND    = "perception.path_a.sam.backend";
+inline constexpr const char* SAM_MODEL_PATH = "perception.path_a.sam.model_path";
+inline constexpr const char* SAM_INPUT_SIZE = "perception.path_a.sam.input_size";
+inline constexpr const char* SAM_NUM_MASKS  = "perception.path_a.sam.num_masks";
+inline constexpr const char* MASK_CLASS_IOU_THRESHOLD =
+    "perception.path_a.mask_class_iou_threshold";
+}  // namespace path_a
 
 // Shutdown drain behaviour (Issue #446)
 inline constexpr const char* DRAIN_TIMEOUT_MS = "perception.drain_timeout_ms";

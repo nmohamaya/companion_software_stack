@@ -1,7 +1,7 @@
 // common/util/include/util/per_class_config.h
 // Per-class config lookup utility — loads JSON sections like
 //   { "default": 5.0, "person": 2.0, "drone": 4.0 }
-// into std::array<T, 8> indexed by ObjectClass enum values.
+// into std::array<T, 9> indexed by ObjectClass enum values.
 #pragma once
 
 #include "util/config.h"
@@ -14,13 +14,14 @@
 
 namespace drone::util {
 
-inline constexpr uint8_t kPerClassCount = 8;
+inline constexpr uint8_t kPerClassCount = 9;
 
 inline constexpr std::array<const char*, kPerClassCount> kClassName = {
-    "unknown", "person", "vehicle_car", "vehicle_truck", "drone", "animal", "building", "tree",
+    "unknown", "person",   "vehicle_car", "vehicle_truck",      "drone",
+    "animal",  "building", "tree",        "geometric_obstacle",
 };
 
-/// Map a JSON class name to its index (0-7), or -1 if unrecognized.
+/// Map a JSON class name to its index (0-8), or -1 if unrecognized.
 inline int class_name_to_index(const std::string& name) {
     for (uint8_t i = 0; i < kPerClassCount; ++i) {
         if (name == kClassName[i]) return static_cast<int>(i);

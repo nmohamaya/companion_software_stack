@@ -31,7 +31,7 @@
 namespace drone::planner {
 
 static_assert(drone::util::kPerClassCount ==
-                  static_cast<uint8_t>(drone::ipc::ObjectClass::TREE) + 1,
+                  static_cast<uint8_t>(drone::ipc::ObjectClass::GEOMETRIC_OBSTACLE) + 1,
               "kPerClassCount must match ObjectClass enum size");
 
 /// Configuration for the 3D obstacle avoider.
