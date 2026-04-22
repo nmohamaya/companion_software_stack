@@ -781,6 +781,37 @@ grep 'No path' drone_logs/scenarios_gazebo/*/mission_planner.log | tail -5
 
 ---
 
+### Fix #54 — Model Path Validation Breaks ctest When CWD Is Not Project Root (PR #603)
+
+**Date:** 2026-04-22
+**Severity:** Medium
+**Files:** `process2_perception/src/yolo_seg_inference_backend.cpp`, `process2_perception/src/opencv_yolo_detector.cpp`
+
+**What:** `YoloModelTest.LoadsSuccessfully` and `YoloModelTest.ConfigConstruction` passed when run directly from the project root (`./build/bin/test_opencv_yolo_detector`) but failed when run via `ctest --test-dir build`. The path validation function rejected the compile-time `YOLO_MODEL_PATH` (an absolute path like `/home/.../models/yolov8n.onnx`) because it used `is_absolute()` as a blanket rejection.
+
+**Error messages (searchable):**
+
+- `[ERROR] [OpenCvYoloDetector] Absolute model paths not allowed: /home/.../models/yolov8n.onnx`
+- `Value of: det.is_loaded()  Actual: false  Expected: true`
+
+**Reproduce:**
+
+1. Apply the initial `validate_model_path()` using `weakly_canonical("models")` (commit `b68e59b`)
+2. `bash deploy/build.sh`
+3. `ctest --test-dir build --output-on-failure -R YoloModelTest.LoadsSuccessfully` — fails
+4. `./build/bin/test_opencv_yolo_detector --gtest_filter=YoloModelTest.LoadsSuccessfully` — passes (from project root)
+
+**Why (Root Cause):**
+The first version of `validate_model_path()` used `std::filesystem::weakly_canonical("models")` to resolve the allowed base directory. `weakly_canonical` resolves relative paths against the current working directory. When ctest runs from `build/`, the allowed base becomes `<project>/build/models/` instead of `<project>/models/`. The fix replaced this with `lexically_normal()` — a blanket absolute-path rejection — which then broke the compile-time `YOLO_MODEL_PATH` define (set to `${PROJECT_SOURCE_DIR}/models/yolov8n.onnx` in `tests/CMakeLists.txt:268`), which is intentionally absolute so tests work from any cwd.
+
+**Fix:** Replaced `weakly_canonical`-based validation with `lexically_normal()` (pure lexical, no filesystem access, cwd-independent). Relative paths must start with `models/` as first component; absolute paths must contain `models` as a path component. Defense-in-depth: reject any `..` remaining after normalization. Applied identically to both `opencv_yolo_detector.cpp` and `yolo_seg_inference_backend.cpp`.
+
+**Found by:** PR #603 two-pass review — introduced by the path-traversal security fix (P1 #3), caught during post-fix `ctest` validation.
+
+**Regression test:** `YoloModelTest.LoadsSuccessfully`, `YoloModelTest.ConfigConstruction` — both pass from project root and via `ctest --test-dir build`. `YoloSegBackend.RejectsAbsolutePath` and `YoloSegBackend.RejectsPathTraversal` verify malicious paths are still rejected.
+
+---
+
 ## SLAM / VIO (Process 3)
 
 ---
