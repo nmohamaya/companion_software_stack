@@ -105,6 +105,58 @@ struct DetectedObjectList {
 };
 
 // ═══════════════════════════════════════════════════════════
+// Semantic Voxels (Process 2 → Process 4) — PATH A pipeline
+// Mask-aware back-projection output from the SAM + detector
+// fusion pipeline. Each voxel is already world-frame and
+// confidence-scored — no further promotion-hit filter needed.
+// See Epic #520 / Issue #608.
+// ═══════════════════════════════════════════════════════════
+static constexpr int MAX_VOXELS_PER_BATCH = 1024;
+
+struct SemanticVoxel {
+    float       position_x{0.0f};
+    float       position_y{0.0f};
+    float       position_z{0.0f};                        // world frame (m)
+    float       occupancy{0.0f};                         // [0, 1]
+    float       confidence{0.0f};                        // [0, 1]
+    ObjectClass semantic_label{ObjectClass::UNKNOWN};    // class label from MaskClassAssigner
+    uint8_t     _pad0[3]{0, 0, 0};                       // explicit padding (keep trivially copyable)
+    uint64_t    timestamp_ns{0};                         // source-frame capture time
+
+    [[nodiscard]] bool validate() const {
+        return std::isfinite(position_x) && std::isfinite(position_y) &&
+               std::isfinite(position_z) && std::isfinite(occupancy) && occupancy >= 0.0f &&
+               occupancy <= 1.0f && std::isfinite(confidence) && confidence >= 0.0f &&
+               confidence <= 1.0f;
+    }
+};
+
+struct SemanticVoxelBatch {
+    uint64_t      timestamp_ns{0};      // batch emission time
+    uint64_t      frame_sequence{0};    // source video-frame sequence number
+    uint32_t      num_voxels{0};        // count of valid entries in voxels[]
+    uint32_t      _pad0{0};
+    SemanticVoxel voxels[MAX_VOXELS_PER_BATCH]{};
+
+    [[nodiscard]] bool validate() const {
+        if (num_voxels > MAX_VOXELS_PER_BATCH) return false;
+        for (uint32_t i = 0; i < num_voxels; ++i) {
+            if (!voxels[i].validate()) return false;
+        }
+        return true;
+    }
+};
+
+static_assert(std::is_trivially_copyable_v<SemanticVoxel>,
+              "SemanticVoxel must be trivially copyable for Zenoh wire serialisation");
+static_assert(std::is_trivially_copyable_v<SemanticVoxelBatch>,
+              "SemanticVoxelBatch must be trivially copyable for Zenoh wire serialisation");
+static_assert(std::is_standard_layout_v<SemanticVoxel>,
+              "SemanticVoxel must be standard layout");
+static_assert(std::is_standard_layout_v<SemanticVoxelBatch>,
+              "SemanticVoxelBatch must be standard layout");
+
+// ═══════════════════════════════════════════════════════════
 // SLAM Pose (Process 3 → Process 4, Process 5, Process 6)
 // ═══════════════════════════════════════════════════════════
 struct alignas(64) Pose {
@@ -593,6 +645,7 @@ namespace topics {
 constexpr const char* VIDEO_MISSION_CAM = "/drone_mission_cam";
 constexpr const char* VIDEO_STEREO_CAM  = "/drone_stereo_cam";
 constexpr const char* DETECTED_OBJECTS  = "/detected_objects";
+constexpr const char* SEMANTIC_VOXELS   = "/semantic_voxels";
 constexpr const char* SLAM_POSE         = "/slam_pose";
 constexpr const char* MISSION_STATUS    = "/mission_status";
 constexpr const char* TRAJECTORY_CMD    = "/trajectory_cmd";

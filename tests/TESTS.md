@@ -121,6 +121,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Cross-Cutting Interfaces](#cross-cutting-interfaces) | 1 | 7 | IProcessMonitor, ISysInfo |
 | [Integration (shell)](#integration-tests) | 2 | 42+ | Full-stack E2E: Zenoh smoke test, Gazebo SITL integration |
 | [IPC — Validation](#ipc--validation) | 1 | 56 | IPC struct validation (dimensions, NaN/Inf, oversized) |
+| [IPC — Semantic Voxels](#ipc--validation) | 1 | 16 | `SemanticVoxel` / `SemanticVoxelBatch` default-init, `validate()`, topic mapping, byte round-trip (PATH A wire type, Issue #608) |
 | [Utility — Triple Buffer](#utility--triple-buffer) | 1 | 10 | Lock-free triple buffer latest-value handoff |
 | [Utility — sd_notify](#utility--sd_notify) | 1 | 9 | systemd sd_notify wrapper (ready, watchdog, stopping, status) |
 | [Scenario Integration](#run_scenariosh--scenario-driven-integration-runner) | 2 | 250+ | 25 scenarios via `run_scenario.sh` + `run_scenario_gazebo.sh` (20 Tier 1 + 5 Tier 2) |
@@ -141,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **82 C++ + 5 shell + 1 Python** | **1746 (no SDK) / 1787 (+SDK) + 42 + 29 + 250+** | |
+| **Total** | **83 C++ + 5 shell + 1 Python** | **1762 (no SDK) / 1803 (+SDK) + 42 + 29 + 250+** | |
 
 ---
 
@@ -255,6 +256,18 @@ network configuration.
 | `IpcValidation` | 54 | VideoFrame (valid dims, zero width/height/channels, max exceeded), StereoFrame (valid, zero/max dims), DetectedObject (valid, NaN fields, negative confidence, label overflow), DetectedObjectList (valid, count exceeded, invalid nested object), Pose (valid, NaN position/quaternion, quality range), SystemHealth (valid fields), FCState (valid, NaN battery), TrajectoryCmd (valid, NaN velocity), ThreadHealth (valid, name overflow) |
 
 **Key files under test:** `ipc/ipc_types.h`
+
+### test_semantic_voxels.cpp — 16 tests
+
+**What it tests:** `SemanticVoxel` / `SemanticVoxelBatch` IPC wire types added by PATH A integration (Epic #520, Issue #608). Default construction, `validate()` coverage, Zenoh topic mapping, and a byte round-trip that proves the type survives `memcpy` serialisation without loss.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `SemanticVoxel` | 7 | Default zero-init; `validate()` accepts well-formed voxels and rejects NaN/Inf position, out-of-range occupancy and confidence |
+| `SemanticVoxelBatch` | 7 | Default zero-init for all 1024 slots; `validate()` on empty / populated batches; rejection of `num_voxels > MAX_VOXELS_PER_BATCH`, rejection of bad voxel inside valid range, and correctly ignoring slots past `num_voxels`; byte round-trip preserves content |
+| `SemanticVoxelsTopicMapping` | 2 | `/semantic_voxels` ↔ `drone/perception/voxels`, constant matches legacy name |
+
+**Key files under test:** `ipc/ipc_types.h` (`SemanticVoxel`, `SemanticVoxelBatch`, `MAX_VOXELS_PER_BATCH`, `topics::SEMANTIC_VOXELS`), `ipc/zenoh_message_bus.h` (topic-mapping table).
 
 ---
 

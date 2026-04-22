@@ -3327,4 +3327,27 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-_Last updated after Improvement #85 (Epic #515). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #86 — PATH A IPC wire type: `SemanticVoxelBatch` + `/semantic_voxels` channel (Issue #608 PR 1)
+
+**Date:** 2026-04-22
+**Category:** Feature — IPC / Perception v2
+**Epic:** [#520 — PATH A (SAM + Detector Integration)](https://github.com/nmohamaya/companion_software_stack/issues/520) via integration sub-issue [#608](https://github.com/nmohamaya/companion_software_stack/issues/608)
+
+**What:**
+
+- New IPC wire types `SemanticVoxel` (32 B, world-frame voxel with occupancy, confidence, `ObjectClass` label, source-frame timestamp) and `SemanticVoxelBatch` (header + fixed 1024-slot array, ~32 KB) in `common/ipc/ipc_types.h`.
+- New topic constant `topics::SEMANTIC_VOXELS = "/semantic_voxels"` with Zenoh-key mapping to `drone/perception/voxels` in `ZenohMessageBus::to_key_expr()`.
+- `static_assert`ed trivially copyable + standard layout to satisfy the existing reinterpret_cast wire-serialisation contract.
+- All fields have default member initialisers — zero-init on construction, no uninitialised reads possible.
+- 16 unit tests (`test_semantic_voxels.cpp`) — default construction, `validate()` boundary cases (NaN / Inf position, out-of-range occupancy / confidence, count-over-max, bad-voxel-in-batch, ignored-past-count), topic mapping, byte round-trip integrity.
+
+**Files added:** `tests/test_semantic_voxels.cpp`
+**Files modified:** `common/ipc/include/ipc/ipc_types.h`, `common/ipc/include/ipc/zenoh_message_bus.h`, `tests/CMakeLists.txt`, `tests/TESTS.md`, `docs/design/API.md`
+
+**Why:** Epic #520 delivered PATH A component classes (SAM backend, MaskClassAssigner, MaskDepthProjector) via PRs #603 and #604 but did not include end-to-end runtime wiring — no IPC channel for the voxel stream, no P2 publisher, no P4 consumer. Scenario 33 consequently runs the same pipeline as scenario 30 (`color_contour` → depth → standard projection), the grid saturates with ghost cells within 30 s, and the drone collides with real obstacles in live UE5 runs. #608 fills the wiring gap across three PRs; this PR lands the channel and wire type first so the publisher (PR 2) and subscriber (PR 3) have something concrete to target. No publishers or subscribers yet → no runtime behaviour change on the integration branch.
+
+**Test count:** +16 new tests. Full suite: 1829 → 1845 on integration branch.
+
+---
+
+*Last updated after Improvement #86 (Issue #608 PR 1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*

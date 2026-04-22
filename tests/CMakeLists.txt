@@ -333,6 +333,9 @@ add_drone_test(test_static_obstacle_layer test_static_obstacle_layer.cpp)
 # ── IPC Validation tests (Issues #179, #181, #185) ─────────
 add_drone_test(test_ipc_validation test_ipc_validation.cpp)
 
+# ── Semantic Voxels IPC tests (Epic #520, Issue #608 PR 1) ─
+add_drone_test(test_semantic_voxels test_semantic_voxels.cpp)
+
 # ── GCS Command Handler tests (Issue #154) ─────────────────
 add_drone_test(test_gcs_command_handler test_gcs_command_handler.cpp)
 
