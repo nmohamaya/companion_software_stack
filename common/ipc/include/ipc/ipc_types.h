@@ -51,14 +51,15 @@ struct StereoFrame {
 static constexpr int MAX_DETECTED_OBJECTS = 64;
 
 enum class ObjectClass : uint8_t {
-    UNKNOWN       = 0,
-    PERSON        = 1,
-    VEHICLE_CAR   = 2,
-    VEHICLE_TRUCK = 3,
-    DRONE         = 4,
-    ANIMAL        = 5,
-    BUILDING      = 6,
-    TREE          = 7,
+    UNKNOWN            = 0,
+    PERSON             = 1,
+    VEHICLE_CAR        = 2,
+    VEHICLE_TRUCK      = 3,
+    DRONE              = 4,
+    ANIMAL             = 5,
+    BUILDING           = 6,
+    TREE               = 7,
+    GEOMETRIC_OBSTACLE = 8,
 };
 
 struct DetectedObject {

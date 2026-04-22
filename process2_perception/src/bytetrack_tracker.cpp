@@ -7,7 +7,7 @@
 #include <cmath>
 
 static_assert(drone::util::kPerClassCount ==
-                  static_cast<uint8_t>(drone::perception::ObjectClass::TREE) + 1,
+                  static_cast<uint8_t>(drone::perception::ObjectClass::GEOMETRIC_OBSTACLE) + 1,
               "kPerClassCount must match ObjectClass enum size");
 
 namespace drone::perception {

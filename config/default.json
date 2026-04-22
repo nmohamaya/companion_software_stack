@@ -67,6 +67,12 @@
                 "num_classes": 5
             }
         },
+        "detector_switcher": {
+            "_comment": "Altitude-based COCO/VisDrone dataset switching (Epic #520 E5.5)",
+            "altitude_threshold_m": 30.0,
+            "coco_model_path": "models/yolov8n-seg.onnx",
+            "visdrone_model_path": "models/yolov8n-visdrone-seg.onnx"
+        },
         "tracker": {
             "backend": "bytetrack",
             "max_age": 10,
@@ -121,6 +127,17 @@
         "semantic_projector": {
             "backend": "cpu"
         },
+        "path_a": {
+            "_comment": "PATH A — SAM + detector fusion (Epic #520). Disabled by default.",
+            "enabled": false,
+            "sam": {
+                "backend": "sam_simulated",
+                "model_path": "",
+                "input_size": 1024,
+                "num_masks": 3
+            },
+            "mask_class_iou_threshold": 0.5
+        },
         "fusion": {
             "rate_hz": 30,
             "camera_weight": 1.0,
@@ -133,7 +150,8 @@
                 "drone": 0.3,
                 "animal": 0.8,
                 "building": 10.0,
-                "tree": 6.0
+                "tree": 6.0,
+                "geometric_obstacle": 2.0
             },
             "bbox_height_noise_px": 2.5,
             "depth": {
@@ -224,9 +242,9 @@
             "max_age_ms": 500,
             "per_class": {
                 "_comment": "Per-class overrides (Epic #519). Unspecified classes use 'default'.",
-                "influence_radius_m": { "default": 5.0, "person": 3.0, "vehicle_truck": 8.0, "building": 2.0, "tree": 2.0 },
+                "influence_radius_m": { "default": 5.0, "person": 3.0, "vehicle_truck": 8.0, "building": 2.0, "tree": 2.0, "geometric_obstacle": 4.0 },
                 "repulsive_gain": { "default": 2.0, "vehicle_truck": 3.0 },
-                "min_distance_m": { "default": 2.0, "person": 3.0, "vehicle_truck": 4.0 },
+                "min_distance_m": { "default": 2.0, "person": 3.0, "vehicle_truck": 4.0, "geometric_obstacle": 3.0 },
                 "prediction_dt_s": { "default": 0.5, "building": 0.0, "tree": 0.0, "drone": 1.0 },
                 "min_confidence": { "default": 0.3 }
             }

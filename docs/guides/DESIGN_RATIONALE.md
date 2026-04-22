@@ -739,3 +739,27 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 
 **Date:** 2026-04-20 (during PR #595 review fix round)
 
+---
+
+## DR-030: YoloSegInferenceBackend — Perception-Level Factory, Not HAL Factory
+
+**Question:** `YoloSegInferenceBackend` implements `IInferenceBackend` (a HAL interface). Should it be registered in `hal_factory.h::create_inference_backend()` like `SimulatedSAMBackend`?
+
+**For HAL factory registration:**
+
+- Consistent with how other backends (simulated, SAM) are created — single factory, single config key.
+- Callers don't need to know which factory to use.
+
+**For perception-level factory (Option A):**
+
+- `YoloSegInferenceBackend` depends on `perception/detector_class_maps.h` → `perception/types.h`, which live in `process2_perception/`. The HAL factory is in `common/hal/` and can't include process-level headers without creating an upward dependency.
+- The .cpp lives in `process2_perception/src/` — only compiled for P2. Other processes including `hal_factory.h` would get linker errors.
+- `OpenCvYoloDetector` (the existing YOLO detector) follows the same pattern: it lives in P2, not in the HAL factory. The HAL factory creates generic/simulated backends; perception-specific implementations are instantiated at the process level.
+- Moving `DetectorDataset` and class-mapping functions to `common/` would couple the HAL layer to perception-domain concepts (COCO class indices, VisDrone dataset specifics) — violating the abstraction boundary.
+
+**Decision:** Keep `YoloSegInferenceBackend` in `process2_perception/`. P2's main (or a thin perception-level factory) selects between `YoloSegInferenceBackend` and the generic HAL backends based on config. This matches the existing `OpenCvYoloDetector` pattern and preserves the HAL/perception layering.
+
+**Revisit when:** If multiple processes need to create YOLOv8-seg backends, or if `detector_class_maps.h` is refactored into `common/`.
+
+**Date:** 2026-04-22 (Epic #520, E5.2 implementation)
+
