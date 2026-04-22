@@ -9,7 +9,9 @@
         "cube_*":    { "class_id": 100, "class_name": "obstacle" },
         "panel_*":   { "class_id": 100, "class_name": "obstacle" },
         "pillar_*":  { "class_id": 100, "class_name": "obstacle" },
-        "wall_*":    { "class_id": 100, "class_name": "obstacle" }
+        "wall_*":    { "class_id": 100, "class_name": "obstacle" },
+        "couch_*":   { "class_id": 57,  "class_name": "couch" },
+        "bush_*":    { "class_id": 58,  "class_name": "potted plant" }
     },
     "scenario": {
         "name": "non_coco_obstacles",
@@ -149,6 +151,7 @@
                 "promotion_hits": 10,
                 "max_static_cells": 500
             },
+            "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",
             "static_obstacles": [],
             "geofence": {
                 "enabled": false
@@ -211,6 +214,20 @@
                 "_comment": "SimulatedSAMBackend was instantiated."
             },
             {
+                "name": "Radar first scan",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[CosysRadar\\] First scan: \\d+ detections",
+                "min_matches": 1,
+                "_comment": "CosysRadar backend successfully polled LiDAR data at least once."
+            },
+            {
+                "name": "MaskClassAssigner active",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[MaskClassAssigner\\]|assigned_class=GEOMETRIC_OBSTACLE|assigned_class=",
+                "min_matches": 1,
+                "_comment": "MaskClassAssigner fused detector classes with SAM masks."
+            },
+            {
                 "name": "Detector detections (non-zero)",
                 "path": "drone_logs/*.log",
                 "pattern": "\\[(OpenCvYoloDetector|ColorContourDetector)\\].*detections=[1-9]",
@@ -230,6 +247,13 @@
                 "pattern": "(\\[D\\*Lite\\].*occupied=[1-9])|(\\[PotentialField.*corrected)",
                 "min_matches": 1,
                 "_comment": "Planner or avoider reacted to obstacles."
+            },
+            {
+                "name": "VIO remained NOMINAL",
+                "path": "drone_logs/*.log",
+                "pattern": "health=DEGRADED",
+                "min_matches": 0,
+                "_comment": "Inverse check: zero DEGRADED events (Cosys ground-truth VIO should stay green)."
             },
             {
                 "name": "Mission completed (LANDED)",

@@ -197,6 +197,23 @@ TEST_F(MaskDepthProjectorTest, MaskSamplingProducesMultipleVoxels) {
     EXPECT_EQ(result.value().size(), 16u);
 }
 
+TEST_F(MaskDepthProjectorTest, UnmappedCocoClassProducesUnknown) {
+    MaskDepthProjector mdp(projector_);
+    auto               mask = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    // COCO class 1 = bicycle → coco_to_object_class returns UNKNOWN
+    auto det   = make_detector_output(280.0f, 200.0f, 80.0f, 80.0f, 1, 0.85f);
+    auto depth = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({mask}, {det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+
+    const auto& updates = result.value();
+    EXPECT_FALSE(updates.empty());
+    for (const auto& vu : updates) {
+        EXPECT_EQ(vu.semantic_label, static_cast<uint8_t>(ObjectClass::UNKNOWN));
+    }
+}
+
 TEST(MaskDepthProjectorBasic, IouThresholdAccessor) {
     CpuSemanticProjector proj;
     MaskDepthProjector   mdp(proj, 0.75f);
@@ -207,4 +224,13 @@ TEST(MaskDepthProjectorBasic, DefaultIouThreshold) {
     CpuSemanticProjector proj;
     MaskDepthProjector   mdp(proj);
     EXPECT_FLOAT_EQ(mdp.iou_threshold(), 0.5f);
+}
+
+TEST(MaskDepthProjectorBasic, IouThresholdClampedToRange) {
+    CpuSemanticProjector proj;
+    MaskDepthProjector   low(proj, -1.0f);
+    EXPECT_FLOAT_EQ(low.iou_threshold(), 0.01f);
+
+    MaskDepthProjector high(proj, 5.0f);
+    EXPECT_FLOAT_EQ(high.iou_threshold(), 1.0f);
 }
