@@ -18,14 +18,21 @@
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
+#include "util/per_class_config.h"
+#include "util/result.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <limits>
 #include <string>
 
 namespace drone::planner {
+
+static_assert(drone::util::kPerClassCount ==
+                  static_cast<uint8_t>(drone::ipc::ObjectClass::TREE) + 1,
+              "kPerClassCount must match ObjectClass enum size");
 
 /// Configuration for the 3D obstacle avoider.
 struct ObstacleAvoider3DConfig {
@@ -46,15 +53,29 @@ struct ObstacleAvoider3DConfig {
     // Per-obstacle INFO log when its contribution exceeds ~0.5 m/s.  Gated so
     // scenarios that want quiet avoider output can disable it (Issue #503).
     bool log_corrections = true;
+
+    // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
+    // Zero-initialized here; the ObstacleAvoider3D constructor fills them
+    // from the global scalars above, then the Config-driven constructor
+    // overwrites with per-class values from JSON.
+    std::array<float, drone::util::kPerClassCount> influence_radius_per_class{};
+    std::array<float, drone::util::kPerClassCount> repulsive_gain_per_class{};
+    std::array<float, drone::util::kPerClassCount> min_distance_per_class{};
+    std::array<float, drone::util::kPerClassCount> prediction_dt_per_class{};
+    std::array<float, drone::util::kPerClassCount> min_confidence_per_class{};
 };
 
 class ObstacleAvoider3D final : public IObstacleAvoider {
 public:
-    explicit ObstacleAvoider3D(const ObstacleAvoider3DConfig& config = {}) : config_(config) {}
+    explicit ObstacleAvoider3D(const ObstacleAvoider3DConfig& config = {}) : config_(config) {
+        sync_per_class_from_globals();
+    }
 
     /// Convenience constructor with influence radius and repulsive gain.
     ObstacleAvoider3D(float influence_radius, float repulsive_gain)
-        : config_{influence_radius, repulsive_gain} {}
+        : config_{influence_radius, repulsive_gain} {
+        sync_per_class_from_globals();
+    }
 
     /// Config-driven constructor — reads all avoider params from drone::Config.
     explicit ObstacleAvoider3D(const drone::Config& cfg) {
@@ -100,6 +121,19 @@ public:
         config_.log_corrections =
             cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::LOG_CORRECTIONS,
                           config_.log_corrections);
+
+        // Per-class overrides — fall back to the global scalar loaded above.
+        namespace oa                       = drone::cfg_key::mission_planner::obstacle_avoidance;
+        config_.influence_radius_per_class = drone::util::load_per_class<float>(
+            cfg, oa::PER_CLASS_INFLUENCE_RADIUS_M, config_.influence_radius_m);
+        config_.repulsive_gain_per_class = drone::util::load_per_class<float>(
+            cfg, oa::PER_CLASS_REPULSIVE_GAIN, config_.repulsive_gain);
+        config_.min_distance_per_class = drone::util::load_per_class<float>(
+            cfg, oa::PER_CLASS_MIN_DISTANCE_M, config_.min_distance_m);
+        config_.prediction_dt_per_class = drone::util::load_per_class<float>(
+            cfg, oa::PER_CLASS_PREDICTION_DT_S, config_.prediction_dt_s);
+        config_.min_confidence_per_class = drone::util::load_per_class<float>(
+            cfg, oa::PER_CLASS_MIN_CONFIDENCE, config_.min_confidence);
     }
 
     drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd&      planned,
@@ -138,13 +172,17 @@ public:
 
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
-            if (obj.confidence < config_.min_confidence) continue;
+            const auto  ci  = static_cast<uint8_t>(obj.class_id);
+            if (ci >= drone::util::kPerClassCount) continue;
+
+            if (obj.confidence < config_.min_confidence_per_class[ci]) continue;
             ++considered;
 
             // Predicted object position (if velocity is available)
-            float ox = obj.position_x + obj.velocity_x * config_.prediction_dt_s;
-            float oy = obj.position_y + obj.velocity_y * config_.prediction_dt_s;
-            float oz = obj.position_z + obj.velocity_z * config_.prediction_dt_s;
+            const float pred_dt = config_.prediction_dt_per_class[ci];
+            float       ox      = obj.position_x + obj.velocity_x * pred_dt;
+            float       oy      = obj.position_y + obj.velocity_y * pred_dt;
+            float       oz      = obj.position_z + obj.velocity_z * pred_dt;
 
             // Relative position from drone to obstacle
             float dx = ox - drone_x;
@@ -153,11 +191,11 @@ public:
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-            if (dist < config_.influence_radius_m && dist > 0.01f) {
+            if (dist < config_.influence_radius_per_class[ci] && dist > 0.01f) {
                 ++active;
                 if (dist < min_active_dist) min_active_dist = dist;
                 // Inverse-square repulsive force (decays with distance)
-                float repulsion = config_.repulsive_gain / (dist * dist);
+                float repulsion = config_.repulsive_gain_per_class[ci] / (dist * dist);
 
                 // Per-obstacle contribution vector (so we can log its magnitude).
                 const float cx = -(dx / dist) * repulsion;
@@ -179,9 +217,9 @@ public:
                 if (config_.log_corrections) {
                     const float cmag = std::sqrt(cx * cx + cy * cy + cz * cz);
                     if (cmag > 0.5f) {
-                        DRONE_LOG_INFO("[Avoider] obstacle d={:.1f}m rep={:.2f} |c|={:.2f}m/s at "
-                                       "({:.1f},{:.1f},{:.1f})",
-                                       dist, repulsion, cmag, ox, oy, oz);
+                        DRONE_LOG_DEBUG("[Avoider] obstacle d={:.1f}m rep={:.2f} |c|={:.2f}m/s "
+                                        "at ({:.1f},{:.1f},{:.1f})",
+                                        dist, repulsion, cmag, ox, oy, oz);
                     }
                 }
             }
@@ -299,7 +337,23 @@ public:
     /// Exposed for tests and diagnostics.
     [[nodiscard]] bool close_regime_active() const { return close_regime_active_; }
 
+    /// Mutable config access — for tests that need per-class overrides
+    /// after construction (the constructor fills per-class arrays from
+    /// the global scalars, so tests must override after).
+    ObstacleAvoider3DConfig& mutable_config() { return config_; }
+
 private:
+    // Fill all per-class arrays from their corresponding global scalar.
+    // Called once at construction so legacy configs that only set globals
+    // propagate correctly to the per-class arrays.
+    void sync_per_class_from_globals() {
+        config_.influence_radius_per_class.fill(config_.influence_radius_m);
+        config_.repulsive_gain_per_class.fill(config_.repulsive_gain);
+        config_.min_distance_per_class.fill(config_.min_distance_m);
+        config_.prediction_dt_per_class.fill(config_.prediction_dt_s);
+        config_.min_confidence_per_class.fill(config_.min_confidence);
+    }
+
     ObstacleAvoider3DConfig config_;
     // Path-aware bypass hysteresis state (Issue #503).
     // Enters when closest obstacle < min_distance_m; exits when it rises
@@ -314,16 +368,18 @@ private:
 // is fully visible — avoids circular-include issues.
 namespace drone::planner {
 
-inline std::unique_ptr<IObstacleAvoider> create_obstacle_avoider(
+[[nodiscard]] inline drone::util::Result<std::unique_ptr<IObstacleAvoider>> create_obstacle_avoider(
     const std::string& backend = "potential_field_3d", float influence_radius = 5.0f,
     float repulsive_gain = 2.0f, const drone::Config* cfg = nullptr) {
+    using R = drone::util::Result<std::unique_ptr<IObstacleAvoider>>;
     if (backend == "3d" || backend == "obstacle_avoider_3d" || backend == "potential_field_3d") {
         if (cfg) {
-            return std::make_unique<ObstacleAvoider3D>(*cfg);
+            return R::ok(std::make_unique<ObstacleAvoider3D>(*cfg));
         }
-        return std::make_unique<ObstacleAvoider3D>(influence_radius, repulsive_gain);
+        return R::ok(std::make_unique<ObstacleAvoider3D>(influence_radius, repulsive_gain));
     }
-    throw std::runtime_error("Unknown obstacle avoider: " + backend);
+    return R::err(drone::util::Error(drone::util::ErrorCode::InvalidValue,
+                                     "Unknown obstacle avoider: " + backend));
 }
 
 }  // namespace drone::planner

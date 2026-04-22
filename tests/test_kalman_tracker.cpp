@@ -208,3 +208,34 @@ TEST(HungarianSolverTest, MoreColsThanRows) {
     EXPECT_DOUBLE_EQ(result.total_cost, 3.0);
     EXPECT_EQ(result.unmatched_cols.size(), 1u);  // col 0 unmatched
 }
+
+// ═══════════════════════════════════════════════════════════
+// Motion model tests (Epic #519)
+// ═══════════════════════════════════════════════════════════
+
+TEST(KalmanBoxTrackerTest, MotionModelFromString) {
+    EXPECT_EQ(motion_model_from_string("constant_velocity"), MotionModel::CONSTANT_VELOCITY);
+    EXPECT_EQ(motion_model_from_string("constant_acceleration"),
+              MotionModel::CONSTANT_ACCELERATION);
+    EXPECT_EQ(motion_model_from_string("unknown_model"), MotionModel::CONSTANT_VELOCITY);
+    EXPECT_EQ(motion_model_from_string(""), MotionModel::CONSTANT_VELOCITY);
+}
+
+TEST(KalmanBoxTrackerTest, ConstantAccelerationHigherVelocityNoise) {
+    Detection2D det{100, 200, 50, 80, 0.9f, ObjectClass::DRONE, 0, 0};
+
+    KalmanBoxTracker cv_tracker(det, 1, MotionModel::CONSTANT_VELOCITY);
+    KalmanBoxTracker ca_tracker(det, 2, MotionModel::CONSTANT_ACCELERATION);
+
+    // CA model uses 10x higher velocity process noise (0.1 vs 0.01).
+    EXPECT_FLOAT_EQ(cv_tracker.process_noise_velocity(), 0.01f);
+    EXPECT_FLOAT_EQ(ca_tracker.process_noise_velocity(), 0.1f);
+    EXPECT_GT(ca_tracker.process_noise_velocity(), cv_tracker.process_noise_velocity());
+}
+
+TEST(KalmanBoxTrackerTest, DefaultMotionModelIsConstantVelocity) {
+    Detection2D      det{100, 200, 50, 80, 0.9f, ObjectClass::PERSON, 0, 0};
+    KalmanBoxTracker tracker(det, 1);
+    // Default model is CONSTANT_VELOCITY — verify via process noise.
+    EXPECT_FLOAT_EQ(tracker.process_noise_velocity(), 0.01f);
+}

@@ -339,3 +339,51 @@ TEST_F(ConfigValidatorTest, CustomRuleFails) {
     EXPECT_EQ(r.error().size(), 1u);
     EXPECT_NE(r.error()[0].find("battery_crit must be less than battery_warn"), std::string::npos);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Per-class section validation (Epic #519)
+// ���═══��══════════════════════════════════════════════════════
+
+TEST_F(ConfigValidatorTest, PerClassSectionValidPasses) {
+    load_json(R"({
+        "per_class": {
+            "influence": { "default": 5.0, "person": 3.0, "drone": 4.0, "_comment": "test" }
+        }
+    })");
+    ConfigSchema s;
+    s.per_class_section("per_class.influence");
+    auto r = validate(cfg_, s);
+    EXPECT_TRUE(r.is_ok());
+}
+
+TEST_F(ConfigValidatorTest, PerClassSectionTypoRejected) {
+    load_json(R"({
+        "per_class": {
+            "influence": { "default": 5.0, "personn": 3.0 }
+        }
+    })");
+    ConfigSchema s;
+    s.per_class_section("per_class.influence");
+    auto r = validate(cfg_, s);
+    EXPECT_TRUE(r.is_err());
+    ASSERT_EQ(r.error().size(), 1u);
+    EXPECT_NE(r.error()[0].find("personn"), std::string::npos);
+}
+
+TEST_F(ConfigValidatorTest, PerClassSectionMissingIsOk) {
+    load_json(R"({ "other": 1 })");
+    ConfigSchema s;
+    s.per_class_section("per_class.influence");
+    auto r = validate(cfg_, s);
+    EXPECT_TRUE(r.is_ok());
+}
+
+TEST_F(ConfigValidatorTest, PerClassSectionCommentKeysAllowed) {
+    load_json(R"({
+        "sec": { "_comment_why": "explanation", "default": 1.0, "tree": 2.0 }
+    })");
+    ConfigSchema s;
+    s.per_class_section("sec");
+    auto r = validate(cfg_, s);
+    EXPECT_TRUE(r.is_ok());
+}

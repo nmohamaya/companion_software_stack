@@ -100,8 +100,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 6 | 216 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID+covariance depth+height priors+radar-learned heights), color contour, YOLOv8, world transform |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 220 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P2 — Perception](#p2--perception) | 6 | 219 | Kalman filter + Hungarian solver + per-class motion model, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID+covariance depth+height priors+radar-learned heights), color contour, YOLOv8, world transform |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 224 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D (+ per-class overrides) |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 53 | CPU/memory/thermal monitoring, ISysInfo abstraction, ProcessManager supervisor |
@@ -109,7 +109,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Watchdog — Thread Health Publisher](#watchdog--thread-health-publisher) | 1 | 15 | ShmThreadHealth struct, ThreadHealthPublisher bridge |
 | [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
 | [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
-| [Utility](#utility) | 5 | 147 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
+| [Utility](#utility) | 6 | 163 | Config, Result<T,E>, config validator, per-class config, JSON log sink, latency tracker |
 | [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 49 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend (covariance quality) |
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [P4 — Collision Recovery](#p4--collision-recovery) | 1 | 14 | Post-collision FSM state, waypoint skip, recovery logic |
@@ -136,7 +136,8 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — GT Emitter](#test_gt_emittercpp--13-tests) | 1 | 13 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping; review fixes: config key validation, error path coverage |
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
-| **Total** | **77 C++ + 5 shell** | **1682 (no SDK) / 1723 (+SDK) + 42 + 250+** | |
+| Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
+| **Total** | **78 C++ + 5 shell + 1 Python** | **1707 (no SDK) / 1748 (+SDK) + 42 + 29 + 250+** | |
 
 ---
 
@@ -438,16 +439,17 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ## P2 — Perception
 
-### test_kalman_tracker.cpp — 15 tests
+### test_kalman_tracker.cpp — 18 tests
 
 **What it tests:** Tracking building blocks — Kalman filter (8D state, constant
-velocity model) and O(n³) Munkres Hungarian assignment solver. These are shared
-infrastructure used by ByteTrackTracker.
+velocity model, per-class motion model) and O(n³) Munkres Hungarian assignment
+solver. These are shared infrastructure used by ByteTrackTracker.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `KalmanBoxTrackerTest` | 7 | Init from detection, predict step, update step, age increment, `is_confirmed()` after N updates, `is_stale()` after M misses, velocity initially zero |
 | `HungarianSolverTest` | 8 | Empty input, single match, perfect diagonal, max-cost gating, all-too-expensive, rectangular matrices, Munkres optimality (greedy-beats cases) |
+| `MotionModelTest` | 3 | `motion_model_from_string()` mapping, CONSTANT_ACCELERATION higher velocity noise than CONSTANT_VELOCITY, default model is CONSTANT_VELOCITY |
 
 **Key files under test:** `perception/kalman_tracker.h`
 
@@ -633,21 +635,26 @@ tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 24 tests
+### test_obstacle_avoider_3d.cpp — 29 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
-path-aware mode, Euclidean-magnitude clamp and close-regime path-aware bypass (Issue #503).
+path-aware mode, Euclidean-magnitude clamp, close-regime path-aware bypass (Issue #503),
+per-class config overrides (Epic #519), OOB class_id safety, and Result<>-based factory errors.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `ObstacleAvoider3DTest` | 7 | No objects pass-through, stale objects ignored, close object repels in XYZ, low confidence ignored, correction clamped, prediction shifts repulsion, NaN pose pass-through |
-| `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown throws |
+| `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown returns Result error |
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
 | `ObstacleAvoider3DTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
 | `ObstacleAvoider3DTest` | 4 | Path-aware mode: strips backward repulsion, preserves lateral, preserves same-direction, disabled fallback |
 | `ObstacleAvoider3DTest` | 3 | Euclidean-magnitude clamp (not per-axis), close-regime bypass pushes opposite planner, bypass hysteresis prevents flip-flop (Issue #503) |
+| `ObstacleAvoider3DTest` | 3 | Per-class influence radius (PERSON vs TRUCK at same distance), per-class confidence threshold (DRONE filtered at 0.5 when threshold=0.8), per-class prediction dt (BUILDING stationary vs DRONE aggressive prediction) (Epic #519) |
+| `ObstacleAvoider3DTest` | 1 | Config-driven constructor loads per-class from JSON |
+| `ObstacleAvoider3DTest` | 1 | OOB class_id (255) is safely skipped — no repulsion applied |
+| `ObstacleAvoider3DTest` | 1 | Config-driven per-class loading from JSON (PERSON influence=3.0, default=5.0) |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 
@@ -979,17 +986,35 @@ graph where:
 
 ---
 
-### test_config_validator.cpp — 22 tests
+### test_config_validator.cpp — 26 tests
 
 **What it tests:** `ConfigSchema` startup-time config validation with
 builder-pattern constraints. Includes real config validation test
-(`DefaultConfigPassesAllSchemas`) using absolute path resolution.
+(`DefaultConfigPassesAllSchemas`) using absolute path resolution, and
+per-class section validation (Epic #519).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `ConfigValidatorTest` | 22 | Required field missing → error, type mismatch → error, range constraint (`.range()`), one-of constraint (`.one_of()`), custom predicate (`.satisfies()`), optional fields, required sections, **default.json validates against all schemas** (absolute path via PROJECT_CONFIG_DIR), multiple errors collected in single pass, pre-built process schemas |
+| `ConfigValidatorTest` | 4 | Per-class section validation: valid section passes, typo class name ("personn") rejected, missing section OK, `_comment` keys allowed (Epic #519) |
 
-**Key files under test:** `util/config_validator.h`
+**Key files under test:** `util/config_validator.h`, `util/per_class_config.h`
+
+---
+
+### test_per_class_config.cpp — 13 tests
+
+**What it tests:** `per_class_config.h` — per-class config lookup utility (Epic #519).
+Maps JSON sections like `{ "default": 5.0, "person": 2.0 }` into `std::array<T, 8>`
+indexed by `ObjectClass` enum values.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `PerClassConfig` | 2 | `class_name_to_index()` — all 8 valid class names, invalid name returns -1 |
+| `PerClassConfig` | 8 | `load_per_class<T>()` — all classes specified, default fallback for unspecified, no default uses fallback, missing section, unknown keys collected, `_comment` keys ignored, type mismatch falls back to compiled default, string type support |
+| `PerClassConfig` | 3 | `validate_per_class_section()` — valid section clean, unknown class name detected, missing section returns empty |
+
+**Key files under test:** `util/per_class_config.h`
 
 ---
 

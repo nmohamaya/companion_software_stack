@@ -16,6 +16,26 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-21
+
+#### 12. HAL factory functions use `throw` instead of `Result<T,E>`
+
+- **Priority:** P2
+- **Category:** architecture
+- **Noticed while:** PR #599 review (Epic #519 per-class config). P4 planner/avoider factories converted in this PR; HAL factories remain.
+- **Current state:** All 7 factory functions in `common/hal/include/hal/hal_factory.h` (create_camera, create_fc_link, create_gcs_link, create_gimbal, create_imu_source, create_radar, create_depth_estimator) throw `std::runtime_error` on unknown backend strings. This is startup-only code but violates the project's `Result<T,E>` error-handling pattern.
+- **Proposed fix:** Convert all HAL factories to return `Result<std::unique_ptr<Interface>>`. Update callers in all 7 process main.cpp files and tests.
+- **When worth doing:** Standalone refactor PR — touches many files across the whole stack.
+
+#### 13. No IPC-boundary validation of `class_id` before `avoid()`
+
+- **Priority:** P3
+- **Category:** architecture (defense-in-depth)
+- **Noticed while:** PR #599 review — OOB array access via `class_id` as index into `std::array<T, 8>`.
+- **Current state:** `mission_state_tick.h` passes `DetectedObjectList` from IPC directly to `avoider.avoid()` without validating `class_id` bounds. The avoider now has an in-loop guard (`if (ci >= kPerClassCount) continue`), but defense-in-depth says validate at the system boundary too.
+- **Proposed fix:** Add a `validate()` method to `DetectedObjectList` or a free function that clamps/filters invalid class IDs before passing to downstream consumers. Log a warning when invalid IDs are received from IPC.
+- **When worth doing:** When touching IPC types or adding new consumers of DetectedObjectList.
+
 ### 2026-04-20
 
 #### 10. `COSYS_SIMULATION_ARCHITECTURE.md` — parallel to the existing Gazebo doc
