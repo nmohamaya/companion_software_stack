@@ -1,0 +1,243 @@
+{
+    "_comment": "Scenario 33: Non-COCO obstacle avoidance via PATH A (SAM + detector fusion). Exercises the full E5 pipeline: SimulatedSAMBackend generates class-agnostic masks, MaskClassAssigner fuses with detector classes, MaskDepthProjector back-projects to 3D voxels. Non-COCO objects (cubes, panels, pillars) get GEOMETRIC_OBSTACLE class. Based on scenario 30 route and scene.",
+    "_epic": "#520 E5",
+    "_issue": "#560",
+    "gt_class_map": {
+        "_comment": "Ground-truth class map. Non-COCO obstacles use custom id 100 (mapped to GEOMETRIC_OBSTACLE by PATH A). Person uses COCO class 0.",
+        "person_*":  { "class_id": 0,   "class_name": "person" },
+        "chair_*":   { "class_id": 56,  "class_name": "chair" },
+        "cube_*":    { "class_id": 100, "class_name": "obstacle" },
+        "panel_*":   { "class_id": 100, "class_name": "obstacle" },
+        "pillar_*":  { "class_id": 100, "class_name": "obstacle" },
+        "wall_*":    { "class_id": 100, "class_name": "obstacle" }
+    },
+    "scenario": {
+        "name": "non_coco_obstacles",
+        "description": "Flight through environment with non-COCO obstacles. PATH A (SAM + detector fusion) classifies unknown objects as GEOMETRIC_OBSTACLE and populates the occupancy grid for avoidance.",
+        "tier": 3,
+        "timeout_s": 180,
+        "requires_cosys_airsim": true,
+        "scene": {
+            "file": "config/scenes/cosys_static.json"
+        },
+        "backend_requirements": {
+            "video_capture.mission_cam.backend": "cosys_airsim",
+            "perception.detector.backend": "color_contour",
+            "perception.depth_estimator.backend": "depth_anything_v2",
+            "slam_vio_nav.imu_source.backend": "cosys_airsim",
+            "slam_vio_nav.depth_source.backend": "cosys_airsim",
+            "mission_planner.radar.backend": "cosys_airsim",
+            "comms.mavlink.backend": "cosys_rpc"
+        }
+    },
+    "config_overrides": {
+        "video_capture": {
+            "mission_cam": {
+                "backend": "cosys_airsim",
+                "endpoint": "127.0.0.1:41451",
+                "camera_name": "mission_cam",
+                "vehicle_name": "Drone0",
+                "width": 1280,
+                "height": 720,
+                "fps": 30,
+                "focal_length_mm": 25.0,
+                "sensor_width_mm": 4.0
+            },
+            "stereo_cam": {
+                "backend": "simulated",
+                "width": 640,
+                "height": 480,
+                "fps": 20
+            }
+        },
+        "perception": {
+            "detector": {
+                "backend": "color_contour",
+                "min_contour_area": 2000,
+                "confidence_threshold": 0.4,
+                "max_fps": 30,
+                "min_bbox_height_px": 60,
+                "max_aspect_ratio": 5.0
+            },
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "enabled": true,
+                "model_path": "models/depth_anything_v2_vits.onnx",
+                "use_cuda": true,
+                "input_height": 384,
+                "input_width": 384
+            },
+            "tracker": {
+                "backend": "bytetrack",
+                "max_age": 30,
+                "min_hits": 3
+            },
+            "fusion": {
+                "backend": "ukf",
+                "process_noise_factor": 0.05,
+                "measurement_noise_range": 0.1,
+                "measurement_noise_bearing": 0.05
+            },
+            "path_a": {
+                "_comment": "PATH A enabled — SAM-simulated masks fused with detector output. MaskDepthProjector produces GEOMETRIC_OBSTACLE voxels for non-COCO objects.",
+                "enabled": true,
+                "sam": {
+                    "backend": "sam_simulated",
+                    "model_path": "",
+                    "input_size": 1024,
+                    "num_masks": 5
+                },
+                "mask_class_iou_threshold": 0.5
+            }
+        },
+        "slam": {
+            "vio": {
+                "backend": "cosys_airsim"
+            }
+        },
+        "slam_vio_nav": {
+            "imu_source": {
+                "backend": "cosys_airsim",
+                "endpoint": "127.0.0.1:41451",
+                "imu_name": "imu",
+                "vehicle_name": "Drone0",
+                "poll_interval_ms": 50
+            },
+            "depth_source": {
+                "backend": "cosys_airsim",
+                "endpoint": "127.0.0.1:41451",
+                "camera_name": "DepthCam",
+                "vehicle_name": "Drone0"
+            }
+        },
+        "mission_planner": {
+            "takeoff_altitude_m": 5.0,
+            "acceptance_radius_m": 2.0,
+            "overshoot_proximity_factor": 5.0,
+            "cruise_speed_mps": 2.0,
+            "survey_duration_s": 0,
+            "path_planner": {
+                "backend": "dstar_lite",
+                "max_search_time_ms": 2000,
+                "max_iterations": 250000,
+                "z_band_cells": 0,
+                "replan_interval_s": 0.5,
+                "look_ahead_m": 0.0,
+                "smoothing_alpha": 0.5,
+                "yaw_towards_travel": true,
+                "yaw_smoothing_rate": 0.3,
+                "snap_approach_bias": 0.5
+            },
+            "obstacle_avoider": {
+                "backend": "potential_field_3d"
+            },
+            "obstacle_avoidance": {
+                "min_distance_m": 2.5,
+                "influence_radius_m": 10.0,
+                "repulsive_gain": 3.0,
+                "max_correction_mps": 3.5,
+                "vertical_gain": 0.0,
+                "path_aware": true,
+                "path_aware_bypass_hysteresis_m": 0.5,
+                "log_corrections": true
+            },
+            "occupancy_grid": {
+                "resolution_m": 2.0,
+                "inflation_radius_m": 2.5,
+                "dynamic_obstacle_ttl_s": 2.0,
+                "min_confidence": 0.5,
+                "promotion_hits": 10,
+                "max_static_cells": 500
+            },
+            "static_obstacles": [],
+            "geofence": {
+                "enabled": false
+            },
+            "waypoints": [
+                {
+                    "x": 0, "y": 0, "z": 5,
+                    "yaw": 1.57, "speed": 2.0, "payload_trigger": false,
+                    "_comment": "Start — takeoff point."
+                },
+                {
+                    "x": 10, "y": 20, "z": 5,
+                    "yaw": 1.57, "speed": 2.0, "payload_trigger": false,
+                    "_comment": "Enter obstacle cluster."
+                },
+                {
+                    "x": 25, "y": 12, "z": 5,
+                    "yaw": -0.5, "speed": 2.0, "payload_trigger": false,
+                    "_comment": "Fly between pillar and wall — forces tight avoidance."
+                },
+                {
+                    "x": 10, "y": 2, "z": 5,
+                    "yaw": -2.36, "speed": 2.0, "payload_trigger": false,
+                    "_comment": "Return-leg obstacles."
+                },
+                {
+                    "x": 0, "y": 0, "z": 5,
+                    "yaw": 0, "speed": 2.0, "payload_trigger": false,
+                    "_comment": "Return home."
+                }
+            ]
+        },
+        "comms": {
+            "mavlink": {
+                "backend": "cosys_rpc",
+                "heartbeat_rate_hz": 1,
+                "timeout_ms": 8000
+            }
+        },
+        "system_monitor": {
+            "enable_thermal_monitoring": true,
+            "enable_memory_monitoring": true,
+            "watchdog_interval_ms": 500
+        }
+    },
+    "validation": {
+        "checks": [
+            {
+                "name": "PATH A enabled",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[MaskDepthProjector\\]|\\[PATH_A\\]|path_a.*enabled.*true",
+                "min_matches": 1,
+                "_comment": "PATH A pipeline was activated."
+            },
+            {
+                "name": "SAM backend running",
+                "path": "drone_logs/*.log",
+                "pattern": "SimulatedSAMBackend",
+                "min_matches": 1,
+                "_comment": "SimulatedSAMBackend was instantiated."
+            },
+            {
+                "name": "Detector detections (non-zero)",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[(OpenCvYoloDetector|ColorContourDetector)\\].*detections=[1-9]",
+                "min_matches": 10,
+                "_comment": "Detector fired on the spawned/environment objects."
+            },
+            {
+                "name": "Occupancy grid populated",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[OccupancyGrid\\].*(promoted|occupied)=[1-9]",
+                "min_matches": 1,
+                "_comment": "At least one cell promoted from perception output."
+            },
+            {
+                "name": "Avoider sees obstacles",
+                "path": "drone_logs/*.log",
+                "pattern": "(\\[D\\*Lite\\].*occupied=[1-9])|(\\[PotentialField.*corrected)",
+                "min_matches": 1,
+                "_comment": "Planner or avoider reacted to obstacles."
+            },
+            {
+                "name": "Mission completed (LANDED)",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[FSM\\].*LANDED",
+                "min_matches": 1,
+                "_comment": "FSM reached LANDED — drone navigated the full waypoint loop."
+            }
+        ]
+    }
+}
