@@ -78,7 +78,7 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
             auto dets = [&]() {
                 drone::util::ScopedDiagTimer              timer(diag, "Detect");
                 std::optional<drone::util::ScopedLatency> bench_detect;
-                // See DR-022 (docs/guides/DESIGN_RATIONALE.md): mutex-protected
+                // See DR-022 (docs/tracking/DESIGN_RATIONALE.md): mutex-protected
                 // profiler on a flight-critical thread is accepted because
                 // recorders share priority, mutex hold is <100ns dominated by
                 // the detector's ms-scale work, and gated by benchmark.profiler.enabled.
@@ -700,7 +700,7 @@ int main(int argc, char* argv[]) {
     //
     // DR-022 documents the priority-inversion / measurement-contamination
     // analysis that permits mutex-protected ScopedLatency calls on these
-    // flight-critical threads (see docs/guides/DESIGN_RATIONALE.md).
+    // flight-critical threads (see docs/tracking/DESIGN_RATIONALE.md).
     const bool benchmark_profiler_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::benchmark::PROFILER_ENABLED, false);
     std::optional<drone::util::LatencyProfiler> benchmark_profiler;
