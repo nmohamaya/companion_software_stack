@@ -90,9 +90,9 @@ public:
 #else
         const int step = (stride > 0) ? static_cast<int>(stride)
                                       : static_cast<int>(width * channels);
-        cv::Mat rgb(static_cast<int>(height), static_cast<int>(width),
+        cv::Mat   rgb(static_cast<int>(height), static_cast<int>(width),
                     channels == 3 ? CV_8UC3 : (channels == 4 ? CV_8UC4 : CV_8UC1),
-                    const_cast<uint8_t*>(frame_data), static_cast<size_t>(step));
+                      const_cast<uint8_t*>(frame_data), static_cast<size_t>(step));
 
         cv::Mat gray;
         if (channels == 1) {
@@ -122,8 +122,8 @@ public:
         cv::Canny(blurred, edges, canny_low_, canny_high_);
 
         if (dilate_ksize_ > 1) {
-            cv::Mat kernel = cv::getStructuringElement(
-                cv::MORPH_ELLIPSE, cv::Size(dilate_ksize_, dilate_ksize_));
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE,
+                                                       cv::Size(dilate_ksize_, dilate_ksize_));
             cv::dilate(edges, edges, kernel);
         }
 
@@ -156,8 +156,8 @@ public:
         // map without a scale factor on the downstream side.
         output.detections.reserve(kept.size());
         for (size_t rank = 0; rank < kept.size(); ++rank) {
-            const auto& ic         = kept[rank];
-            const auto& contour    = contours[ic.idx];
+            const auto&    ic      = kept[rank];
+            const auto&    contour = contours[ic.idx];
             const cv::Rect r_small = cv::boundingRect(contour);
 
             InferenceDetection det;
@@ -175,8 +175,8 @@ public:
             // to full resolution. cv::resize with INTER_NEAREST keeps the
             // mask binary (0/255).
             cv::Mat mask_small(small.rows, small.cols, CV_8UC1, cv::Scalar(0));
-            cv::drawContours(mask_small, contours, static_cast<int>(ic.idx),
-                             cv::Scalar(255), cv::FILLED);
+            cv::drawContours(mask_small, contours, static_cast<int>(ic.idx), cv::Scalar(255),
+                             cv::FILLED);
 
             if (downsample_ > 1) {
                 cv::Mat mask_full(static_cast<int>(height), static_cast<int>(width), CV_8UC1,

@@ -55,10 +55,9 @@ public:
     FastSamInferenceBackend() = default;
 
     FastSamInferenceBackend(const drone::Config& cfg, const std::string& section) {
-        model_path_           = cfg.get<std::string>(section + ".model_path",
-                                                     "models/fastsam_s.onnx");
-        confidence_threshold_ = std::clamp(
-            cfg.get<float>(section + ".confidence_threshold", 0.40f), 0.0f, 1.0f);
+        model_path_ = cfg.get<std::string>(section + ".model_path", "models/fastsam_s.onnx");
+        confidence_threshold_ = std::clamp(cfg.get<float>(section + ".confidence_threshold", 0.40f),
+                                           0.0f, 1.0f);
         nms_threshold_ = std::clamp(cfg.get<float>(section + ".nms_threshold", 0.45f), 0.0f, 1.0f);
         input_size_    = std::clamp(cfg.get<int>(section + ".input_size", 1024), kMinInputSize,
                                     kMaxInputSize);
@@ -147,7 +146,7 @@ public:
         std::vector<float>              confidences;
         std::vector<cv::Rect>           boxes;
         std::vector<std::vector<float>> mask_coeffs_all;
-        const auto reserve_count = static_cast<size_t>(std::min(cols, 512));
+        const auto                      reserve_count = static_cast<size_t>(std::min(cols, 512));
         confidences.reserve(reserve_count);
         boxes.reserve(reserve_count);
         mask_coeffs_all.reserve(reserve_count);
@@ -209,12 +208,12 @@ public:
                                         static_cast<float>(input_size_);
             const int rx = std::max(0, static_cast<int>(boxes[idx].x / x_scale * proto_scale_x));
             const int ry = std::max(0, static_cast<int>(boxes[idx].y / y_scale * proto_scale_y));
-            const int rw = std::min(mask_w - rx, std::max(1, static_cast<int>(boxes[idx].width /
-                                                                              x_scale *
-                                                                              proto_scale_x)));
-            const int rh = std::min(mask_h - ry, std::max(1, static_cast<int>(boxes[idx].height /
-                                                                              y_scale *
-                                                                              proto_scale_y)));
+            const int rw =
+                std::min(mask_w - rx,
+                         std::max(1, static_cast<int>(boxes[idx].width / x_scale * proto_scale_x)));
+            const int rh = std::min(
+                mask_h - ry,
+                std::max(1, static_cast<int>(boxes[idx].height / y_scale * proto_scale_y)));
             cv::Mat mask_crop = mask_raw(cv::Rect(rx, ry, rw, rh));
 
             const int bbox_px_w = std::max(1, static_cast<int>(det.bbox.w));

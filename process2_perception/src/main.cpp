@@ -932,7 +932,7 @@ int main(int argc, char* argv[]) {
             // is "sam_simulated" (scenario 33's current setting).
             const std::string sam_section =
                 std::string(drone::cfg_key::perception::path_a::SECTION) + ".sam";
-            sam_backend      = drone::hal::create_inference_backend(ctx.cfg, sam_section);
+            sam_backend = drone::hal::create_inference_backend(ctx.cfg, sam_section);
             const std::string sam_model_path =
                 ctx.cfg.get<std::string>(drone::cfg_key::perception::path_a::SAM_MODEL_PATH, "");
             const int sam_input_size =

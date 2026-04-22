@@ -125,9 +125,8 @@ private:
         // original code assumed only convention (1), silently filtered almost
         // every sample when convention (2) backends were used (~99% probe
         // rejection), producing 1-2 voxels/frame instead of ~10-50.
-        const bool mask_is_full_image =
-            static_cast<float>(det.mask_width) >= det.bbox.w * 1.5f &&
-            static_cast<float>(det.mask_height) >= det.bbox.h * 1.5f;
+        const bool mask_is_full_image = static_cast<float>(det.mask_width) >= det.bbox.w * 1.5f &&
+                                        static_cast<float>(det.mask_height) >= det.bbox.h * 1.5f;
 
         for (int gy = 0; gy < GRID; ++gy) {
             for (int gx = 0; gx < GRID; ++gx) {
@@ -142,14 +141,12 @@ private:
                     my = static_cast<uint32_t>(
                         std::clamp(v, 0.0f, static_cast<float>(det.mask_height - 1)));
                 } else {
-                    mx = static_cast<uint32_t>(std::clamp((u - det.bbox.x) / det.bbox.w *
-                                                              static_cast<float>(det.mask_width),
-                                                          0.0f,
-                                                          static_cast<float>(det.mask_width - 1)));
-                    my = static_cast<uint32_t>(std::clamp((v - det.bbox.y) / det.bbox.h *
-                                                              static_cast<float>(det.mask_height),
-                                                          0.0f,
-                                                          static_cast<float>(det.mask_height - 1)));
+                    mx = static_cast<uint32_t>(std::clamp(
+                        (u - det.bbox.x) / det.bbox.w * static_cast<float>(det.mask_width), 0.0f,
+                        static_cast<float>(det.mask_width - 1)));
+                    my = static_cast<uint32_t>(std::clamp(
+                        (v - det.bbox.y) / det.bbox.h * static_cast<float>(det.mask_height), 0.0f,
+                        static_cast<float>(det.mask_height - 1)));
                 }
                 if (det.mask[my * det.mask_width + mx] < 128) continue;
 

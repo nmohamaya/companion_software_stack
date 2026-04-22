@@ -17,6 +17,8 @@
 #pragma once
 
 #include "hal/cpu_semantic_projector.h"
+#include "hal/edge_contour_sam_backend.h"
+#include "hal/fastsam_inference_backend.h"
 #include "hal/icamera.h"
 #include "hal/ievent_camera.h"
 #include "hal/ifc_link.h"
@@ -33,8 +35,6 @@
 #include "hal/simulated_gcs_link.h"
 #include "hal/simulated_gimbal.h"
 #include "hal/simulated_imu.h"
-#include "hal/edge_contour_sam_backend.h"
-#include "hal/fastsam_inference_backend.h"
 #include "hal/simulated_inference_backend.h"
 #include "hal/simulated_radar.h"
 #include "hal/simulated_sam_backend.h"
