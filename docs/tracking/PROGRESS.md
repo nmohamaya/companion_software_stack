@@ -3335,11 +3335,15 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 **What:**
 
-- New IPC wire types `SemanticVoxel` (32 B, world-frame voxel with occupancy, confidence, `ObjectClass` label, source-frame timestamp) and `SemanticVoxelBatch` (header + fixed 1024-slot array, ~32 KB) in `common/ipc/ipc_types.h`.
+- New IPC wire types `SemanticVoxel` (32 B, world-frame voxel with occupancy, confidence, `ObjectClass` label, source-frame timestamp) and `SemanticVoxelBatch` (header + fixed 1024-slot array, 32 832 B after `alignas(64)` tail pad) in `common/ipc/ipc_types.h`.
 - New topic constant `topics::SEMANTIC_VOXELS = "/semantic_voxels"` with Zenoh-key mapping to `drone/perception/voxels` in `ZenohMessageBus::to_key_expr()`.
-- `static_assert`ed trivially copyable + standard layout to satisfy the existing reinterpret_cast wire-serialisation contract.
+- `static_assert`ed trivially copyable + standard layout + per-field `offsetof` + computed `sizeof` — any future field reorder / resize fails the build.
+- `alignas(64)` on `SemanticVoxelBatch` (matches `Pose` / `FaultOverrides` precedent) keeps the 24 B header cache-line-isolated from the voxel array.
+- `validate()` enforces NaN / Inf rejection on positions, `[0, 1]` bounds on occupancy / confidence, and `ObjectClass` enum-range on `semantic_label` — Zenoh delivers raw bytes so the enum check stops an out-of-range byte from reaching a downstream `switch` statement.
 - All fields have default member initialisers — zero-init on construction, no uninitialised reads possible.
-- 16 unit tests (`test_semantic_voxels.cpp`) — default construction, `validate()` boundary cases (NaN / Inf position, out-of-range occupancy / confidence, count-over-max, bad-voxel-in-batch, ignored-past-count), topic mapping, byte round-trip integrity.
+- Per-batch cap comment explains the `MAX_VOXELS_PER_BATCH = 1024` rationale (one Zenoh SHM packet; publisher must truncate by confidence or split if exceeded; sized for 5–15 SAM masks × sparse depth sampling; revisit after first live PR 2 measurement).
+- In-process (`hal::VoxelUpdate`) vs. on-wire (`SemanticVoxel`) duality documented inline.
+- 20 unit tests (`test_semantic_voxels.cpp`) — default construction, `validate()` boundary cases (NaN / Inf position, `[0, 1]` exact-boundary accepts for occupancy / confidence, out-of-range rejections, `ObjectClass` byte ≥ 9 reject, `num_voxels > MAX` reject, full-batch `num_voxels = MAX` accept, bad-voxel-in-batch reject, bad-voxel-at-last-slot reject, empty-batch-with-garbage-tail accept, voxels-past-count ignored), topic mapping, byte round-trip via `std::copy` on byte iterators (CLAUDE.md: prefer `std::copy` over `memcpy`).
 
 **Files added:** `tests/test_semantic_voxels.cpp`
 **Files modified:** `common/ipc/include/ipc/ipc_types.h`, `common/ipc/include/ipc/zenoh_message_bus.h`, `tests/CMakeLists.txt`, `tests/TESTS.md`, `docs/design/API.md`

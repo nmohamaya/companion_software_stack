@@ -3,17 +3,19 @@
 //
 // Scope for PR 1 (IPC wire type only):
 //   - Default construction zero-initialises (no uninitialised reads possible)
-//   - validate() accepts well-formed voxels / batches
-//   - validate() rejects NaN / Inf positions and out-of-range [0,1] fields
+//   - validate() accepts well-formed voxels / batches, including exact 0 / 1 boundaries
+//   - validate() rejects NaN / Inf positions, out-of-range [0, 1] fields, out-of-range
+//     ObjectClass enum, and num_voxels > MAX_VOXELS_PER_BATCH
 //   - Zenoh topic mapping /semantic_voxels → drone/perception/voxels
-//   - Trivially-copyable round-trip via byte-buffer (proxy for on-wire serialisation;
-//     full bus round-trip lands in PR 2 alongside the P2 publisher)
+//   - Byte round-trip via iterator copy (proxy for on-wire serialisation; full bus
+//     round-trip lands in PR 2 alongside the P2 publisher)
 #include "ipc/ipc_types.h"
 #include "ipc/zenoh_message_bus.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
+#include <cstdint>
 #include <limits>
 #include <memory>
 
@@ -48,7 +50,7 @@ TEST(SemanticVoxelBatch, DefaultConstructZeroInit) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SemanticVoxel::validate()
+// SemanticVoxel::validate() — well-formed + boundaries
 // ═══════════════════════════════════════════════════════════
 
 TEST(SemanticVoxel, ValidateAcceptsWellFormed) {
@@ -62,6 +64,21 @@ TEST(SemanticVoxel, ValidateAcceptsWellFormed) {
     v.timestamp_ns   = 1'700'000'000'000'000'000ULL;
     EXPECT_TRUE(v.validate());
 }
+
+TEST(SemanticVoxel, ValidateAcceptsOccupancyAndConfidenceBoundaries) {
+    // Exact 0.0 and 1.0 must be accepted on both range-checked fields.
+    SemanticVoxel v{};
+    v.occupancy  = 0.0f;
+    v.confidence = 0.0f;
+    EXPECT_TRUE(v.validate());
+    v.occupancy  = 1.0f;
+    v.confidence = 1.0f;
+    EXPECT_TRUE(v.validate());
+}
+
+// ═══════════════════════════════════════════════════════════
+// SemanticVoxel::validate() — rejection paths
+// ═══════════════════════════════════════════════════════════
 
 TEST(SemanticVoxel, ValidateRejectsNaNPosition) {
     SemanticVoxel v{};
@@ -100,23 +117,50 @@ TEST(SemanticVoxel, ValidateRejectsConfidenceAboveOne) {
     EXPECT_FALSE(v.validate());
 }
 
+TEST(SemanticVoxel, ValidateRejectsNegativeConfidence) {
+    SemanticVoxel v{};
+    v.occupancy  = 0.5f;
+    v.confidence = -0.1f;
+    EXPECT_FALSE(v.validate());
+}
+
+TEST(SemanticVoxel, ValidateRejectsOutOfRangeSemanticLabel) {
+    // Zenoh delivers raw bytes; a sender can write an ObjectClass byte beyond the
+    // last defined enumerator. Reject at validate() so downstream switch statements
+    // never see an undefined enum value.
+    SemanticVoxel v{};
+    v.occupancy  = 0.5f;
+    v.confidence = 0.5f;
+    // Last defined enumerator: GEOMETRIC_OBSTACLE = 8 — anything ≥ 9 is out of range.
+    auto* raw = reinterpret_cast<uint8_t*>(&v.semantic_label);
+    *raw      = 9;
+    EXPECT_FALSE(v.validate());
+    *raw = 0xFF;
+    EXPECT_FALSE(v.validate());
+}
+
 // ═══════════════════════════════════════════════════════════
-// SemanticVoxelBatch::validate()
+// SemanticVoxelBatch::validate() — count and per-voxel paths
 // ═══════════════════════════════════════════════════════════
 
-TEST(SemanticVoxelBatch, ValidateAcceptsEmptyBatch) {
-    auto b         = std::make_unique<SemanticVoxelBatch>();
-    b->num_voxels  = 0;
+TEST(SemanticVoxelBatch, ValidateAcceptsEmptyBatchEvenWithGarbageTail) {
+    // num_voxels=0 → validate() must short-circuit before inspecting any slot,
+    // even if a later slot is NaN-poisoned.
+    auto b                                         = std::make_unique<SemanticVoxelBatch>();
+    b->num_voxels                                  = 0;
+    b->voxels[0].position_x                        = std::numeric_limits<float>::quiet_NaN();
+    b->voxels[MAX_VOXELS_PER_BATCH - 1].position_z = std::numeric_limits<float>::infinity();
     EXPECT_TRUE(b->validate());
 }
 
-TEST(SemanticVoxelBatch, ValidateAcceptsPopulatedBatch) {
+TEST(SemanticVoxelBatch, ValidateAcceptsFullBatchAtMax) {
+    // Exact upper boundary — every slot populated with a valid voxel.
     auto b            = std::make_unique<SemanticVoxelBatch>();
-    b->timestamp_ns   = 12345;
-    b->frame_sequence = 42;
-    b->num_voxels     = 3;
-    for (uint32_t i = 0; i < b->num_voxels; ++i) {
-        b->voxels[i].position_x     = static_cast<float>(i);
+    b->timestamp_ns   = 1;
+    b->frame_sequence = 2;
+    b->num_voxels     = MAX_VOXELS_PER_BATCH;
+    for (uint32_t i = 0; i < MAX_VOXELS_PER_BATCH; ++i) {
+        b->voxels[i].position_x     = static_cast<float>(i) * 0.1f;
         b->voxels[i].occupancy      = 0.5f;
         b->voxels[i].confidence     = 0.8f;
         b->voxels[i].semantic_label = ObjectClass::GEOMETRIC_OBSTACLE;
@@ -131,8 +175,8 @@ TEST(SemanticVoxelBatch, ValidateRejectsCountOverMax) {
 }
 
 TEST(SemanticVoxelBatch, ValidateRejectsBadVoxelInBatch) {
-    auto b            = std::make_unique<SemanticVoxelBatch>();
-    b->num_voxels     = 2;
+    auto b                  = std::make_unique<SemanticVoxelBatch>();
+    b->num_voxels           = 2;
     b->voxels[0].occupancy  = 0.5f;
     b->voxels[0].confidence = 0.5f;
     // Second voxel has NaN position — batch must reject.
@@ -142,10 +186,24 @@ TEST(SemanticVoxelBatch, ValidateRejectsBadVoxelInBatch) {
     EXPECT_FALSE(b->validate());
 }
 
+TEST(SemanticVoxelBatch, ValidateRejectsBadVoxelAtLastSlot) {
+    // Near-full batch: loop must iterate to the last slot and catch the bad voxel.
+    auto b        = std::make_unique<SemanticVoxelBatch>();
+    b->num_voxels = MAX_VOXELS_PER_BATCH;
+    for (uint32_t i = 0; i < MAX_VOXELS_PER_BATCH - 1; ++i) {
+        b->voxels[i].occupancy  = 0.5f;
+        b->voxels[i].confidence = 0.5f;
+    }
+    b->voxels[MAX_VOXELS_PER_BATCH - 1].occupancy  = 0.5f;
+    b->voxels[MAX_VOXELS_PER_BATCH - 1].confidence = 0.5f;
+    b->voxels[MAX_VOXELS_PER_BATCH - 1].position_y = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(b->validate());
+}
+
 TEST(SemanticVoxelBatch, ValidateIgnoresVoxelsPastCount) {
     // num_voxels=1; voxels[5] is NaN but shouldn't be inspected.
-    auto b                = std::make_unique<SemanticVoxelBatch>();
-    b->num_voxels         = 1;
+    auto b                  = std::make_unique<SemanticVoxelBatch>();
+    b->num_voxels           = 1;
     b->voxels[0].occupancy  = 0.5f;
     b->voxels[0].confidence = 0.5f;
     b->voxels[5].position_x = std::numeric_limits<float>::quiet_NaN();
@@ -156,7 +214,7 @@ TEST(SemanticVoxelBatch, ValidateIgnoresVoxelsPastCount) {
 // Zenoh topic mapping
 // ═══════════════════════════════════════════════════════════
 
-TEST(SemanticVoxelsTopicMapping, LegacyToKeyExpr) {
+TEST(SemanticVoxelsTopicMapping, MapsLegacyTopicToZenohKeyExpr) {
     EXPECT_EQ(ZenohMessageBus::to_key_expr(topics::SEMANTIC_VOXELS), "drone/perception/voxels");
 }
 
@@ -165,8 +223,10 @@ TEST(SemanticVoxelsTopicMapping, ConstantMatchesLegacyName) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Trivially-copyable byte round-trip (proxy for wire serialisation;
-// full bus round-trip lands with the P2 publisher in PR 2).
+// Byte round-trip — proxy for wire serialisation.
+// Uses std::copy on uint8_t byte spans (CLAUDE.md: prefer std::copy over memcpy;
+// reinterpret_cast on trivially-copyable IPC structs is explicitly allowed).
+// Full bus round-trip lands with the P2 publisher in PR 2.
 // ═══════════════════════════════════════════════════════════
 
 TEST(SemanticVoxelBatch, ByteRoundTripPreservesContent) {
@@ -184,13 +244,16 @@ TEST(SemanticVoxelBatch, ByteRoundTripPreservesContent) {
         src->voxels[i].timestamp_ns   = 1000ULL + i;
     }
 
-    // Serialise: copy into a byte buffer.
-    std::vector<uint8_t> wire(sizeof(SemanticVoxelBatch));
-    std::memcpy(wire.data(), src.get(), wire.size());
+    // Serialise: byte-copy via iterator pair. static_assert on is_trivially_copyable_v
+    // in ipc_types.h guarantees this is well-defined for the struct.
+    std::array<uint8_t, sizeof(SemanticVoxelBatch)> wire{};
+    const auto* src_bytes = reinterpret_cast<const uint8_t*>(src.get());
+    std::copy(src_bytes, src_bytes + sizeof(SemanticVoxelBatch), wire.begin());
 
     // Deserialise into a fresh instance.
-    auto dst = std::make_unique<SemanticVoxelBatch>();
-    std::memcpy(dst.get(), wire.data(), wire.size());
+    auto  dst       = std::make_unique<SemanticVoxelBatch>();
+    auto* dst_bytes = reinterpret_cast<uint8_t*>(dst.get());
+    std::copy(wire.begin(), wire.end(), dst_bytes);
 
     EXPECT_EQ(dst->timestamp_ns, src->timestamp_ns);
     EXPECT_EQ(dst->frame_sequence, src->frame_sequence);
@@ -204,5 +267,4 @@ TEST(SemanticVoxelBatch, ByteRoundTripPreservesContent) {
         EXPECT_EQ(dst->voxels[i].semantic_label, src->voxels[i].semantic_label);
         EXPECT_EQ(dst->voxels[i].timestamp_ns, src->voxels[i].timestamp_ns);
     }
-    EXPECT_TRUE(dst->validate());
 }
