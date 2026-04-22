@@ -24,9 +24,7 @@ public:
 
     // projector must outlive this object (non-owning reference).
     explicit MaskDepthProjector(hal::ISemanticProjector& projector, float iou_threshold = 0.5f)
-        : projector_(projector)
-        , assigner_(std::clamp(iou_threshold, 0.01f, 1.0f))
-        , iou_threshold_(std::clamp(iou_threshold, 0.01f, 1.0f)) {
+        : projector_(projector), assigner_(std::clamp(iou_threshold, 0.01f, 1.0f)) {
         if (iou_threshold < 0.01f || iou_threshold > 1.0f) {
             DRONE_LOG_WARN("[MaskDepthProjector] iou_threshold {:.3f} clamped to [{:.2f}, {:.2f}]",
                            iou_threshold, 0.01f, 1.0f);
@@ -62,12 +60,11 @@ public:
         return projector_.project(classified, depth, camera_pose);
     }
 
-    [[nodiscard]] float iou_threshold() const { return iou_threshold_; }
+    [[nodiscard]] float iou_threshold() const { return assigner_.iou_threshold(); }
 
 private:
     hal::ISemanticProjector& projector_;
     MaskClassAssigner        assigner_;
-    float                    iou_threshold_;
 };
 
 }  // namespace drone::perception

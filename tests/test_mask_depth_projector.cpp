@@ -214,6 +214,54 @@ TEST_F(MaskDepthProjectorTest, UnmappedCocoClassProducesUnknown) {
     }
 }
 
+TEST_F(MaskDepthProjectorTest, IoUBoundaryJustBelowThreshold) {
+    MaskDepthProjector mdp(projector_, 0.5f);
+    auto               mask = make_sam_mask(100.0f, 100.0f, 80.0f, 80.0f);
+    // Overlap 30px in x: intersection=30*80=2400, union=2*6400-2400=10400, IoU≈0.231 < 0.5
+    auto det   = make_detector_output(150.0f, 100.0f, 80.0f, 80.0f, 0, 0.9f);
+    auto depth = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({mask}, {det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    for (const auto& vu : result.value()) {
+        EXPECT_EQ(vu.semantic_label, static_cast<uint8_t>(ObjectClass::GEOMETRIC_OBSTACLE));
+    }
+}
+
+TEST_F(MaskDepthProjectorTest, IoUBoundaryAtThreshold) {
+    MaskDepthProjector mdp(projector_, 0.5f);
+    auto               mask = make_sam_mask(100.0f, 100.0f, 80.0f, 80.0f);
+    // Identical bbox: IoU=1.0 >= 0.5 → should assign detector class
+    auto det   = make_detector_output(100.0f, 100.0f, 80.0f, 80.0f, 0, 0.9f);
+    auto depth = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({mask}, {det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    for (const auto& vu : result.value()) {
+        EXPECT_EQ(vu.semantic_label, static_cast<uint8_t>(ObjectClass::PERSON));
+    }
+}
+
+TEST_F(MaskDepthProjectorTest, VoxelPositionMatchesPinholeBackprojection) {
+    MaskDepthProjector mdp(projector_);
+    // Mask centred at image centre (320,240) with known depth=5.0 and identity pose.
+    // Pinhole: x_cam=(320-320)*5/500=0, y_cam=(240-240)*5/500=0, z_cam=5
+    // Expected world position: (0, 0, 5)
+    auto mask  = make_sam_mask(310.0f, 230.0f, 20.0f, 20.0f);
+    auto depth = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty());
+
+    // All 4×4 samples within the 20×20 bbox centred at (320,240) should be near (0,0,5)
+    for (const auto& vu : result.value()) {
+        EXPECT_NEAR(vu.position_m.x(), 0.0f, 0.2f);
+        EXPECT_NEAR(vu.position_m.y(), 0.0f, 0.2f);
+        EXPECT_NEAR(vu.position_m.z(), 5.0f, 0.01f);
+    }
+}
+
 TEST(MaskDepthProjectorBasic, IouThresholdAccessor) {
     CpuSemanticProjector proj;
     MaskDepthProjector   mdp(proj, 0.75f);
