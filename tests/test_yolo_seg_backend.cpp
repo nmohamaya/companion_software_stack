@@ -3,58 +3,34 @@
 // Real inference requires a YOLOv8-seg .onnx model and OpenCV; these tests exercise
 // the control flow without a model loaded.
 #include "perception/yolo_seg_inference_backend.h"
+#include "test_helpers.h"
 #include "util/config.h"
 
-#include <cstdio>
-#include <fstream>
+#include <cmath>
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 using namespace drone::perception;
-
-// ── Temp config helper ──
-
-static std::vector<std::string> g_temp_files;
-
-static std::string create_temp_config(const std::string& json_content) {
-    char tmpl[] = "/tmp/test_yolo_seg_XXXXXX.json";
-    int  fd     = mkstemps(tmpl, 5);
-    if (fd < 0) {
-        std::string   path = "/tmp/test_yolo_seg_" + std::to_string(getpid()) + ".json";
-        std::ofstream ofs(path);
-        ofs << json_content;
-        g_temp_files.push_back(path);
-        return path;
-    }
-    ::close(fd);
-    std::string   path(tmpl);
-    std::ofstream ofs(path);
-    ofs << json_content;
-    g_temp_files.push_back(path);
-    return path;
-}
-
-struct TempFileCleanup {
-    ~TempFileCleanup() {
-        for (auto& f : g_temp_files) std::remove(f.c_str());
-    }
-};
-static TempFileCleanup g_cleanup;
+static drone::test::TempFileCleanup g_cleanup;
 
 // ── Tests ──
 
 TEST(YoloSegBackend, Name) {
-    YoloSegInferenceBackend backend("nonexistent.onnx");
+    YoloSegInferenceBackend backend("models/nonexistent.onnx");
     EXPECT_EQ(backend.name(), "YoloSegInferenceBackend");
 }
 
 TEST(YoloSegBackend, InitWithoutModel) {
     YoloSegInferenceBackend backend("");
     EXPECT_FALSE(backend.is_loaded());
-    // init("") keeps model_loaded_ = false — returns false (no model to run)
     EXPECT_FALSE(backend.init("", 640));
+}
+
+TEST(YoloSegBackend, InitWithInvalidPathReturnsFalse) {
+    YoloSegInferenceBackend backend("");
+    EXPECT_FALSE(backend.init("/tmp/no_such_model_xyz.onnx", 640));
+    EXPECT_FALSE(backend.is_loaded());
 }
 
 TEST(YoloSegBackend, InferWithoutModelReturnsEmpty) {
@@ -78,16 +54,28 @@ TEST(YoloSegBackend, ZeroDimensionsReturnsError) {
     EXPECT_TRUE(result.is_err());
 }
 
+TEST(YoloSegBackend, ZeroChannelsReturnsError) {
+    YoloSegInferenceBackend backend("");
+    std::vector<uint8_t>    frame(640 * 480, 0);
+    auto                    result = backend.infer(frame.data(), 640, 480, 0, 0);
+    EXPECT_TRUE(result.is_err());
+}
+
 TEST(YoloSegBackend, RejectsPathTraversal) {
     YoloSegInferenceBackend backend("../../etc/passwd");
     EXPECT_FALSE(backend.is_loaded());
 }
 
+TEST(YoloSegBackend, RejectsAbsolutePath) {
+    YoloSegInferenceBackend backend("/etc/passwd");
+    EXPECT_FALSE(backend.is_loaded());
+}
+
 TEST(YoloSegBackend, ConfigConstruction) {
-    auto          path = create_temp_config(R"({
+    auto          path = drone::test::create_temp_config(R"({
         "perception": {
             "detector": {
-                "model_path": "nonexistent.onnx",
+                "model_path": "models/nonexistent.onnx",
                 "confidence_threshold": 0.3,
                 "nms_threshold": 0.5,
                 "input_size": 416,
@@ -100,10 +88,15 @@ TEST(YoloSegBackend, ConfigConstruction) {
     ASSERT_TRUE(cfg.load(path));
     YoloSegInferenceBackend backend(cfg, "perception.detector");
     EXPECT_EQ(backend.name(), "YoloSegInferenceBackend");
+    EXPECT_FLOAT_EQ(backend.confidence_threshold(), 0.3f);
+    EXPECT_FLOAT_EQ(backend.nms_threshold(), 0.5f);
+    EXPECT_EQ(backend.input_size(), 416);
+    EXPECT_EQ(backend.num_classes(), 80);
+    EXPECT_EQ(backend.dataset(), DetectorDataset::COCO);
 }
 
 TEST(YoloSegBackend, VisDroneDatasetConfig) {
-    auto          path = create_temp_config(R"({
+    auto          path = drone::test::create_temp_config(R"({
         "test": {
             "model_path": "",
             "dataset": "visdrone",
@@ -115,15 +108,24 @@ TEST(YoloSegBackend, VisDroneDatasetConfig) {
     ASSERT_TRUE(cfg.load(path));
     YoloSegInferenceBackend backend(cfg, "test");
     EXPECT_EQ(backend.name(), "YoloSegInferenceBackend");
+    EXPECT_EQ(backend.dataset(), DetectorDataset::VISDRONE);
+    EXPECT_EQ(backend.num_classes(), 10);
 }
 
 TEST(YoloSegBackend, DefaultParameters) {
     YoloSegInferenceBackend backend("", 0.25f, 0.45f, 640, DetectorDataset::COCO);
     EXPECT_FALSE(backend.is_loaded());
     EXPECT_EQ(backend.name(), "YoloSegInferenceBackend");
+    EXPECT_EQ(backend.num_classes(), 80);
 }
 
-TEST(YoloSegBackend, TimestampIncrementsAcrossCalls) {
+TEST(YoloSegBackend, VisDroneExplicitConstructorSetsNumClasses) {
+    YoloSegInferenceBackend backend("", 0.25f, 0.45f, 640, DetectorDataset::VISDRONE);
+    EXPECT_EQ(backend.num_classes(), 10);
+    EXPECT_EQ(backend.dataset(), DetectorDataset::VISDRONE);
+}
+
+TEST(YoloSegBackend, TimestampIsRealClock) {
     YoloSegInferenceBackend backend("");
     std::vector<uint8_t>    frame(320 * 240 * 3, 64);
 
@@ -133,4 +135,14 @@ TEST(YoloSegBackend, TimestampIncrementsAcrossCalls) {
     ASSERT_TRUE(r1.is_ok());
     ASSERT_TRUE(r2.is_ok());
     EXPECT_LT(r1.value().timestamp_ns, r2.value().timestamp_ns);
+    // Verify it's a real timestamp (> year 2020 in nanoseconds)
+    EXPECT_GT(r1.value().timestamp_ns, uint64_t{1'000'000'000});
+}
+
+TEST(YoloSegBackend, InputSizeClampedToSaneRange) {
+    YoloSegInferenceBackend backend("", 0.25f, 0.45f, 0, DetectorDataset::COCO);
+    EXPECT_GE(backend.input_size(), 32);
+
+    YoloSegInferenceBackend backend2("", 0.25f, 0.45f, 99999, DetectorDataset::COCO);
+    EXPECT_LE(backend2.input_size(), 1920);
 }

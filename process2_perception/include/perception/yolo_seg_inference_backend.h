@@ -29,6 +29,11 @@ public:
                             float nms_threshold = 0.45f, int input_size = 640,
                             DetectorDataset dataset = DetectorDataset::COCO);
 
+    YoloSegInferenceBackend(const YoloSegInferenceBackend&)            = delete;
+    YoloSegInferenceBackend& operator=(const YoloSegInferenceBackend&) = delete;
+    YoloSegInferenceBackend(YoloSegInferenceBackend&&)                 = default;
+    YoloSegInferenceBackend& operator=(YoloSegInferenceBackend&&)      = default;
+
     [[nodiscard]] bool init(const std::string& model_path, int input_size) override;
 
     [[nodiscard]] drone::util::Result<drone::hal::InferenceOutput, std::string> infer(
@@ -37,13 +42,19 @@ public:
 
     [[nodiscard]] std::string name() const override { return "YoloSegInferenceBackend"; }
 
-    bool is_loaded() const { return model_loaded_; }
+    [[nodiscard]] bool            is_loaded() const { return model_loaded_; }
+    [[nodiscard]] float           confidence_threshold() const { return confidence_threshold_; }
+    [[nodiscard]] float           nms_threshold() const { return nms_threshold_; }
+    [[nodiscard]] int             input_size() const { return input_size_; }
+    [[nodiscard]] int             num_classes() const { return num_classes_; }
+    [[nodiscard]] DetectorDataset dataset() const { return dataset_; }
 
 private:
     void load_model(const std::string& model_path);
 
 #ifdef HAS_OPENCV
-    cv::dnn::Net net_;
+    cv::dnn::Net             net_;
+    std::vector<std::string> output_layer_names_;
 #endif
     bool            model_loaded_         = false;
     float           confidence_threshold_ = 0.25f;

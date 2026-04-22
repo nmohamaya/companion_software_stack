@@ -50,30 +50,55 @@ OpenCvYoloDetector::OpenCvYoloDetector(const std::string& model_path, float conf
     load_model(model_path);
 }
 
-// ── Model loading ───────────────────────────────────────────
-void OpenCvYoloDetector::load_model(const std::string& model_path) {
-    // Path traversal guard: reject paths containing ".." components.
-    // Real backends will load model files from disk — prevent directory traversal
-    // from config-injected paths (e.g. "../../etc/passwd").
-    if (model_path.find("..") != std::string::npos) {
-        DRONE_LOG_ERROR("[OpenCvYoloDetector] Rejected model path with '..': {}", model_path);
-        model_loaded_ = false;
-        return;
+// ── Path validation ─────────────────────────────────────────
+// Uses lexical normalization (cwd-independent) to ensure model paths
+// stay under a models/ directory.  Relative paths must start with
+// "models/"; absolute paths (e.g. compile-time YOLO_MODEL_PATH) must
+// contain "models" as a path component.
+static bool validate_model_path(const std::string& raw_path, const std::string& tag) {
+    std::filesystem::path p(raw_path);
+    auto                  normalized = p.lexically_normal();
+
+    if (p.is_relative()) {
+        auto it = normalized.begin();
+        if (it == normalized.end() || it->string() != "models") {
+            DRONE_LOG_ERROR("[{}] Model path must be under models/ directory: {}", tag, raw_path);
+            return false;
+        }
+    } else {
+        bool found_models = false;
+        for (const auto& component : normalized) {
+            if (component.string() == "models") {
+                found_models = true;
+                break;
+            }
+        }
+        if (!found_models) {
+            DRONE_LOG_ERROR("[{}] Absolute model path must include models/ directory: {}", tag,
+                            raw_path);
+            return false;
+        }
     }
 
-    // Canonicalize path — weakly_canonical can throw on invalid paths or IO errors
-    std::filesystem::path canonical;
-    try {
-        canonical = std::filesystem::weakly_canonical(model_path);
-    } catch (const std::filesystem::filesystem_error& e) {
-        DRONE_LOG_ERROR("[OpenCvYoloDetector] Invalid model path '{}': {}", model_path, e.what());
+    for (const auto& component : normalized) {
+        if (component.string() == "..") {
+            DRONE_LOG_ERROR("[{}] Path traversal detected in model path: {}", tag, raw_path);
+            return false;
+        }
+    }
+    return true;
+}
+
+// ── Model loading ───────────────────────────────────────────
+void OpenCvYoloDetector::load_model(const std::string& model_path) {
+    if (!validate_model_path(model_path, "OpenCvYoloDetector")) {
         model_loaded_ = false;
         return;
     }
 
 #ifdef HAS_OPENCV
     try {
-        net_ = cv::dnn::readNetFromONNX(canonical.string());
+        net_ = cv::dnn::readNetFromONNX(model_path);
         net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         model_loaded_ = true;
@@ -86,7 +111,6 @@ void OpenCvYoloDetector::load_model(const std::string& model_path) {
         model_loaded_ = false;
     }
 #else
-    (void)canonical;
     DRONE_LOG_WARN("[OpenCvYoloDetector] OpenCV not available — model not loaded");
     model_loaded_ = false;
 #endif

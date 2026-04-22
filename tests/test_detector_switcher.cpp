@@ -1,44 +1,16 @@
 // tests/test_detector_switcher.cpp
 // Unit tests for DetectorSwitcher — altitude-based COCO/VisDrone switching.
 #include "perception/detector_switcher.h"
+#include "test_helpers.h"
 #include "util/config.h"
 
-#include <cstdio>
-#include <fstream>
+#include <cmath>
+#include <limits>
 
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 using namespace drone::perception;
-
-// ── Temp config helper ──
-
-static std::vector<std::string> g_temp_files;
-
-static std::string create_temp_config(const std::string& json_content) {
-    char tmpl[] = "/tmp/test_det_sw_XXXXXX.json";
-    int  fd     = mkstemps(tmpl, 5);
-    if (fd < 0) {
-        std::string   path = "/tmp/test_det_sw_" + std::to_string(getpid()) + ".json";
-        std::ofstream ofs(path);
-        ofs << json_content;
-        g_temp_files.push_back(path);
-        return path;
-    }
-    ::close(fd);
-    std::string   path(tmpl);
-    std::ofstream ofs(path);
-    ofs << json_content;
-    g_temp_files.push_back(path);
-    return path;
-}
-
-struct TempFileCleanup {
-    ~TempFileCleanup() {
-        for (auto& f : g_temp_files) std::remove(f.c_str());
-    }
-};
-static TempFileCleanup g_cleanup;
+static drone::test::TempFileCleanup g_cleanup;
 
 // ── Tests ──
 
@@ -75,8 +47,19 @@ TEST(DetectorSwitcher, NegativeAltitudeIsCoco) {
     EXPECT_EQ(sw.select_dataset(-5.0f), DetectorDataset::COCO);
 }
 
+TEST(DetectorSwitcher, NaNAltitudeDefaultsToCoco) {
+    DetectorSwitcher sw(30.0f, "coco.onnx", "visdrone.onnx");
+    EXPECT_EQ(sw.select_dataset(std::numeric_limits<float>::quiet_NaN()), DetectorDataset::COCO);
+}
+
+TEST(DetectorSwitcher, InfinityAltitudeDefaultsToCoco) {
+    DetectorSwitcher sw(30.0f, "coco.onnx", "visdrone.onnx");
+    EXPECT_EQ(sw.select_dataset(std::numeric_limits<float>::infinity()), DetectorDataset::COCO);
+    EXPECT_EQ(sw.select_dataset(-std::numeric_limits<float>::infinity()), DetectorDataset::COCO);
+}
+
 TEST(DetectorSwitcher, ConfigConstruction) {
-    auto          path = create_temp_config(R"({
+    auto          path = drone::test::create_temp_config(R"({
         "perception": {
             "detector_switcher": {
                 "altitude_threshold_m": 50.0,
@@ -97,7 +80,7 @@ TEST(DetectorSwitcher, ConfigConstruction) {
 }
 
 TEST(DetectorSwitcher, DefaultConfigValues) {
-    auto          path = create_temp_config(R"({})");
+    auto          path = drone::test::create_temp_config(R"({})");
     drone::Config cfg;
     ASSERT_TRUE(cfg.load(path));
     DetectorSwitcher sw(cfg);
@@ -105,4 +88,17 @@ TEST(DetectorSwitcher, DefaultConfigValues) {
     EXPECT_FLOAT_EQ(sw.altitude_threshold(), 30.0f);
     EXPECT_EQ(sw.model_path(DetectorDataset::COCO), "models/yolov8n-seg.onnx");
     EXPECT_EQ(sw.model_path(DetectorDataset::VISDRONE), "models/yolov8n-visdrone-seg.onnx");
+}
+
+TEST(DetectorSwitcher, ThresholdClampedToSaneRange) {
+    DetectorSwitcher sw(999.0f, "a.onnx", "b.onnx");
+    EXPECT_LE(sw.altitude_threshold(), 500.0f);
+
+    DetectorSwitcher sw2(-10.0f, "a.onnx", "b.onnx");
+    EXPECT_GE(sw2.altitude_threshold(), 0.0f);
+}
+
+TEST(DetectorSwitcher, NaNThresholdDefaultsToSafe) {
+    DetectorSwitcher sw(std::numeric_limits<float>::quiet_NaN(), "a.onnx", "b.onnx");
+    EXPECT_FLOAT_EQ(sw.altitude_threshold(), 30.0f);
 }

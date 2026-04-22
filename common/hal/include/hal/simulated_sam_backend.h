@@ -19,11 +19,12 @@ public:
     SimulatedSAMBackend& operator=(SimulatedSAMBackend&&)      = default;
 
     explicit SimulatedSAMBackend(int num_masks = 3, float confidence = 0.9f)
-        : num_masks_(std::clamp(num_masks, 0, kMaxMasks)), confidence_(confidence) {}
+        : num_masks_(std::clamp(num_masks, 0, kMaxMasks))
+        , confidence_(std::clamp(confidence, 0.0f, 1.0f)) {}
 
     SimulatedSAMBackend(const drone::Config& cfg, const std::string& section)
         : num_masks_(std::clamp(cfg.get<int>(section + ".num_masks", 3), 0, kMaxMasks))
-        , confidence_(cfg.get<float>(section + ".confidence", 0.9f)) {}
+        , confidence_(std::clamp(cfg.get<float>(section + ".confidence", 0.9f), 0.0f, 1.0f)) {}
 
     [[nodiscard]] bool init(const std::string& /*model_path*/, int /*input_size*/) override {
         return true;
