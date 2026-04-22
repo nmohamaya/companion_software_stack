@@ -74,7 +74,10 @@
             "max_association_cost": 100.0,
             "high_conf_threshold": 0.5,
             "low_conf_threshold": 0.1,
-            "max_iou_cost": 0.7
+            "max_iou_cost": 0.7,
+            "per_class": {
+                "motion_model": { "default": "constant_velocity" }
+            }
         },
         "depth_estimator": {
             "backend": "simulated",
@@ -218,7 +221,15 @@
             "max_correction_mps": 3.0,
             "min_confidence": 0.3,
             "prediction_dt_s": 0.5,
-            "max_age_ms": 500
+            "max_age_ms": 500,
+            "per_class": {
+                "_comment": "Per-class overrides (Epic #519). Unspecified classes use 'default'.",
+                "influence_radius_m": { "default": 5.0, "person": 3.0, "vehicle_truck": 8.0, "building": 2.0, "tree": 2.0 },
+                "repulsive_gain": { "default": 2.0, "vehicle_truck": 3.0 },
+                "min_distance_m": { "default": 2.0, "person": 3.0, "vehicle_truck": 4.0 },
+                "prediction_dt_s": { "default": 0.5, "building": 0.0, "tree": 0.0, "drone": 1.0 },
+                "min_confidence": { "default": 0.3 }
+            }
         },
         "geofence": {
             "polygon": [
@@ -285,6 +296,14 @@
         "fc_link_lost_timeout_ms": 3000,
         "fc_link_rtl_timeout_ms": 15000,
         "loiter_escalation_timeout_s": 30
+    },
+
+    "benchmark": {
+        "_comment": "Benchmark harness (Epic #523 — perception-rewrite baseline). Profiler is opt-in; default off to keep production overhead at zero.",
+        "profiler": {
+            "enabled": false,
+            "output_dir": "drone_logs/benchmark"
+        }
     },
 
     "cosys_airsim": {

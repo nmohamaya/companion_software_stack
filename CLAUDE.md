@@ -31,6 +31,13 @@ When working on any task, **always look for and suggest improvements** you notic
 
 Flag these as suggestions (don't silently implement them). Use your judgement on severity — mention critical issues immediately, batch minor suggestions at the end of your response.
 
+**Where deferred items are logged:** two destinations, never mixed:
+
+- **Proactive findings I noticed myself** (not in response to a review comment) → `docs/tracking/IMPROVEMENTS.md`. Backlog of nice-to-haves for quiet windows. Entries are dated, prioritised (P1/P2/P3), categorised, and moved to a **Resolved** section with a PR/commit reference once addressed.
+- **Declining or disagreeing with a review comment** (from agents, Copilot, or humans) → `docs/guides/DESIGN_RATIONALE.md` as a new DR-NNN entry. This is the audit trail proving the comment was evaluated and the call was intentional.
+
+When writing "Review Fixes" tables on a PR and marking an item deferred, always include a DR-NNN reference. When flagging improvements in an end-of-task summary, add them to IMPROVEMENTS.md — don't leave them floating in conversation only.
+
 **Safety issues are critical** — any memory safety violations, undefined behaviour, race conditions, missing error handling on flight-critical paths, or other issues that could cause loss of vehicle must be reported to the user **immediately** when noticed, not batched.
 
 ## Build Commands
@@ -93,7 +100,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 
 **Before reporting "all tests pass" — verify:**
 - [ ] Correct branch? (`git branch --show-current`)
-- [ ] Test count matches baseline? (currently **1479** — see [tests/TESTS.md](tests/TESTS.md))
+- [ ] Test count matches baseline? (currently **1707** — see [tests/TESTS.md](tests/TESTS.md))
 - [ ] Zero compiler warnings? (build uses `-Werror -Wall -Wextra`)
 - [ ] clang-format clean? (`git diff --name-only | xargs clang-format-18 --dry-run --Werror`)
 

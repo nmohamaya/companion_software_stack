@@ -16,6 +16,7 @@
 #include "perception/ukf_fusion_engine.h"
 #include "util/config_keys.h"
 #include "util/diagnostic.h"
+#include "util/latency_profiler.h"
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -27,6 +28,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <optional>
 #include <thread>
 
 #include <Eigen/Geometry>  // Quaternionf for full-quaternion transform (#421)
@@ -51,9 +54,14 @@ static std::atomic<int> g_shutdown_phase{0};
 // ── Inference thread ────────────────────────────────────────
 // Stops when shutdown_phase >= 1.  No drain needed — inference is the
 // pipeline source; stopping it is what triggers downstream drains.
+// @param profiler nullable — pass nullptr to disable per-stage latency
+//                 profiling. See DR-022 for the safety analysis of
+//                 mutex-protected recording from this flight-critical
+//                 thread.
 static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                              drone::TripleBuffer<Detection2DList>&            output_queue,
-                             std::atomic<int>& shutdown_phase, IDetector& detector) {
+                             std::atomic<int>& shutdown_phase, IDetector& detector,
+                             drone::util::LatencyProfiler* profiler) {
     DRONE_LOG_INFO("[Inference] Thread started — using detector: {}", detector.name());
 
     auto hb = drone::util::ScopedHeartbeat("inference", true);
@@ -68,7 +76,13 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
             drone::util::FrameDiagnostics diag(frame.sequence_number);
 
             auto dets = [&]() {
-                drone::util::ScopedDiagTimer timer(diag, "Detect");
+                drone::util::ScopedDiagTimer              timer(diag, "Detect");
+                std::optional<drone::util::ScopedLatency> bench_detect;
+                // See DR-022 (docs/guides/DESIGN_RATIONALE.md): mutex-protected
+                // profiler on a flight-critical thread is accepted because
+                // recorders share priority, mutex hold is <100ns dominated by
+                // the detector's ms-scale work, and gated by benchmark.profiler.enabled.
+                if (profiler) bench_detect.emplace(*profiler, "Detect");
                 return detector.detect(frame.pixel_data, frame.width, frame.height, frame.channels);
             }();
 
@@ -103,10 +117,11 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
 // Stops when shutdown_phase >= 2.  When phase hits 1 (inference stopped),
 // the tracker drains any remaining data in the inference->tracker buffer
 // before exiting.
+// @param profiler nullable — see inference_thread docstring and DR-022.
 static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
                            drone::TripleBuffer<TrackedObjectList>& output_queue,
                            std::atomic<int>& shutdown_phase, ITracker& tracker,
-                           int drain_timeout_ms) {
+                           int drain_timeout_ms, drone::util::LatencyProfiler* profiler) {
     DRONE_LOG_INFO("[Tracker] Thread started — backend: {}", tracker.name());
 
     auto hb = drone::util::ScopedHeartbeat("tracker", true);
@@ -133,7 +148,9 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
             drone::util::FrameDiagnostics diag(det_opt->frame_sequence);
 
             auto tracked = [&]() {
-                drone::util::ScopedDiagTimer timer(diag, "Track");
+                drone::util::ScopedDiagTimer              timer(diag, "Track");
+                std::optional<drone::util::ScopedLatency> bench_track;  // See DR-022
+                if (profiler) bench_track.emplace(*profiler, "Track");
                 return tracker.update(*det_opt);
             }();
 
@@ -179,13 +196,14 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
 //             Used to rotate camera-frame detections into world frame.
 // radar_sub — IPC subscriber for radar detections (RadarDetectionList).
 //             Fed into fusion engine for camera+radar multi-sensor fusion.
+// @param profiler nullable — see inference_thread docstring and DR-022.
 static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&                  tracked_queue,
                           drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
                           drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
                           drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
                           std::atomic<int>& shutdown_phase, IFusionEngine& engine,
                           int fusion_rate_hz, drone::TripleBuffer<drone::hal::DepthMap>* depth_buf,
-                          int drain_timeout_ms) {
+                          int drain_timeout_ms, drone::util::LatencyProfiler* profiler) {
     DRONE_LOG_INFO("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
                    fusion_rate_hz);
 
@@ -268,7 +286,9 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
             drone::util::FrameDiagnostics diag(fusion_count);
 
             auto fused = [&]() {
-                drone::util::ScopedDiagTimer timer(diag, "Fuse");
+                drone::util::ScopedDiagTimer              timer(diag, "Fuse");
+                std::optional<drone::util::ScopedLatency> bench_fuse;  // See DR-022
+                if (profiler) bench_fuse.emplace(*profiler, "Fuse");
                 return engine.fuse(*topt);
             }();
 
@@ -669,13 +689,32 @@ int main(int argc, char* argv[]) {
     // Depth map triple buffer — only used when depth estimator is enabled
     drone::TripleBuffer<drone::hal::DepthMap> depth_to_fusion;
 
+    // ── Optional benchmark profiler (Epic #523, Issue #571) ──────────
+    // Opt-in via config (benchmark.profiler.enabled). Disabled by default
+    // so production builds pay zero overhead. When active, records per-stage
+    // latency from the detector / tracker / fusion threads and dumps a JSON
+    // summary to benchmark.profiler.output_dir on shutdown.
+    //
+    // DR-022 documents the priority-inversion / measurement-contamination
+    // analysis that permits mutex-protected ScopedLatency calls on these
+    // flight-critical threads (see docs/guides/DESIGN_RATIONALE.md).
+    const bool benchmark_profiler_enabled =
+        ctx.cfg.get<bool>(drone::cfg_key::benchmark::PROFILER_ENABLED, false);
+    std::optional<drone::util::LatencyProfiler> benchmark_profiler;
+    if (benchmark_profiler_enabled) {
+        benchmark_profiler.emplace();
+        DRONE_LOG_INFO("[Benchmark] LatencyProfiler enabled — stages: Detect, Track, Fuse");
+    }
+    drone::util::LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler
+                                                                    : nullptr;
+
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread, std::ref(*video_sub), std::ref(inference_to_tracker),
-                            std::ref(g_shutdown_phase), std::ref(*detector));
+                            std::ref(g_shutdown_phase), std::ref(*detector), profiler_ptr);
 
     std::thread t_tracker(tracker_thread, std::ref(inference_to_tracker),
                           std::ref(tracker_to_fusion), std::ref(g_shutdown_phase),
-                          std::ref(*tracker), drain_timeout_ms);
+                          std::ref(*tracker), drain_timeout_ms, profiler_ptr);
 
     // Subscribe to drone pose for the camera→world transform in the fusion thread
     auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
@@ -686,10 +725,10 @@ int main(int argc, char* argv[]) {
 
     const int fusion_rate_hz =
         std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
-    std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
-                         std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_shutdown_phase),
-                         std::ref(*fusion_engine), fusion_rate_hz,
-                         depth_enabled ? &depth_to_fusion : nullptr, drain_timeout_ms);
+    std::thread t_fusion(
+        fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub), std::ref(*pose_sub),
+        std::ref(*radar_sub), std::ref(g_shutdown_phase), std::ref(*fusion_engine), fusion_rate_hz,
+        depth_enabled ? &depth_to_fusion : nullptr, drain_timeout_ms, profiler_ptr);
 
     // Launch depth estimation thread if HAL is active (Issue #430)
     // Subscriber must outlive the thread — declare in outer scope (same pattern as pose_sub, radar_sub)
@@ -739,7 +778,12 @@ int main(int argc, char* argv[]) {
     // drain sequence: stop inference first, let tracker drain, then fusion,
     // then auxiliary threads.  Each phase transition uses release ordering
     // so downstream threads see the updated phase with full memory visibility.
-    drone::systemd::notify_stopping();
+    //
+    // notify_stopping() is called AFTER the profiler dump (if any) — that
+    // way the dump happens while systemd still considers the service
+    // "running" (fault-recovery review, PR #593), and any dump failure is
+    // logged at full severity rather than during the narrower stop-timeout
+    // window.
     DRONE_LOG_INFO("Shutting down — phased drain (timeout={}ms per stage)...", drain_timeout_ms);
 
     // Phase 1: stop inference (pipeline source)
@@ -762,6 +806,30 @@ int main(int argc, char* argv[]) {
     // Phase 4: all stopped
     g_shutdown_phase.store(4, std::memory_order_release);
 
+    // ── Benchmark profiler JSON dump (Issue #571 wiring) ──────
+    // All worker threads have joined — the profiler's mutex is uncontended
+    // and the captured window covers the full run. Dump before
+    // notify_stopping() so we remain under the active-state watchdog and
+    // the user (who explicitly enabled the feature) sees an ERROR if it
+    // fails rather than a quiet WARN lost in the shutdown log noise.
+    // DR-022 covers the broader flight-critical-thread analysis.
+    if (benchmark_profiler) {
+        const std::string output_dir = ctx.cfg.get<std::string>(
+            drone::cfg_key::benchmark::PROFILER_OUTPUT_DIR, "drone_logs/benchmark");
+        const std::filesystem::path path = std::filesystem::path(output_dir) /
+                                           "latency_perception.json";
+        const auto status = benchmark_profiler->dump_to_file(path);
+        if (status == drone::util::LatencyProfiler::DumpStatus::Ok) {
+            DRONE_LOG_INFO("[Benchmark] Wrote profiler snapshot → {}", path.string());
+        } else {
+            // Profiler was explicitly enabled — the user wanted this output;
+            // losing it is a real failure, not a warning.
+            DRONE_LOG_ERROR("[Benchmark] Profiler dump FAILED for {}: {}", path.string(),
+                            drone::util::LatencyProfiler::describe(status));
+        }
+    }
+
+    drone::systemd::notify_stopping();
     DRONE_LOG_INFO("=== Perception process stopped ===");
     return 0;
 }

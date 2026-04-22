@@ -1,5 +1,15 @@
 # Simulation Architecture
 
+> **Scope:** this document covers the **Gazebo SITL** (Tier 2) simulation architecture in depth, plus the Tier 1 pure-simulated path. It does NOT cover the **Cosys-AirSim** (Tier 3) photorealistic simulation — Cosys is a separate runtime with its own RPC API, vehicle model, and scenario set. For Cosys:
+>
+> - **Why we added Cosys:** see [ADR-011 — Cosys-AirSim photorealistic simulation](../adr/ADR-011-cosys-airsim-photorealistic-simulation.md).
+> - **How to set up Cosys locally:** see [COSYS_SETUP.md](../guides/COSYS_SETUP.md).
+> - **Cosys HAL backends:** `CosysCameraBackend`, `CosysIMUBackend`, `CosysRadarBackend` (LiDAR-as-radar proxy), `CosysDepthBackend`, `CosysFCLinkBackend` — implemented in `common/hal/src/cosys_*.cpp`, all gated behind `HAVE_COSYS_AIRSIM`.
+> - **Cosys scenarios:** `#29 cosys_perception` (mixed dynamic) and `#30 cosys_static` (static proving ground). See `config/scenarios/29_*.json` / `30_*.json` and `tests/run_scenario_cosys.sh`.
+> - **Benchmark-harness ground-truth emitter for Cosys:** segmentation-mask-based per-frame GT via `simGetSegmentationImage` + `simListSceneObjects`. Design and rationale in [`docs/design/perception_v2_detailed_design.md` § 13 "Ground-truth emitter"](../design/perception_v2_detailed_design.md) (gitignored draft during the active rewrite; will be committed once the design stabilises).
+>
+> A dedicated `COSYS_SIMULATION_ARCHITECTURE.md` is a known gap — tracked in [docs/tracking/IMPROVEMENTS.md](../tracking/IMPROVEMENTS.md).
+
 ## Table of Contents
 
 1. [Overview](#overview)

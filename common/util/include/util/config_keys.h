@@ -91,6 +91,8 @@ inline constexpr const char* MAX_ASSOCIATION_COST = "perception.tracker.max_asso
 inline constexpr const char* HIGH_CONF_THRESHOLD  = "perception.tracker.high_conf_threshold";
 inline constexpr const char* LOW_CONF_THRESHOLD   = "perception.tracker.low_conf_threshold";
 inline constexpr const char* MAX_IOU_COST         = "perception.tracker.max_iou_cost";
+// Per-class motion model (Epic #519)
+inline constexpr const char* PER_CLASS_MOTION_MODEL = "perception.tracker.per_class.motion_model";
 }  // namespace tracker
 
 namespace radar {
@@ -277,6 +279,17 @@ inline constexpr const char* PATH_AWARE      = "mission_planner.obstacle_avoidan
 inline constexpr const char* PATH_AWARE_BYPASS_HYSTERESIS_M =
     "mission_planner.obstacle_avoidance.path_aware_bypass_hysteresis_m";
 inline constexpr const char* LOG_CORRECTIONS = "mission_planner.obstacle_avoidance.log_corrections";
+// Per-class overrides (Epic #519 — per-class config schema)
+inline constexpr const char* PER_CLASS_INFLUENCE_RADIUS_M =
+    "mission_planner.obstacle_avoidance.per_class.influence_radius_m";
+inline constexpr const char* PER_CLASS_REPULSIVE_GAIN =
+    "mission_planner.obstacle_avoidance.per_class.repulsive_gain";
+inline constexpr const char* PER_CLASS_MIN_DISTANCE_M =
+    "mission_planner.obstacle_avoidance.per_class.min_distance_m";
+inline constexpr const char* PER_CLASS_PREDICTION_DT_S =
+    "mission_planner.obstacle_avoidance.per_class.prediction_dt_s";
+inline constexpr const char* PER_CLASS_MIN_CONFIDENCE =
+    "mission_planner.obstacle_avoidance.per_class.min_confidence";
 }  // namespace obstacle_avoidance
 
 namespace obstacle_avoider {
@@ -441,6 +454,19 @@ inline constexpr const char* NOISE_AZIMUTH_STD_RAD   = ".noise.azimuth_std_rad";
 inline constexpr const char* NOISE_ELEVATION_STD_RAD = ".noise.elevation_std_rad";
 inline constexpr const char* NOISE_VELOCITY_STD_MPS  = ".noise.velocity_std_mps";
 }  // namespace hal
+
+// ═══════════════════════════════════════════════════════════
+// Benchmark harness settings (Epic #523 — perception rewrite baseline)
+// ═══════════════════════════════════════════════════════════
+// All keys are opt-in. Default configs leave the profiler disabled so
+// production builds pay zero overhead. Scenario configs that want a
+// baseline capture override `benchmark.profiler.enabled: true`.
+namespace benchmark {
+inline constexpr const char* SECTION               = "benchmark";
+inline constexpr const char* PROFILER_ENABLED      = "benchmark.profiler.enabled";
+inline constexpr const char* PROFILER_OUTPUT_DIR   = "benchmark.profiler.output_dir";
+inline constexpr const char* GT_DETECTION_RADIUS_M = "benchmark.gt_detection_radius_m";
+}  // namespace benchmark
 
 // ═══════════════════════════════════════════════════════════
 // Cosys-AirSim simulation settings

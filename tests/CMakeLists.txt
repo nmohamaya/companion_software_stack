@@ -62,6 +62,9 @@ add_drone_test(test_fault_manager   test_fault_manager.cpp)
 # ── Geofence tests ──────────────────────────────────────────
 add_drone_test(test_geofence        test_geofence.cpp)
 
+# ── Per-class config utility tests (Epic #519) ─────────────
+add_drone_test(test_per_class_config test_per_class_config.cpp)
+
 # ── 3D Obstacle Avoider tests ───────────────────────────────
 add_drone_test(test_obstacle_avoider_3d test_obstacle_avoider_3d.cpp)
 
@@ -98,6 +101,34 @@ add_drone_test(test_result          test_result.cpp)
 
 # ── LatencyTracker tests ─────────────────────────────────────
 add_drone_test(test_latency_tracker test_latency_tracker.cpp)
+
+# ── LatencyProfiler tests (Issue #571 — Epic #523) ──────────
+# Per-stage latency profiler used by the benchmark harness. Header-only,
+# so no additional sources; lives in common/util alongside latency_tracker.
+add_drone_test(test_latency_profiler test_latency_profiler.cpp)
+
+# ── LatencyProfiler wiring smoke test (Issue #571 wiring PR) ─────
+# Simulates the P2/P4 profiler-wiring pattern end-to-end: concurrent
+# workers record via ScopedLatency, dump to JSON on disk, parse back.
+# Guards the wiring contract without needing a full scenario run.
+add_drone_test(test_latency_profiler_dump test_latency_profiler_dump.cpp)
+
+# ── GT emitter tests (Issue #594 — Epic #523, PR 1 Cosys backend) ─
+# Shared-layer tests only (GtClassMap + to_json_line). The Cosys backend
+# itself needs a live AirSim server and is covered by scenario tests #29/#30.
+# When built with HAVE_COSYS_AIRSIM, the Cosys .cpp is linked in and the
+# factory resolves at link time; otherwise the backend .cpp is empty.
+add_drone_test(test_gt_emitter
+    test_gt_emitter.cpp
+    benchmark/gt_emitter.cpp
+    benchmark/cosys_gt_emitter.cpp
+)
+target_include_directories(test_gt_emitter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_gt_emitter PRIVATE
+    PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
 
 # ── Thread Heartbeat & Watchdog tests ────────────────────────
 add_drone_test(test_thread_heartbeat test_thread_heartbeat.cpp)
@@ -416,4 +447,62 @@ add_drone_test(test_perception_drain test_perception_drain.cpp)
 add_drone_test(test_model_presets    test_model_presets.cpp)
 target_compile_definitions(test_model_presets PRIVATE
     PROJECT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+
+# ── Perception metrics framework tests (Issue #570 — Epic #523) ─
+# Pure C++, no ML deps. Measures TP/FP/FN, per-class AP, MOTA/MOTP,
+# confusion matrix. Used by the benchmark harness for regression gating.
+add_drone_test(test_perception_metrics
+    test_perception_metrics.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_perception_metrics PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# ── Baseline capture tests (Issue #573 — Epic #523) ─────────────
+# Validates BaselineCapture metric accumulation, per-class breakdown,
+# JSON round-trip, and latency passthrough. Links perception_metrics
+# for TP/FP/FN computation (same lib the capture class delegates to).
+add_drone_test(test_baseline_capture
+    test_baseline_capture.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_baseline_capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_baseline_capture PRIVATE
+    nlohmann_json::nlohmann_json
+)
+
+# ── Baseline comparator tests (Issue #572 — Epic #523) ──────────
+# Validates regression detection against configurable thresholds:
+# recall, precision, mAP, MOTA, latency p95.
+add_drone_test(test_baseline_comparator
+    test_baseline_comparator.cpp
+    benchmark/baseline_comparator.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(test_baseline_comparator PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_baseline_comparator PRIVATE
+    nlohmann_json::nlohmann_json
+)
+
+# ── Baseline comparison CLI tool (Issue #572) ────────────────────
+# Standalone executable: compare current run against stored baseline.
+add_executable(compare_to_baseline
+    benchmark/compare_to_baseline_main.cpp
+    benchmark/baseline_comparator.cpp
+    benchmark/baseline_capture.cpp
+    benchmark/perception_metrics.cpp
+)
+target_include_directories(compare_to_baseline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(compare_to_baseline PRIVATE
+    nlohmann_json::nlohmann_json
 )

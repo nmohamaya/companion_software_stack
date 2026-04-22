@@ -403,3 +403,339 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 **Decision:** Keep rpclib in the submodule tree. The cost of a "dirty" submodule is low (add to `.gitignore`), while patching AirSim's build creates maintenance burden on every upstream update.
 
 **Revisit when:** AirSim's CMake is refactored to accept external rpclib paths, or we fork the repo and can control the build system.
+
+---
+
+## DR-017: Perception Metrics — Inline vs Split `compute_detection_metrics` / `compute_tracking_metrics`
+
+**Question:** The review-code-quality agent (PR #590) flagged that `compute_detection_metrics` (~80 lines) and `compute_tracking_metrics` (~80 lines) exceed the 40-line function-split heuristic and suggested splitting each into helpers. Should we split them?
+
+**For splitting:**
+- Shorter functions read faster in isolation
+- Aligns with the general function-length guideline
+- Future additions (e.g., class-agnostic AP variant) could reuse the per-frame-accumulate helper without duplicating the post-processing pass
+
+**For keeping inline:**
+- Both functions follow the same two-phase shape: a per-frame accumulate loop (mutating `out` / `tm`) followed by a short post-processing pass (per-class AP; AP=0 injection). Splitting them forces callers to pass the large output struct, several per-class maps, and the ground-truth inventory into a helper — so the helper signatures become long and the split buys line count, not clarity.
+- The state each phase mutates is visible at a glance in-line (confusion matrix, per-class maps). Splitting would obscure the fact that `per_class_preds`/`per_class_gts` are scratch-local and only live across the same function.
+- No current caller wants to skip the per-class AP pass or the AP=0 injection, so the phases aren't independently reusable.
+- The test file exercises the full shape end-to-end via `compute_detection_metrics`; no test would gain clarity from the split.
+- The tracking function has similar per-GT state (`gt_state` map) whose lifetime is the whole call — splitting would require passing it through a helper parameter for no readability gain.
+
+**Decision:** Keep both functions inline. Readability of a two-phase flow is easier when both phases share locals by visibility, not by parameter threading. Accept the 80-line length here — the logic reads linearly.
+
+**When to revisit:**
+- If a new caller wants to consume only the per-frame phase (e.g. streaming / online evaluation), split the per-frame loop into a helper at that point.
+- If a third metric function lands with the same two-phase shape — three repetitions would justify a shared helper.
+
+**Date:** 2026-04-20 (during PR #590 review fix round)
+
+---
+
+## DR-018: Perception Metrics — `ScoredPrediction` / `ScoredGroundTruth` as Separate Types
+
+**Question:** The review-code-quality agent (PR #590) noted that `ScoredGroundTruth` is a strict subset of `ScoredPrediction` (no confidence field) and suggested merging or making the relationship explicit. Should we unify them?
+
+**For merging:**
+- Drops one struct definition; one type to learn instead of two.
+- A field addition would only need to land once.
+
+**For keeping separate:**
+- Type safety at the boundary: `compute_ap` takes predictions and ground truth as distinct parameters. Using separate types means the compiler catches an accidental swap (passing GTs where preds are expected); a unified type would let the swap compile and only fail at runtime when confidence turned out to be zero-valued GT.
+- `confidence` has no meaning for a ground-truth box; carrying it on the unified type invites callers to pass uninitialised or sentinel values.
+- Size is tiny (24 vs 28 bytes); there's no measurable memory cost to keeping them distinct.
+- The narrowing is the *point* — `ScoredGroundTruth` being a subset-shape of `ScoredPrediction` mirrors the real-world relationship: GT is what a prediction would look like if it were guaranteed correct.
+
+**Decision:** Keep as separate types. A header comment now documents the intentional narrowing so readers don't mistake it for accidental duplication.
+
+**When to revisit:** If we add many fields that belong on both (e.g. frame-level metadata, timing), and the manual field duplication becomes burdensome, factor a common base struct rather than merging the leaf types.
+
+**Date:** 2026-04-20 (during PR #590 review fix round)
+
+---
+
+## DR-019: Perception Metrics — `std::unordered_map` Instead of Dense Vector for `gt_by_frame`
+
+**Question:** The review-performance agent (PR #590) noted that `compute_ap` uses `std::unordered_map<uint64_t, vector<size_t>> gt_by_frame`, but frame indices are densely packed 0..N-1 from the calling frame loop. A `std::vector<vector<size_t>>` indexed by frame would be O(1) access with no hashing. Should we switch?
+
+**For switching to vector:**
+- O(1) lookup vs unordered_map's hash + possible chain walk.
+- Better cache locality.
+- No bucket heap allocations.
+
+**For keeping unordered_map:**
+- `compute_ap` is a public entry point in the header — callers can pass `ScoredPrediction` / `ScoredGroundTruth` with arbitrary `frame_index` values, not necessarily dense 0-based. The caller that happens to use dense indices today (`compute_detection_metrics`) isn't the only supported caller.
+- Switching to vector requires the caller to either (a) promise dense indices (silently breaks if violated), or (b) compute max frame index first and size the outer vector accordingly — which is itself O(N).
+- Performance at the current AC (N=1000) is already 5 ms against a 100 ms budget. The hash cost is not on the critical path.
+
+**Decision:** Keep `unordered_map`. The public-API flexibility is worth the small hash cost. If a future caller demands dense-index performance, expose a second `compute_ap` overload that takes the pre-grouped vector directly.
+
+**When to revisit:** If the benchmark harness graduates into streaming / online evaluation where `compute_ap` runs 1000× per second, or if profiling shows the hash cost dominates.
+
+**Date:** 2026-04-20 (during PR #590 review fix round)
+
+---
+
+## DR-020: LatencyProfiler — `std::string` in `LatencyTrace` vs Fixed `char[N]` Array
+
+**Question:** The review-performance agent (PR #591) flagged that `LatencyTrace::stage` is a `std::string`, which makes `LatencyTrace` non-trivially-copyable and forces a (potentially heap-allocating) string assignment on every `record()` call into the trace ring. They suggested replacing with `char stage[32]{}` so the struct becomes trivially copyable and the trace-ring write is a `memcpy`.
+
+**For switching to `char[N]`:**
+
+- `LatencyTrace` becomes trivially copyable — bulk ring snapshots via `memcpy` instead of a per-element copy constructor.
+- Eliminates the SSO dependency on typical stage-name lengths (currently safe because names like `"detector"` fit in ~15-char SSO buffers, but not guaranteed).
+- Tighter bounded memory footprint — no silent heap growth if a stage name happens to be long.
+
+**For keeping `std::string`:**
+
+- Unbounded stage names stay supported without silent truncation. A `char[32]` truncates; the resulting JSON output then has two different stages with the same truncated key colliding in `stages`.
+- The dominant cost on the `record()` path isn't the string copy — it's the mutex, `now_ns()`, and the map find. Stage-name assignment is < 100 ns per call when SSO applies.
+- The `collect_traces_locked()` snapshot already copies `LatencyTrace` by value into a `std::vector<LatencyTrace>` — switching to `char[N]` makes that bulk copy faster, but it's not on the hot path.
+- A fixed char array forces every caller to audit stage-name lengths across the codebase; adding a debug assert or documented contract to cap stage names is the work we'd need to do regardless.
+
+**Decision:** Keep `std::string`. The complaint is structurally valid but practically marginal — the SSO optimisation covers typical usage, the mutex dominates the record-path cost, and the bounded-footprint argument doesn't hold up against silent-truncation collisions. The heterogeneous-comparator fix landed on the map key (avoiding the per-record `std::string` allocation for the map lookup) captures the biggest concrete win the review identified.
+
+**When to revisit:**
+
+- If profiling shows the trace-ring write (not the map lookup) as the dominant cost — e.g. if we start firing `record()` from tight loops where stage names are pre-computed longer strings.
+- If we add a hard real-time pipeline stage (> 1 kHz) that uses the profiler directly instead of the intended `LatencyTracker` fast-path.
+- If bounded allocation guarantees become a regulatory/certification constraint.
+
+**Date:** 2026-04-20 (during PR #591 review fix round)
+
+---
+
+## DR-021: LatencyProfiler — `summaries()` Sorts Under the Profiler Mutex
+
+**Question:** The review-performance and review-concurrency agents (PR #591) flagged that `LatencyProfiler::summaries()` calls `LatencyTracker::summary()` for each stage while holding the profiler mutex, and each `summary()` call sorts its sample ring (O(N log N)). With 10 stages × 1024 samples that's roughly 100 000 compare ops — ~100-200 µs of mutex hold time on an Orin Nano — during which concurrent `record()` callers block. They suggested exposing a raw-snapshot method on `LatencyTracker` and sorting outside the profiler lock.
+
+**For offloading the sort outside the lock:**
+
+- Shorter critical section → lower worst-case block time for concurrent recorders.
+- Predictable: under-lock cost becomes O(N) memcpy per stage rather than O(N log N) sort.
+- Avoids the scenario where `summaries()` can spike the very latency it's measuring.
+
+**For keeping the sort under the lock:**
+
+- `summaries()` is explicitly a periodic-dump path, not per-tick. The benchmark harness calls it at window boundaries (scenario-end or checkpoint), not 30 Hz. A 200 µs pause once every few seconds is invisible in the measured pipeline.
+- Splitting introduces a new coupling: `LatencyTracker` would need a public `snapshot()` returning the raw sample vector, which leaks the ring-buffer implementation detail into callers. `LatencyTracker`'s current API is tight (`record`, `summary`, `reset`) — opening it up for the profiler's benefit is backwards.
+- The concurrent-read-while-write test added in this PR catches any correctness regression; it doesn't catch a 200 µs pause, but that's not a correctness issue.
+- The alternative (copy raw samples under lock, sort outside) still holds the lock for O(N × stages) memcpy — the absolute win is smaller than the refactor cost.
+
+**Decision:** Keep the sort under the profiler mutex. The problem is real in theory but not triggered by the benchmark-harness usage pattern. If we ever call `summaries()` from a hot path, the right fix is to move the call off the hot path, not to re-architect the lock discipline.
+
+**When to revisit:**
+
+- If `summaries()` moves onto the per-tick path (e.g. a live dashboard reading current state at 30 Hz).
+- If TSan or profiling shows recorder threads blocking on `mtx_` for measurable stretches during dumps.
+- If `LatencyTracker` grows a snapshot API for other reasons — then this optimisation becomes free to land.
+
+**Date:** 2026-04-20 (during PR #591 review fix round)
+
+---
+
+## DR-022: LatencyProfiler (Mutex-Protected) on Flight-Critical Threads — Opt-in Wiring in P2/P4
+
+**Question:** The observability-on-flight-critical-threads rule in CLAUDE.md (and `deploy/safety_audit.sh` Rule 31) says mutex-protected observability primitives SHOULD NOT be called from flight-critical threads without documented justification. The profiler-wiring PR adds `ScopedLatency` guards in P2's detector/tracker/fusion threads (~30 Hz) and P4's planner loop (10 Hz) — each of which is a flight-critical path. Is this a violation or a justified exception?
+
+**The rule targets two failure modes:**
+
+1. **Priority inversion** — a lower-priority thread holding the profiler's mutex blocks a higher-priority control-loop thread.
+2. **Observation affecting measurement** — the mutex cost contaminates the latency being measured.
+
+**Analysis for this specific wiring:**
+
+- **Priority isolation.** All recorders are peer pipeline threads in the same process — no real-time priority boundaries are crossed. P2's inference / tracker / fusion threads run at similar priority; P4's planner loop is single-threaded. No higher-priority thread calls `record()`, so classic priority inversion cannot occur. (The OS scheduler may still preempt mid-record, but that's true of any code; the profiler adds no new inversion path.)
+- **Bounded mutex-hold-time dominated by measured work.** `LatencyProfiler::record()` takes a mutex, does a `std::map` find (heterogeneous `string_view` lookup — no alloc on hit), a `LatencyTracker::record()` (O(1) ring write), and a single string-assign into the trace ring. Measured cost is ~500 ns per call. Compared to detector work (tens of ms), tracker (~1–5 ms), fusion (~200 µs), planner-loop (<1 ms): the mutex hold is three-to-five orders of magnitude below the measured work. Measurement contamination is negligible.
+- **Opt-in via config.** The guards live behind `benchmark.profiler.enabled` (default false in `config/default.json`). Production builds and every default scenario pay zero overhead — not even the optional-construction cost. Only scenarios that explicitly set the flag (currently only the upcoming #573 baseline-capture runs) activate the profiler.
+- **No cross-thread data escape.** The `ScopedLatency` instances are stack-local to each stage's lambda; the profiler is a stack-local `std::optional<LatencyProfiler>` in `main()` whose lifetime covers all worker threads.
+
+**Decision:** Accepted — safe exception to the rule. The three criteria the rule demands (priority isolation, bounded hold-time, explicit gating) are all met.
+
+**Concrete implementation choices flowing from this analysis:**
+
+- Pointer-optional pattern (`std::optional<ScopedLatency> bench; if (profiler) bench.emplace(...);`) rather than a compile-time switch, because we want the same binary to run both with and without profiling — switching a scenario's config is all it should take.
+- No fallback to a lock-free per-thread buffer. Would be the correct answer for >1 kHz paths, but at 10–30 Hz the mutex is cheaper than maintaining per-thread ring buffers + a merge path. Keeping the single-profiler model simpler.
+- JSON dump happens after all worker threads have joined (P2) or after the main loop exits (P4) so the mutex is uncontended during the dump.
+
+**Addendum (2026-04-20, PR #593 review-fix round):**
+
+- **AC denominator clarification.** The "< 2 % of tick time" claim refers to the **full pipeline tick**, not individual sub-stages. For P4's short sub-stages (`GeofenceCheck`, `FaultEval` at ~10 µs in the IDLE/PREFLIGHT fast-path early-return), the ~200 ns profiler overhead approaches 2 % of that sub-stage's own duration but stays well under 2 % of the 1–5 ms full `PlannerLoop` tick. This is acceptable — the AC is about per-tick pipeline budget, not per-sub-stage. If we later move the AC numerator to "per call-site" this sub-stage fast-path needs a second look.
+- **Fast-path caveat for P4.** `GeofenceCheck` and `FaultEval` are profiled even when they early-return at IDLE/PREFLIGHT/TAKEOFF (short atomic-set path). The recorded p50/p95 will be noisier at these states because the profiler cost is comparable to the measured work. This is intentional — skipping profiling at IDLE would hide a real regression if the fast-path regressed. Baselines should segment by FSM state if this noise becomes a problem.
+
+**When to revisit:**
+
+- If profiling is ever used to instrument an IPC callback handler, Zenoh read-path thread, or a future >1 kHz stage — those DO have priority hazards the current analysis does not cover.
+- If the profiler's `record()` internal cost grows past ~5 µs — re-evaluate contamination ratio.
+- If the config flag is ever flipped to `true` by default — the "opt-in" leg of the justification disappears and the analysis must be redone.
+
+**Date:** 2026-04-20 (during perception-v2 profiler-wiring PR)
+
+---
+
+## DR-023: LatencyProfiler — Raw `LatencyProfiler*` Aliasing `std::optional<LatencyProfiler>` for Thread Pass-Through
+
+**Question:** The review-code-quality agent (PR #593) flagged that P2/P4 main.cpp construct a `std::optional<LatencyProfiler> benchmark_profiler` and then derive a raw pointer `LatencyProfiler* profiler_ptr = benchmark_profiler ? &*benchmark_profiler : nullptr;` to pass into worker thread functions. Two names alias the same underlying object — is this pattern justified?
+
+**For an alternative (construct the profiler inside each thread, gate via `enabled` flag internally):**
+
+- Eliminates the second name.
+- No cross-scope pointer aliasing.
+- Slightly simpler call-site.
+
+**For keeping the current pattern:**
+
+- `LatencyProfiler` is non-copyable, non-movable (holds a `std::mutex`). It cannot be passed by value into a `std::thread` functor, and it cannot be stored inside the optional *and* passed by reference into a thread's argument list, because `std::thread` decays its arguments to stored values. The raw pointer is the idiomatic workaround — C++ standard library patterns (`std::ref`, pointer args) exist for exactly this.
+- The alternative "internal enable flag" would duplicate the gating logic into every `record()` call (plus every `ScopedLatency` dtor) for a hot-path branch — a cost that's absent when the pointer is null. Keeping gating outside the profiler also keeps the profiler's public API honest: if you have a profiler, it records. Period.
+- The pointer is written exactly once in `main()` immediately after the optional's construction, and the `std::thread` ctor that follows provides a happens-before fence — the worker threads see a fully-constructed profiler via a stable pointer for their entire lifetime. No mutation, no race.
+- The optional's storage is a local in `main()`; the main thread outlives every worker (it joins them before returning). Lifetime is trivially safe.
+- Two names (`benchmark_profiler`, `profiler_ptr`) add a small cognitive cost but are unambiguous — `grep` finds both, code comments at the declaration site explain the relationship.
+
+**Decision:** Keep the current pattern. The aliasing reads unusual at first glance but is load-bearing given `LatencyProfiler`'s non-movability and the C++ thread-argument contract. Internal gating would move cost into the hot path without improving clarity.
+
+**When to revisit:**
+
+- If `LatencyProfiler` becomes movable (breaking change to its mutex ownership) — then the optional could be moved directly into a thread's capture.
+- If we add more call sites and the pattern duplication becomes a readability tax — factor a `ThreadedProfilerHandle` wrapper that hides the aliasing.
+
+**Date:** 2026-04-20 (during PR #593 review fix round)
+
+---
+
+## DR-024: LatencyProfiler — Path Validation Allow-List (CWD + `/var/log/drone` + `/tmp`)
+
+**Question:** The review-security agent (PR #593) flagged that `benchmark.profiler.output_dir` is taken from config without validation, enabling path-traversal writes on a tampered config. `LatencyProfiler::dump_to_file()` now canonicalises the path and checks membership in a fixed allow-list. What should the allow-list contain?
+
+**For a minimal allow-list (production only — `/var/log/drone`):**
+
+- Single documented safe root matches the hardened systemd `ReadWritePaths`.
+- Dev workflows break: running a process from a shell dir expects the default `drone_logs/benchmark` (relative to CWD) to work.
+- Would force every dev-machine run to set `output_dir` explicitly.
+
+**For a permissive allow-list (CWD + `/var/log/drone` + `/tmp`):**
+
+- **CWD** — lets dev runs use the default `drone_logs/benchmark` (relative path canonicalises under the launch directory). This is how every developer's local environment works today and matches the `.gitignore` assumption that `drone_logs/` is a per-machine artifact.
+- **`/var/log/drone`** — the production `ReadWritePaths` entry. When the hardened systemd units eventually deploy, `benchmark.profiler.output_dir` can be set to an absolute path here.
+- **`/tmp`** — tmpfs, safe for CI / smoke-test dumps that shouldn't persist. The test suite uses this.
+
+**Against any absolute path outside the three:**
+
+- Path traversal via `../../etc/systemd/system` is rejected after canonicalisation.
+- Absolute paths to `/etc`, `/root`, `/boot`, `/usr` are refused — a tampered config cannot cause writes to arbitrary locations.
+- The profiler is diagnostic-only; the feature is opt-in and off by default. A site with a legitimate unusual output path can add it to the allow-list in a small code change rather than a config-only change.
+
+**Decision:** Adopt the permissive allow-list. Dev + production + CI all work without config gymnastics, while the security goal (no arbitrary writes from tampered config) is met. Failures produce `DumpStatus::PathRejected` and log at ERROR (since the user explicitly enabled profiling).
+
+**When to revisit:**
+
+- If a second observability sink needs disk output, factor the validation into a shared helper rather than duplicating the allow-list.
+- If an operator needs to write benchmark data to a custom location, the allow-list is intentionally a compile-time list — add it with code review rather than config. If this friction becomes a real burden, we can add a CLI-only override flag that bypasses validation.
+
+**Date:** 2026-04-20 (during PR #593 review fix round)
+
+---
+
+## DR-025: GtClassMap — Alphabetical Pattern Ordering Documented, Not Fixed
+
+**Question:** PR #595 review flagged that `GtClassMap::lookup` docstring says "first match wins" but the implementation of `GtClassMap::load` iterates a `nlohmann::json` object, which is backed by `std::map` (alphabetical), not insertion order. Should we switch to `nlohmann::ordered_json`?
+
+**For switching to ordered_json:**
+- Matches user intuition: "I listed specific patterns first, they should win."
+- Removes the trap where `"SM_Car*"` written before `"SM_*"` in config is silently overridden.
+
+**For documenting and keeping std::map:**
+- `ordered_json` is a breaking change project-wide — every `drone::Config` consumer would be affected.
+- Alphabetical order is stable, deterministic, and greppable.
+- Users can work around it by naming patterns so desired winners sort first (e.g. `zzz_fallback*`).
+- Direct construction via `PatternEntry` vector still preserves caller order — the only case where order matters is `load()`.
+
+**Decision:** Document clearly (see `GtClassMap::lookup` docstring in `tests/benchmark/gt_emitter.h`) and add `LoadFromConfigUsesAlphabeticalOrder` test to lock the semantic. Revisit if we hit a real scenario where alphabetical-naming workaround is insufficient.
+
+**Revisit when:** A scenario config needs insertion-order semantics that alphabetical naming can't express, OR we move `drone::Config` to `ordered_json` for other reasons.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-026: GT Class Map — `class_id = 0` as Valid (COCO "person") Not as Sentinel
+
+**Question:** PR #595 review flagged that `GtClassMap::Entry::class_id` defaults to `0`, but COCO class 0 is "person" — a real class. Should we use `std::optional<Entry>` semantics throughout, or add a validity sentinel?
+
+**For optional/sentinel:**
+- Defends against bugs where a default-constructed Entry is silently returned instead of `nullopt`.
+- Makes the "not mapped" state explicit.
+
+**For keeping class_id = 0 as valid:**
+- `lookup()` already returns `std::optional<Entry>` — the "not mapped" case IS explicit at the API boundary.
+- A default-constructed `Entry` inside a `GtClassMap` only exists if the user writes one — tests don't show that happening.
+- Changing to a sentinel (e.g. `UINT32_MAX`) creates a separate class of bug where the sentinel is accidentally serialised into JSONL output.
+- Using `std::optional<Entry>` everywhere makes the API noisier for no real safety gain, since the lookup already returns an optional.
+
+**Decision:** Keep `class_id = 0` as a valid class. The default value of `Entry{}` is only reached if code inside the class intentionally returns a default — which it doesn't. The `lookup()` optional return is the defensible boundary.
+
+**Revisit when:** A new caller pattern emerges that passes `Entry{}` around without going through `lookup()`.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-027: GtClassMap — Silent Skip of Entries Missing `class_id` / `class_name`
+
+**Question:** PR #595 review flagged that `GtClassMap::load` silently drops entries that are malformed (missing `class_id` or `class_name`, or whose value is not an object). Should we WARN on each skip or throw?
+
+**For warn/throw:**
+- Catches config typos at startup rather than silently producing a smaller map.
+- `LoadFromConfigSkipsMalformedEntries` test exists but nobody reads test output.
+
+**For silent skip:**
+- `GtClassMap` is used at scenario-run time, not at production runtime. A scenario author running the scenario will see GT miss and investigate.
+- The outer WARN ("gt_class_map key is present but not a JSON object") already catches the whole-section typo case — added in this PR.
+- Per-entry warn adds log noise for a tooling-only harness.
+- If we want strict validation, that belongs in a separate `validate_scenario_config.py` pre-run tool, not in the emitter.
+
+**Decision:** Keep silent per-entry skip. Outer WARN covers the likely-to-happen whole-section typo. Scenario-config validation is a separate concern.
+
+**Revisit when:** A scenario ships with silently-dropped GT entries and nobody notices until a baseline regression.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-028: `register_filters` Kept Public on CosysGtEmitter (anonymous namespace class)
+
+**Question:** PR #595 review flagged that `CosysGtEmitter::register_filters` is public but the class lives in an anonymous namespace (no external callers possible). Should it be private and called from the constructor?
+
+**For private + constructor-call:**
+- Expresses the invariant that filters are always registered before any `emit()` call.
+- Removes the chance of a future refactor forgetting to call it.
+
+**For keeping as-is:**
+- The class is in an anonymous namespace — there ARE no external callers, so the exposure risk is nil.
+- Moving RPC calls into the constructor means construction can fail (via RPC error) but constructors can't return null. We'd have to throw — adding exception-handling paths to the factory.
+- The factory currently calls `register_filters` explicitly and logs a WARN on failure without aborting emitter creation. This "partial filter set is still useful" behaviour would be lost.
+
+**Decision:** Keep `register_filters` public and called from the factory. The anonymous-namespace scope already provides the isolation the reviewer wanted, and the explicit-call + WARN pattern preserves graceful-degradation semantics.
+
+**Revisit when:** We move `CosysGtEmitter` out of the anonymous namespace (e.g. for direct testing), at which point re-evaluate.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+
+---
+
+## DR-029: GtClassMap — Linear Scan Not Unordered Map
+
+**Question:** PR #595 review flagged that `GtClassMap::lookup` does a linear scan through `patterns_`. Should it be an `unordered_map` with exact matches resolved first and wildcards as a fallback list?
+
+**For unordered_map:**
+- O(1) exact-match lookup vs O(N) linear scan.
+
+**For keeping linear scan:**
+- Typical class maps are <20 entries. Linear scan of 20 entries is a handful of ns — not a real hot path.
+- `lookup()` is called per-detection, ~30 times per frame at 30 Hz — ~900 calls/sec max. Even at 100 entries, ~100 µs total per second — 0.01% of tick budget.
+- Wildcards MUST be scanned linearly regardless; mixing exact-hash and wildcard-scan adds code complexity for no measurable gain.
+- Simple code is easier to reason about for a benchmark-harness-only component.
+
+**Decision:** Keep linear scan. Revisit if a real scenario emerges with >100 patterns, measured impact > 1% of tick budget.
+
+**Date:** 2026-04-20 (during PR #595 review fix round)
+

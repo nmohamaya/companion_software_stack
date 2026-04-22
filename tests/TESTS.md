@@ -100,8 +100,8 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Gazebo](#hal--gazebo) | 2 | 25 | Gazebo camera and IMU backends |
 | [HAL — MAVLink](#hal--mavlink) | 1 | 14 | MavlinkFCLink (MAVSDK-based flight controller) |
 | [HAL — Radar](#hal--radar) | 1 | 29 | IRadar interface, SimulatedRadar, factory, config, topic |
-| [P2 — Perception](#p2--perception) | 6 | 216 | Kalman filter + Hungarian solver, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID+covariance depth+height priors+radar-learned heights), color contour, YOLOv8, world transform |
-| [P4 — Mission Planner](#p4--mission-planner) | 8 | 220 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D |
+| [P2 — Perception](#p2--perception) | 6 | 219 | Kalman filter + Hungarian solver + per-class motion model, ByteTrack (two-stage IoU), fusion (UKF+camera+radar+dormant re-ID+covariance depth+height priors+radar-learned heights), color contour, YOLOv8, world transform |
+| [P4 — Mission Planner](#p4--mission-planner) | 8 | 224 | Mission FSM, FaultManager, StaticObstacleLayer, GCSCommandHandler, FaultResponseExecutor, MissionStateTick, D* Lite planner, ObstacleAvoider3D (+ per-class overrides) |
 | [P5 — Comms](#p5--comms) | 1 | 13 | MavlinkSim and GCSLink |
 | [P6 — Payload Manager](#p6--payload-manager) | 1 | 9 | GimbalController servo simulation |
 | [P7 — System Monitor](#p7--system-monitor) | 2 | 53 | CPU/memory/thermal monitoring, ISysInfo abstraction, ProcessManager supervisor |
@@ -109,7 +109,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Watchdog — Thread Health Publisher](#watchdog--thread-health-publisher) | 1 | 15 | ShmThreadHealth struct, ThreadHealthPublisher bridge |
 | [Watchdog — Restart Policy](#watchdog--restart-policy) | 1 | 17 | RestartPolicy backoff/thermal, StackStatus, ProcessConfig from_json |
 | [Watchdog — Process Graph](#watchdog--process-graph) | 1 | 27 | Dual-edge dependency graph, topo sort, cascade targets, cycle detection |
-| [Utility](#utility) | 5 | 147 | Config, Result<T,E>, config validator, JSON log sink, latency tracker |
+| [Utility](#utility) | 6 | 163 | Config, Result<T,E>, config validator, per-class config, JSON log sink, latency tracker |
 | [P3 — SLAM / VIO](#p3--slam--vio) | 3 | 49 | Feature extractor, stereo matcher, IMU pre-integrator, VIO backend (covariance quality) |
 | [Utility — Diagnostics](#utility--diagnostics) | 1 | 12 | FrameDiagnostics collector, ScopedDiagTimer, merge, severity |
 | [P4 — Collision Recovery](#p4--collision-recovery) | 1 | 14 | Post-collision FSM state, waypoint skip, recovery logic |
@@ -134,7 +134,14 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Volumetric Map](#hal--volumetric-map) | 1 | 9 | IVolumetricMap + SimulatedVolumetricMap: init, insert/query, clear, same-voxel merge, factory |
 | [HAL — Event Camera](#hal--event-camera) | 1 | 9 | PixelFormat channels, IEventCamera + SimulatedEventCamera: open/close, events, factory |
 | [HAL — Semantic Projector](#hal--semantic-projector) | 1 | 14 | ISemanticProjector + CpuSemanticProjector: pinhole back-projection, depth NaN/zero, mask, factory |
-| **Total** | **75 C++ + 5 shell** | **1605 (no SDK) / 1644 (+SDK) + 42 + 250+** | |
+| [Benchmark — Perception Metrics](#test_perception_metricscpp--25-tests) | 1 | 25 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
+| [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
+| [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
+| [Benchmark — GT Emitter](#test_gt_emittercpp--13-tests) | 1 | 13 | GtClassMap pattern match (exact / wildcard / first-wins); load-from-scenario-config (well-formed, missing, malformed); JSONL serialisation round-trip with quote-and-backslash escaping; review fixes: config key validation, error path coverage |
+| [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
+| [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
+| Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
+| **Total** | **82 C++ + 5 shell + 1 Python** | **1746 (no SDK) / 1787 (+SDK) + 42 + 29 + 250+** | |
 
 ---
 
@@ -418,6 +425,25 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ---
 
+### test_perception_metrics.cpp — 25 tests
+
+**What it tests:** `drone::benchmark::perception_metrics` — pure-C++ metrics library that scores the perception pipeline against ground truth. Foundation layer for the Epic #523 benchmark harness; consumed by later sub-issues (latency profiler, CI gating, dashboard).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `BBox2D` | 4 | `area()` and identity IoU=1; disjoint boxes → IoU 0; zero-area box → IoU 0; half-overlap IoU = 50/150 |
+| `ClassMetrics` | 2 | `precision/recall/f1` math; zero denominators don't NaN |
+| `DetectionMetrics` | 9 | Empty frames; all-FP when no GT; all-FN when no predictions; perfect overlap → all TP, mAP=1; class mismatch → FP+FN with confusion-matrix cell filled; below-IoU-threshold pair is FP+FN (same pair passes at lower threshold); greedy matches highest-confidence prediction first; confusion-matrix dimensions are `[num_classes+1]²` with background slot; multi-IoU returns one `DetectionMetrics` per threshold |
+| `AP` | 2 | Empty preds or empty GT → AP 0; perfect preds across multiple classes → AP 1 |
+| `Tracking` | 5 | Empty frames → zero metrics; perfect track over 5 frames → MOTA=MOTP=1, no switches/fragmentations; ID swap between frames detected as id_switch=1; 3-frame sequence with a 1-frame gap detected as fragmentation=1; unmatched prediction counts as FP with total_gt=0 yielding MOTA=0 (defined, not -∞) |
+| `Performance` | 1 | N=1000 preds × 1000 GT in < 100 ms (measured ≈5 ms) |
+
+**Why these tests matter:** Every subsequent PR in the perception-v2 rewrite (Epics E2-E11) has to prove it doesn't regress detection/tracking quality. The scorer is the shared contract — if this math is wrong, every downstream comparison is wrong. Corner-case tests enforce the "no zero-denominator NaN" invariant used by CI gating; the perf test keeps the scorer fast enough to run on every scenario run without bloating wall-clock.
+
+**Key files under test:** `tests/benchmark/perception_metrics.h`, `tests/benchmark/perception_metrics.cpp`
+
+---
+
 ## HAL — Radar
 
 ### test_radar_hal.cpp — 30 tests
@@ -474,16 +500,17 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 
 ## P2 — Perception
 
-### test_kalman_tracker.cpp — 15 tests
+### test_kalman_tracker.cpp — 18 tests
 
 **What it tests:** Tracking building blocks — Kalman filter (8D state, constant
-velocity model) and O(n³) Munkres Hungarian assignment solver. These are shared
-infrastructure used by ByteTrackTracker.
+velocity model, per-class motion model) and O(n³) Munkres Hungarian assignment
+solver. These are shared infrastructure used by ByteTrackTracker.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `KalmanBoxTrackerTest` | 7 | Init from detection, predict step, update step, age increment, `is_confirmed()` after N updates, `is_stale()` after M misses, velocity initially zero |
 | `HungarianSolverTest` | 8 | Empty input, single match, perfect diagonal, max-cost gating, all-too-expensive, rectangular matrices, Munkres optimality (greedy-beats cases) |
+| `MotionModelTest` | 3 | `motion_model_from_string()` mapping, CONSTANT_ACCELERATION higher velocity noise than CONSTANT_VELOCITY, default model is CONSTANT_VELOCITY |
 
 **Key files under test:** `perception/kalman_tracker.h`
 
@@ -669,21 +696,26 @@ tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 24 tests
+### test_obstacle_avoider_3d.cpp — 29 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
-path-aware mode, Euclidean-magnitude clamp and close-regime path-aware bypass (Issue #503).
+path-aware mode, Euclidean-magnitude clamp, close-regime path-aware bypass (Issue #503),
+per-class config overrides (Epic #519), OOB class_id safety, and Result<>-based factory errors.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `ObstacleAvoider3DTest` | 7 | No objects pass-through, stale objects ignored, close object repels in XYZ, low confidence ignored, correction clamped, prediction shifts repulsion, NaN pose pass-through |
-| `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown throws |
+| `ObstacleAvoiderFactory` | 4 | `"3d"` registered, `"obstacle_avoider_3d"` registered, `"potential_field_3d"` registered, unknown returns Result error |
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
 | `ObstacleAvoider3DTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
 | `ObstacleAvoider3DTest` | 4 | Path-aware mode: strips backward repulsion, preserves lateral, preserves same-direction, disabled fallback |
 | `ObstacleAvoider3DTest` | 3 | Euclidean-magnitude clamp (not per-axis), close-regime bypass pushes opposite planner, bypass hysteresis prevents flip-flop (Issue #503) |
+| `ObstacleAvoider3DTest` | 3 | Per-class influence radius (PERSON vs TRUCK at same distance), per-class confidence threshold (DRONE filtered at 0.5 when threshold=0.8), per-class prediction dt (BUILDING stationary vs DRONE aggressive prediction) (Epic #519) |
+| `ObstacleAvoider3DTest` | 1 | Config-driven constructor loads per-class from JSON |
+| `ObstacleAvoider3DTest` | 1 | OOB class_id (255) is safely skipped — no repulsion applied |
+| `ObstacleAvoider3DTest` | 1 | Config-driven per-class loading from JSON (PERSON influence=3.0, default=5.0) |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 
@@ -1015,17 +1047,35 @@ graph where:
 
 ---
 
-### test_config_validator.cpp — 22 tests
+### test_config_validator.cpp — 26 tests
 
 **What it tests:** `ConfigSchema` startup-time config validation with
 builder-pattern constraints. Includes real config validation test
-(`DefaultConfigPassesAllSchemas`) using absolute path resolution.
+(`DefaultConfigPassesAllSchemas`) using absolute path resolution, and
+per-class section validation (Epic #519).
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
 | `ConfigValidatorTest` | 22 | Required field missing → error, type mismatch → error, range constraint (`.range()`), one-of constraint (`.one_of()`), custom predicate (`.satisfies()`), optional fields, required sections, **default.json validates against all schemas** (absolute path via PROJECT_CONFIG_DIR), multiple errors collected in single pass, pre-built process schemas |
+| `ConfigValidatorTest` | 4 | Per-class section validation: valid section passes, typo class name ("personn") rejected, missing section OK, `_comment` keys allowed (Epic #519) |
 
-**Key files under test:** `util/config_validator.h`
+**Key files under test:** `util/config_validator.h`, `util/per_class_config.h`
+
+---
+
+### test_per_class_config.cpp — 13 tests
+
+**What it tests:** `per_class_config.h` — per-class config lookup utility (Epic #519).
+Maps JSON sections like `{ "default": 5.0, "person": 2.0 }` into `std::array<T, 8>`
+indexed by `ObjectClass` enum values.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `PerClassConfig` | 2 | `class_name_to_index()` — all 8 valid class names, invalid name returns -1 |
+| `PerClassConfig` | 8 | `load_per_class<T>()` — all classes specified, default fallback for unspecified, no default uses fallback, missing section, unknown keys collected, `_comment` keys ignored, type mismatch falls back to compiled default, string type support |
+| `PerClassConfig` | 3 | `validate_per_class_section()` — valid section clean, unknown class name detected, missing section returns empty |
+
+**Key files under test:** `util/per_class_config.h`
 
 ---
 
@@ -1075,6 +1125,76 @@ capacity test validates the bitwise-mask wrap-around that avoids
 expensive modulo operations.
 
 **Key files under test:** `util/latency_tracker.h`
+
+---
+
+### test_latency_profiler.cpp — 15 tests
+
+**What it tests:** `LatencyProfiler` + `ScopedLatency` — the per-stage, thread-safe latency profiler that sits on top of `LatencyTracker` for the Epic #523 benchmark harness. Aggregates percentile stats per named stage, maintains a bounded correlation-ID-tagged trace ring, and emits a stable JSON snapshot for baseline files.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `LatencyProfiler` | 12 | Empty-profiler guards (no stages, no traces, summaries empty); per-stage tracker population from `record()`; `reset()` clears everything; percentile correctness against injected 1..100 ns durations (p50≈50, p90≈90, p95≈95, p99≈99 ±2); trace ring preserves oldest-first ordering of correlation IDs across mixed stages; ring-overflow test (cap 4, write 10 → retains last 4; per-stage aggregates still count all 10); zero-capacity trace ring disables tracing without affecting aggregates; 4-thread × 500-record concurrent-write stress (sum = 2000, no lost updates); `to_json()` contains both `stages` and `traces` sections even when empty; JSON escapes quotes and backslashes in stage names |
+| `ScopedLatency` | 3 | Records duration on destructor (MockClock 42 µs → `min_ns == 42 000`); captures `CorrelationContext::get()` at construction and ignores mid-scope changes; non-monotonic clock (time goes backward inside the scope) → duration clamped to 0 ns, not wrapped to 2^64 |
+
+**Why these tests matter:** The profiler is consumed by every subsequent PR in the perception-v2 rewrite (`ScopedLatency` guards wrap detector/tracker/grid-update/planner-tick). If percentile math is wrong, every baseline and every regression gate is wrong. The thread-safety test catches mutex gaps at lower cost than a TSan run. The non-monotonic-clock defence exists because sign extension bugs with signed durations have bitten us before (memory: `feedback_integer_conversion_safety.md`). The overhead sub-test (`OverheadUnderBudget`) measures `ScopedLatency` cost at 10 000 empty-scope records and asserts < 5 µs per record — three orders below the 2 % of a 30 Hz tick budget.
+
+**Key files under test:** `util/latency_profiler.h`
+
+---
+
+### test_latency_profiler_dump.cpp — 3 tests
+
+**What it tests:** The profiler-wiring pattern used in `process2_perception/src/main.cpp` and `process4_mission_planner/src/main.cpp`. Exercises the end-to-end contract — simulated worker threads record via `ScopedLatency`, main() dumps `LatencyProfiler::to_json()` to disk, the file parses back cleanly, and concurrent workers land all records (no mutex / ordering bugs).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `LatencyProfilerDump` | 3 | (1) Simulated 3-stage perception run (100 frames × `Detect`/`Track`/`Fuse`) → valid JSON on disk → parse back, per-stage counts match, percentiles non-zero; (2) Disabled-profiler path: empty `std::optional<LatencyProfiler>` means no file gets written; (3) Concurrent 6-thread × 500-record stress confirms every `ScopedLatency` record lands (total count invariant) — same shape as P2's 6 threads |
+
+**Why these tests matter:** DR-022 permits mutex-protected `ScopedLatency` on flight-critical threads under three conditions (priority isolation, bounded hold-time, config gating). This test guards condition 3 (the `std::optional` null path actually produces zero I/O) and the lossless-record invariant (no race dropping records). Without this, a refactor that breaks the "profiler → file" pipeline would only surface during a full scenario run.
+
+**Key files under test:** `util/latency_profiler.h`, plus the main.cpp wiring patterns in `process2_perception/` and `process4_mission_planner/`.
+
+---
+
+### test_gt_emitter.cpp — 13 tests
+
+**What it tests:** `drone::benchmark::GtClassMap` (scenario-config-driven class mapping) + `to_json_line` (JSONL serialisation) — the shared layer of the ground-truth emitter (#594 / Epic #523). The Cosys backend itself needs a live AirSim server and is covered by scenario integration tests (#29, #30).
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `GtClassMap` | 8 | Empty map → every lookup is nullopt; exact-match patterns (no wildcard) hit only the literal name; trailing `*` wildcard matches any prefix; first-registered pattern wins on overlap; `load(drone::Config)` reads the `gt_class_map` section correctly; missing key → empty map (no crash); malformed entries (non-object, missing `class_id`/`class_name`) are silently dropped; `patterns()` returns the registered pattern strings in order |
+| `GtEmitterJson` | 3 | `to_json_line` produces single-line JSON (no embedded newlines), parses cleanly via `nlohmann::json`, round-trips every field (timestamp, frame_sequence, camera pose, per-object class/bbox/gt_track_id/occlusion/distance_m); empty objects array serialises cleanly; class_name containing `"` and `\` characters round-trips through parse without corruption |
+
+**Why these tests matter:** The GT emitter is consumed by every baseline-capture run (#573) and every subsequent perception-v2 PR's scoring. A silent drop on a malformed config entry, an off-by-one on wildcard matching, or a JSON-escape bug in `to_json_line` would silently corrupt the TP/FP/FN numbers the whole rewrite is measured against.
+
+**Key files under test:** `tests/benchmark/gt_emitter.h`, `tests/benchmark/gt_emitter.cpp`. The Cosys backend (`tests/benchmark/cosys_gt_emitter.cpp`) compiles into the test target for link-coverage but is not directly exercised (needs a live AirSim server).
+
+### test_baseline_capture.cpp — 17 tests
+
+**What it tests:** `drone::benchmark::BaselineCapture` — the metric accumulation and JSON serialisation layer that produces `benchmarks/baseline.json` (#573 / Epic #523). Consumes the same `FrameData` / `DetectionMetrics` / `TrackingMetrics` types from #570 and latency JSON from #571.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `BaselineCaptureTest` | 17 | Perfect detection (10 TP, precision/recall = 1.0, mean_ap = 1.0); mixed TP/FP/FN counts; per-class breakdown with class-name map; multiple scenarios in insertion order; JSON round-trip (write + load with full field verification: detection, tracking, per-class, mean_ap); latency content fidelity (parsed JSON equality, not just non-empty); tracking metrics (MOTP bounded ≈0.81, zero ID switches on stable track); tracking ID switch detection (pred track ID change); tracking fragmentation detection (track lost then reacquired); finalise unknown scenario returns false; empty scenario (all zeros); load from nonexistent path; load malformed JSON; load wrong-schema JSON; state preserved on load failure; nonexistent scenario returns nullptr; duplicate scenario name reuses existing entry |
+
+**Why these tests matter:** The baseline is the single reference point the entire perception v2 rewrite is measured against. A serialisation bug that silently drops a field, a finalise() that miscounts TP/FP, or a load() that corrupts the class breakdown would make every subsequent delta measurement wrong — and we wouldn't notice until live testing on hardware.
+
+**Key files under test:** `tests/benchmark/baseline_capture.h`, `tests/benchmark/baseline_capture.cpp`. Delegates to `perception_metrics.h/cpp` (#570) for the actual TP/FP/FN and MOTA/MOTP computation.
+
+---
+
+### test_baseline_comparator.cpp — 21 tests
+
+**What it tests:** `drone::benchmark::compare_baselines()` and `format_comparison()` — the regression detection engine that compares a current benchmark run against a stored baseline (#572 / Epic #523). Consumes `BaselineCapture` objects from #573 and enforces configurable percentage thresholds on detection, tracking, and latency metrics.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `BaselineComparatorTest` | 21 | Improvement passes (higher metrics → pass, metrics_checked > 0); regression beyond threshold fails (10% recall drop exceeds 5% threshold); regression within threshold passes (3% drop within 5%); exact boundary passes (current = baseline × 0.95 → pass, >= inclusive); below boundary fails (current = 0.759 < 0.76 boundary); missing scenario in current run fails; zero-valued baseline metrics skipped (detection + latency with zero baselines → always pass); latency regression fails (30% p95 increase exceeds 20% threshold); latency improvement passes (20% decrease); latency within threshold passes (15% increase within 20%); latency missing stage silently skips (only present stages compared); latency malformed JSON safe (no crash or false fail); format produces Markdown table with correct columns and summary; format renders **MISSING** for absent scenarios; format renders **FAIL** for regressed metrics; extra scenario in current ignored; custom thresholds respected (strict 5% fails, relaxed 15% passes); MOTA regression detected (17.6% drop exceeds 5%); MOTP-only regression detected (MOTA stable, MOTP drops 18.75%); MOTP uses independent threshold from MOTA (relaxed motp_drop_pct passes); multiple scenarios with partial failure (one good, one regressed) |
+
+**Why these tests matter:** This is the CI gate — a bug here either lets regressions through silently or blocks valid PRs with false alarms. The zero-baseline skip is critical because `benchmarks/baseline.json` is currently all zeros; without it, every comparison would fail. The latency defensive path tests ensure malformed/missing data doesn't crash the tool. The MOTP-specific tests caught a copy-paste bug where MOTP silently shared MOTA's threshold.
+
+**Key files under test:** `tests/benchmark/baseline_comparator.h`, `tests/benchmark/baseline_comparator.cpp`. Also tests the CLI tool `compare_to_baseline_main.cpp` indirectly (same comparison logic). Depends on `baseline_capture.h/cpp` (#573) for `BaselineCapture` and `ScenarioBaseline` types.
 
 ---
 

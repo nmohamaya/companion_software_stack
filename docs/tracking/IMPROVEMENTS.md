@@ -16,7 +16,100 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-21
+
+#### 12. HAL factory functions use `throw` instead of `Result<T,E>`
+
+- **Priority:** P2
+- **Category:** architecture
+- **Noticed while:** PR #599 review (Epic #519 per-class config). P4 planner/avoider factories converted in this PR; HAL factories remain.
+- **Current state:** All 7 factory functions in `common/hal/include/hal/hal_factory.h` (create_camera, create_fc_link, create_gcs_link, create_gimbal, create_imu_source, create_radar, create_depth_estimator) throw `std::runtime_error` on unknown backend strings. This is startup-only code but violates the project's `Result<T,E>` error-handling pattern.
+- **Proposed fix:** Convert all HAL factories to return `Result<std::unique_ptr<Interface>>`. Update callers in all 7 process main.cpp files and tests.
+- **When worth doing:** Standalone refactor PR — touches many files across the whole stack.
+
+#### 13. No IPC-boundary validation of `class_id` before `avoid()`
+
+- **Priority:** P3
+- **Category:** architecture (defense-in-depth)
+- **Noticed while:** PR #599 review — OOB array access via `class_id` as index into `std::array<T, 8>`.
+- **Current state:** `mission_state_tick.h` passes `DetectedObjectList` from IPC directly to `avoider.avoid()` without validating `class_id` bounds. The avoider now has an in-loop guard (`if (ci >= kPerClassCount) continue`), but defense-in-depth says validate at the system boundary too.
+- **Proposed fix:** Add a `validate()` method to `DetectedObjectList` or a free function that clamps/filters invalid class IDs before passing to downstream consumers. Log a warning when invalid IDs are received from IPC.
+- **When worth doing:** When touching IPC types or adding new consumers of DetectedObjectList.
+
 ### 2026-04-20
+
+#### 10. `COSYS_SIMULATION_ARCHITECTURE.md` — parallel to the existing Gazebo doc
+
+- **Priority:** P3
+- **Category:** docs (architecture reference)
+- **Noticed while:** filing issue #594 (GT emitter) — the existing `docs/architecture/SIMULATION_ARCHITECTURE.md` is Gazebo-only despite Cosys now being comparable in complexity (HAL backends, segmentation, `simSpawnObject` scene population, scenarios #29/#30, GT emitter).
+- **Current state:** Cosys architecture is scattered across ADR-011 (the "why"), `docs/guides/COSYS_SETUP.md` (the "how-to-install"), and inline comments in `common/hal/src/cosys_*.cpp`. No single reference doc for the runtime architecture.
+- **Proposed fix:** create `docs/architecture/COSYS_SIMULATION_ARCHITECTURE.md` mirroring the Gazebo doc's structure — HAL-mapping, RPC-surface inventory, scenario population via `simSpawnObject`, segmentation pipeline, GT-emitter integration, known limitations. Cross-link from the Gazebo doc and from COSYS_SETUP.md.
+- **When worth doing:** after the #594 (GT emitter) + #573 (baseline capture) work stabilises the Cosys-side patterns — then we document what actually shipped rather than chasing a moving target.
+
+#### 5. Stage-name constants (eliminate magic-string drift across P2/P4/tests)
+
+- **Priority:** P3
+- **Category:** architecture (benchmark harness consistency)
+- **Source:** deferred from `review-code-quality` agent on PR #593
+- **Current state:** Stage names like `"Detect"`, `"Track"`, `"Fuse"`, `"PlannerLoop"`, `"GeofenceCheck"`, `"FaultEval"` appear as string literals at each `ScopedLatency` site across `process2_perception/src/main.cpp`, `process4_mission_planner/src/main.cpp`, and `tests/test_latency_profiler_dump.cpp`. A rename at one site wouldn't break the build — the baseline harness would silently see a new stage name while the old name disappears.
+- **Proposed fix:** `namespace drone::cfg_key::benchmark::stage_names { inline constexpr std::string_view DETECT = "Detect"; ... }` in `util/config_keys.h`. All three locations (P2, P4, test) use the constants.
+- **When worth doing:** when a third consumer (dashboard / CI gating) needs to reference the same stage names, OR when a rename has to happen for real (e.g. renaming `"Detect"` to `"Detection"` to match a schema).
+
+#### 6. `LatencyTrace::stage` as `char[N]` for trivially-copyable ring (perf)
+
+- **Priority:** P3
+- **Category:** test-infra (benchmark harness performance)
+- **Source:** deferred from `review-performance` agent on PR #593 (also `review-performance` on PR #591, documented in DR-020)
+- **Current state:** `LatencyTrace` holds a `std::string stage`. SSO keeps typical stage names (≤15 chars) allocation-free, but every `record()` call still does a `slot.stage.assign()` under the mutex — ~10 ns of unnecessary work per call on the hot path.
+- **Proposed fix:** switch `LatencyTrace::stage` to `char stage[32]` (or `std::array<char, 32>`). Makes `LatencyTrace` trivially copyable, allows `memcpy`-based bulk snapshot in `traces()`, eliminates SSO dependency.
+- **When worth doing:** when a hot-path consumer records at >1 kHz (current max is 30 Hz), or when a certification audit flags the SSO assumption as an unbounded-allocation risk.
+- **Trade-off:** silent truncation of stage names longer than 31 chars — manageable with a static assert on each stage-name literal.
+
+#### 7. TSan run for `AllRecordsLandUnderConcurrentWorkers` test
+
+- **Priority:** P3
+- **Category:** test-infra (coverage)
+- **Source:** deferred from `review-test-quality` agent on PR #593
+- **Current state:** The 6-thread × 500-record stress test guards against count mismatches but can't catch memory-ordering bugs without ThreadSanitizer. CI runs the test under default GCC; no TSan pipeline runs on each PR.
+- **Proposed fix:** add a `bash deploy/run_ci_local.sh --job TSAN` step that runs `test_latency_profiler*` under TSan, and require it pass before landing changes to `common/util/include/util/latency_profiler.h`.
+- **When worth doing:** when a real TSan finding slips through to main, or as part of a broader CI-coverage uplift.
+
+#### 8. `[[likely]]` / `[[unlikely]]` on the profiler gate
+
+- **Priority:** P3
+- **Category:** code quality (micro-optimisation)
+- **Source:** deferred from `review-performance` agent on PR #593
+- **Current state:** `if (profiler) bench.emplace(...)` — branch predictor handles it perfectly after the first few frames, but an explicit `[[unlikely]]` on the null-branch would improve code layout in the default (disabled) path.
+- **Proposed fix:** `if (profiler_ptr) [[unlikely]] { ... }` at each of the 6 call sites.
+- **When worth doing:** when profiling shows the disabled-path overhead is measurable. Currently it's sub-nanosecond — not worth the readability cost.
+
+#### 9. `= nullptr` default on `LatencyProfiler*` thread-function parameters
+
+- **Priority:** P3
+- **Category:** api-ergonomics
+- **Source:** deferred from `review-api-contract` agent on PR #593
+- **Current state:** P2's `inference_thread`, `tracker_thread`, `fusion_thread` all take `LatencyProfiler* profiler` as the final positional parameter with no default value. Every current caller passes it explicitly, but a future caller could forget and get a compile error instead of a safe-by-default null.
+- **Proposed fix:** add `= nullptr` to the parameter in the function declaration.
+- **When worth doing:** when a second caller of any of these thread functions appears (e.g. a test harness that wants to run the thread function with a mock detector).
+
+#### 3. `compute_ap` — O(11 × log nP) via max-precision envelope
+
+- **Priority:** P3
+- **Category:** test-infra (benchmark harness performance)
+- **Source:** deferred from `review-performance` agent on PR #590
+- **Current state:** `compute_ap` in `tests/benchmark/perception_metrics.cpp` runs an O(11 × nP) scan over the precision-recall curve for each of the 11 VOC recall checkpoints. Measured ≈5 ms at N=1000, well under the 100 ms AC.
+- **Proposed fix:** Standard VOC trick — sweep the precision curve right-to-left once to build a max-precision envelope (`max_precision[i] = max(precision_curve[i..end])`), then binary-search for each recall checkpoint. Reduces the interpolation step from O(11 × nP) to O(11 × log nP). Net: one extra O(nP) pass.
+- **When worth doing:** benchmark harness scales to N ≥ 10 000 detections per scenario, or profiling shows `compute_ap` on a hot path.
+
+#### 4. `std::stable_sort` in `compute_ap` / `match_frame` for cross-run determinism
+
+- **Priority:** P3
+- **Category:** test-infra (benchmark harness reproducibility)
+- **Source:** deferred from `review-performance` agent on PR #590
+- **Current state:** both `std::sort` call sites (confidence-desc sorting in `compute_ap` and `match_frame`) use unstable sort. Tie-broken predictions can land in implementation-defined order, producing non-deterministic TP/FP assignments (and therefore AP) across platforms when two predictions share the exact same confidence.
+- **Proposed fix:** swap to `std::stable_sort`. ~10–20% slower at N=100 000 but still well within budget.
+- **When worth doing:** CI gates AP across Linux × macOS runners, or an investigation chases a flaky AP delta to tie-breaking.
 
 #### 1. Ninja/Unix-Makefiles generator mismatch on `airsim-build` blocks rebuild
 - **Priority:** P2
