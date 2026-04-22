@@ -286,6 +286,18 @@ inline constexpr const char* REQUIRE_RADAR_FOR_PROMOTION =
 inline constexpr const char* PREDICTION_ENABLED =
     "mission_planner.occupancy_grid.prediction_enabled";
 inline constexpr const char* PREDICTION_DT_S = "mission_planner.occupancy_grid.prediction_dt_s";
+
+// Semantic-voxel input (Epic #520 / Issue #608 PATH A).  When enabled, P4 subscribes
+// to /semantic_voxels and inserts each voxel directly into the static layer, bypassing
+// the promotion_hits filter (voxels are already mask-gated and confidence-scored on
+// the P2 side).  The position clamp is enforced at the P4 boundary as a final guard
+// against out-of-world-extent positions (addresses review security P3 from PR #609).
+inline constexpr const char* VOXEL_INPUT_ENABLED =
+    "mission_planner.occupancy_grid.voxel_input.enabled";
+inline constexpr const char* VOXEL_INPUT_POSITION_CLAMP_M =
+    "mission_planner.occupancy_grid.voxel_input.position_clamp_m";
+inline constexpr const char* VOXEL_INPUT_MIN_CONFIDENCE =
+    "mission_planner.occupancy_grid.voxel_input.min_confidence";
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {

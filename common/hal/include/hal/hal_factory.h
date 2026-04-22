@@ -17,6 +17,8 @@
 #pragma once
 
 #include "hal/cpu_semantic_projector.h"
+#include "hal/edge_contour_sam_backend.h"
+#include "hal/fastsam_inference_backend.h"
 #include "hal/icamera.h"
 #include "hal/ievent_camera.h"
 #include "hal/ifc_link.h"
@@ -357,6 +359,20 @@ template<typename Interface>
     }
     if (backend == "sam_simulated") {
         return std::make_unique<SimulatedSAMBackend>(cfg, section);
+    }
+    // Algorithmic class-agnostic segmentation — OpenCV edge+contour based.
+    // Produces real masks from image content without any ML dependency;
+    // the interim fill between SimulatedSAMBackend (test scaffold) and a
+    // real SAM-2 ONNX backend (Epic #520 / Issue #555).
+    if (backend == "edge_contour_sam") {
+        return std::make_unique<EdgeContourSAMBackend>(cfg, section);
+    }
+    // Real class-agnostic SAM via FastSAM ONNX (YOLOv8-seg architecture
+    // trained on Meta's SA-1B).  The drop-in for what Epic #520 / Issue
+    // #555 actually needed.  Requires `models/fastsam_s.onnx` — run
+    // `bash models/download_fastsam.sh` to fetch + export.
+    if (backend == "fastsam") {
+        return std::make_unique<FastSamInferenceBackend>(cfg, section);
     }
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {

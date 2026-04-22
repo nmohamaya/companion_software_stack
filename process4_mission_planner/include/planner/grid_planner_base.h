@@ -79,6 +79,14 @@ public:
     /// Pre-load a static obstacle from the HD map (scenario config).
     virtual void add_static_obstacle(float wx, float wy, float radius_m, float height_m) = 0;
 
+    /// Insert world-frame voxels from the PATH A semantic-voxels pipeline
+    /// (Epic #520 / Issue #608).  See `OccupancyGrid3D::insert_voxels` for
+    /// semantics; this is the IGridPlanner pass-through so the P4 voxel
+    /// subscriber thread doesn't need a downcast to GridPlannerBase.
+    virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
+                                                            uint32_t n, float clamp_m,
+                                                            float min_confidence) = 0;
+
     /// True if the last planning cycle could not find a search path
     /// and fell back to a direct line toward the target.
     [[nodiscard]] virtual bool using_direct_fallback() const = 0;
@@ -131,6 +139,18 @@ public:
     void add_static_obstacle(float wx, float wy, float radius_m, float height_m) override {
         grid_.add_static_obstacle(wx, wy, radius_m, height_m);
         snap_valid_ = false;
+    }
+
+    OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
+                                                    uint32_t n, float clamp_m,
+                                                    float min_confidence) override {
+        auto stats = grid_.insert_voxels(voxels, n, clamp_m, min_confidence);
+        // If any voxel landed, invalidate the cached path so D*Lite/A* replan
+        // against the updated grid on the next tick.
+        if (stats.inserted > 0) {
+            snap_valid_ = false;
+        }
+        return stats;
     }
 
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }

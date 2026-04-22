@@ -227,7 +227,13 @@
             "max_static_cells": 0,
             "require_radar_for_promotion": false,
             "prediction_enabled": true,
-            "prediction_dt_s": 2.0
+            "prediction_dt_s": 2.0,
+            "voxel_input": {
+                "_comment": "PATH A voxel subscriber (Epic #520 / Issue #608). Disabled by default; scenario 33 enables it.",
+                "enabled": false,
+                "position_clamp_m": 1000.0,
+                "min_confidence": 0.3
+            }
         },
         "obstacle_avoider": {
             "backend": "potential_field_3d"

@@ -175,6 +175,107 @@ public:
                        wx, wy, radius_m, height_m, added, static_occupied_.size());
     }
 
+    /// Insert world-frame voxels from the PATH A pipeline (Epic #520 / Issue #608).
+    ///
+    /// The voxels arrive on `/semantic_voxels`, already confidence-scored and
+    /// mask-gated by MaskDepthProjector on the P2 side.  That upstream work
+    /// means we intentionally **bypass** the `promotion_hits` filter used in
+    /// `update_from_objects()` — those hits guard against ghost cells from
+    /// the detector/depth pipeline's false positives on ground texture, which
+    /// the mask-aware path has already filtered out.
+    ///
+    /// Position clamp: the final safety guard before writing to the grid.
+    /// A malformed sender (or a numerical edge case in MaskDepthProjector)
+    /// could emit positions outside the world extent, which would overflow
+    /// grid indexing.  Any voxel whose |position| exceeds `clamp_m` on any
+    /// axis is dropped.  Addresses the security P3 deferred from PR #609.
+    ///
+    /// Cells written here land in the static layer but are NOT recorded in
+    /// `hd_map_cells_` — an upstream pipeline regression (e.g. a future SAM
+    /// misfire) can still be cleared by `clear_static()`.
+    ///
+    /// @return `{inserted, clamped_dropped, low_confidence_dropped, out_of_bounds}`
+    struct VoxelInsertStats {
+        size_t inserted               = 0;
+        size_t clamped_dropped        = 0;
+        size_t low_confidence_dropped = 0;
+        size_t out_of_bounds          = 0;
+    };
+    VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels, uint32_t n,
+                                   float clamp_m, float min_confidence) {
+        VoxelInsertStats s;
+        if (voxels == nullptr || n == 0) return s;
+        const float clamp = std::max(0.0f, clamp_m);
+
+        // Each voxel carries a point sample of an obstacle surface.  Without
+        // inflation a 5 m cube hit by 4 depth samples produces only 2-3
+        // unique grid cells and the avoider's repulsive field has gaps big
+        // enough for the drone to squeeze through (observed during scenario
+        // 33 testing).  Inflate symmetrically in 3D — voxels are point
+        // samples with no height prior.  Radius 1 cell → 3×3×3-minus-corners
+        // neighbourhood (~7 cells per voxel) keeps the grid bounded while
+        // still filling the gap between scattered mask probes.
+        constexpr int kInflate  = 1;
+        constexpr int kInflate2 = kInflate * kInflate;
+
+        // Ground-plane reject threshold.  At 2 m grid resolution, voxels
+        // with world z < 0.3 m are ground textures / shadows / floor patches
+        // that EdgeContourSAM latches onto — promoting them to static would
+        // make every patch of grass an obstacle.  Scenario drone cruise
+        // altitude is 5 m, so no real navigation-relevant obstacle lives
+        // below 0.3 m from this camera's vantage point.
+        constexpr float kMinObstacleZ = 0.3f;
+
+        for (uint32_t i = 0; i < n; ++i) {
+            const auto& v = voxels[i];
+            // Position clamp (PR #609 review P3 deferred to consumer boundary).
+            // Reject voxels whose |x|, |y|, or |z| exceeds the world extent.
+            if (clamp > 0.0f && (std::abs(v.position_x) > clamp || std::abs(v.position_y) > clamp ||
+                                 std::abs(v.position_z) > clamp)) {
+                ++s.clamped_dropped;
+                continue;
+            }
+            if (v.confidence < min_confidence) {
+                ++s.low_confidence_dropped;
+                continue;
+            }
+            // Ground-plane filter — count under clamped_dropped to keep the
+            // stats tuple compact; the diagnostic log groups all boundary
+            // drops together anyway.
+            if (v.position_z < kMinObstacleZ) {
+                ++s.clamped_dropped;
+                continue;
+            }
+            const GridCell center = world_to_grid(v.position_x, v.position_y, v.position_z);
+            if (!in_bounds(center)) {
+                ++s.out_of_bounds;
+                continue;
+            }
+            // Small 3D inflation — every cell within `kInflate` of the sample.
+            // Most neighbouring inserts collide with cells already present
+            // from nearby voxels, so this is idempotent on repeated observations.
+            for (int dz = -kInflate; dz <= kInflate; ++dz) {
+                for (int dy = -kInflate; dy <= kInflate; ++dy) {
+                    for (int dx = -kInflate; dx <= kInflate; ++dx) {
+                        if (dx * dx + dy * dy + dz * dz > kInflate2) continue;
+                        const GridCell c{center.x + dx, center.y + dy, center.z + dz};
+                        if (!in_bounds(c)) continue;
+                        auto [it, inserted] = static_occupied_.insert(c);
+                        if (inserted) {
+                            changed_cells_.push_back({c, true});
+                            // Do NOT record in hd_map_cells_ — these are PATH A
+                            // voxels, clearable by clear_static() if the
+                            // pipeline misbehaves.
+                            ++s.inserted;
+                            ++promoted_count_;
+                        }
+                    }
+                }
+            }
+        }
+        return s;
+    }
+
     /// Insert obstacles from a detected object list.
     /// Updates timestamps for observed cells; stale cells expire after TTL.
     void update_from_objects(const drone::ipc::DetectedObjectList& objects,
