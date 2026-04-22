@@ -133,6 +133,7 @@ The sole message bus implementation. Provides `advertise<T>()` / `subscribe<T>()
 | `/drone_mission_cam` | `drone/video/frame` |
 | `/drone_stereo_cam` | `drone/video/stereo_frame` |
 | `/detected_objects` | `drone/perception/detections` |
+| `/semantic_voxels` | `drone/perception/voxels` |
 | `/slam_pose` | `drone/slam/pose` |
 | `/mission_status` | `drone/mission/status` |
 | `/trajectory_cmd` | `drone/mission/trajectory` |
@@ -393,6 +394,7 @@ Classification label for detected objects.
 | 5 | `ANIMAL` |
 | 6 | `BUILDING` |
 | 7 | `TREE` |
+| 8 | `GEOMETRIC_OBSTACLE` |
 
 ### `DetectedObjectList`
 
@@ -412,6 +414,44 @@ struct DetectedObjectList {
 **Topic:** `/detected_objects` to Zenoh key `drone/perception/detections`
 **Publisher:** P2 (perception)
 **Subscribers:** P4 (mission planner)
+
+### `SemanticVoxel` / `SemanticVoxelBatch`
+
+Output of the PATH A pipeline (Epic #520): mask-aware back-projection of SAM masks through
+depth into world-frame voxels. Each voxel is already confidence-scored and class-labelled
+by `MaskClassAssigner`, so the planner can insert into the occupancy grid without the
+`promotion_hits` filter required by the detector-driven path.
+
+```cpp
+struct SemanticVoxel {
+    float       position_x, position_y, position_z;  // world frame (m)
+    float       occupancy;                           // [0, 1]
+    float       confidence;                          // [0, 1]
+    ObjectClass semantic_label;                      // from MaskClassAssigner
+    uint8_t     _pad_label[3];
+    uint64_t    timestamp_ns;                        // source-frame capture time
+};
+
+constexpr uint32_t MAX_VOXELS_PER_BATCH = 1024;
+
+struct alignas(64) SemanticVoxelBatch {
+    uint64_t      timestamp_ns;     // batch emission time
+    uint64_t      frame_sequence;   // source video-frame sequence
+    uint32_t      num_voxels;
+    uint32_t      _pad_hdr;
+    SemanticVoxel voxels[MAX_VOXELS_PER_BATCH];
+};
+```
+
+**Topic:** `/semantic_voxels` to Zenoh key `drone/perception/voxels`
+**Publisher:** P2 (perception, PATH A — added in PR wiring E5.INT / Issue #608)
+**Subscribers:** P4 (mission planner — occupancy-grid writer, added in PR 3)
+**Wire size:** `sizeof(SemanticVoxelBatch) = 32832 B` — 24 B header (incl. 4 B `_pad_hdr`) + 1024 × 32 B voxel array + 40 B `alignas(64)` tail pad. One Zenoh SHM packet.
+**Trivially copyable / standard layout:** yes — `static_assert`ed in `ipc_types.h`, along with per-field `offsetof` and `sizeof` guards that catch silent field reorder / resize at compile time.
+**Alignment:** `alignas(64)` — matches `Pose` / `FaultOverrides` precedent so the 24 B header is cache-line-isolated from the voxel array on the subscriber side.
+
+Coexists with `/detected_objects` for backwards compatibility: scenarios that keep the
+detector-only path unchanged see no new traffic on this channel.
 
 ### `MissionState` (enum)
 

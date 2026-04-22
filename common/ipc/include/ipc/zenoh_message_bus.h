@@ -107,6 +107,7 @@ public:
             {"/drone_mission_cam", "drone/video/frame"},
             {"/drone_stereo_cam", "drone/video/stereo_frame"},
             {"/detected_objects", "drone/perception/detections"},
+            {"/semantic_voxels", "drone/perception/voxels"},
             {"/slam_pose", "drone/slam/pose"},
             {"/mission_status", "drone/mission/status"},
             {"/trajectory_cmd", "drone/mission/trajectory"},

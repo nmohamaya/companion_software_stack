@@ -3327,4 +3327,31 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-_Last updated after Improvement #85 (Epic #515). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #86 — PATH A IPC wire type: `SemanticVoxelBatch` + `/semantic_voxels` channel (Issue #608 PR 1)
+
+**Date:** 2026-04-22
+**Category:** Feature — IPC / Perception v2
+**Epic:** [#520 — PATH A (SAM + Detector Integration)](https://github.com/nmohamaya/companion_software_stack/issues/520) via integration sub-issue [#608](https://github.com/nmohamaya/companion_software_stack/issues/608)
+
+**What:**
+
+- New IPC wire types `SemanticVoxel` (32 B, world-frame voxel with occupancy, confidence, `ObjectClass` label, source-frame timestamp) and `SemanticVoxelBatch` (header + fixed 1024-slot array, 32 832 B after `alignas(64)` tail pad) in `common/ipc/ipc_types.h`.
+- New topic constant `topics::SEMANTIC_VOXELS = "/semantic_voxels"` with Zenoh-key mapping to `drone/perception/voxels` in `ZenohMessageBus::to_key_expr()`.
+- `static_assert`ed trivially copyable + standard layout + per-field `offsetof` + computed `sizeof` — any future field reorder / resize fails the build.
+- `alignas(64)` on `SemanticVoxelBatch` (matches `Pose` / `FaultOverrides` precedent) keeps the 24 B header cache-line-isolated from the voxel array.
+- `validate()` enforces NaN / Inf rejection on positions, `[0, 1]` bounds on occupancy / confidence, and `ObjectClass` enum-range on `semantic_label` — Zenoh delivers raw bytes so the enum check stops an out-of-range byte from reaching a downstream `switch` statement.
+- All fields have default member initialisers — zero-init on construction, no uninitialised reads possible.
+- Per-batch cap comment explains the `MAX_VOXELS_PER_BATCH = 1024` rationale (one Zenoh SHM packet; publisher must truncate by confidence or split if exceeded; sized for 5–15 SAM masks × sparse depth sampling; revisit after first live PR 2 measurement).
+- In-process (`hal::VoxelUpdate`) vs. on-wire (`SemanticVoxel`) duality documented inline.
+- 20 unit tests (`test_semantic_voxels.cpp`) — default construction, `validate()` boundary cases (NaN / Inf position, `[0, 1]` exact-boundary accepts for occupancy / confidence, out-of-range rejections, `ObjectClass` byte ≥ 9 reject, `num_voxels > MAX` reject, full-batch `num_voxels = MAX` accept, bad-voxel-in-batch reject, bad-voxel-at-last-slot reject, empty-batch-with-garbage-tail accept, voxels-past-count ignored), topic mapping, byte round-trip via `std::copy` on byte iterators (CLAUDE.md: prefer `std::copy` over `memcpy`).
+
+**Files added:** `tests/test_semantic_voxels.cpp`
+**Files modified:** `common/ipc/include/ipc/ipc_types.h`, `common/ipc/include/ipc/zenoh_message_bus.h`, `tests/CMakeLists.txt`, `tests/TESTS.md`, `docs/design/API.md`
+
+**Why:** Epic #520 delivered PATH A component classes (SAM backend, MaskClassAssigner, MaskDepthProjector) via PRs #603 and #604 but did not include end-to-end runtime wiring — no IPC channel for the voxel stream, no P2 publisher, no P4 consumer. Scenario 33 consequently runs the same pipeline as scenario 30 (`color_contour` → depth → standard projection), the grid saturates with ghost cells within 30 s, and the drone collides with real obstacles in live UE5 runs. #608 fills the wiring gap across three PRs; this PR lands the channel and wire type first so the publisher (PR 2) and subscriber (PR 3) have something concrete to target. No publishers or subscribers yet → no runtime behaviour change on the integration branch.
+
+**Test count:** +16 new tests. Full suite: 1829 → 1845 on integration branch.
+
+---
+
+*Last updated after Improvement #86 (Issue #608 PR 1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
