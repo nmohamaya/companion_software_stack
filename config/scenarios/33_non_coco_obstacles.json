@@ -53,13 +53,13 @@
             }
         },
         "perception": {
+            "_comment_detector": "Perception v2 (Epic #520) design: detector provides class labels only — SAM masks are the primary obstacle source. Switched from color_contour (ground-texture ghost cells) to YOLOv8 so the detector fires ONLY on real COCO objects (person, chair, couch, bush). Non-COCO obstacles (wall, pillar, cube) have no detector bbox, get GEOMETRIC_OBSTACLE via MaskClassAssigner fallback, and are represented in the grid purely through PATH A voxels. Detector output also drives dynamic TTL cells for reactive avoidance of moving objects — static promotion is paused when voxel_input is enabled (see mission_planner.occupancy_grid.voxel_input).",
             "detector": {
-                "backend": "color_contour",
-                "min_contour_area": 2000,
+                "backend": "yolov8",
+                "model_path": "models/yolov8n.onnx",
                 "confidence_threshold": 0.4,
                 "max_fps": 30,
-                "min_bbox_height_px": 60,
-                "max_aspect_ratio": 5.0
+                "input_size": 640
             },
             "depth_estimator": {
                 "backend": "depth_anything_v2",
@@ -81,13 +81,15 @@
                 "measurement_noise_bearing": 0.05
             },
             "path_a": {
-                "_comment": "PATH A enabled — SAM-simulated masks fused with detector output. MaskDepthProjector produces GEOMETRIC_OBSTACLE voxels for non-COCO objects.",
+                "_comment": "PATH A enabled with real class-agnostic SAM via FastSAM ONNX (YOLOv8-seg architecture trained on SA-1B). Produces masks for every distinct object/surface in the frame regardless of COCO class. Prerequisite: run `bash models/download_fastsam.sh` once to fetch FastSAM-s.pt and export to models/fastsam_s.onnx (~50 MB, ~80 ms/frame CPU). MaskDepthProjector back-projects the masks via Depth Anything V2 into world-frame voxels; non-COCO obstacles (walls, pillars, TemplateCubes) get GEOMETRIC_OBSTACLE labels because they don't match any YOLOv8 detector bbox.",
                 "enabled": true,
                 "sam": {
-                    "backend": "sam_simulated",
-                    "model_path": "",
+                    "backend": "fastsam",
+                    "model_path": "models/fastsam_s.onnx",
                     "input_size": 1024,
-                    "num_masks": 5
+                    "confidence_threshold": 0.4,
+                    "nms_threshold": 0.45,
+                    "mask_channels": 32
                 },
                 "mask_class_iou_threshold": 0.5
             }
@@ -149,7 +151,13 @@
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
                 "promotion_hits": 10,
-                "max_static_cells": 500
+                "max_static_cells": 500,
+                "voxel_input": {
+                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the static layer directly (bypassing promotion_hits, since voxels are already mask-gated + confidence-scored).",
+                    "enabled": true,
+                    "position_clamp_m": 200.0,
+                    "min_confidence": 0.3
+                }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",
             "static_obstacles": [],
@@ -196,6 +204,31 @@
             "enable_memory_monitoring": true,
             "watchdog_interval_ms": 500
         }
+    },
+    "pass_criteria": {
+        "_comment": "Enforced by tests/run_scenario_cosys.sh Phase 6 (grep against combined.log). Validates the full PATH A pipeline is engaged: P2 SAM thread + MaskDepthProjector publisher and P4 voxel subscriber + grid writer. The log_must_not_contain list rejects the failure modes from the pre-#608 run (STUCK loop → LOITER escalation + silent PATH A init failure).",
+        "log_contains": [
+            "[PathA] Enabled",
+            "[SAM] Thread started",
+            "[MaskProj] Thread started",
+            "[MaskProj] Published",
+            "[VoxelSub] Subscribed to",
+            "[VoxelSub]",
+            "Advanced to waypoint 5/5"
+        ],
+        "log_must_not_contain": [
+            "[PathA] Requested via config but initialisation failed",
+            "STUCK count 4 exceeded cap 3"
+        ],
+        "processes_alive": [
+            "video_capture",
+            "perception",
+            "slam_vio_nav",
+            "mission_planner",
+            "comms",
+            "payload_manager",
+            "system_monitor"
+        ]
     },
     "validation": {
         "checks": [

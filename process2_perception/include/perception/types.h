@@ -1,6 +1,8 @@
 // process2_perception/include/perception/types.h
 // All data types for perception: detections, tracked/fused objects.
 #pragma once
+#include "hal/iinference_backend.h"
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -56,6 +58,18 @@ struct Detection2DList {
     std::vector<Detection2D> detections;
     uint64_t                 timestamp_ns   = 0;
     uint64_t                 frame_sequence = 0;
+};
+
+// ═══════════════════════════════════════════════════════════
+// SAM Masks (PATH A — Epic #520, Issue #608)
+// Carries class-agnostic mask output from an IInferenceBackend (e.g.
+// SimulatedSAMBackend) plus the source frame's sequence number so the
+// mask_projection_thread can correlate with detector bboxes + depth.
+// ═══════════════════════════════════════════════════════════
+struct Masks2DList {
+    std::vector<drone::hal::InferenceDetection> masks;
+    uint64_t                                    timestamp_ns   = 0;
+    uint64_t                                    frame_sequence = 0;
 };
 
 // ═══════════════════════════════════════════════════════════

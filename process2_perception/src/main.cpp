@@ -3,15 +3,19 @@
 // Reads video frames from SHM, runs detection → tracking → fusion,
 // publishes fused objects to SHM.
 
+#include "hal/cpu_semantic_projector.h"
 #include "hal/hal_factory.h"
 #include "hal/idepth_estimator.h"
+#include "hal/iinference_backend.h"
 #include "hal/iradar.h"
+#include "hal/simulated_sam_backend.h"
 #include "ipc/ipc_types.h"
 #include "perception/detector_interface.h"
 #include "perception/fusion_engine.h"
 #include "perception/ifusion_engine.h"
 #include "perception/itracker.h"
 #include "perception/kalman_tracker.h"
+#include "perception/mask_depth_projector.h"
 #include "perception/types.h"
 #include "perception/ukf_fusion_engine.h"
 #include "util/config_keys.h"
@@ -54,6 +58,11 @@ static std::atomic<int> g_shutdown_phase{0};
 // ── Inference thread ────────────────────────────────────────
 // Stops when shutdown_phase >= 1.  No drain needed — inference is the
 // pipeline source; stopping it is what triggers downstream drains.
+// @param projection_output_queue nullable — when PATH A is enabled
+//                 (Epic #520, Issue #608), the mask_projection_thread reads
+//                 from a second TripleBuffer.  inference_thread writes to
+//                 it in addition to the primary tracker queue.  Each
+//                 TripleBuffer has a single consumer — fanout is explicit.
 // @param profiler nullable — pass nullptr to disable per-stage latency
 //                 profiling. See DR-022 for the safety analysis of
 //                 mutex-protected recording from this flight-critical
@@ -61,8 +70,10 @@ static std::atomic<int> g_shutdown_phase{0};
 static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                              drone::TripleBuffer<Detection2DList>&            output_queue,
                              std::atomic<int>& shutdown_phase, IDetector& detector,
-                             drone::util::LatencyProfiler* profiler) {
-    DRONE_LOG_INFO("[Inference] Thread started — using detector: {}", detector.name());
+                             drone::util::LatencyProfiler*         profiler,
+                             drone::TripleBuffer<Detection2DList>* projection_output_queue) {
+    DRONE_LOG_INFO("[Inference] Thread started — using detector: {}{}", detector.name(),
+                   projection_output_queue ? " (PATH A fanout active)" : "");
 
     auto hb = drone::util::ScopedHeartbeat("inference", true);
 
@@ -94,6 +105,12 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
             diag.add_metric("Detect", "n_detections",
                             static_cast<double>(det_list.detections.size()));
 
+            // PATH A fanout — mask_projection_thread needs the raw detector
+            // bboxes alongside SAM masks.  Write a copy first; move into the
+            // primary queue second.
+            if (projection_output_queue) {
+                projection_output_queue->write(det_list);  // copy
+            }
             output_queue.write(std::move(det_list));
             ++frame_count;
 
@@ -111,6 +128,203 @@ static void inference_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& vi
     }
     DRONE_LOG_INFO("[Inference] Thread stopped — {} frames, {} writes", frame_count,
                    output_queue.write_count());
+}
+
+// ── SAM thread ──────────────────────────────────────────────
+// Stops when shutdown_phase >= 1.  Consumes video frames via its own
+// Zenoh subscriber (same pattern as depth_thread) and produces
+// class-agnostic masks for the mask_projection_thread.  Only started
+// when perception.path_a.enabled is true.
+// @param sam   IInferenceBackend that returns per-mask
+//              InferenceDetection entries (e.g. SimulatedSAMBackend).
+static void sam_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
+                       drone::TripleBuffer<Masks2DList>&                output_queue,
+                       std::atomic<int>& shutdown_phase, drone::hal::IInferenceBackend& sam) {
+    DRONE_LOG_INFO("[SAM] Thread started — backend: {}", sam.name());
+
+    auto hb = drone::util::ScopedHeartbeat("sam", true);
+
+    uint64_t frame_count = 0;
+    uint64_t fail_count  = 0;
+    while (shutdown_phase.load(std::memory_order_acquire) < 1) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+        drone::ipc::VideoFrame frame;
+        bool                   got_frame = video_sub.receive(frame);
+
+        if (!got_frame) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        auto result = sam.infer(frame.pixel_data, frame.width, frame.height, frame.channels);
+        if (!result.is_ok()) {
+            ++fail_count;
+            if (fail_count % 100 == 1) {
+                DRONE_LOG_WARN("[SAM] infer() failed ({} consecutive): {}", fail_count,
+                               result.error());
+            }
+            continue;
+        }
+        fail_count = 0;
+
+        Masks2DList list;
+        list.masks          = std::move(result).value().detections;
+        list.timestamp_ns   = frame.timestamp_ns;
+        list.frame_sequence = frame.sequence_number;
+        output_queue.write(std::move(list));
+        ++frame_count;
+
+        if (frame_count % 100 == 0) {
+            DRONE_LOG_INFO("[SAM] Processed {} frames (writes={})", frame_count,
+                           output_queue.write_count());
+        }
+    }
+    DRONE_LOG_INFO("[SAM] Thread stopped — {} frames, {} writes", frame_count,
+                   output_queue.write_count());
+}
+
+// ── Mask projection thread (PATH A consumer) ─────────────────
+// Stops when shutdown_phase >= 2 (same as fusion_thread — runs alongside
+// fusion, not downstream of it).  Correlates SAM masks, detector bboxes,
+// depth, and camera pose, runs MaskDepthProjector, converts the
+// resulting VoxelUpdate[] to a SemanticVoxelBatch, and publishes on
+// `/semantic_voxels` for P4's voxel subscriber.
+//
+// Synchronization: primary trigger is SAM output (the most expensive
+// stage).  On each arriving mask list, pull latest-value from the other
+// three inputs.  If detections or depth are missing for this tick,
+// skip — the MaskDepthProjector needs both (masks alone can't produce
+// voxels without depth).
+static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          masks_queue,
+                                   drone::TripleBuffer<Detection2DList>&      detections_queue,
+                                   drone::TripleBuffer<drone::hal::DepthMap>& depth_queue,
+                                   drone::ipc::ISubscriber<drone::ipc::Pose>& pose_sub,
+                                   drone::ipc::IPublisher<drone::ipc::SemanticVoxelBatch>& voxel_pub,
+                                   std::atomic<int>&                      shutdown_phase,
+                                   drone::perception::MaskDepthProjector& projector) {
+    DRONE_LOG_INFO("[MaskProj] Thread started — publishing to {}",
+                   drone::ipc::topics::SEMANTIC_VOXELS);
+
+    auto hb = drone::util::ScopedHeartbeat("mask_projection", true);
+
+    uint64_t                            tick_count      = 0;
+    uint64_t                            published_count = 0;
+    uint64_t                            skipped_count   = 0;
+    std::optional<drone::ipc::Pose>     latest_pose;
+    std::optional<drone::hal::DepthMap> latest_depth;
+    std::optional<Detection2DList>      latest_dets;
+
+    while (shutdown_phase.load(std::memory_order_acquire) < 2) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        auto masks_opt = masks_queue.read();
+        if (!masks_opt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        ++tick_count;
+
+        // Refresh latest detections + depth + pose (best-effort; keep prior
+        // snapshot if the triple buffer hasn't produced new data this tick).
+        if (auto d = detections_queue.read()) latest_dets = std::move(*d);
+        if (auto d = depth_queue.read()) latest_depth = std::move(*d);
+        drone::ipc::Pose pose_msg;
+        if (pose_sub.receive(pose_msg)) latest_pose = pose_msg;
+
+        // Need all four inputs for projection to produce meaningful voxels.
+        // Skip the tick if any are missing — next tick will retry with the
+        // cached snapshot.
+        if (!latest_dets || !latest_depth || !latest_pose) {
+            ++skipped_count;
+            if (skipped_count % 100 == 1) {
+                DRONE_LOG_DEBUG("[MaskProj] skip — dets={} depth={} pose={}",
+                                latest_dets.has_value(), latest_depth.has_value(),
+                                latest_pose.has_value());
+            }
+            continue;
+        }
+
+        // Convert perception::Detection2D -> hal::InferenceDetection for the
+        // MaskDepthProjector API.  Masks are empty on these (detector doesn't
+        // produce masks — SAM does).
+        std::vector<drone::hal::InferenceDetection> det_hal;
+        det_hal.reserve(latest_dets->detections.size());
+        for (const auto& d : latest_dets->detections) {
+            drone::hal::InferenceDetection h;
+            h.bbox.x      = d.x;
+            h.bbox.y      = d.y;
+            h.bbox.w      = d.w;
+            h.bbox.h      = d.h;
+            h.class_id    = static_cast<int>(d.class_id);
+            h.confidence  = d.confidence;
+            h.mask_width  = 0;
+            h.mask_height = 0;
+            det_hal.push_back(std::move(h));
+        }
+
+        // Build camera pose as an Affine3f from the SLAM quaternion/translation.
+        Eigen::Quaternionf q(static_cast<float>(latest_pose->quaternion[0]),
+                             static_cast<float>(latest_pose->quaternion[1]),
+                             static_cast<float>(latest_pose->quaternion[2]),
+                             static_cast<float>(latest_pose->quaternion[3]));
+        if (q.squaredNorm() < 1e-6f) {
+            ++skipped_count;
+            continue;
+        }
+        q.normalize();
+        Eigen::Affine3f cam_pose = Eigen::Affine3f::Identity();
+        cam_pose.linear()        = q.toRotationMatrix();
+        cam_pose.translation()   = Eigen::Vector3f(static_cast<float>(latest_pose->translation[0]),
+                                                   static_cast<float>(latest_pose->translation[1]),
+                                                   static_cast<float>(latest_pose->translation[2]));
+
+        auto proj = projector.project(masks_opt->masks, det_hal, *latest_depth, cam_pose);
+        if (!proj.is_ok()) {
+            if (tick_count % 100 == 1) {
+                DRONE_LOG_WARN("[MaskProj] project() failed: {}", proj.error());
+            }
+            continue;
+        }
+        const auto voxels = std::move(proj).value();
+        if (voxels.empty()) {
+            continue;
+        }
+
+        // Pack VoxelUpdate[] -> SemanticVoxelBatch.  Truncate by descending
+        // confidence if we ever overshoot MAX_VOXELS_PER_BATCH (see #608).
+        auto batch            = std::make_unique<drone::ipc::SemanticVoxelBatch>();
+        batch->timestamp_ns   = masks_opt->timestamp_ns;
+        batch->frame_sequence = static_cast<uint64_t>(masks_opt->frame_sequence);
+        const size_t n_voxels = std::min<size_t>(voxels.size(), drone::ipc::MAX_VOXELS_PER_BATCH);
+        batch->num_voxels     = static_cast<uint32_t>(n_voxels);
+        for (size_t i = 0; i < n_voxels; ++i) {
+            const auto& v   = voxels[i];
+            auto&       out = batch->voxels[i];
+            out.position_x  = v.position_m.x();
+            out.position_y  = v.position_m.y();
+            out.position_z  = v.position_m.z();
+            out.occupancy   = std::clamp(v.occupancy, 0.0f, 1.0f);
+            out.confidence  = std::clamp(v.confidence, 0.0f, 1.0f);
+            // hal::VoxelUpdate::semantic_label is a uint8_t that the
+            // CpuSemanticProjector sets from the detection's assigned class.
+            // Clamp to the ObjectClass range so validate() accepts it.
+            const uint8_t label_byte = std::min<uint8_t>(
+                v.semantic_label,
+                static_cast<uint8_t>(drone::ipc::ObjectClass::GEOMETRIC_OBSTACLE));
+            out.semantic_label = static_cast<drone::ipc::ObjectClass>(label_byte);
+            out.timestamp_ns   = v.timestamp_ns;
+        }
+        voxel_pub.publish(*batch);
+        ++published_count;
+
+        if (published_count % 50 == 0) {
+            DRONE_LOG_INFO("[MaskProj] Published {} batches — last batch: {} voxels, {} skipped",
+                           published_count, batch->num_voxels, skipped_count);
+        }
+    }
+    DRONE_LOG_INFO("[MaskProj] Thread stopped — {} ticks, {} published, {} skipped", tick_count,
+                   published_count, skipped_count);
 }
 
 // ── Tracker thread ──────────────────────────────────────────
@@ -435,11 +649,18 @@ static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&               
 // to a triple buffer for consumption by the fusion thread.
 // Stops when shutdown_phase >= 3.  Depth is a leaf node (writes to fusion's
 // TripleBuffer) — no downstream drain needed, just stop consuming frames.
+// @param projection_output_queue nullable — when PATH A is enabled
+//                 (Epic #520, Issue #608), mask_projection_thread needs its
+//                 own depth stream.  TripleBuffer is single-consumer, so we
+//                 fanout by writing the same depth map twice.  Same pattern
+//                 as inference_thread's projection_output_queue.
 static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_sub,
                          drone::TripleBuffer<drone::hal::DepthMap>&       output_queue,
                          std::atomic<int>& shutdown_phase, drone::hal::IDepthEstimator& estimator,
-                         int max_fps) {
-    DRONE_LOG_INFO("[Depth] Thread started — backend: {}, max_fps: {}", estimator.name(), max_fps);
+                         int                                        max_fps,
+                         drone::TripleBuffer<drone::hal::DepthMap>* projection_output_queue) {
+    DRONE_LOG_INFO("[Depth] Thread started — backend: {}, max_fps: {}{}", estimator.name(), max_fps,
+                   projection_output_queue ? " (PATH A fanout active)" : "");
 
     auto hb = drone::util::ScopedHeartbeat("depth", true);
 
@@ -472,6 +693,12 @@ static void depth_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_
             if (result.is_ok()) {
                 auto depth_map         = std::move(result).value();
                 depth_map.timestamp_ns = frame.timestamp_ns;
+                // PATH A fanout — mask_projection_thread needs its own depth
+                // stream.  Write the copy first so output_queue can move the
+                // original into its scratch slot without reallocation.
+                if (projection_output_queue) {
+                    projection_output_queue->write(depth_map);  // copy
+                }
                 output_queue.write(std::move(depth_map));
                 ++frame_count;
                 fail_count = 0;  // reset on success
@@ -682,6 +909,107 @@ int main(int argc, char* argv[]) {
                        "(perception.depth_estimator.enabled=false)");
     }
 
+    // ── PATH A — SAM + mask projection (Epic #520, Issue #608) ──
+    // Gated on perception.path_a.enabled (default false); scenario 33
+    // turns it on to exercise the mask-aware voxelisation path that
+    // classifies non-COCO obstacles (cubes, panels, pillars) as
+    // GEOMETRIC_OBSTACLE voxels for the P4 occupancy grid.
+    const bool path_a_enabled = ctx.cfg.get<bool>(drone::cfg_key::perception::path_a::ENABLED,
+                                                  false);
+    std::unique_ptr<drone::hal::IInferenceBackend>                          sam_backend;
+    std::unique_ptr<drone::hal::ISemanticProjector>                         semantic_projector;
+    std::unique_ptr<drone::perception::MaskDepthProjector>                  mask_projector;
+    std::unique_ptr<drone::ipc::IPublisher<drone::ipc::SemanticVoxelBatch>> voxel_pub;
+    if (path_a_enabled) {
+        try {
+            // Route through the HAL factory so `perception.path_a.sam.backend`
+            // in config actually selects the backend.  The factory reads
+            // `{section}.backend` under the SAM section and returns the matching
+            // IInferenceBackend ("sam_simulated", "simulated", or plugin-loaded).
+            // Previous code hardcoded SimulatedSAMBackend regardless of the
+            // config value — that's why `sam.backend = "yolov8_seg"` had no
+            // effect.  Factory still returns SimulatedSAMBackend when the value
+            // is "sam_simulated" (scenario 33's current setting).
+            const std::string sam_section =
+                std::string(drone::cfg_key::perception::path_a::SECTION) + ".sam";
+            sam_backend      = drone::hal::create_inference_backend(ctx.cfg, sam_section);
+            const std::string sam_model_path =
+                ctx.cfg.get<std::string>(drone::cfg_key::perception::path_a::SAM_MODEL_PATH, "");
+            const int sam_input_size =
+                ctx.cfg.get<int>(drone::cfg_key::perception::path_a::SAM_INPUT_SIZE, 512);
+            if (!sam_backend->init(sam_model_path, sam_input_size)) {
+                DRONE_LOG_ERROR("[PathA] SAM init() failed (backend={}, model='{}') — PATH A "
+                                "disabled",
+                                sam_backend->name(), sam_model_path);
+                sam_backend.reset();
+            }
+        } catch (const std::exception& e) {
+            DRONE_LOG_ERROR("[PathA] SAM construction failed: {} — PATH A disabled", e.what());
+            sam_backend.reset();
+        }
+
+        if (sam_backend) {
+            auto                         sp = std::make_unique<drone::hal::CpuSemanticProjector>();
+            drone::hal::CameraIntrinsics intr;
+            intr.fx = calib.camera_intrinsics(0, 0);
+            intr.fy = calib.camera_intrinsics(1, 1);
+            intr.cx = calib.camera_intrinsics(0, 2);
+            intr.cy = calib.camera_intrinsics(1, 2);
+            intr.width =
+                static_cast<uint32_t>(ctx.cfg.get<int>("video_capture.mission_cam.width", 1280));
+            intr.height =
+                static_cast<uint32_t>(ctx.cfg.get<int>("video_capture.mission_cam.height", 720));
+            if (!sp->init(intr)) {
+                DRONE_LOG_ERROR("[PathA] CpuSemanticProjector init failed (intrinsics={}x{}) — "
+                                "PATH A disabled",
+                                intr.width, intr.height);
+                sam_backend.reset();
+            } else {
+                semantic_projector = std::move(sp);
+                const float iou    = ctx.cfg.get<float>(
+                    drone::cfg_key::perception::path_a::MASK_CLASS_IOU_THRESHOLD, 0.5f);
+                mask_projector = std::make_unique<drone::perception::MaskDepthProjector>(
+                    *semantic_projector, iou);
+                voxel_pub = ctx.bus.advertise<drone::ipc::SemanticVoxelBatch>(
+                    drone::ipc::topics::SEMANTIC_VOXELS);
+                if (!voxel_pub->is_ready()) {
+                    DRONE_LOG_ERROR("[PathA] Failed to create publisher for {} — PATH A disabled",
+                                    drone::ipc::topics::SEMANTIC_VOXELS);
+                    sam_backend.reset();
+                    mask_projector.reset();
+                    semantic_projector.reset();
+                    voxel_pub.reset();
+                }
+            }
+        }
+
+        if (sam_backend && mask_projector && voxel_pub) {
+            DRONE_LOG_INFO("[PathA] Enabled — SAM: {}, projector: {}, publish: {}",
+                           sam_backend->name(), semantic_projector->name(),
+                           drone::ipc::topics::SEMANTIC_VOXELS);
+        } else {
+            DRONE_LOG_WARN(
+                "[PathA] Requested via config but initialisation failed — running "
+                "without PATH A (scenario behaviour degrades to PATH B / detector only)");
+        }
+    } else {
+        DRONE_LOG_INFO("[Perception] PATH A disabled (perception.path_a.enabled=false)");
+    }
+    // PATH A requires the depth thread — MaskDepthProjector has nothing to
+    // project without depth, so mask_projection_thread would skip forever.
+    // Refuse to enable if depth is off rather than let the scenario run with
+    // a silently-inert pipeline (same class of failure as #605).
+    if (path_a_enabled && !depth_enabled) {
+        DRONE_LOG_ERROR("[PathA] perception.path_a.enabled=true requires "
+                        "perception.depth_estimator.enabled=true — PATH A disabled");
+        sam_backend.reset();
+        mask_projector.reset();
+        semantic_projector.reset();
+        voxel_pub.reset();
+    }
+    const bool path_a_active = path_a_enabled && depth_enabled && sam_backend && mask_projector &&
+                               voxel_pub;
+
     // ── Drain timeout (Issue #446) — configurable, default 500ms ──
     const int drain_timeout_ms =
         std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::DRAIN_TIMEOUT_MS, 500), 50, 5000);
@@ -691,6 +1019,11 @@ int main(int argc, char* argv[]) {
     drone::TripleBuffer<TrackedObjectList> tracker_to_fusion;
     // Depth map triple buffer — only used when depth estimator is enabled
     drone::TripleBuffer<drone::hal::DepthMap> depth_to_fusion;
+    // PATH A fanout — inference + depth both fanout an extra copy so the
+    // projection thread has its own single-consumer slot on each.
+    drone::TripleBuffer<Detection2DList>      inference_to_projection;
+    drone::TripleBuffer<Masks2DList>          sam_to_projection;
+    drone::TripleBuffer<drone::hal::DepthMap> depth_to_projection;
 
     // ── Optional benchmark profiler (Epic #523, Issue #571) ──────────
     // Opt-in via config (benchmark.profiler.enabled). Disabled by default
@@ -713,7 +1046,8 @@ int main(int argc, char* argv[]) {
 
     // ── Launch threads ──────────────────────────────────────
     std::thread t_inference(inference_thread, std::ref(*video_sub), std::ref(inference_to_tracker),
-                            std::ref(g_shutdown_phase), std::ref(*detector), profiler_ptr);
+                            std::ref(g_shutdown_phase), std::ref(*detector), profiler_ptr,
+                            path_a_active ? &inference_to_projection : nullptr);
 
     std::thread t_tracker(tracker_thread, std::ref(inference_to_tracker),
                           std::ref(tracker_to_fusion), std::ref(g_shutdown_phase),
@@ -745,8 +1079,8 @@ int main(int argc, char* argv[]) {
         const int depth_max_fps = std::clamp(
             ctx.cfg.get<int>(drone::cfg_key::perception::depth_estimator::MAX_FPS, 15), 0, 60);
         t_depth = std::thread(depth_thread, std::ref(*depth_video_sub), std::ref(depth_to_fusion),
-                              std::ref(g_shutdown_phase), std::ref(*depth_estimator),
-                              depth_max_fps);
+                              std::ref(g_shutdown_phase), std::ref(*depth_estimator), depth_max_fps,
+                              path_a_active ? &depth_to_projection : nullptr);
     }
 
     // Launch radar read thread if HAL is active and publisher is ready
@@ -756,6 +1090,24 @@ int main(int argc, char* argv[]) {
                               std::ref(g_shutdown_phase), radar_update_rate_hz);
     } else if (radar) {
         DRONE_LOG_WARN("[Radar] HAL active but publisher not ready — radar read thread disabled");
+    }
+
+    // Launch PATH A threads (Epic #520, Issue #608) if enabled + initialised.
+    // Each needs its own video subscriber (Zenoh SHM topology — see depth_video_sub pattern).
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::VideoFrame>> sam_video_sub;
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::Pose>>       pathA_pose_sub;
+    std::thread                                                      t_sam;
+    std::thread                                                      t_mask_proj;
+    if (path_a_active) {
+        sam_video_sub =
+            ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
+        pathA_pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+        t_sam       = std::thread(sam_thread, std::ref(*sam_video_sub), std::ref(sam_to_projection),
+                                  std::ref(g_shutdown_phase), std::ref(*sam_backend));
+        t_mask_proj = std::thread(mask_projection_thread, std::ref(sam_to_projection),
+                                  std::ref(inference_to_projection), std::ref(depth_to_projection),
+                                  std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
+                                  std::ref(g_shutdown_phase), std::ref(*mask_projector));
     }
 
     // ── Thread watchdog + health publisher ──────────────────
@@ -789,15 +1141,17 @@ int main(int argc, char* argv[]) {
     // window.
     DRONE_LOG_INFO("Shutting down — phased drain (timeout={}ms per stage)...", drain_timeout_ms);
 
-    // Phase 1: stop inference (pipeline source)
+    // Phase 1: stop inference + SAM (pipeline sources)
     g_shutdown_phase.store(1, std::memory_order_release);
-    DRONE_LOG_INFO("[Shutdown] Phase 1 — stopping inference");
+    DRONE_LOG_INFO("[Shutdown] Phase 1 — stopping inference (+ SAM if active)");
     t_inference.join();
+    if (t_sam.joinable()) t_sam.join();
 
-    // Phase 2: stop tracker (drains inference→tracker buffer)
+    // Phase 2: stop tracker + mask projection (drain upstream buffers)
     g_shutdown_phase.store(2, std::memory_order_release);
-    DRONE_LOG_INFO("[Shutdown] Phase 2 — stopping tracker (draining)");
+    DRONE_LOG_INFO("[Shutdown] Phase 2 — stopping tracker (+ mask projection if active)");
     t_tracker.join();
+    if (t_mask_proj.joinable()) t_mask_proj.join();
 
     // Phase 3: stop fusion, depth, radar (fusion drains tracker→fusion buffer)
     g_shutdown_phase.store(3, std::memory_order_release);

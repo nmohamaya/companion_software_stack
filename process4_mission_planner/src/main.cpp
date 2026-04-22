@@ -365,6 +365,42 @@ int main(int argc, char* argv[]) {
     // ── Create fault manager (config-driven thresholds) ────
     FaultManager fault_mgr(ctx.cfg);
 
+    // ── PATH A voxel subscriber (Epic #520 / Issue #608) ──
+    // Gated on mission_planner.occupancy_grid.voxel_input.enabled; polled
+    // each planning tick alongside the detected-objects stream.  Stays on
+    // the main thread so P4's "single-threaded planner" invariant holds.
+    const bool voxel_input_enabled = ctx.cfg.get<bool>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_ENABLED, false);
+    const float voxel_input_clamp_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_POSITION_CLAMP_M, 1000.0f);
+    const float voxel_input_min_confidence = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_MIN_CONFIDENCE, 0.3f);
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::SemanticVoxelBatch>> voxel_sub;
+    if (voxel_input_enabled) {
+        if (grid_planner == nullptr) {
+            DRONE_LOG_ERROR(
+                "[VoxelSub] voxel_input.enabled=true but path planner is not grid-based "
+                "— voxel input disabled");
+        } else {
+            voxel_sub = ctx.bus.subscribe<drone::ipc::SemanticVoxelBatch>(
+                drone::ipc::topics::SEMANTIC_VOXELS);
+            // Suppress detector-path static promotion while voxel input is active.
+            // Otherwise `update_from_objects()` + `color_contour + depth` flood
+            // the static layer with ghost cells faster than the mask-aware PATH A
+            // voxels can make an impact on the repulsive field (uncovered during
+            // scenario-33 end-to-end testing — 1286 promoted cells, mostly false
+            // positives, dominated the avoider over 5 real wall cells).  The
+            // dynamic TTL layer keeps populating, so reactive avoidance of
+            // moving objects still works.
+            grid_planner->set_promotion_paused(true);
+            DRONE_LOG_INFO("[VoxelSub] Subscribed to {} (clamp={:.0f} m, min_conf={:.2f}); "
+                           "detector-path static promotion PAUSED — PATH A is sole static-cell "
+                           "source while voxel_input is enabled",
+                           drone::ipc::topics::SEMANTIC_VOXELS, voxel_input_clamp_m,
+                           voxel_input_min_confidence);
+        }
+    }
+
     DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
 
@@ -418,6 +454,40 @@ int main(int argc, char* argv[]) {
 
         drone::ipc::DetectedObjectList objects{};
         obj_sub->receive(objects);
+
+        // ── 1b. Drain PATH A voxel batches (Epic #520 / Issue #608) ──
+        // Polled on the planner thread to preserve P4's single-threaded
+        // invariant.  Each batch is validated, clamped, and inserted into
+        // the occupancy grid's static layer.  Non-empty inserts invalidate
+        // the cached path via the GridPlannerBase::insert_voxels hook.
+        if (voxel_sub && grid_planner) {
+            uint32_t batches_drained = 0;
+            uint32_t inserted_total  = 0;
+            uint32_t dropped_total   = 0;
+            for (;;) {
+                drone::ipc::SemanticVoxelBatch batch{};
+                if (!voxel_sub->receive(batch)) break;
+                if (!batch.validate()) {
+                    DRONE_LOG_WARN("[VoxelSub] rejected malformed batch (num_voxels={})",
+                                   batch.num_voxels);
+                    continue;
+                }
+                auto stats = grid_planner->insert_voxels(batch.voxels, batch.num_voxels,
+                                                         voxel_input_clamp_m,
+                                                         voxel_input_min_confidence);
+                inserted_total += static_cast<uint32_t>(stats.inserted);
+                dropped_total += static_cast<uint32_t>(
+                    stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);
+                ++batches_drained;
+                // Hard cap on drain iterations per tick — a runaway publisher
+                // must not starve the planning loop.
+                if (batches_drained >= 10) break;
+            }
+            if (batches_drained > 0) {
+                DRONE_LOG_INFO("[VoxelSub] tick={} batches={} inserted={} dropped={}", loop_tick,
+                               batches_drained, inserted_total, dropped_total);
+            }
+        }
 
         drone::ipc::FCState fc_state{};
         if (fc_state_sub->is_connected()) {

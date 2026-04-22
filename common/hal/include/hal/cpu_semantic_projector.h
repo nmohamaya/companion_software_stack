@@ -80,6 +80,16 @@ private:
             std::clamp(v * scale_y, 0.0f, static_cast<float>(depth.height - 1)));
         const float d = depth.data[dy * depth.width + dx] * depth.scale;
         if (!std::isfinite(d) || d <= 0.0f) return 0.0f;
+        // Reject samples beyond kMaxObstacleDepth — distant horizon / sky /
+        // scenery contours are not navigation-relevant and would otherwise
+        // flood the downstream occupancy grid with ghost voxels.  20 m is a
+        // conservative drone-scale cutoff; real obstacles the planner needs
+        // to route around are well within this range at scenario cruise
+        // speeds.  (#608 E5.INT — discovered when EdgeContourSAM masks
+        // picked up every image edge and back-projected them into voxels at
+        // 50-100 m depth, filling the grid far past `max_static_cells`.)
+        constexpr float kMaxObstacleDepth = 20.0f;
+        if (d > kMaxObstacleDepth) return 0.0f;
         return d;
     }
 
@@ -107,18 +117,40 @@ private:
         const float   step_x = det.bbox.w / static_cast<float>(GRID);
         const float   step_y = det.bbox.h / static_cast<float>(GRID);
 
+        // Backends in the codebase use two mask conventions:
+        //   1. bbox-local      — mask_width ≈ bbox.w (e.g. YOLOv8-seg tiled masks)
+        //   2. full-image      — mask_width ≫ bbox.w, pixel indexed by (u, v)
+        //                        directly (EdgeContourSAMBackend, SimulatedSAMBackend).
+        // Auto-detect from geometry to accept both.  Issue #608 E5.INT: the
+        // original code assumed only convention (1), silently filtered almost
+        // every sample when convention (2) backends were used (~99% probe
+        // rejection), producing 1-2 voxels/frame instead of ~10-50.
+        const bool mask_is_full_image =
+            static_cast<float>(det.mask_width) >= det.bbox.w * 1.5f &&
+            static_cast<float>(det.mask_height) >= det.bbox.h * 1.5f;
+
         for (int gy = 0; gy < GRID; ++gy) {
             for (int gx = 0; gx < GRID; ++gx) {
                 const float u = det.bbox.x + (static_cast<float>(gx) + 0.5f) * step_x;
                 const float v = det.bbox.y + (static_cast<float>(gy) + 0.5f) * step_y;
 
-                // Check mask at this sample point
-                const auto mx = static_cast<uint32_t>(
-                    std::clamp((u - det.bbox.x) / det.bbox.w * static_cast<float>(det.mask_width),
-                               0.0f, static_cast<float>(det.mask_width - 1)));
-                const auto my = static_cast<uint32_t>(
-                    std::clamp((v - det.bbox.y) / det.bbox.h * static_cast<float>(det.mask_height),
-                               0.0f, static_cast<float>(det.mask_height - 1)));
+                uint32_t mx = 0;
+                uint32_t my = 0;
+                if (mask_is_full_image) {
+                    mx = static_cast<uint32_t>(
+                        std::clamp(u, 0.0f, static_cast<float>(det.mask_width - 1)));
+                    my = static_cast<uint32_t>(
+                        std::clamp(v, 0.0f, static_cast<float>(det.mask_height - 1)));
+                } else {
+                    mx = static_cast<uint32_t>(std::clamp((u - det.bbox.x) / det.bbox.w *
+                                                              static_cast<float>(det.mask_width),
+                                                          0.0f,
+                                                          static_cast<float>(det.mask_width - 1)));
+                    my = static_cast<uint32_t>(std::clamp((v - det.bbox.y) / det.bbox.h *
+                                                              static_cast<float>(det.mask_height),
+                                                          0.0f,
+                                                          static_cast<float>(det.mask_height - 1)));
+                }
                 if (det.mask[my * det.mask_width + mx] < 128) continue;
 
                 const float z = sample_depth(depth, u, v, scale_x, scale_y);

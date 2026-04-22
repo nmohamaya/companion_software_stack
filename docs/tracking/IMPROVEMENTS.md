@@ -18,6 +18,19 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ### 2026-04-22
 
+#### (new) Revisit: extract PATH A (SAM + mask projection) into its own process
+
+- **Priority:** P3
+- **Category:** architecture
+- **Noticed while:** Issue #608 PR 2 design discussion — weighing "new process P8" vs. "two more threads in P2" for the SAM + MaskDepthProjector pipeline.
+- **Current decision:** Stay in P2 as threads (per-path factory from Epic #516 supports this cleanly). Data locality is the dominant factor — MaskDepthProjector needs frame, bboxes, SAM masks, depth, and camera pose, all of which already exist in P2.
+- **Revisit trigger:** When the first real SAM backend lands (non-`SimulatedSAMBackend`). At that point, evaluate:
+  - Does SAM's ONNX / GPU footprint cause OOMs, hangs, or CUDA-context fights that take P2's core detection/tracking down with it?
+  - Is the GPU memory ceiling pushing us toward per-process cgroups + CUDA budgeting?
+  - Would a restart policy specific to the ML-heavy SAM path (exponential backoff, disable-on-repeated-failure) be meaningfully different from the current shared P2 policy?
+- **If yes to any:** extract PATH A to a new process (P8). The per-path factory means the extraction is primarily moving the two thread constructors and wiring new IPC hops; protocol-level breakage is limited to making `/drone_mission_cam` have a second subscriber and adding a new `/semantic_voxels` publisher location — both low-risk given existing patterns.
+- **If no:** leave as threads, document the decision's residual risk in a DR entry.
+
 #### 15. MaskClassAssigner copies full InferenceDetection (including mask pixel buffer) per mask per frame
 
 - **Priority:** P2
