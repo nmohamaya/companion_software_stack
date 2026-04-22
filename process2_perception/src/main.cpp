@@ -620,6 +620,9 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_BUILDING, 10.0f);
     calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::TREE)] =
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_TREE, 6.0f);
+    calib.height_priors[static_cast<uint8_t>(drone::perception::ObjectClass::GEOMETRIC_OBSTACLE)] =
+        ctx.cfg.get<float>(drone::cfg_key::perception::fusion::HEIGHT_PRIORS_GEOMETRIC_OBSTACLE,
+                           2.0f);
     calib.bbox_height_noise_px =
         ctx.cfg.get<float>(drone::cfg_key::perception::fusion::BBOX_HEIGHT_NOISE_PX, 2.5f);
 
