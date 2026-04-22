@@ -3045,207 +3045,261 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-### Improvement #74 — Perception Metrics Framework (Issue #570, Epic #523)
+### Improvement #74 — Skip Cosys Integration Tests Without AirSim Server (PR #494)
 
-**Date:** 2026-04-20
-**Category:** Testing / Benchmark harness
-**Issues:** [#570](https://github.com/nmohamaya/companion_software_stack/issues/570) · parent [#523](https://github.com/nmohamaya/companion_software_stack/issues/523) · meta-epic [#514](https://github.com/nmohamaya/companion_software_stack/issues/514)
+**Date:** 2026-04-18
+**Category:** Infrastructure — Build / CI
+**PR:** [#494](https://github.com/nmohamaya/companion_software_stack/pull/494)
 
-**What:** Landed the first building block of the perception-rewrite benchmark harness: a pure-C++ metrics library that consumes per-frame `{ground_truth, predictions}` and emits per-class TP/FP/FN, precision/recall/F1, per-class AP (PASCAL VOC 11-point interpolation), confusion matrix with a background slot, and tracking metrics (MOTA, MOTP, ID switches, fragmentations). No ML deps, CPU only, lives under `tests/benchmark/` so it isn't shipped in production binaries.
+**What:**
 
-Matching is greedy confidence-ordered per class — standard COCO-style evaluation. Confusion matrix is sized `[num_classes+1] × [num_classes+1]` where the trailing row/column is the background bucket (unmatched GTs contribute to `M[gt_class][bg]`, unmatched predictions land in `M[bg][pred_class]` or a class-confused row when they overlap a different-class GT). Tracking metrics track per-GT `(last_pred_id, last_tracked_frame)` state across frames to detect switches (same GT, different pred ID frame-to-frame) and fragmentations (GT lost for ≥1 frame and then re-acquired).
+- Cosys integration tests (`test_cosys_hal_backends`) and tools (`cosys_populate_scene`) now gracefully skip when no AirSim RPC server is reachable, instead of hard-failing CI.
+- CMake summary now shows whether Cosys-AirSim support was found, improving developer orientation.
 
-**Files added:** `tests/benchmark/perception_metrics.h`, `tests/benchmark/perception_metrics.cpp`, `tests/test_perception_metrics.cpp`.
-**Files modified:** `tests/CMakeLists.txt` (new test target), `docs/design/perception_v2_detailed_design.md` (metric explainer section, landed status).
+**Files modified:** `CMakeLists.txt`, `tests/test_cosys_hal_backends.cpp`, `tools/cosys_populate_scene/main.cpp`
 
-**Why:** Every subsequent PR in the perception-v2 rewrite has to prove it doesn't regress detection/tracking quality. Without a stable scoring library, "is it better?" is anecdotal. This is CP0 part 1 of the perception-v2 integration branch (`feature/perception-v2-integration`); part 2 is #573 baseline capture on scenarios #02/#18/#21/#29/#30.
+**Why:** CI runs on machines without a running Cosys-AirSim instance. Without this fix, any test suite including Cosys tests would fail on standard CI runners and developer machines without the full sim stack.
 
-**Test count:** +23 tests in `test_perception_metrics` covering IoU math, ClassMetrics corner cases (zero denominator), detection corner cases (no-GT, no-preds, all-TP, class mismatch, below-IoU, greedy highest-confidence, multi-IoU), AP edge cases, tracking (perfect track, ID switch, fragmentation, unmatched pred as FP), plus a perf test proving N=1000×1000 completes in ~5 ms (target < 100 ms). 1605 → 1628.
-
-**Universal acceptance criteria:** updated `docs/design/perception_v2_detailed_design.md` §13 with the beginner-friendly explainer of each metric (inherited requirement from meta-epic #514). No license-obligation changes, so ADR-012 / LICENSE untouched.
+**Test count:** No new tests. Existing Cosys tests now skip cleanly instead of aborting.
 
 ---
 
-### Improvement #75 — Latency Profiler (Issue #571, Epic #523)
+### Improvement #75 — Patch Cosys-AirSim simSpawnObject Crash on UE5 5.4 (Issue #495, PR #496)
 
-**Date:** 2026-04-20
-**Category:** Testing / Benchmark harness
-**Issues:** [#571](https://github.com/nmohamaya/companion_software_stack/issues/571) · parent [#523](https://github.com/nmohamaya/companion_software_stack/issues/523) · meta-epic [#514](https://github.com/nmohamaya/companion_software_stack/issues/514)
+**Date:** 2026-04-18
+**Category:** Bug Fix — Tier 3 simulation / third-party
+**Issue:** [#495](https://github.com/nmohamaya/companion_software_stack/issues/495)
+**PR:** [#496](https://github.com/nmohamaya/companion_software_stack/pull/496)
 
-**What:** Landed the second building block of the perception-rewrite benchmark harness: a thread-safe, per-stage latency profiler with correlation-ID-tagged end-to-end traces. Pure C++17 header-only library in `common/util/include/util/latency_profiler.h`, sitting next to the existing single-threaded `LatencyTracker` primitive.
+**What:**
 
-Public API:
+- **Root cause:** Two bugs in the vendored Cosys-AirSim submodule exposed by UE5 5.4. (1) `AirBlueprintLib.cpp:390` `GenerateAssetRegistryMap` uses `FARFilter` without `PackagePaths` — default behaviour of `GetAssets()` changed in UE5 5.4+ so the asset map is never populated. (2) `WorldSimApi.cpp:94-96` dereferences `TMap::Find` result without null-check — crashes when the map is empty.
+- **Fix:** Local patch (`third_party/cosys-airsim-simspawnobject-fix.patch`) adds `PackagePaths` and null-checks. Idempotent apply script (`third_party/apply_cosys_patches.sh`) checks if already applied.
+- Scenario 30 updated to use the corrected spawn paths.
 
-- `LatencyProfiler` — owns a `std::map<std::string, LatencyTracker>` for per-stage percentile aggregation plus a bounded `LatencyTrace` ring for end-to-end traces. `record()`, `summaries()`, `traces()`, `to_json()`, `reset()` are all thread-safe via an internal mutex.
-- `ScopedLatency` — RAII timer. Captures start-time and the thread-local `CorrelationContext::get()` at construction; records the duration on destruction. Defends against non-monotonic clocks by clamping to zero.
-- `LatencyProfiler::to_json()` — stable JSON snapshot (lexicographically ordered stages + oldest-first trace ring) suitable for consumption by the benchmark harness baseline file.
+**Files added:** `third_party/cosys-airsim-simspawnobject-fix.patch`, `third_party/apply_cosys_patches.sh`
+**Files modified:** `config/scenarios/30_cosys_static.json`, `tools/cosys_populate_scene/main.cpp`
 
-Built on top of the existing `LatencyTracker` for per-stage ring/sort/percentile logic — reuses the lock-free sample ring and scratch-buffer optimisation already tested and shipped.
+**Why:** `simSpawnObject` segfaulted on every call, completely blocking scenario 30's obstacle spawning and any dynamic scene composition for Tier 3 testing.
 
-**Files added:** `common/util/include/util/latency_profiler.h`, `tests/test_latency_profiler.cpp`.
-**Files modified:** `tests/CMakeLists.txt` (new `test_latency_profiler` target), `docs/design/perception_v2_detailed_design.md` (§13 landed status + explainer).
-
-**Why:** Sub-issue #573 (baseline capture) needs p95 latency per scenario. Without this profiler we'd hand-wire timestamps at every stage. This gives the harness a single uniform API (`ScopedLatency guard(profiler, "detector")`) that every stage in P2 will adopt in a follow-up PR. Correlation-ID tagging means per-frame traces are coherent across processes — essential for "why did frame 17 blow its budget" investigations that regression gating will surface.
-
-**Test count:** +15 tests in `test_latency_profiler`:
-
-- `LatencyProfiler` suite (9): empty-profiler guards, per-stage tracker population, reset, percentile correctness against injected 1..100 ns durations, trace ring ordering, trace wrap-on-overflow (cap 4, write 10 → keep last 4), zero-capacity ring disables tracing but keeps aggregates, thread-safe concurrent writes (4 threads × 500 records), stages/traces structure via `to_json`.
-- `ScopedLatency` suite (3): records duration on destruction (MockClock 42 µs → tracker min_ns == 42 000), captures correlation ID at construction (changes mid-scope are ignored), non-monotonic clock → zero duration (defensive).
-- `LatencyProfiler.ToJsonEscapesStageNames`, `ToJsonEmptyProfilerIsValid`, `OverheadUnderBudget` (10 000 guarded records under 5 µs per record — several orders under the < 2 % tick budget).
-
-1605 → 1620 (baseline pre-PR was without PR #590's 25 tests; this branch is off `feature/perception-v2-integration` which now has PR #590 merged).
-
-**Universal acceptance criteria:** updated `docs/design/perception_v2_detailed_design.md` §13 with the profiler's public API + usage + overhead note. No license-obligation changes, so ADR-012 / LICENSE untouched.
-
-**Follow-ups:**
-
-- Wire `ScopedLatency` guards into P2 pipeline stages (detector, tracker, grid update, planner tick) — separate PR to keep review surface small.
-- #573 baseline capture — consumes this profiler's JSON output and merges with #570's detection-metrics JSON into `benchmarks/baseline.json`.
+**Test count:** No new tests. Fix verified via live Cosys-AirSim scenario 30 run.
 
 ---
 
-### Improvement #76 — Profiler Wiring + DR-022 (Issue #571 follow-up)
+### Improvement #76 — SWVIO Phase 1: IMU State Propagation + State Augmentation (Issue #498, PR #500)
 
-**Date:** 2026-04-20
-**Category:** Testing / Benchmark harness
-**Issues:** Parent [#571](https://github.com/nmohamaya/companion_software_stack/issues/571) (follow-up from CP0 part 2 of Epic #523 / meta-epic #514)
+**Date:** 2026-04-18
+**Category:** Feature — Navigation / VIO
+**Issue:** [#498](https://github.com/nmohamaya/companion_software_stack/issues/498)
+**PR:** [#500](https://github.com/nmohamaya/companion_software_stack/pull/500)
+**Epic:** [#497 — Custom Sliding-Window Optimization VIO (SWVIO)](https://github.com/nmohamaya/companion_software_stack/issues/497)
 
-**What:** Wired the `LatencyProfiler` from PR #591 into the two flight-critical processes that the upcoming #573 baseline-capture PR needs timing data from:
+**What:**
 
-- **P2 perception** — `ScopedLatency` guards at the existing `ScopedDiagTimer` call sites in the inference, tracker, and fusion threads (stages `Detect`, `Track`, `Fuse`). Each thread takes an optional `LatencyProfiler*` parameter; `nullptr` means profiling is off (zero overhead).
-- **P4 mission planner** — same pattern around the planner loop, geofence check, and fault eval (stages `PlannerLoop`, `GeofenceCheck`, `FaultEval`).
-- **Config gate** — new `benchmark.profiler.enabled` (default `false`) and `benchmark.profiler.output_dir` (default `drone_logs/benchmark`) keys. Production builds pay zero overhead.
-- **JSON dump** — on clean shutdown each process writes `latency_<process>.json` to the configured output dir. `#573` baseline capture will merge these into `benchmarks/baseline.json`.
+- **SlidingWindowVIOBackend** — Phase 1 of the custom stereo-inertial VIO. Implements IMU error-state propagation with full 15-dim covariance (position, velocity, rotation, gyro bias, accel bias), camera clone augmentation into a sliding window (default 10 clones), and oldest-clone Schur-complement marginalization.
+- **slam_math.h** — Extracted shared SO(3)/SE(3) math utilities (exp_map, log_map, skew, left/right Jacobian) from `imu_preintegrator.cpp` into a reusable header.
+- **ivio_interface.h** — Extracted `IVIOBackend` pure interface to break circular include dependency. Factory registers `"swvio"` backend.
+- **Health FSM** — INIT → PROPAGATING → HEALTHY → DEGRADED state machine tracking covariance growth and measurement staleness.
+- **Config section** — `slam.vio.swvio.*` with 8 tunable parameters (gravity magnitude, noise densities, window size, marginalization strategy).
 
-The `LatencyProfiler` holds a `std::mutex`, which conflicts with the observability-on-flight-critical-threads rule added in PR #591 and extended in PR #592. The tightened rule now allows a documented exception; **DR-022** (`docs/guides/DESIGN_RATIONALE.md`) captures the full analysis showing this usage is safe:
+**Files added:** `slam_math.h`, `swvio_types.h`, `swvio_backend.h`, `ivio_interface.h`, `swvio_backend.cpp`, `test_swvio_backend.cpp`
+**Files modified:** `imu_preintegrator.cpp`, `ivio_backend.h`, `default.json`, `CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/TESTS.md`
 
-1. **Priority isolation** — all recorders are peer pipeline threads, no higher-priority thread is blocked.
-2. **Bounded hold-time** — mutex held for ~500 ns vs ms-scale measured work (3–5 orders of magnitude separation).
-3. **Opt-in gating** — no production build or default scenario runs the profiler.
+**Why:** Phase 1 of the custom VIO system (Epic #497). The existing `SimulatedVIOBackend` and `GazeboVIOBackend` don't run real estimation — they proxy ground truth from the simulator. SWVIO is the first backend that does real IMU propagation with proper uncertainty tracking, required for Phase 2 (sliding-window Gauss-Newton optimization) and eventually Phase 3 (stereo visual updates + loop closure).
 
-**Files added:** `tests/test_latency_profiler_dump.cpp` (3 tests — end-to-end JSON dump, disabled-profiler no-op, concurrent-workers records-land).
-
-**Files modified:**
-- `process2_perception/src/main.cpp` — profiler + 3 `ScopedLatency` sites + shutdown dump
-- `process4_mission_planner/src/main.cpp` — same, 3 sites
-- `common/util/include/util/config_keys.h` — new `benchmark::*` namespace
-- `config/default.json` — `benchmark.profiler.{enabled,output_dir}` defaults
-- `docs/guides/DESIGN_RATIONALE.md` — DR-022
-- `tests/CMakeLists.txt` — new test target
-
-**Why:** Baseline-capture (#573) requires per-stage p95/p99 latency for scenarios #02/#18/#21/#29/#30. Without instrumentation those numbers don't exist. This is the smaller of the two prerequisites before #573 can land (the other is a ground-truth emitter for per-frame bbox GT, which is its own design discussion).
-
-**Test count:** +3 in `test_latency_profiler_dump`. 1647 → 1650 (approximately — exact number depends on scenario ring tests + SDK-gated tests). All 1647 pre-existing tests still pass.
-
-**Universal acceptance criteria:** DR-022 documents the safety analysis; Rule 31 in `deploy/safety_audit.sh` now WARNs on this usage and points reviewers to DESIGN_RATIONALE.md. No license-obligation changes — stdlib only.
+**Test count:** +17 (8 backend tests: construction, propagation physics, stationarity, covariance growth, augmentation, marginalization, health FSM, factory registration; 9 slam_math tests: exp/log map, skew, Jacobians, identity properties). 1588 total after merge.
 
 ---
 
-### Improvement #77 — Ground-truth Emitter (Issue #594, Epic #523 CP0 part 3)
+### Improvement #77 — Observability Safety Rule: Mutex-Protected Primitives on Flight-Critical Threads (PR #592)
 
 **Date:** 2026-04-20
-**Category:** Testing / Benchmark harness
-**Issues:** [#594](https://github.com/nmohamaya/companion_software_stack/issues/594) · parent [#523](https://github.com/nmohamaya/companion_software_stack/issues/523) · meta-epic [#514](https://github.com/nmohamaya/companion_software_stack/issues/514)
+**Category:** Infrastructure — Safety audit
+**PR:** [#592](https://github.com/nmohamaya/companion_software_stack/pull/592)
 
-**What:** Per-frame ground-truth emitter — the second prerequisite for #573 baseline capture. Queries the simulator for visible objects and produces JSONL records consumable by the #570 metrics framework.
+**What:**
 
-Shape:
+- **safety_audit.sh Rule 31** — New static analysis rule that detects mutex-protected observability primitives (`LatencyProfiler`, `JsonLogSink`, `FrameDiagnostics`) called from flight-critical threads (P2 detector/tracker hot paths, P3 VIO backend, P4 planner tick, IPC callbacks, watchdog paths).
+- **CLAUDE.md codified** — Added "Observability on flight-critical threads" section to safety-critical C++ practices, documenting the constraint and the escape hatch (lock-free `LatencyTracker` + dedicated IO drain thread).
+- **review-concurrency agent** updated to check for this pattern during code review.
+- Rule allows documented justifications (via `// SAFETY: profiler justified` comments) for cases where the team has analyzed the priority-inversion risk and accepted it.
 
-- `IGroundTruthEmitter` interface + `GtDetection` / `FrameGroundTruth` / `GtCameraPose` types in `tests/benchmark/gt_emitter.h`.
-- `GtClassMap` — loads per-scenario `gt_class_map` config, supports exact-match + trailing-`*` wildcard patterns, translates simulator object names to `{class_id, class_name}`.
-- `to_json_line()` — single-line JSONL serialiser, round-trips cleanly through `nlohmann::json::parse`.
-- **Cosys-AirSim backend** (PR 1, this commit) using AirSim's built-in detection API (`simAddDetectionFilterMeshName` + `simGetDetections`) — bbox + relative pose + object name come from the simulator pre-computed. Stable `gt_track_id` derived from object name via `std::hash`. Occlusion placeholder (0.0) since the detection API filters to visible-only; proper occlusion score tracked in IMPROVEMENTS.md as a follow-up.
-- **Gazebo backend** (PR 2, follow-up) — covers scenarios #02/#18/#21.
+**Files modified:** `deploy/safety_audit.sh`, `CLAUDE.md`, `.claude/agents/review-concurrency.md`
 
-Design decisions captured in `docs/design/perception_v2_detailed_design.md` §13 (ground-truth emitter section):
+**Why:** The new `LatencyProfiler` (PR #591) uses a mutex internally. If called from a 30+ Hz control loop, the mutex introduces priority-inversion risk and can spike the very latency being measured. This rule prevents accidental adoption in hot paths while allowing justified use in lower-frequency paths (documented via DR-022).
 
-1. **Approach B (per-frame dynamic)** over static-config GT — honest for dynamic scenes.
-2. **Stable `gt_track_id` across FoV exits** — the simulator has omniscient identity, so no dormant-track guessing needed. Out-of-FoV → emit nothing; re-enter → same track_id.
-3. **Per-scenario `gt_class_map`** — each scenario's config file is self-contained.
-4. **Occlusion as first-class field** with a placeholder value for now.
-
-**Files added:**
-- `tests/benchmark/gt_emitter.h` — interface + types (~160 lines)
-- `tests/benchmark/gt_emitter.cpp` — shared impl (GtClassMap::load, lookup, to_json_line) (~110 lines)
-- `tests/benchmark/cosys_gt_emitter.cpp` — Cosys backend (~220 lines, HAVE_COSYS_AIRSIM-gated)
-- `tests/test_gt_emitter.cpp` — 11 unit tests (shared layer only; Cosys needs live AirSim)
-
-**Files modified:**
-- `config/scenarios/29_cosys_perception.json` + `30_cosys_static.json` — add `gt_class_map`
-- `docs/design/perception_v2_detailed_design.md` — §13 ground-truth emitter section (gitignored draft)
-- `docs/architecture/SIMULATION_ARCHITECTURE.md` — scope note clarifying Gazebo focus + pointers to Cosys docs
-- `docs/guides/CONFIG_GUIDE.md` — `gt_class_map` scenario-config key documentation
-- `docs/tracking/IMPROVEMENTS.md` — entry #10 for a future `COSYS_SIMULATION_ARCHITECTURE.md`
-- `tests/CMakeLists.txt` — new `test_gt_emitter` target
-- `tests/TESTS.md` — suite entry + total count
-
-**Why:** Baseline capture (#573) needs per-frame GT bboxes to compute TP/FP/FN, MOTA, ID-switch, fragmentation against the pre-rewrite pipeline's output. Without this emitter those numbers can't be produced honestly on scenes with dynamic objects (3 of 5 target scenarios). The Cosys-first split lets us start baseline capture on #29/#30 while the Gazebo backend (PR 2) comes online for #02/#18/#21.
-
-**Test count:** +11 in `test_gt_emitter`. 1650 → 1661 (+SDK).
-
-**Universal acceptance criteria:** design doc updated; no license obligations change.
-
-**Follow-ups tracked in IMPROVEMENTS.md:**
-
-- Gazebo GT emitter (PR 2 under the same issue #594).
-- Proper occlusion score via segmentation-mask pixel accounting.
-- `COSYS_SIMULATION_ARCHITECTURE.md` parallel to the Gazebo doc.
+**Test count:** No new tests. Rule verified via `bash deploy/safety_audit.sh` on the codebase.
 
 ---
 
-### Improvement #78 — Baseline capture: `benchmarks/baseline.json` + `BaselineCapture` class (Issue #573, Epic #523)
+## Phase 13b — Perception Pipeline v2 (Integration Branch)
+
+*The following improvements landed on `feature/perception-v2-integration` and will merge to main when the integration branch is ready. They are tracked here for completeness.*
+
+### Improvement #78 — Perception Metrics Framework: TP/FP/FN, AP, MOTA/MOTP (Issue #570, PR #590)
 
 **Date:** 2026-04-20
+**Category:** Feature — Perception / Benchmark harness
+**Issue:** [#570](https://github.com/nmohamaya/companion_software_stack/issues/570)
+**PR:** [#590](https://github.com/nmohamaya/companion_software_stack/pull/590)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
 
-**What:** Baseline capture infrastructure for the perception benchmark harness. `BaselineCapture` class accumulates per-scenario detection + tracking metrics and latency summaries from live scenario runs, then serialises to `benchmarks/baseline.json`. Seed baseline checked in with structure for 5 scenarios (#02, #18, #21, #29, #30) — values populate on first live capture.
+**What:**
 
-**Files added:**
-- `tests/benchmark/baseline_capture.h` — `BaselineCapture` class + `ScenarioBaseline` / `PerClassBaseline` types
-- `tests/benchmark/baseline_capture.cpp` — implementation: metric accumulation via `compute_detection_metrics` / `compute_tracking_metrics`, JSON serialisation (nlohmann ordered_json), file I/O with round-trip load
-- `tests/test_baseline_capture.cpp` — 11 GTest cases: perfect detection, mixed TP/FP/FN, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip, latency passthrough, tracking metrics, empty/invalid/duplicate scenarios
-- `benchmarks/baseline.json` — seed baseline with all 5 scenario structures
-- `benchmarks/README.md` — regeneration instructions, scenario table, metric interpretation guide
+- Pure C++17 scorer under `tests/benchmark/` — detection metrics (per-class TP/FP/FN, precision/recall/F1, per-class AP via PASCAL VOC 11-point interpolation, confusion matrix) and tracking metrics (MOTA, MOTP, ID switches, fragmentations).
+- Greedy confidence-ordered matching (COCO-style) over Hungarian for determinism and simplicity.
+- IoU-form MOTP (standard for 2D bbox trackers). Per-GT track-state keeps ID-switch/fragmentation bookkeeping O(total_GT).
 
-**Files modified:**
-- `tests/CMakeLists.txt` — `test_baseline_capture` target
-- `tests/TESTS.md` — suite entry + total count update
-- `docs/design/perception_v2_detailed_design.md` — status marker + pointer to baseline
+**Files added:** `tests/benchmark/perception_metrics.h`, `tests/benchmark/perception_metrics.cpp`, `tests/test_perception_metrics.cpp`
+**Files modified:** `tests/CMakeLists.txt`, `tests/TESTS.md`
 
-Also cherry-picked review fixes from PR #595 (`fe2e84a`): GT emitter config key validation, error path coverage (+2 tests → 13 total in `test_gt_emitter`).
+**Why:** CP0 foundation for Epic #523. Every subsequent perception-v2 PR will be graded against these metrics. No ML deps, no OpenCV — pure C++17 for CI reproducibility.
 
-**Why:** Every perception-v2 PR needs a reference point to measure against. Without `baseline.json`, "does this PR improve detection?" is subjective. The capture class computes TP/FP/FN, mAP, MOTA/MOTP, ID switches, and per-stage latency percentiles — the same metrics the CI gating (#572) will enforce. Seed baseline provides the schema; values populate when scenarios run on Gazebo (Tier 2) or Cosys-AirSim (Tier 3).
-
-**Test count:** +11 in `test_baseline_capture`, +2 in `test_gt_emitter` (review fixes). 1642 → 1655.
-
-**Universal acceptance criteria:** design doc updated; no license obligations change.
+**Test count:** +23. 1605 → 1628.
 
 ---
 
-### Improvement #79 — CI gating: baseline comparison tool + regression detection (Issue #572, Epic #523)
+### Improvement #79 — Latency Profiler: Per-Stage Percentiles + Correlation-Tagged Traces (Issue #571, PRs #591 + #593)
 
 **Date:** 2026-04-20
+**Category:** Feature — Observability / Benchmark harness
+**Issue:** [#571](https://github.com/nmohamaya/companion_software_stack/issues/571)
+**PRs:** [#591](https://github.com/nmohamaya/companion_software_stack/pull/591), [#593](https://github.com/nmohamaya/companion_software_stack/pull/593)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
 
-**What:** Baseline comparator that fails CI when a PR regresses perception quality beyond configurable thresholds. Compares a current benchmark run against `benchmarks/baseline.json` using percentage-based relative thresholds for detection (recall, precision, mAP), tracking (MOTA, MOTP), and latency (per-stage p95). Includes a CLI tool (`compare_to_baseline`) for local and CI use, and a CI workflow step in `ci-perception.yml`.
+**What:**
 
-**Files added:**
+- **PR #591** — Header-only `LatencyProfiler` (`common/util/`) with `ScopedLatency` RAII guards, thread-safe per-stage percentile computation (p50/p95/p99), correlation-ID-tagged end-to-end traces, non-monotonic clock defence. 15 unit tests.
+- **PR #593** — Wired `ScopedLatency` into P2 (Detect/Track/Fuse) and P4 (PlannerLoop/GeofenceCheck/FaultEval). Opt-in config gate (`benchmark.profiler.enabled`, default false) for zero production overhead. DR-022 documents mutex safety analysis. 3 smoke tests.
 
-- `tests/benchmark/baseline_comparator.h` — `ComparisonThresholds`, `MetricDelta`, `ScenarioComparison`, `ComparisonResult` types + `compare_baselines()` / `format_comparison()` APIs
-- `tests/benchmark/baseline_comparator.cpp` — comparison engine: higher-is-better (recall, precision, mAP, MOTA, MOTP), lower-is-better (latency p95), zero-baseline skip, Markdown table formatter
-- `tests/benchmark/compare_to_baseline_main.cpp` — CLI: `--baseline <path> --current <path>` with per-metric threshold overrides, exit 0/1
-- `tests/test_baseline_comparator.cpp` — 11 GTest cases: improvement, regression, within-threshold, missing scenario, zero baseline, latency regression, format output, extra scenario, custom thresholds, tracking regression, partial failure
+**Files added:** `common/util/include/util/latency_profiler.h`, `tests/test_latency_profiler.cpp`, `tests/test_latency_profiler_dump.cpp`
+**Files modified:** `process2_perception/src/main.cpp`, `process4_mission_planner/src/main.cpp`, `config/default.json`, `common/util/include/util/config_keys.h`, `tests/CMakeLists.txt`, `tests/TESTS.md`
 
-**Files modified:**
+**Why:** The benchmark harness needs per-stage latency data alongside detection/tracking accuracy. The profiler composites with the metrics framework (#570) into `benchmarks/baseline.json` for regression detection.
 
-- `tests/CMakeLists.txt` — `test_baseline_comparator` test target + `compare_to_baseline` executable target
-- `.github/workflows/ci-perception.yml` — baseline regression gate step between perception run and PR comment
-- `tests/TESTS.md` — suite entry + detailed section + total count update
-
-**Why:** Without automated regression detection, perception quality regressions can slip through code review. The comparator enforces that recall, precision, mAP, MOTA, MOTP, and latency don't degrade beyond thresholds (default 5% for accuracy, 20% for latency). Zero-baseline skip ensures the all-zeros seed baseline passes gracefully until real data is captured. Advisory in CI until baselines have real values.
-
-**Test count:** +21 in `test_baseline_comparator`. 1661 → 1682.
-
-**Universal acceptance criteria:** CI workflow updated; no license obligations change.
+**Test count:** +18 (15 profiler + 3 wiring smoke). 1628 → 1648.
 
 ---
 
-*Last updated after Improvement #79 (CI gating comparator, #572). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #80 — Ground-Truth Emitter: Per-Frame GT for Baseline Capture (Issue #594, PR #595)
+
+**Date:** 2026-04-20
+**Category:** Feature — Perception / Benchmark harness
+**Issue:** [#594](https://github.com/nmohamaya/companion_software_stack/issues/594)
+**PR:** [#595](https://github.com/nmohamaya/companion_software_stack/pull/595)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- Pluggable `IGroundTruthEmitter` interface with Cosys-AirSim backend using AirSim's built-in detection API (`simGetDetections`).
+- Per-frame dynamic GT (not static-config) — handles moving objects. Stable `gt_track_id` via `std::hash<string_view>` folded to 32 bits.
+- Per-scenario `gt_class_map` in scenario JSON for auditable class mapping.
+- Out-of-FoV/occluded objects not emitted (AirSim filters visible-only).
+
+**Files added:** `tests/benchmark/gt_emitter.h`, `tests/benchmark/gt_emitter.cpp`, `tests/benchmark/cosys_gt_emitter.cpp`, `tests/test_gt_emitter.cpp`
+**Files modified:** `config/scenarios/29_cosys_perception.json`, `config/scenarios/30_cosys_static.json`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Detection/tracking metrics (#570) need ground-truth bboxes per frame. Static GT configs would produce misleading baselines for the 3 of 5 target scenarios with dynamic content.
+
+**Test count:** +13 (11 initial + 2 review fixes). 1648 → 1655.
+
+---
+
+### Improvement #81 — Baseline Capture Infrastructure + Seed Baseline (Issue #573, PR #596)
+
+**Date:** 2026-04-21
+**Category:** Feature — Perception / Benchmark harness
+**Issue:** [#573](https://github.com/nmohamaya/companion_software_stack/issues/573)
+**PR:** [#596](https://github.com/nmohamaya/companion_software_stack/pull/596)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- `BaselineCapture` class — accumulates per-scenario detection + tracking metrics and latency summaries, serialises to `benchmarks/baseline.json`. Delegates to the #570 metrics framework.
+- Seed baseline (`benchmarks/baseline.json`) — structure for 5 target scenarios (#02, #18, #21, #29, #30), zero-valued until first live capture run.
+
+**Files added:** `tests/benchmark/baseline_capture.h`, `tests/benchmark/baseline_capture.cpp`, `tests/test_baseline_capture.cpp`, `benchmarks/baseline.json`, `benchmarks/README.md`
+**Files modified:** `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Connects the metrics framework (#570), latency profiler (#571), and GT emitter (#594) into a single capture pipeline that feeds the CI comparator (#572) and dashboard (#574).
+
+**Test count:** +11. 1655 → 1672 (includes GT emitter review-fix cherry-pick).
+
+---
+
+### Improvement #82 — CI Gating: Baseline Comparison Tool + Regression Detection (Issue #572, PR #597)
+
+**Date:** 2026-04-21
+**Category:** Feature — CI / Benchmark harness
+**Issue:** [#572](https://github.com/nmohamaya/companion_software_stack/issues/572)
+**PR:** [#597](https://github.com/nmohamaya/companion_software_stack/pull/597)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- `BaselineComparator` class — compares current benchmark run against baseline with configurable percentage thresholds (5% for detection/tracking, 20% for latency p95).
+- CLI tool (`compare_to_baseline`) with `--baseline`/`--current` args and per-metric threshold overrides.
+- CI integration — advisory baseline regression gate step in `ci-perception.yml`.
+- Zero-baseline skip — all-zeros baseline passes until real data is captured.
+
+**Files added:** `tests/benchmark/baseline_comparator.h`, `tests/benchmark/baseline_comparator.cpp`, `tests/benchmark/compare_to_baseline_main.cpp`, `tests/test_baseline_comparator.cpp`
+**Files modified:** `.github/workflows/ci-perception.yml`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Automated regression detection — PRs that degrade perception metrics beyond threshold get flagged in CI before merge.
+
+**Test count:** +11. 1672 → 1683.
+
+---
+
+### Improvement #83 — Dashboard Renderer: HTML/MD Benchmark Report (Issue #574, PR #598)
+
+**Date:** 2026-04-21
+**Category:** Feature — CI / Benchmark harness
+**Issue:** [#574](https://github.com/nmohamaya/companion_software_stack/issues/574)
+**PR:** [#598](https://github.com/nmohamaya/companion_software_stack/pull/598)
+**Epic:** [#523 — Perception Benchmark Harness](https://github.com/nmohamaya/companion_software_stack/issues/523)
+
+**What:**
+
+- Zero-dependency Python dashboard renderer (`tests/benchmark/dashboard_renderer.py`) producing human-readable benchmark reports from BaselineCapture JSON.
+- Two output modes: `--mode pr-comment` (~50 lines for GitHub PR comments with summary table + top-3 changes) and `--mode full` (per-class breakdowns, latency stage tables).
+- CI integration — new "Generate benchmark dashboard" step in `ci-perception.yml` with graceful fallback.
+- Completes Epic #523 (Perception Benchmark Harness).
+
+**Files added:** `tests/benchmark/dashboard_renderer.py`, `tests/benchmark/test_dashboard_renderer.py`
+**Files modified:** `.github/workflows/ci-perception.yml`, `tests/TESTS.md`
+
+**Why:** The comparator (#572) gives pass/fail; the dashboard gives humans the context to understand *why* and *where* metrics changed. Closes out the benchmark harness epic.
+
+**Test count:** +14 (Python unittest). 1683 → 1697 (Python tests counted separately in TESTS.md).
+
+---
+
+### Improvement #84 — Per-Class Config Schema: load_per_class<T>() + Avoider/Tracker Integration (Epic #519, PR #599)
+
+**Date:** 2026-04-21
+**Category:** Feature — Infrastructure / Perception / Navigation
+**Epic:** [#519 — Per-Class Config Schema](https://github.com/nmohamaya/companion_software_stack/issues/519) (all 5 sub-issues: #550–#554)
+**PR:** [#599](https://github.com/nmohamaya/companion_software_stack/pull/599)
+
+**What:**
+
+- **`per_class_config.h`** — Generic `load_per_class<T>()` template utility that reads JSON sections like `{ "default": 5.0, "person": 2.0 }` into `std::array<T, 8>` indexed by `ObjectClass`. Includes `class_name_to_index()`, `validate_per_class_section()`, and compile-time `static_assert` tying `kPerClassCount` to the `ObjectClass` enum.
+- **Obstacle avoider** — 5 per-class arrays (influence_radius, repulsive_gain, min_distance, prediction_dt, min_confidence) loaded at startup, used in the avoid() hot loop via class_id index. OOB bounds check for untrusted IPC data.
+- **Kalman tracker** — Per-class motion model (CONSTANT_VELOCITY / CONSTANT_ACCELERATION) with different process noise Q_ matrices. ByteTrack selects model at track creation.
+- **Config validation** — `per_class_section()` schema rule rejects unknown class names at startup. Wired into both mission_planner and perception schemas.
+- **Factory refactor** — `planner_factory.h` and `obstacle_avoider_3d.h` factories converted from `throw` to `Result<T,E>` pattern.
+- **config/default.json** — Populated with per-class defaults for all avoider and tracker parameters.
+- **CI fix** — `run_perception_ci.sh` dry-run `KeyError: 'metrics'` fixed (baseline format mismatch from PR #596).
+
+**Files added:** `common/util/include/util/per_class_config.h`, `tests/test_per_class_config.cpp`
+**Files modified:** `config_keys.h`, `config_validator.h`, `obstacle_avoider_3d.h`, `planner_factory.h`, `kalman_tracker.h`, `bytetrack_tracker.h/cpp`, `P4 main.cpp`, `config/default.json`, `run_perception_ci.sh`, 6 test files
+**Docs:** `CI_ISSUES.md` (CI-012), `IMPROVEMENTS.md` (#12, #13)
+
+**Why:** Per-class behaviour (margins, motion models, prediction horizons) was hardcoded to global values. This epic moves all per-class tuning into `drone::Config` with a standard hierarchy, a reusable lookup utility, and startup validation. Zero runtime cost — arrays loaded once at startup.
+
+**Test count:** +13 new tests (per_class_config, OOB bounds, config-driven avoider, motion model, type mismatch). Factory tests updated from throw→Result. 1697 → 1707 on integration branch.
+
+---
+
+_Last updated after Improvement #84 (Epic #519). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
