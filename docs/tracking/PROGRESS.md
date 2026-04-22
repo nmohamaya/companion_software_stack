@@ -3302,4 +3302,29 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-_Last updated after Improvement #84 (Epic #519). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._
+### Improvement #85 — HAL Interface Layer for Perception v2 (Epic #515)
+
+**Date:** 2026-04-21
+**Category:** Feature — Infrastructure / HAL
+**Epic:** [#515 — HAL Interface Layer for Perception v2](https://github.com/nmohamaya/companion_software_stack/issues/515) (sub-issues: #528, #529, #530, #531)
+
+**What:**
+
+- **`pixel_format.h`** — `PixelFormat` enum (GRAY8, RGB8, BGR8, RGBA8, NV12, YUYV, BAYER_RGGB8, THERMAL_8/16, EVENT_CD) + `pixel_format_channels()` helper. Reusable by ICamera, IEventCamera, IInferenceBackend.
+- **`iinference_backend.h`** — `IInferenceBackend` interface with HAL-local types (`BoundingBox2D`, `InferenceDetection`, `InferenceOutput`). Includes optional per-detection mask. `SimulatedInferenceBackend` returns N deterministic synthetic detections.
+- **`ivolumetric_map.h`** — `IVolumetricMap` interface with `VoxelKey`, `VoxelData`, `VoxelUpdate` structs. `SimulatedVolumetricMap` uses `std::unordered_map<VoxelKey, VoxelData, VoxelKeyHash>` with position discretization via `floor(pos / resolution)`.
+- **`ievent_camera.h`** — `IEventCamera` interface with `EventCD` and `EventBatch` structs. `SimulatedEventCamera` generates deterministic synthetic events.
+- **`isemantic_projector.h`** — `ISemanticProjector` interface with `CameraIntrinsics` struct. `CpuSemanticProjector` implements real pinhole back-projection: samples depth at bbox centre (or sparse 4×4 grid within mask), transforms to world frame via `camera_pose`.
+- **Factory** — `create_inference_backend()`, `create_volumetric_map()`, `create_event_camera()`, `create_semantic_projector()` added to `hal_factory.h`.
+- **Config** — `config_keys.h` extended with 4 new perception namespaces. `default.json` extended with 4 new sections.
+
+**Files added:** `pixel_format.h`, `iinference_backend.h`, `simulated_inference_backend.h`, `ivolumetric_map.h`, `simulated_volumetric_map.h`, `ievent_camera.h`, `simulated_event_camera.h`, `isemantic_projector.h`, `cpu_semantic_projector.h`, `test_inference_backend.cpp`, `test_volumetric_map.cpp`, `test_event_camera.cpp`, `test_semantic_projector.cpp`
+**Files modified:** `hal_factory.h`, `config_keys.h`, `config/default.json`, `tests/CMakeLists.txt`, `tests/TESTS.md`
+
+**Why:** Perception v2 components (grid, IMM tracker, SAM, radar fusion) all depend on these HAL abstractions. Defining them first as a foundational epic unblocks E2–E7. HAL-local types avoid circular dependency (perception → HAL → util, never backward).
+
+**Test count:** +39 new tests (7 inference, 9 volumetric map, 9 event camera, 14 semantic projector). 1585 → 1624 total.
+
+---
+
+_Last updated after Improvement #85 (Epic #515). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory._

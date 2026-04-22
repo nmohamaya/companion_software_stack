@@ -130,6 +130,10 @@ bash deploy/build.sh --test-filter watchdog
 | [HAL — Depth Anything V2](#hal--depth-anything-v2) | 2 | 16 | DA V2 OpenCV DNN backend: model load, input validation, known-scene golden test, depth range (OPENCV_FOUND only) |
 | [HAL — Camera Lifetime](#test_hal_camera_lifetimecpp--7-tests) | 1 | 7 | CapturedFrame owned data lifetime safety: survives next capture, dimension match, close survival |
 | [HAL — Cosys-AirSim Camera Config](#test_cosys_camera_configcpp--6-tests) | 1 | 6 | CosysCameraBackend name-resolution precedence: per-section → top-level → default, plus symmetric empty-value-not-shadowing for vehicle_name (gated on `HAVE_COSYS_AIRSIM`) |
+| [HAL — Inference Backend](#hal--inference-backend) | 1 | 7 | IInferenceBackend + SimulatedInferenceBackend: init, infer, null/zero validation, factory |
+| [HAL — Volumetric Map](#hal--volumetric-map) | 1 | 9 | IVolumetricMap + SimulatedVolumetricMap: init, insert/query, clear, same-voxel merge, factory |
+| [HAL — Event Camera](#hal--event-camera) | 1 | 9 | PixelFormat channels, IEventCamera + SimulatedEventCamera: open/close, events, factory |
+| [HAL — Semantic Projector](#hal--semantic-projector) | 1 | 14 | ISemanticProjector + CpuSemanticProjector: pinhole back-projection, depth NaN/zero, mask, factory |
 | [Benchmark — Perception Metrics](#test_perception_metricscpp--25-tests) | 1 | 25 | TP/FP/FN, per-class AP (PASCAL VOC 11-point), MOTA/MOTP, ID switches, fragmentations, confusion matrix, IoU math, N=1000×1000 perf budget |
 | [Benchmark — Latency Profiler](#test_latency_profilercpp--15-tests) | 1 | 15 | Per-stage percentile aggregation, correlation-ID-tagged trace ring, ScopedLatency RAII timer, thread-safe concurrent writes, JSON snapshot, overhead budget |
 | [Benchmark — Profiler Dump Smoke](#test_latency_profiler_dumpcpp--3-tests) | 1 | 3 | Simulated P2/P4 wiring pattern — concurrent workers record via ScopedLatency, dump to JSON on disk, parse back, verify no lost records |
@@ -137,7 +141,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **78 C++ + 5 shell + 1 Python** | **1707 (no SDK) / 1748 (+SDK) + 42 + 29 + 250+** | |
+| **Total** | **82 C++ + 5 shell + 1 Python** | **1746 (no SDK) / 1787 (+SDK) + 42 + 29 + 250+** | |
 
 ---
 
@@ -361,6 +365,63 @@ Compiled with `HAVE_MAVSDK`.  Tests gracefully handle missing PX4 SITL.
 **Key files under test:** `hal/cosys_name_resolver.h` (free functions `resolve_camera_name`, `resolve_vehicle_name`, `resolve_airsim_name`), `hal/cosys_camera.h` (thin static wrappers).
 
 **Why:** Regression test for the silent 256×144 downgrade that made scenario 30 produce zero detections for 39 YOLO inference frames. No RPC required — the helpers are `static` by design so the resolution logic can be unit-tested without instantiating the backend (which would need a live AirSim server). See BUG_FIXES.md → Fix #499a.
+
+---
+
+## HAL — Inference Backend
+
+### test_inference_backend.cpp — 7 tests
+
+**What it tests:** `IInferenceBackend` interface and `SimulatedInferenceBackend` — the HAL abstraction for ML inference engines (ONNX Runtime, TensorRT, etc.). The simulated backend returns N deterministic synthetic detections with configurable count.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `InferenceBackend` | 7 | `name()` returns `"SimulatedInferenceBackend"`; `init()` returns true; `infer()` returns correct detection count with valid bbox/confidence; null frame pointer returns error; zero dimensions returns error; factory creates simulated backend; factory throws on unknown backend |
+
+**Key files under test:** `hal/iinference_backend.h`, `hal/simulated_inference_backend.h`, `hal/hal_factory.h`
+
+---
+
+## HAL — Volumetric Map
+
+### test_volumetric_map.cpp — 9 tests
+
+**What it tests:** `IVolumetricMap` interface and `SimulatedVolumetricMap` — a hash-map-based 3D voxel store that discretizes positions into grid cells. Used for semantic 3D scene representation.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `VolumetricMap` | 9 | `name()` correct; `init()` with valid resolution; `init()` rejects zero/negative resolution; insert + query round-trip (occupancy, semantic label, confidence); query miss returns nullopt; `clear()` empties map; two inserts to same voxel (via discretization) keep latest; factory creates simulated backend; factory throws on unknown backend |
+
+**Key files under test:** `hal/ivolumetric_map.h`, `hal/simulated_volumetric_map.h`, `hal/hal_factory.h`
+
+---
+
+## HAL — Event Camera
+
+### test_event_camera.cpp — 9 tests
+
+**What it tests:** `PixelFormat` enum channel helper and `IEventCamera` + `SimulatedEventCamera` — the HAL abstraction for dynamic vision sensors (DVS/event cameras). The simulated backend generates deterministic synthetic events.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `PixelFormat` | 1 | `pixel_format_channels()` returns correct channel count for GRAY8(1), RGB8(3), BGR8(3), RGBA8(4), THERMAL_8(1), THERMAL_16(1), EVENT_CD(0) |
+| `EventCamera` | 8 | `name()` correct; open/close lifecycle; zero-dimension open fails; read when closed returns invalid batch; read produces correct event count with valid coordinates and polarity; pixel format is EVENT_CD; factory creates simulated backend; factory throws on unknown backend |
+
+**Key files under test:** `hal/pixel_format.h`, `hal/ievent_camera.h`, `hal/simulated_event_camera.h`, `hal/hal_factory.h`
+
+---
+
+## HAL — Semantic Projector
+
+### test_semantic_projector.cpp — 14 tests
+
+**What it tests:** `ISemanticProjector` interface and `CpuSemanticProjector` — pinhole-model back-projection of 2D detections + depth maps into 3D `VoxelUpdate` structs. The CPU implementation handles both bbox-centre sampling and sparse grid sampling within detection masks.
+
+| Suite | Tests | What is validated |
+|-------|-------|-------------------|
+| `SemanticProjector` | 14 | `name()` correct; init with valid intrinsics; init rejects zero dimensions; init rejects zero focal length; project before init fails; empty detections returns empty updates; single detection back-projects to correct 3D position; NaN depth skipped; zero depth skipped; camera pose translation applied to world frame; invalid (empty) depth map returns error; masked detection produces 4×4=16 voxel updates; factory creates CPU backend; factory throws on unknown backend |
+
+**Key files under test:** `hal/isemantic_projector.h`, `hal/cpu_semantic_projector.h`, `hal/hal_factory.h`
 
 ---
 
