@@ -1,6 +1,7 @@
 {
     "_comment": "Cosys-AirSim dev profile — native desktop (GTX 1080 Ti, 11 GB VRAM)",
-    "log_level": "info",
+    "_comment_log_level": "Dev-profile default is debug so scenario runs on the laptop/desktop have maximum diagnostic signal. Cloud profile (cosys_airsim.json) and the project default (default.json) remain at info.",
+    "log_level": "debug",
     "ipc_backend": "zenoh",
 
     "cosys_airsim": {
