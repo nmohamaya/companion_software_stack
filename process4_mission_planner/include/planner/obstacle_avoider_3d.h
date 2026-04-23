@@ -81,6 +81,20 @@ struct ObstacleAvoider3DConfig {
     std::array<float, drone::util::kPerClassCount> min_confidence_per_class{};
 };
 
+// ── Named constants (PR #617 code-quality review) ──────────────────────────
+// The 0.01f dist gate and 0.01f velocity-magnitude gate are both "minimum
+// non-zero scalar to prevent div-by-zero on degenerate geometry", but they
+// guard different quantities — distance vs velocity — so they get distinct
+// names.  The log thresholds live here because they govern when [Avoider]
+// lines are promoted to INFO; unlike `min_distance_m`, they are not physics
+// values and don't belong in per-scenario config.
+namespace avoider_constants {
+inline constexpr float kMinDistGateM               = 0.01f;  // geometry dead-zone
+inline constexpr float kMinVelMagnitude            = 0.01f;  // velocity dead-zone (normalisation)
+inline constexpr float kLogPerObstacleThresholdMps = 0.5f;   // promote per-obstacle log to INFO
+inline constexpr float kLogDeltaThresholdMps       = 0.1f;   // promote summary log to INFO
+}  // namespace avoider_constants
+
 class ObstacleAvoider3D final : public IObstacleAvoider {
 public:
     explicit ObstacleAvoider3D(const ObstacleAvoider3DConfig& config = {}) : config_(config) {
@@ -143,11 +157,15 @@ public:
         config_.min_brake_scale =
             cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_BRAKE_SCALE,
                            config_.min_brake_scale);
-        // PR #617 fault-recovery P3: a config mistake of min_distance_m=0 silently
-        // disables the brake — warn loudly so operators notice before scenario time.
+        // PR #617 review: a config mistake of min_distance_m=0 silently disables
+        // BOTH the brake path (guarded by `min_distance_m > 0` inside avoid())
+        // AND the close_regime_active_ hysteresis (entry condition is
+        // `dist < min_distance_m`, which can never be true when it's 0).
+        // Warn loudly so operators notice before scenario time.
         if (config_.brake_in_close_regime && config_.min_distance_m <= 0.0f) {
             DRONE_LOG_WARN("[ObstacleAvoider3D] brake_in_close_regime enabled but "
-                           "min_distance_m={:.3f} <= 0 — brake path will be skipped.",
+                           "min_distance_m={:.3f} <= 0 — brake path will be skipped and "
+                           "close_regime_active_ hysteresis will also be suppressed.",
                            config_.min_distance_m);
         }
 
@@ -226,7 +244,8 @@ public:
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-            if (dist < config_.influence_radius_per_class[ci] && dist > 0.01f) {
+            if (dist < config_.influence_radius_per_class[ci] &&
+                dist > avoider_constants::kMinDistGateM) {
                 ++active;
                 if (dist < min_active_dist) {
                     min_active_dist = dist;
@@ -256,7 +275,7 @@ public:
                 // so quiet scenarios can disable it (Issue #503).
                 if (config_.log_corrections) {
                     const float cmag = std::sqrt(cx * cx + cy * cy + cz * cz);
-                    if (cmag > 0.5f) {
+                    if (cmag > avoider_constants::kLogPerObstacleThresholdMps) {
                         DRONE_LOG_DEBUG("[Avoider] obstacle d={:.1f}m rep={:.2f} |c|={:.2f}m/s "
                                         "at ({:.1f},{:.1f},{:.1f})",
                                         dist, repulsion, cmag, ox, oy, oz);
@@ -313,7 +332,7 @@ public:
                 // planned command has a vertical component.
                 const float mag_xy =
                     std::sqrt(cmd.velocity_x * cmd.velocity_x + cmd.velocity_y * cmd.velocity_y);
-                if (mag_xy > 0.01f) {
+                if (mag_xy > avoider_constants::kMinVelMagnitude) {
                     const float inv   = 1.0f / mag_xy;
                     const float dx    = cmd.velocity_x * inv;
                     const float dy    = cmd.velocity_y * inv;
@@ -330,7 +349,7 @@ public:
                 const float planned_mag = std::sqrt(cmd.velocity_x * cmd.velocity_x +
                                                     cmd.velocity_y * cmd.velocity_y +
                                                     cmd.velocity_z * cmd.velocity_z);
-                if (planned_mag > 0.01f) {
+                if (planned_mag > avoider_constants::kMinVelMagnitude) {
                     const float inv_mag = 1.0f / planned_mag;
                     const float dir_x   = cmd.velocity_x * inv_mag;
                     const float dir_y   = cmd.velocity_y * inv_mag;
@@ -363,7 +382,7 @@ public:
         float brake_scale   = 1.0f;
         float v_toward      = 0.0f;
         if (close_regime_active_ && config_.brake_in_close_regime &&
-            std::isfinite(min_active_dist) && min_active_dist > 0.01f &&
+            std::isfinite(min_active_dist) && min_active_dist > avoider_constants::kMinDistGateM &&
             config_.min_distance_m > 0.0f) {
             const float inv = 1.0f / min_active_dist;
             const float nx  = nearest_dx * inv;
@@ -406,19 +425,37 @@ public:
         // INFO-gated on log_corrections + meaningful delta so quiet ticks stay
         // at DEBUG.  Magnitude is the Euclidean size of the total correction
         // applied to the planned velocity.
+        //
+        // Log-field reference (for operators parsing [Avoider] lines):
+        //   considered      = objects passing min_confidence filter
+        //   active          = objects within influence_radius_m
+        //   |delta|         = Euclidean magnitude of repulsion correction (m/s)
+        //   path_aware_strip= times path-aware stripping removed an opposing component
+        //   close_regime    = 1 if nearest obstacle < min_distance_m (hysteresis)
+        //   brake           = 1 if PR #617 brake arbitration cancelled forward motion
+        //   v_toward        = forward-velocity component that was cancelled (m/s)
+        //   scale           = proximity-based magnitude scaler applied after cancel
         if (config_.log_corrections) {
             const float delta_mag = std::sqrt(
                 total_rep_x * total_rep_x + total_rep_y * total_rep_y + total_rep_z * total_rep_z);
-            if (active > 0 || delta_mag > 0.1f) {
-                // brake=1 means brake arbitration reduced forward motion this tick
-                // (Issue #513).  v_toward is the forward velocity component that
-                // was cancelled; brake_scale is the proximity-based magnitude
-                // scaler applied after cancellation.
-                DRONE_LOG_INFO(
-                    "[Avoider] considered={} active={} |delta|={:.2f} m/s "
-                    "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} scale={:.2f}",
-                    considered, active, delta_mag, path_aware_strip_count,
-                    close_regime_active_ ? 1 : 0, brake_applied ? 1 : 0, v_toward, brake_scale);
+            if (active > 0 || delta_mag > avoider_constants::kLogDeltaThresholdMps) {
+                // Emit brake fields only when the brake path was entered — on quiet
+                // ticks the three defaults (0, 0.0, 1.0) aren't informative.  This
+                // saves one fmt::format + alloc per active tick when the brake is
+                // idle (PR #617 perf review).
+                if (brake_applied || brake_scale < 1.0f) {
+                    DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
+                                   "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} "
+                                   "scale={:.2f}",
+                                   considered, active, delta_mag, path_aware_strip_count,
+                                   close_regime_active_ ? 1 : 0, brake_applied ? 1 : 0, v_toward,
+                                   brake_scale);
+                } else {
+                    DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
+                                   "path_aware_strip={} close_regime={}",
+                                   considered, active, delta_mag, path_aware_strip_count,
+                                   close_regime_active_ ? 1 : 0);
+                }
             }
         }
 
