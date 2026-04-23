@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # deploy/clean_run_build_cosys.sh
-# Clean-build the companion stack and launch a Cosys-AirSim (UE5) scenario.
+# Clean-build the companion stack and smoke-test that all 7 processes start.
+#
+# Scope: this script is a *build + process-startup* verifier, not a scenario
+# runner.  It does NOT launch UE5 / Cosys-AirSim / Gazebo.  To actually run a
+# scenario against Cosys-AirSim, use:
+#
+#     ./tests/run_scenario_cosys.sh config/scenarios/33_non_coco_obstacles.json --gui --verbose
 #
 # Usage:
-#   bash deploy/clean_run_build_cosys.sh                        # default: scenario 33 + GUI
-#   bash deploy/clean_run_build_cosys.sh --scenario 30          # pick a different scenario
-#   bash deploy/clean_run_build_cosys.sh --headless             # no UE5 3D window
-#   bash deploy/clean_run_build_cosys.sh --no-tests             # skip unit tests
-#   bash deploy/clean_run_build_cosys.sh --asan                 # + AddressSanitizer
-#   bash deploy/clean_run_build_cosys.sh --ubsan                # + UBSan
-#   bash deploy/clean_run_build_cosys.sh --coverage             # + code coverage
-#   bash deploy/clean_run_build_cosys.sh --scenario-config PATH # absolute scenario json
+#   bash deploy/clean_run_build_cosys.sh               # default: clean build + smoke test
+#   bash deploy/clean_run_build_cosys.sh --no-tests    # skip ctest (saves ~60 s)
+#   bash deploy/clean_run_build_cosys.sh --asan        # + AddressSanitizer
+#   bash deploy/clean_run_build_cosys.sh --ubsan       # + UBSan
+#   bash deploy/clean_run_build_cosys.sh --coverage    # + code coverage
+#   bash deploy/clean_run_build_cosys.sh --smoke-seconds 15  # override 8 s wait
+#   bash deploy/clean_run_build_cosys.sh --no-smoke    # skip smoke test (build + ctest only)
 #
 # NOTE: --tsan is intentionally omitted because the zenohc library triggers
 #       TSan false-positives in its internal threading.
@@ -19,47 +24,47 @@
 #   1. Kill leftover UE5/PX4/companion processes
 #   2. Clean-build (Release by default, Debug if sanitizer/coverage)
 #   3. Run unit tests (unless --no-tests)
-#   4. Launch tests/run_scenario_cosys.sh with the selected scenario
+#   4. Launch the 7 companion processes via deploy/launch_all.sh (simulated
+#      backends — no UE5, no Gazebo), wait for them to come up, verify every
+#      process is alive, then shut them down cleanly.
+#
+# Exit codes:
+#   0  clean build + all 7 processes alive
+#   1  build or tests or smoke test failed
 #
 # Prerequisites:
-#   - zenohc ≥ 1.0 installed  (apt: libzenohc libzenohc-dev)
-#   - Cosys-AirSim checkout with a pre-built environment (e.g., Blocks)
-#   - NVIDIA GPU + drivers for UE5
+#   - zenohc ≥ 1.0 installed (apt: libzenohc libzenohc-dev)
+#   - NVIDIA GPU + drivers optional (only needed for scenario runs, not here)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-SCENARIO_NUM="33"
-SCENARIO_CONFIG=""
-GUI_FLAG="--gui"
 SANITIZER=""
 ENABLE_COVERAGE="OFF"
 RUN_TESTS=true
-VERBOSE_FLAG="--verbose"
+RUN_SMOKE=true
+SMOKE_SECONDS=8
 
 usage() {
-    sed -n '2,20p' "$0"
+    sed -n '2,28p' "$0"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --scenario)          SCENARIO_NUM="$2"; shift ;;
-        --scenario-config)   SCENARIO_CONFIG="$2"; shift ;;
-        --headless)          GUI_FLAG="" ;;
-        --gui)               GUI_FLAG="--gui" ;;
-        --quiet)             VERBOSE_FLAG="" ;;
-        --no-tests)          RUN_TESTS=false ;;
-        --asan)              SANITIZER="asan" ;;
+        --no-tests)      RUN_TESTS=false ;;
+        --no-smoke)      RUN_SMOKE=false ;;
+        --smoke-seconds) SMOKE_SECONDS="$2"; shift ;;
+        --asan)          SANITIZER="asan" ;;
         --tsan)
             echo "ERROR: --tsan is not supported (false-positives in zenohc internal threading)."
             echo "  Use --asan or --ubsan instead."
             exit 1
             ;;
-        --ubsan)             SANITIZER="ubsan" ;;
-        --coverage)          ENABLE_COVERAGE="ON" ;;
-        -h|--help)           usage; exit 0 ;;
+        --ubsan)         SANITIZER="ubsan" ;;
+        --coverage)      ENABLE_COVERAGE="ON" ;;
+        -h|--help)       usage; exit 0 ;;
         *)
             echo "Unknown argument: $1"
             usage
@@ -69,26 +74,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-# Resolve scenario config path
-if [[ -z "$SCENARIO_CONFIG" ]]; then
-    # Match scenario number prefix against config/scenarios/<N>_*.json
-    matches=( "${PROJECT_DIR}/config/scenarios/${SCENARIO_NUM}_"*.json )
-    if [[ ${#matches[@]} -ne 1 || ! -f "${matches[0]}" ]]; then
-        echo "ERROR: Could not resolve scenario '${SCENARIO_NUM}' in config/scenarios/"
-        echo "  Try --scenario-config <path> or list with:"
-        echo "    ls config/scenarios/ | head"
-        exit 1
-    fi
-    SCENARIO_CONFIG="${matches[0]}"
-fi
-if [[ ! -f "$SCENARIO_CONFIG" ]]; then
-    echo "ERROR: Scenario config not found: ${SCENARIO_CONFIG}"
-    exit 1
-fi
-
-# Build type: Debug if sanitizer or coverage requested, Release otherwise
-# Use arrays for cmake flags so paths with spaces or shell metacharacters
-# (e.g. ZENOH_CONFIG_PATH="/has space") don't break the invocation.
+# Build type: Debug if sanitizer or coverage requested, Release otherwise.
 BUILD_TYPE="Release"
 EXTRA_CMAKE_FLAGS=()
 if [[ -n "$SANITIZER" ]]; then
@@ -116,11 +102,11 @@ echo "[OK] zenohc ${ZENOH_VER} found"
 # ── Step 1: Kill leftover processes ───────────────────────────
 echo ""
 echo "═══ [1/4] Cleaning up old processes ═══"
-# UE5 / Cosys-AirSim
+# UE5 / Cosys-AirSim (defensive — scripts like this often run after a failed scenario)
 pkill -9 -f "UnrealEditor"   2>/dev/null || true
 pkill -9 -f "Blocks-Linux"   2>/dev/null || true
 pkill -9 -f "AirSimEnv"      2>/dev/null || true
-# PX4 (defensive: Tier 3 uses SimpleFlight, but stale PX4 could still hold ports)
+# PX4 (defensive)
 pkill -9 -f "px4_sitl"                   2>/dev/null || true
 pkill -9 -f "PX4-Autopilot/build/px4"    2>/dev/null || true
 # Companion stack
@@ -136,8 +122,7 @@ echo ""
 echo "═══ [2/4] Clean build (${BUILD_TYPE}) ═══"
 [[ -n "$SANITIZER" ]]            && echo "  Sanitizer: ${SANITIZER}"
 [[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage : ON"
-# Determine Zenoh security configuration.  Use an array so paths with spaces
-# survive the cmake invocation without re-splitting.
+# Zenoh security configuration — array so paths with spaces survive the cmake invocation.
 ZENOH_SECURITY_FLAGS=()
 if [[ -n "${ZENOH_CONFIG_PATH:-}" ]]; then
     if [[ ! -f "$ZENOH_CONFIG_PATH" ]]; then
@@ -172,21 +157,80 @@ else
     echo "═══ [3/4] Skipping unit tests (--no-tests) ═══"
 fi
 
-# ── Step 4: Launch Cosys-AirSim scenario ─────────────────────
-echo ""
-echo "═══ [4/4] Launching Cosys-AirSim scenario ═══"
-if [[ -n "$GUI_FLAG" ]]; then
-    echo "  Mode     : GUI (UE5 3-D viewport)"
-else
-    echo "  Mode     : Headless (-RenderOffScreen)"
+# ── Step 4: Smoke-test the 7 companion processes ─────────────
+if [[ "$RUN_SMOKE" != "true" ]]; then
+    echo ""
+    echo "═══ [4/4] Skipping smoke test (--no-smoke) ═══"
+    echo ""
+    echo "DONE — clean build + ctest.  To run a scenario:"
+    echo "  ./tests/run_scenario_cosys.sh config/scenarios/33_non_coco_obstacles.json --gui --verbose"
+    exit 0
 fi
-echo "  Scenario : ${SCENARIO_CONFIG}"
-echo "  Logs     : drone_logs/scenarios_cosys/<scenario>/..."
-echo "  Press Ctrl+C to stop."
+
+echo ""
+echo "═══ [4/4] Smoke test: start 7 processes (simulated backends) ═══"
+SMOKE_LOG="${PROJECT_DIR}/drone_logs/smoke_test_$(date +%Y-%m-%d_%H%M%S).log"
+mkdir -p "$(dirname "$SMOKE_LOG")"
+echo "  Log   : ${SMOKE_LOG}"
+echo "  Wait  : ${SMOKE_SECONDS}s for the stack to settle"
 echo ""
 
-# Use exec so SIGINT from the user goes straight to the runner's trap
-exec bash "${PROJECT_DIR}/tests/run_scenario_cosys.sh" \
-    "$SCENARIO_CONFIG" \
-    $GUI_FLAG \
-    $VERBOSE_FLAG
+# Launch the 7 processes.  launch_all.sh uses simulated backends by default —
+# no UE5, no Gazebo, no external simulator — exactly what we want to verify
+# that the stack compiled cleanly and every binary starts without crashing.
+bash "${SCRIPT_DIR}/launch_all.sh" > "$SMOKE_LOG" 2>&1 &
+LAUNCH_PID=$!
+
+cleanup_smoke() {
+    # Stop launch_all and any lingering process it spawned.
+    kill -INT "$LAUNCH_PID" 2>/dev/null || true
+    sleep 2
+    pkill -9 -f "build/bin/(video_capture|perception|slam_vio_nav|mission_planner|comms|payload_manager|system_monitor)" 2>/dev/null || true
+    wait "$LAUNCH_PID" 2>/dev/null || true
+    # Clean up stale Zenoh shm (safe — we just killed everything that would hold them).
+    rm -f /dev/shm/zenoh_shm_* 2>/dev/null || true
+}
+trap cleanup_smoke EXIT INT TERM
+
+# Poll for every 0.5s until every process is alive or we time out.
+SMOKE_DEADLINE=$(( $(date +%s) + SMOKE_SECONDS ))
+PROCS=(video_capture perception slam_vio_nav mission_planner comms payload_manager system_monitor)
+while true; do
+    ALL_UP=true
+    for p in "${PROCS[@]}"; do
+        if ! pgrep -f "build/bin/$p" >/dev/null; then
+            ALL_UP=false; break
+        fi
+    done
+    if [[ "$ALL_UP" == "true" ]]; then break; fi
+    if [[ $(date +%s) -ge $SMOKE_DEADLINE ]]; then break; fi
+    sleep 0.5
+done
+
+# Final check + per-process report.
+echo "  ┌─────────────────────────────────────────────────"
+MISSING=0
+for p in "${PROCS[@]}"; do
+    if pgrep -f "build/bin/$p" >/dev/null; then
+        echo "  │  ✓ $p"
+    else
+        echo "  │  ✗ $p NOT RUNNING"
+        MISSING=$((MISSING + 1))
+    fi
+done
+echo "  └─────────────────────────────────────────────────"
+echo ""
+
+if [[ $MISSING -eq 0 ]]; then
+    echo "SMOKE TEST: PASS — all 7 processes are alive."
+    echo ""
+    echo "Next: run a scenario"
+    echo "  ./tests/run_scenario_cosys.sh config/scenarios/33_non_coco_obstacles.json --gui --verbose"
+    exit 0
+else
+    echo "SMOKE TEST: FAIL — ${MISSING}/7 processes did not start."
+    echo ""
+    echo "Last 30 lines of ${SMOKE_LOG}:"
+    tail -30 "$SMOKE_LOG" 2>/dev/null || true
+    exit 1
+fi
