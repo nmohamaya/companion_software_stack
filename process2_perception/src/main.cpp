@@ -56,6 +56,22 @@ static std::atomic<bool> g_running{true};
 // ensuring in-flight data is processed rather than dropped.
 static std::atomic<int> g_shutdown_phase{0};
 
+// ── Camera → body extrinsic rotation (PR #614 / Issue #612) ─────────
+// OpenCV camera optical frame (X=right, Y=down, Z=forward) →
+// aerospace-ENU body frame (X=forward, Y=left, Z=up).  Hoisted to file
+// scope so the constant is built once at program start and reviewers
+// reading `mask_projection_thread` see the frame convention at the top
+// of the file, next to the phased-shutdown globals.  Eigen types aren't
+// constexpr-constructible, so a meyers singleton is the idiomatic fit.
+static const Eigen::Matrix3f& R_body_from_cam() {
+    static const Eigen::Matrix3f kMatrix = (Eigen::Matrix3f() << 0, 0, 1,  //
+                                            -1, 0, 0,                      //
+                                            0, -1, 0                       //
+                                            )
+                                               .finished();
+    return kMatrix;
+}
+
 // ── Inference thread ────────────────────────────────────────
 // Stops when shutdown_phase >= 1.  No drain needed — inference is the
 // pipeline source; stopping it is what triggers downstream drains.
@@ -286,18 +302,10 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
         }
         q.normalize();
 
-        // OpenCV camera (X=right, Y=down, Z=forward) → aerospace-ENU body
-        // (X=forward, Y=left, Z=up).  Stored as `static` so the constant matrix
-        // is built once and reused across ticks.
-        static const Eigen::Matrix3f R_body_from_cam = (Eigen::Matrix3f() << 0, 0,
-                                                        1,         // body_X ← cam_Z (forward)
-                                                        -1, 0, 0,  // body_Y ← −cam_X (left)
-                                                        0, -1, 0   // body_Z ← −cam_Y (up)
-                                                        )
-                                                           .finished();
-
+        // See file-scope R_body_from_cam() — definition lives at the top of
+        // main.cpp next to the phased-shutdown globals.
         Eigen::Affine3f cam_pose = Eigen::Affine3f::Identity();
-        cam_pose.linear()        = q.toRotationMatrix() * R_body_from_cam;
+        cam_pose.linear()        = q.toRotationMatrix() * R_body_from_cam();
         cam_pose.translation()   = Eigen::Vector3f(static_cast<float>(latest_pose->translation[0]),
                                                    static_cast<float>(latest_pose->translation[1]),
                                                    static_cast<float>(latest_pose->translation[2]));
@@ -340,6 +348,13 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
         }
         voxel_pub.publish(*batch);
         ++published_count;
+
+        // First-publish marker — short runs that fail before 50 batches still
+        // emit "[MaskProj] Published …" once, so scenario pass_criteria log
+        // greps (see config/scenarios/33_non_coco_obstacles.json) still fire.
+        if (published_count == 1) {
+            DRONE_LOG_INFO("[MaskProj] Published first batch — {} voxels", batch->num_voxels);
+        }
 
         // Diagnostic trace (Issue #612).  Inert when disabled.  Writes the
         // full pose / bboxes / voxel positions for off-line analysis of the
@@ -1126,11 +1141,21 @@ int main(int argc, char* argv[]) {
 
     // Launch PATH A threads (Epic #520, Issue #608) if enabled + initialised.
     // Each needs its own video subscriber (Zenoh SHM topology — see depth_video_sub pattern).
+    //
+    // IMPORTANT (PR #614 review): declaration order matters for exception-safety.
+    // `path_a_trace` (the unique_ptr) MUST be declared BEFORE `t_sam` / `t_mask_proj`
+    // so that at scope exit the threads destruct FIRST (std::thread dtor runs
+    // std::terminate on a still-joinable thread, so they must already be joined
+    // on the normal path — which we do at Phase 2 — but on an exception path
+    // between construction and the join the dtor order still matters).
+    // Declaring trace before the threads means: on scope exit, threads destruct
+    // first, and *their* dtor is what enforces the join-or-terminate invariant.
+    // The trace stays alive for the entire join window.
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::VideoFrame>> sam_video_sub;
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::Pose>>       pathA_pose_sub;
+    std::unique_ptr<drone::util::PathATrace>                         path_a_trace;
     std::thread                                                      t_sam;
     std::thread                                                      t_mask_proj;
-    std::unique_ptr<drone::util::PathATrace>                         path_a_trace;
     if (path_a_active) {
         sam_video_sub =
             ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);

@@ -14,7 +14,13 @@
 #   ./tests/run_scenario_cosys.sh config/scenarios/29_cosys_perception.json --gui --verbose
 #
 # Options:
-#   --base-config <path>    Base config (default: config/cosys_airsim.json)
+#   --base-config <path>    Base config (default: resolved from the scenario).
+#                           Resolution precedence:
+#                             1. this flag, if given
+#                             2. scenario.base_config inside the scenario JSON
+#                             3. config/cosys_airsim_dev.json, if it exists
+#                             4. config/cosys_airsim.json (cloud profile fallback)
+#                           Paths must stay within PROJECT_DIR (no ../ escape).
 #   --log-dir <path>        Log output directory (default: drone_logs/scenarios_cosys)
 #   --timeout <seconds>     Override scenario timeout
 #   --dry-run               Parse scenario, show plan, don't execute
@@ -23,6 +29,17 @@
 #   --json-logs             Enable structured JSON log output
 #   --ipc <shm|zenoh>       Override IPC backend (default: from base config)
 #   --env <name>            UE5 environment name (default: Blocks)
+#
+# Scenario JSON fields (auto-detected by the runner):
+#   scenario.base_config    Optional hint pointing at the base config overlay
+#                           that best matches this scenario (e.g.
+#                           "config/cosys_airsim_dev.json" for the dev profile).
+#                           Lets a scenario be launched without --base-config.
+#                           Path must stay inside PROJECT_DIR.
+#   perception.path_a.diag.trace_voxels   Opt-in voxel trace (Issue #612).
+#                           The runner rewrites trace_path to
+#                           <scenario_log_dir>/path_a_voxel_trace.jsonl so every
+#                           run is self-contained.
 #
 # Environment variables:
 #   COSYS_DIR    Path to Cosys-AirSim (default: third_party/cosys-airsim if present)
@@ -201,12 +218,39 @@ with open(sys.argv[4], 'w') as f:
 PYEOF
 }
 
+confine_to_project() {
+    # Return 0 iff $1 resolves to a path under $PROJECT_DIR.  Rejects symlink
+    # escapes and ../-escapes even if the intermediate path doesn't exist yet.
+    # Portable realpath(1) may not support --relative-base; use Python instead.
+    local candidate="$1"
+    python3 - "$candidate" "$PROJECT_DIR" <<'PYEOF' >/dev/null 2>&1
+import os, sys
+candidate, root = sys.argv[1], sys.argv[2]
+root_real = os.path.realpath(root)
+# Use realpath so symlink targets are evaluated; fall back to normpath if the
+# candidate does not exist yet (realpath still resolves parents).
+cand_real = os.path.realpath(candidate)
+if not (cand_real == root_real or cand_real.startswith(root_real + os.sep)):
+    sys.exit(1)
+PYEOF
+}
+
 resolve_base_config() {
     # Resolve the base config path against a scenario file.
     # Precedence: caller-provided override → scenario.base_config → dev → cloud.
+    #
+    # Security: the `scenario.base_config` hint is read from a JSON file we do
+    # NOT control (users can ship arbitrary scenarios).  A malicious hint like
+    # `"base_config": "../../etc/passwd"` would otherwise be parsed by
+    # merge_configs() and passed into every companion process.  Confine all
+    # resolved paths to $PROJECT_DIR; reject anything that escapes.
     local scenario_file="$1"
     local override="$2"
     if [[ -n "$override" ]]; then
+        if ! confine_to_project "$override"; then
+            echo -e "${RED}ERROR: --base-config '${override}' escapes project root${NC}" >&2
+            return 2
+        fi
         echo "$override"
         return 0
     fi
@@ -217,6 +261,10 @@ resolve_base_config() {
     if [[ -n "$hint" && "$hint" != "None" ]]; then
         if [[ "$hint" != /* ]]; then
             hint="${PROJECT_DIR}/${hint}"
+        fi
+        if ! confine_to_project "$hint"; then
+            echo -e "${RED}ERROR: scenario.base_config '${hint}' escapes project root${NC}" >&2
+            return 2
         fi
         echo "$hint"
         return 0
@@ -395,8 +443,12 @@ if [[ ! -f "$SCENARIO_FILE" ]]; then
     fi
 fi
 
-# Resolve base config now that we know which scenario is running
-BASE_CONFIG=$(resolve_base_config "$SCENARIO_FILE" "$BASE_CONFIG")
+# Resolve base config now that we know which scenario is running.
+# resolve_base_config returns exit code 2 on path-confinement failure; the
+# error message has already gone to stderr.
+if ! BASE_CONFIG=$(resolve_base_config "$SCENARIO_FILE" "$BASE_CONFIG"); then
+    exit 2
+fi
 if [[ ! -f "$BASE_CONFIG" ]]; then
     echo -e "${RED}ERROR: Base config not found: ${BASE_CONFIG}${NC}"
     exit 2
@@ -988,6 +1040,29 @@ if kill -0 "$UE5_PID" 2>/dev/null; then
     check "Cosys-AirSim (UE5) still running" 0
 else
     check "Cosys-AirSim (UE5) still running" 1
+fi
+
+# ── PATH A voxel-on-target regression check (PR #614 review) ──
+# Addresses the review-test-quality P1: without this check, a Fix #55
+# regression (wrong camera extrinsic → voxels 8–12 m off) would not fail
+# the scenario — every `pass_criteria.log_contains` marker fires at init,
+# so a broken pipeline still "passes" until the LANDED gate.
+VOXEL_TRACE="${SCENARIO_LOG_DIR}/path_a_voxel_trace.jsonl"
+VOXEL_CHECK="${PROJECT_DIR}/tools/check_voxel_on_target.py"
+if [[ -f "$VOXEL_TRACE" && -x "$VOXEL_CHECK" && -n "$SCENE_FILE" && -f "$SCENE_FILE" ]]; then
+    echo ""
+    echo "PATH A voxel-on-target check:"
+    # Pull threshold from scenario JSON if present; otherwise use the default.
+    VOX_MIN_RATIO=$(json_get "$SCENARIO_FILE" "pass_criteria.voxel_on_target_ratio_min")
+    VOX_RADIUS=$(json_get "$SCENARIO_FILE" "pass_criteria.voxel_on_target_radius_m")
+    VOX_ARGS=(--trace "$VOXEL_TRACE" --scene "$SCENE_FILE")
+    [[ -n "$VOX_MIN_RATIO" && "$VOX_MIN_RATIO" != "None" ]] && VOX_ARGS+=(--min-ratio "$VOX_MIN_RATIO")
+    [[ -n "$VOX_RADIUS"    && "$VOX_RADIUS"    != "None" ]] && VOX_ARGS+=(--radius-m "$VOX_RADIUS")
+    if python3 "$VOXEL_CHECK" "${VOX_ARGS[@]}" 2>&1 | tee "${SCENARIO_LOG_DIR}/voxel_on_target.log"; then
+        check "Voxel-on-target ratio within threshold" 0
+    else
+        check "Voxel-on-target ratio within threshold" 1
+    fi
 fi
 if ss -tlnp 2>/dev/null | grep -q ":${COSYS_RPC_PORT}"; then
     check "RPC port ${COSYS_RPC_PORT} still open" 0

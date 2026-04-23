@@ -65,10 +65,16 @@ struct GridPlannerConfig {
     // direction during obstacle detours so PATH A can voxelise the obstacle's
     // far face before the drone clips it. Default false to preserve existing
     // behaviour; scenario 33 turns it on (Issue #612).
-    bool  yaw_towards_velocity = false;
-    float snap_approach_bias   = 0.5f;  // Approach-direction penalty for snap fallback
-    bool  prediction_enabled   = true;  // Enable velocity-based obstacle prediction
-    float prediction_dt_s      = 2.0f;  // Prediction horizon (seconds into the future)
+    bool yaw_towards_velocity = false;
+
+    // Minimum velocity magnitude (m/s) below which `yaw_towards_velocity`
+    // falls back to the bee-line-to-goal yaw.  Prevents jitter when the
+    // drone is hovering or moving slower than sensor noise.  Tuned against
+    // scenario 33 detour profile (nominal detour speed 1.5-2.5 m/s).
+    float yaw_velocity_threshold_mps = 0.4f;
+    float snap_approach_bias         = 0.5f;  // Approach-direction penalty for snap fallback
+    bool  prediction_enabled         = true;  // Enable velocity-based obstacle prediction
+    float prediction_dt_s            = 2.0f;  // Prediction horizon (seconds into the future)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -411,7 +417,7 @@ public:
             float ytt_dy = target.y - py;
             if (config_.yaw_towards_velocity) {
                 const float vmag = std::sqrt(smooth_vx_ * smooth_vx_ + smooth_vy_ * smooth_vy_);
-                if (vmag > 0.4f) {
+                if (vmag > config_.yaw_velocity_threshold_mps) {
                     ytt_dx = smooth_vx_;
                     ytt_dy = smooth_vy_;
                 }

@@ -39,6 +39,7 @@ STRICT_MODE_OFF
 STRICT_MODE_ON
 
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -46,7 +47,9 @@ STRICT_MODE_ON
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -55,10 +58,25 @@ using json = nlohmann::json;
 
 namespace {
 
+// Lock-free across the signal handler / main loop boundary.
+static_assert(std::atomic<bool>::is_always_lock_free,
+              "cosys_telemetry_poller requires a lock-free atomic<bool> for the signal handler");
 std::atomic<bool> g_running{true};
 
 void on_signal(int) {
     g_running.store(false, std::memory_order_release);
+}
+
+/// Parse an integer from a C string with range validation.  Replaces
+/// `std::atoi` (forbidden by CLAUDE.md — silent 0 on bad input).
+std::optional<int> parse_int(const char* s, int min_val, int max_val) {
+    if (s == nullptr || *s == '\0') return std::nullopt;
+    std::string_view sv(s);
+    int              out{0};
+    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), out);
+    if (ec != std::errc{} || ptr != sv.data() + sv.size()) return std::nullopt;
+    if (out < min_val || out > max_val) return std::nullopt;
+    return out;
 }
 
 uint64_t now_ns() {
@@ -107,15 +125,23 @@ bool parse_args(int argc, char** argv, Args& a) {
             else
                 return false;
         } else if (s == "--port") {
-            if (auto v = next("--port"))
-                a.port = static_cast<uint16_t>(std::atoi(v));
-            else
+            auto v = next("--port");
+            if (!v) return false;
+            auto parsed = parse_int(v, 1, 65535);
+            if (!parsed) {
+                std::cerr << "error: --port must be an integer in [1, 65535]: " << v << "\n";
                 return false;
+            }
+            a.port = static_cast<uint16_t>(*parsed);
         } else if (s == "--rate_hz") {
-            if (auto v = next("--rate_hz"))
-                a.rate_hz = std::max(1, std::atoi(v));
-            else
+            auto v = next("--rate_hz");
+            if (!v) return false;
+            auto parsed = parse_int(v, 1, 1000);
+            if (!parsed) {
+                std::cerr << "error: --rate_hz must be an integer in [1, 1000]: " << v << "\n";
                 return false;
+            }
+            a.rate_hz = *parsed;
         } else if (s == "-h" || s == "--help") {
             std::cout << "cosys_telemetry_poller — collision + ground-truth kinematics telemetry\n"
                       << "Options:\n"

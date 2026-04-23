@@ -23,6 +23,21 @@
 // `record_batch`).  The constructor opens the file once; writes are
 // buffered by `std::ofstream`.  No locking needed.
 //
+// Path confinement: `trace_path` is config-controlled; the constructor
+// rejects absolute paths outside the project root and rejects any path
+// that, after lexical normalisation, escapes the project tree (`..`
+// components surviving normalisation).  Scenario runners rewrite this to
+// `<scenario_log_dir>/path_a_voxel_trace.jsonl` before process launch.
+//
+// Flight-critical constraint (DR-026, docs/guides/DESIGN_RATIONALE.md):
+// `record_batch()` performs `std::ofstream` I/O from the caller thread
+// (`mask_projection_thread`).  The CPP_PATTERNS_GUIDE observability rule
+// prohibits mutex-backed observability on flight-critical threads; the
+// exception documented in DR-026 allows this diagnostic writer because
+// (a) it is opt-in with default `trace_voxels=false`, (b) it is never
+// enabled in production configs, and (c) the `enabled_` branch short-
+// circuits to a single `bool` load in the hot path.
+//
 // File format: JSON lines (RFC 7464 loose interpretation) — each line is an
 // independent JSON object, parseable with one `json::parse()` per line.
 // Python plotter example:
@@ -53,10 +68,19 @@ namespace drone::util {
 
 class PathATrace {
 public:
-    /// Constructor.  If `enabled` is false or the path cannot be opened, the
-    /// writer is inert — `record_batch()` becomes a no-op.
+    /// Constructor.  If `enabled` is false, the path cannot be opened, or the
+    /// path fails confinement (see `is_path_confined`), the writer is inert —
+    /// `record_batch()` becomes a no-op.
     PathATrace(bool enabled, const std::string& path) : enabled_(enabled), path_(path) {
         if (!enabled_) return;
+        if (!is_path_confined(path)) {
+            DRONE_LOG_ERROR(
+                "[PathATrace] Refusing trace path '{}' — must stay under drone_logs/ or a "
+                "project-root-relative subdirectory; no absolute or ../-escaping paths",
+                path);
+            enabled_ = false;
+            return;
+        }
         try {
             std::filesystem::create_directories(std::filesystem::path(path).parent_path());
         } catch (const std::exception& e) {
@@ -69,6 +93,26 @@ public:
             return;
         }
         DRONE_LOG_INFO("[PathATrace] Writing voxel trace to '{}'", path);
+    }
+
+    /// Confine trace paths to the project tree.  Accepts:
+    ///   - relative paths rooted under `drone_logs/` (the scenario runners
+    ///     rewrite trace_path to `<scenario_log_dir>/path_a_voxel_trace.jsonl`
+    ///     before launching the process, so this is the normal case).
+    ///   - any relative path whose lexically-normalised form does not start
+    ///     with `..` (covers CI / alternative log dirs).
+    /// Rejects:
+    ///   - absolute paths (e.g. `/etc/cron.d/...`).
+    ///   - relative paths that normalise to an escape (`../../etc/foo`).
+    static bool is_path_confined(const std::string& path) {
+        if (path.empty()) return false;
+        std::filesystem::path p(path);
+        if (p.is_absolute()) return false;
+        const auto normalised = p.lexically_normal();
+        const auto first      = normalised.begin();
+        if (first == normalised.end()) return false;
+        if (*first == "..") return false;
+        return true;
     }
 
     ~PathATrace() {
@@ -84,7 +128,13 @@ public:
 
     [[nodiscard]] bool enabled() const { return enabled_; }
 
-    /// Record one published batch.  Expects:
+    /// Record one published batch.
+    ///
+    /// **Thread-safety:** NOT thread-safe.  Must be called from a single thread
+    /// only — the thread that owns the `PathATrace` instance.  The class holds
+    /// no mutex; concurrent callers would race on `out_` and `lines_written_`.
+    ///
+    /// Expects:
     ///   @param t_ns    Batch emission time (source-frame timestamp)
     ///   @param seq     Source video-frame sequence number
     ///   @param pose    SLAM pose used for this projection
@@ -128,14 +178,22 @@ public:
                                        static_cast<int>(v.semantic_label), v.confidence}));
         }
 
-        // Single dump() → one line → one write → no interleaving risk.
+        // Single dump() → one line → one write.  nlohmann::json has no stream-
+        // sink overload (only indent/width params), so the intermediate
+        // std::string is unavoidable.  Acceptable because `enabled_` defaults
+        // to false in production (see DR-033).
         out_ << j.dump() << '\n';
         ++lines_written_;
-        // Flush every 50 lines so in-progress analyses can tail the file.
-        if ((lines_written_ % 50) == 0) out_.flush();
+        if ((lines_written_ % kFlushIntervalLines) == 0) out_.flush();
     }
 
 private:
+    // Flush every N lines so in-progress analyses can `tail -f` the file.
+    // At 30 Hz, N=50 yields ~1.7 s tail latency — matches the
+    // cosys_telemetry_poller's 2 s flush cadence (diagnostic-only paths
+    // should feel similar under the developer's terminal).
+    static constexpr uint64_t kFlushIntervalLines = 50;
+
     bool          enabled_{false};
     std::string   path_;
     std::ofstream out_;

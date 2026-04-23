@@ -87,18 +87,20 @@ if [[ ! -f "$SCENARIO_CONFIG" ]]; then
 fi
 
 # Build type: Debug if sanitizer or coverage requested, Release otherwise
+# Use arrays for cmake flags so paths with spaces or shell metacharacters
+# (e.g. ZENOH_CONFIG_PATH="/has space") don't break the invocation.
 BUILD_TYPE="Release"
-EXTRA_CMAKE_FLAGS=""
+EXTRA_CMAKE_FLAGS=()
 if [[ -n "$SANITIZER" ]]; then
     BUILD_TYPE="Debug"
     case "$SANITIZER" in
-        asan)  EXTRA_CMAKE_FLAGS="-DENABLE_ASAN=ON" ;;
-        ubsan) EXTRA_CMAKE_FLAGS="-DENABLE_UBSAN=ON" ;;
+        asan)  EXTRA_CMAKE_FLAGS+=("-DENABLE_ASAN=ON") ;;
+        ubsan) EXTRA_CMAKE_FLAGS+=("-DENABLE_UBSAN=ON") ;;
     esac
 fi
 if [[ "$ENABLE_COVERAGE" == "ON" ]]; then
     BUILD_TYPE="Debug"
-    EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DENABLE_COVERAGE=ON"
+    EXTRA_CMAKE_FLAGS+=("-DENABLE_COVERAGE=ON")
 fi
 
 # ── Step 0: Verify zenohc is installed ────────────────────────
@@ -134,25 +136,26 @@ echo ""
 echo "═══ [2/4] Clean build (${BUILD_TYPE}) ═══"
 [[ -n "$SANITIZER" ]]            && echo "  Sanitizer: ${SANITIZER}"
 [[ "$ENABLE_COVERAGE" == "ON" ]] && echo "  Coverage : ON"
-# Determine Zenoh security configuration
-ZENOH_SECURITY_FLAGS=""
+# Determine Zenoh security configuration.  Use an array so paths with spaces
+# survive the cmake invocation without re-splitting.
+ZENOH_SECURITY_FLAGS=()
 if [[ -n "${ZENOH_CONFIG_PATH:-}" ]]; then
     if [[ ! -f "$ZENOH_CONFIG_PATH" ]]; then
         echo "ERROR: ZENOH_CONFIG_PATH='${ZENOH_CONFIG_PATH}' does not exist."
         exit 1
     fi
     echo "  Using secure Zenoh config: ${ZENOH_CONFIG_PATH}"
-    ZENOH_SECURITY_FLAGS="-DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}"
+    ZENOH_SECURITY_FLAGS+=("-DZENOH_CONFIG_PATH=${ZENOH_CONFIG_PATH}")
 else
     echo "  WARNING: No ZENOH_CONFIG_PATH set — using insecure mode (dev/test only)."
-    ZENOH_SECURITY_FLAGS="-DALLOW_INSECURE_ZENOH=ON"
+    ZENOH_SECURITY_FLAGS+=("-DALLOW_INSECURE_ZENOH=ON")
 fi
 
 rm -rf build/
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-      ${ZENOH_SECURITY_FLAGS} \
-      ${EXTRA_CMAKE_FLAGS} \
+      "${ZENOH_SECURITY_FLAGS[@]}" \
+      "${EXTRA_CMAKE_FLAGS[@]}" \
       ..
 cmake --build . -j"$(nproc)"
 cd "$PROJECT_DIR"

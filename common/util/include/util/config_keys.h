@@ -279,6 +279,10 @@ inline constexpr const char* YAW_SMOOTHING_RATE = "mission_planner.path_planner.
 // the camera at the actual flight direction.
 inline constexpr const char* YAW_TOWARDS_VELOCITY =
     "mission_planner.path_planner.yaw_towards_velocity";
+// Minimum |v| (m/s) below which yaw_towards_velocity falls back to
+// bee-line-to-goal.  Prevents yaw jitter when hovering (Issue #612).
+inline constexpr const char* YAW_VELOCITY_THRESHOLD_MPS =
+    "mission_planner.path_planner.yaw_velocity_threshold_mps";
 inline constexpr const char* SNAP_APPROACH_BIAS = "mission_planner.path_planner.snap_approach_bias";
 }  // namespace path_planner
 

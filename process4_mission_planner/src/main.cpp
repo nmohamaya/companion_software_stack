@@ -228,6 +228,9 @@ int main(int argc, char* argv[]) {
     planner_cfg.yaw_towards_velocity =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::path_planner::YAW_TOWARDS_VELOCITY,
                           planner_cfg.yaw_towards_velocity);
+    planner_cfg.yaw_velocity_threshold_mps = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::path_planner::YAW_VELOCITY_THRESHOLD_MPS,
+        planner_cfg.yaw_velocity_threshold_mps);
     planner_cfg.snap_approach_bias =
         ctx.cfg.get<float>(drone::cfg_key::mission_planner::path_planner::SNAP_APPROACH_BIAS,
                            planner_cfg.snap_approach_bias);

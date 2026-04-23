@@ -353,6 +353,9 @@ endif()
 # ── D* Lite Path Planner tests (Issue #158) ────────────────
 add_drone_test(test_dstar_lite_planner test_dstar_lite_planner.cpp)
 
+# ── PATH A Diagnostic Trace tests (Issue #612, PR #614) ──────
+add_drone_test(test_path_a_trace test_path_a_trace.cpp)
+
 # ── Dynamic Obstacle Prediction tests (Issue #256) ───────
 add_drone_test(test_obstacle_prediction test_obstacle_prediction.cpp)
 
