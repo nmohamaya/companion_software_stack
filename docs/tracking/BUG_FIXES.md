@@ -854,74 +854,7 @@ cam_pose.linear() = q.toRotationMatrix() * R_body_from_cam;
 
 **Regression test:** Run scenario 33; confirm ≥20% of voxels cluster near the cube's altitude band (not the drone's altitude). Before fix: 0%. After fix: 34%.
 
----
-
-### Fix #56 — `CpuSemanticProjector` Mask-Convention Mismatch (Issue #612)
-
-**Date:** 2026-04-23
-**Severity:** High
-**Files:** `common/hal/include/hal/cpu_semantic_projector.h`
-
-**What:** `CpuSemanticProjector::project()` assumed masks were bbox-local (`mask_width ≈ bbox.w`, indexed with bbox-local `(u, v)`). `SimulatedSAMBackend` happened to produce bbox-local masks, so the assumption held accidentally. When `EdgeContourSAMBackend` or `FastSAMInferenceBackend` plugged in — both produce full-image masks (input-frame resolution) — the projector indexed the full mask with bbox-local coordinates, reading the top-left 32×32 patch of the whole frame instead of the masked region inside the bbox.
-
-**Why (Root Cause):** Undocumented interface: `SAMBackend::run()` returns a mask buffer but does not specify whether its dimensions are bbox-local or full-image, and the downstream projector baked in the simulated backend's convention.
-
-**Fix:** Auto-detect the mask convention inside the projector: if `mask_width >= bbox.w * 1.5f`, treat the mask as full-image and index with global `(u, v)`; otherwise preserve the bbox-local path for backward compatibility. Ratio of 1.5 chosen so small rounding gaps don't trigger the full-image path.
-
-**Found by:** `path_a_voxel_trace.jsonl` — for the same mask set, voxel count per batch was ~3 with the wrong interpretation vs ~25 with the correct one.
-
-**Regression test:** Scenario 33 logs `[MaskProj] Published N voxels (batch_size=M)` with N consistently in the 20–30 range per batch for FastSAM output.
-
----
-
-### Fix #57 — SAM Backend Factory Hard-Coded Simulated Backend (Issue #612)
-
-**Date:** 2026-04-23
-**Severity:** High
-**Files:** `process2_perception/src/main.cpp`
-
-**What:** The PATH A construction block in P2 always constructed `SimulatedSAMBackend` even when `perception.path_a.sam.backend` was set to `fastsam` or `edge_contour`. Config was silently ignored — no warning, no error. Users flipping the backend field saw no effect on behaviour.
-
-**Why (Root Cause):** Early scaffolding left a hard-coded `auto sam = std::make_unique<SimulatedSAMBackend>(...);` line behind the PATH A enabled gate. The `InferenceBackendFactory::create_inference_backend(cfg, sam_section)` function existed but wasn't called.
-
-**Fix:** Route through the factory:
-
-```cpp
-auto sam = InferenceBackendFactory::create_inference_backend(cfg, sam_section);
-```
-
-Process-startup logs now identify the selected backend so the user sees which one actually loaded.
-
-**Found by:** Log inspection after confirming `sam.backend=fastsam` in the merged config but no `[FastSAM]` initialisation line appeared in `perception.log`.
-
-**Regression test:** `perception.log` contains `[SAM] Backend initialised: <backend_name>` matching `perception.path_a.sam.backend` in the merged config.
-
----
-
-### Fix #58 — FastSAM ONNX Has `Floor` Node OpenCV DNN 4.10 Can't Parse (Issue #612)
-
-**Date:** 2026-04-23
-**Severity:** Medium
-**Files:** `models/download_fastsam.sh`
-
-**What:** `cv::dnn::readNetFromONNX("models/fastsam_s.onnx")` threw on load. The Ultralytics FastSAM-s export includes a `Floor` node at `/model.10/Floor` (a type coercion for the proposal decoder) that OpenCV DNN's ONNX importer doesn't support.
-
-**Error messages (searchable):**
-
-- `OpenCV(4.10.0) Error: Can't create layer "/model.10/Floor" of type "Floor" in function 'getLayerInstance'`
-
-**Why (Root Cause):** OpenCV DNN's ONNX op coverage lags PyTorch's export graph. `onnxsim` (onnx-simplifier) constant-folds the Floor node into its static inputs, eliminating it from the runtime graph.
-
-**Fix:** `models/download_fastsam.sh` pipes the Ultralytics PT→ONNX export through `onnxsim` before writing `models/fastsam_s.onnx`:
-
-```bash
-python3 -c "from ultralytics import FastSAM; FastSAM('FastSAM-s.pt').export(format='onnx', opset=12)"
-onnxsim FastSAM-s.onnx models/fastsam_s.onnx
-```
-
-**Found by:** First attempt to load the FastSAM ONNX in `perception.log` — crash was deterministic on load.
-
-**Regression test:** `bash models/download_fastsam.sh` succeeds, and a subsequent `cv::dnn::readNetFromONNX` load does not throw. (Covered end-to-end by scenario 33.)
+**Attribution note:** An earlier draft of this changelog included entries (Fix #56–#58, #60) attributing the mask-convention auto-detect, SAM factory routing, FastSAM ONNX `onnxsim` post-pass, and the `OccupancyGrid3D::insert_voxels()` ground-plane filter / position clamp / inflation reduction to this PR. Those changes were actually authored by PRs #609 / #611 (the integration-branch parents this PR was cut from) — `common/hal/include/hal/cpu_semantic_projector.h`, `process4_mission_planner/include/planner/occupancy_grid_3d.h`, and `models/download_fastsam.sh` are unmodified by PR #614. The entries were removed. The real #612 PATH A fixes in this PR are **Fix #55 (camera→body extrinsic), Fix #59 (kMaxProposals bump), Fix #61 (yaw_towards_velocity), Fix #62 (telemetry-poller include order)** plus the diagnostic infrastructure (PathATrace, cosys_telemetry_poller, plot_voxel_trace.py).
 
 ---
 
@@ -944,33 +877,6 @@ onnxsim FastSAM-s.onnx models/fastsam_s.onnx
 **Found by:** `perception.log` repeatedly emitting `[FastSAM] parse_raw_output: cols=21504 exceeds ...` on every frame, resulting in zero masks handed to the projector.
 
 **Regression test:** Scenario 33 logs `[FastSAM] Parsed N masks` with N in the 200–500 range per frame for the Blocks environment.
-
----
-
-### Fix #60 — Ground-Texture Ghost Voxels Pollute Static Grid Layer (Issue #612)
-
-**Date:** 2026-04-23
-**Severity:** High
-**Files:** `common/hal/include/hal/cpu_semantic_projector.h`, `process4_mission_planner/include/planner/occupancy_grid_3d.h`
-
-**What:** Depth Anything V2's metric depth drifts noticeably past ~15m; combined with a 3D inflation radius of 2 cells (a 5×5×5 = 125-cell neighbourhood), distant ground-texture pixels produced phantom voxels at `z≈0` that the grid permanently promoted. The D\* Lite planner's start-cell kept ending up inside inflated phantom obstacles, forcing reverse-only replans and eventually `STUCK count 4 exceeded cap 3`.
-
-**Symptom:** Scenario 33 logs showed `[Grid]` static cell count climbing past 800 during survey, `[D*Lite] No path` warnings, and the drone repeatedly reversing without lateral motion.
-
-**Why (Root Cause):** Three layered defects that amplified each other:
-
-1. `CpuSemanticProjector::sample_depth()` accepted any depth value DA V2 returned, including the multi-metre drifts at the horizon.
-2. `OccupancyGrid3D` had no ground-plane filter, so any voxel with `z` near zero got promoted.
-3. 3D inflation radius 2 meant one noisy voxel contaminated 125 cells instead of 27.
-
-**Fix (three layers, all conservative):**
-1. `sample_depth()` — clamp depth > 20m to zero (skip the sample) via `constexpr float kMaxObstacleDepth = 20.0f`.
-2. `OccupancyGrid3D::insert_voxels()` — reject voxels with `z < 0.3f` (ground) and clamp `|x|, |y|, |z| ≤ position_clamp_m` (new config key `mission_planner.occupancy_grid.voxel_input.position_clamp_m`, default 1000m).
-3. Lowered inflation radius from 2 → 1 cell in `insert_voxels()` (3×3×3 neighbourhood).
-
-**Found by:** `[Grid] 800+ static` combined with top-down plotter showing voxel scatter at ground level along the drone's trajectory (not at scene objects).
-
-**Regression test:** Scenario 33 — static cell growth capped at ~180 at survey-end; zero `[D*Lite] No path` warnings in the working run.
 
 ---
 
