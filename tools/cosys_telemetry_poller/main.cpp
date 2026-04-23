@@ -189,11 +189,11 @@ int main(int argc, char** argv) {
                 ++collision_count;
                 last_coll_tstamp = ci.time_stamp;
                 if (coll_log.is_open()) {
-                    coll_log << "[" << now_ns() << "] collision #" << collision_count << " with '"
-                             << ci.object_name << "' (id=" << ci.object_id << ")"
-                             << " at (" << ci.impact_point.x() << ", " << ci.impact_point.y()
-                             << ", " << ci.impact_point.z() << ") pen=" << ci.penetration_depth
-                             << "\n";
+                    coll_log << "[" << now_ns() << "] collision #" << collision_count;
+                    coll_log << " with '" << ci.object_name << "' (id=" << ci.object_id << ")";
+                    coll_log << " at (" << ci.impact_point.x() << ", " << ci.impact_point.y();
+                    coll_log << ", " << ci.impact_point.z() << ")";
+                    coll_log << " pen=" << ci.penetration_depth << "\n";
                     coll_log.flush();
                 }
             }
