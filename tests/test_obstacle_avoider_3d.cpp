@@ -321,6 +321,12 @@ TEST(ObstacleAvoider3DTest, VeryCloseObjectMaxRepulsion) {
     config.max_correction_mps = 3.0f;
     config.min_confidence     = 0.3f;
     config.path_aware         = false;  // test isotropic base repulsion
+    // Disable brake arbitration so this test isolates the max-repulsion clamp.
+    // The #513 brake path cancels forward velocity before repulsion is added,
+    // which would change the total correction magnitude and obscure what this
+    // test is pinning (the Euclidean clamp on the repulsion vector alone).
+    // Dedicated brake tests live further down the file.
+    config.brake_in_close_regime = false;
 
     ObstacleAvoider3D avoider(config);
 
@@ -793,4 +799,157 @@ TEST(ObstacleAvoider3DTest, PathAwareDisabledFallback) {
 
     // Old behavior: obstacle ahead → backwards push applied → vx reduced.
     EXPECT_LT(result.velocity_x, cmd.velocity_x);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Issue #513 — brake arbitration in close regime
+// Regression: the avoider must cancel forward velocity heading INTO a
+// close-regime obstacle, not merely add a lateral deflection.  Scenario-30
+// live-run evidence (see #513 body) showed a 0.98 m/s lateral correction
+// against a 2 m/s forward cruise = ~30° deflection, not a brake.  The
+// drone overshot.  This test pins the correct behaviour.
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_CancelsForwardComponent) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 2.0f;
+    config.min_distance_m        = 3.0f;
+    config.max_correction_mps    = 5.0f;
+    config.brake_in_close_regime = true;
+    config.path_aware            = false;  // avoid path-aware interaction in this test
+    config.vertical_gain         = 0.0f;   // 2D scenario
+    ObstacleAvoider3D avoider(config);
+
+    // Drone at origin cruising +X at 2 m/s.
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Obstacle 2 m ahead — inside min_distance_m so close_regime_active_ fires.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 2.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // With brake_in_close_regime=true and d=2, min_distance=3:
+    //   1. Forward (toward-obstacle) component cancelled: planned 2 m/s → 0.
+    //   2. Proximity scale = d/min_distance = 2/3 ≈ 0.67 applied to residual.
+    //   3. Repulsion adds negative-X push (away from obstacle) so final vx < 0.
+    // Key assertion: the forward motion was REVERSED, not merely deflected.
+    EXPECT_LT(result.velocity_x, 0.0f)
+        << "Forward velocity should be cancelled AND pushed backward by repulsion; "
+        << "got vx=" << result.velocity_x << " (additive-only correction would leave vx > 0)";
+    EXPECT_TRUE(avoider.close_regime_active());
+}
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_DisabledLeavesForwardMotion) {
+    // Regression guard: with brake_in_close_regime=false, the pre-#513 additive-
+    // only behaviour must be preserved.  Same geometry as above — verify vx is
+    // only lightly reduced, not reversed.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 0.5f;  // weak to isolate brake-vs-deflect
+    config.min_distance_m        = 3.0f;
+    config.max_correction_mps    = 1.5f;   // limit correction authority
+    config.brake_in_close_regime = false;  // pre-#513 behaviour
+    config.path_aware            = false;
+    config.vertical_gain         = 0.0f;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 2.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Pre-#513: avoider adds repulsion but doesn't cancel forward component.
+    // With max_correction capped at 1.5 and cruise at 2.0, vx stays positive.
+    EXPECT_GT(result.velocity_x, 0.0f)
+        << "With brake_in_close_regime=false, pre-#513 additive behaviour "
+        << "should leave forward motion above zero; got vx=" << result.velocity_x;
+    EXPECT_TRUE(avoider.close_regime_active());
+}
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_ProximityScalingLinear) {
+    // Verify the proximity scaler: at d = min_distance, scale = 1 (no extra
+    // slowdown beyond forward-cancellation).  At d = min_distance/2, scale = 0.5
+    // applied to what's left of cmd.velocity (lateral component survives).
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 0.0f;  // no repulsion — isolate brake math
+    config.min_distance_m        = 4.0f;
+    config.max_correction_mps    = 10.0f;
+    config.brake_in_close_regime = true;
+    config.path_aware            = false;
+    config.vertical_gain         = 0.0f;
+    ObstacleAvoider3D avoider(config);
+
+    // Drone cruising +X 2 m/s, also +Y 1 m/s (lateral component).
+    auto cmd  = make_cmd(2.0f, 1.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Obstacle 2 m straight ahead — toward-component = 2, lateral = 1.
+    // After forward cancellation: cmd = (0, 1, 0).
+    // Proximity scale = 2/4 = 0.5 → cmd = (0, 0.5, 0).
+    // No repulsion added.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 2.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Forward component cancelled, proximity-scaled lateral survives.
+    EXPECT_NEAR(result.velocity_x, 0.0f, 1e-4f);
+    EXPECT_NEAR(result.velocity_y, 0.5f, 1e-4f);
+    EXPECT_NEAR(result.velocity_z, 0.0f, 1e-4f);
+}
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_NoEffectOutsideCloseRegime) {
+    // When nearest obstacle is inside influence_radius but outside min_distance,
+    // close_regime_active_ should be false and brake should NOT apply.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 0.5f;
+    config.min_distance_m        = 2.0f;
+    config.max_correction_mps    = 1.0f;
+    config.brake_in_close_regime = true;
+    config.path_aware            = false;
+    config.vertical_gain         = 0.0f;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Obstacle 5 m ahead — well outside min_distance (2 m).
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Close regime should NOT be active.
+    EXPECT_FALSE(avoider.close_regime_active());
+    // Forward motion should still be largely intact — only weak repulsion applied.
+    EXPECT_GT(result.velocity_x, 0.5f)
+        << "Outside close regime, brake should not apply; vx=" << result.velocity_x;
 }

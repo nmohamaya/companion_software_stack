@@ -53,6 +53,13 @@ struct ObstacleAvoider3DConfig {
     // Per-obstacle INFO log when its contribution exceeds ~0.5 m/s.  Gated so
     // scenarios that want quiet avoider output can disable it (Issue #503).
     bool log_corrections = true;
+    // Brake arbitration in close-regime — Issue #513.
+    // When close_regime_active_ fires, cancel the component of planned
+    // velocity pointing at the nearest obstacle and scale total commanded
+    // magnitude by proximity.  Fixes the additive-correction gap where a
+    // modest lateral deflection (e.g. |delta|=0.98 m/s) was insufficient
+    // against 2 m/s cruise pointed at an obstacle.  Default true.
+    bool brake_in_close_regime = true;
 
     // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
     // Zero-initialized here; the ObstacleAvoider3D constructor fills them
@@ -121,6 +128,9 @@ public:
         config_.log_corrections =
             cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::LOG_CORRECTIONS,
                           config_.log_corrections);
+        config_.brake_in_close_regime = cfg.get<bool>(
+            drone::cfg_key::mission_planner::obstacle_avoidance::BRAKE_IN_CLOSE_REGIME,
+            config_.brake_in_close_regime);
 
         // Per-class overrides — fall back to the global scalar loaded above.
         namespace oa                       = drone::cfg_key::mission_planner::obstacle_avoidance;
@@ -169,6 +179,12 @@ public:
         // Track nearest active obstacle for the path-aware bypass hysteresis
         // (Issue #503).  Only updated when an obstacle is within influence.
         float min_active_dist = std::numeric_limits<float>::infinity();
+        // Direction vector from drone to the nearest active obstacle —
+        // captured for Issue #513's brake arbitration.  Unit-less; normalised
+        // only when we actually use it.
+        float nearest_dx = 0.0f;
+        float nearest_dy = 0.0f;
+        float nearest_dz = 0.0f;
 
         for (uint32_t i = 0; i < objects.num_objects; ++i) {
             const auto& obj = objects.objects[i];
@@ -193,7 +209,12 @@ public:
 
             if (dist < config_.influence_radius_per_class[ci] && dist > 0.01f) {
                 ++active;
-                if (dist < min_active_dist) min_active_dist = dist;
+                if (dist < min_active_dist) {
+                    min_active_dist = dist;
+                    nearest_dx      = dx;
+                    nearest_dy      = dy;
+                    nearest_dz      = dz;
+                }
                 // Inverse-square repulsive force (decays with distance)
                 float repulsion = config_.repulsive_gain_per_class[ci] / (dist * dist);
 
@@ -309,6 +330,43 @@ public:
             }
         }
 
+        // ── Brake arbitration in close regime (Issue #513) ─────────────
+        // Additive lateral correction alone is insufficient when the planner's
+        // cruise vector points at an obstacle.  In the close regime:
+        //   (1) cancel the component of cmd.velocity pointing INTO the nearest
+        //       obstacle (drone's own forward momentum stops driving it in), and
+        //   (2) scale total commanded magnitude by proximity so the drone
+        //       decelerates linearly to a stop at the obstacle surface.
+        // Then fall through to the existing repulsion-add, which contributes
+        // the lateral push.  Gated by `brake_in_close_regime` (default true);
+        // scenarios that want pure-deflection semantics set it to false.
+        bool  brake_applied = false;
+        float brake_scale   = 1.0f;
+        float v_toward      = 0.0f;
+        if (close_regime_active_ && config_.brake_in_close_regime &&
+            std::isfinite(min_active_dist) && min_active_dist > 0.01f &&
+            config_.min_distance_m > 0.0f) {
+            const float inv = 1.0f / min_active_dist;
+            const float nx  = nearest_dx * inv;
+            const float ny  = nearest_dy * inv;
+            const float nz  = nearest_dz * inv;
+            // (1) Cancel component heading INTO the obstacle.
+            v_toward = cmd.velocity_x * nx + cmd.velocity_y * ny + cmd.velocity_z * nz;
+            if (v_toward > 0.0f) {
+                cmd.velocity_x -= v_toward * nx;
+                cmd.velocity_y -= v_toward * ny;
+                cmd.velocity_z -= v_toward * nz;
+                brake_applied = true;
+            }
+            // (2) Scale magnitude by proximity — linear ramp 0→1 over 0→min_distance_m.
+            //     At d = min_distance_m, scale = 1 (full commanded speed).
+            //     At d = 0, scale = 0 (stop at the obstacle surface).
+            brake_scale = std::min(1.0f, min_active_dist / config_.min_distance_m);
+            cmd.velocity_x *= brake_scale;
+            cmd.velocity_y *= brake_scale;
+            cmd.velocity_z *= brake_scale;
+        }
+
         cmd.velocity_x += total_rep_x;
         cmd.velocity_y += total_rep_y;
         cmd.velocity_z += total_rep_z;
@@ -321,10 +379,15 @@ public:
             const float delta_mag = std::sqrt(
                 total_rep_x * total_rep_x + total_rep_y * total_rep_y + total_rep_z * total_rep_z);
             if (active > 0 || delta_mag > 0.1f) {
-                DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
-                               "path_aware_strip={} close_regime={}",
-                               considered, active, delta_mag, path_aware_strip_count,
-                               close_regime_active_ ? 1 : 0);
+                // brake=1 means brake arbitration reduced forward motion this tick
+                // (Issue #513).  v_toward is the forward velocity component that
+                // was cancelled; brake_scale is the proximity-based magnitude
+                // scaler applied after cancellation.
+                DRONE_LOG_INFO(
+                    "[Avoider] considered={} active={} |delta|={:.2f} m/s "
+                    "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} scale={:.2f}",
+                    considered, active, delta_mag, path_aware_strip_count,
+                    close_regime_active_ ? 1 : 0, brake_applied ? 1 : 0, v_toward, brake_scale);
             }
         }
 
