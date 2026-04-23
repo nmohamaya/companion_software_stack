@@ -807,3 +807,55 @@ Gray-area decisions where both sides are defensible. Each entry captures the que
 
 **Date:** 2026-04-22 (PR #604 review, E5.4 MaskDepthProjector)
 
+## DR-033: `PathATrace` JSONL Writer on Flight-Critical `mask_projection_thread`
+
+**Question:** PR #614 review (review-concurrency, P1): `PathATrace::record_batch()` performs `std::ofstream` I/O directly on `mask_projection_thread`, which is one of P2's flight-critical perception threads. Glibc's `std::ofstream` takes a streambuf sentry / write lock internally; this is the same class of hazard the "observability on flight-critical threads" rule in `docs/guides/CPP_PATTERNS_GUIDE.md` and CLAUDE.md is built to prevent. Should the diagnostic writer be reworked to buffer through an SPSC ring + dedicated IO thread before it ships?
+
+**For the SPSC-ring approach:**
+
+- Removes the (small) streambuf lock from the hot path entirely — the ring is lock-free.
+- Aligns with `LatencyTracker` / `TripleBuffer` patterns already used for hot-path telemetry.
+- Makes the production-always-safe story easier to state: "PATH A tracing is measurable-cost-free even when enabled."
+
+**For keeping the direct `ofstream` call (our decision):**
+
+- The CLAUDE.md rule reads *"SHOULD NOT be called from flight-critical threads without documented justification"*. This DR is the justification.
+- `PathATrace` is opt-in via config key `perception.path_a.diag.trace_voxels`, **default `false`** — production configs never flip it on. Scenario 33 turns it on because it's a diagnostic scenario; no other scenario enables it.
+- The `enabled_` short-circuit is a single `bool` load at the top of `record_batch()`. When disabled, cost is one load + predicted branch — zero I/O, zero allocation.
+- When the user enables the trace, they are *already opting out of the production latency envelope* — the whole point is to get visibility during diagnosis, not to measure production latency. Adding a second thread + SPSC ring for a tool that only runs under a diagnostic config is over-engineering for the use case it exists to serve.
+- Same rationale recently codified for `LatencyProfiler` wiring in DR-022 — opt-in observability on control threads is acceptable when the opt-in gate is a default-false config and the hot-path cost when disabled is zero.
+- The companion `cosys_telemetry_poller` follows the same pattern (10 Hz direct `ofstream` on a dedicated polling thread that only exists in diagnostic runs).
+
+**Decision:** Keep the direct `ofstream` call in `record_batch()`. Document the constraint in the header:
+
+- file-level comment names the rule and the DR.
+- method-level comment on `record_batch()` states single-writer / not-thread-safe.
+- code-level: the `enabled_` short-circuit is the first statement so the hot-path cost is one predicted branch.
+
+CI hygiene (follow-up): add a lint that greps non-diag scenarios' `config_overrides` for `trace_voxels: true` and fails if found.
+
+**Revisit when:** If a production config ever wants `trace_voxels=true` (e.g., black-box flight recorder for certification evidence), promote to the SPSC-ring design before shipping.
+
+**Date:** 2026-04-23 (PR #614 review, review-concurrency P1)
+
+## DR-034: Four `BUG_FIXES` Entries Removed — Attribution Belonged to Earlier PRs
+
+**Question:** PR #614 review (review-api-contract, P1): An earlier draft of `BUG_FIXES.md` added entries Fix #56, #57, #58, #60 for PATH A fixes (mask-convention auto-detect, SAM factory routing, FastSAM `onnxsim` post-pass, `OccupancyGrid3D::insert_voxels` ground-plane filter / position clamp / inflation reduction). The reviewer pointed out these don't appear in PR #614's diff. Should they be relabelled, removed, or kept with a pointer to the real authoring PR?
+
+**Audit result (confirmed by git diff against the integration-branch tip `992b888`):**
+
+- `common/hal/include/hal/cpu_semantic_projector.h` — unchanged by PR #614; the 1.5× mask-convention auto-detect and 20 m depth clamp were in place as of PR #611.
+- `common/hal/include/hal/fastsam_inference_backend.h` — PR #614 only bumps `kMaxProposals` 16384 → 65536 (Fix #59). The wider FastSAM wiring and `onnxsim` post-pass predate this branch.
+- `process4_mission_planner/include/planner/occupancy_grid_3d.h` — unchanged by PR #614. `insert_voxels()` including ground filter, position clamp, and 1-cell inflation were in place at the integration-branch tip.
+- `models/download_fastsam.sh` — unchanged by PR #614 (repo stores it as a symlink into the parent project).
+
+**For relabel-and-point-to-real-PR:** keeps a searchable record of *what* the fix was; the PR pointer tells readers where to dig if they want the commit.
+
+**For removal (our decision):** `BUG_FIXES.md` is a changelog, not a retrospective catalogue. Every other entry in the file is a thing the commit/PR it references actually did. Inserting re-descriptions of earlier work violates that convention and would let future readers wrongly cite this PR as the authoring commit. Attribution notes at the end of a single adjacent entry (Fix #55) are enough to point curious readers at where the earlier work really happened.
+
+**Decision:** Remove Fix #56, #57, #58, #60. Keep Fix #55 (camera extrinsic), #59 (kMaxProposals), #61 (yaw_towards_velocity), #62 (poller include order) — these genuinely land in PR #614. Numbering gap is consistent with pre-existing gaps elsewhere in the file.
+
+**Revisit when:** If `BUG_FIXES.md` ever grows a "Changes inherited from integration branch" section, the removed entries could be moved there with their real PR references.
+
+**Date:** 2026-04-23 (PR #614 review, review-api-contract P1)
+

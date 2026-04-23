@@ -14,7 +14,13 @@
 #   ./tests/run_scenario_cosys.sh config/scenarios/29_cosys_perception.json --gui --verbose
 #
 # Options:
-#   --base-config <path>    Base config (default: config/cosys_airsim.json)
+#   --base-config <path>    Base config (default: resolved from the scenario).
+#                           Resolution precedence:
+#                             1. this flag, if given
+#                             2. scenario.base_config inside the scenario JSON
+#                             3. config/cosys_airsim_dev.json, if it exists
+#                             4. config/cosys_airsim.json (cloud profile fallback)
+#                           Paths must stay within PROJECT_DIR (no ../ escape).
 #   --log-dir <path>        Log output directory (default: drone_logs/scenarios_cosys)
 #   --timeout <seconds>     Override scenario timeout
 #   --dry-run               Parse scenario, show plan, don't execute
@@ -23,6 +29,17 @@
 #   --json-logs             Enable structured JSON log output
 #   --ipc <shm|zenoh>       Override IPC backend (default: from base config)
 #   --env <name>            UE5 environment name (default: Blocks)
+#
+# Scenario JSON fields (auto-detected by the runner):
+#   scenario.base_config    Optional hint pointing at the base config overlay
+#                           that best matches this scenario (e.g.
+#                           "config/cosys_airsim_dev.json" for the dev profile).
+#                           Lets a scenario be launched without --base-config.
+#                           Path must stay inside PROJECT_DIR.
+#   perception.path_a.diag.trace_voxels   Opt-in voxel trace (Issue #612).
+#                           The runner rewrites trace_path to
+#                           <scenario_log_dir>/path_a_voxel_trace.jsonl so every
+#                           run is self-contained.
 #
 # Environment variables:
 #   COSYS_DIR    Path to Cosys-AirSim (default: third_party/cosys-airsim if present)
@@ -42,7 +59,12 @@ BIN_DIR="${PROJECT_DIR}/build/bin"
 SCENARIOS_DIR="${PROJECT_DIR}/config/scenarios"
 DEPLOY_DIR="${PROJECT_DIR}/deploy"
 FAULT_INJECTOR="${BIN_DIR}/fault_injector"
-DEFAULT_BASE_CONFIG="${PROJECT_DIR}/config/cosys_airsim.json"
+# Default base config: picked at scenario-load time.  Order of precedence:
+#   1. --base-config CLI flag (explicit override)
+#   2. scenario.base_config field inside the scenario JSON (self-describing)
+#   3. config/cosys_airsim_dev.json  (dev profile — preferred for local runs)
+#   4. config/cosys_airsim.json      (cloud profile — fallback)
+DEFAULT_BASE_CONFIG=""   # populated after SCENARIO_FILE is resolved
 DEFAULT_LOG_DIR="${PROJECT_DIR}/drone_logs/scenarios_cosys"
 COSYS_RPC_PORT="${COSYS_RPC_PORT:-41451}"
 PX4_DIR="${PX4_DIR:-${HOME}/PX4-Autopilot}"
@@ -74,7 +96,7 @@ SCENARIO_NAME=""
 
 # ── Parse args ────────────────────────────────────────────────
 SCENARIO_FILE=""
-BASE_CONFIG="$DEFAULT_BASE_CONFIG"
+BASE_CONFIG=""   # empty = auto-resolve after scenario file is known
 LOG_DIR="$DEFAULT_LOG_DIR"
 TIMEOUT_OVERRIDE=""
 DRY_RUN=false
@@ -196,6 +218,64 @@ with open(sys.argv[4], 'w') as f:
 PYEOF
 }
 
+confine_to_project() {
+    # Return 0 iff $1 resolves to a path under $PROJECT_DIR.  Rejects symlink
+    # escapes and ../-escapes even if the intermediate path doesn't exist yet.
+    # Portable realpath(1) may not support --relative-base; use Python instead.
+    local candidate="$1"
+    python3 - "$candidate" "$PROJECT_DIR" <<'PYEOF' >/dev/null 2>&1
+import os, sys
+candidate, root = sys.argv[1], sys.argv[2]
+root_real = os.path.realpath(root)
+# Use realpath so symlink targets are evaluated; fall back to normpath if the
+# candidate does not exist yet (realpath still resolves parents).
+cand_real = os.path.realpath(candidate)
+if not (cand_real == root_real or cand_real.startswith(root_real + os.sep)):
+    sys.exit(1)
+PYEOF
+}
+
+resolve_base_config() {
+    # Resolve the base config path against a scenario file.
+    # Precedence: caller-provided override → scenario.base_config → dev → cloud.
+    #
+    # Security: the `scenario.base_config` hint is read from a JSON file we do
+    # NOT control (users can ship arbitrary scenarios).  A malicious hint like
+    # `"base_config": "../../etc/passwd"` would otherwise be parsed by
+    # merge_configs() and passed into every companion process.  Confine all
+    # resolved paths to $PROJECT_DIR; reject anything that escapes.
+    local scenario_file="$1"
+    local override="$2"
+    if [[ -n "$override" ]]; then
+        if ! confine_to_project "$override"; then
+            echo -e "${RED}ERROR: --base-config '${override}' escapes project root${NC}" >&2
+            return 2
+        fi
+        echo "$override"
+        return 0
+    fi
+    local hint=""
+    if [[ -f "$scenario_file" ]]; then
+        hint=$(json_get "$scenario_file" "scenario.base_config" 2>/dev/null || echo "")
+    fi
+    if [[ -n "$hint" && "$hint" != "None" ]]; then
+        if [[ "$hint" != /* ]]; then
+            hint="${PROJECT_DIR}/${hint}"
+        fi
+        if ! confine_to_project "$hint"; then
+            echo -e "${RED}ERROR: scenario.base_config '${hint}' escapes project root${NC}" >&2
+            return 2
+        fi
+        echo "$hint"
+        return 0
+    fi
+    if [[ -f "${PROJECT_DIR}/config/cosys_airsim_dev.json" ]]; then
+        echo "${PROJECT_DIR}/config/cosys_airsim_dev.json"
+        return 0
+    fi
+    echo "${PROJECT_DIR}/config/cosys_airsim.json"
+}
+
 check() {
     local desc="$1"
     local result="$2"
@@ -226,7 +306,7 @@ check_prerequisites() {
         echo -e "${RED}ERROR: Build directory not found. Run: bash deploy/build.sh${NC}"
         ok=false
     fi
-    if [[ ! -f "$BASE_CONFIG" ]]; then
+    if [[ -n "$BASE_CONFIG" && ! -f "$BASE_CONFIG" ]]; then
         echo -e "${RED}ERROR: Base config not found: ${BASE_CONFIG}${NC}"
         ok=false
     fi
@@ -320,7 +400,10 @@ if [[ "$RUN_ALL" == "true" ]]; then
         echo -e "${BOLD}  Running: ${scenario_name}${NC}"
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-        args=("$f" --base-config "$BASE_CONFIG" --log-dir "$LOG_DIR")
+        args=("$f" --log-dir "$LOG_DIR")
+        # Only forward --base-config if user explicitly set one; otherwise let
+        # the recursive call resolve per-scenario (scenario.base_config → dev → cloud).
+        [[ -n "$BASE_CONFIG" ]] && args+=(--base-config "$BASE_CONFIG")
         [[ -n "$TIMEOUT_OVERRIDE" ]] && args+=(--timeout "$TIMEOUT_OVERRIDE")
         [[ -n "$IPC_BACKEND" ]] && args+=(--ipc "$IPC_BACKEND")
         [[ "$GUI" == "true" ]] && args+=(--gui)
@@ -360,6 +443,18 @@ if [[ ! -f "$SCENARIO_FILE" ]]; then
     fi
 fi
 
+# Resolve base config now that we know which scenario is running.
+# resolve_base_config returns exit code 2 on path-confinement failure; the
+# error message has already gone to stderr.
+if ! BASE_CONFIG=$(resolve_base_config "$SCENARIO_FILE" "$BASE_CONFIG"); then
+    exit 2
+fi
+if [[ ! -f "$BASE_CONFIG" ]]; then
+    echo -e "${RED}ERROR: Base config not found: ${BASE_CONFIG}${NC}"
+    exit 2
+fi
+echo -e "${CYAN}  Base config: ${BASE_CONFIG}${NC}"
+
 # Extract scenario metadata
 SCENARIO_NAME=$(json_get "$SCENARIO_FILE" "scenario.name")
 SCENARIO_DESC=$(json_get "$SCENARIO_FILE" "scenario.description")
@@ -385,8 +480,19 @@ if [[ -z "$SCENARIO_NAME" ]]; then
     exit 2
 fi
 
+# Prefix the log-dir name with the scenario number pulled from the filename
+# (e.g. "33_non_coco_obstacles.json" → "33_non_coco_obstacles").  Makes run
+# directories immediately grep-able / sortable by scenario number.
+SCENARIO_FILE_BASE=$(basename "$SCENARIO_FILE" .json)
+SCENARIO_NUM_PREFIX=$(echo "$SCENARIO_FILE_BASE" | grep -oE '^[0-9]+' || true)
+if [[ -n "$SCENARIO_NUM_PREFIX" && "$SCENARIO_NAME" != "${SCENARIO_NUM_PREFIX}_"* ]]; then
+    SCENARIO_DIR_NAME="${SCENARIO_NUM_PREFIX}_${SCENARIO_NAME}"
+else
+    SCENARIO_DIR_NAME="$SCENARIO_NAME"
+fi
+
 RUN_START_EPOCH=$(date +%s)
-SCENARIO_LOG_DIR=$(create_run_dir "$LOG_DIR" "$SCENARIO_NAME")
+SCENARIO_LOG_DIR=$(create_run_dir "$LOG_DIR" "$SCENARIO_DIR_NAME")
 
 echo ""
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
@@ -418,6 +524,20 @@ with open(sys.argv[1], 'w') as f:
 PYEOF
 fi
 echo -e "  ${GREEN}✓${NC} Config merged → ${MERGED_CONFIG} (ipc=${IPC_BACKEND:-default})"
+
+# Route per-run diagnostic artifacts into the scenario log directory so every
+# run stays self-contained (#612). Only rewrites fields the scenario opted in.
+python3 - "$MERGED_CONFIG" "$SCENARIO_LOG_DIR" <<'PYEOF'
+import json, os, sys
+cfg_path, log_dir = sys.argv[1], sys.argv[2]
+with open(cfg_path) as f:
+    cfg = json.load(f)
+diag = cfg.get("perception", {}).get("path_a", {}).get("diag")
+if isinstance(diag, dict) and diag.get("trace_voxels"):
+    diag["trace_path"] = os.path.join(log_dir, "path_a_voxel_trace.jsonl")
+with open(cfg_path, "w") as f:
+    json.dump(cfg, f, indent=4)
+PYEOF
 
 EFFECTIVE_IPC="${IPC_BACKEND}"
 if [[ -z "$EFFECTIVE_IPC" ]]; then
@@ -501,6 +621,12 @@ cleanup_scenario() {
     echo "Cleaning up Cosys-AirSim scenario..."
     if [[ -n "${SCENARIO_LOG_DIR:-}" && "$SCENARIO_LOG_DIR" == *_RUNNING ]]; then
         SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    fi
+    # Stop telemetry poller first so its JSONL flushes before UE5 goes away.
+    if [[ -n "${TELEMETRY_PID:-}" ]] && kill -0 "$TELEMETRY_PID" 2>/dev/null; then
+        kill -SIGTERM "$TELEMETRY_PID" 2>/dev/null || true
+        sleep 1
+        kill -SIGKILL "$TELEMETRY_PID" 2>/dev/null || true
     fi
     # Destroy RPC-spawned scene objects while UE5 is still alive.
     # Best-effort: failures are non-fatal (stamp file left behind for manual cleanup).
@@ -794,6 +920,26 @@ check_deadline() {
     fi
 }
 
+# ── Sim-side telemetry poller (Issue #607 / #612) ────────────
+# Polls simGetCollisionInfo + simGetGroundTruthKinematics at 10 Hz and
+# writes JSONL alongside the other run logs.  Complements the perception-
+# side voxel trace: `cosys_telemetry.jsonl` carries ground-truth drone pose
+# (vs SLAM estimate) and UE5 physics collision events (vs no-collision-log-
+# at-all today).
+TELEMETRY_POLLER="${BIN_DIR}/cosys_telemetry_poller"
+TELEMETRY_PID=""
+if [[ -x "$TELEMETRY_POLLER" ]]; then
+    "$TELEMETRY_POLLER" \
+        --out "${SCENARIO_LOG_DIR}/cosys_telemetry.jsonl" \
+        --collisions "${SCENARIO_LOG_DIR}/collisions.log" \
+        --host "127.0.0.1" --port "${COSYS_RPC_PORT}" --rate_hz 10 \
+        > "${SCENARIO_LOG_DIR}/cosys_telemetry_poller.log" 2>&1 &
+    TELEMETRY_PID=$!
+    echo -e "  ${CYAN}Telemetry poller launched (pid=${TELEMETRY_PID})${NC}"
+else
+    echo -e "  ${YELLOW}WARNING: ${TELEMETRY_POLLER} not built — no collision / GT-pose logs${NC}"
+fi
+
 # ── Phase 4: Fault injection ──────────────────────────────────
 check_deadline
 echo ""
@@ -895,6 +1041,29 @@ if kill -0 "$UE5_PID" 2>/dev/null; then
 else
     check "Cosys-AirSim (UE5) still running" 1
 fi
+
+# ── PATH A voxel-on-target regression check (PR #614 review) ──
+# Addresses the review-test-quality P1: without this check, a Fix #55
+# regression (wrong camera extrinsic → voxels 8–12 m off) would not fail
+# the scenario — every `pass_criteria.log_contains` marker fires at init,
+# so a broken pipeline still "passes" until the LANDED gate.
+VOXEL_TRACE="${SCENARIO_LOG_DIR}/path_a_voxel_trace.jsonl"
+VOXEL_CHECK="${PROJECT_DIR}/tools/check_voxel_on_target.py"
+if [[ -f "$VOXEL_TRACE" && -x "$VOXEL_CHECK" && -n "$SCENE_FILE" && -f "$SCENE_FILE" ]]; then
+    echo ""
+    echo "PATH A voxel-on-target check:"
+    # Pull threshold from scenario JSON if present; otherwise use the default.
+    VOX_MIN_RATIO=$(json_get "$SCENARIO_FILE" "pass_criteria.voxel_on_target_ratio_min")
+    VOX_RADIUS=$(json_get "$SCENARIO_FILE" "pass_criteria.voxel_on_target_radius_m")
+    VOX_ARGS=(--trace "$VOXEL_TRACE" --scene "$SCENE_FILE")
+    [[ -n "$VOX_MIN_RATIO" && "$VOX_MIN_RATIO" != "None" ]] && VOX_ARGS+=(--min-ratio "$VOX_MIN_RATIO")
+    [[ -n "$VOX_RADIUS"    && "$VOX_RADIUS"    != "None" ]] && VOX_ARGS+=(--radius-m "$VOX_RADIUS")
+    if python3 "$VOXEL_CHECK" "${VOX_ARGS[@]}" 2>&1 | tee "${SCENARIO_LOG_DIR}/voxel_on_target.log"; then
+        check "Voxel-on-target ratio within threshold" 0
+    else
+        check "Voxel-on-target ratio within threshold" 1
+    fi
+fi
 if ss -tlnp 2>/dev/null | grep -q ":${COSYS_RPC_PORT}"; then
     check "RPC port ${COSYS_RPC_PORT} still open" 0
 else
@@ -918,7 +1087,7 @@ echo -e "${BOLD}═════════════════════�
 RUN_END_EPOCH=$(date +%s)
 SCENARIO_LOG_DIR=$(finalize_run_dir "$SCENARIO_LOG_DIR" "$PASS" "$FAIL")
 
-SCENARIO_BASE_DIR="${LOG_DIR}/${SCENARIO_NAME}"
+SCENARIO_BASE_DIR="${LOG_DIR}/${SCENARIO_DIR_NAME}"
 update_latest_symlink "$SCENARIO_BASE_DIR" "$(basename "$SCENARIO_LOG_DIR")"
 
 write_run_metadata "${SCENARIO_LOG_DIR}/run_metadata.json" \
@@ -931,7 +1100,7 @@ REPORT_FILE=$(generate_run_report "$SCENARIO_LOG_DIR" "$SCENARIO_NAME" "cosys_ai
 
 append_to_index "${LOG_DIR}/runs.jsonl" \
     "${SCENARIO_LOG_DIR}/run_metadata.json" \
-    "${SCENARIO_NAME}/$(basename "$SCENARIO_LOG_DIR")"
+    "${SCENARIO_DIR_NAME}/$(basename "$SCENARIO_LOG_DIR")"
 
 echo ""
 echo -e "  ${CYAN}Report : ${REPORT_FILE}${NC}"

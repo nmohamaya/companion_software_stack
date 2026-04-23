@@ -423,7 +423,34 @@ Before merging, update the project's tracking documents:
    - Update suite/test counts in the summary table
    - Document what each new suite validates
 
-7. **When to update:** Include doc updates in the same PR branch, committed before merge.
+7. **`DESIGN_RATIONALE.md`** — Add a new `DR-NNN` entry when:
+   - You are **declining or disagreeing with a review comment** (from a review agent, Copilot, or a human reviewer) based on a justified rationale. This creates the audit trail showing the comment was evaluated intentionally, not missed.
+   - You made a **gray-area design decision where both sides are defensible** — e.g. "opt-in observability on a flight-critical thread is OK because the default is off and the gate is config-driven."
+   - You marked an item **deferred** in a PR's Review Fixes table — the DR is where the reasoning lives. Every deferral must cite a DR-NNN reference.
+   - You need to document a **revisit trigger** — a condition under which the decision should be reconsidered (e.g. "if a production config ever wants this enabled, promote to SPSC-ring").
+   - Format each entry as: Question / For-X / For-Y / Decision / Revisit when / Date. See existing DR-001 through DR-034 for style.
+   - DR entries are append-only. If a decision is superseded, keep the old entry and add a new one referencing it.
+
+8. **`IMPROVEMENTS.md`** — Add an entry when:
+   - You notice a **proactive improvement yourself** (not in response to a review comment) — infrastructure cleanups, architecture nits, code-quality nice-to-haves, missing tests, documentation gaps, stale numbers, tool ergonomics, etc.
+   - The improvement is **worth doing but not worth interrupting current work** — quiet-window backlog for when a PR is waiting on review or a test is running.
+   - You batched minor suggestions at the end of a task summary — anything that would otherwise "float in conversation only" belongs here instead.
+   - Entries must include: date, priority (P1/P2/P3), category (Infra / Arch / CodeQual / Functional / Tests / Docs / Scripts), file/area, what/why, suggested approach.
+   - Move completed entries to a **Resolved** section at the bottom, with the PR or commit reference.
+
+   **Critical distinction — which file gets the entry?**
+
+   | Origin of the item | Destination |
+   |---|---|
+   | A review agent / Copilot / human reviewer flagged it *and* we are declining to fix it | `DESIGN_RATIONALE.md` (new DR-NNN) |
+   | A review agent / Copilot / human reviewer flagged it *and* we are fixing it now | Nothing — just fix it in the PR |
+   | A review agent / Copilot / human reviewer flagged it *and* we are deferring | `DESIGN_RATIONALE.md` (new DR-NNN); cite the DR number in the PR's Review Fixes table |
+   | We noticed it ourselves and it's outside the current PR's scope | `IMPROVEMENTS.md` |
+   | We noticed it ourselves and we're fixing it now | Nothing — just fix it in the PR |
+
+   Never mix the two destinations. `IMPROVEMENTS.md` is a backlog of nice-to-haves; `DESIGN_RATIONALE.md` is the audit trail for evaluated-and-declined review comments. They serve different readers (backlog groomers vs future PR reviewers checking why X wasn't fixed).
+
+9. **When to update:** Include doc updates in the same PR branch, committed before merge.
 
 #### Step 8: Merge to Main
 

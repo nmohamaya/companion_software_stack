@@ -59,9 +59,22 @@ struct GridPlannerConfig {
     int   max_static_cells   = 0;              // Cap on promoted static cells (0 = unlimited)
     bool  yaw_towards_travel = true;           // Face sensors toward next waypoint during NAVIGATE
     float yaw_smoothing_rate = 0.3f;  // EMA alpha for yaw transitions (0=frozen, 1=instant)
-    float snap_approach_bias = 0.5f;  // Approach-direction penalty for snap fallback
-    bool  prediction_enabled = true;  // Enable velocity-based obstacle prediction
-    float prediction_dt_s    = 2.0f;  // Prediction horizon (seconds into the future)
+    // When `yaw_towards_velocity` is true (and `yaw_towards_travel` also true),
+    // the yaw target follows the smoothed velocity command instead of the
+    // bee-line to the next waypoint. Points the camera at the actual flight
+    // direction during obstacle detours so PATH A can voxelise the obstacle's
+    // far face before the drone clips it. Default false to preserve existing
+    // behaviour; scenario 33 turns it on (Issue #612).
+    bool yaw_towards_velocity = false;
+
+    // Minimum velocity magnitude (m/s) below which `yaw_towards_velocity`
+    // falls back to the bee-line-to-goal yaw.  Prevents jitter when the
+    // drone is hovering or moving slower than sensor noise.  Tuned against
+    // scenario 33 detour profile (nominal detour speed 1.5-2.5 m/s).
+    float yaw_velocity_threshold_mps = 0.4f;
+    float snap_approach_bias         = 0.5f;  // Approach-direction penalty for snap fallback
+    bool  prediction_enabled         = true;  // Enable velocity-based obstacle prediction
+    float prediction_dt_s            = 2.0f;  // Prediction horizon (seconds into the future)
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -390,9 +403,25 @@ public:
         // Yaw-towards-travel: face sensors toward the next waypoint.
         // Uses waypoint direction (not path step) to avoid feedback loop
         // where camera view → grid → planner → yaw → camera causes circling.
+        //
+        // When `yaw_towards_velocity` is true, override the bee-line-to-goal
+        // direction with the actual smoothed velocity command — the camera
+        // tracks the *real* flight direction during obstacle detours so PATH A
+        // can voxelise the obstacle's far face before the drone clips it
+        // (Issue #612 — observed: drone routed around one cube face, then
+        // clipped the unseen face on the way back to the waypoint).  Reverts
+        // to bee-line direction when velocity magnitude is too small to
+        // estimate a heading, so we don't yaw randomly during hover.
         if (config_.yaw_towards_travel) {
-            const float ytt_dx   = target.x - px;
-            const float ytt_dy   = target.y - py;
+            float ytt_dx = target.x - px;
+            float ytt_dy = target.y - py;
+            if (config_.yaw_towards_velocity) {
+                const float vmag = std::sqrt(smooth_vx_ * smooth_vx_ + smooth_vy_ * smooth_vy_);
+                if (vmag > config_.yaw_velocity_threshold_mps) {
+                    ytt_dx = smooth_vx_;
+                    ytt_dy = smooth_vy_;
+                }
+            }
             const float ytt_dist = std::sqrt(ytt_dx * ytt_dx + ytt_dy * ytt_dy);
             if (ytt_dist > 0.5f) {
                 constexpr float kPi     = 3.14159265358979323846f;

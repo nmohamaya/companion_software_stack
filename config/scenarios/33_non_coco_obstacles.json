@@ -19,6 +19,8 @@
         "tier": 3,
         "timeout_s": 180,
         "requires_cosys_airsim": true,
+        "base_config": "config/cosys_airsim_dev.json",
+        "_comment_base_config": "Hint for tests/run_scenario_cosys.sh — used when caller does not pass --base-config. Makes `./tests/run_scenario_cosys.sh config/scenarios/33_non_coco_obstacles.json --gui` work without any extra flags.",
         "scene": {
             "file": "config/scenes/cosys_static.json"
         },
@@ -91,7 +93,12 @@
                     "nms_threshold": 0.45,
                     "mask_channels": 32
                 },
-                "mask_class_iou_threshold": 0.5
+                "mask_class_iou_threshold": 0.5,
+                "diag": {
+                    "_comment": "Issue #612 voxel-position trace — JSONL of pose + bboxes + voxel world positions per batch. Consumed by tools/plot_voxel_trace.py. The runner overwrites trace_path with <scenario_log_dir>/path_a_voxel_trace.jsonl so every run is self-contained; keep trace_voxels=true to opt in.",
+                    "trace_voxels": true,
+                    "trace_path": "path_a_voxel_trace.jsonl"
+                }
             }
         },
         "slam": {
@@ -129,7 +136,8 @@
                 "look_ahead_m": 0.0,
                 "smoothing_alpha": 0.5,
                 "yaw_towards_travel": true,
-                "yaw_smoothing_rate": 0.3,
+                "yaw_towards_velocity": true,
+                "yaw_smoothing_rate": 0.5,
                 "snap_approach_bias": 0.5
             },
             "obstacle_avoider": {

@@ -228,6 +228,17 @@ public:
 
         for (uint32_t i = 0; i < n; ++i) {
             const auto& v = voxels[i];
+            // Finite-value guard (PR #614 fault-recovery review).  `abs(NaN) >
+            // clamp` is false by IEEE-754, so NaN positions used to slip
+            // through the clamp below and land in `world_to_grid`, where
+            // `round(NaN/res)` is implementation-defined — producing phantom
+            // cells at arbitrary grid indices with no log trail.  Reject
+            // non-finite values explicitly and count under the clamp bucket.
+            if (!std::isfinite(v.position_x) || !std::isfinite(v.position_y) ||
+                !std::isfinite(v.position_z)) {
+                ++s.clamped_dropped;
+                continue;
+            }
             // Position clamp (PR #609 review P3 deferred to consumer boundary).
             // Reject voxels whose |x|, |y|, or |z| exceeds the world extent.
             if (clamp > 0.0f && (std::abs(v.position_x) > clamp || std::abs(v.position_y) > clamp ||
