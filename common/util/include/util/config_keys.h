@@ -333,6 +333,22 @@ inline constexpr const char* PATH_AWARE      = "mission_planner.obstacle_avoidan
 inline constexpr const char* PATH_AWARE_BYPASS_HYSTERESIS_M =
     "mission_planner.obstacle_avoidance.path_aware_bypass_hysteresis_m";
 inline constexpr const char* LOG_CORRECTIONS = "mission_planner.obstacle_avoidance.log_corrections";
+// When close_regime_active_ triggers (nearest obstacle < min_distance_m),
+// cancel the component of the planned velocity pointing at the obstacle
+// and scale total magnitude by proximity.  Fixes the additive-correction
+// gap where a planner cruise vector + a modest lateral deflection still
+// drives the drone forward into the obstacle (Issue #513).  Default true;
+// scenarios that want pure-deflection semantics can set it false.
+inline constexpr const char* BRAKE_IN_CLOSE_REGIME =
+    "mission_planner.obstacle_avoidance.brake_in_close_regime";
+// Floor on the proximity-based brake scale.  A single spurious short-range
+// detection (radar noise at 0.05 m against min_distance_m=2.0 m) would
+// otherwise zero the velocity command for one tick — worse than the
+// pre-#513 deflection-only behaviour for noisy detectors.  The floor caps
+// the worst single-tick response at `min_brake_scale × cruise_speed`.
+// Persistent obstacles still drive the scale to this floor over multiple
+// ticks, so the safety property is preserved.  Default 0.1 (10 %).
+inline constexpr const char* MIN_BRAKE_SCALE = "mission_planner.obstacle_avoidance.min_brake_scale";
 // Per-class overrides (Epic #519 — per-class config schema)
 inline constexpr const char* PER_CLASS_INFLUENCE_RADIUS_M =
     "mission_planner.obstacle_avoidance.per_class.influence_radius_m";
