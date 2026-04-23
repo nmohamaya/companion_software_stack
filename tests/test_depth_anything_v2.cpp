@@ -131,6 +131,111 @@ TEST(DepthAnythingV2Test, ConfigConstruction) {
 
     EXPECT_EQ(estimator.name(), "DepthAnythingV2Estimator");
     EXPECT_FALSE(estimator.is_loaded());  // model doesn't exist
+    // Calibration defaults to off — by-design for backward compat.
+    EXPECT_FALSE(estimator.calibration_enabled());
+}
+
+// ═══════════════════════════════════════════════════════════
+// Calibration (Issue #616) — configuration & fallback logic
+// ═══════════════════════════════════════════════════════════
+
+namespace {
+// Helper: build a throwaway Config with calibration fields set.
+drone::Config make_calibration_cfg(bool enabled, float raw_min, float raw_max, float a = 1.0f,
+                                   float b = 0.0f) {
+    std::string path = "/tmp/test_da_v2_calib_" + std::to_string(::getpid()) + "_" +
+                       std::to_string(rand()) + ".json";
+    {
+        std::ofstream ofs(path);
+        ofs << "{\n"
+            << "  \"perception\": {\n"
+            << "    \"depth_estimator\": {\n"
+            << "      \"backend\": \"depth_anything_v2\",\n"
+            << "      \"model_path\": \"nonexistent.onnx\",\n"
+            << "      \"dav2\": {\n"
+            << "        \"calibration_enabled\": " << (enabled ? "true" : "false") << ",\n"
+            << "        \"raw_min_ref\": " << raw_min << ",\n"
+            << "        \"raw_max_ref\": " << raw_max << ",\n"
+            << "        \"calibration_coef_a\": " << a << ",\n"
+            << "        \"calibration_coef_b\": " << b << "\n"
+            << "      }\n"
+            << "    }\n"
+            << "  }\n"
+            << "}\n";
+    }
+    drone::Config cfg;
+    bool          ok = cfg.load(path);
+    std::remove(path.c_str());
+    EXPECT_TRUE(ok) << "Failed to load test config from " << path;
+    return cfg;
+}
+}  // namespace
+
+TEST(DepthAnythingV2Test, CalibrationEnabledWithValidRefs) {
+    // Real refs (min < max, both finite) → calibration stays enabled.
+    auto cfg = make_calibration_cfg(/*enabled=*/true, /*raw_min=*/0.1f, /*raw_max=*/0.9f);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_TRUE(estimator.calibration_enabled())
+        << "Valid refs should keep calibration on; got disabled.";
+}
+
+TEST(DepthAnythingV2Test, CalibrationFallbackOnInvalidRefs) {
+    // raw_max <= raw_min → invalid window → fall back to per-frame.  The
+    // estimator must NOT silently produce garbage metres; it should disable
+    // calibration and log a WARN (not asserted here but the fallback is
+    // observable via calibration_enabled()).
+    auto cfg = make_calibration_cfg(/*enabled=*/true, /*raw_min=*/0.5f, /*raw_max=*/0.5f);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.calibration_enabled())
+        << "Invalid refs (raw_max<=raw_min) should trigger fallback to per-frame.";
+}
+
+TEST(DepthAnythingV2Test, CalibrationFallbackOnMissingRefs) {
+    // `calibration_enabled=true` but no raw_min_ref / raw_max_ref keys in
+    // config → struct defaults (NaN) remain → fall back to per-frame path.
+    // JSON doesn't have a NaN literal; this is the realistic shape of an
+    // operator config mistake: the flag is flipped on but refs were forgotten.
+    std::string path = "/tmp/test_da_v2_nanrefs_" + std::to_string(::getpid()) + ".json";
+    {
+        std::ofstream ofs(path);
+        ofs << R"({
+            "perception": {
+                "depth_estimator": {
+                    "backend": "depth_anything_v2",
+                    "model_path": "nonexistent.onnx",
+                    "dav2": { "calibration_enabled": true }
+                }
+            }
+        })";
+    }
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    std::remove(path.c_str());
+
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.calibration_enabled())
+        << "Missing refs (struct-default NaN) should trigger fallback to per-frame.";
+}
+
+TEST(DepthAnythingV2Test, CalibrationDisabledByDefault) {
+    // No dav2.* keys in config → calibration is off, behaviour is byte-identical
+    // to pre-#616 per-frame normalisation.
+    std::string path = "/tmp/test_da_v2_nocal_" + std::to_string(::getpid()) + ".json";
+    {
+        std::ofstream ofs(path);
+        ofs << R"({
+            "perception": { "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "nonexistent.onnx"
+            }}
+        })";
+    }
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    std::remove(path.c_str());
+
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.calibration_enabled());
 }
 
 // ═══════════════════════════════════════════════════════════

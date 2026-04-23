@@ -59,9 +59,24 @@ public:
 
     [[nodiscard]] std::string name() const override { return "CpuSemanticProjector"; }
 
+    /// Texture gate (Issue #616) — reject depth samples in low-gradient regions
+    /// of the depth map.  Flat depth regions correspond to DA V2's weakest
+    /// failure mode (cube faces, sky, textureless walls) where the network
+    /// has no features to latch onto.  Threshold is depth-gradient magnitude
+    /// (metres per pixel).  0.0 = disabled (backward-compatible default).
+    /// Operators tune this against scenario 33's `check_voxel_on_target.py`
+    /// output; 0.05-0.2 m/px is a reasonable starting range for DA V2 at
+    /// 518x518 input.
+    void set_texture_gate_threshold(float threshold) {
+        texture_gate_threshold_ = std::max(0.0f, threshold);
+    }
+
+    [[nodiscard]] float texture_gate_threshold() const { return texture_gate_threshold_; }
+
 private:
     CameraIntrinsics intrinsics_{};
     bool             initialized_{false};
+    float            texture_gate_threshold_{0.0f};
 
     // Back-project pixel (u,v) at depth Z to a world-frame 3D point
     [[nodiscard]] Eigen::Vector3f backproject(float u, float v, float z,
@@ -90,7 +105,51 @@ private:
         // 50-100 m depth, filling the grid far past `max_static_cells`.)
         constexpr float kMaxObstacleDepth = 20.0f;
         if (d > kMaxObstacleDepth) return 0.0f;
+        // Texture gate (Issue #616) — reject samples where the local depth
+        // gradient is below threshold.  Cube faces, sky, untextured walls
+        // produce nearly-flat depth output from DA V2 (the network has no
+        // features to latch onto); voxelising them pollutes the grid.
+        // Computing the gradient on the *depth* map (not RGB) is a proxy
+        // for DA V2 confidence — if the model couldn't see variation, we
+        // shouldn't trust the metres it reports.  Disabled by default
+        // (threshold=0 short-circuits at the top of the check).
+        if (texture_gate_threshold_ > 0.0f &&
+            depth_gradient_magnitude(depth, dx, dy) < texture_gate_threshold_) {
+            return 0.0f;
+        }
         return d;
+    }
+
+    /// Sobel-style gradient magnitude on the depth map at pixel (dx, dy).
+    /// Returns the magnitude in metres-per-pixel (depth units).  Safely
+    /// clamps the 3x3 stencil at the map boundary.  Used by the texture
+    /// gate above.
+    [[nodiscard]] float depth_gradient_magnitude(const DepthMap& depth, uint32_t dx,
+                                                 uint32_t dy) const {
+        if (depth.width < 3 || depth.height < 3) return 0.0f;
+        const uint32_t x1 = dx == 0 ? 0 : dx - 1;
+        const uint32_t x2 = std::min<uint32_t>(dx + 1, depth.width - 1);
+        const uint32_t y1 = dy == 0 ? 0 : dy - 1;
+        const uint32_t y2 = std::min<uint32_t>(dy + 1, depth.height - 1);
+
+        const auto at = [&](uint32_t x, uint32_t y) {
+            return depth.data[y * depth.width + x] * depth.scale;
+        };
+
+        // 3x3 Sobel stencil — standard kernels for Gx and Gy.  Non-finite
+        // samples anywhere in the stencil poison the whole gradient (return
+        // 0 so the texture gate fails closed — a safe default).
+        const float p00 = at(x1, y1), p01 = at(dx, y1), p02 = at(x2, y1);
+        const float p10 = at(x1, dy), p12 = at(x2, dy);
+        const float p20 = at(x1, y2), p21 = at(dx, y2), p22 = at(x2, y2);
+        if (!std::isfinite(p00) || !std::isfinite(p01) || !std::isfinite(p02) ||
+            !std::isfinite(p10) || !std::isfinite(p12) || !std::isfinite(p20) ||
+            !std::isfinite(p21) || !std::isfinite(p22)) {
+            return 0.0f;
+        }
+        const float gx = (p02 + 2.0f * p12 + p22) - (p00 + 2.0f * p10 + p20);
+        const float gy = (p20 + 2.0f * p21 + p22) - (p00 + 2.0f * p01 + p02);
+        return std::sqrt(gx * gx + gy * gy);
     }
 
     void project_bbox_centre(const InferenceDetection& det, const DepthMap& depth,

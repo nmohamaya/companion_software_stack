@@ -22,8 +22,33 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const drone::Config& cfg,
     input_size_            = cfg.get<int>(section + ".input_size", 518);
     max_depth_m_           = cfg.get<float>(section + ".max_depth_m", 20.0f);
 
-    DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}", input_size_,
-                   max_depth_m_);
+    // Calibration (Issue #616) — all default-off; per-frame path is still used
+    // unless all refs + coefs are explicitly provided.
+    namespace dav2       = drone::cfg_key::perception::depth_estimator::dav2;
+    calibration_enabled_ = cfg.get<bool>(dav2::CALIBRATION_ENABLED, false);
+    raw_min_ref_         = cfg.get<float>(dav2::RAW_MIN_REF, raw_min_ref_);
+    raw_max_ref_         = cfg.get<float>(dav2::RAW_MAX_REF, raw_max_ref_);
+    calibration_coef_a_  = cfg.get<float>(dav2::CALIBRATION_COEF_A, calibration_coef_a_);
+    calibration_coef_b_  = cfg.get<float>(dav2::CALIBRATION_COEF_B, calibration_coef_b_);
+
+    // Safety-check the calibration inputs.  If enabled but refs are invalid,
+    // fall back to per-frame normalisation rather than silently producing
+    // garbage metres.
+    if (calibration_enabled_) {
+        const bool refs_valid = std::isfinite(raw_min_ref_) && std::isfinite(raw_max_ref_) &&
+                                raw_max_ref_ > raw_min_ref_;
+        if (!refs_valid) {
+            DRONE_LOG_WARN("[DepthAnythingV2] calibration_enabled=true but raw_min_ref={:.3f} / "
+                           "raw_max_ref={:.3f} invalid — falling back to per-frame normalisation.",
+                           raw_min_ref_, raw_max_ref_);
+            calibration_enabled_ = false;
+        }
+    }
+
+    DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}, "
+                   "calibration={} (a={:.3f}, b={:.3f}, raw_ref=[{:.3f},{:.3f}])",
+                   input_size_, max_depth_m_, calibration_enabled_ ? "on" : "off",
+                   calibration_coef_a_, calibration_coef_b_, raw_min_ref_, raw_max_ref_);
     load_model(model_path);
 }
 
@@ -171,12 +196,18 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 
     // ── Step 5: Convert relative inverse depth → metric depth ──
     // DA V2 outputs unnormalized inverse depth: higher raw value = closer object.
-    // We normalize to [0,1] then linearly map to metric depth:
-    //   normalized=1 (closest object, highest inverse depth) → min_depth (0.1m)
-    //   normalized=0 (farthest object, lowest inverse depth) → max_depth
-    // This provides full utilization of the [min_depth, max_depth] range.
-    // Note: DA V2 is a relative (not metric) model — the absolute scale depends
-    // on the scene. The linear mapping is the simplest correct conversion.
+    // Two conversion paths — see class docstring for the design rationale:
+    //
+    //   (a) Per-frame normalisation (default, pre-#616 behaviour):
+    //       min/max of raw_data this frame → linear map to [min_depth, max_depth].
+    //
+    //   (b) Calibrated (Issue #616, opt-in via `dav2.calibration_enabled`):
+    //       use fitted `(raw_min_ref, raw_max_ref)` to anchor normalisation
+    //       across frames, then apply linear fit `a * metric_anchored + b`.
+    //
+    // Either way we always compute per-frame min/max for the diagnostic log
+    // below (operators parse these values to fit calibration coefficients
+    // later with `tools/calibrate_depth_anything_v2.py`).
     float min_val = raw_data[0];
     float max_val = raw_data[0];
     for (size_t i = 1; i < num_pixels; ++i) {
@@ -186,7 +217,13 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 
     constexpr float eps       = 1e-6f;
     constexpr float min_depth = 0.1f;  // Minimum metric depth (closest objects)
-    const float     range     = max_val - min_val;
+
+    // Choose which min/max pair drives the normalisation.  In calibrated mode
+    // the refs are fixed; in default mode the per-frame values are used so
+    // every frame self-scales (today's behaviour, byte-identical when off).
+    const float norm_min = calibration_enabled_ ? raw_min_ref_ : min_val;
+    const float norm_max = calibration_enabled_ ? raw_max_ref_ : max_val;
+    const float range    = norm_max - norm_min;
 
     DepthMap map;
     map.width         = static_cast<uint32_t>(out_w);
@@ -198,15 +235,31 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     map.data.resize(num_pixels);
 
     if (range < eps) {
-        // Flat output (all pixels same depth) — return uniform max_depth
+        // Flat scale range — return uniform max_depth.  Occurs when the
+        // per-frame raw output is constant (flat scene) OR when a
+        // mis-configured calibration provides near-equal refs.
         std::fill(map.data.begin(), map.data.end(), max_depth_m_);
     } else {
         for (size_t i = 0; i < num_pixels; ++i) {
-            // Normalize inverse depth to [0, 1]: 1 = closest, 0 = farthest
-            const float normalized = (raw_data[i] - min_val) / range;
+            // Normalise inverse depth to roughly [0, 1]: 1 = closest, 0 = farthest.
+            // In calibrated mode, a raw sample outside the reference window
+            // clamps to [0, 1] — that's intentional (a frame that looks closer
+            // than anything in the calibration set still reports its best
+            // metric estimate instead of extrapolating wildly).
+            float normalized = (raw_data[i] - norm_min) / range;
+            if (calibration_enabled_) {
+                normalized = std::clamp(normalized, 0.0f, 1.0f);
+            }
             // Linear map: high inverse depth (close) → small depth, low → large depth
-            const float metric = min_depth + (max_depth_m_ - min_depth) * (1.0f - normalized);
-            map.data[i]        = metric;
+            float metric = min_depth + (max_depth_m_ - min_depth) * (1.0f - normalized);
+            // Calibrated mode applies the final linear fit.  Identity (a=1,b=0)
+            // is a no-op — operators only need to provide a/b when the
+            // anchored-scale output still has a systematic bias vs ground truth.
+            if (calibration_enabled_) {
+                metric = calibration_coef_a_ * metric + calibration_coef_b_;
+                metric = std::clamp(metric, min_depth, max_depth_m_);
+            }
+            map.data[i] = metric;
         }
     }
 

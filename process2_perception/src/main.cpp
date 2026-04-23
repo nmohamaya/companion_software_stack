@@ -1012,6 +1012,18 @@ int main(int argc, char* argv[]) {
                                 intr.width, intr.height);
                 sam_backend.reset();
             } else {
+                // Issue #616 — opt-in depth-gradient texture gate.  Zero default
+                // is backward-compatible; scenarios that want to reject samples
+                // on flat/textureless surfaces set a non-zero threshold in
+                // metres-per-pixel (tuned against DA V2 output + scenario geometry).
+                const float tgate = ctx.cfg.get<float>(
+                    drone::cfg_key::perception::semantic_projector::TEXTURE_GATE_THRESHOLD, 0.0f);
+                sp->set_texture_gate_threshold(tgate);
+                if (tgate > 0.0f) {
+                    DRONE_LOG_INFO("[PathA] CpuSemanticProjector texture gate enabled: "
+                                   "threshold={:.3f} m/px",
+                                   tgate);
+                }
                 semantic_projector = std::move(sp);
                 const float iou    = ctx.cfg.get<float>(
                     drone::cfg_key::perception::path_a::MASK_CLASS_IOU_THRESHOLD, 0.5f);

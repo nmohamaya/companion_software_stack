@@ -121,6 +121,30 @@ inline constexpr const char* MAX_FPS         = "perception.depth_estimator.max_f
 inline constexpr const char* NOISE_STD_M     = "perception.depth_estimator.noise_std_m";
 inline constexpr const char* DEFAULT_DEPTH_M = "perception.depth_estimator.default_depth_m";
 inline constexpr const char* ENABLED         = "perception.depth_estimator.enabled";
+
+// ── DA V2 calibration (Issue #616) ─────────────────────────────────
+// DA V2 outputs relative inverse depth.  Today the model normalises per
+// frame (unstable scale across frames).  These keys opt into a globally-
+// anchored scale + optional linear fit.  All default-off — existing
+// scenarios inherit today's per-frame behaviour.
+namespace dav2 {
+inline constexpr const char* CALIBRATION_ENABLED =
+    "perception.depth_estimator.dav2.calibration_enabled";
+// `(raw_min_ref, raw_max_ref)` anchor the normalisation across frames.
+// When NaN (default), fall back to per-frame min/max.  Fit via
+// `tools/calibrate_depth_anything_v2.py` from a scenario run's
+// `perception.log`.
+inline constexpr const char* RAW_MIN_REF = "perception.depth_estimator.dav2.raw_min_ref";
+inline constexpr const char* RAW_MAX_REF = "perception.depth_estimator.dav2.raw_max_ref";
+// Linear map applied AFTER anchored normalisation:
+//   metric_final = calibration_coef_a * metric_anchored + calibration_coef_b
+// Defaults (1.0, 0.0) are identity — only matters if a proper fit against
+// ground truth (Cosys DepthCam or instrumented ground run) is provided.
+inline constexpr const char* CALIBRATION_COEF_A =
+    "perception.depth_estimator.dav2.calibration_coef_a";
+inline constexpr const char* CALIBRATION_COEF_B =
+    "perception.depth_estimator.dav2.calibration_coef_b";
+}  // namespace dav2
 }  // namespace depth_estimator
 
 namespace fusion {
@@ -167,6 +191,15 @@ inline constexpr const char* SECTION = "perception.event_camera";
 
 namespace semantic_projector {
 inline constexpr const char* SECTION = "perception.semantic_projector";
+// Texture gate (Issue #616) — reject depth samples in low-gradient regions
+// of the depth map.  Flat depth is DA V2's weakest failure mode (cube faces,
+// sky, untextured walls) — the network has no features to latch onto and
+// the output is effectively noise.  The gradient magnitude at the sample
+// pixel is a proxy: high gradient → feature-rich, low → unsafe to trust.
+// Threshold units are metres-per-pixel (depth gradient).  Default 0.0 =
+// disabled (backward-compatible with existing scenarios).
+inline constexpr const char* TEXTURE_GATE_THRESHOLD =
+    "perception.semantic_projector.texture_gate_threshold";
 }  // namespace semantic_projector
 
 // PATH A — SAM + detector fusion (Epic #520)
