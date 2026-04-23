@@ -812,6 +812,202 @@ The first version of `validate_model_path()` used `std::filesystem::weakly_canon
 
 ---
 
+### Fix #55 — PATH A Camera→Body Extrinsic Rotation Missing (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** Critical
+**Files:** `process2_perception/src/main.cpp`
+
+**What:** After PR #611 merged, live scenario-33 runs showed the PATH A pipeline alive end-to-end — FastSAM produced masks, `MaskDepthProjector` back-projected, `/semantic_voxels` flowed to P4, and the grid grew. But the drone still collided with `TemplateCube_Rounded_9` because every back-projected voxel was rotated by a constant 90° error before landing in the world frame. The plotter (`tools/plot_voxel_trace.py`) showed voxel scatter clustered in the wrong quadrant from the drone, with zero voxels near the cube even when FastSAM clearly segmented it.
+
+**Error messages (searchable):**
+
+- No explicit error — silent frame-convention bug. Diagnostic signal was "voxel world positions 8–12m offset from GT scene-object positions".
+- `[Grid] N static (promoted=N)` numbers grew but were in the wrong cells, so `[D*Lite]` never saw the cube obstacle.
+
+**Reproduce:**
+1. Check out commit `992b888` (PR #611 merge, scenario-33 baseline).
+2. `bash deploy/clean_run_build_cosys.sh --scenario 33`
+3. Grep `path_a_voxel_trace.jsonl` for voxel `world[x,y,z]` vs GT cube position `(10, 20, 2.5)` from `config/scenes/cosys_static.json` — offsets of 8–12m are the symptom.
+
+**Why (Root Cause):**
+In `mask_projection_thread`, the camera pose passed to `MaskDepthProjector::project()` was built as:
+
+```cpp
+cam_pose.linear() = q.toRotationMatrix();   // q = body quaternion from SLAM
+```
+
+The projector interprets that rotation as the *camera* frame's orientation in world coordinates. Cosys's camera optical frame is OpenCV convention (`cam_X=right`, `cam_Y=down`, `cam_Z=forward`); the drone body frame is FRD (`body_X=forward`, `body_Y=right`, `body_Z=down`). Without the body→cam rotation, every pixel's bearing from the drone was wrong by this constant 90° yaw/roll.
+
+**Fix:** Introduced `R_body_from_cam` as a `static const Eigen::Matrix3f` and right-multiplied it into the body rotation before building the camera pose:
+
+```cpp
+static const Eigen::Matrix3f R_body_from_cam = (Eigen::Matrix3f() <<
+     0,  0,  1,   // body_X ← cam_Z (forward)
+    -1,  0,  0,   // body_Y ← −cam_X (left)
+     0, -1,  0    // body_Z ← −cam_Y (up)
+).finished();
+cam_pose.linear() = q.toRotationMatrix() * R_body_from_cam;
+```
+
+**Found by:** `tools/plot_voxel_trace.py` cross-referencing per-batch voxel world XYZ (from `path_a_voxel_trace.jsonl`) against scene ground-truth positions (from `config/scenes/cosys_static.json`). This was the exact failure mode row from the diagnostic hypothesis table in the issue body.
+
+**Regression test:** Run scenario 33; confirm ≥20% of voxels cluster near the cube's altitude band (not the drone's altitude). Before fix: 0%. After fix: 34%.
+
+---
+
+### Fix #56 — `CpuSemanticProjector` Mask-Convention Mismatch (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** High
+**Files:** `common/hal/include/hal/cpu_semantic_projector.h`
+
+**What:** `CpuSemanticProjector::project()` assumed masks were bbox-local (`mask_width ≈ bbox.w`, indexed with bbox-local `(u, v)`). `SimulatedSAMBackend` happened to produce bbox-local masks, so the assumption held accidentally. When `EdgeContourSAMBackend` or `FastSAMInferenceBackend` plugged in — both produce full-image masks (input-frame resolution) — the projector indexed the full mask with bbox-local coordinates, reading the top-left 32×32 patch of the whole frame instead of the masked region inside the bbox.
+
+**Why (Root Cause):** Undocumented interface: `SAMBackend::run()` returns a mask buffer but does not specify whether its dimensions are bbox-local or full-image, and the downstream projector baked in the simulated backend's convention.
+
+**Fix:** Auto-detect the mask convention inside the projector: if `mask_width >= bbox.w * 1.5f`, treat the mask as full-image and index with global `(u, v)`; otherwise preserve the bbox-local path for backward compatibility. Ratio of 1.5 chosen so small rounding gaps don't trigger the full-image path.
+
+**Found by:** `path_a_voxel_trace.jsonl` — for the same mask set, voxel count per batch was ~3 with the wrong interpretation vs ~25 with the correct one.
+
+**Regression test:** Scenario 33 logs `[MaskProj] Published N voxels (batch_size=M)` with N consistently in the 20–30 range per batch for FastSAM output.
+
+---
+
+### Fix #57 — SAM Backend Factory Hard-Coded Simulated Backend (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** High
+**Files:** `process2_perception/src/main.cpp`
+
+**What:** The PATH A construction block in P2 always constructed `SimulatedSAMBackend` even when `perception.path_a.sam.backend` was set to `fastsam` or `edge_contour`. Config was silently ignored — no warning, no error. Users flipping the backend field saw no effect on behaviour.
+
+**Why (Root Cause):** Early scaffolding left a hard-coded `auto sam = std::make_unique<SimulatedSAMBackend>(...);` line behind the PATH A enabled gate. The `InferenceBackendFactory::create_inference_backend(cfg, sam_section)` function existed but wasn't called.
+
+**Fix:** Route through the factory:
+
+```cpp
+auto sam = InferenceBackendFactory::create_inference_backend(cfg, sam_section);
+```
+
+Process-startup logs now identify the selected backend so the user sees which one actually loaded.
+
+**Found by:** Log inspection after confirming `sam.backend=fastsam` in the merged config but no `[FastSAM]` initialisation line appeared in `perception.log`.
+
+**Regression test:** `perception.log` contains `[SAM] Backend initialised: <backend_name>` matching `perception.path_a.sam.backend` in the merged config.
+
+---
+
+### Fix #58 — FastSAM ONNX Has `Floor` Node OpenCV DNN 4.10 Can't Parse (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** Medium
+**Files:** `models/download_fastsam.sh`
+
+**What:** `cv::dnn::readNetFromONNX("models/fastsam_s.onnx")` threw on load. The Ultralytics FastSAM-s export includes a `Floor` node at `/model.10/Floor` (a type coercion for the proposal decoder) that OpenCV DNN's ONNX importer doesn't support.
+
+**Error messages (searchable):**
+
+- `OpenCV(4.10.0) Error: Can't create layer "/model.10/Floor" of type "Floor" in function 'getLayerInstance'`
+
+**Why (Root Cause):** OpenCV DNN's ONNX op coverage lags PyTorch's export graph. `onnxsim` (onnx-simplifier) constant-folds the Floor node into its static inputs, eliminating it from the runtime graph.
+
+**Fix:** `models/download_fastsam.sh` pipes the Ultralytics PT→ONNX export through `onnxsim` before writing `models/fastsam_s.onnx`:
+
+```bash
+python3 -c "from ultralytics import FastSAM; FastSAM('FastSAM-s.pt').export(format='onnx', opset=12)"
+onnxsim FastSAM-s.onnx models/fastsam_s.onnx
+```
+
+**Found by:** First attempt to load the FastSAM ONNX in `perception.log` — crash was deterministic on load.
+
+**Regression test:** `bash models/download_fastsam.sh` succeeds, and a subsequent `cv::dnn::readNetFromONNX` load does not throw. (Covered end-to-end by scenario 33.)
+
+---
+
+### Fix #59 — `FastSAMInferenceBackend::kMaxProposals` Too Small at 1024 Input (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** High
+**Files:** `common/hal/include/hal/fastsam_inference_backend.h`
+
+**What:** `FastSAMInferenceBackend::parse_raw_output()` rejected every FastSAM inference as `INVALID_ARGUMENT` because the ONNX model's proposal-decoder head emits 21504 proposals at 1024×1024 input, and the hard-coded bounds check was 16384.
+
+**Error messages (searchable):**
+
+- `[FastSAM] parse_raw_output: cols=21504 exceeds kMaxProposals=16384 — refusing`
+
+**Why (Root Cause):** `kMaxProposals = 16384` was sized for YOLOv8-seg at 640 input (~8400 proposals, doubled for safety). FastSAM-s at 1024 input emits ~2.5× more proposals. Single-point constant, never revisited after upping the input resolution.
+
+**Fix:** Raise to `static constexpr int kMaxProposals = 65536`. Keep the cap so a malformed ONNX still can't trigger a huge allocation.
+
+**Found by:** `perception.log` repeatedly emitting `[FastSAM] parse_raw_output: cols=21504 exceeds ...` on every frame, resulting in zero masks handed to the projector.
+
+**Regression test:** Scenario 33 logs `[FastSAM] Parsed N masks` with N in the 200–500 range per frame for the Blocks environment.
+
+---
+
+### Fix #60 — Ground-Texture Ghost Voxels Pollute Static Grid Layer (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** High
+**Files:** `common/hal/include/hal/cpu_semantic_projector.h`, `process4_mission_planner/include/planner/occupancy_grid_3d.h`
+
+**What:** Depth Anything V2's metric depth drifts noticeably past ~15m; combined with a 3D inflation radius of 2 cells (a 5×5×5 = 125-cell neighbourhood), distant ground-texture pixels produced phantom voxels at `z≈0` that the grid permanently promoted. The D\* Lite planner's start-cell kept ending up inside inflated phantom obstacles, forcing reverse-only replans and eventually `STUCK count 4 exceeded cap 3`.
+
+**Symptom:** Scenario 33 logs showed `[Grid]` static cell count climbing past 800 during survey, `[D*Lite] No path` warnings, and the drone repeatedly reversing without lateral motion.
+
+**Why (Root Cause):** Three layered defects that amplified each other:
+
+1. `CpuSemanticProjector::sample_depth()` accepted any depth value DA V2 returned, including the multi-metre drifts at the horizon.
+2. `OccupancyGrid3D` had no ground-plane filter, so any voxel with `z` near zero got promoted.
+3. 3D inflation radius 2 meant one noisy voxel contaminated 125 cells instead of 27.
+
+**Fix (three layers, all conservative):**
+1. `sample_depth()` — clamp depth > 20m to zero (skip the sample) via `constexpr float kMaxObstacleDepth = 20.0f`.
+2. `OccupancyGrid3D::insert_voxels()` — reject voxels with `z < 0.3f` (ground) and clamp `|x|, |y|, |z| ≤ position_clamp_m` (new config key `mission_planner.occupancy_grid.voxel_input.position_clamp_m`, default 1000m).
+3. Lowered inflation radius from 2 → 1 cell in `insert_voxels()` (3×3×3 neighbourhood).
+
+**Found by:** `[Grid] 800+ static` combined with top-down plotter showing voxel scatter at ground level along the drone's trajectory (not at scene objects).
+
+**Regression test:** Scenario 33 — static cell growth capped at ~180 at survey-end; zero `[D*Lite] No path` warnings in the working run.
+
+---
+
+### Fix #61 — Drone Yawed Toward Waypoint, Never Faced Detour Obstacle (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** Medium
+**Files:** `process4_mission_planner/include/planner/grid_planner_base.h`, `process4_mission_planner/src/main.cpp`, `common/util/include/util/config_keys.h`, `config/scenarios/33_non_coco_obstacles.json`
+
+**What:** With `yaw_towards_travel = true`, the drone points its nose at the next waypoint's bearing. During a potential-field-induced lateral detour around `TemplateCube_Rounded_9`, that bearing points *past* the cube, so the mission camera's frustum misses the cube's side face. PATH A gets no masks from the critical surface, the planner loses obstacle coverage, and the drone re-enters from the un-observed side and collides.
+
+**Why (Root Cause):** Yaw control was tied to the waypoint direction vector (waypoint-minus-current-position). During an active detour the actual velocity vector diverges from that direction, and the critical observation surface is on the velocity side, not the waypoint side.
+
+**Fix:** Added `yaw_towards_velocity` boolean config flag (default `false`, gated via new key `mission_planner.path_planner.yaw_towards_velocity`). When enabled and smoothed velocity magnitude exceeds 0.4 m/s, the yaw target is computed from the velocity vector instead of the waypoint-direction vector. Increased `yaw_smoothing_rate` from 0.3 → 0.5 so yaw tracks actual heading changes at detour speed.
+
+**Found by:** Observation of two consecutive failed runs — first collision on the near face of the cube, second on the far face. Cross-checked `cosys_telemetry.jsonl` GT trajectory against the voxel trace plotter: lateral motion was present, but no voxels ever landed on the face the drone was lateraling past.
+
+**Regression test:** Scenario 33 working run on 2026-04-23 — 0 `TemplateCube_Rounded_9` collisions, drone advanced past WP2 + WP3 on the detour path.
+
+---
+
+### Fix #62 — `cosys_telemetry_poller` Include Order Breaks AirSim Macro Expansion (Issue #612)
+
+**Date:** 2026-04-23
+**Severity:** Low (build-time only)
+**Files:** `tools/cosys_telemetry_poller/main.cpp`
+
+**What:** Compiling `tools/cosys_telemetry_poller/main.cpp` failed when our `hal/cosys_rpc_client.h` was included after the AirSim public headers. AirSim's headers define preprocessor symbols (`IS_ALIGNED`, macros in `common_utils/StrictMode.hpp`) that collide with identifiers used in our HAL wrapper.
+
+**Fix:** Include `hal/cosys_rpc_client.h` *first*, then the AirSim headers. Added a one-line comment in `main.cpp` flagging the ordering constraint so future edits don't re-break it.
+
+**Found by:** First compile attempt of the new binary during #612 diagnostic-infra work.
+
+**Regression test:** `cmake --build build --target cosys_telemetry_poller` succeeds with `-Werror -Wall -Wextra`.
+
+---
+
 ## SLAM / VIO (Process 3)
 
 ---

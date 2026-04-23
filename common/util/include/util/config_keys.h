@@ -179,6 +179,15 @@ inline constexpr const char* SAM_INPUT_SIZE = "perception.path_a.sam.input_size"
 inline constexpr const char* SAM_NUM_MASKS  = "perception.path_a.sam.num_masks";
 inline constexpr const char* MASK_CLASS_IOU_THRESHOLD =
     "perception.path_a.mask_class_iou_threshold";
+
+// Diagnostic voxel-position trace (Issue #612). When enabled, the P2
+// mask_projection_thread writes one JSON line per published batch to
+// TRACE_PATH, carrying pose + detector bboxes + SAM masks + per-voxel
+// image-origin + world-frame position. Off by default — production builds
+// pay zero cost. Consumed by tools/plot_voxel_trace.py to visualise where
+// voxels actually land vs scene-object ground truth.
+inline constexpr const char* DIAG_TRACE_VOXELS = "perception.path_a.diag.trace_voxels";
+inline constexpr const char* DIAG_TRACE_PATH   = "perception.path_a.diag.trace_path";
 }  // namespace path_a
 
 // Shutdown drain behaviour (Issue #446)
@@ -265,6 +274,11 @@ inline constexpr const char* Z_BAND_CELLS       = "mission_planner.path_planner.
 inline constexpr const char* LOOK_AHEAD_M       = "mission_planner.path_planner.look_ahead_m";
 inline constexpr const char* YAW_TOWARDS_TRAVEL = "mission_planner.path_planner.yaw_towards_travel";
 inline constexpr const char* YAW_SMOOTHING_RATE = "mission_planner.path_planner.yaw_smoothing_rate";
+// Follow velocity direction instead of bee-line-to-waypoint (Issue #612).
+// Lets PATH A voxelise the obstacle's far face during a detour by pointing
+// the camera at the actual flight direction.
+inline constexpr const char* YAW_TOWARDS_VELOCITY =
+    "mission_planner.path_planner.yaw_towards_velocity";
 inline constexpr const char* SNAP_APPROACH_BIAS = "mission_planner.path_planner.snap_approach_bias";
 }  // namespace path_planner
 

@@ -21,6 +21,7 @@
 #include "util/config_keys.h"
 #include "util/diagnostic.h"
 #include "util/latency_profiler.h"
+#include "util/path_a_trace.h"
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
 #include "util/sd_notify.h"
@@ -201,7 +202,8 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
                                    drone::ipc::ISubscriber<drone::ipc::Pose>& pose_sub,
                                    drone::ipc::IPublisher<drone::ipc::SemanticVoxelBatch>& voxel_pub,
                                    std::atomic<int>&                      shutdown_phase,
-                                   drone::perception::MaskDepthProjector& projector) {
+                                   drone::perception::MaskDepthProjector& projector,
+                                   drone::util::PathATrace*               trace) {
     DRONE_LOG_INFO("[MaskProj] Thread started — publishing to {}",
                    drone::ipc::topics::SEMANTIC_VOXELS);
 
@@ -263,7 +265,17 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
             det_hal.push_back(std::move(h));
         }
 
-        // Build camera pose as an Affine3f from the SLAM quaternion/translation.
+        // Build camera pose from the SLAM body pose.  Two stages:
+        //   1. T_world_body — SLAM quaternion + translation (drone body frame
+        //      in world coordinates).
+        //   2. R_body_from_cam — static camera→body extrinsic rotation.  The
+        //      projector back-projects in the OpenCV camera convention
+        //      (X=right, Y=down, Z=forward).  Without this rotation, the
+        //      camera's forward axis (depth) was landing on the body's up
+        //      axis (altitude) — every voxel ended up 5-30 m above the drone
+        //      instead of in front of it.  Diagnosed via Issue #612 voxel
+        //      trace: 10 321 voxels over a full scenario-33 run with zero
+        //      within 3 m of the actual cube-collision point.
         Eigen::Quaternionf q(static_cast<float>(latest_pose->quaternion[0]),
                              static_cast<float>(latest_pose->quaternion[1]),
                              static_cast<float>(latest_pose->quaternion[2]),
@@ -273,8 +285,19 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
             continue;
         }
         q.normalize();
+
+        // OpenCV camera (X=right, Y=down, Z=forward) → aerospace-ENU body
+        // (X=forward, Y=left, Z=up).  Stored as `static` so the constant matrix
+        // is built once and reused across ticks.
+        static const Eigen::Matrix3f R_body_from_cam = (Eigen::Matrix3f() << 0, 0,
+                                                        1,         // body_X ← cam_Z (forward)
+                                                        -1, 0, 0,  // body_Y ← −cam_X (left)
+                                                        0, -1, 0   // body_Z ← −cam_Y (up)
+                                                        )
+                                                           .finished();
+
         Eigen::Affine3f cam_pose = Eigen::Affine3f::Identity();
-        cam_pose.linear()        = q.toRotationMatrix();
+        cam_pose.linear()        = q.toRotationMatrix() * R_body_from_cam;
         cam_pose.translation()   = Eigen::Vector3f(static_cast<float>(latest_pose->translation[0]),
                                                    static_cast<float>(latest_pose->translation[1]),
                                                    static_cast<float>(latest_pose->translation[2]));
@@ -317,6 +340,15 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
         }
         voxel_pub.publish(*batch);
         ++published_count;
+
+        // Diagnostic trace (Issue #612).  Inert when disabled.  Writes the
+        // full pose / bboxes / voxel positions for off-line analysis of the
+        // "voxels aren't landing on the cube" class of bugs.
+        if (trace && trace->enabled()) {
+            trace->record_batch(masks_opt->timestamp_ns,
+                                static_cast<uint64_t>(masks_opt->frame_sequence), *latest_pose,
+                                det_hal, masks_opt->masks, voxels);
+        }
 
         if (published_count % 50 == 0) {
             DRONE_LOG_INFO("[MaskProj] Published {} batches — last batch: {} voxels, {} skipped",
@@ -1098,16 +1130,28 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::Pose>>       pathA_pose_sub;
     std::thread                                                      t_sam;
     std::thread                                                      t_mask_proj;
+    std::unique_ptr<drone::util::PathATrace>                         path_a_trace;
     if (path_a_active) {
         sam_video_sub =
             ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
         pathA_pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+
+        // Diagnostic voxel trace (Issue #612).  Opt-in via
+        // perception.path_a.diag.trace_voxels; output path defaults under
+        // drone_logs/ so scenario runs land trace next to the run's other logs.
+        const bool trace_enabled =
+            ctx.cfg.get<bool>(drone::cfg_key::perception::path_a::DIAG_TRACE_VOXELS, false);
+        const std::string trace_path =
+            ctx.cfg.get<std::string>(drone::cfg_key::perception::path_a::DIAG_TRACE_PATH,
+                                     "drone_logs/path_a_voxel_trace.jsonl");
+        path_a_trace = std::make_unique<drone::util::PathATrace>(trace_enabled, trace_path);
+
         t_sam       = std::thread(sam_thread, std::ref(*sam_video_sub), std::ref(sam_to_projection),
                                   std::ref(g_shutdown_phase), std::ref(*sam_backend));
-        t_mask_proj = std::thread(mask_projection_thread, std::ref(sam_to_projection),
-                                  std::ref(inference_to_projection), std::ref(depth_to_projection),
-                                  std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
-                                  std::ref(g_shutdown_phase), std::ref(*mask_projector));
+        t_mask_proj = std::thread(
+            mask_projection_thread, std::ref(sam_to_projection), std::ref(inference_to_projection),
+            std::ref(depth_to_projection), std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
+            std::ref(g_shutdown_phase), std::ref(*mask_projector), path_a_trace.get());
     }
 
     // ── Thread watchdog + health publisher ──────────────────

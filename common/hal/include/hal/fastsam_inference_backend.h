@@ -257,7 +257,12 @@ public:
 private:
     static constexpr int kMinInputSize = 128;
     static constexpr int kMaxInputSize = 2048;
-    static constexpr int kMaxProposals = 16384;
+    // FastSAM at 1024×1024 input emits 21504 proposals from the anchor-free
+    // head (strides 8/16/32: 128² + 64² + 32² = 21504).  Larger inputs scale
+    // roughly ∝ h·w, so give generous headroom without becoming unbounded —
+    // a malformed model should still be caught.  YOLOv8-seg at 640 emits
+    // 8400, so this cap covers both pathways.
+    static constexpr int kMaxProposals = 65536;
     static constexpr int kNumClasses   = 1;  // FastSAM is class-agnostic
 
     [[nodiscard]] bool load_model() {
