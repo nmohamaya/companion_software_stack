@@ -60,6 +60,15 @@ struct ObstacleAvoider3DConfig {
     // modest lateral deflection (e.g. |delta|=0.98 m/s) was insufficient
     // against 2 m/s cruise pointed at an obstacle.  Default true.
     bool brake_in_close_regime = true;
+    // Floor on the proximity-based brake scale (PR #617 fault-recovery P2).
+    // Without this floor, a single spurious detection at 0.05 m (radar
+    // noise) against min_distance_m=2.0 produces brake_scale=0.025 — a
+    // near-stop command for one full planner tick.  Capping the worst
+    // single-tick output preserves the safety property (persistent
+    // obstacles still drive the scale to the floor over multiple ticks)
+    // while rejecting one-tick noise events.  Default 0.1 (= 10 % of
+    // cruise).
+    float min_brake_scale = 0.1f;
 
     // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
     // Zero-initialized here; the ObstacleAvoider3D constructor fills them
@@ -131,6 +140,16 @@ public:
         config_.brake_in_close_regime = cfg.get<bool>(
             drone::cfg_key::mission_planner::obstacle_avoidance::BRAKE_IN_CLOSE_REGIME,
             config_.brake_in_close_regime);
+        config_.min_brake_scale =
+            cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_BRAKE_SCALE,
+                           config_.min_brake_scale);
+        // PR #617 fault-recovery P3: a config mistake of min_distance_m=0 silently
+        // disables the brake — warn loudly so operators notice before scenario time.
+        if (config_.brake_in_close_regime && config_.min_distance_m <= 0.0f) {
+            DRONE_LOG_WARN("[ObstacleAvoider3D] brake_in_close_regime enabled but "
+                           "min_distance_m={:.3f} <= 0 — brake path will be skipped.",
+                           config_.min_distance_m);
+        }
 
         // Per-class overrides — fall back to the global scalar loaded above.
         namespace oa                       = drone::cfg_key::mission_planner::obstacle_avoidance;
@@ -361,7 +380,19 @@ public:
             // (2) Scale magnitude by proximity — linear ramp 0→1 over 0→min_distance_m.
             //     At d = min_distance_m, scale = 1 (full commanded speed).
             //     At d = 0, scale = 0 (stop at the obstacle surface).
+            //     Clamp BELOW by `min_brake_scale` (PR #617 fault-recovery P2) so a
+            //     single-frame spurious short-range detection can't zero the
+            //     command for a full tick.  Persistent obstacles still pin the
+            //     scale to this floor over consecutive ticks.
+            //     NOTE: `min_distance_m` here is the global scalar — the same
+            //     value that gates close_regime_active_ hysteresis above.  If
+            //     per-class min_distance_per_class overrides are set (Epic #519)
+            //     they affect the per-class repulsion loop upstream, not the
+            //     brake scale denominator.  Keeping the denominator global keeps
+            //     the brake semantics independent of which class happened to be
+            //     the nearest obstacle this tick.
             brake_scale = std::min(1.0f, min_active_dist / config_.min_distance_m);
+            brake_scale = std::max(config_.min_brake_scale, brake_scale);
             cmd.velocity_x *= brake_scale;
             cmd.velocity_y *= brake_scale;
             cmd.velocity_z *= brake_scale;

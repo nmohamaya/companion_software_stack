@@ -341,6 +341,14 @@ inline constexpr const char* LOG_CORRECTIONS = "mission_planner.obstacle_avoidan
 // scenarios that want pure-deflection semantics can set it false.
 inline constexpr const char* BRAKE_IN_CLOSE_REGIME =
     "mission_planner.obstacle_avoidance.brake_in_close_regime";
+// Floor on the proximity-based brake scale.  A single spurious short-range
+// detection (radar noise at 0.05 m against min_distance_m=2.0 m) would
+// otherwise zero the velocity command for one tick — worse than the
+// pre-#513 deflection-only behaviour for noisy detectors.  The floor caps
+// the worst single-tick response at `min_brake_scale × cruise_speed`.
+// Persistent obstacles still drive the scale to this floor over multiple
+// ticks, so the safety property is preserved.  Default 0.1 (10 %).
+inline constexpr const char* MIN_BRAKE_SCALE = "mission_planner.obstacle_avoidance.min_brake_scale";
 // Per-class overrides (Epic #519 — per-class config schema)
 inline constexpr const char* PER_CLASS_INFLUENCE_RADIUS_M =
     "mission_planner.obstacle_avoidance.per_class.influence_radius_m";

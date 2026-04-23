@@ -844,6 +844,12 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_CancelsForwardComponent) {
     EXPECT_LT(result.velocity_x, 0.0f)
         << "Forward velocity should be cancelled AND pushed backward by repulsion; "
         << "got vx=" << result.velocity_x << " (additive-only correction would leave vx > 0)";
+    // Upper bound — runaway repulsion regression guard (PR #617 test-unit review).
+    // max_correction_mps clamps the repulsion vector to 5 m/s; with the 0.01
+    // clamp-path tolerance, output vx cannot drop below -5.01.
+    EXPECT_GT(result.velocity_x, -config.max_correction_mps - 0.01f)
+        << "Output exceeded max_correction clamp — repulsion vector "
+        << "magnitude regression? Got vx=" << result.velocity_x;
     EXPECT_TRUE(avoider.close_regime_active());
 }
 
@@ -952,4 +958,102 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_NoEffectOutsideCloseRegime) {
     // Forward motion should still be largely intact — only weak repulsion applied.
     EXPECT_GT(result.velocity_x, 0.5f)
         << "Outside close regime, brake should not apply; vx=" << result.velocity_x;
+}
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_ObstacleBehind_NoForwardCancel) {
+    // Coverage for the `v_toward <= 0` branch (PR #617 test-unit review).
+    // Drone is IN close regime (obstacle 1 m behind) but moving AWAY from it.
+    // The forward-cancellation step must be skipped (brake=0 path), while the
+    // proximity scale still applies to whatever lateral / forward motion is
+    // commanded — a persistent retreat obstacle should not suddenly amplify
+    // the drone's command just because the drone is retreating.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 0.0f;  // isolate brake math from repulsion
+    config.min_distance_m        = 2.0f;
+    config.max_correction_mps    = 5.0f;
+    config.brake_in_close_regime = true;
+    config.path_aware            = false;
+    config.vertical_gain         = 0.0f;
+    ObstacleAvoider3D avoider(config);
+
+    // Drone moving -X (retreating).  Cruise = (-1, 0.5, 0) (retreat + slight
+    // lateral drift).
+    auto cmd  = make_cmd(-1.0f, 0.5f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Obstacle BEHIND the drone at (+1, 0, 5) — relative vector +X, drone
+    // cmd is -X, so v_toward = cmd · n̂ = (-1)*(+1) + 0 + 0 = -1 < 0.
+    // Forward-cancel path MUST be skipped.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Expected behaviour:
+    //  - close_regime_active_ = true (dist=1 < min_distance=2)
+    //  - v_toward = -1 (drone retreating)
+    //  - Forward-cancel branch NOT taken: cmd untouched by step 1.
+    //  - Proximity scale = min(1, 1/2) = 0.5, floored by min_brake_scale=0.1
+    //    (not hit, 0.5 > 0.1) → 0.5 applied to whole vector.
+    //  - Final: (-0.5, 0.25, 0).
+    EXPECT_TRUE(avoider.close_regime_active());
+    EXPECT_NEAR(result.velocity_x, -0.5f, 1e-4f)
+        << "Retreating drone in close regime: forward-cancel should skip and "
+        << "proximity scale alone should halve the retreat velocity.";
+    EXPECT_NEAR(result.velocity_y, 0.25f, 1e-4f)
+        << "Lateral command should also be halved by proximity scale.";
+    EXPECT_NEAR(result.velocity_z, 0.0f, 1e-4f);
+}
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_MinBrakeScaleFloor) {
+    // Spurious-detection regression guard (PR #617 fault-recovery P2).  A
+    // single radar return at 0.05 m against min_distance_m=2.0 would naively
+    // compute brake_scale = 0.025 — a near-full-stop command for one tick.
+    // The min_brake_scale floor must clamp the output to `min_brake_scale ×
+    // cruise` regardless of how close the spurious detection reports.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 0.0f;  // isolate brake from repulsion
+    config.min_distance_m        = 2.0f;
+    config.max_correction_mps    = 5.0f;
+    config.brake_in_close_regime = true;
+    config.min_brake_scale       = 0.1f;  // floor = 10 %
+    config.path_aware            = false;
+    config.vertical_gain         = 0.0f;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 1.0f, 0.0f);  // cruise + lateral
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    // Spurious detection 5 cm ahead — well below the > 0.01 m gate so it
+    // enters the loop and drives close_regime_active_.  Without a floor,
+    // proximity scale would be 0.025.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 0.05f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // Expected:
+    //  - Forward-cancel zeroes the +X component of cmd (cmd becomes (0, 1, 0)).
+    //  - Raw scale = 0.05 / 2.0 = 0.025.
+    //  - Floor (0.1) wins: scale = max(0.025, 0.1) = 0.1.
+    //  - Output = (0, 0.1, 0) — NOT (0, 0.025, 0).
+    EXPECT_TRUE(avoider.close_regime_active());
+    EXPECT_NEAR(result.velocity_x, 0.0f, 1e-4f);
+    EXPECT_NEAR(result.velocity_y, 0.1f, 1e-4f)
+        << "Lateral velocity after floor: expected cruise_y=1.0 × min_brake_scale=0.1 "
+        << "= 0.1. Got " << result.velocity_y
+        << " — min_brake_scale floor failed (check std::max ordering).";
+    EXPECT_NEAR(result.velocity_z, 0.0f, 1e-4f);
 }
