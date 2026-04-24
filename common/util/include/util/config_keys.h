@@ -210,6 +210,13 @@ inline constexpr const char* SECTION = "perception.semantic_projector";
 // disabled (backward-compatible with existing scenarios).
 inline constexpr const char* TEXTURE_GATE_THRESHOLD =
     "perception.semantic_projector.texture_gate_threshold";
+
+// Mask sampling density (Issue #629).  N×N grid of depth probes per SAM
+// mask; default 4 (legacy 16 probes/mask).  No-HD-map scenarios that must
+// discover obstacles via perception alone (scenario 33) can override to
+// 8 or 16 for denser coverage at ~O(N²) CPU cost.  Clamped to [2, 64] by
+// the projector.
+inline constexpr const char* SAMPLE_GRID_SIZE = "perception.semantic_projector.sample_grid_size";
 }  // namespace semantic_projector
 
 // PATH A — SAM + detector fusion (Epic #520)
