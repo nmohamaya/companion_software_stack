@@ -387,6 +387,35 @@ private:
                 return avoider.avoid(planned, pose, objects);
             }();
 
+            // ── Issue #624 — post-avoider yaw-towards-velocity refresh ────
+            // #337 wired yaw-towards-velocity inside the planner using the
+            // planner's smoothed velocity (pre-avoidance).  When the avoider
+            // deflects sideways to route around an obstacle, target_yaw is
+            // left pointing at the planner's straight-line heading — camera
+            // and forward-facing sensors lose the obstacle to the drone's
+            // blind spot, so the drone drifts back into it from an angle
+            // it never had voxels for.  Refresh target_yaw from the
+            // avoider's post-deflection velocity so the camera tracks the
+            // actual flight direction.
+            //
+            // No-op when the planner's `yaw_towards_velocity` flag is off
+            // (every scenario that doesn't opt in).  Reuses the planner's
+            // own threshold so the two yaw paths agree on "too slow to
+            // yaw safely" — prevents oscillation during hover.
+            //
+            // Measured on scenario 33 pre-fix: drone body yaw of +9° while
+            // actual motion heading -91° (= 100° misalignment) during the
+            // cube-approach sidestep; drone collided head-on.
+            if (grid_planner && grid_planner->yaw_towards_velocity_enabled()) {
+                const float vx      = traj.velocity_x;
+                const float vy      = traj.velocity_y;
+                const float v_xy_sq = vx * vx + vy * vy;
+                const float thr     = grid_planner->yaw_velocity_threshold_mps();
+                if (v_xy_sq > thr * thr) {
+                    traj.target_yaw = std::atan2(vy, vx);
+                }
+            }
+
             // Diagnostic every 10 ticks (~1s at 10Hz) — gated by logger runtime level.
             if (::drone::log::logger().should_log(::drone::log::Level::Debug) &&
                 diag_tick_++ % 10 == 0) {
