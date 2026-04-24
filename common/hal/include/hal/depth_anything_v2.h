@@ -11,6 +11,7 @@
 
 #ifdef HAS_OPENCV
 #include <opencv2/core.hpp>
+#include <opencv2/core/cuda.hpp>  // Issue #626 — cv::cuda::getCudaEnabledDeviceCount probe
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 #endif
@@ -101,6 +102,18 @@ private:
     float raw_max_ref_         = std::numeric_limits<float>::quiet_NaN();
     float calibration_coef_a_  = 1.0f;
     float calibration_coef_b_  = 0.0f;
+
+    // ── CUDA inference path (Issue #626) ───────────────────────────
+    // Request OpenCV DNN's CUDA backend + target at model-load time.
+    // Default false — keeps CPU-only builds working and is safe on
+    // machines without an NVIDIA GPU.  At load time we probe
+    // `cv::cuda::getCudaEnabledDeviceCount()`: zero devices → WARN +
+    // silently fall back to CPU (so a mis-configured deploy doesn't
+    // silently die).  When it engages, DA V2 ViT-S inference drops
+    // from ~2-3 s/frame (CPU, scenario 33 logs) to ~20-100 ms/frame
+    // depending on GPU — the headline fix for no-HD-map scenarios
+    // that depend on PATH A batch rate.
+    bool use_cuda_ = false;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
