@@ -95,7 +95,9 @@
                     "input_size": 1024,
                     "confidence_threshold": 0.4,
                     "nms_threshold": 0.45,
-                    "mask_channels": 32
+                    "mask_channels": 32,
+                    "_comment_use_cuda": "Issue #626 follow-up — FastSAM on CUDA runs ~10-15 ms/frame vs ~80-150 ms/frame CPU, which is the difference between MaskProj publishing at 10 Hz vs 0.13 Hz (measured scenario 33 run 2026-04-24_170802).  Safe on CPU-only machines: load_model()'s canary falls back automatically.",
+                    "use_cuda": true
                 },
                 "mask_class_iou_threshold": 0.5,
                 "diag": {

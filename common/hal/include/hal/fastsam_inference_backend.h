@@ -44,6 +44,7 @@
 
 #ifdef HAS_OPENCV
 #include <opencv2/core.hpp>
+#include <opencv2/core/cuda.hpp>  // Issue #626 — getCudaEnabledDeviceCount probe
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 #endif
@@ -62,6 +63,11 @@ public:
         input_size_    = std::clamp(cfg.get<int>(section + ".input_size", 1024), kMinInputSize,
                                     kMaxInputSize);
         mask_channels_ = std::clamp(cfg.get<int>(section + ".mask_channels", 32), 1, 128);
+        // Issue #626 follow-up — opt into OpenCV DNN CUDA backend.  Default
+        // false preserves CPU-only behaviour.  Load-time canary + fallback
+        // mirrors DA V2's pattern so a cuDNN/CUDA mismatch degrades cleanly
+        // to CPU instead of crashing the perception process at first frame.
+        use_cuda_ = cfg.get<bool>(section + ".use_cuda", false);
     }
 
     FastSamInferenceBackend(const FastSamInferenceBackend&)            = delete;
@@ -282,14 +288,57 @@ private:
         }
         try {
             net_ = cv::dnn::readNetFromONNX(model_path_);
-            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+
+            // Issue #626 follow-up — CUDA backend engagement with canary
+            // fallback (same pattern as DepthAnythingV2Estimator).  FastSAM
+            // at 1024×1024 CPU is ~80-150 ms/frame; on CUDA ~10-20 ms,
+            // which roughly 10× the MaskProj batch rate feeding PATH A.
+            bool cuda_engaged = false;
+            if (use_cuda_) {
+                const int cuda_devices = cv::cuda::getCudaEnabledDeviceCount();
+                if (cuda_devices == 0) {
+                    DRONE_LOG_WARN("[FastSAM] use_cuda=true but "
+                                   "cv::cuda::getCudaEnabledDeviceCount()=0 — "
+                                   "falling back to CPU.");
+                } else {
+                    try {
+                        net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                        net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                        // Canary inference — zero blob at the configured
+                        // input size.  Flushes any cuDNN/CUDA mismatch up
+                        // into the constructor instead of killing the
+                        // SAM thread at first frame.
+                        cv::Mat canary_blob = cv::Mat::zeros(cv::Size(input_size_, input_size_),
+                                                             CV_32FC3);
+                        cv::Mat canary_input;
+                        cv::dnn::blobFromImage(canary_blob, canary_input, 1.0 / 255.0,
+                                               cv::Size(input_size_, input_size_),
+                                               cv::Scalar(0, 0, 0), false, false);
+                        net_.setInput(canary_input);
+                        (void)net_.forward();
+                        cuda_engaged = true;
+                    } catch (const cv::Exception& e) {
+                        DRONE_LOG_WARN("[FastSAM] CUDA canary failed ({}) — "
+                                       "falling back to CPU.  Common cause: cuDNN/CUDA version "
+                                       "mismatch.",
+                                       e.what());
+                    } catch (const std::exception& e) {
+                        DRONE_LOG_WARN("[FastSAM] CUDA canary threw std::exception ({}) — "
+                                       "falling back to CPU",
+                                       e.what());
+                    }
+                }
+            }
+            if (!cuda_engaged) {
+                net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+                net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+            }
             output_layer_names_ = net_.getUnconnectedOutLayersNames();
             model_loaded_       = true;
             DRONE_LOG_INFO("[FastSAM] Model loaded: {} (conf={:.2f}, nms={:.2f}, input={}x{}, "
-                           "mask_channels={})",
+                           "mask_channels={}, backend={})",
                            model_path_, confidence_threshold_, nms_threshold_, input_size_,
-                           input_size_, mask_channels_);
+                           input_size_, mask_channels_, cuda_engaged ? "CUDA" : "CPU");
             return true;
         } catch (const cv::Exception& e) {
             DRONE_LOG_ERROR("[FastSAM] Failed to load '{}': {}", model_path_, e.what());
@@ -312,6 +361,10 @@ private:
     float       nms_threshold_        = 0.45f;
     int         input_size_           = 1024;
     int         mask_channels_        = 32;
+    // Issue #626 follow-up — opt into OpenCV DNN's CUDA backend.  Default
+    // false keeps CPU-only builds working; load_model()'s canary catches
+    // cuDNN/CUDA mismatches before the SAM thread's first inference.
+    bool use_cuda_ = false;
 };
 
 }  // namespace drone::hal
