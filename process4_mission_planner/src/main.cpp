@@ -208,6 +208,14 @@ int main(int argc, char* argv[]) {
     planner_cfg.require_radar_for_promotion = ctx.cfg.get<bool>(
         drone::cfg_key::mission_planner::occupancy_grid::REQUIRE_RADAR_FOR_PROMOTION,
         planner_cfg.require_radar_for_promotion);
+    // Issue #635 — how many observations a PATH A voxel needs before it
+    // cements as a permanent static cell.  Pre-fix voxels cemented after
+    // ONE observation, creating a permanent wake that walled off return
+    // paths.  New default 3 mirrors the detector-observation promotion
+    // magnitude.
+    planner_cfg.voxel_promotion_hits =
+        ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::VOXEL_PROMOTION_HITS,
+                         planner_cfg.voxel_promotion_hits);
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,

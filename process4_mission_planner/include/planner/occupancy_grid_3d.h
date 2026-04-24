@@ -109,7 +109,7 @@ public:
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
                              float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f,
-                             bool require_radar_for_promotion = false)
+                             bool require_radar_for_promotion = false, int voxel_promotion_hits = 3)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -121,7 +121,8 @@ public:
         , max_static_cells_(max_static_cells)
         , prediction_enabled_(prediction_enabled)
         , prediction_dt_s_(prediction_dt_s)
-        , require_radar_for_promotion_(require_radar_for_promotion) {}
+        , require_radar_for_promotion_(require_radar_for_promotion)
+        , voxel_promotion_hits_(voxel_promotion_hits) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -262,6 +263,17 @@ public:
                 ++s.out_of_bounds;
                 continue;
             }
+            // Issue #635 — timestamp for TTL decay.  Voxels that aren't
+            // re-observed within `cell_ttl_ns_` expire via the same
+            // loop that handles detector observations (see line 426).
+            // Without this, PATH A voxels cemented as permanent static
+            // cells — the drone's outbound flight deposited an
+            // everlasting wake that walled off its return corridor
+            // (scenario 33 stuck-at-(24.5, 26.1) failure mode, 2026-04-24).
+            const uint64_t now_ns =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
             // Small 3D inflation — every cell within `kInflate` of the sample.
             // Most neighbouring inserts collide with cells already present
             // from nearby voxels, so this is idempotent on repeated observations.
@@ -271,14 +283,40 @@ public:
                         if (dx * dx + dy * dy + dz * dz > kInflate2) continue;
                         const GridCell c{center.x + dx, center.y + dy, center.z + dz};
                         if (!in_bounds(c)) continue;
-                        auto [it, inserted] = static_occupied_.insert(c);
-                        if (inserted) {
+
+                        // Already-permanent cell (HD-map seed or previously-
+                        // promoted voxel) — nothing more to do.  Still
+                        // refreshes the dynamic timestamp below so that if
+                        // clear_static() ever wipes it, the dynamic layer
+                        // keeps the obstacle alive until TTL decides.
+                        const bool was_absent = occupied_.count(c) == 0 &&
+                                                static_occupied_.count(c) == 0;
+
+                        // Dynamic-bucket refresh: write current timestamp.
+                        // Existing TTL-sweep at occupied_.erase() / line 426
+                        // handles decay when this cell stops being observed.
+                        occupied_[c] = now_ns;
+                        if (was_absent) {
                             changed_cells_.push_back({c, true});
-                            // Do NOT record in hd_map_cells_ — these are PATH A
-                            // voxels, clearable by clear_static() if the
-                            // pipeline misbehaves.
                             ++s.inserted;
-                            ++promoted_count_;
+                        }
+
+                        // Promotion: after `voxel_promotion_hits_` distinct
+                        // observations a cell becomes permanent — real walls
+                        // should cement, transient frame-artefacts should
+                        // decay.  Mirrors `update_from_objects()` promotion
+                        // path (line 615) except this one doesn't gate on
+                        // radar-confirmed (PATH A is the sole static source
+                        // in scenarios that enable voxel_input).
+                        if (voxel_promotion_hits_ > 0 && static_occupied_.count(c) == 0) {
+                            int& hits = hit_count_[c];
+                            ++hits;
+                            if (hits >= voxel_promotion_hits_) {
+                                static_occupied_.insert(c);
+                                occupied_.erase(c);
+                                hit_count_.erase(c);
+                                ++promoted_count_;
+                            }
                         }
                     }
                 }
@@ -648,6 +686,12 @@ private:
     bool     prediction_enabled_{true};              // enable velocity-based prediction inflation
     float    prediction_dt_s_{2.0f};                 // prediction horizon in seconds
     bool     require_radar_for_promotion_{false};    // hit-count path needs ≥1 radar update
+    // Issue #635 — PATH A voxel observations become permanent static cells
+    // only after this many hits.  Lower values pollute the grid with
+    // transient detections; higher values require multi-frame robustness
+    // before a voxel "cements".  Default 3 (same magnitude as
+    // promotion_hits_ for the detector path).
+    int voxel_promotion_hits_{3};
     // Cumulative count of objects with velocity-based prediction applied (never reset).
     int      total_predictions_applied_{0};
     uint64_t diag_tick_{0};  // for periodic diagnostic logging

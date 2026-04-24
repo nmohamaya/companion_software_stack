@@ -372,6 +372,14 @@ inline constexpr const char* VOXEL_INPUT_POSITION_CLAMP_M =
     "mission_planner.occupancy_grid.voxel_input.position_clamp_m";
 inline constexpr const char* VOXEL_INPUT_MIN_CONFIDENCE =
     "mission_planner.occupancy_grid.voxel_input.min_confidence";
+// Issue #635 — PATH A voxels now flow through the dynamic-TTL bucket
+// instead of going directly to the permanent static layer.  They promote
+// to static (permanent) only after being re-observed this many times.
+// Lower = faster cementing (more reactive, more grid pollution); higher =
+// more conservative (transient artefacts decay, only robust obstacles
+// cement).  Default 3.
+inline constexpr const char* VOXEL_PROMOTION_HITS =
+    "mission_planner.occupancy_grid.voxel_input.promotion_hits";
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {

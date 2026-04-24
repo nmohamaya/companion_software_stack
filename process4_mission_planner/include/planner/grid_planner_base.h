@@ -75,6 +75,14 @@ struct GridPlannerConfig {
     float snap_approach_bias         = 0.5f;  // Approach-direction penalty for snap fallback
     bool  prediction_enabled         = true;  // Enable velocity-based obstacle prediction
     float prediction_dt_s            = 2.0f;  // Prediction horizon (seconds into the future)
+    // Issue #635 — PATH A voxel observations become permanent static cells
+    // only after this many hits.  Prevents transient voxels (misprojections,
+    // one-frame artefacts) from cementing as permanent obstacles that wall
+    // off return corridors.  Real walls / pillars get re-observed every
+    // frame while in FOV and promote quickly; sparse detections decay via
+    // TTL.  Default 3 — mirrors `promotion_hits` magnitude for the
+    // detector-observation path.
+    int voxel_promotion_hits = 3;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -164,7 +172,7 @@ public:
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
                 config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
-                config.require_radar_for_promotion) {}
+                config.require_radar_for_promotion, config.voxel_promotion_hits) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

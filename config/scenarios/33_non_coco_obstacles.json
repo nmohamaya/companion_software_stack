@@ -167,7 +167,7 @@
                 "promotion_hits": 10,
                 "max_static_cells": 500,
                 "voxel_input": {
-                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the static layer directly (bypassing promotion_hits, since voxels are already mask-gated + confidence-scored).",
+                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid.  Since Issue #635 voxels route through the dynamic-TTL bucket first and promote to static after `promotion_hits` observations.  Default 3 preserves near-old behaviour (cells promote in ~0.23 s @ 13 Hz) while the TTL plumbing is now in place for future tuning — higher values (15-30) will let transient artefacts decay while robustly-observed walls cement.",
                     "enabled": true,
                     "position_clamp_m": 200.0,
                     "min_confidence": 0.3

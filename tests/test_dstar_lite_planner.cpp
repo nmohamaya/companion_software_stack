@@ -2567,3 +2567,99 @@ TEST(DStarLiteCornerCutTest, IncrementalUpdateRespectsCornerGuard) {
     EXPECT_FALSE(path_has_corner_cut(planner.cached_path(), planner.grid()))
         << "Incremental replan must respect corner-cutting guard";
 }
+
+// ═════════════════════════════════════════════════════════════
+// Issue #635 — PATH A voxel TTL + promotion
+// ═════════════════════════════════════════════════════════════
+//
+// PATH A voxels used to be inserted directly into `static_occupied_`
+// (permanent cells), which meant every viewpoint during flight
+// deposited voxels that never decayed.  On scenario 33 the drone's
+// outbound wake walled off its return corridor.
+//
+// After #635, voxels flow through the dynamic-TTL bucket first and
+// only promote to static after `voxel_promotion_hits` observations.
+
+namespace {
+drone::ipc::SemanticVoxel make_voxel(float x, float y, float z) {
+    drone::ipc::SemanticVoxel v{};
+    v.position_x     = x;
+    v.position_y     = y;
+    v.position_z     = z;
+    v.confidence     = 0.9f;
+    v.occupancy      = 1.0f;
+    v.semantic_label = drone::ipc::ObjectClass::GEOMETRIC_OBSTACLE;
+    v.timestamp_ns   = 0;
+    return v;
+}
+}  // namespace
+
+TEST(OccupancyGrid3DTest, Issue635_VoxelDecaysAfterTTLWhenNotReobserved) {
+    // Short TTL so the test doesn't wait seconds.  Promotion threshold
+    // set very high to isolate the decay path (no interference from
+    // auto-promotion).
+    const float     ttl_s = 0.2f;
+    OccupancyGrid3D grid(/*resolution=*/1.0f, /*extent=*/10.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/ttl_s, /*min_confidence=*/0.3f,
+                         /*promotion_hits=*/0, /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.3f,
+                         /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/0.0f,
+                         /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/99);
+
+    auto v     = make_voxel(3.0f, 3.0f, 3.0f);
+    auto stats = grid.insert_voxels(&v, 1, /*clamp_m=*/100.0f, /*min_conf=*/0.3f);
+    EXPECT_GT(stats.inserted, 0u) << "first insertion should populate the dynamic bucket";
+    EXPECT_TRUE(grid.is_occupied(grid.world_to_grid(3.0f, 3.0f, 3.0f)))
+        << "cell must be occupied immediately after insert";
+
+    // Wait past the TTL.  update_from_objects() triggers the dynamic
+    // sweep even with an empty DetectedObjectList.
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(ttl_s * 1000 + 100)));
+    drone::ipc::DetectedObjectList empty{};
+    drone::ipc::Pose               pose{};
+    pose.translation[2] = 3.0f;
+    grid.update_from_objects(empty, pose);
+
+    EXPECT_FALSE(grid.is_occupied(grid.world_to_grid(3.0f, 3.0f, 3.0f)))
+        << "cell must decay after TTL when not re-observed — "
+           "this was the scenario-33 bug (voxels cemented forever)";
+}
+
+TEST(OccupancyGrid3DTest, Issue635_VoxelPromotesToStaticAfterRepeatedObservation) {
+    // Real walls / pillars get re-observed every frame — they must
+    // still cement as permanent static cells, just not on the first
+    // observation.
+    OccupancyGrid3D grid(/*resolution=*/1.0f, /*extent=*/10.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/10.0f, /*min_confidence=*/0.3f,
+                         /*promotion_hits=*/0, /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.3f,
+                         /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/0.0f,
+                         /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/3);
+
+    auto       v    = make_voxel(4.0f, 4.0f, 4.0f);
+    const auto cell = grid.world_to_grid(4.0f, 4.0f, 4.0f);
+
+    grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    EXPECT_TRUE(grid.is_occupied(cell));
+    EXPECT_EQ(grid.static_count(), 0u) << "one observation — not yet static";
+
+    grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    EXPECT_EQ(grid.static_count(), 0u) << "two observations — not yet static";
+
+    grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    EXPECT_GT(grid.static_count(), 0u)
+        << "three observations — cell should have promoted to static";
+
+    // Permanence check — promoted cell must survive a TTL sweep.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    drone::ipc::DetectedObjectList empty{};
+    drone::ipc::Pose               pose{};
+    pose.translation[2] = 4.0f;
+    grid.update_from_objects(empty, pose);
+    EXPECT_TRUE(grid.is_occupied(cell)) << "promoted cell must survive any TTL sweep — that's what "
+                                           "'static' means";
+}
