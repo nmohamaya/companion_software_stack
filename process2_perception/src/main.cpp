@@ -1032,6 +1032,20 @@ int main(int argc, char* argv[]) {
                 const float max_depth = ctx.cfg.get<float>("perception.depth_estimator.max_depth_m",
                                                            20.0f);
                 sp->set_max_obstacle_depth_m(max_depth);
+
+                // Issue #629 — mask sampling density.  Legacy default 4×4=16
+                // probes per mask.  Dense-perception / no-HD-map scenarios
+                // (scenario 33) override to 8 or 16 for higher per-frame
+                // discovery rate.
+                const int grid_size = ctx.cfg.get<int>(
+                    drone::cfg_key::perception::semantic_projector::SAMPLE_GRID_SIZE, 4);
+                sp->set_sample_grid_size(grid_size);
+                if (grid_size != 4) {
+                    DRONE_LOG_INFO("[PathA] CpuSemanticProjector sample grid: {}×{} "
+                                   "(= {} probes/mask)",
+                                   sp->sample_grid_size(), sp->sample_grid_size(),
+                                   sp->sample_grid_size() * sp->sample_grid_size());
+                }
                 semantic_projector = std::move(sp);
                 const float iou    = ctx.cfg.get<float>(
                     drone::cfg_key::perception::path_a::MASK_CLASS_IOU_THRESHOLD, 0.5f);

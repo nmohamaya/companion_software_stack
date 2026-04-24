@@ -214,11 +214,61 @@ TEST(SemanticProjector, MaskedDetectionProducesMultipleUpdates) {
     auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
     ASSERT_TRUE(result.is_ok());
 
-    // 4x4 grid with all mask pixels active → 16 updates
+    // Default 4x4 grid with all mask pixels active → 16 updates
     EXPECT_EQ(result.value().size(), 16u);
     for (const auto& vu : result.value()) {
         EXPECT_EQ(vu.semantic_label, 5);
     }
+}
+
+// ─── Issue #629 — configurable sample density ─────────────────────────
+
+TEST(SemanticProjector, SampleGridSize_DefaultIs4) {
+    CpuSemanticProjector proj;
+    EXPECT_EQ(proj.sample_grid_size(), 4);
+}
+
+TEST(SemanticProjector, SampleGridSize_ClampToMinimum2) {
+    // Values below 2 would produce ≤1 probe per row — a zero-coverage
+    // projector.  The setter must clamp.
+    CpuSemanticProjector proj;
+    proj.set_sample_grid_size(0);
+    EXPECT_EQ(proj.sample_grid_size(), 2);
+    proj.set_sample_grid_size(-5);
+    EXPECT_EQ(proj.sample_grid_size(), 2);
+}
+
+TEST(SemanticProjector, SampleGridSize_ClampToMaximum64) {
+    // 64×64 = 4096 probes/mask × 3 masks ≈ 12k back-projections per frame.
+    // Higher values risk starving the detector thread on allocation alone.
+    CpuSemanticProjector proj;
+    proj.set_sample_grid_size(1000);
+    EXPECT_EQ(proj.sample_grid_size(), 64);
+}
+
+TEST(SemanticProjector, SampleGridSize_16EmitsExpectedProbeCount) {
+    // The smoking gun from Issue #629: with legacy N=4, a fully-masked
+    // detection emits 16 voxels.  Bumping N=8 quadruples coverage.
+    CpuSemanticProjector proj;
+    CameraIntrinsics     intr{500.0f, 500.0f, 320.0f, 240.0f, 640, 480};
+    ASSERT_TRUE(proj.init(intr));
+    proj.set_sample_grid_size(8);
+    EXPECT_EQ(proj.sample_grid_size(), 8);
+
+    InferenceDetection det;
+    det.bbox       = {100.0f, 100.0f, 80.0f, 80.0f};
+    det.class_id   = 5;
+    det.confidence = 0.8f;
+    // Full-image mask convention so every probe hits foreground.
+    det.mask_width  = 640;
+    det.mask_height = 480;
+    det.mask.assign(static_cast<size_t>(det.mask_width) * det.mask_height, 255);
+
+    auto depth  = make_depth_map(640, 480, 8.0f);
+    auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    // 8×8 grid with all mask pixels active → 64 updates.
+    EXPECT_EQ(result.value().size(), 64u);
 }
 
 TEST(SemanticProjector, FactoryCpu) {

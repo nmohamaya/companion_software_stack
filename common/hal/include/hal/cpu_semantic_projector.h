@@ -91,11 +91,30 @@ public:
 
     [[nodiscard]] float max_obstacle_depth_m() const { return max_obstacle_depth_m_; }
 
+    /// Mask sampling density (Issue #629).  Each SAM mask is covered by an
+    /// `N × N` grid of depth probes that back-project to voxels; higher N
+    /// gives denser per-frame coverage at the cost of ~O(N²) depth samples
+    /// and back-projections per mask.  Matters for no-HD-map scenarios
+    /// (scenario 33): with N=4 (default) a drone at 2 m/s accumulates
+    /// voxels too slowly to build a solid obstacle footprint before
+    /// reaching obstacles.  Typical production values: 4 (default, legacy
+    /// behaviour), 8 (4× samples, +0.2 ms/frame), 16 (16× samples,
+    /// +0.8 ms/frame, recommended for dense-perception scenarios).
+    ///
+    /// Clamped to [2, 64] — a 0 or negative value would produce no voxels;
+    /// >64 risks per-frame allocations that starve the detector thread.
+    void set_sample_grid_size(int grid_size) { sample_grid_size_ = std::clamp(grid_size, 2, 64); }
+
+    [[nodiscard]] int sample_grid_size() const { return sample_grid_size_; }
+
 private:
     CameraIntrinsics intrinsics_{};
     bool             initialized_{false};
     float            texture_gate_threshold_{0.0f};
     float            max_obstacle_depth_m_{20.0f};
+    // Default 4 preserves legacy 4×4=16 probes per mask for scenarios that
+    // don't opt in to the higher density (Issue #629).
+    int sample_grid_size_{4};
 
     // Back-project pixel (u,v) at depth Z to a world-frame 3D point
     [[nodiscard]] Eigen::Vector3f backproject(float u, float v, float z,
@@ -198,10 +217,13 @@ private:
     void project_masked(const InferenceDetection& det, const DepthMap& depth,
                         const Eigen::Affine3f& camera_pose, float scale_x, float scale_y,
                         std::vector<VoxelUpdate>& updates) const {
-        // Sparse 4x4 grid within the mask bounding box
-        constexpr int GRID   = 4;
-        const float   step_x = det.bbox.w / static_cast<float>(GRID);
-        const float   step_y = det.bbox.h / static_cast<float>(GRID);
+        // Grid sampling within the mask bounding box (Issue #629).  Legacy
+        // default is 4×4=16 probes per mask; scenarios that need denser
+        // obstacle discovery (e.g. no-HD-map scenario 33) override via
+        // `perception.semantic_projector.sample_grid_size`.
+        const int   GRID   = sample_grid_size_;
+        const float step_x = det.bbox.w / static_cast<float>(GRID);
+        const float step_y = det.bbox.h / static_cast<float>(GRID);
 
         // Backends in the codebase use two mask conventions:
         //   1. bbox-local      — mask_width ≈ bbox.w (e.g. YOLOv8-seg tiled masks)
