@@ -59,9 +59,43 @@ public:
 
     [[nodiscard]] std::string name() const override { return "CpuSemanticProjector"; }
 
+    /// Texture gate (Issue #616) — reject depth samples in low-gradient regions
+    /// of the depth map.  Flat depth regions correspond to DA V2's weakest
+    /// failure mode (cube faces, sky, textureless walls) where the network
+    /// has no features to latch onto.
+    ///
+    /// Threshold is compared against the **un-normalised 3×3 Sobel magnitude**
+    /// on the depth map at the sample pixel — that is, `sqrt(Gx^2 + Gy^2)`
+    /// without dividing by the kernel sum of 8.  Units are "depth units
+    /// summed across the Sobel stencil", not strict metres-per-pixel.  A
+    /// flat 1 m/px depth step produces a magnitude of ~8, not 1.  Operators
+    /// tune empirically against scenario voxel-on-target output rather than
+    /// computing a theoretical threshold.  0.3-1.0 is a reasonable starting
+    /// range for DA V2 @ 518×518 on the Blocks environment.
+    ///
+    /// 0.0 = disabled (backward-compatible default).
+    void set_texture_gate_threshold(float threshold) {
+        texture_gate_threshold_ = std::max(0.0f, threshold);
+    }
+
+    [[nodiscard]] float texture_gate_threshold() const { return texture_gate_threshold_; }
+
+    /// Upper metric depth cutoff (PR #620 code-quality review).  Samples
+    /// beyond this are rejected as horizon / sky contours.  Must match
+    /// `perception.depth_estimator.max_depth_m` to avoid an asymmetric
+    /// config where the estimator reports depths the projector then
+    /// silently drops.  Default 20 m (matches pre-#620 hardcoded value).
+    void set_max_obstacle_depth_m(float max_depth_m) {
+        max_obstacle_depth_m_ = std::max(0.1f, max_depth_m);
+    }
+
+    [[nodiscard]] float max_obstacle_depth_m() const { return max_obstacle_depth_m_; }
+
 private:
     CameraIntrinsics intrinsics_{};
     bool             initialized_{false};
+    float            texture_gate_threshold_{0.0f};
+    float            max_obstacle_depth_m_{20.0f};
 
     // Back-project pixel (u,v) at depth Z to a world-frame 3D point
     [[nodiscard]] Eigen::Vector3f backproject(float u, float v, float z,
@@ -80,17 +114,69 @@ private:
             std::clamp(v * scale_y, 0.0f, static_cast<float>(depth.height - 1)));
         const float d = depth.data[dy * depth.width + dx] * depth.scale;
         if (!std::isfinite(d) || d <= 0.0f) return 0.0f;
-        // Reject samples beyond kMaxObstacleDepth — distant horizon / sky /
+        // Reject samples beyond max_obstacle_depth_m_ — distant horizon / sky /
         // scenery contours are not navigation-relevant and would otherwise
-        // flood the downstream occupancy grid with ghost voxels.  20 m is a
-        // conservative drone-scale cutoff; real obstacles the planner needs
-        // to route around are well within this range at scenario cruise
-        // speeds.  (#608 E5.INT — discovered when EdgeContourSAM masks
-        // picked up every image edge and back-projected them into voxels at
-        // 50-100 m depth, filling the grid far past `max_static_cells`.)
-        constexpr float kMaxObstacleDepth = 20.0f;
-        if (d > kMaxObstacleDepth) return 0.0f;
+        // flood the downstream occupancy grid with ghost voxels.  The cutoff
+        // is piped in from config by P2 main.cpp (should match
+        // `perception.depth_estimator.max_depth_m` — PR #620 code-quality
+        // review fixed the asymmetry where this was hardcoded at 20 m while
+        // the estimator's ceiling was config-driven).  Default 20 m; real
+        // obstacles the planner needs to route around are well within this
+        // range at scenario cruise speeds.  (#608 E5.INT — discovered when
+        // EdgeContourSAM masks picked up every image edge and back-projected
+        // them into voxels at 50-100 m depth, filling the grid far past
+        // `max_static_cells`.)
+        if (d > max_obstacle_depth_m_) return 0.0f;
+        // Texture gate (Issue #616) — reject samples where the local depth
+        // gradient is below threshold.  Cube faces, sky, untextured walls
+        // produce nearly-flat depth output from DA V2 (the network has no
+        // features to latch onto); voxelising them pollutes the grid.
+        // Computing the gradient on the *depth* map (not RGB) is a proxy
+        // for DA V2 confidence — if the model couldn't see variation, we
+        // shouldn't trust the metres it reports.  Disabled by default
+        // (threshold=0 short-circuits at the top of the check).
+        if (texture_gate_threshold_ > 0.0f &&
+            depth_gradient_magnitude(depth, dx, dy) < texture_gate_threshold_) {
+            return 0.0f;
+        }
         return d;
+    }
+
+    /// Un-normalised 3x3 Sobel magnitude on the depth map at pixel (dx, dy).
+    /// Returns `sqrt(Gx^2 + Gy^2)` where Gx, Gy use the raw Sobel kernel
+    /// without dividing by the kernel sum of 8.  Units are "depth units
+    /// summed across the stencil" — a flat 1 m/pixel ramp returns ~8.
+    /// Used by the texture gate above; the operator picks the threshold
+    /// against the actual output magnitude (not a theoretical m/px value).
+    /// Safely clamps the 3x3 stencil at the map boundary.  PR #620
+    /// api-contract review relabelled this from "metres per pixel" — the
+    /// old label was off by the kernel-sum factor.
+    [[nodiscard]] float depth_gradient_magnitude(const DepthMap& depth, uint32_t dx,
+                                                 uint32_t dy) const {
+        if (depth.width < 3 || depth.height < 3) return 0.0f;
+        const uint32_t x1 = dx == 0 ? 0 : dx - 1;
+        const uint32_t x2 = std::min<uint32_t>(dx + 1, depth.width - 1);
+        const uint32_t y1 = dy == 0 ? 0 : dy - 1;
+        const uint32_t y2 = std::min<uint32_t>(dy + 1, depth.height - 1);
+
+        const auto at = [&](uint32_t x, uint32_t y) {
+            return depth.data[y * depth.width + x] * depth.scale;
+        };
+
+        // 3x3 Sobel stencil — standard kernels for Gx and Gy.  Non-finite
+        // samples anywhere in the stencil poison the whole gradient (return
+        // 0 so the texture gate fails closed — a safe default).
+        const float p00 = at(x1, y1), p01 = at(dx, y1), p02 = at(x2, y1);
+        const float p10 = at(x1, dy), p12 = at(x2, dy);
+        const float p20 = at(x1, y2), p21 = at(dx, y2), p22 = at(x2, y2);
+        if (!std::isfinite(p00) || !std::isfinite(p01) || !std::isfinite(p02) ||
+            !std::isfinite(p10) || !std::isfinite(p12) || !std::isfinite(p20) ||
+            !std::isfinite(p21) || !std::isfinite(p22)) {
+            return 0.0f;
+        }
+        const float gx = (p02 + 2.0f * p12 + p22) - (p00 + 2.0f * p10 + p20);
+        const float gy = (p20 + 2.0f * p21 + p22) - (p00 + 2.0f * p01 + p02);
+        return std::sqrt(gx * gx + gy * gy);
     }
 
     void project_bbox_centre(const InferenceDetection& det, const DepthMap& depth,

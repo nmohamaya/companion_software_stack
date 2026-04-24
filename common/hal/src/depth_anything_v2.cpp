@@ -21,9 +21,39 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const drone::Config& cfg,
                                                   "models/depth_anything_v2_vits.onnx");
     input_size_            = cfg.get<int>(section + ".input_size", 518);
     max_depth_m_           = cfg.get<float>(section + ".max_depth_m", 20.0f);
+    // Lower metric bound — closest reportable obstacle (PR #620 code-quality
+    // review).  `max_depth_m_` was configurable but `min_depth_m_` was hardcoded
+    // at 0.1 — asymmetric.  Operators tuning tight indoor flights may want a
+    // narrower floor; symmetric tunability closes the gap.
+    namespace dav2 = drone::cfg_key::perception::depth_estimator::dav2;
+    min_depth_m_   = cfg.get<float>(dav2::MIN_DEPTH_M, 0.1f);
 
-    DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}", input_size_,
-                   max_depth_m_);
+    // Calibration (Issue #616) — all default-off; per-frame path is still used
+    // unless all refs + coefs are explicitly provided.
+    calibration_enabled_ = cfg.get<bool>(dav2::CALIBRATION_ENABLED, false);
+    raw_min_ref_         = cfg.get<float>(dav2::RAW_MIN_REF, raw_min_ref_);
+    raw_max_ref_         = cfg.get<float>(dav2::RAW_MAX_REF, raw_max_ref_);
+    calibration_coef_a_  = cfg.get<float>(dav2::CALIBRATION_COEF_A, calibration_coef_a_);
+    calibration_coef_b_  = cfg.get<float>(dav2::CALIBRATION_COEF_B, calibration_coef_b_);
+
+    // Safety-check the calibration inputs.  If enabled but refs are invalid,
+    // fall back to per-frame normalisation rather than silently producing
+    // garbage metres.
+    if (calibration_enabled_) {
+        const bool refs_valid = std::isfinite(raw_min_ref_) && std::isfinite(raw_max_ref_) &&
+                                raw_max_ref_ > raw_min_ref_;
+        if (!refs_valid) {
+            DRONE_LOG_WARN("[DepthAnythingV2] calibration_enabled=true but raw_min_ref={:.3f} / "
+                           "raw_max_ref={:.3f} invalid — falling back to per-frame normalisation.",
+                           raw_min_ref_, raw_max_ref_);
+            calibration_enabled_ = false;
+        }
+    }
+
+    DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}, "
+                   "calibration={} (a={:.3f}, b={:.3f}, raw_ref=[{:.3f},{:.3f}])",
+                   input_size_, max_depth_m_, calibration_enabled_ ? "on" : "off",
+                   calibration_coef_a_, calibration_coef_b_, raw_min_ref_, raw_max_ref_);
     load_model(model_path);
 }
 
@@ -170,23 +200,58 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     const auto  num_pixels = static_cast<size_t>(out_h) * static_cast<size_t>(out_w);
 
     // ── Step 5: Convert relative inverse depth → metric depth ──
-    // DA V2 outputs unnormalized inverse depth: higher raw value = closer object.
-    // We normalize to [0,1] then linearly map to metric depth:
-    //   normalized=1 (closest object, highest inverse depth) → min_depth (0.1m)
-    //   normalized=0 (farthest object, lowest inverse depth) → max_depth
-    // This provides full utilization of the [min_depth, max_depth] range.
-    // Note: DA V2 is a relative (not metric) model — the absolute scale depends
-    // on the scene. The linear mapping is the simplest correct conversion.
-    float min_val = raw_data[0];
-    float max_val = raw_data[0];
-    for (size_t i = 1; i < num_pixels; ++i) {
-        min_val = std::min(min_val, raw_data[i]);
-        max_val = std::max(max_val, raw_data[i]);
+    // DA V2 outputs unnormalised inverse depth: higher raw value = closer object.
+    // Two conversion paths — see class docstring for the design rationale:
+    //
+    //   (a) Per-frame normalisation (default, pre-#616 behaviour):
+    //       min/max of raw_data this frame → linear remap to
+    //       [min_depth_m_, max_depth_m_].
+    //
+    //   (b) Calibrated (Issue #616, opt-in via `dav2.calibration_enabled`):
+    //       use fitted `(raw_min_ref, raw_max_ref)` to anchor normalisation
+    //       across frames, then apply linear fit `a * metric_anchored + b`.
+    //
+    // Delegates per-pixel math to `convert_raw_to_metric()` (free function at
+    // file scope in depth_anything_v2.h) so the conversion is unit-testable
+    // without a loaded ONNX model (PR #620 review refactor).
+    constexpr float eps = 1e-6f;
+
+    // Per-frame min/max is required for (a) the diagnostic log emitted every
+    // 30th call and (b) the per-frame conversion path.  In calibrated mode
+    // the output doesn't need it, but we still scan every 30th frame so the
+    // log continues to fire and the calibration tool keeps working.  That
+    // saves ~29/30 × 268k FP compares when calibration is on.
+    static std::atomic<uint64_t> scan_counter{0};
+    const bool                   need_scan = !calibration_enabled_ ||
+                           (scan_counter.fetch_add(1, std::memory_order_relaxed) % 30 == 0);
+    float min_val = 0.0f;
+    float max_val = 0.0f;
+    if (need_scan) {
+        min_val = raw_data[0];
+        max_val = raw_data[0];
+        for (size_t i = 1; i < num_pixels; ++i) {
+            min_val = std::min(min_val, raw_data[i]);
+            max_val = std::max(max_val, raw_data[i]);
+        }
     }
 
-    constexpr float eps       = 1e-6f;
-    constexpr float min_depth = 0.1f;  // Minimum metric depth (closest objects)
-    const float     range     = max_val - min_val;
+    // Build conversion parameters — anchor choice hoisted outside the pixel
+    // loop (per PR #620 code-quality review: `calibration_enabled_` is
+    // invariant across all pixels).
+    DepthConversionParams params;
+    params.min_depth_m         = min_depth_m_;
+    params.max_depth_m         = max_depth_m_;
+    params.calibration_enabled = calibration_enabled_;
+    params.calibration_coef_a  = calibration_coef_a_;
+    params.calibration_coef_b  = calibration_coef_b_;
+    if (calibration_enabled_) {
+        params.anchor_min = raw_min_ref_;
+        params.anchor_max = raw_max_ref_;
+    } else {
+        params.anchor_min = min_val;
+        params.anchor_max = max_val;
+    }
+    const float range = params.anchor_max - params.anchor_min;
 
     DepthMap map;
     map.width         = static_cast<uint32_t>(out_w);
@@ -198,15 +263,16 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     map.data.resize(num_pixels);
 
     if (range < eps) {
-        // Flat output (all pixels same depth) — return uniform max_depth
+        // Flat scale range — uniform max_depth output.  Per-frame path: raw
+        // scene is constant (flat wall / unlit frame).  Calibrated path: refs
+        // are near-equal (config rounding — the constructor's `>` guard lets
+        // refs that differ by a hair through).  Either way a fall-back to
+        // "everything is far" is conservative: the grid gets no near
+        // obstacles, the planner doesn't route around phantoms.
         std::fill(map.data.begin(), map.data.end(), max_depth_m_);
     } else {
         for (size_t i = 0; i < num_pixels; ++i) {
-            // Normalize inverse depth to [0, 1]: 1 = closest, 0 = farthest
-            const float normalized = (raw_data[i] - min_val) / range;
-            // Linear map: high inverse depth (close) → small depth, low → large depth
-            const float metric = min_depth + (max_depth_m_ - min_depth) * (1.0f - normalized);
-            map.data[i]        = metric;
+            map.data[i] = convert_raw_to_metric(raw_data[i], range, params);
         }
     }
 
