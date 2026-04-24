@@ -131,8 +131,13 @@ namespace dav2 {
 inline constexpr const char* CALIBRATION_ENABLED =
     "perception.depth_estimator.dav2.calibration_enabled";
 // `(raw_min_ref, raw_max_ref)` anchor the normalisation across frames.
-// When NaN (default), fall back to per-frame min/max.  Fit via
-// `tools/calibrate_depth_anything_v2.py` from a scenario run's
+// Validity rules (enforced by the constructor; any failure → fall back to
+// per-frame min/max with a WARN log):
+//   * both finite (NaN/inf rejected — NaN is the default sentinel meaning
+//     "key absent from config" and indicates calibration was never set up),
+//   * raw_max_ref > raw_min_ref (equal or inverted bounds reject — the
+//     anchored window must have positive width).
+// Fit via `tools/calibrate_depth_anything_v2.py` from a scenario run's
 // `perception.log`.
 inline constexpr const char* RAW_MIN_REF = "perception.depth_estimator.dav2.raw_min_ref";
 inline constexpr const char* RAW_MAX_REF = "perception.depth_estimator.dav2.raw_max_ref";
@@ -144,6 +149,11 @@ inline constexpr const char* CALIBRATION_COEF_A =
     "perception.depth_estimator.dav2.calibration_coef_a";
 inline constexpr const char* CALIBRATION_COEF_B =
     "perception.depth_estimator.dav2.calibration_coef_b";
+// Closest metric depth the estimator will report.  Sibling of
+// `perception.depth_estimator.max_depth_m` — the two bracket the output
+// range.  Promoted from hardcoded 0.1f per PR #620 code-quality review so
+// tight indoor calibrations can push the floor below 10 cm.  Default 0.1 m.
+inline constexpr const char* MIN_DEPTH_M = "perception.depth_estimator.dav2.min_depth_m";
 }  // namespace dav2
 }  // namespace depth_estimator
 

@@ -79,13 +79,18 @@ def percentile(values: list[float], p: float) -> float:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("log_path", type=Path, help="Path to perception.log from a scenario run")
     ap.add_argument(
         "--percentile",
         type=float,
         default=100.0,
         help="Use the N-th percentile of per-frame min/max (default 100 = absolute). "
+             "Applied symmetrically: raw_max_ref uses the N-th percentile of the per-frame "
+             "maxes, raw_min_ref uses the (100-N)-th percentile of the per-frame mins. "
              "Try 99 or 95 to reject one-frame outliers on startup.",
     )
     ap.add_argument(
@@ -109,6 +114,19 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Sample-size sanity check.  The diagnostic is emitted every 30th frame,
+    # so a single match means the run barely exited bootstrap.  Pinning
+    # calibration refs to one sample makes the linear fit fragile —
+    # any startup transient becomes the global anchor.
+    if len(pairs) < 2:
+        print(
+            f"WARNING: only {len(pairs)} DA V2 range sample(s) parsed — calibration "
+            "refs derived from such a small sample are unreliable.  Re-run the "
+            "scenario for at least ~10 seconds (≥ 60 sampled frames) for a "
+            "trustworthy fit.",
+            file=sys.stderr,
+        )
 
     mins = [p[0] for p in pairs]
     maxs = [p[1] for p in pairs]

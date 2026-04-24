@@ -141,10 +141,21 @@ TEST(DepthAnythingV2Test, ConfigConstruction) {
 
 namespace {
 // Helper: build a throwaway Config with calibration fields set.
+//
+// PR #620 test-quality review P1: previously used `pid + rand()` for the
+// tmpfile name.  Under `ctest -j` (parallel test execution), an unseeded
+// `rand()` plus shared pid produces identical filenames across iterations
+// of the same test binary, leading to file-write races + cross-test
+// contamination.  `mkstemp` is the POSIX answer — it atomically opens a
+// uniquely-named file and returns the fd; we close it and only need the
+// path for `cfg.load`.
 drone::Config make_calibration_cfg(bool enabled, float raw_min, float raw_max, float a = 1.0f,
                                    float b = 0.0f) {
-    std::string path = "/tmp/test_da_v2_calib_" + std::to_string(::getpid()) + "_" +
-                       std::to_string(rand()) + ".json";
+    char tmpl[] = "/tmp/test_da_v2_calib_XXXXXX.json";
+    int  fd     = ::mkstemps(tmpl, 5);  // 5 = length of ".json" suffix
+    EXPECT_GE(fd, 0) << "mkstemps failed for tmpfile";
+    if (fd >= 0) ::close(fd);
+    std::string path(tmpl);
     {
         std::ofstream ofs(path);
         ofs << "{\n"
@@ -171,7 +182,7 @@ drone::Config make_calibration_cfg(bool enabled, float raw_min, float raw_max, f
 }
 }  // namespace
 
-TEST(DepthAnythingV2Test, CalibrationEnabledWithValidRefs) {
+TEST(DepthAnythingV2Test, CalibrationEnabled_WhenRefsValid) {
     // Real refs (min < max, both finite) → calibration stays enabled.
     auto cfg = make_calibration_cfg(/*enabled=*/true, /*raw_min=*/0.1f, /*raw_max=*/0.9f);
     DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
@@ -179,15 +190,69 @@ TEST(DepthAnythingV2Test, CalibrationEnabledWithValidRefs) {
         << "Valid refs should keep calibration on; got disabled.";
 }
 
-TEST(DepthAnythingV2Test, CalibrationFallbackOnInvalidRefs) {
-    // raw_max <= raw_min → invalid window → fall back to per-frame.  The
-    // estimator must NOT silently produce garbage metres; it should disable
-    // calibration and log a WARN (not asserted here but the fallback is
-    // observable via calibration_enabled()).
+TEST(DepthAnythingV2Test, CalibrationFallback_OnEqualRefs) {
+    // raw_max == raw_min → degenerate window → fall back to per-frame.
     auto cfg = make_calibration_cfg(/*enabled=*/true, /*raw_min=*/0.5f, /*raw_max=*/0.5f);
     DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
     EXPECT_FALSE(estimator.calibration_enabled())
-        << "Invalid refs (raw_max<=raw_min) should trigger fallback to per-frame.";
+        << "Equal refs should trigger fallback to per-frame.";
+}
+
+TEST(DepthAnythingV2Test, CalibrationFallback_OnInvertedRefs) {
+    // raw_min > raw_max → inverted window (operator typo) → fall back.
+    // Distinct input shape from EqualRefs case; covers the strict `>` guard
+    // path (PR #620 test-quality review P2).
+    auto cfg = make_calibration_cfg(/*enabled=*/true, /*raw_min=*/0.9f, /*raw_max=*/0.1f);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.calibration_enabled())
+        << "Inverted refs (raw_min > raw_max) should trigger fallback to per-frame.";
+}
+
+TEST(DepthAnythingV2Test, CalibrationFallback_OnNaNRef) {
+    // One ref NaN, other finite → fails the `isfinite` guard → fall back.
+    // Covers the `isfinite` branch independently from the ordering branch
+    // (PR #620 test-quality review P2).  We can't write NaN in JSON, so
+    // omit raw_max_ref entirely and let the struct default (NaN) take over.
+    char tmpl[] = "/tmp/test_da_v2_one_nan_XXXXXX.json";
+    int  fd     = ::mkstemps(tmpl, 5);
+    ASSERT_GE(fd, 0);
+    ::close(fd);
+    std::string path(tmpl);
+    {
+        std::ofstream ofs(path);
+        ofs << R"({
+            "perception": {
+                "depth_estimator": {
+                    "backend": "depth_anything_v2",
+                    "model_path": "nonexistent.onnx",
+                    "dav2": {
+                        "calibration_enabled": true,
+                        "raw_min_ref": 0.1
+                    }
+                }
+            }
+        })";
+    }
+    drone::Config cfg;
+    ASSERT_TRUE(cfg.load(path));
+    std::remove(path.c_str());
+
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.calibration_enabled())
+        << "One NaN ref (raw_max_ref omitted from JSON) should trigger fallback.";
+}
+
+TEST(DepthAnythingV2Test, CalibrationEnabled_AcceptsNarrowButValidWindow) {
+    // raw_max = raw_min + 1e-6f → just above the strict-`>` guard threshold.
+    // The constructor accepts it; the per-pixel `range < eps (=1e-6f)`
+    // branch in estimate() may then apply (handled separately in the math
+    // tests below).  This test pins that the *guard* lets it through —
+    // callers can decide what to do with the narrow window.
+    auto                     cfg = make_calibration_cfg(/*enabled=*/true,
+                                    /*raw_min=*/0.5f, /*raw_max=*/0.5f + 1e-5f);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_TRUE(estimator.calibration_enabled())
+        << "Narrow-but-valid window should pass the strict-`>` guard; got disabled.";
 }
 
 TEST(DepthAnythingV2Test, CalibrationFallbackOnMissingRefs) {
@@ -236,6 +301,129 @@ TEST(DepthAnythingV2Test, CalibrationDisabledByDefault) {
 
     DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
     EXPECT_FALSE(estimator.calibration_enabled());
+}
+
+// ═══════════════════════════════════════════════════════════
+// Per-pixel calibration math (PR #620 review refactor)
+//
+// `convert_raw_to_metric()` is a file-scope free function so the
+// arithmetic that used to live inside `estimate()` is testable without
+// loading the ONNX model.  These cover the branches reviewers couldn't
+// reach: per-frame happy path, calibrated happy path, NaN guard,
+// out-of-window clamping, output clamping, and the degenerate `coef_a=0`
+// fit.
+// ═══════════════════════════════════════════════════════════
+
+namespace {
+DepthConversionParams make_per_frame_params(float min_depth = 0.1f, float max_depth = 20.0f,
+                                            float anchor_min = 0.0f, float anchor_max = 1.0f) {
+    DepthConversionParams p;
+    p.min_depth_m         = min_depth;
+    p.max_depth_m         = max_depth;
+    p.calibration_enabled = false;
+    p.anchor_min          = anchor_min;
+    p.anchor_max          = anchor_max;
+    return p;
+}
+
+DepthConversionParams make_calibrated_params(float anchor_min, float anchor_max, float a = 1.0f,
+                                             float b = 0.0f, float min_depth = 0.1f,
+                                             float max_depth = 20.0f) {
+    DepthConversionParams p;
+    p.min_depth_m         = min_depth;
+    p.max_depth_m         = max_depth;
+    p.calibration_enabled = true;
+    p.anchor_min          = anchor_min;
+    p.anchor_max          = anchor_max;
+    p.calibration_coef_a  = a;
+    p.calibration_coef_b  = b;
+    return p;
+}
+}  // namespace
+
+TEST(DepthAnythingV2MathTest, PerFrame_HighRawMapsToMinDepth) {
+    // raw at the per-frame max → normalized = 1 → metric = min_depth (closest).
+    auto        p     = make_per_frame_params(/*min*/ 0.1f, /*max*/ 20.0f, /*amin*/ 0.0f,
+                                   /*amax*/ 1.0f);
+    const float range = p.anchor_max - p.anchor_min;
+    EXPECT_NEAR(convert_raw_to_metric(1.0f, range, p), 0.1f, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, PerFrame_LowRawMapsToMaxDepth) {
+    // raw at the per-frame min → normalized = 0 → metric = max_depth (farthest).
+    auto        p     = make_per_frame_params();
+    const float range = p.anchor_max - p.anchor_min;
+    EXPECT_NEAR(convert_raw_to_metric(0.0f, range, p), 20.0f, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, PerFrame_NaN_FailsClosed_ToMaxDepth) {
+    // Memory-safety / fault-recovery P3: a NaN raw sample must not
+    // propagate to map.data.  Free function returns max_depth (far).
+    auto        p     = make_per_frame_params();
+    const float range = p.anchor_max - p.anchor_min;
+    const float nan   = std::numeric_limits<float>::quiet_NaN();
+    const float out   = convert_raw_to_metric(nan, range, p);
+    EXPECT_TRUE(std::isfinite(out)) << "NaN raw must not produce NaN metric";
+    EXPECT_FLOAT_EQ(out, 20.0f) << "NaN raw should fail closed to max_depth";
+}
+
+TEST(DepthAnythingV2MathTest, Calibrated_OutOfWindowRawClamps) {
+    // raw above the calibrated window → normalized would exceed 1 → clamp to 1
+    // → metric = min_depth.  Documents that out-of-window samples report
+    // "closer than anything in the calibration set" rather than extrapolating.
+    auto        p     = make_calibrated_params(/*amin*/ 0.2f, /*amax*/ 0.8f);
+    const float range = p.anchor_max - p.anchor_min;
+    EXPECT_NEAR(convert_raw_to_metric(1.5f, range, p), p.min_depth_m, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, Calibrated_BelowWindowRawClamps) {
+    // raw below the calibrated window → normalized < 0 → clamp to 0 →
+    // metric = max_depth.
+    auto        p     = make_calibrated_params(/*amin*/ 0.2f, /*amax*/ 0.8f);
+    const float range = p.anchor_max - p.anchor_min;
+    EXPECT_NEAR(convert_raw_to_metric(-0.5f, range, p), p.max_depth_m, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, Calibrated_LinearFitApplied) {
+    // a=2, b=1 → metric_anchored=10 → final = 21, then clamped to max_depth=20.
+    auto p        = make_calibrated_params(/*amin*/ 0.0f, /*amax*/ 1.0f, /*a*/ 2.0f, /*b*/ 1.0f);
+    p.max_depth_m = 20.0f;
+    const float range = p.anchor_max - p.anchor_min;
+    // raw=0.5 → normalized=0.5 → metric_anchored = 0.1 + (20-0.1)*(1-0.5) ≈ 10.05
+    // a*x+b = 2*10.05 + 1 = 21.1 → clamp to 20.
+    EXPECT_NEAR(convert_raw_to_metric(0.5f, range, p), 20.0f, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, Calibrated_ZeroCoefAProducesConstantOutput) {
+    // PR #620 test-quality P2: a=0 reduces the linear fit to `metric = b`
+    // (then clamped).  Defensive: confirms no divide-by-zero or NaN even
+    // though the multiplication is the dangerous step, not a divide.
+    auto        p = make_calibrated_params(/*amin*/ 0.0f, /*amax*/ 1.0f, /*a*/ 0.0f, /*b*/ 5.0f);
+    const float range = p.anchor_max - p.anchor_min;
+    // a=0 → metric = 0*x + 5 = 5 (within [0.1, 20] so no clamp).
+    EXPECT_NEAR(convert_raw_to_metric(0.3f, range, p), 5.0f, 1e-4f);
+    EXPECT_NEAR(convert_raw_to_metric(0.7f, range, p), 5.0f, 1e-4f);
+    EXPECT_NEAR(convert_raw_to_metric(0.0f, range, p), 5.0f, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, Calibrated_OutputClampToMinDepth) {
+    // Linear fit pushes metric below min_depth → output clamps up to min_depth.
+    auto        p = make_calibrated_params(/*amin*/ 0.0f, /*amax*/ 1.0f, /*a*/ 0.5f, /*b*/ -10.0f);
+    const float range = p.anchor_max - p.anchor_min;
+    // raw=1.0 → normalized=1.0 → metric_anchored = min_depth = 0.1
+    // a*x+b = 0.5*0.1 + (-10) = -9.95 → clamp up to min_depth.
+    EXPECT_NEAR(convert_raw_to_metric(1.0f, range, p), p.min_depth_m, 1e-4f);
+}
+
+TEST(DepthAnythingV2MathTest, NaN_FailsClosed_BothPaths) {
+    // Belt-and-braces: NaN guard must fail-closed in BOTH per-frame and
+    // calibrated paths, regardless of coefficients.
+    auto p_per = make_per_frame_params();
+    auto p_cal = make_calibrated_params(/*amin*/ 0.0f, /*amax*/ 1.0f, /*a*/ 100.0f, /*b*/ -50.0f);
+    EXPECT_FLOAT_EQ(convert_raw_to_metric(std::numeric_limits<float>::quiet_NaN(), 1.0f, p_per),
+                    20.0f);
+    EXPECT_FLOAT_EQ(convert_raw_to_metric(std::numeric_limits<float>::quiet_NaN(), 1.0f, p_cal),
+                    20.0f);
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -316,8 +316,11 @@ TEST(SemanticProjector, TextureGateDefaultDisabled) {
 
 TEST(SemanticProjector, TextureGateRejectsFlatRegion) {
     // Set a threshold high enough to reject the flat half but still accept
-    // the gradient half (step=0.1 → Sobel magnitude ≈ 4 * 0.1 = 0.4 m/px at
-    // the interior of the gradient).  Flat half has gradient 0.
+    // the gradient half. With step=0.1 and the un-normalised 3x3 Sobel
+    // (kernel weights ±1/±2), the magnitude on the interior of the ramp is
+    //   sqrt((-1*(d-Δ) + 1*(d+Δ) + -2*(d-Δ) + 2*(d+Δ) + -1*(d-Δ) + 1*(d+Δ))^2)
+    //   = |8*Δ| = 0.8 (with Δ=0.1).  Flat half has gradient 0.  Threshold
+    //   0.2 is comfortably between the two.
     CpuSemanticProjector proj;
     ASSERT_TRUE(proj.init(make_intrinsics(64, 64)));
     proj.set_texture_gate_threshold(0.2f);
@@ -332,6 +335,19 @@ TEST(SemanticProjector, TextureGateRejectsFlatRegion) {
     EXPECT_EQ(r_flat.value().size(), 0u)
         << "Texture gate should reject the flat-depth bbox centre; got " << r_flat.value().size()
         << " voxels.";
+
+    // Positive control: the same flat-half detection MUST produce a voxel
+    // when the gate is disabled. Proves the rejection above is caused by
+    // the texture gate, not by an unrelated rejection (e.g. depth=0,
+    // out-of-bounds projection, or another preflight check).
+    CpuSemanticProjector proj_open;
+    ASSERT_TRUE(proj_open.init(make_intrinsics(64, 64)));
+    EXPECT_FLOAT_EQ(proj_open.texture_gate_threshold(), 0.0f);
+    auto r_flat_open = proj_open.project(dets_flat, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(r_flat_open.is_ok());
+    EXPECT_EQ(r_flat_open.value().size(), 1u)
+        << "Without the gate, the same flat detection should produce a voxel — "
+           "otherwise the rejection above is not attributable to the gate.";
 
     // Gradient-half detection (x=48) — expected to pass.
     std::vector<InferenceDetection> dets_grad{make_det_at(48, 32)};
@@ -348,4 +364,33 @@ TEST(SemanticProjector, TextureGateNegativeClampedToZero) {
     CpuSemanticProjector proj;
     proj.set_texture_gate_threshold(-1.0f);
     EXPECT_FLOAT_EQ(proj.texture_gate_threshold(), 0.0f);
+}
+
+TEST(SemanticProjector, TextureGateDegenerateDepthMap) {
+    // 3x3 Sobel needs at least 3 rows / cols of usable data.  When the
+    // depth map is smaller than that (e.g. a 2x2 patch from a heavily
+    // letter-boxed source), depth_gradient_magnitude() must fail closed
+    // — return 0 so the gate rejects, rather than read out-of-bounds.
+    // This is the safety-critical default when there's not enough data
+    // to assess texture.
+    CpuSemanticProjector proj;
+    // Intrinsics still 64x64 (source frame) but the DepthMap is 2x2.
+    ASSERT_TRUE(proj.init(make_intrinsics(64, 64)));
+    proj.set_texture_gate_threshold(0.05f);  // tiny threshold
+
+    DepthMap dm;
+    dm.width         = 2;
+    dm.height        = 2;
+    dm.source_width  = 64;
+    dm.source_height = 64;
+    dm.scale         = 32.0f;  // 64 / 2
+    dm.confidence    = 0.9f;
+    dm.data          = {1.0f, 9.0f, 9.0f, 1.0f};  // huge swing — would pass any gate if computed
+
+    std::vector<InferenceDetection> dets{make_det_at(32, 32)};
+    auto                            r = proj.project(dets, dm, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(r.is_ok());
+    EXPECT_EQ(r.value().size(), 0u)
+        << "Degenerate (<3-pixel) DepthMap must fail closed via the texture gate, "
+           "not produce voxels from extrapolated gradient values.";
 }

@@ -62,21 +62,40 @@ public:
     /// Texture gate (Issue #616) — reject depth samples in low-gradient regions
     /// of the depth map.  Flat depth regions correspond to DA V2's weakest
     /// failure mode (cube faces, sky, textureless walls) where the network
-    /// has no features to latch onto.  Threshold is depth-gradient magnitude
-    /// (metres per pixel).  0.0 = disabled (backward-compatible default).
-    /// Operators tune this against scenario 33's `check_voxel_on_target.py`
-    /// output; 0.05-0.2 m/px is a reasonable starting range for DA V2 at
-    /// 518x518 input.
+    /// has no features to latch onto.
+    ///
+    /// Threshold is compared against the **un-normalised 3×3 Sobel magnitude**
+    /// on the depth map at the sample pixel — that is, `sqrt(Gx^2 + Gy^2)`
+    /// without dividing by the kernel sum of 8.  Units are "depth units
+    /// summed across the Sobel stencil", not strict metres-per-pixel.  A
+    /// flat 1 m/px depth step produces a magnitude of ~8, not 1.  Operators
+    /// tune empirically against scenario voxel-on-target output rather than
+    /// computing a theoretical threshold.  0.3-1.0 is a reasonable starting
+    /// range for DA V2 @ 518×518 on the Blocks environment.
+    ///
+    /// 0.0 = disabled (backward-compatible default).
     void set_texture_gate_threshold(float threshold) {
         texture_gate_threshold_ = std::max(0.0f, threshold);
     }
 
     [[nodiscard]] float texture_gate_threshold() const { return texture_gate_threshold_; }
 
+    /// Upper metric depth cutoff (PR #620 code-quality review).  Samples
+    /// beyond this are rejected as horizon / sky contours.  Must match
+    /// `perception.depth_estimator.max_depth_m` to avoid an asymmetric
+    /// config where the estimator reports depths the projector then
+    /// silently drops.  Default 20 m (matches pre-#620 hardcoded value).
+    void set_max_obstacle_depth_m(float max_depth_m) {
+        max_obstacle_depth_m_ = std::max(0.1f, max_depth_m);
+    }
+
+    [[nodiscard]] float max_obstacle_depth_m() const { return max_obstacle_depth_m_; }
+
 private:
     CameraIntrinsics intrinsics_{};
     bool             initialized_{false};
     float            texture_gate_threshold_{0.0f};
+    float            max_obstacle_depth_m_{20.0f};
 
     // Back-project pixel (u,v) at depth Z to a world-frame 3D point
     [[nodiscard]] Eigen::Vector3f backproject(float u, float v, float z,
@@ -95,16 +114,19 @@ private:
             std::clamp(v * scale_y, 0.0f, static_cast<float>(depth.height - 1)));
         const float d = depth.data[dy * depth.width + dx] * depth.scale;
         if (!std::isfinite(d) || d <= 0.0f) return 0.0f;
-        // Reject samples beyond kMaxObstacleDepth — distant horizon / sky /
+        // Reject samples beyond max_obstacle_depth_m_ — distant horizon / sky /
         // scenery contours are not navigation-relevant and would otherwise
-        // flood the downstream occupancy grid with ghost voxels.  20 m is a
-        // conservative drone-scale cutoff; real obstacles the planner needs
-        // to route around are well within this range at scenario cruise
-        // speeds.  (#608 E5.INT — discovered when EdgeContourSAM masks
-        // picked up every image edge and back-projected them into voxels at
-        // 50-100 m depth, filling the grid far past `max_static_cells`.)
-        constexpr float kMaxObstacleDepth = 20.0f;
-        if (d > kMaxObstacleDepth) return 0.0f;
+        // flood the downstream occupancy grid with ghost voxels.  The cutoff
+        // is piped in from config by P2 main.cpp (should match
+        // `perception.depth_estimator.max_depth_m` — PR #620 code-quality
+        // review fixed the asymmetry where this was hardcoded at 20 m while
+        // the estimator's ceiling was config-driven).  Default 20 m; real
+        // obstacles the planner needs to route around are well within this
+        // range at scenario cruise speeds.  (#608 E5.INT — discovered when
+        // EdgeContourSAM masks picked up every image edge and back-projected
+        // them into voxels at 50-100 m depth, filling the grid far past
+        // `max_static_cells`.)
+        if (d > max_obstacle_depth_m_) return 0.0f;
         // Texture gate (Issue #616) — reject samples where the local depth
         // gradient is below threshold.  Cube faces, sky, untextured walls
         // produce nearly-flat depth output from DA V2 (the network has no
@@ -120,10 +142,15 @@ private:
         return d;
     }
 
-    /// Sobel-style gradient magnitude on the depth map at pixel (dx, dy).
-    /// Returns the magnitude in metres-per-pixel (depth units).  Safely
-    /// clamps the 3x3 stencil at the map boundary.  Used by the texture
-    /// gate above.
+    /// Un-normalised 3x3 Sobel magnitude on the depth map at pixel (dx, dy).
+    /// Returns `sqrt(Gx^2 + Gy^2)` where Gx, Gy use the raw Sobel kernel
+    /// without dividing by the kernel sum of 8.  Units are "depth units
+    /// summed across the stencil" — a flat 1 m/pixel ramp returns ~8.
+    /// Used by the texture gate above; the operator picks the threshold
+    /// against the actual output magnitude (not a theoretical m/px value).
+    /// Safely clamps the 3x3 stencil at the map boundary.  PR #620
+    /// api-contract review relabelled this from "metres per pixel" — the
+    /// old label was off by the kernel-sum factor.
     [[nodiscard]] float depth_gradient_magnitude(const DepthMap& depth, uint32_t dx,
                                                  uint32_t dy) const {
         if (depth.width < 3 || depth.height < 3) return 0.0f;

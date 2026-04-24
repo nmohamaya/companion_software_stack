@@ -90,7 +90,8 @@ private:
 #endif
     bool  model_loaded_ = false;
     int   input_size_   = 518;
-    float max_depth_m_  = 20.0f;  // metric conversion: depth = max_depth / (inv_depth + eps)
+    float max_depth_m_  = 20.0f;  // upper metric bound (output is clamped here)
+    float min_depth_m_  = 0.1f;   // lower metric bound (closest reportable obstacle)
 
     // ── Calibration path (Issue #616) ──────────────────────────────
     // All zero-valued by default; enabled only when calibration_enabled_
@@ -101,5 +102,69 @@ private:
     float calibration_coef_a_  = 1.0f;
     float calibration_coef_b_  = 0.0f;
 };
+
+// ═══════════════════════════════════════════════════════════════════════
+// Calibration math — free functions (Issue #616, PR #620 review refactor)
+//
+// Exposed at file scope so the per-pixel math is unit-testable without
+// needing the ONNX model loaded.  `DepthAnythingV2Estimator::estimate()`
+// calls these helpers once the model has produced its raw inverse-depth
+// output.  See the class docstring for the two conversion paths.
+// ═══════════════════════════════════════════════════════════════════════
+
+struct DepthConversionParams {
+    float min_depth_m         = 0.1f;
+    float max_depth_m         = 20.0f;
+    bool  calibration_enabled = false;
+    float anchor_min          = 0.0f;
+    float anchor_max          = 1.0f;
+    float calibration_coef_a  = 1.0f;
+    float calibration_coef_b  = 0.0f;
+};
+
+/// Convert a single raw DA V2 inverse-depth sample to metric depth.
+///
+/// Preserves pre-#616 per-frame semantics when `calibration_enabled=false`:
+/// caller supplies `anchor_min`/`anchor_max` = this frame's min/max, the
+/// `range = anchor_max - anchor_min` is > eps, and no clamping is applied
+/// to the result.
+///
+/// When `calibration_enabled=true`:
+///   1. Normalise with the fitted anchor window (clamp to [0,1] so a raw
+///      sample outside the window doesn't extrapolate wildly).
+///   2. Linear-remap to [min_depth_m, max_depth_m].
+///   3. Apply the linear fit `metric = a*metric + b`.
+///   4. Clamp output to [min_depth_m, max_depth_m].
+///
+/// NaN / Inf guard (memory-safety P3 / fault-recovery P3): a non-finite raw
+/// sample fails closed — returns `max_depth_m` (far-depth), the most
+/// conservative default for obstacle avoidance.  Prevents NaN propagation
+/// into downstream voxel positions.
+[[nodiscard]] inline float convert_raw_to_metric(float raw, float range,
+                                                 const DepthConversionParams& p) {
+    // Non-finite raw output (ONNX corruption / numerical glitch) → fail
+    // closed to far-depth.  Applies to both per-frame and calibrated paths
+    // so the behaviour is consistent regardless of `calibration_enabled`.
+    if (!std::isfinite(raw)) {
+        return p.max_depth_m;
+    }
+    // Both paths compute the anchored normalisation identically; what
+    // differs is whether the anchor is per-frame or fitted, and whether
+    // the output gets a post-linear-fit clamp.
+    float normalized = (raw - p.anchor_min) / range;
+    if (p.calibration_enabled) {
+        // Raw sample outside the fitted window: clamp rather than extrapolate.
+        normalized = std::clamp(normalized, 0.0f, 1.0f);
+    }
+    float metric = p.min_depth_m + (p.max_depth_m - p.min_depth_m) * (1.0f - normalized);
+    if (p.calibration_enabled) {
+        metric = p.calibration_coef_a * metric + p.calibration_coef_b;
+        // Final safety clamp — covers degenerate `a*x+b` fits that push
+        // output outside the physical depth range (e.g. operator-supplied
+        // `coef_b` exceeds max_depth_m).
+        metric = std::clamp(metric, p.min_depth_m, p.max_depth_m);
+    }
+    return metric;
+}
 
 }  // namespace drone::hal
