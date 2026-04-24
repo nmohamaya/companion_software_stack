@@ -1,5 +1,7 @@
 // tests/test_mission_state_tick.cpp
 // Unit tests for MissionStateTick (Issue #154).
+#include "planner/grid_planner_base.h"
+#include "planner/iobstacle_avoider.h"
 #include "planner/mission_state_tick.h"
 #include "planner/obstacle_avoider_3d.h"
 #include "planner/planner_factory.h"
@@ -469,4 +471,144 @@ TEST_F(MissionStateTickTest, WaypointOvershootAdvancesToNext) {
 
     // Should have advanced past WP1 due to overshoot detection
     EXPECT_EQ(fsm.current_wp_index(), 2u);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Issue #624 — post-avoider yaw-towards-velocity refresh
+// ═══════════════════════════════════════════════════════════════════
+//
+// When the planner's `yaw_towards_velocity` is on AND the avoider
+// deflects velocity during NAVIGATE, `target_yaw` must follow the
+// deflected velocity — not stay on the planner's pre-avoidance
+// heading.  Verified against scenario 33 failure mode where the drone
+// body was yawed at +9° while the avoider deflected motion to -91°
+// (= 100° misalignment) — camera lost the cube to the blind spot and
+// the drone drifted back into it from the side.
+
+namespace {
+
+/// Stub IObstacleAvoider that overwrites the planned velocity with a
+/// caller-provided pure-sideways deflection (+Y direction).  Used to
+/// exercise the post-avoider yaw refresh in isolation from real
+/// avoider dynamics.
+class DeflectingAvoider : public drone::planner::IObstacleAvoider {
+public:
+    drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd& planned,
+                                    const drone::ipc::Pose& /*pose*/,
+                                    const drone::ipc::DetectedObjectList& /*objects*/) override {
+        auto out       = planned;
+        out.velocity_x = 0.0f;  // cancel planned forward motion
+        out.velocity_y = 1.5f;  // pure +Y deflection (= East in ENU)
+        out.velocity_z = 0.0f;
+        // target_yaw deliberately LEFT at the planner's value — the
+        // whole point of the test is that mission_state_tick refreshes
+        // it from the (new) velocity, NOT the avoider.
+        return out;
+    }
+    std::string name() const override { return "DeflectingAvoider"; }
+};
+
+}  // namespace
+
+class Issue624YawRefreshTest : public ::testing::Test {
+protected:
+    // GridPlannerBase config with yaw_towards_velocity ON + low threshold
+    // so the refresh fires at any non-hover speed.
+    drone::planner::GridPlannerConfig grid_cfg = [] {
+        drone::planner::GridPlannerConfig c;
+        c.yaw_towards_travel         = true;
+        c.yaw_towards_velocity       = true;
+        c.yaw_velocity_threshold_mps = 0.1f;
+        return c;
+    }();
+
+    // Minimal grid planner (D* Lite accepts GridPlannerConfig; we only
+    // use it for the two accessors #624 added — never for real search).
+    std::unique_ptr<drone::planner::IPathPlanner> planner =
+        drone::planner::create_path_planner("dstar_lite", grid_cfg).value();
+
+    // The planner in mission_state_tick is typed as IPathPlanner*,
+    // and grid_planner as IGridPlanner* — same underlying object here.
+    drone::planner::IGridPlanner* grid_planner =
+        dynamic_cast<drone::planner::IGridPlanner*>(planner.get());
+
+    DeflectingAvoider                         avoider;
+    drone::planner::StaticObstacleLayer       obstacle_layer;
+    drone::planner::StateTickConfig           config{10.0f, 1.5f, 0.5f, 5};
+    drone::planner::MissionStateTick          state_tick{config};
+    MockPublisher<drone::ipc::TrajectoryCmd>  traj_pub;
+    MockPublisher<drone::ipc::PayloadCommand> payload_pub;
+    drone::planner::MissionFSM                fsm;
+    std::vector<FCCallRecord>                 fc_calls;
+    drone::planner::FCSendFn send_fc = [this](drone::ipc::FCCommandType cmd, float p) {
+        fc_calls.push_back({cmd, p});
+    };
+
+    void SetUp() override {
+        ASSERT_NE(grid_planner, nullptr) << "test harness needs grid_planner downcast to work";
+        ASSERT_TRUE(grid_planner->yaw_towards_velocity_enabled());
+        // Mission with a waypoint east of origin so NAVIGATE is exercised.
+        fsm.load_mission({{20.0f, 0.0f, 5.0f, 0.0f, 2.0f, 3, false}});
+        fsm.on_arm();
+        fsm.on_takeoff();
+        fsm.on_navigate();
+    }
+
+    void do_navigate_tick(const drone::ipc::Pose& pose) {
+        drone::ipc::DetectedObjectList objects{};
+        drone::util::FrameDiagnostics  diag(0);
+        auto                           fc = make_fc(true, 5.0f);
+        state_tick.tick(fsm, pose, fc, objects, *planner, grid_planner, avoider, obstacle_layer,
+                        traj_pub, payload_pub, send_fc, 0, diag);
+    }
+};
+
+TEST_F(Issue624YawRefreshTest, TargetYawFollowsAvoiderDeflectedVelocity) {
+    // Drone is mid-mission at (0,0,5), planner would normally emit a
+    // +X-ish velocity toward the waypoint at (20,0,5) → bee-line yaw 0.
+    // DeflectingAvoider forces the velocity to pure +Y (1.5 m/s).
+    // Expected: target_yaw = atan2(1.5, 0) = +π/2 (≈ 1.5708 rad, East).
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+    do_navigate_tick(pose);
+
+    ASSERT_FALSE(traj_pub.messages().empty()) << "NAVIGATE tick should have published a trajectory";
+    const auto& cmd = traj_pub.messages().back();
+    EXPECT_NEAR(cmd.velocity_x, 0.0f, 1e-5f) << "avoider cancelled +X velocity";
+    EXPECT_NEAR(cmd.velocity_y, 1.5f, 1e-5f) << "avoider emitted +Y velocity";
+    EXPECT_NEAR(cmd.target_yaw, M_PI_2, 1e-3f)
+        << "target_yaw must track avoider-deflected velocity (atan2(1.5, 0) = π/2). "
+           "If this fires with target_yaw ≈ 0 instead, the post-avoider yaw refresh "
+           "in mission_state_tick.h has regressed (Issue #624).";
+}
+
+TEST_F(Issue624YawRefreshTest, YawRefreshSkippedBelowVelocityThreshold) {
+    // Override the deflecting avoider with one that emits near-zero
+    // velocity (below the planner's threshold).  target_yaw should
+    // then stay at whatever the planner emitted (not trip the refresh).
+    class HoverAvoider : public drone::planner::IObstacleAvoider {
+    public:
+        drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd& planned,
+                                        const drone::ipc::Pose& /*pose*/,
+                                        const drone::ipc::DetectedObjectList& /*objects*/) override {
+            auto out       = planned;
+            out.velocity_x = 0.01f;  // << 0.1 threshold
+            out.velocity_y = 0.01f;
+            out.target_yaw = 0.42f;  // marker — should survive
+            return out;
+        }
+        std::string name() const override { return "HoverAvoider"; }
+    } hover_avoider;
+
+    auto                           pose = make_pose(0.0f, 0.0f, 5.0f);
+    drone::ipc::DetectedObjectList objects{};
+    drone::util::FrameDiagnostics  diag(0);
+    auto                           fc = make_fc(true, 5.0f);
+    state_tick.tick(fsm, pose, fc, objects, *planner, grid_planner, hover_avoider, obstacle_layer,
+                    traj_pub, payload_pub, send_fc, 0, diag);
+
+    ASSERT_FALSE(traj_pub.messages().empty());
+    const auto& cmd = traj_pub.messages().back();
+    EXPECT_NEAR(cmd.target_yaw, 0.42f, 1e-3f)
+        << "target_yaw must NOT be refreshed when |v| < threshold — "
+           "refresh would yaw-chase sensor noise at hover";
 }
