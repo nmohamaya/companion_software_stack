@@ -259,6 +259,35 @@ Every PR must update the relevant docs:
 - Zenoh tests must use `RESOURCE_LOCK` to prevent parallel session exhaustion
 - New bugs get a regression test before the fix
 
+### Commit hygiene — commit after each fix lands green
+
+**Rule:** each discrete fix gets committed as soon as it (a) builds clean, (b) passes its test, and (c) is genuinely independent of any larger work still in progress. **Do not batch multiple unrelated fixes into one uncommitted pile of working-tree changes** just because a bigger investigation is ongoing.
+
+**Failure mode we have hit:** during a scenario-debug session, three independent fixes (PathATrace absolute-path acceptance, its unit test, telemetry-poller NED→ENU conversion) sat uncommitted in a worktree for over an hour. The user surfaced it with "I can still see so many uncommitted changes" before anything was lost. PR #623 rescued them — but only after the explicit prompt.
+
+**What to do:**
+
+- As soon as a change compiles + its tests pass + it's separable from larger in-progress work, commit it. Don't wait for "end of session."
+- Stage by file name (`git add path/to/file.cpp`) — never `git add -A` / `git add .` / `git add -f` (risks staging gitignored proprietary/USP files, untracked SDK trees, large model files).
+- Small diagnostic-only one-liners still get a commit + PR. Small, single-concern PRs merge fast.
+- If a fix is genuinely entangled with in-progress larger work, commit it to a WIP branch (`wip/<topic>`) rather than leaving an unnamed dirty tree.
+- Before ending any session or switching tasks, run `git status` in every active worktree and either commit, `git stash push -m "<descriptive name>"`, or write a clear `tasks/todo.md` note about the deliberate dirty state.
+
+### Worktree hygiene — remove worktrees immediately after merge
+
+**Rule:** when a worktree's PR merges (or the branch is abandoned), remove the worktree **and** the local branch **immediately** — not at "end of session," not "once I'm back on this work."
+
+```bash
+# From any other worktree (e.g., main checkout):
+git worktree remove ~/Projects/companion_software_stack_worktrees/<branch-name>
+git branch -D <feature/branch-name>
+git fetch --prune origin   # drop deleted origin branches
+```
+
+**Why it matters:** each stale worktree carries a multi-GB `build/` dir, a checkout that diverges from `origin/main` the moment main moves, a local branch that shadows the origin branch, and an IDE workspace that keeps opening old paths. In a multi-agent environment, these accumulate into confusion quickly.
+
+**Session-start audit:** start every session with `git worktree list` and `git stash list`. Reconcile state you don't recognise — commit, stash, or remove — before starting new work. Old stashes and phantom worktrees are the #1 source of "I thought this was committed" bugs.
+
 ### Review Fix Protocol
 After addressing review comments:
 1. Commit with list of fixes in body: `fix: address PR #N review comments`
