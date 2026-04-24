@@ -121,6 +121,12 @@ inline constexpr const char* MAX_FPS         = "perception.depth_estimator.max_f
 inline constexpr const char* NOISE_STD_M     = "perception.depth_estimator.noise_std_m";
 inline constexpr const char* DEFAULT_DEPTH_M = "perception.depth_estimator.default_depth_m";
 inline constexpr const char* ENABLED         = "perception.depth_estimator.enabled";
+// Issue #626 — opt into OpenCV DNN's CUDA backend for DA V2 inference.
+// Default false preserves legacy CPU behaviour on machines without a GPU.
+// When true, DA V2's load_model() probes cv::cuda::getCudaEnabledDeviceCount()
+// and falls back to CPU with a WARN if CUDA is unavailable — safe to set
+// anywhere; the backend fights back if the machine can't run it.
+inline constexpr const char* USE_CUDA = "perception.depth_estimator.use_cuda";
 
 // ── DA V2 calibration (Issue #616) ─────────────────────────────────
 // DA V2 outputs relative inverse depth.  Today the model normalises per

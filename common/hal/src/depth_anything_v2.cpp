@@ -50,10 +50,16 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const drone::Config& cfg,
         }
     }
 
+    // CUDA inference (Issue #626) — engage only when the config opts in.
+    // Silently ignored in every scenario before this PR.  Set via
+    // `perception.depth_estimator.use_cuda`.
+    use_cuda_ = cfg.get<bool>(section + ".use_cuda", false);
+
     DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}, "
-                   "calibration={} (a={:.3f}, b={:.3f}, raw_ref=[{:.3f},{:.3f}])",
-                   input_size_, max_depth_m_, calibration_enabled_ ? "on" : "off",
-                   calibration_coef_a_, calibration_coef_b_, raw_min_ref_, raw_max_ref_);
+                   "use_cuda={}, calibration={} (a={:.3f}, b={:.3f}, raw_ref=[{:.3f},{:.3f}])",
+                   input_size_, max_depth_m_, use_cuda_ ? "true" : "false",
+                   calibration_enabled_ ? "on" : "off", calibration_coef_a_, calibration_coef_b_,
+                   raw_min_ref_, raw_max_ref_);
     load_model(model_path);
 }
 
@@ -87,12 +93,61 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
 #ifdef HAS_OPENCV
     try {
         net_ = cv::dnn::readNetFromONNX(canonical.string());
-        net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+
+        // Issue #626 — CUDA backend engagement.  Falls back to CPU with a
+        // WARN when (a) no CUDA device is visible or (b) a canary forward
+        // pass fails (the common case on machines with a cuDNN/CUDA
+        // version mismatch — e.g. cuDNN 8.5 built for CUDA 11 on a
+        // CUDA 12 host, where the CUDA backend's dlopen of cuDNN dies
+        // at the first inference call and takes the perception process
+        // with it).  The canary runs one forward pass on a zero-input
+        // blob so any load-time failure happens here in the constructor
+        // (before the Depth thread starts) rather than in the hot path.
+        bool cuda_engaged = false;
+        if (use_cuda_) {
+            const int cuda_devices = cv::cuda::getCudaEnabledDeviceCount();
+            if (cuda_devices == 0) {
+                DRONE_LOG_WARN("[DepthAnythingV2] use_cuda=true but "
+                               "cv::cuda::getCudaEnabledDeviceCount()=0 — falling back to CPU. "
+                               "Rebuild OpenCV with -DWITH_CUDA=ON -DWITH_CUDNN=ON, or set "
+                               "use_cuda=false to silence this warning.");
+            } else {
+                try {
+                    net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                    net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                    // Canary inference — zero blob at the configured input size.
+                    // A cuDNN/CUDA version mismatch shows up here rather than
+                    // in the real Depth thread's first frame.
+                    cv::Mat canary_blob = cv::Mat::zeros(cv::Size(input_size_, input_size_),
+                                                         CV_32FC3);
+                    cv::Mat canary_input;
+                    cv::dnn::blobFromImage(canary_blob, canary_input, 1.0 / 255.0,
+                                           cv::Size(input_size_, input_size_), cv::Scalar(0, 0, 0),
+                                           false, false);
+                    net_.setInput(canary_input);
+                    (void)net_.forward();  // throws or silently OK
+                    cuda_engaged = true;
+                } catch (const cv::Exception& e) {
+                    DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference failed ({}) — "
+                                   "falling back to CPU.  Common causes: cuDNN/CUDA version "
+                                   "mismatch (check /usr/local/cuda/lib64 vs libcudnn*), or "
+                                   "OpenCV built without CUDA_DNN.",
+                                   e.what());
+                } catch (const std::exception& e) {
+                    DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference threw std::exception "
+                                   "({}) — falling back to CPU",
+                                   e.what());
+                }
+            }
+        }
+        if (!cuda_engaged) {
+            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        }
         model_loaded_ = true;
 
-        DRONE_LOG_INFO("[DepthAnythingV2] Model loaded: {} (input={}x{})", model_path, input_size_,
-                       input_size_);
+        DRONE_LOG_INFO("[DepthAnythingV2] Model loaded: {} (input={}x{}, backend={})", model_path,
+                       input_size_, input_size_, cuda_engaged ? "CUDA" : "CPU");
     } catch (const cv::Exception& e) {
         DRONE_LOG_ERROR("[DepthAnythingV2] Failed to load model '{}': {}", model_path, e.what());
         model_loaded_ = false;
