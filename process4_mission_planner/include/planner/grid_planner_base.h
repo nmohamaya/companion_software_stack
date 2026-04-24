@@ -123,6 +123,14 @@ public:
     /// Get the snapped world-frame position {x, y, z} if a snap is active.
     /// Returns std::nullopt when no snap is active (has_snapped_goal() == false).
     [[nodiscard]] virtual std::optional<std::array<float, 3>> snapped_goal_xyz() const = 0;
+
+    /// Issue #624 — post-avoider yaw refresh needs read-only access to the
+    /// yaw-towards-velocity feature flag and velocity threshold so the
+    /// orchestration layer (mission_state_tick) can honour the same values
+    /// the planner was configured with, without duplicating config wiring
+    /// or downcasting.
+    [[nodiscard]] virtual bool  yaw_towards_velocity_enabled() const = 0;
+    [[nodiscard]] virtual float yaw_velocity_threshold_mps() const   = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -136,6 +144,18 @@ public:
 
 class GridPlannerBase : public IGridPlanner {
 public:
+    /// Issue #624 — expose the yaw-towards-velocity config to the
+    /// orchestration layer.  The planner already uses these values
+    /// internally; the post-avoider yaw refresh needs to honour the
+    /// same feature flag and threshold without downcasting from the
+    /// IGridPlanner interface.
+    [[nodiscard]] bool yaw_towards_velocity_enabled() const override {
+        return config_.yaw_towards_velocity;
+    }
+    [[nodiscard]] float yaw_velocity_threshold_mps() const override {
+        return config_.yaw_velocity_threshold_mps;
+    }
+
     explicit GridPlannerBase(const GridPlannerConfig& config = {})
         : config_(config)
         , grid_(config.resolution_m, config.grid_extent_m, config.inflation_radius_m,
