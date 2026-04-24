@@ -397,6 +397,20 @@ bash tests/test_zenoh_e2e.sh
 - Mark simulation-dependent tests with a GTest filter tag: `TEST(Integration, ...)`
 - Document any required environment setup in the PR description
 
+##### Tier-3 / Cosys-AirSim model preflight (Issue #625)
+
+`tests/run_scenario_cosys.sh` and `tests/run_scenario_gazebo.sh` both run a preflight check that verifies every `model_path` referenced in the merged scenario config exists on disk **before** launching any companion process. Missing models otherwise produce silent in-process degradation (e.g. `[OpenCvYoloDetector] Failed to load model`) that looks identical to genuine logic bugs and burns 30+ minutes per scenario debug.
+
+If the runner reports `✗ Preflight failed: missing model file(s)` it will list each missing file with the exact download script to run, e.g.:
+
+```
+config key:  perception.detector.model_path
+expected at: /path/to/models/yolov8n.onnx
+→ run: bash models/download_yolov8n.sh
+```
+
+The `models/` directory is gitignored — every fresh checkout / new dev machine needs the relevant download scripts run once before scenario testing works.
+
 #### Step 5: Create Pull Request
 
 1. Push branch: `git push origin feature/issue-XX-description`

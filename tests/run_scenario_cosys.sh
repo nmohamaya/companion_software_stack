@@ -544,6 +544,59 @@ if [[ -z "$EFFECTIVE_IPC" ]]; then
     EFFECTIVE_IPC=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('ipc_backend','zenoh'))" "$MERGED_CONFIG" 2>/dev/null || echo "zenoh")
 fi
 
+# ── Preflight: every model_path in the merged config must exist (Issue #625) ──
+# Without this check, a missing ONNX file produces a silent in-process error
+# (e.g. `[OpenCvYoloDetector] Failed to load model`) and the scenario runs to
+# completion with the affected stage degraded.  The pass_criteria failures look
+# identical to genuine logic bugs, so debugging takes 30+ minutes per missing
+# file.  Fail fast here instead, with a pointer to the right download script.
+MISSING_MODELS=$(python3 - "$MERGED_CONFIG" "$PROJECT_DIR" <<'PYEOF'
+import json, os, sys, pathlib
+cfg_path, project_root = sys.argv[1], pathlib.Path(sys.argv[2])
+cfg = json.load(open(cfg_path))
+missing = []
+def walk(obj, path=""):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            child = f"{path}.{k}" if path else k
+            if k == "model_path" and isinstance(v, str) and v:
+                p = pathlib.Path(v)
+                if not p.is_absolute():
+                    p = (project_root / p)
+                if not p.exists():
+                    missing.append((child, str(p)))
+            walk(v, child)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            walk(item, f"{path}[{i}]")
+walk(cfg)
+for key, path in missing:
+    print(f"{key}\t{path}")
+PYEOF
+)
+if [[ -n "$MISSING_MODELS" ]]; then
+    echo -e "  ${RED}✗ Preflight failed: missing model file(s) referenced by scenario config${NC}" >&2
+    echo "" >&2
+    echo "$MISSING_MODELS" | while IFS=$'\t' read -r key path; do
+        echo "    config key:  $key" >&2
+        echo "    expected at: $path" >&2
+        case "$path" in
+            *yolov8n*)             echo "    → run: bash models/download_yolov8n.sh"          >&2 ;;
+            *yolov8s*)             echo "    → run: bash models/download_yolov8n.sh # use 'n' variant" >&2 ;;
+            *yolov8*visdrone*)     echo "    → run: bash models/download_yolov8n_visdrone.sh"  >&2 ;;
+            *fastsam*)             echo "    → run: bash models/download_fastsam.sh"           >&2 ;;
+            *depth_anything_v2*)   echo "    → run: bash models/download_depth_anything_v2.sh" >&2 ;;
+            *)                     echo "    → no known download script; check models/ for the matching .sh" >&2 ;;
+        esac
+        echo "" >&2
+    done
+    echo -e "  ${YELLOW}Tip:${NC} models/ is gitignored — every fresh checkout needs the download scripts run." >&2
+    echo "" >&2
+    SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    exit 1
+fi
+echo -e "  ${GREEN}✓${NC} Preflight: all referenced model files present"
+
 # ── Dry run ───────────────────────────────────────────────────
 if [[ "$DRY_RUN" == "true" ]]; then
     echo ""
