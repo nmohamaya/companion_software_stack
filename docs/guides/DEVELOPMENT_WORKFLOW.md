@@ -227,6 +227,48 @@ git checkout -b feature/issue-XX-short-description
 - Add or update unit tests for any changed logic
 - Use `cfg.get<>()` for all tunables — no magic numbers in process code
 
+##### Commit hygiene — commit after each fix lands green
+
+**Rule:** each discrete fix gets committed as soon as it builds clean and its tests pass. **Do not batch multiple independent fixes into one uncommitted pile of working-tree changes** just because you're "still debugging a bigger problem."
+
+**Why:** unbatched, uncommitted work is fragile and invisible. Concrete failure modes observed on this project:
+
+- A 2026-04-24 scenario-33 diagnostic session produced three independent small fixes (PathATrace absolute-path acceptance, test coverage for it, telemetry-poller NED→ENU conversion). All three sat uncommitted in a worktree for over an hour while debugging continued; a crash or accidental `git checkout` would have discarded them. PR #623 rescued them, but only after a direct "why aren't these committed?" prompt from the user.
+- Uncommitted work doesn't appear in `git worktree list`, doesn't show up in review agents' context, and is invisible to other agents working concurrently on the same branch.
+- Bundled "end of debug session" commits mix unrelated changes, making review harder and bisect useless.
+
+**What to do:**
+
+1. As soon as a fix (a) builds clean, (b) passes its test, and (c) is genuinely independent of any larger work still in progress — commit it. Even if you're mid-session and the overall investigation is ongoing.
+2. Name the files explicitly (`git add path/to/file.cpp`). Never `git add -A` / `git add .` — risks staging gitignored proprietary files, untracked noise, or stashed submodule contents.
+3. If the change is a diagnostic-only one-liner, it still gets a commit + PR. Small, single-concern PRs merge fast.
+4. If a fix is genuinely entangled with a larger in-progress change, commit it to a **WIP branch** (`wip/<short-description>`) rather than leaving it in an unnamed working tree.
+5. Before ending any session or context-switching between tasks, run `git status` in every active worktree and either commit, stash (with a descriptive name, `git stash push -m "..."`), or consciously accept the dirty state in writing (e.g. a `tasks/todo.md` note).
+
+##### Worktree hygiene — remove worktrees immediately after merge
+
+**Rule:** when a worktree's PR merges (or the branch is abandoned), the worktree **and** the local branch get removed immediately. Not at "end of session." Not "once I'm back on this work." **Immediately.**
+
+**Why:** stale worktrees pile up quickly in a multi-agent environment. Each one carries:
+
+- a `build/` directory (often 5-10 GB of object files)
+- a checkout that diverges from `origin/main` the moment main moves
+- a local branch that shadows the origin branch and confuses future `git checkout`
+- an IDE workspace that keeps opening old paths
+
+**What to do after merge:**
+
+```bash
+# From any other worktree (e.g., main checkout):
+git worktree remove ~/Projects/companion_software_stack_worktrees/<branch-name>
+git branch -D <feature/branch-name>
+git fetch --prune origin   # drop deleted origin branches
+```
+
+If the worktree has unexpected uncommitted work, investigate before removing (it may be legitimate in-progress work from another agent). If it's clearly yours and the PR is merged, it is safe to remove.
+
+**Session-start audit:** at the start of any working session, run `git worktree list` and `git stash list`. Reconcile any state you don't recognise — commit, stash, or remove — before starting new work. Old stashes and phantom worktrees are the most reliable source of "I thought this was committed" bugs.
+
 #### Step 4: Pre-Push Verification
 
 **All PRs must pass these checks locally before pushing.**

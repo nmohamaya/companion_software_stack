@@ -110,11 +110,27 @@ TEST(PathATraceTest, EnabledWritesOneJsonlLinePerBatch) {
     std::filesystem::remove(abs);
 }
 
-TEST(PathATraceTest, PathConfinementRejectsAbsolute) {
-    // Absolute path (even under /tmp) must be rejected — force the writer inert.
+TEST(PathATraceTest, PathConfinementRejectsAbsoluteWithoutDroneLogs) {
+    // Absolute path with no `drone_logs` segment must be rejected — force
+    // the writer inert.
     drone::util::PathATrace trace(true, "/tmp/absolute_escape.jsonl");
     EXPECT_FALSE(trace.enabled());
     EXPECT_FALSE(std::filesystem::exists("/tmp/absolute_escape.jsonl"));
+}
+
+TEST(PathATraceTest, PathConfinementAcceptsAbsoluteUnderDroneLogs) {
+    // Scenario runners rewrite trace_path to an absolute path under the
+    // run's drone_logs/ subtree.  Verify that such paths are accepted —
+    // this was broken before the confinement relaxation (2026-04-24)
+    // when every scenario-33 run was rejecting its own trace file.
+    auto abs_path = std::filesystem::temp_directory_path() /
+                    ("drone_logs_test_" + std::to_string(::getpid())) / "drone_logs" /
+                    "path_a_voxel_trace.jsonl";
+    std::filesystem::create_directories(abs_path.parent_path());
+    drone::util::PathATrace trace(true, abs_path.string());
+    EXPECT_TRUE(trace.enabled()) << "absolute path with drone_logs segment should be accepted: "
+                                 << abs_path;
+    std::filesystem::remove_all(abs_path.parent_path().parent_path());
 }
 
 TEST(PathATraceTest, PathConfinementRejectsDotDotEscape) {

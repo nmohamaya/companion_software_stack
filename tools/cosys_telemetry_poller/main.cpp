@@ -241,21 +241,30 @@ int main(int argc, char** argv) {
         // Ground-truth kinematics.  Independent of SLAM drift — lets us
         // cross-check the `camera_pose` the perception pipeline uses against
         // the simulator's real-world pose.
+        //
+        // Frame conversion: AirSim returns NED (Z-down).  Our SLAM publishes
+        // ENU-like (Z-up) via CosysVIOBackend (see
+        // process3_slam_vio_nav/include/slam/ivio_backend.h poll_loop:
+        // `p.position = (x, y, -z)` and `q_enu = (w, x, -y, -z)`).  Apply the
+        // same conversion here so the telemetry log lands in the SAME frame
+        // that `plot_voxel_trace.py` expects when it diffs SLAM vs GT.
+        // Without this, the pose-error plot showed a spurious 10 m offset
+        // that was pure Z-sign artefact and masked real diagnostic work.
         try {
             auto k    = client.simGetGroundTruthKinematics(a.vehicle);
             rec["gt"] = {
-                {"pos", {k.pose.position.x(), k.pose.position.y(), k.pose.position.z()}},
+                {"pos", {k.pose.position.x(), k.pose.position.y(), -k.pose.position.z()}},
                 {"q",
-                 {k.pose.orientation.w(), k.pose.orientation.x(), k.pose.orientation.y(),
-                  k.pose.orientation.z()}},
-                {"lv", {k.twist.linear.x(), k.twist.linear.y(), k.twist.linear.z()}},
-                {"av", {k.twist.angular.x(), k.twist.angular.y(), k.twist.angular.z()}},
+                 {k.pose.orientation.w(), k.pose.orientation.x(), -k.pose.orientation.y(),
+                  -k.pose.orientation.z()}},
+                {"lv", {k.twist.linear.x(), k.twist.linear.y(), -k.twist.linear.z()}},
+                {"av", {k.twist.angular.x(), k.twist.angular.y(), -k.twist.angular.z()}},
                 {"la",
                  {k.accelerations.linear.x(), k.accelerations.linear.y(),
-                  k.accelerations.linear.z()}},
+                  -k.accelerations.linear.z()}},
                 {"aa",
                  {k.accelerations.angular.x(), k.accelerations.angular.y(),
-                  k.accelerations.angular.z()}},
+                  -k.accelerations.angular.z()}},
             };
         } catch (const std::exception& e) {
             rec["gt_err"] = e.what();

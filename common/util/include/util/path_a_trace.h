@@ -24,9 +24,12 @@
 // buffered by `std::ofstream`.  No locking needed.
 //
 // Path confinement: `trace_path` is config-controlled; the constructor
-// rejects absolute paths outside the project root and rejects any path
-// that, after lexical normalisation, escapes the project tree (`..`
-// components surviving normalisation).  Scenario runners rewrite this to
+// accepts relative paths that don't escape the tree via `..`, and
+// absolute paths that contain a `drone_logs` segment somewhere in their
+// normalised form (the project convention for every diagnostic artifact).
+// Rejects paths that escape via `..` or absolute paths without a
+// `drone_logs` segment (e.g. `/etc/cron.d/...`, `/tmp/evil.jsonl`).
+// Scenario runners rewrite this to an absolute
 // `<scenario_log_dir>/path_a_voxel_trace.jsonl` before process launch.
 //
 // Flight-critical constraint (DR-026, docs/guides/DESIGN_RATIONALE.md):
@@ -96,21 +99,36 @@ public:
     }
 
     /// Confine trace paths to the project tree.  Accepts:
-    ///   - relative paths rooted under `drone_logs/` (the scenario runners
-    ///     rewrite trace_path to `<scenario_log_dir>/path_a_voxel_trace.jsonl`
-    ///     before launching the process, so this is the normal case).
-    ///   - any relative path whose lexically-normalised form does not start
-    ///     with `..` (covers CI / alternative log dirs).
+    ///   - relative paths whose lexically-normalised form does not start
+    ///     with `..` (the typical CI / manual case, e.g.
+    ///     `drone_logs/path_a_voxel_trace.jsonl`).
+    ///   - absolute paths that contain a `drone_logs` segment somewhere
+    ///     in their normalised form.  This handles the scenario runners,
+    ///     which rewrite `trace_path` to an absolute
+    ///     `<scenario_log_dir>/path_a_voxel_trace.jsonl` before launching
+    ///     each process so the run directory is self-contained regardless
+    ///     of the process's working directory.  A `drone_logs` segment
+    ///     requirement rejects accidental writes to `/tmp`, `/etc`, or the
+    ///     user's home — the project convention is that every diagnostic
+    ///     artifact lives under a `drone_logs` tree.
     /// Rejects:
-    ///   - absolute paths (e.g. `/etc/cron.d/...`).
+    ///   - absolute paths that have no `drone_logs` segment (e.g.
+    ///     `/etc/cron.d/evil.jsonl`, `/tmp/absolute_escape.jsonl`).
     ///   - relative paths that normalise to an escape (`../../etc/foo`).
     static bool is_path_confined(const std::string& path) {
         if (path.empty()) return false;
         std::filesystem::path p(path);
-        if (p.is_absolute()) return false;
-        const auto normalised = p.lexically_normal();
-        const auto first      = normalised.begin();
+        const auto            normalised = p.lexically_normal();
+        const auto            first      = normalised.begin();
         if (first == normalised.end()) return false;
+
+        if (p.is_absolute()) {
+            for (const auto& segment : normalised) {
+                if (segment == "drone_logs") return true;
+            }
+            return false;
+        }
+
         if (*first == "..") return false;
         return true;
     }
