@@ -372,6 +372,21 @@ inline constexpr const char* VOXEL_INPUT_POSITION_CLAMP_M =
     "mission_planner.occupancy_grid.voxel_input.position_clamp_m";
 inline constexpr const char* VOXEL_INPUT_MIN_CONFIDENCE =
     "mission_planner.occupancy_grid.voxel_input.min_confidence";
+// Issue #635 — PATH A voxels now flow through the dynamic-TTL bucket
+// instead of going directly to the permanent static layer.  They promote
+// to static (permanent) only after being re-observed this many times.
+// Lower = faster cementing (more reactive, more grid pollution); higher =
+// more conservative (transient artefacts decay, only robust obstacles
+// cement).  Default 3.
+inline constexpr const char* VOXEL_PROMOTION_HITS =
+    "mission_planner.occupancy_grid.voxel_input.promotion_hits";
+// Issue #635 — TTL (seconds) for *promoted* static cells.  When > 0, cells
+// that came via voxel/radar promotion (NOT HD-map) decay out of the static
+// layer if not re-observed for this long.  Prevents the outbound voxel wake
+// from walling off return corridors in no-HD-map scenarios.  HD-map cells
+// are always immune.  0 = legacy permanent-promotion behaviour.
+inline constexpr const char* STATIC_CELL_TTL_S =
+    "mission_planner.occupancy_grid.voxel_input.static_cell_ttl_s";
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {
@@ -566,6 +581,7 @@ inline constexpr const char* PLUGIN_FACTORY = ".plugin_factory";
 
 // Radar-specific sub-keys (appended to section prefix)
 inline constexpr const char* MAX_RANGE_M         = ".max_range_m";
+inline constexpr const char* MIN_RANGE_M         = ".min_range_m";
 inline constexpr const char* FOV_AZIMUTH_RAD     = ".fov_azimuth_rad";
 inline constexpr const char* FOV_ELEVATION_RAD   = ".fov_elevation_rad";
 inline constexpr const char* GROUND_FILTER_ALT_M = ".ground_filter_alt_m";
@@ -573,6 +589,14 @@ inline constexpr const char* FALSE_ALARM_RATE    = ".false_alarm_rate";
 inline constexpr const char* NUM_TARGETS         = ".num_targets";
 inline constexpr const char* GZ_SCAN_TOPIC       = ".gz_scan_topic";
 inline constexpr const char* GZ_ODOM_TOPIC       = ".gz_odom_topic";
+// Issue #635 — clustering bin sizes for emulated forward-radar from lidar.
+// Cosys-AirSim's GPULidar produces ~1000 raw points per scan; without
+// clustering the first 128 in scan order are kept (an angular slice) and
+// the rest dropped.  These bin sizes group nearby returns into single
+// detections so each radar track represents one physical obstacle.
+inline constexpr const char* CLUSTER_RANGE_M       = ".cluster.range_m";
+inline constexpr const char* CLUSTER_AZIMUTH_RAD   = ".cluster.azimuth_rad";
+inline constexpr const char* CLUSTER_ELEVATION_RAD = ".cluster.elevation_rad";
 
 // Noise sub-keys (appended to section prefix)
 inline constexpr const char* NOISE_RANGE_STD_M       = ".noise.range_std_m";
