@@ -581,6 +581,7 @@ inline constexpr const char* PLUGIN_FACTORY = ".plugin_factory";
 
 // Radar-specific sub-keys (appended to section prefix)
 inline constexpr const char* MAX_RANGE_M         = ".max_range_m";
+inline constexpr const char* MIN_RANGE_M         = ".min_range_m";
 inline constexpr const char* FOV_AZIMUTH_RAD     = ".fov_azimuth_rad";
 inline constexpr const char* FOV_ELEVATION_RAD   = ".fov_elevation_rad";
 inline constexpr const char* GROUND_FILTER_ALT_M = ".ground_filter_alt_m";
@@ -588,6 +589,14 @@ inline constexpr const char* FALSE_ALARM_RATE    = ".false_alarm_rate";
 inline constexpr const char* NUM_TARGETS         = ".num_targets";
 inline constexpr const char* GZ_SCAN_TOPIC       = ".gz_scan_topic";
 inline constexpr const char* GZ_ODOM_TOPIC       = ".gz_odom_topic";
+// Issue #635 — clustering bin sizes for emulated forward-radar from lidar.
+// Cosys-AirSim's GPULidar produces ~1000 raw points per scan; without
+// clustering the first 128 in scan order are kept (an angular slice) and
+// the rest dropped.  These bin sizes group nearby returns into single
+// detections so each radar track represents one physical obstacle.
+inline constexpr const char* CLUSTER_RANGE_M       = ".cluster.range_m";
+inline constexpr const char* CLUSTER_AZIMUTH_RAD   = ".cluster.azimuth_rad";
+inline constexpr const char* CLUSTER_ELEVATION_RAD = ".cluster.elevation_rad";
 
 // Noise sub-keys (appended to section prefix)
 inline constexpr const char* NOISE_RANGE_STD_M       = ".noise.range_std_m";
