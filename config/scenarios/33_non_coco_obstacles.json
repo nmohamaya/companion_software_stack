@@ -165,15 +165,14 @@
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
                 "promotion_hits": 10,
-                "_comment_max_static_cells": "Issue #635 — bumped from 500 to 2000 after run 2026-04-27_130244 hit the cap in 13 s of takeoff with mostly noise voxels (drone hadn't reached real obstacles yet).  500 was too restrictive: by the time the drone got close enough that the cube was the dominant feature, the cap was already saturated by depth-noise / horizon artefacts and the cube's own voxels couldn't promote.  2000 gives real obstacles room while still bounding the wake.  Pair with static_cell_ttl_s=15 in voxel_input below.",
-                "max_static_cells": 2000,
+                "max_static_cells": 500,
                 "voxel_input": {
                     "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid.  Since Issue #635 voxels route through the dynamic-TTL bucket first and promote to static after `promotion_hits` observations.",
-                    "_comment_static_cell_ttl_s": "Issue #635 (option A: decay-on-look-away) — promoted static cells decay after 15 s if not re-observed.  HD-map cells are exempt by design.  Tuning history: 30s (run 2026-04-27_123850) was too long — 5007 cells, no decay during return leg, drone walled off; 8s (run 2026-04-27_130244) was too short — cells representing the cube decayed while drone was next to it, 429 collisions with TemplateCube_Rounded_9.  15s is a compromise.  Long-term fix is voxel clustering + instance tracking (option B, #638).",
+                    "_comment_static_cell_ttl_s": "Issue #635 (option A: decay-on-look-away) DISABLED for this scenario — empirical testing across TTL ∈ {0, 8, 15, 30}s and cap ∈ {500, 2000} could not find a setting that solves the failure: (a) cap saturates with noise (depth edges, ground, horizon) within 13 s of takeoff before real obstacles are observed, so real obstacles can't promote and the drone collides; (b) any TTL short enough to clear the wake also decays cells representing real obstacles while the drone is next to them.  Per-cell promotion fundamentally cannot distinguish noise from real obstacles in this scenario.  Reverting to legacy permanent-promotion (static_cell_ttl_s=0) as the known baseline until option B (voxel clustering + instance tracking, #638) lands.  See PR #636 for the option-A infrastructure (TTL plumbing, cap enforcement, side-table) which option B will reuse.",
                     "enabled": true,
                     "position_clamp_m": 200.0,
                     "min_confidence": 0.3,
-                    "static_cell_ttl_s": 15.0
+                    "static_cell_ttl_s": 0.0
                 }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",
