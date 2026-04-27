@@ -133,6 +133,15 @@ public:
     /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
     virtual void set_promotion_paused(bool paused) = 0;
 
+    /// Issue #638 Phase 3 — clear per-instance observation counters.
+    /// Call on FSM transitions where the perception context resets
+    /// (RTL/LAND, mission abort) so a stale instance_id from earlier in
+    /// the mission can't keep promoting after a P2 restart re-mints
+    /// fresh IDs that collide with existing counters.  Mirror of the
+    /// `set_promotion_paused()` pattern; both protect the grid during
+    /// state transitions that perception is unaware of.
+    virtual void clear_instance_state() = 0;
+
     /// Grid diagnostic counters — exposed on the interface so diagnostic
     /// logging in tick_survey/tick_navigate can avoid dynamic_cast.
     [[nodiscard]] virtual size_t grid_occupied_count() const = 0;
@@ -214,6 +223,7 @@ public:
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
 
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
+    void clear_instance_state() override { grid_.clear_instance_state(); }
 
     [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }
     [[nodiscard]] size_t grid_static_count() const override { return grid_.static_count(); }

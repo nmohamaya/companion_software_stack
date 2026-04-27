@@ -41,6 +41,7 @@ OccupancyGrid3D make_grid(int promotion_observations) {
                            /*min_promotion_depth_confidence=*/0.3f,
                            /*max_static_cells=*/0, /*prediction_enabled=*/false,
                            /*prediction_dt_s=*/0.0f, /*require_radar_for_promotion=*/false,
+                           /*voxel_promotion_hits=*/3, /*static_cell_ttl_s=*/0.0f,
                            /*voxel_instance_promotion_observations=*/promotion_observations);
 }
 

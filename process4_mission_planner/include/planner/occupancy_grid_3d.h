@@ -109,8 +109,7 @@ public:
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
                              float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f,
-                             bool  require_radar_for_promotion           = false,
-                             int   voxel_promotion_hits                  = 3,
+                             bool require_radar_for_promotion = false, int voxel_promotion_hits = 3,
                              float static_cell_ttl_s                     = 0.0f,
                              int   voxel_instance_promotion_observations = 0)
         : resolution_(resolution)
@@ -236,11 +235,16 @@ public:
         // `voxel_instance_promotion_observations_` distinct frames, all
         // voxels for that instance pass the gate.
         if (voxel_instance_promotion_observations_ > 0) {
-            std::unordered_set<uint32_t> batch_instances;
+            // P2-B from PR #641 review: hoisted to a member to amortise
+            // the per-batch heap allocation across calls (was a fresh
+            // unordered_set every call on the flight-critical voxel
+            // subscriber tick).  `clear()` preserves the bucket capacity.
+            batch_instances_scratch_.clear();
             for (uint32_t i = 0; i < n; ++i) {
-                if (voxels[i].instance_id != 0) batch_instances.insert(voxels[i].instance_id);
+                if (voxels[i].instance_id != 0)
+                    batch_instances_scratch_.insert(voxels[i].instance_id);
             }
-            for (uint32_t id : batch_instances) {
+            for (uint32_t id : batch_instances_scratch_) {
                 ++instances_[id].observation_count;
             }
         }
@@ -899,6 +903,10 @@ private:
         uint32_t observation_count = 0;
     };
     std::unordered_map<uint32_t, InstanceRecord> instances_;
+    // Per-batch scratch for `insert_voxels()` distinct-instance counting.
+    // Hoisted out of the function body to amortise allocation across calls
+    // (P2-B from PR #641 review).  `clear()` preserves bucket capacity.
+    std::unordered_set<uint32_t> batch_instances_scratch_;
     // Cumulative count of objects with velocity-based prediction applied (never reset).
     int      total_predictions_applied_{0};
     uint64_t diag_tick_{0};  // for periodic diagnostic logging

@@ -73,10 +73,23 @@ public:
         // Pause promotion during RTL/LAND — the drone is descending to a
         // known-safe location and ground-feature detections would pollute the
         // static layer, blocking the landing approach (Issue #340).
+        //
+        // Issue #638 P1-B from PR #641 review: also clear per-instance
+        // observation counters on the *transition* into RTL/LAND.  After
+        // P2 restarts the perception context, fresh instance_id values
+        // would otherwise collide with stale `instances_[N]` counters
+        // that already crossed the promotion threshold — defeating the
+        // gate's confirmation guarantee.  Clearing on the entering edge
+        // (was_landing_=false → landing=true) is one-shot and matches
+        // the same FSM-transition trigger as `set_promotion_paused`.
         if (grid_planner != nullptr) {
             const bool landing = (fsm.state() == MissionState::RTL ||
                                   fsm.state() == MissionState::LAND);
             grid_planner->set_promotion_paused(landing);
+            if (landing && !was_landing_) {
+                grid_planner->clear_instance_state();
+            }
+            was_landing_ = landing;
         }
 
         // Clear stuck-detector mission-scoped state when back in IDLE
@@ -168,6 +181,11 @@ private:
     // stall in health telemetry instead of silent oscillation.  Reset on
     // waypoint advance or mission restart (IDLE re-entry).
     uint32_t stuck_transition_count_ = 0;
+
+    // Issue #638 P1-B (PR #641 review): tracks the previous-tick value
+    // of `landing` so we can call `clear_instance_state()` exactly once
+    // on the entering edge into RTL/LAND, not every tick.
+    bool was_landing_ = false;
 
     // Extract yaw (rad) from pose quaternion [w, x, y, z].  Used in three
     // places that previously had identical inline atan2 blocks.  Keeps the
