@@ -2754,6 +2754,79 @@ TEST(OccupancyGrid3DTest, Issue635_StaticCellPersistsWhenReobserved) {
                                            "refresh path must touch static_cell_timestamps_";
 }
 
+TEST(OccupancyGrid3DTest, Issue635_VoxelPromotionRespectsMaxStaticCells) {
+    // Scenario-33 run on 2026-04-27 showed the voxel-promotion path
+    // ignoring `max_static_cells` entirely (5007 promoted cells with cap
+    // set to 500).  This test locks in the cap by inserting voxels at
+    // many distinct positions with promotion_hits=1 (immediate promotion)
+    // and asserting the cap is honoured.
+    constexpr int   kCap = 5;
+    OccupancyGrid3D grid(/*resolution=*/1.0f, /*extent=*/50.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/10.0f, /*min_confidence=*/0.3f,
+                         /*promotion_hits=*/0, /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.3f,
+                         /*max_static_cells=*/kCap, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/0.0f,
+                         /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/1, /*static_cell_ttl_s=*/0.0f);
+
+    // Insert 100 voxels at distinct positions far enough apart that
+    // inflated neighbourhoods don't overlap (>3 cells apart in xy).
+    size_t total_cap_blocked = 0;
+    for (int i = 0; i < 100; ++i) {
+        // Stride 5 m along y to keep inflated neighbourhoods disjoint.
+        auto v     = make_voxel(5.0f, static_cast<float>(5 + i * 5), 5.0f);
+        auto stats = grid.insert_voxels(&v, 1, 200.0f, 0.3f);
+        total_cap_blocked += stats.cap_blocked;
+    }
+
+    // Each voxel inflates to ~7 cells.  With a cap of 5, only the cells
+    // promoted before the cap was reached survive — the rest stay in the
+    // dynamic bucket.  Allow some headroom in the assertion because
+    // inflation produces multiple cells per insert.
+    EXPECT_LE(grid.static_count(), static_cast<size_t>(kCap) + 6u)
+        << "voxel-promotion path must honour max_static_cells (was 5007 cells "
+           "with cap=500 in the scenario-33 2026-04-27_123850 run)";
+    EXPECT_GT(total_cap_blocked, 0u)
+        << "with 100 inserts at unique positions and cap=5, at least some "
+           "must have been blocked by the cap";
+}
+
+TEST(OccupancyGrid3DTest, Issue635_StaticSweepRunsOnInsertVoxelsCadence) {
+    // The original sweep ran only inside update_from_objects(), which
+    // is gated on `objects.num_objects > 0 || !occupied_.empty()`.  When
+    // the detector is silent (empty DetectedObjectList, no live dynamic
+    // cells), the sweep wouldn't fire and promoted cells would outlive
+    // their TTL.  The fix runs the sweep from insert_voxels() too.
+    const float     static_ttl_s = 0.15f;
+    OccupancyGrid3D grid(/*resolution=*/1.0f, /*extent=*/10.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/10.0f, /*min_confidence=*/0.3f,
+                         /*promotion_hits=*/0, /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.3f,
+                         /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/0.0f,
+                         /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/1, /*static_cell_ttl_s=*/static_ttl_s);
+
+    // Promote a cell at one position.
+    auto v_a = make_voxel(2.0f, 2.0f, 2.0f);
+    grid.insert_voxels(&v_a, 1, 100.0f, 0.3f);
+    const auto cell_a = grid.world_to_grid(2.0f, 2.0f, 2.0f);
+    ASSERT_TRUE(grid.is_occupied(cell_a));
+    ASSERT_GT(grid.static_count(), 0u);
+
+    // Wait past the TTL, then insert a *different* voxel — never call
+    // update_from_objects().  The insert_voxels() sweep must clear cell_a.
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(static_cast<int>(static_ttl_s * 1000 + 100)));
+    auto v_b = make_voxel(7.0f, 7.0f, 7.0f);
+    grid.insert_voxels(&v_b, 1, 100.0f, 0.3f);
+
+    EXPECT_FALSE(grid.is_occupied(cell_a))
+        << "cell_a should have decayed via the per-insert sweep — without it, "
+           "scenario-33 wake never decays when detector path goes idle";
+}
+
 TEST(OccupancyGrid3DTest, Issue635_HdMapCellsImmuneToStaticTtl) {
     // HD-map cells (loaded via add_static_obstacle) must NEVER decay,
     // even when static_cell_ttl_s > 0.  They represent ground-truth

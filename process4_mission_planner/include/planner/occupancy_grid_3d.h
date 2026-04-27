@@ -199,12 +199,17 @@ public:
     /// `hd_map_cells_` — an upstream pipeline regression (e.g. a future SAM
     /// misfire) can still be cleared by `clear_static()`.
     ///
-    /// @return `{inserted, clamped_dropped, low_confidence_dropped, out_of_bounds}`
+    /// @return `{inserted, clamped_dropped, low_confidence_dropped, out_of_bounds, cap_blocked}`
     struct VoxelInsertStats {
         size_t inserted               = 0;
         size_t clamped_dropped        = 0;
         size_t low_confidence_dropped = 0;
         size_t out_of_bounds          = 0;
+        // Issue #635 patch — voxel cells that hit the promotion threshold
+        // but couldn't promote because `max_static_cells_` was reached.
+        // These cells stay in the dynamic bucket and can still promote
+        // later if the cap frees up via the static-TTL sweep.
+        size_t cap_blocked = 0;
     };
     VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels, uint32_t n,
                                    float clamp_m, float min_confidence) {
@@ -323,20 +328,45 @@ public:
                         // path (line 615) except this one doesn't gate on
                         // radar-confirmed (PATH A is the sole static source
                         // in scenarios that enable voxel_input).
+                        //
+                        // Issue #635 patch — honour `max_static_cells_` here
+                        // too.  Previously the cap was only checked on the
+                        // detector/radar promotion path; voxel promotion was
+                        // unbounded, producing 5000+ promoted cells in <15 s
+                        // on scenario 33 (cap was 500).  Without this guard
+                        // the static layer overwhelms the planner before
+                        // any TTL sweep can decay the wake.
                         if (voxel_promotion_hits_ > 0 && static_occupied_.count(c) == 0) {
                             int& hits = hit_count_[c];
                             ++hits;
                             if (hits >= voxel_promotion_hits_) {
-                                static_occupied_.insert(c);
-                                occupied_.erase(c);
-                                hit_count_.erase(c);
-                                ++promoted_count_;
-                                // Record promotion time when static-cell TTL
-                                // is enabled — the sweep keys off this map.
-                                // HD-map cells stay timestamp-free so they
-                                // can never decay (Issue #635).
-                                if (static_cell_ttl_ns_ > 0) {
-                                    static_cell_timestamps_[c] = now_ns;
+                                const std::size_t promoted_static_count =
+                                    static_occupied_.size() > hd_map_static_count_
+                                        ? static_occupied_.size() - hd_map_static_count_
+                                        : 0;
+                                const bool cap_reached =
+                                    max_static_cells_ > 0 &&
+                                    promoted_static_count >=
+                                        static_cast<std::size_t>(max_static_cells_);
+                                if (!cap_reached) {
+                                    static_occupied_.insert(c);
+                                    occupied_.erase(c);
+                                    hit_count_.erase(c);
+                                    ++promoted_count_;
+                                    // Record promotion time when static-cell
+                                    // TTL is enabled — the sweep keys off
+                                    // this map.  HD-map cells stay timestamp-
+                                    // free so they can never decay.
+                                    if (static_cell_ttl_ns_ > 0) {
+                                        static_cell_timestamps_[c] = now_ns;
+                                    }
+                                } else {
+                                    // Cap reached — leave cell in dynamic
+                                    // bucket (still observed, still TTL-decays
+                                    // normally).  hit_count_ stays so a later
+                                    // re-observation after a sweep frees a
+                                    // slot can still promote.
+                                    ++s.cap_blocked;
                                 }
                             }
                         }
@@ -344,6 +374,16 @@ public:
                 }
             }
         }
+        // Issue #635 patch — also sweep the static layer on the voxel
+        // arrival cadence (~13 Hz), not just on the detector tick (~10 Hz
+        // and gated on `objects.num_objects > 0`).  Faster decay response
+        // means cells the drone has flown past clear out before the next
+        // search cycle, instead of carrying a multi-second wake.
+        const uint64_t sweep_now_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+        sweep_static_cells(sweep_now_ns);
         return s;
     }
 
@@ -594,8 +634,11 @@ private:
     ///
     /// Cost: O(|static_cell_timestamps_|).  In practice the set is small
     /// (capped by `max_static_cells_` when set, else bounded by perception
-    /// observation rate × TTL).  Called from `update_from_objects()` once
-    /// per detector tick (~10 Hz) — same cadence as the dynamic-cell sweep.
+    /// observation rate × TTL).  Called from BOTH `update_from_objects()`
+    /// (~10 Hz, detector tick) AND `insert_voxels()` (~13 Hz, voxel batch
+    /// arrival).  The voxel-side call is the responsive one — it ensures
+    /// the wake decays at sensor rate even when the detector is silent
+    /// (e.g. an empty `DetectedObjectList` on frames with no COCO objects).
     void sweep_static_cells(uint64_t now_ns) {
         if (static_cell_ttl_ns_ == 0) return;
         for (auto it = static_cell_timestamps_.begin(); it != static_cell_timestamps_.end();) {
