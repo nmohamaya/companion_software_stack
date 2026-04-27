@@ -109,6 +109,17 @@ public:
         // max_match_distance_m_.  If found, update that track; if not,
         // mint a new track.  Greedy is fine here — at N ≤ 30 the
         // suboptimality vs Hungarian is within sensor noise.
+        //
+        // Issue #638 P2-A from PR #640 review: `tracks_view` holds raw
+        // `Track*` pointers into `tracks_`.  Below, the mint-new-track
+        // branch does `tracks_[stable_id] = ...` which can rehash the
+        // unordered_map and invalidate every `Track&` reference (and
+        // therefore every `Track*` we cached).  Pre-reserving for the
+        // worst case (all candidates mint) eliminates the rehash window:
+        // `unordered_map::reserve()` guarantees no rehash until size
+        // exceeds the requested capacity.
+        tracks_.reserve(tracks_.size() + candidates.size());
+
         std::unordered_map<uint32_t, uint32_t> frame_local_to_stable;  // remap table
         std::vector<bool>                      track_matched(tracks_.size(), false);
         // Index tracks by position in a vector for O(1) "matched" lookup.
@@ -138,6 +149,20 @@ public:
                 t.last_seen_ns          = now_ns;
                 ++t.observation_count;
             } else {
+                // Issue #638 P2-D from PR #640 review: detect uint32_t
+                // wrap on `next_stable_id_`.  ID 0 is reserved for noise;
+                // a wrapped value would collide with the noise sentinel
+                // and bypass any downstream gate.  Reset the tracker
+                // wholesale on wrap (4 B mints/frame at 10 Hz → 13+
+                // years; in practice unreachable except via the
+                // unbounded-mint DOS the NaN-config guard above closes,
+                // but defensive depth is cheap here).
+                if (next_stable_id_ == 0) {
+                    tracks_.clear();
+                    tracks_view.clear();
+                    track_matched.assign(0, false);
+                    next_stable_id_ = 1;
+                }
                 stable_id           = next_stable_id_++;
                 Track& t            = tracks_[stable_id];
                 t.centroid_m        = cand.centroid;

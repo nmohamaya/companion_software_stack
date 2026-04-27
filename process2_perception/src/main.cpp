@@ -1321,10 +1321,33 @@ int main(int argc, char* argv[]) {
         // Issue #638 Phase 2 — cross-frame instance tracker.  Constructed
         // here so its track table persists across frames; only consulted
         // when clustering is enabled.
-        const float tracker_max_match_distance_m = ctx.cfg.get<float>(
+        //
+        // P2-B/C/F from PR #640 review: NaN/Inf and out-of-range guards.
+        // Without these, NaN config slips through `std::max(0.0f, NaN)`
+        // (returns NaN), then track-distance comparisons return false for
+        // every candidate → unbounded `tracks_` growth → DOS via memory
+        // exhaustion.  An over-large `max_match_distance_m` would
+        // conflate distinct obstacles across the visible world.
+        constexpr float kMaxMatchDistanceCapM        = 50.0f;    // physical sensor sanity cap
+        constexpr float kTrackMaxAgeCapS             = 3600.0f;  // 1 h (avoids uint64_t overflow)
+        float           tracker_max_match_distance_m = ctx.cfg.get<float>(
             drone::cfg_key::perception::path_a::TRACKER_MAX_MATCH_DISTANCE_M, 3.0f);
-        const float tracker_track_max_age_s =
+        float tracker_track_max_age_s =
             ctx.cfg.get<float>(drone::cfg_key::perception::path_a::TRACKER_TRACK_MAX_AGE_S, 2.0f);
+        if (!std::isfinite(tracker_max_match_distance_m) || tracker_max_match_distance_m < 0.0f ||
+            tracker_max_match_distance_m > kMaxMatchDistanceCapM) {
+            DRONE_LOG_WARN("[VoxelTracker] tracker.max_match_distance_m {} out of [0,{}] — "
+                           "clamping to 3.0m",
+                           tracker_max_match_distance_m, kMaxMatchDistanceCapM);
+            tracker_max_match_distance_m = 3.0f;
+        }
+        if (!std::isfinite(tracker_track_max_age_s) || tracker_track_max_age_s < 0.0f ||
+            tracker_track_max_age_s > kTrackMaxAgeCapS) {
+            DRONE_LOG_WARN("[VoxelTracker] tracker.track_max_age_s {} out of [0,{}] — "
+                           "clamping to 2.0s",
+                           tracker_track_max_age_s, kTrackMaxAgeCapS);
+            tracker_track_max_age_s = 2.0f;
+        }
         path_a_tracker = std::make_unique<drone::perception::VoxelInstanceTracker>(
             tracker_max_match_distance_m, tracker_track_max_age_s);
         if (cluster_eps_m > 0.0f) {

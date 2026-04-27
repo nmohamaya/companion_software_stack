@@ -87,23 +87,75 @@ TEST(VoxelInstanceTracker, StationaryClusterGetsStableIdAcrossFrames) {
 
 TEST(VoxelInstanceTracker, MovingClusterWithinGateKeepsSameId) {
     // Cluster moves 0.5 m per frame — well within max_match_distance=3 m.
+    //
+    // P2-G from PR #640 review: vary `frame_id` across frames so the
+    // test ACTUALLY proves cross-frame ID rewriting, not just that
+    // frame-local ID 1 happens to map to stable ID 1 by coincidence.
+    // With frame_ids 11, 47, 99 a no-op tracker would leave those
+    // values unmodified and the assertion would fail.
     VoxelInstanceTracker tracker(/*max_match_distance_m=*/3.0f);
 
     std::vector<VoxelUpdate> v0;
-    add_cluster(v0, 0.0f, 0.0f, 5.0f, /*frame_id=*/1);
+    add_cluster(v0, 0.0f, 0.0f, 5.0f, /*frame_id=*/11);
     tracker.update(v0, 100'000'000ull);
     const uint32_t initial_id = v0[0].instance_id;
+    ASSERT_NE(initial_id, 11u) << "tracker must overwrite frame-local id with stable id";
+    ASSERT_NE(initial_id, 0u);
 
     std::vector<VoxelUpdate> v1;
-    add_cluster(v1, 0.5f, 0.0f, 5.0f, /*frame_id=*/1);
+    add_cluster(v1, 0.5f, 0.0f, 5.0f, /*frame_id=*/47);
     tracker.update(v1, 200'000'000ull);
-    EXPECT_EQ(v1[0].instance_id, initial_id);
+    EXPECT_EQ(v1[0].instance_id, initial_id) << "moving cluster must keep stable id across frames";
+    EXPECT_NE(v1[0].instance_id, 47u);
 
     std::vector<VoxelUpdate> v2;
-    add_cluster(v2, 1.0f, 0.0f, 5.0f, /*frame_id=*/1);
+    add_cluster(v2, 1.0f, 0.0f, 5.0f, /*frame_id=*/99);
     tracker.update(v2, 300'000'000ull);
     EXPECT_EQ(v2[0].instance_id, initial_id);
+    EXPECT_NE(v2[0].instance_id, 99u);
     EXPECT_EQ(tracker.track_count(), 1u);
+}
+
+TEST(VoxelInstanceTracker, ManyMintsInOneFrameDoNotInvalidateMatchPointers) {
+    // P2-A from PR #640 review: `tracks_view` holds raw `Track*` into
+    // `tracks_`.  If a frame mints enough new tracks to trigger
+    // `unordered_map` rehash mid-loop, the cached `Track*` entries for
+    // already-existing tracks in `tracks_view` become dangling pointers.
+    // The fix `tracks_.reserve(tracks_.size() + candidates.size())` at
+    // the top of the match loop pre-allocates so no rehash occurs
+    // during the loop.  This test forces 50 mints in one frame after
+    // pre-seeding with one stationary track — without the fix, the
+    // stationary track's `Track*` in `tracks_view` would be invalidated
+    // by the mint inserts and any subsequent match would read freed
+    // memory (UBSan / ASan would catch it).
+    VoxelInstanceTracker tracker(/*max_match_distance_m=*/3.0f);
+
+    // Seed with one stationary track.
+    std::vector<VoxelUpdate> seed;
+    add_cluster(seed, 0.0f, 0.0f, 5.0f, /*frame_id=*/1);
+    tracker.update(seed, 100'000'000ull);
+    const uint32_t seed_stable_id = seed[0].instance_id;
+    ASSERT_EQ(tracker.track_count(), 1u);
+
+    // Frame 2: 50 candidates at well-spaced positions (so they all mint
+    // new tracks), interleaved with another observation at the seed
+    // position (which must match the existing track).  If the rehash
+    // fix is missing, the seed track's `Track*` could be freed mid-loop.
+    std::vector<VoxelUpdate> v;
+    for (int i = 0; i < 50; ++i) {
+        add_cluster(v, 100.0f + 5.0f * i, 100.0f, 5.0f, /*frame_id=*/static_cast<uint32_t>(i + 2));
+    }
+    add_cluster(v, 0.0f, 0.0f, 5.0f, /*frame_id=*/100);  // matches seed
+    tracker.update(v, 200'000'000ull);
+
+    EXPECT_GE(tracker.track_count(), 50u + 1u) << "all 50 distinct candidates must mint";
+    // The seed-position cluster (frame_id=100) must match the original
+    // seed track and inherit `seed_stable_id`.  If the rehash invalidated
+    // the cached `Track*`, this assertion is unreliable but the test
+    // would crash under ASan/UBSan before reaching it — passing here +
+    // green sanitiser run is the safety guarantee.
+    EXPECT_EQ(v.back().instance_id, seed_stable_id)
+        << "stationary cluster must keep its stable id even when many other tracks mint";
 }
 
 TEST(VoxelInstanceTracker, JumpBeyondGateMintsNewId) {
