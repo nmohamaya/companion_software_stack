@@ -256,6 +256,22 @@ inline constexpr const char* DIAG_TRACE_PATH   = "perception.path_a.diag.trace_p
 // CLUSTER_MIN_PTS ≈ 3–5 (rejects single-frame depth artefacts).
 inline constexpr const char* CLUSTER_EPS_M   = "perception.path_a.cluster.eps_m";
 inline constexpr const char* CLUSTER_MIN_PTS = "perception.path_a.cluster.min_pts";
+
+// Issue #638 Phase 2 — cross-frame instance tracker.  Converts the
+// frame-local cluster IDs from Phase 1 into stable IDs that survive
+// across frames, so Phase 3 can promote whole tracked instances.
+//
+// TRACKER_MAX_MATCH_DISTANCE_M — centroid gating threshold (m) for
+//   matching a candidate cluster to an existing track.  Above this,
+//   a new track is minted.  Tune against per-frame cluster motion
+//   at cruise speed (drone @ 2 m/s × 100 ms tick = 0.2 m baseline,
+//   +depth jitter; 2-5 m typical default).
+// TRACKER_TRACK_MAX_AGE_S — drop tracks not re-observed for this long.
+//   Should exceed brief occlusions (yaw past pillar) but be shorter
+//   than the "obstacle gone" signal.  2 s default.
+inline constexpr const char* TRACKER_MAX_MATCH_DISTANCE_M =
+    "perception.path_a.tracker.max_match_distance_m";
+inline constexpr const char* TRACKER_TRACK_MAX_AGE_S = "perception.path_a.tracker.track_max_age_s";
 }  // namespace path_a
 
 // Shutdown drain behaviour (Issue #446)

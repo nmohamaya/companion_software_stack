@@ -169,6 +169,8 @@ add_drone_test(test_detector_switcher    test_detector_switcher.cpp)
 add_drone_test(test_mask_depth_projector test_mask_depth_projector.cpp)
 # Issue #638 Phase 1 — voxel clustering
 add_drone_test(test_voxel_clusterer      test_voxel_clusterer.cpp)
+# Issue #638 Phase 2 — cross-frame voxel instance tracker
+add_drone_test(test_voxel_instance_tracker test_voxel_instance_tracker.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
