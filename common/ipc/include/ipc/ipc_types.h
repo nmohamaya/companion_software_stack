@@ -137,6 +137,15 @@ struct SemanticVoxel {
     ObjectClass semantic_label{ObjectClass::UNKNOWN};  // class label from MaskClassAssigner
     uint8_t     _pad_label[3]{0, 0, 0};                // keep 8-byte alignment before timestamp_ns
     uint64_t    timestamp_ns{0};                       // source-frame capture time
+    // Issue #638 Phase 1 — per-frame cluster ID assigned by P2's
+    // voxel_clusterer before publishing.  0 = unclustered noise (a voxel
+    // that didn't reach min_pts in its connected component); ≥1 = member
+    // of a distinct 3D cluster.  Cluster IDs are *frame-local* — Phase 2
+    // (cross-frame instance tracker) will replace these with stable
+    // tracked-instance IDs.  Until Phase 3 wires the consumer side,
+    // OccupancyGrid3D ignores this field and behaviour is unchanged.
+    uint32_t instance_id{0};
+    uint32_t _pad_instance{0};  // keep 8-byte struct alignment
 
     [[nodiscard]] bool validate() const {
         // Enum-range check — senders write a raw byte over Zenoh, so guard
@@ -181,14 +190,19 @@ static_assert(std::is_standard_layout_v<SemanticVoxelBatch>,
               "SemanticVoxelBatch must be standard layout");
 
 // Wire-format ABI guards — catch silent field reorder / resize on future edits.
-static_assert(sizeof(SemanticVoxel) == 32,
-              "SemanticVoxel wire size must be 32 B; update wire consumers if this changes");
+// Issue #638 Phase 1 grew the struct from 32 → 40 B by adding instance_id +
+// 4-byte trailing pad.  Wire format is in lock-step between P2 and P4 (both
+// rebuild from this header), so the size bump is safe within one deployment.
+static_assert(sizeof(SemanticVoxel) == 40,
+              "SemanticVoxel wire size must be 40 B; update wire consumers if this changes");
 static_assert(offsetof(SemanticVoxel, position_x) == 0, "position_x must start at offset 0");
 static_assert(offsetof(SemanticVoxel, occupancy) == 12, "occupancy must follow position_{x,y,z}");
 static_assert(offsetof(SemanticVoxel, semantic_label) == 20,
               "semantic_label must follow occupancy+confidence");
 static_assert(offsetof(SemanticVoxel, timestamp_ns) == 24,
               "timestamp_ns must be 8-byte aligned at offset 24");
+static_assert(offsetof(SemanticVoxel, instance_id) == 32,
+              "instance_id must be 4-byte aligned at offset 32 (Issue #638 Phase 1)");
 static_assert(offsetof(SemanticVoxelBatch, num_voxels) == 16,
               "num_voxels must follow timestamp_ns + frame_sequence");
 static_assert(offsetof(SemanticVoxelBatch, voxels) == 24,

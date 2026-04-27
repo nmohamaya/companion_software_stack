@@ -18,6 +18,7 @@
 #include "perception/mask_depth_projector.h"
 #include "perception/types.h"
 #include "perception/ukf_fusion_engine.h"
+#include "perception/voxel_clusterer.h"
 #include "util/config_keys.h"
 #include "util/diagnostic.h"
 #include "util/latency_profiler.h"
@@ -219,7 +220,11 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
                                    drone::ipc::IPublisher<drone::ipc::SemanticVoxelBatch>& voxel_pub,
                                    std::atomic<int>&                      shutdown_phase,
                                    drone::perception::MaskDepthProjector& projector,
-                                   drone::util::PathATrace*               trace) {
+                                   drone::util::PathATrace*               trace,
+                                   // Issue #638 Phase 1 — voxel clustering params.
+                                   // eps_m == 0 disables clustering (every voxel
+                                   // gets instance_id=0, current default).
+                                   float cluster_eps_m, int cluster_min_pts) {
     DRONE_LOG_INFO("[MaskProj] Thread started — publishing to {}",
                    drone::ipc::topics::SEMANTIC_VOXELS);
 
@@ -231,6 +236,10 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
     std::optional<drone::ipc::Pose>     latest_pose;
     std::optional<drone::hal::DepthMap> latest_depth;
     std::optional<Detection2DList>      latest_dets;
+    // Issue #638 Phase 1 — reusable scratch for the per-frame cluster pass.
+    // Keeping the maps + parent vector across frames avoids per-frame
+    // hashmap reallocation; the clusterer clears them at entry.
+    drone::perception::VoxelClusterScratch cluster_scratch;
 
     while (shutdown_phase.load(std::memory_order_acquire) < 2) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -317,9 +326,24 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
             }
             continue;
         }
-        const auto voxels = std::move(proj).value();
+        auto voxels = std::move(proj).value();
         if (voxels.empty()) {
             continue;
+        }
+
+        // Issue #638 Phase 1 — assign per-frame cluster IDs in-place.
+        // Voxels in clusters of <cluster_min_pts get instance_id=0
+        // (downstream Phase 3 will skip promotion for those).  Disabled
+        // when cluster_eps_m == 0; today P4 ignores instance_id so the
+        // field is published-only until Phase 3 lands.
+        drone::perception::assign_instance_ids(voxels, cluster_eps_m, cluster_min_pts,
+                                               &cluster_scratch);
+        const uint32_t n_clusters = drone::perception::count_clusters(voxels);
+        if (cluster_eps_m > 0.0f && tick_count % 100 == 1) {
+            DRONE_LOG_INFO("[VoxelCluster] frame_seq={}: {} voxels → {} clusters "
+                           "(eps={:.2f}m, min_pts={})",
+                           masks_opt->frame_sequence, voxels.size(), n_clusters, cluster_eps_m,
+                           cluster_min_pts);
         }
 
         // Pack VoxelUpdate[] -> SemanticVoxelBatch.  Truncate by descending
@@ -345,6 +369,7 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
                 static_cast<uint8_t>(drone::ipc::ObjectClass::GEOMETRIC_OBSTACLE));
             out.semantic_label = static_cast<drone::ipc::ObjectClass>(label_byte);
             out.timestamp_ns   = v.timestamp_ns;
+            out.instance_id    = v.instance_id;
         }
         voxel_pub.publish(*batch);
         ++published_count;
@@ -1229,12 +1254,25 @@ int main(int argc, char* argv[]) {
                                      "drone_logs/path_a_voxel_trace.jsonl");
         path_a_trace = std::make_unique<drone::util::PathATrace>(trace_enabled, trace_path);
 
+        // Issue #638 Phase 1 — voxel clustering knobs.  eps_m == 0 disables
+        // (default), preserving today's behaviour.  Scenarios that opt in
+        // override perception.path_a.cluster.eps_m / .min_pts.
+        const float cluster_eps_m =
+            ctx.cfg.get<float>(drone::cfg_key::perception::path_a::CLUSTER_EPS_M, 0.0f);
+        const int cluster_min_pts =
+            ctx.cfg.get<int>(drone::cfg_key::perception::path_a::CLUSTER_MIN_PTS, 3);
+        if (cluster_eps_m > 0.0f) {
+            DRONE_LOG_INFO("[VoxelCluster] enabled: eps={:.2f}m min_pts={}", cluster_eps_m,
+                           cluster_min_pts);
+        }
+
         t_sam       = std::thread(sam_thread, std::ref(*sam_video_sub), std::ref(sam_to_projection),
                                   std::ref(g_shutdown_phase), std::ref(*sam_backend));
-        t_mask_proj = std::thread(
-            mask_projection_thread, std::ref(sam_to_projection), std::ref(inference_to_projection),
-            std::ref(depth_to_projection), std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
-            std::ref(g_shutdown_phase), std::ref(*mask_projector), path_a_trace.get());
+        t_mask_proj = std::thread(mask_projection_thread, std::ref(sam_to_projection),
+                                  std::ref(inference_to_projection), std::ref(depth_to_projection),
+                                  std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
+                                  std::ref(g_shutdown_phase), std::ref(*mask_projector),
+                                  path_a_trace.get(), cluster_eps_m, cluster_min_pts);
     }
 
     // ── Thread watchdog + health publisher ──────────────────

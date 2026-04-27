@@ -244,6 +244,18 @@ inline constexpr const char* MASK_CLASS_IOU_THRESHOLD =
 // voxels actually land vs scene-object ground truth.
 inline constexpr const char* DIAG_TRACE_VOXELS = "perception.path_a.diag.trace_voxels";
 inline constexpr const char* DIAG_TRACE_PATH   = "perception.path_a.diag.trace_path";
+
+// Issue #638 Phase 1 — voxel clustering (3D Union-Find on grid hash) runs
+// after MaskDepthProjector::project() and before SemanticVoxelBatch
+// publish.  Voxels in clusters of <CLUSTER_MIN_PTS members get
+// instance_id=0 (noise); larger components get unique per-frame IDs.
+//
+// CLUSTER_EPS_M = 0  → clustering disabled (every voxel id=0,
+//                       backwards-compatible default).
+// Recommended: CLUSTER_EPS_M ≈ OccupancyGrid3D resolution (0.5–2 m);
+// CLUSTER_MIN_PTS ≈ 3–5 (rejects single-frame depth artefacts).
+inline constexpr const char* CLUSTER_EPS_M   = "perception.path_a.cluster.eps_m";
+inline constexpr const char* CLUSTER_MIN_PTS = "perception.path_a.cluster.min_pts";
 }  // namespace path_a
 
 // Shutdown drain behaviour (Issue #446)
