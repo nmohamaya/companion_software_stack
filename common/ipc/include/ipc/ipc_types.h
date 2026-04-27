@@ -123,7 +123,10 @@ struct DetectedObjectList {
 // Per-batch voxel cap. One batch == one video frame.
 // If `MaskDepthProjector` produces more than this, the PR-2 publisher
 // must either truncate by descending confidence or emit multiple batches
-// per frame. 1024 × 32 B + 24 B header ≈ 32 KB → one Zenoh SHM packet.
+// per frame. 1024 × 40 B + 24 B header ≈ 40 KB → one Zenoh SHM packet.
+// (Voxel size grew from 32 → 40 B in PR #639 / Issue #638 Phase 1 when
+// `instance_id` + 4 B trailing pad were added; SHM pool sizing must
+// match this updated number.)
 // Sized for typical scenarios (5–15 SAM masks × sparse 4×4 depth
 // sampling); revisit after the first live PR-2 measurement.
 static constexpr uint32_t MAX_VOXELS_PER_BATCH = 1024;
@@ -137,6 +140,15 @@ struct SemanticVoxel {
     ObjectClass semantic_label{ObjectClass::UNKNOWN};  // class label from MaskClassAssigner
     uint8_t     _pad_label[3]{0, 0, 0};                // keep 8-byte alignment before timestamp_ns
     uint64_t    timestamp_ns{0};                       // source-frame capture time
+    // Issue #638 Phase 1 — per-frame cluster ID assigned by P2's
+    // voxel_clusterer before publishing.  0 = unclustered noise (a voxel
+    // that didn't reach min_pts in its connected component); ≥1 = member
+    // of a distinct 3D cluster.  Cluster IDs are *frame-local* — Phase 2
+    // (cross-frame instance tracker) will replace these with stable
+    // tracked-instance IDs.  Until Phase 3 wires the consumer side,
+    // OccupancyGrid3D ignores this field and behaviour is unchanged.
+    uint32_t instance_id{0};
+    uint32_t _pad_instance{0};  // keep 8-byte struct alignment
 
     [[nodiscard]] bool validate() const {
         // Enum-range check — senders write a raw byte over Zenoh, so guard
@@ -181,19 +193,28 @@ static_assert(std::is_standard_layout_v<SemanticVoxelBatch>,
               "SemanticVoxelBatch must be standard layout");
 
 // Wire-format ABI guards — catch silent field reorder / resize on future edits.
-static_assert(sizeof(SemanticVoxel) == 32,
-              "SemanticVoxel wire size must be 32 B; update wire consumers if this changes");
+// Issue #638 Phase 1 grew the struct from 32 → 40 B by adding instance_id +
+// 4-byte trailing pad.  Wire format is in lock-step between P2 and P4 (both
+// rebuild from this header), so the size bump is safe within one deployment.
+static_assert(sizeof(SemanticVoxel) == 40,
+              "SemanticVoxel wire size must be 40 B; update wire consumers if this changes");
 static_assert(offsetof(SemanticVoxel, position_x) == 0, "position_x must start at offset 0");
 static_assert(offsetof(SemanticVoxel, occupancy) == 12, "occupancy must follow position_{x,y,z}");
 static_assert(offsetof(SemanticVoxel, semantic_label) == 20,
               "semantic_label must follow occupancy+confidence");
 static_assert(offsetof(SemanticVoxel, timestamp_ns) == 24,
               "timestamp_ns must be 8-byte aligned at offset 24");
+static_assert(offsetof(SemanticVoxel, instance_id) == 32,
+              "instance_id must be 4-byte aligned at offset 32 (Issue #638 Phase 1)");
 static_assert(offsetof(SemanticVoxelBatch, num_voxels) == 16,
               "num_voxels must follow timestamp_ns + frame_sequence");
 static_assert(offsetof(SemanticVoxelBatch, voxels) == 24,
               "voxels[] must follow the 24-byte header with no interior padding");
-// Total sizeof depends on alignas(64): unpadded 24 + 1024*32 = 32792 rounds up to 32832.
+// Total sizeof depends on alignas(64): unpadded 24 + 1024*40 = 40984 rounds
+// up to 41024 (~40 KB).  The static_assert below derives the value from
+// sizeof(SemanticVoxel) so the formula is self-updating, but operators
+// reading this comment for SHM pool sizing should plan for ~40 KB per
+// batch (was ~32 KB pre-#639).
 static_assert(sizeof(SemanticVoxelBatch) ==
                   ((24 + MAX_VOXELS_PER_BATCH * sizeof(SemanticVoxel) + 63u) & ~63u),
               "SemanticVoxelBatch size must equal alignas(64)-rounded(header + voxel array)");

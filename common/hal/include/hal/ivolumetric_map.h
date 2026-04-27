@@ -44,6 +44,11 @@ struct VoxelUpdate {
     uint8_t         semantic_label{0};
     float           confidence{0.5f};
     uint64_t        timestamp_ns{0};
+    // Issue #638 Phase 1 — per-frame cluster ID assigned by P2's
+    // voxel_clusterer between MaskDepthProjector::project() and the
+    // SemanticVoxelBatch publish.  0 = unclustered noise; >=1 = cluster.
+    // Carried through to SemanticVoxel.instance_id in the IPC message.
+    uint32_t instance_id{0};
 };
 
 /// Abstract volumetric map interface.

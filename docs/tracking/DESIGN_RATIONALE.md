@@ -909,3 +909,67 @@ The reviewer's "grep across the entire codebase returns zero matches" claim is i
 
 **Date:** 2026-04-27 (PR #630 review-security P4)
 
+
+---
+
+## DR-037: PR #639 review-code-quality P2 — Union-Find without union-by-rank
+
+**Question:** PR #639 review-code-quality P2 flagged that `uf_union` in `voxel_clusterer.h` always attaches `rx` under `ry` without rank tracking, so the worst-case Union-Find depth is O(N) before path-halving in `uf_find` flattens it. The header docstring claims "O(N · α(N))", which is only true with union-by-rank. The reviewer asked us to either implement rank or correct the docstring.
+
+**For implementing rank:** restores the documented complexity guarantee. ~10 lines.
+
+**For declining (our decision):** at scenario-33 N (~5 000 voxels/frame) the worst-case difference between O(N · α(N)) and O(N · log N) is ~12-13 extra `find()` iterations per voxel — invisible in practice. Path-halving alone gives effectively-flat trees on realistic spatial-cluster geometry (clusters are mostly wide and shallow, not degenerate chains). Adding rank would mean tracking a second `vector<int>` and an extra branch in `uf_union`; the maintenance + cache cost is a fair trade against the asymptotic guarantee only when N grows or when a profiler shows the union pass dominating.
+
+**Decision:** Keep the rank-free implementation. **Tighten the docstring to "O(N · log N) worst case, O(N) typical with path-halving on cluster-shaped input"** rather than claiming the rank-bound. Add `IMPROVEMENTS.md` entry for "implement union-by-rank when profiling shows union pass dominating."
+
+**Revisit when:** N exceeds ~50 000 voxels/frame, OR a profile shows >5 % of `mask_projection_thread` time in `uf_find` / `uf_union`, OR scenario inputs become topologically degenerate (long chains rather than clusters).
+
+**Date:** 2026-04-27 (PR #639 review-code-quality P2)
+
+---
+
+## DR-038: PR #640 review-performance P3 — Per-frame allocations in `VoxelInstanceTracker::update()`
+
+**Question:** PR #640 review-performance flagged that `update()` allocates four local collections per call (`candidates`, `frame_local_to_stable`, `track_matched`, `tracks_view`). At 10 Hz × ~30 tracks this is ~40 small allocations per second, suggested fix is to mirror the `VoxelClusterScratch` pattern with persistent member fields.
+
+**For mirroring the pattern:** consistent with Phase 1, eliminates the allocator pressure entirely.
+
+**For declining (our decision):** Phase 1's `VoxelClusterScratch` exists because the clusterer's allocations are sized by N=5000 voxels/frame — large enough that re-rehashing matters. Phase 2's tracker collections are sized by ≤30 tracks/frame; per-call cost is ~5 μs total on Jetson Orin's allocator. Adding `VoxelTrackerScratch` mirror requires either (a) breaking encapsulation by exposing the scratch through the constructor, or (b) making the four collections `mutable` members violating the const-correctness of `tracks()`. Neither is worth the ~50 μs/s saved.
+
+**Decision:** Keep per-call locals. **Land if a profiler shows tracker `update()` >100 μs/frame** in scenario testing. The header already documents the N≤30 assumption in the "Algorithm choice" section.
+
+**Revisit when:** Phase 4 scenario runs show tracker `update()` cost above 100 μs/frame, OR if track count grows past ~100 (e.g. complex urban scenarios with many simultaneously-tracked obstacles).
+
+**Date:** 2026-04-27 (PR #640 review-performance P3)
+
+---
+
+## DR-039: PR #641 review-memory-safety P2 — `OccupancyGrid3D` ctor with 14 positional parameters
+
+**Question:** PR #641 added the 14th positional parameter to `OccupancyGrid3D`'s constructor. The reviewer correctly flagged this as a maintainability risk: silent argument-swap bugs become invisible at the call site. Suggested fix: refactor to a `GridConfig` struct mirror.
+
+**For refactoring:** named-arg semantics, robust to insertion at any position, mirrors the `GridPlannerConfig` pattern already used at the planner layer.
+
+**For declining for this PR (our decision):** the refactor has wide blast radius — `OccupancyGrid3D` is constructed in 8 unit-test files plus `GridPlannerBase` plus `add_static_obstacle` test fixtures. Each call site uses positional `/*name=*/` comments; mechanically converting them to a struct is straightforward but adds ~50 lines of net diff to a PR whose scope is already ~150 lines of behaviour change. Better to land the behaviour change first and refactor as a follow-up that touches only signature + call sites.
+
+**Decision:** Keep the 14-parameter ctor for #641. **File a dedicated refactor PR** that introduces `OccupancyGrid3DConfig` struct and updates all call sites in one mechanical pass. Pre-condition: #639/#640/#641/#642 all merged so the integration branch is the stable base for the refactor.
+
+**Revisit when:** parameter 15 is needed (the trigger forcing the refactor anyway), OR the next P4-side review of the constructor surface area.
+
+**Date:** 2026-04-27 (PR #641 review-memory-safety P2-D)
+
+---
+
+## DR-040: PR #642 review-test-coverage P2 — No CI test for scenario JSON loading
+
+**Question:** PR #642 review noted that no CI test parses `config/scenarios/*.json` and verifies the keys reach their consumers. A typo or stale key would only surface at scenario-run time (Tier 3 Cosys-AirSim), not in unit-test CI.
+
+**For adding the parametric test:** catches typos at unit-test time, ~20 lines of `tests/test_config_validator.cpp` extension.
+
+**For declining for this PR (our decision):** the suggested test is a *good idea* but is not Phase 4-specific — every config key in the codebase has the same vulnerability. Adding it as a one-off for #642 would create a half-coverage situation (tests scenarios but not `default.json`, `cosys_airsim_dev.json`, etc.). The right scope is a dedicated test that walks every JSON file in `config/` and validates structure against a schema or a key allowlist; that's its own ~100-line PR with cross-cutting impact.
+
+**Decision:** Don't add the parametric test in #642. **Open a separate issue** for "config-validator test for all `config/*.json` files" with sub-tasks for each config category. Phase 4 ships with the PR-body explicit binary-version dependency note (already addressed).
+
+**Revisit when:** the next config-key typo causes a debugging session, OR when `IMPROVEMENTS.md` accumulates 3+ scenario-config-related issues.
+
+**Date:** 2026-04-27 (PR #642 review-test-coverage P2)
