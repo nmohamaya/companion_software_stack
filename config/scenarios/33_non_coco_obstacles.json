@@ -104,6 +104,16 @@
                     "_comment": "Issue #612 voxel-position trace — JSONL of pose + bboxes + voxel world positions per batch. Consumed by tools/plot_voxel_trace.py. The runner overwrites trace_path with <scenario_log_dir>/path_a_voxel_trace.jsonl so every run is self-contained; keep trace_voxels=true to opt in.",
                     "trace_voxels": true,
                     "trace_path": "path_a_voxel_trace.jsonl"
+                },
+                "cluster": {
+                    "_comment": "Issue #638 Phase 1 — voxel 3D clustering. eps_m=1.0 matches OccupancyGrid3D resolution (1m); nearby voxels link into instances. min_pts=5 rejects single-frame depth artefacts (DA V2 horizon contours, edge flickers).",
+                    "eps_m": 1.0,
+                    "min_pts": 5
+                },
+                "tracker": {
+                    "_comment": "Issue #638 Phase 2 — cross-frame instance tracker. max_match_distance_m=3.0 covers per-frame cluster motion at scenario-33 cruise (drone @2 m/s × 100 ms tick + depth jitter). track_max_age_s=2.0 keeps tracks alive through brief occlusions (yaw past pillar) but drops stale ghosts.",
+                    "max_match_distance_m": 3.0,
+                    "track_max_age_s": 2.0
                 }
             }
         },
@@ -167,12 +177,14 @@
                 "promotion_hits": 10,
                 "max_static_cells": 500,
                 "voxel_input": {
-                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid.  Since Issue #635 voxels route through the dynamic-TTL bucket first and promote to static after `promotion_hits` observations.",
-                    "_comment_static_cell_ttl_s": "Issue #635 (option A: decay-on-look-away) DISABLED for this scenario — empirical testing across TTL ∈ {0, 8, 15, 30}s and cap ∈ {500, 2000} could not find a setting that solves the failure: (a) cap saturates with noise (depth edges, ground, horizon) within 13 s of takeoff before real obstacles are observed, so real obstacles can't promote and the drone collides; (b) any TTL short enough to clear the wake also decays cells representing real obstacles while the drone is next to them.  Per-cell promotion fundamentally cannot distinguish noise from real obstacles in this scenario.  Reverting to legacy permanent-promotion (static_cell_ttl_s=0) as the known baseline until option B (voxel clustering + instance tracking, #638) lands.  See PR #636 for the option-A infrastructure (TTL plumbing, cap enforcement, side-table) which option B will reuse.",
+                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid via the instance-promotion gate.",
+                    "_comment_static_cell_ttl_s": "Issue #635 (option A: decay-on-look-away) DISABLED for this scenario — empirical testing across TTL ∈ {0, 8, 15, 30}s and cap ∈ {500, 2000} could not find a setting that solves the failure.  Per-cell promotion fundamentally cannot distinguish noise from real obstacles.  Phase 4 (#638) replaces option A with the per-instance gate below; static_cell_ttl_s stays at 0 because the gate already prevents noise from reaching the static layer.",
+                    "_comment_instance_gate": "Issue #638 Phase 4 — instance-aware promotion. PATH A voxels carry instance_id from Phase 1's clusterer + Phase 2's tracker. Voxels with id=0 (noise — single-frame depth artefacts that didn't form a coherent cluster) are rejected outright. Tracked instances must be observed in 5 distinct frames (~0.5s @ 10Hz) before any of their voxels reach the grid. Real obstacles cluster across frames and promote; transient noise never accumulates. This is the architectural fix that PR #636's empirical journey proved was needed (see PR #639/#640/#641).",
                     "enabled": true,
                     "position_clamp_m": 200.0,
                     "min_confidence": 0.3,
-                    "static_cell_ttl_s": 0.0
+                    "static_cell_ttl_s": 0.0,
+                    "instance_promotion_observations": 5
                 }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",
