@@ -380,6 +380,13 @@ inline constexpr const char* VOXEL_INPUT_MIN_CONFIDENCE =
 // cement).  Default 3.
 inline constexpr const char* VOXEL_PROMOTION_HITS =
     "mission_planner.occupancy_grid.voxel_input.promotion_hits";
+// Issue #635 — TTL (seconds) for *promoted* static cells.  When > 0, cells
+// that came via voxel/radar promotion (NOT HD-map) decay out of the static
+// layer if not re-observed for this long.  Prevents the outbound voxel wake
+// from walling off return corridors in no-HD-map scenarios.  HD-map cells
+// are always immune.  0 = legacy permanent-promotion behaviour.
+inline constexpr const char* STATIC_CELL_TTL_S =
+    "mission_planner.occupancy_grid.voxel_input.static_cell_ttl_s";
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {

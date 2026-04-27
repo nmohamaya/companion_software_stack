@@ -83,6 +83,14 @@ struct GridPlannerConfig {
     // TTL.  Default 3 — mirrors `promotion_hits` magnitude for the
     // detector-observation path.
     int voxel_promotion_hits = 3;
+    // Issue #635 — TTL for *promoted* static cells (cells that came via
+    // voxel/radar promotion, NOT HD-map).  When > 0, promoted cells decay
+    // out of `static_occupied_` if they aren't re-observed for this many
+    // seconds.  HD-map cells loaded via `add_static_obstacle` are never
+    // affected.  0 = disabled (legacy permanent-promotion behaviour).
+    // Recommended: 30-60 s for no-HD-map scenarios so the outbound voxel
+    // wake doesn't wall off return corridors.
+    float static_cell_ttl_s = 0.0f;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -172,7 +180,8 @@ public:
                 config.cell_ttl_s, config.min_confidence, config.promotion_hits,
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
                 config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
-                config.require_radar_for_promotion, config.voxel_promotion_hits) {}
+                config.require_radar_for_promotion, config.voxel_promotion_hits,
+                config.static_cell_ttl_s) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

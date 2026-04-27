@@ -109,7 +109,8 @@ public:
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
                              float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f,
-                             bool require_radar_for_promotion = false, int voxel_promotion_hits = 3)
+                             bool require_radar_for_promotion = false, int voxel_promotion_hits = 3,
+                             float static_cell_ttl_s = 0.0f)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -122,7 +123,8 @@ public:
         , prediction_enabled_(prediction_enabled)
         , prediction_dt_s_(prediction_dt_s)
         , require_radar_for_promotion_(require_radar_for_promotion)
-        , voxel_promotion_hits_(voxel_promotion_hits) {}
+        , voxel_promotion_hits_(voxel_promotion_hits)
+        , static_cell_ttl_ns_(static_cast<uint64_t>(std::max(0.0f, static_cell_ttl_s) * 1e9f)) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -139,6 +141,8 @@ public:
         static_occupied_.clear();
         hd_map_cells_.clear();
         hd_map_static_count_ = 0;
+        static_cell_timestamps_.clear();
+        promoted_count_ = 0;
     }
 
     /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
@@ -301,6 +305,17 @@ public:
                             ++s.inserted;
                         }
 
+                        // Issue #635 — refresh the static-cell timestamp if
+                        // this voxel re-observes a previously-promoted cell.
+                        // HD-map cells aren't in `static_cell_timestamps_`,
+                        // so they're skipped (they're permanent by design);
+                        // promoted cells get their TTL extended for as long
+                        // as PATH A keeps confirming the obstacle.
+                        if (auto it = static_cell_timestamps_.find(c);
+                            it != static_cell_timestamps_.end()) {
+                            it->second = now_ns;
+                        }
+
                         // Promotion: after `voxel_promotion_hits_` distinct
                         // observations a cell becomes permanent — real walls
                         // should cement, transient frame-artefacts should
@@ -316,6 +331,13 @@ public:
                                 occupied_.erase(c);
                                 hit_count_.erase(c);
                                 ++promoted_count_;
+                                // Record promotion time when static-cell TTL
+                                // is enabled — the sweep keys off this map.
+                                // HD-map cells stay timestamp-free so they
+                                // can never decay (Issue #635).
+                                if (static_cell_ttl_ns_ > 0) {
+                                    static_cell_timestamps_[c] = now_ns;
+                                }
                             }
                         }
                     }
@@ -472,6 +494,12 @@ public:
             }
         }
 
+        // Issue #635 — sweep promoted static cells whose TTL has expired.
+        // HD-map cells (in `hd_map_cells_`, never given a timestamp) are
+        // immune by construction.  Cheap when `static_cell_ttl_ns_ == 0`
+        // (early-out) so legacy scenarios pay nothing.
+        sweep_static_cells(now_ns);
+
         // Diagnostic: log grid state periodically
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             DRONE_LOG_INFO(
@@ -548,6 +576,41 @@ public:
     [[nodiscard]] size_t pending_changes() const { return changed_cells_.size(); }
 
 private:
+    /// Issue #635 — sweep promoted static cells whose TTL has expired.
+    ///
+    /// Walks `static_cell_timestamps_` (only contains promoted cells, never
+    /// HD-map cells) and evicts any entry older than `static_cell_ttl_ns_`.
+    /// HD-map cells are immune by construction — they never receive a
+    /// timestamp.  No-op when `static_cell_ttl_ns_ == 0` (legacy behaviour).
+    ///
+    /// Eviction:
+    ///   1. Drop the cell from `static_occupied_` (path becomes traversable).
+    ///   2. Drop its timestamp.
+    ///   3. Push to `changed_cells_` so D* Lite re-plans through the cleared
+    ///      space on the next tick.
+    ///   4. Decrement `promoted_count_` so the diagnostic counter tracks
+    ///      live promotions, not lifetime promotions.  (Lifetime cumulative
+    ///      counters could be added separately if needed.)
+    ///
+    /// Cost: O(|static_cell_timestamps_|).  In practice the set is small
+    /// (capped by `max_static_cells_` when set, else bounded by perception
+    /// observation rate × TTL).  Called from `update_from_objects()` once
+    /// per detector tick (~10 Hz) — same cadence as the dynamic-cell sweep.
+    void sweep_static_cells(uint64_t now_ns) {
+        if (static_cell_ttl_ns_ == 0) return;
+        for (auto it = static_cell_timestamps_.begin(); it != static_cell_timestamps_.end();) {
+            if (now_ns - it->second > static_cell_ttl_ns_) {
+                const GridCell c = it->first;
+                static_occupied_.erase(c);
+                changed_cells_.push_back({c, false});
+                if (promoted_count_ > 0) --promoted_count_;
+                it = static_cell_timestamps_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     /// Check whether a grid cell is at or adjacent (Chebyshev ≤ 1) to any
     /// already-promoted static cell.  Used for promotion suppression:
     /// once an obstacle has been promoted, further detections at the same
@@ -641,6 +704,12 @@ private:
                                     changed_cells_.push_back({c, true});
                                 }
                                 ++promoted_count_;
+                                // Issue #635 — record promotion time so
+                                // detector/radar-promoted cells also decay
+                                // (uniform behaviour with the voxel path).
+                                if (static_cell_ttl_ns_ > 0) {
+                                    static_cell_timestamps_[c] = now_ns;
+                                }
                             }
                         } else if (promotion_hits_ > 0 && !cap_reached) {
                             // When require_radar_for_promotion_ is set, the hit-count
@@ -657,6 +726,9 @@ private:
                                     occupied_.erase(c);
                                     hit_count_.erase(c);
                                     ++promoted_count_;
+                                    if (static_cell_ttl_ns_ > 0) {
+                                        static_cell_timestamps_[c] = now_ns;
+                                    }
                                 }
                             } else {
                                 // Camera-only: clear any stale hit count so a
@@ -692,6 +764,14 @@ private:
     // before a voxel "cements".  Default 3 (same magnitude as
     // promotion_hits_ for the detector path).
     int voxel_promotion_hits_{3};
+    // Issue #635 — TTL for *promoted* static cells (cells that came via
+    // voxel/radar promotion, not HD-map).  Cells in `static_occupied_` whose
+    // entry in `static_cell_timestamps_` is older than this expire on the
+    // next sweep.  HD-map cells (those in `hd_map_cells_`) are timestamp-
+    // free and never decay.  0 = disabled (legacy behaviour, all promoted
+    // cells live forever).  Recommended: 30-60 s for no-HD-map scenarios so
+    // the outbound flight's voxel wake doesn't wall off the return corridor.
+    uint64_t static_cell_ttl_ns_{0};
     // Cumulative count of objects with velocity-based prediction applied (never reset).
     int      total_predictions_applied_{0};
     uint64_t diag_tick_{0};  // for periodic diagnostic logging
@@ -701,6 +781,17 @@ private:
     // Subset of static_occupied_ that came from add_static_obstacle() (HD-map).
     // Used to suppress radar promotion near known obstacles (Issue #389).
     std::unordered_set<GridCell, GridCellHash> hd_map_cells_;
+    // Issue #635 — timestamp side-table for *promoted* static cells (NOT
+    // HD-map).  Lookup semantics:
+    //   - cell ∈ static_occupied_ AND ∈ hd_map_cells_   → permanent (HD-map)
+    //   - cell ∈ static_occupied_ AND ∈ static_cell_timestamps_
+    //                                                   → decays after TTL
+    //   - cell ∈ static_occupied_ AND in neither        → permanent (legacy
+    //         path: created when static_cell_ttl_ns_ == 0, before this map
+    //         was wired)
+    // Refreshed when a voxel re-observes a promoted cell; entries are
+    // dropped when the cell decays out of static_occupied_.
+    std::unordered_map<GridCell, uint64_t, GridCellHash> static_cell_timestamps_;
     // Camera-confirmation layer: cells observed by perception, expire after TTL.
     // Refreshed each detection cycle; also catches unexpected/dynamic obstacles.
     std::unordered_map<GridCell, uint64_t, GridCellHash> occupied_;

@@ -216,6 +216,15 @@ int main(int argc, char* argv[]) {
     planner_cfg.voxel_promotion_hits =
         ctx.cfg.get<int>(drone::cfg_key::mission_planner::occupancy_grid::VOXEL_PROMOTION_HITS,
                          planner_cfg.voxel_promotion_hits);
+    // Issue #635 — static-cell TTL (0 = legacy permanent promotion).
+    planner_cfg.static_cell_ttl_s =
+        ctx.cfg.get<float>(drone::cfg_key::mission_planner::occupancy_grid::STATIC_CELL_TTL_S,
+                           planner_cfg.static_cell_ttl_s);
+    if (planner_cfg.static_cell_ttl_s > 0.0f) {
+        DRONE_LOG_INFO("[OccGrid] Promoted-cell decay enabled: TTL={:.1f}s "
+                       "(HD-map cells exempt)",
+                       planner_cfg.static_cell_ttl_s);
+    }
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,

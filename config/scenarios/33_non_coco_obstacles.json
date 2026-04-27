@@ -167,10 +167,12 @@
                 "promotion_hits": 10,
                 "max_static_cells": 500,
                 "voxel_input": {
-                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid.  Since Issue #635 voxels route through the dynamic-TTL bucket first and promote to static after `promotion_hits` observations.  Default 3 preserves near-old behaviour (cells promote in ~0.23 s @ 13 Hz) while the TTL plumbing is now in place for future tuning — higher values (15-30) will let transient artefacts decay while robustly-observed walls cement.",
+                    "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid.  Since Issue #635 voxels route through the dynamic-TTL bucket first and promote to static after `promotion_hits` observations.",
+                    "_comment_static_cell_ttl_s": "Issue #635 (option A: decay-on-look-away) — promoted static cells decay after 30 s if not re-observed.  HD-map cells are exempt by design.  Eliminates the outbound voxel wake that previously walled off the return corridor at (24.5, 26.1) in scenario 33.  Long-term fix is voxel clustering + instance tracking (option B, separate issue).",
                     "enabled": true,
                     "position_clamp_m": 200.0,
-                    "min_confidence": 0.3
+                    "min_confidence": 0.3,
+                    "static_cell_ttl_s": 30.0
                 }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",
