@@ -16,6 +16,52 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-27 (#638 review-driven backlog)
+
+The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review findings across 8 reviewer agents.  P1 + high-value P2 fixes landed in the respective PRs; the items below were deemed correct-but-deferred (proactive backlog).
+
+#### Phase 1 (#639) — voxel clusterer
+
+- **P2** (declined for now): `uf_union` lacks union-by-rank; header docstring claims O(N·α(N)) but only O(N log N) holds without rank.  At our N (~5000 voxels/frame) the asymptotic gap is invisible, but the docstring should either be tightened or rank should be added.  Choose one when N grows or when a profiler shows the union pass dominating.  See DR-037.
+- **P2**: extract `cluster_lidar_points()` analogue from `assign_instance_ids()` into a unit-testable free function so the inner Union-Find logic is exercised independently of the void-returning entry point.
+- **P3**: replace `unordered_map<int,int> root_size` and `unordered_map<int,uint32_t> root_to_id` with flat `std::vector<int>` indexed by root.  Eliminates ~10k hash ops/frame at N=5000.
+- **P3**: pre-`reserve()` `cell_to_voxel` to `N * 2` to reduce rehash/chaining cost in the 27-cell neighbour loop (135k lookups/frame at N=5000).
+- **P3**: `assign_instance_ids` could return `Result<uint32_t>` (cluster count + error channel) instead of `void` — would also obviate the `count_clusters()` helper's second pass.
+- **P3**: `count_clusters()` now O(N) distinct-id scan (correct, was max-id which broke under non-compact Phase 2 IDs).  Performance-equivalent at our N; flag if profiling shows it.
+- **P3**: tests don't cover the Chebyshev=1 boundary in y/z axes — only along x.  A bug like `for (int dy = 0; dy <= 0; ...)` would not be caught.  Add a 3D adjacency test.
+- **P3**: tests don't cover `min_pts=1` singleton-cluster boundary, single-voxel input, exact-eps boundary, or negative eps_m / min_pts.
+- **P3**: `tracks/TESTS.md` not yet updated with `test_voxel_clusterer.cpp` (11 tests after #639 fixes) and the new baseline count.
+- **P3**: `EnabledWritesOneJsonlLinePerBatch` style: tests use `instance_id = 0xDEADBEEFu` marker pattern only on the two disable tests; consider applying to other tests for consistency / future-proofing.
+- **P3**: `pack_cell_key` 16-bit truncation now bounded by the kMaxCellIndex clamp at the call site (P1-A fix), but the function itself still silently truncates if called from elsewhere.  Either widen to 21 bits/axis (covers ±1M cells in 63 bits), or rename to `pack_cell_key_unchecked` to make the precondition explicit.
+
+#### Phase 2 (#640) — voxel instance tracker
+
+- **P2** (declined for now): hidden allocations in `update()` (4 local collections per call).  At N≤30 tracks the allocator pressure is ~40 alloc/s, well within budget.  Mirror the `VoxelClusterScratch` pattern when a profiler shows it matters.  See DR-038.
+- **P3**: `Track` struct `observation_count` semantics — counts total re-associations, not consecutive frames.  If Phase 4 needs consecutive semantics for promotion gating, add a `consecutive_count` field.
+- **P3**: `tracks_view` cache-hostile pointer-chasing pattern in inner match loop; a struct-of-vectors flat array would be faster at N=30 once profiled.
+- **P3**: `next_stable_id_` wraparound check (today only triggers after 4B mints, but compounds with NaN-config DOS — handled defensively elsewhere; keep an explicit `++` wraparound assert as an additional layer).
+- **P3**: split `update()` into `compute_candidates_` / `associate_to_tracks_` / `rewrite_voxel_ids_` private methods so association can be tested independently.
+- **P3**: `default.json` missing `path_a.cluster` and `path_a.tracker` defaults; `cfg.get<>` falls back to ctor defaults silently.  Add the keys for visibility/auditability.
+- **P3**: deterministic iteration via `std::map` for `candidates` and `frame_local_to_stable` would remove a class of test-flake risk (unordered_map order is implementation-defined).
+- **P4**: `[[maybe_unused]]` on the `_` structured binding to silence potential `-Wshadow` warnings.
+
+#### Phase 3 (#641) — instance-aware grid promotion
+
+- **P2** (declined for now): `OccupancyGrid3D` ctor now takes 14 positional parameters.  Refactor to a `GridConfig` struct mirror.  Out-of-scope for #641; large blast radius.  See DR-039.
+- **P3**: `instances_` map can grow unboundedly within a single mission leg.  `clear_instance_state()` is now wired to RTL/LAND (P1 fix), but a within-leg LRU/TTL eviction would bound worst-case memory in long-duration missions.
+- **P3**: `tracked_instance_count()` / `promoted_instance_count()` accessors should be `noexcept` and `[[nodiscard]]` for consistency with the rest of the file.
+- **P3**: structured binding `[id, rec]` doesn't use `id` — switch to `for (const auto& kv : instances_)` or `[[maybe_unused]]`.
+- **P3**: `InstanceRecord` struct with one `uint32_t observation_count` field is borderline over-engineered today; keep for Phase 4+ extensibility (last_seen_frame_seq, total_voxels, etc.).
+- **P3**: `set_promotion_paused()` / new instance-gate startup interaction in `mission_state_tick.h:79` overwrites startup pause every NAVIGATE tick.  Pre-existing pattern, not Phase 3-introduced; flag for separate refactor.
+- **P3**: Add fault-injection scenario for the instance-promotion gate (mid-flight P2 restart should not bypass the freshly-cleared instance counters).
+
+#### Phase 4 (#642) — scenario 33 enable
+
+- **P2** (declined for now): No CI test that scenario JSON files load + reach consumers.  Parametrise `tests/test_config_validator.cpp` over `config/scenarios/*.json` to catch typos at unit-test time, not scenario-run time.  See DR-040.
+- **P3**: PR body explicit binary-version dependency (Phase 1+2+3 must all be present).  Already addressed by stacked-PR merge order docs but a startup self-check log in P2/P4 for "instance_id is non-zero" would surface mismatches at runtime.
+- **P3**: `_comment_instance_gate` operator note should include the ~1m promotion-latency-at-cruise figure for tuners.
+- **P4**: `max_match_distance_m=3.0` is 15× the per-frame motion baseline — possibly too loose for nearby distinct pillars.  Tighten to 1.5 m if Phase 2 traces show ID flapping.
+
 ### 2026-04-22
 
 #### (new) Revisit: extract PATH A (SAM + mask projection) into its own process

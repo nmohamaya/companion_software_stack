@@ -13,6 +13,7 @@
 
 #include "perception/voxel_clusterer.h"
 
+#include <limits>
 #include <unordered_set>
 
 #include <gtest/gtest.h>
@@ -53,20 +54,70 @@ TEST(VoxelClusterer, EmptyInputIsNoop) {
 TEST(VoxelClusterer, DisabledByZeroEps) {
     // 10 tightly-packed voxels — would form one cluster at any positive eps.
     // eps_m == 0 disables clustering, every voxel must keep id=0.
+    //
+    // P1-B from PR #639 review: pre-seed instance_id with a marker so the
+    // assertion proves the disable branch ACTIVELY wrote 0, not that the
+    // default-constructed value (also 0) leaked through unchanged.
     std::vector<VoxelUpdate> voxels;
-    for (int i = 0; i < 10; ++i) voxels.push_back(make_voxel(0.1f * i, 0.0f, 0.0f));
+    for (int i = 0; i < 10; ++i) {
+        voxels.push_back(make_voxel(0.1f * i, 0.0f, 0.0f));
+        voxels.back().instance_id = 0xDEADBEEFu;  // marker — must be overwritten
+    }
 
     assign_instance_ids(voxels, /*eps_m=*/0.0f, /*min_pts=*/3);
-    for (const auto& v : voxels) EXPECT_EQ(v.instance_id, 0u);
+    for (const auto& v : voxels) {
+        EXPECT_EQ(v.instance_id, 0u) << "disable branch must overwrite the marker with 0";
+    }
     EXPECT_EQ(count_clusters(voxels), 0u);
 }
 
 TEST(VoxelClusterer, DisabledByZeroMinPts) {
+    // P1-B: same false-green guard as above.
     std::vector<VoxelUpdate> voxels;
-    for (int i = 0; i < 10; ++i) voxels.push_back(make_voxel(0.1f * i, 0.0f, 0.0f));
+    for (int i = 0; i < 10; ++i) {
+        voxels.push_back(make_voxel(0.1f * i, 0.0f, 0.0f));
+        voxels.back().instance_id = 0xDEADBEEFu;  // marker — must be overwritten
+    }
 
     assign_instance_ids(voxels, /*eps_m=*/1.0f, /*min_pts=*/0);
+    for (const auto& v : voxels) {
+        EXPECT_EQ(v.instance_id, 0u) << "disable branch must overwrite the marker with 0";
+    }
+}
+
+TEST(VoxelClusterer, DisabledByNaNEps) {
+    // P2-D from PR #639 review: a tampered config could pass NaN through
+    // `cfg.get<float>(... eps_m)`.  `NaN <= 0.0f` is false, so the old
+    // disable guard let NaN slip through, then `1/NaN = NaN`, then
+    // `static_cast<int>(std::floor(NaN))` is UB.  The fix uses
+    // `!std::isfinite(eps_m)` to short-circuit.
+    std::vector<VoxelUpdate> voxels;
+    for (int i = 0; i < 5; ++i) {
+        voxels.push_back(make_voxel(0.1f * i, 0.0f, 0.0f));
+        voxels.back().instance_id = 0xDEADBEEFu;
+    }
+    assign_instance_ids(voxels, std::numeric_limits<float>::quiet_NaN(), 3);
     for (const auto& v : voxels) EXPECT_EQ(v.instance_id, 0u);
+}
+
+TEST(VoxelClusterer, NaNPositionIsHandledSafely) {
+    // P1-A from PR #639 review: a buggy depth backend could emit a NaN
+    // position; without the explicit `std::isfinite` guard, the floor cast
+    // is UB.  Test must run cleanly under UBSan.
+    std::vector<VoxelUpdate> voxels;
+    voxels.push_back(make_voxel(std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f));
+    voxels.push_back(make_voxel(0.0f, std::numeric_limits<float>::infinity(), 0.0f));
+    voxels.push_back(make_voxel(1.0f, 1.0f, 1.0f));
+    voxels.push_back(make_voxel(1.1f, 1.0f, 1.0f));
+    voxels.push_back(make_voxel(1.2f, 1.0f, 1.0f));
+
+    assign_instance_ids(voxels, 1.0f, 3);
+    EXPECT_EQ(voxels[0].instance_id, 0u) << "NaN position must be flagged as noise";
+    EXPECT_EQ(voxels[1].instance_id, 0u) << "Inf position must be flagged as noise";
+    // The remaining 3 finite voxels form one cluster.
+    EXPECT_EQ(voxels[2].instance_id, voxels[3].instance_id);
+    EXPECT_EQ(voxels[3].instance_id, voxels[4].instance_id);
+    EXPECT_NE(voxels[2].instance_id, 0u);
 }
 
 TEST(VoxelClusterer, OneTightClusterGetsOneId) {

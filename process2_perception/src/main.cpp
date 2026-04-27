@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <thread>
@@ -239,7 +240,18 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
     // Issue #638 Phase 1 — reusable scratch for the per-frame cluster pass.
     // Keeping the maps + parent vector across frames avoids per-frame
     // hashmap reallocation; the clusterer clears them at entry.
+    // Pre-reserve to typical worst-case (5000 voxels/frame in scenario 33);
+    // avoids reallocations on N-growth ticks (review P1-E from PR #639).
     drone::perception::VoxelClusterScratch cluster_scratch;
+    cluster_scratch.parent.reserve(5000);
+    cluster_scratch.cell_to_voxel.reserve(5000);
+    cluster_scratch.root_size.reserve(512);
+    cluster_scratch.root_to_id.reserve(512);
+
+    // Issue #638 P1-D — reusable SemanticVoxelBatch (was make_unique per
+    // tick).  ~40 KB struct allocated once at thread start; cleared via
+    // {0, 0, 0} reassignment at batch boundary instead of heap alloc.
+    drone::ipc::SemanticVoxelBatch batch_buf{};
 
     while (shutdown_phase.load(std::memory_order_acquire) < 2) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -348,14 +360,18 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
 
         // Pack VoxelUpdate[] -> SemanticVoxelBatch.  Truncate by descending
         // confidence if we ever overshoot MAX_VOXELS_PER_BATCH (see #608).
-        auto batch            = std::make_unique<drone::ipc::SemanticVoxelBatch>();
-        batch->timestamp_ns   = masks_opt->timestamp_ns;
-        batch->frame_sequence = static_cast<uint64_t>(masks_opt->frame_sequence);
+        // Use a pre-allocated stack-resident batch_buf (review P1-D from
+        // PR #639) — `make_unique` per tick was a multi-KB heap allocation
+        // on a 10 Hz flight-critical thread.  The struct is trivially-
+        // copyable so reassigning fields in place is safe.
+        auto& batch           = batch_buf;
+        batch.timestamp_ns    = masks_opt->timestamp_ns;
+        batch.frame_sequence  = static_cast<uint64_t>(masks_opt->frame_sequence);
         const size_t n_voxels = std::min<size_t>(voxels.size(), drone::ipc::MAX_VOXELS_PER_BATCH);
-        batch->num_voxels     = static_cast<uint32_t>(n_voxels);
+        batch.num_voxels      = static_cast<uint32_t>(n_voxels);
         for (size_t i = 0; i < n_voxels; ++i) {
             const auto& v   = voxels[i];
-            auto&       out = batch->voxels[i];
+            auto&       out = batch.voxels[i];
             out.position_x  = v.position_m.x();
             out.position_y  = v.position_m.y();
             out.position_z  = v.position_m.z();
@@ -371,14 +387,14 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
             out.timestamp_ns   = v.timestamp_ns;
             out.instance_id    = v.instance_id;
         }
-        voxel_pub.publish(*batch);
+        voxel_pub.publish(batch);
         ++published_count;
 
         // First-publish marker — short runs that fail before 50 batches still
         // emit "[MaskProj] Published …" once, so scenario pass_criteria log
         // greps (see config/scenarios/33_non_coco_obstacles.json) still fire.
         if (published_count == 1) {
-            DRONE_LOG_INFO("[MaskProj] Published first batch — {} voxels", batch->num_voxels);
+            DRONE_LOG_INFO("[MaskProj] Published first batch — {} voxels", batch.num_voxels);
         }
 
         // Diagnostic trace (Issue #612).  Inert when disabled.  Writes the
@@ -392,7 +408,7 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
 
         if (published_count % 50 == 0) {
             DRONE_LOG_INFO("[MaskProj] Published {} batches — last batch: {} voxels, {} skipped",
-                           published_count, batch->num_voxels, skipped_count);
+                           published_count, batch.num_voxels, skipped_count);
         }
     }
     DRONE_LOG_INFO("[MaskProj] Thread stopped — {} ticks, {} published, {} skipped", tick_count,
@@ -1257,10 +1273,29 @@ int main(int argc, char* argv[]) {
         // Issue #638 Phase 1 — voxel clustering knobs.  eps_m == 0 disables
         // (default), preserving today's behaviour.  Scenarios that opt in
         // override perception.path_a.cluster.eps_m / .min_pts.
-        const float cluster_eps_m =
+        //
+        // P2-D from PR #639 review: defensively reject NaN/Inf/negative
+        // values from a tampered config — `cfg.get<float>` returns the raw
+        // value (possibly NaN) and `assign_instance_ids` would otherwise
+        // hit UB in the floor cast.  The clusterer's own guard catches it
+        // too, but failing closed at config-read with a WARN gives the
+        // operator visibility instead of silent disable.
+        float cluster_eps_m_raw =
             ctx.cfg.get<float>(drone::cfg_key::perception::path_a::CLUSTER_EPS_M, 0.0f);
-        const int cluster_min_pts =
+        int cluster_min_pts_raw =
             ctx.cfg.get<int>(drone::cfg_key::perception::path_a::CLUSTER_MIN_PTS, 3);
+        float cluster_eps_m   = cluster_eps_m_raw;
+        int   cluster_min_pts = cluster_min_pts_raw;
+        if (!std::isfinite(cluster_eps_m) || cluster_eps_m < 0.0f) {
+            DRONE_LOG_WARN("[VoxelCluster] Invalid cluster.eps_m {} — disabling clustering",
+                           cluster_eps_m_raw);
+            cluster_eps_m = 0.0f;
+        }
+        if (cluster_min_pts < 0) {
+            DRONE_LOG_WARN("[VoxelCluster] Invalid cluster.min_pts {} — disabling clustering",
+                           cluster_min_pts_raw);
+            cluster_min_pts = 0;
+        }
         if (cluster_eps_m > 0.0f) {
             DRONE_LOG_INFO("[VoxelCluster] enabled: eps={:.2f}m min_pts={}", cluster_eps_m,
                            cluster_min_pts);

@@ -30,9 +30,11 @@
 
 #include "hal/isemantic_projector.h"  // for VoxelUpdate
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -101,7 +103,10 @@ inline void uf_union(std::vector<int>& parent, int rx, int ry) noexcept {
 inline void assign_instance_ids(std::vector<drone::hal::VoxelUpdate>& voxels, float eps_m,
                                 int min_pts, VoxelClusterScratch* scratch = nullptr) {
     // Disabled (or pathological config) → leave every voxel as noise.
-    if (voxels.empty() || eps_m <= 0.0f || min_pts <= 0) {
+    // Also disabled when eps_m is non-finite (NaN/Inf) — guards against
+    // tampered config + downstream UB in the floor cast (review P2-D
+    // from PR #639).
+    if (voxels.empty() || !std::isfinite(eps_m) || eps_m <= 0.0f || min_pts <= 0) {
         for (auto& v : voxels) v.instance_id = 0;
         return;
     }
@@ -116,6 +121,14 @@ inline void assign_instance_ids(std::vector<drone::hal::VoxelUpdate>& voxels, fl
     s.root_to_id.clear();
 
     const float inv_eps = 1.0f / eps_m;
+    // Issue #638 P1-A — guard against int overflow in the floor() cast.
+    // Cell indices are packed into 16-bit slots in pack_cell_key; values
+    // outside ±32k cells alias silently.  Clamp positions so the int cast
+    // never overflows even with adversarial input.  Also covers the
+    // small-eps corner case: at eps=0.001m and world ±32m, indices reach
+    // ±32k — at the boundary.  This caps the meaningful flight envelope
+    // at ±32k * eps_m metres (≈ 16 km at the typical 0.5 m eps).
+    constexpr int kMaxCellIndex = 32767;
 
     // Pass 1 — bin every voxel and union it with the *first* voxel in
     // each of the 27 adjacent cells (Chebyshev ≤ 1 — face/edge/corner).
@@ -123,10 +136,26 @@ inline void assign_instance_ids(std::vector<drone::hal::VoxelUpdate>& voxels, fl
     // for transitive closure: every voxel later landing in a neighbour
     // cell unions with that same first occupant, joining the component.
     for (int i = 0; i < static_cast<int>(voxels.size()); ++i) {
-        const auto& v  = voxels[i];
-        const int   cx = static_cast<int>(std::floor(v.position_m.x() * inv_eps));
-        const int   cy = static_cast<int>(std::floor(v.position_m.y() * inv_eps));
-        const int   cz = static_cast<int>(std::floor(v.position_m.z() * inv_eps));
+        auto& v = voxels[i];
+        // Issue #638 P1-A — non-finite position (NaN/Inf from a buggy
+        // depth backend) cannot be safely binned.  static_cast<int>
+        // (std::floor(NaN)) is undefined behaviour per C++17.  Mark as
+        // noise and skip; the upstream sender stays unaware so future
+        // diagnostic improvements can surface the count.
+        if (!std::isfinite(v.position_m.x()) || !std::isfinite(v.position_m.y()) ||
+            !std::isfinite(v.position_m.z())) {
+            v.instance_id = 0;
+            continue;
+        }
+        const float fx = v.position_m.x() * inv_eps;
+        const float fy = v.position_m.y() * inv_eps;
+        const float fz = v.position_m.z() * inv_eps;
+        // Clamp before cast — preserves int domain safety even at small
+        // eps values where world coordinates can produce out-of-range
+        // cell indices (review P2-A).
+        const int cx = std::clamp(static_cast<int>(std::floor(fx)), -kMaxCellIndex, kMaxCellIndex);
+        const int cy = std::clamp(static_cast<int>(std::floor(fy)), -kMaxCellIndex, kMaxCellIndex);
+        const int cz = std::clamp(static_cast<int>(std::floor(fz)), -kMaxCellIndex, kMaxCellIndex);
 
         for (int dz = -1; dz <= 1; ++dz) {
             for (int dy = -1; dy <= 1; ++dy) {
@@ -167,15 +196,17 @@ inline void assign_instance_ids(std::vector<drone::hal::VoxelUpdate>& voxels, fl
 }
 
 /// Convenience accessor — returns the number of distinct non-noise
-/// clusters present in `voxels` (assumes `assign_instance_ids` already
-/// ran).  Useful for diagnostic logs.
-[[nodiscard]] inline uint32_t count_clusters(
-    const std::vector<drone::hal::VoxelUpdate>& voxels) noexcept {
-    uint32_t max_id = 0;
+/// instance IDs present in `voxels`.  Useful for diagnostic logs.
+///
+/// Counts distinct IDs (not max ID) so the result remains correct after
+/// Phase 2's tracker replaces compact frame-local IDs with non-compact
+/// stable instance IDs (review P2-H from PR #639).
+[[nodiscard]] inline uint32_t count_clusters(const std::vector<drone::hal::VoxelUpdate>& voxels) {
+    std::unordered_set<uint32_t> ids;
     for (const auto& v : voxels) {
-        if (v.instance_id > max_id) max_id = v.instance_id;
+        if (v.instance_id != 0) ids.insert(v.instance_id);
     }
-    return max_id;
+    return static_cast<uint32_t>(ids.size());
 }
 
 }  // namespace drone::perception

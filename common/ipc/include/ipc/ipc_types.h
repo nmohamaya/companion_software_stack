@@ -123,7 +123,10 @@ struct DetectedObjectList {
 // Per-batch voxel cap. One batch == one video frame.
 // If `MaskDepthProjector` produces more than this, the PR-2 publisher
 // must either truncate by descending confidence or emit multiple batches
-// per frame. 1024 × 32 B + 24 B header ≈ 32 KB → one Zenoh SHM packet.
+// per frame. 1024 × 40 B + 24 B header ≈ 40 KB → one Zenoh SHM packet.
+// (Voxel size grew from 32 → 40 B in PR #639 / Issue #638 Phase 1 when
+// `instance_id` + 4 B trailing pad were added; SHM pool sizing must
+// match this updated number.)
 // Sized for typical scenarios (5–15 SAM masks × sparse 4×4 depth
 // sampling); revisit after the first live PR-2 measurement.
 static constexpr uint32_t MAX_VOXELS_PER_BATCH = 1024;
@@ -207,7 +210,11 @@ static_assert(offsetof(SemanticVoxelBatch, num_voxels) == 16,
               "num_voxels must follow timestamp_ns + frame_sequence");
 static_assert(offsetof(SemanticVoxelBatch, voxels) == 24,
               "voxels[] must follow the 24-byte header with no interior padding");
-// Total sizeof depends on alignas(64): unpadded 24 + 1024*32 = 32792 rounds up to 32832.
+// Total sizeof depends on alignas(64): unpadded 24 + 1024*40 = 40984 rounds
+// up to 41024 (~40 KB).  The static_assert below derives the value from
+// sizeof(SemanticVoxel) so the formula is self-updating, but operators
+// reading this comment for SHM pool sizing should plan for ~40 KB per
+// batch (was ~32 KB pre-#639).
 static_assert(sizeof(SemanticVoxelBatch) ==
                   ((24 + MAX_VOXELS_PER_BATCH * sizeof(SemanticVoxel) + 63u) & ~63u),
               "SemanticVoxelBatch size must equal alignas(64)-rounded(header + voxel array)");
