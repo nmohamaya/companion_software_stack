@@ -19,6 +19,7 @@
 #include "perception/types.h"
 #include "perception/ukf_fusion_engine.h"
 #include "perception/voxel_clusterer.h"
+#include "perception/voxel_instance_tracker.h"
 #include "util/config_keys.h"
 #include "util/diagnostic.h"
 #include "util/latency_profiler.h"
@@ -225,7 +226,10 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
                                    // Issue #638 Phase 1 — voxel clustering params.
                                    // eps_m == 0 disables clustering (every voxel
                                    // gets instance_id=0, current default).
-                                   float cluster_eps_m, int cluster_min_pts) {
+                                   float cluster_eps_m, int cluster_min_pts,
+                                   // Issue #638 Phase 2 — cross-frame instance tracker.
+                                   // Disabled when clustering is disabled (eps==0).
+                                   drone::perception::VoxelInstanceTracker* tracker) {
     DRONE_LOG_INFO("[MaskProj] Thread started — publishing to {}",
                    drone::ipc::topics::SEMANTIC_VOXELS);
 
@@ -351,10 +355,19 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
         drone::perception::assign_instance_ids(voxels, cluster_eps_m, cluster_min_pts,
                                                &cluster_scratch);
         const uint32_t n_clusters = drone::perception::count_clusters(voxels);
+
+        // Issue #638 Phase 2 — convert frame-local cluster IDs to stable
+        // cross-frame instance IDs.  Tracker is null when clustering is
+        // disabled (eps==0) so this is a no-op in legacy scenarios.
+        if (tracker != nullptr && cluster_eps_m > 0.0f) {
+            tracker->update(voxels, masks_opt->timestamp_ns);
+        }
+
         if (cluster_eps_m > 0.0f && tick_count % 100 == 1) {
-            DRONE_LOG_INFO("[VoxelCluster] frame_seq={}: {} voxels → {} clusters "
+            DRONE_LOG_INFO("[VoxelCluster] frame_seq={}: {} voxels → {} clusters → {} tracks "
                            "(eps={:.2f}m, min_pts={})",
-                           masks_opt->frame_sequence, voxels.size(), n_clusters, cluster_eps_m,
+                           masks_opt->frame_sequence, voxels.size(), n_clusters,
+                           tracker != nullptr ? tracker->track_count() : 0u, cluster_eps_m,
                            cluster_min_pts);
         }
 
@@ -1253,8 +1266,12 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::VideoFrame>> sam_video_sub;
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::Pose>>       pathA_pose_sub;
     std::unique_ptr<drone::util::PathATrace>                         path_a_trace;
-    std::thread                                                      t_sam;
-    std::thread                                                      t_mask_proj;
+    // Issue #638 Phase 2 — cross-frame voxel instance tracker.  Lifetime
+    // matches the mask_projection thread's; declared here for the same
+    // ordering reason as path_a_trace above.
+    std::unique_ptr<drone::perception::VoxelInstanceTracker> path_a_tracker;
+    std::thread                                              t_sam;
+    std::thread                                              t_mask_proj;
     if (path_a_active) {
         sam_video_sub =
             ctx.bus.subscribe<drone::ipc::VideoFrame>(drone::ipc::topics::VIDEO_MISSION_CAM);
@@ -1301,13 +1318,50 @@ int main(int argc, char* argv[]) {
                            cluster_min_pts);
         }
 
+        // Issue #638 Phase 2 — cross-frame instance tracker.  Constructed
+        // here so its track table persists across frames; only consulted
+        // when clustering is enabled.
+        //
+        // P2-B/C/F from PR #640 review: NaN/Inf and out-of-range guards.
+        // Without these, NaN config slips through `std::max(0.0f, NaN)`
+        // (returns NaN), then track-distance comparisons return false for
+        // every candidate → unbounded `tracks_` growth → DOS via memory
+        // exhaustion.  An over-large `max_match_distance_m` would
+        // conflate distinct obstacles across the visible world.
+        constexpr float kMaxMatchDistanceCapM        = 50.0f;    // physical sensor sanity cap
+        constexpr float kTrackMaxAgeCapS             = 3600.0f;  // 1 h (avoids uint64_t overflow)
+        float           tracker_max_match_distance_m = ctx.cfg.get<float>(
+            drone::cfg_key::perception::path_a::TRACKER_MAX_MATCH_DISTANCE_M, 3.0f);
+        float tracker_track_max_age_s =
+            ctx.cfg.get<float>(drone::cfg_key::perception::path_a::TRACKER_TRACK_MAX_AGE_S, 2.0f);
+        if (!std::isfinite(tracker_max_match_distance_m) || tracker_max_match_distance_m < 0.0f ||
+            tracker_max_match_distance_m > kMaxMatchDistanceCapM) {
+            DRONE_LOG_WARN("[VoxelTracker] tracker.max_match_distance_m {} out of [0,{}] — "
+                           "clamping to 3.0m",
+                           tracker_max_match_distance_m, kMaxMatchDistanceCapM);
+            tracker_max_match_distance_m = 3.0f;
+        }
+        if (!std::isfinite(tracker_track_max_age_s) || tracker_track_max_age_s < 0.0f ||
+            tracker_track_max_age_s > kTrackMaxAgeCapS) {
+            DRONE_LOG_WARN("[VoxelTracker] tracker.track_max_age_s {} out of [0,{}] — "
+                           "clamping to 2.0s",
+                           tracker_track_max_age_s, kTrackMaxAgeCapS);
+            tracker_track_max_age_s = 2.0f;
+        }
+        path_a_tracker = std::make_unique<drone::perception::VoxelInstanceTracker>(
+            tracker_max_match_distance_m, tracker_track_max_age_s);
+        if (cluster_eps_m > 0.0f) {
+            DRONE_LOG_INFO("[VoxelTracker] enabled: max_match={:.2f}m max_age={:.1f}s",
+                           tracker_max_match_distance_m, tracker_track_max_age_s);
+        }
+
         t_sam       = std::thread(sam_thread, std::ref(*sam_video_sub), std::ref(sam_to_projection),
                                   std::ref(g_shutdown_phase), std::ref(*sam_backend));
-        t_mask_proj = std::thread(mask_projection_thread, std::ref(sam_to_projection),
-                                  std::ref(inference_to_projection), std::ref(depth_to_projection),
-                                  std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
-                                  std::ref(g_shutdown_phase), std::ref(*mask_projector),
-                                  path_a_trace.get(), cluster_eps_m, cluster_min_pts);
+        t_mask_proj = std::thread(
+            mask_projection_thread, std::ref(sam_to_projection), std::ref(inference_to_projection),
+            std::ref(depth_to_projection), std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
+            std::ref(g_shutdown_phase), std::ref(*mask_projector), path_a_trace.get(),
+            cluster_eps_m, cluster_min_pts, path_a_tracker.get());
     }
 
     // ── Thread watchdog + health publisher ──────────────────
