@@ -109,8 +109,10 @@ public:
                              int promotion_hits = 0, uint32_t radar_promotion_hits = 3,
                              float min_promotion_depth_confidence = 0.3f, int max_static_cells = 0,
                              bool prediction_enabled = true, float prediction_dt_s = 2.0f,
-                             bool require_radar_for_promotion = false, int voxel_promotion_hits = 3,
-                             float static_cell_ttl_s = 0.0f)
+                             bool  require_radar_for_promotion           = false,
+                             int   voxel_promotion_hits                  = 3,
+                             float static_cell_ttl_s                     = 0.0f,
+                             int   voxel_instance_promotion_observations = 0)
         : resolution_(resolution)
         , half_extent_cells_(static_cast<int>(extent / resolution))
         , inflation_cells_(std::max(1, static_cast<int>(std::ceil(inflation / resolution))))
@@ -124,7 +126,8 @@ public:
         , prediction_dt_s_(prediction_dt_s)
         , require_radar_for_promotion_(require_radar_for_promotion)
         , voxel_promotion_hits_(voxel_promotion_hits)
-        , static_cell_ttl_ns_(static_cast<uint64_t>(std::max(0.0f, static_cell_ttl_s) * 1e9f)) {}
+        , static_cell_ttl_ns_(static_cast<uint64_t>(std::max(0.0f, static_cell_ttl_s) * 1e9f))
+        , voxel_instance_promotion_observations_(voxel_instance_promotion_observations) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
     /// Static HD-map obstacles are left untouched; call clear_static() to remove those.
@@ -199,7 +202,7 @@ public:
     /// `hd_map_cells_` — an upstream pipeline regression (e.g. a future SAM
     /// misfire) can still be cleared by `clear_static()`.
     ///
-    /// @return `{inserted, clamped_dropped, low_confidence_dropped, out_of_bounds, cap_blocked}`
+    /// @return `{inserted, clamped_dropped, low_confidence_dropped, out_of_bounds, cap_blocked, instance_skipped}`
     struct VoxelInsertStats {
         size_t inserted               = 0;
         size_t clamped_dropped        = 0;
@@ -210,12 +213,37 @@ public:
         // These cells stay in the dynamic bucket and can still promote
         // later if the cap frees up via the static-TTL sweep.
         size_t cap_blocked = 0;
+        // Issue #638 Phase 3 — voxels rejected by the per-instance promotion
+        // gate.  Either instance_id == 0 (noise from Phase 1's min_pts gate
+        // or Phase 2's tracker bypass) or the tracked instance hasn't been
+        // observed in enough frames yet (`voxel_instance_promotion_observations_`).
+        // Always 0 when instance promotion is disabled (default).
+        size_t instance_skipped = 0;
     };
     VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels, uint32_t n,
                                    float clamp_m, float min_confidence) {
         VoxelInsertStats s;
         if (voxels == nullptr || n == 0) return s;
         const float clamp = std::max(0.0f, clamp_m);
+
+        // Issue #638 Phase 3 — instance-aware promotion gate.
+        // When `voxel_instance_promotion_observations_ > 0`, voxels are
+        // only written to the grid if they belong to a tracked instance
+        // (instance_id > 0) that has been observed in enough frames.
+        // Per-frame observation counting: each call to insert_voxels
+        // counts as one frame; each distinct instance_id seen in this
+        // batch increments its observation count by exactly 1.  After
+        // `voxel_instance_promotion_observations_` distinct frames, all
+        // voxels for that instance pass the gate.
+        if (voxel_instance_promotion_observations_ > 0) {
+            std::unordered_set<uint32_t> batch_instances;
+            for (uint32_t i = 0; i < n; ++i) {
+                if (voxels[i].instance_id != 0) batch_instances.insert(voxels[i].instance_id);
+            }
+            for (uint32_t id : batch_instances) {
+                ++instances_[id].observation_count;
+            }
+        }
 
         // Each voxel carries a point sample of an obstacle surface.  Without
         // inflation a 5 m cube hit by 4 depth samples produces only 2-3
@@ -266,6 +294,24 @@ public:
             if (v.position_z < kMinObstacleZ) {
                 ++s.clamped_dropped;
                 continue;
+            }
+            // Issue #638 Phase 3 — per-voxel instance gate.  When enabled,
+            // noise (id=0) is dropped, and tracked instances must have
+            // accumulated `voxel_instance_promotion_observations_` frames
+            // before any of their voxels reach the grid.  Real obstacles
+            // pass once they're well-observed; transient flickers never do.
+            if (voxel_instance_promotion_observations_ > 0) {
+                if (v.instance_id == 0) {
+                    ++s.instance_skipped;
+                    continue;
+                }
+                const auto it = instances_.find(v.instance_id);
+                if (it == instances_.end() ||
+                    it->second.observation_count <
+                        static_cast<uint32_t>(voxel_instance_promotion_observations_)) {
+                    ++s.instance_skipped;
+                    continue;
+                }
             }
             const GridCell center = world_to_grid(v.position_x, v.position_y, v.position_z);
             if (!in_bounds(center)) {
@@ -603,6 +649,28 @@ public:
     void               set_promotion_paused(bool paused) { promotion_paused_ = paused; }
     [[nodiscard]] bool promotion_paused() const { return promotion_paused_; }
 
+    /// Issue #638 Phase 3 — number of stable instances tracked for the
+    /// instance-promotion gate.  Useful for diagnostics; 0 when the gate
+    /// is disabled.
+    [[nodiscard]] size_t tracked_instance_count() const { return instances_.size(); }
+
+    /// Number of tracked instances that have crossed the promotion
+    /// threshold (their voxels are currently writing to the grid).
+    [[nodiscard]] size_t promoted_instance_count() const {
+        if (voxel_instance_promotion_observations_ <= 0) return 0;
+        const auto threshold = static_cast<uint32_t>(voxel_instance_promotion_observations_);
+        size_t     n         = 0;
+        for (const auto& [id, rec] : instances_) {
+            if (rec.observation_count >= threshold) ++n;
+        }
+        return n;
+    }
+
+    /// Clear per-instance observation counters.  Call on RTL/LAND so a
+    /// stale instance from earlier in the mission can't keep promoting
+    /// after the perception context resets.
+    void clear_instance_state() { instances_.clear(); }
+
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.
     /// D* Lite uses this to know which edges changed.
@@ -815,6 +883,22 @@ private:
     // cells live forever).  Recommended: 30-60 s for no-HD-map scenarios so
     // the outbound flight's voxel wake doesn't wall off the return corridor.
     uint64_t static_cell_ttl_ns_{0};
+    // Issue #638 Phase 3 — instance-aware promotion gate for PATH A voxels.
+    // When > 0, voxels carrying instance_id from Phase 2's tracker are only
+    // written to the grid once their instance has been observed in this many
+    // distinct frames.  Noise (instance_id == 0 from Phase 1's min_pts gate)
+    // is rejected unconditionally.  0 = disabled, voxels write directly to
+    // the grid as before (current default).
+    int voxel_instance_promotion_observations_{0};
+    // Per-instance observation tracking for the Phase 3 gate.  Keyed by the
+    // stable instance_id from Phase 2's tracker.  Each entry counts the
+    // number of distinct insert_voxels() batches that have referenced this
+    // instance — when count >= voxel_instance_promotion_observations_, the
+    // instance's voxels start writing to the grid.
+    struct InstanceRecord {
+        uint32_t observation_count = 0;
+    };
+    std::unordered_map<uint32_t, InstanceRecord> instances_;
     // Cumulative count of objects with velocity-based prediction applied (never reset).
     int      total_predictions_applied_{0};
     uint64_t diag_tick_{0};  // for periodic diagnostic logging

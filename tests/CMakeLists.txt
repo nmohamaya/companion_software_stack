@@ -171,6 +171,8 @@ add_drone_test(test_mask_depth_projector test_mask_depth_projector.cpp)
 add_drone_test(test_voxel_clusterer      test_voxel_clusterer.cpp)
 # Issue #638 Phase 2 — cross-frame voxel instance tracker
 add_drone_test(test_voxel_instance_tracker test_voxel_instance_tracker.cpp)
+# Issue #638 Phase 3 — OccupancyGrid3D instance-promotion gate
+add_drone_test(test_grid_instance_promotion test_grid_instance_promotion.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)

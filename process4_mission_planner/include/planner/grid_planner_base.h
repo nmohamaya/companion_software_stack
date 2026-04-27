@@ -91,6 +91,12 @@ struct GridPlannerConfig {
     // Recommended: 30-60 s for no-HD-map scenarios so the outbound voxel
     // wake doesn't wall off return corridors.
     float static_cell_ttl_s = 0.0f;
+    // Issue #638 Phase 3 — instance-aware voxel promotion gate.  When > 0,
+    // PATH A voxels are only written to the grid once their tracked
+    // instance has accumulated this many distinct frames of observation.
+    // Noise voxels (instance_id == 0) are unconditionally rejected.
+    // 0 = disabled (legacy behaviour, voxels write directly to grid).
+    int voxel_instance_promotion_observations = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -181,7 +187,7 @@ public:
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
                 config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
                 config.require_radar_for_promotion, config.voxel_promotion_hits,
-                config.static_cell_ttl_s) {}
+                config.static_cell_ttl_s, config.voxel_instance_promotion_observations) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {

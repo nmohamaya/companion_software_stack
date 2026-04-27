@@ -225,6 +225,17 @@ int main(int argc, char* argv[]) {
                        "(HD-map cells exempt)",
                        planner_cfg.static_cell_ttl_s);
     }
+    // Issue #638 Phase 3 — instance-aware voxel promotion gate.  0 = legacy
+    // (every voxel writes to grid), >0 = require N frames of observation per
+    // tracked instance before its voxels reach the grid.
+    planner_cfg.voxel_instance_promotion_observations = ctx.cfg.get<int>(
+        drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INSTANCE_PROMOTION_OBSERVATIONS,
+        planner_cfg.voxel_instance_promotion_observations);
+    if (planner_cfg.voxel_instance_promotion_observations > 0) {
+        DRONE_LOG_INFO("[OccGrid] Instance-promotion gate enabled: {} frames required per "
+                       "tracked instance before voxels reach the grid (#638 Phase 3)",
+                       planner_cfg.voxel_instance_promotion_observations);
+    }
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,

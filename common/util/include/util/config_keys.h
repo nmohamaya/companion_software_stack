@@ -415,6 +415,14 @@ inline constexpr const char* VOXEL_PROMOTION_HITS =
 // are always immune.  0 = legacy permanent-promotion behaviour.
 inline constexpr const char* STATIC_CELL_TTL_S =
     "mission_planner.occupancy_grid.voxel_input.static_cell_ttl_s";
+// Issue #638 Phase 3 — instance-aware promotion gate.  When > 0, PATH A
+// voxels are written to the grid only after their tracked instance
+// (Phase 2's stable instance_id) has accumulated this many distinct
+// frames of observation.  Noise voxels (instance_id == 0 from Phase 1's
+// min_pts gate or Phase 2's tracker bypass) are unconditionally rejected.
+// 0 = disabled (legacy behaviour, voxels write directly to the grid).
+inline constexpr const char* VOXEL_INSTANCE_PROMOTION_OBSERVATIONS =
+    "mission_planner.occupancy_grid.voxel_input.instance_promotion_observations";
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {
