@@ -115,6 +115,19 @@ public:
     ///   - absolute paths that have no `drone_logs` segment (e.g.
     ///     `/etc/cron.d/evil.jsonl`, `/tmp/absolute_escape.jsonl`).
     ///   - relative paths that normalise to an escape (`../../etc/foo`).
+    ///
+    /// Trade-off (PR #623 review-memory-safety P2): this is weaker than
+    /// "reject all absolute paths".  The check uses *exact* segment
+    /// equality (`segment == "drone_logs"`), so `/etc/drone_logs_fake/x`
+    /// or `/var/drone_logsx/y` are still rejected — but any directory
+    /// literally named `drone_logs` anywhere on the filesystem will pass.
+    /// Risk is bounded because (a) the writer only opens for write (no
+    /// read of secrets), (b) trace content is JSONL telemetry the
+    /// caller already controls, and (c) production builds default to
+    /// `trace_voxels=false` so the writer is inert.  Symlink resolution
+    /// is intentionally *not* performed: `lexically_normal()` only
+    /// collapses `.` and `..` textually, leaving symlink targets to the
+    /// OS at write time.  See DR-026 for the full analysis.
     static bool is_path_confined(const std::string& path) {
         if (path.empty()) return false;
         std::filesystem::path p(path);

@@ -859,3 +859,53 @@ CI hygiene (follow-up): add a lint that greps non-diag scenarios' `config_overri
 
 **Date:** 2026-04-23 (PR #614 review, review-api-contract P1)
 
+---
+
+## DR-035: PR #632 review-memory-safety P1 "Missing struct fields" — Stale review, fields exist
+
+**Question:** PR #632 review-memory-safety flagged a P1 marked "Blocks Merge" claiming `config_.yaw_towards_velocity` and `config_.yaw_velocity_threshold_mps` referenced in the new `GridPlannerBase` accessors *do not exist* in `GridPlannerConfig`, that the diff does not add them, and that the build would fail. The reviewer also flagged the same fields being set in `tests/test_mission_state_tick.cpp` as the same compile error.
+
+**Audit result:** Both fields *do* exist in `GridPlannerConfig` and have lived there since the integration-branch tip. `process4_mission_planner/include/planner/grid_planner_base.h` line 68:
+
+```cpp
+bool yaw_towards_velocity = false;
+```
+
+…and line 74:
+
+```cpp
+float yaw_velocity_threshold_mps = 0.4f;
+```
+
+The reviewer's "grep across the entire codebase returns zero matches" claim is incorrect — both are also referenced in `plan()` at lines 438 and 440 of the same file, and the surrounding `yaw_towards_velocity` comment block at lines 62–67 documents the feature.
+
+**Likely cause:** The reviewer's grep was scoped to the PR diff only (which doesn't *change* those struct fields, only adds the accessors that read them), or hit a `git show` view rather than the full file at the integration-branch tip. The "first 500 lines" diff truncation note in the review's review-security section corroborates this — the GridPlannerConfig struct begins at line 33 in the file but the relevant fields are at lines 60–74, which would land near the truncation boundary.
+
+**For accepting the comment:** zero — it's wrong on the facts. The build is green at PR #632.
+
+**For declining (our decision):** the comment is a stale review artefact, not a real bug. Adding the fields again would either (a) shadow existing fields with the same name (compile error) or (b) be a no-op if the reviewer wanted us to verify the existing ones. No code change is correct here.
+
+**Decision:** Do not modify `GridPlannerConfig`. Note in the PR's review-fixes table that the P1 has been audited and dismissed as a false positive against the actual file contents. Apply the *adjacent* P2 (`noexcept` on the new pure virtuals) which IS a real hardening improvement.
+
+**Revisit when:** never — this is a one-off review artefact. Future stale-review claims of the same shape (`X does not exist`, `code will not compile`) get the same treatment: read the file at HEAD, verify, decline if the claim is wrong, fix if it's right.
+
+**Date:** 2026-04-27 (PR #632 review-memory-safety P1)
+
+---
+
+## DR-036: PR #630 review-security P4 "Nonstandard `_comment_*` key" — Established convention, not deviation
+
+**Question:** PR #630 review-security P4 flagged `"_comment_sample_grid_size"` in `config/scenarios/33_non_coco_obstacles.json` as a "nonstandard comment key name" deviating from the established `"_comment"` convention, recommending a rename to `"_comment"` (or `"_comment_path_a_sampling"` to avoid collision).
+
+**Audit result:** `grep -rh '"_comment_' config/scenarios/` returns 23 hits across multiple scenario files: `_comment_base_config`, `_comment_detector`, `_comment_sample_grid_size`, `_comment_use_cuda`, `_comment_static_obstacles`, `_comment_temp`, `_comment_waypoints`, `_comment_model`, `_comment_enabled`. The `_comment_<key>` form is the established pattern for *inline annotations on a specific sibling key*, complementing `_comment` for *block-level annotations*. Both forms coexist in the same file (e.g. scenario 33 has both `_comment` at the top of `path_a` and `_comment_use_cuda` next to `path_a.sam.use_cuda`).
+
+**For accepting the comment:** consistency with a single comment-key naming convention; smaller surface for "is this a parseable key or a comment" confusion.
+
+**For declining (our decision):** the convention IS `_comment_<keyname>` for sibling annotations and `_comment` for block annotations. Renaming this one instance would BREAK consistency with 22 other live `_comment_*` keys. The reviewer was generalising from `_comment` without grepping for the broader pattern; the actual convention permits both.
+
+**Decision:** Keep `_comment_sample_grid_size` as-is. If a future linter is added, it should accept both `^_comment$` and `^_comment_[a-z_]+$` patterns.
+
+**Revisit when:** the codebase grows a JSON schema validator that explicitly enumerates allowed keys; at that point all `_comment*` keys should be enumerated together.
+
+**Date:** 2026-04-27 (PR #630 review-security P4)
+

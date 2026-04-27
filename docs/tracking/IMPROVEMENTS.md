@@ -16,6 +16,33 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-27
+
+#### Mid-flight reconfiguration of `CpuSemanticProjector` setters
+
+- **Priority:** P3
+- **Category:** code quality / safety
+- **Noticed while:** PR #630 review-fault-recovery + review-memory-safety raised the `sample_grid_size_` / `max_obstacle_depth_m_` fields are plain types written via setter and read on the perception worker thread. Today the contract is "configure on main thread before workers launch", which is enforced by the std::thread happens-before edge.
+- **Risk if violated:** future hot-reload path calling `set_*` mid-flight would race with `project_masked()` reading the field. Compiler may also cache reads across loop iterations on a `const` method.
+- **Options:** (a) Make the fields `std::atomic<int>`/`std::atomic<float>` with `acquire`/`release` (fast, lock-free). (b) Move config to constructor/`init()` only and remove the setters (architecturally cleaner but breaks the existing setter API). (c) Add a `static_assert` / runtime check in `set_*` that `initialized_` matches the init-once contract.
+- **When worth doing:** when the first hot-reload feature lands. Until then the threading-contract docstring added in PR `fix/review-comments-batch` covers the gap.
+
+#### Use `Config::require<T>()` for safety-relevant perception keys
+
+- **Priority:** P3
+- **Category:** observability
+- **Noticed while:** PR #630 review-security flagged that `Config::get<int>("...sample_grid_size", 4)` silently returns the default if the JSON value is the wrong type (`"sample_grid_size": "dense"`). For the no-HD-map case this is a 16× drop in obstacle discovery with no operator-visible warning.
+- **Proposed fix:** Audit which `cfg.get<>()` calls correspond to safety-relevant perception/planner parameters (sample_grid_size, max_obstacle_depth_m, voxel_promotion_hits, yaw_velocity_threshold_mps, etc.) and switch them to `cfg.require<T>()` with explicit fallback + WARN.
+- **When worth doing:** next perception/planner config sweep. Smaller-scope one-off was added to PR #630 (raw-vs-effective comparison + WARN log) — full audit is broader.
+
+#### Test isolation: `YawRefreshSkippedBelowVelocityThreshold` passes without #624 code
+
+- **Priority:** P3
+- **Category:** test quality
+- **Noticed while:** PR #632 review-test-quality. The test checks that `traj.target_yaw` keeps the avoider's `0.42f` marker — but with the #624 yaw refresh removed entirely, the test still passes (the avoider just sets the value and nothing overwrites it). The companion test `TargetYawFollowsAvoiderDeflectedVelocity` does prove the refresh is hooked up at the above-threshold path; the gap is theoretical.
+- **Proposed fix:** Restructure HoverAvoider to NOT touch `target_yaw`, then assert the planner's natural target_yaw passes through unchanged. With the broken-threshold case (refresh always fires), `target_yaw` would become `atan2(0.01, 0.01) ≈ π/4`, distinguishable from the planner's bee-line value.
+- **When worth doing:** opportunistically when the test file is next touched for #624-adjacent work.
+
 ### 2026-04-22
 
 #### (new) Revisit: extract PATH A (SAM + mask projection) into its own process

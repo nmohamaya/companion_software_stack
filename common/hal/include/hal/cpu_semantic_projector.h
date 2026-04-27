@@ -34,7 +34,13 @@ public:
         }
 
         std::vector<VoxelUpdate> updates;
-        updates.reserve(detections.size());
+        // Worst case: every detection has a mask covered by a sample_grid_size_²
+        // probe grid (see project_masked).  Reserving for that bound avoids
+        // mid-loop reallocations when many masked detections come through (e.g.
+        // scenario 33 at sample_grid_size=16 → up to 256 voxels per detection).
+        const size_t worst_case_per_det = static_cast<size_t>(sample_grid_size_) *
+                                          static_cast<size_t>(sample_grid_size_);
+        updates.reserve(detections.size() * worst_case_per_det);
 
         // Scale factors from image coords to depth map coords
         const float depth_src_w = depth.source_width > 0 ? static_cast<float>(depth.source_width)
@@ -103,6 +109,13 @@ public:
     ///
     /// Clamped to [2, 64] — a 0 or negative value would produce no voxels;
     /// >64 risks per-frame allocations that starve the detector thread.
+    ///
+    /// Threading: must be called before `project()` is invoked from any
+    /// worker thread.  `sample_grid_size_` is a plain `int` (no atomic) —
+    /// the init-once-then-read-only contract is shared with the other
+    /// setters in this class (`set_texture_gate_threshold`,
+    /// `set_max_obstacle_depth_m`); the std::thread constructor that
+    /// launches the perception worker provides the happens-before edge.
     void set_sample_grid_size(int grid_size) { sample_grid_size_ = std::clamp(grid_size, 2, 64); }
 
     [[nodiscard]] int sample_grid_size() const { return sample_grid_size_; }

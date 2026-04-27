@@ -10,6 +10,7 @@
 #   write_run_metadata()    — Machine-readable run_metadata.json
 #   generate_run_report()   — Human-readable run_report.txt with observations
 #   append_to_index()       — Append to runs.jsonl history
+#   preflight_model_paths() — Issue #625: assert every model_path exists, in-tree
 #
 # Usage: source "${SCRIPT_DIR}/lib_scenario_logging.sh"
 # ═══════════════════════════════════════════════════════════════
@@ -997,4 +998,67 @@ _report_overall_assessment() {
         echo "  Radar-primary architecture active: ${radar_only_count} independent radar tracks created."
     fi
     echo ""
+}
+
+# ── Preflight: model_path existence + project-root confinement ───
+# Issue #625 + PR #628 review-security P3.
+# Walks the merged config JSON, asserts that every "model_path" string
+# resolves to an existing file inside $project_root.  Any failure prints
+# tab-separated `key\tpath` to stdout so the caller can iterate via
+# `IFS=$'\t' read -r key path`.  Returns 0 if all paths OK, non-zero on
+# parse error or missing/escaping paths (caller checks `$?` and stdout).
+#
+# Hardened against:
+#   - path traversal: `.resolve().relative_to(project_root.resolve())`
+#     rejects `models/../../etc/passwd` and absolute paths outside the
+#     tree (e.g. `/etc/ssh/...`).
+#   - malformed config: JSON parse failure prints a diagnostic to stdout
+#     and exits 1 instead of fail-open propagating up to caller.
+#
+# Args:
+#   $1 — path to merged-config JSON
+#   $2 — project root (PROJECT_DIR)
+preflight_model_paths() {
+    local cfg_path="$1"
+    local project_root="$2"
+    python3 - "$cfg_path" "$project_root" <<'PYEOF'
+import json, sys, pathlib
+cfg_path     = sys.argv[1]
+project_root = pathlib.Path(sys.argv[2]).resolve()
+try:
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+except (OSError, json.JSONDecodeError) as e:
+    print(f"_parse_error\tcould not read {cfg_path}: {e}")
+    sys.exit(1)
+
+missing = []
+def walk(obj, path=""):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            child = f"{path}.{k}" if path else k
+            if k == "model_path" and isinstance(v, str) and v:
+                p = pathlib.Path(v)
+                if not p.is_absolute():
+                    p = project_root / p
+                # Confine to project root: rejects path traversal
+                # ("models/../../etc/passwd") and absolute paths outside
+                # the tree.  .resolve() collapses .. and follows symlinks.
+                try:
+                    p.resolve().relative_to(project_root)
+                except ValueError:
+                    missing.append((child, f"{p}\t[escapes project root]"))
+                    walk(v, child)
+                    continue
+                if not p.exists():
+                    missing.append((child, str(p)))
+            walk(v, child)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            walk(item, f"{path}[{i}]")
+walk(cfg)
+for key, path in missing:
+    print(f"{key}\t{path}")
+sys.exit(0 if not missing else 0)  # missing list is non-empty stdout; caller checks
+PYEOF
 }
