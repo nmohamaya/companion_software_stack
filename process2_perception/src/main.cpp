@@ -1041,8 +1041,25 @@ int main(int argc, char* argv[]) {
                 // a silent fallback to N=4 in a scenario that needs N=16
                 // is a 16× drop in obstacle discovery (review: PR #630
                 // fault-recovery finding 2).
-                const int grid_size_raw = ctx.cfg.get<int>(
-                    drone::cfg_key::perception::semantic_projector::SAMPLE_GRID_SIZE, 4);
+                //
+                // Uses `cfg.require<int>()` rather than `cfg.get<int>()` so a
+                // wrong-type config value (e.g. `"sample_grid_size": "dense"`)
+                // surfaces as a WARN instead of silently falling through to
+                // the default 4 (PR #630 review-security P3 #2).
+                constexpr int kDefaultGridSize = 4;
+                int           grid_size_raw    = kDefaultGridSize;
+                const auto    cfg_key_str =
+                    std::string(drone::cfg_key::perception::semantic_projector::SAMPLE_GRID_SIZE);
+                if (auto r = ctx.cfg.require<int>(cfg_key_str); r.is_ok()) {
+                    grid_size_raw = r.value();
+                } else {
+                    if (r.error().code() == drone::util::ErrorCode::TypeMismatch) {
+                        DRONE_LOG_WARN("[PathA] {} has wrong JSON type — using default {} "
+                                       "(error: {})",
+                                       cfg_key_str, kDefaultGridSize, r.error().message());
+                    }
+                    // MissingKey is the common case (no override) — silent.
+                }
                 sp->set_sample_grid_size(grid_size_raw);
                 const int grid_size_eff = sp->sample_grid_size();
                 if (grid_size_raw != grid_size_eff) {

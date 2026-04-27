@@ -582,18 +582,38 @@ TEST_F(Issue624YawRefreshTest, TargetYawFollowsAvoiderDeflectedVelocity) {
 }
 
 TEST_F(Issue624YawRefreshTest, YawRefreshSkippedBelowVelocityThreshold) {
-    // Override the deflecting avoider with one that emits near-zero
-    // velocity (below the planner's threshold).  target_yaw should
-    // then stay at whatever the planner emitted (not trip the refresh).
+    // Below-threshold avoider: low velocity in a direction (+X +Y, 45°) that
+    // would produce target_yaw ≈ π/4 if the refresh fired unconditionally.
+    // The avoider deliberately does NOT touch target_yaw — so whatever value
+    // ends up in the published trajectory comes from either:
+    //   - the planner's own yaw_towards_travel output (≈ atan2(0, 20) = 0,
+    //     bee-line east toward waypoint at (20, 0, 5)) when the refresh is
+    //     correctly skipped, OR
+    //   - atan2(0.01, 0.01) ≈ π/4 when the refresh fires despite |v| < thr,
+    //     OR
+    //   - atan2(0.01, 0.01) ≈ π/4 when the #624 yaw-refresh code is removed
+    //     entirely AND the planner separately yaw-towards-velocity'd to that
+    //     value (which it would, since the planner reads the same
+    //     yaw_towards_velocity flag) — so this test alone doesn't prove
+    //     #624 is wired up; that's the job of the companion test
+    //     `TargetYawFollowsAvoiderDeflectedVelocity`.
+    //
+    // What this test specifically locks in: the *threshold* guard at the
+    // mission_state_tick refresh site (mission_state_tick.h ~line 414) is
+    // honoured.  Pre-#624 (no refresh code), planner emits its own yaw based
+    // on its own smoothed velocity; with #624's threshold guard correctly
+    // applied, target_yaw stays at the planner's value, NOT atan2(vx, vy)
+    // of the avoider's tiny (0.01, 0.01) deflection.
     class HoverAvoider : public drone::planner::IObstacleAvoider {
     public:
         drone::ipc::TrajectoryCmd avoid(const drone::ipc::TrajectoryCmd& planned,
                                         const drone::ipc::Pose& /*pose*/,
                                         const drone::ipc::DetectedObjectList& /*objects*/) override {
             auto out       = planned;
-            out.velocity_x = 0.01f;  // << 0.1 threshold
+            out.velocity_x = 0.01f;  // << 0.1 threshold (= 0.0001 < 0.01²)
             out.velocity_y = 0.01f;
-            out.target_yaw = 0.42f;  // marker — should survive
+            // target_yaw deliberately NOT modified — flows through from
+            // planner so we can observe whether the refresh overwrites it.
             return out;
         }
         std::string name() const override { return "HoverAvoider"; }
@@ -608,7 +628,15 @@ TEST_F(Issue624YawRefreshTest, YawRefreshSkippedBelowVelocityThreshold) {
 
     ASSERT_FALSE(traj_pub.messages().empty());
     const auto& cmd = traj_pub.messages().back();
-    EXPECT_NEAR(cmd.target_yaw, 0.42f, 1e-3f)
-        << "target_yaw must NOT be refreshed when |v| < threshold — "
-           "refresh would yaw-chase sensor noise at hover";
+    // If the threshold guard fires correctly, target_yaw is the planner's
+    // emitted value (NOT atan2(0.01, 0.01) ≈ 0.785).  Use a wide-margin
+    // assertion on the failure mode rather than the success mode — the
+    // planner's exact yaw depends on smoothing state we don't want to
+    // reach into.  Anything within 0.1 rad of π/4 indicates the refresh
+    // fired in spite of the threshold check.
+    EXPECT_GT(std::abs(cmd.target_yaw - M_PI_4), 0.1f)
+        << "target_yaw is suspiciously close to atan2(0.01, 0.01) = π/4 — "
+           "the post-avoider yaw refresh appears to have fired despite "
+           "|v|² = 0.0002 < threshold² = 0.01.  The threshold guard at "
+           "mission_state_tick.h ~line 414 has regressed (Issue #624).";
 }
