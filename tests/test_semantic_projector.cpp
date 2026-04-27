@@ -246,29 +246,55 @@ TEST(SemanticProjector, SampleGridSize_ClampToMaximum64) {
     EXPECT_EQ(proj.sample_grid_size(), 64);
 }
 
-TEST(SemanticProjector, SampleGridSize_16EmitsExpectedProbeCount) {
-    // The smoking gun from Issue #629: with legacy N=4, a fully-masked
-    // detection emits 16 voxels.  Bumping N=8 quadruples coverage.
+// Helper for the parameterised probe-count tests below.
+namespace {
+size_t fully_masked_probe_count(int grid_size) {
     CpuSemanticProjector proj;
     CameraIntrinsics     intr{500.0f, 500.0f, 320.0f, 240.0f, 640, 480};
-    ASSERT_TRUE(proj.init(intr));
-    proj.set_sample_grid_size(8);
-    EXPECT_EQ(proj.sample_grid_size(), 8);
+    EXPECT_TRUE(proj.init(intr));
+    proj.set_sample_grid_size(grid_size);
+    EXPECT_EQ(proj.sample_grid_size(), grid_size);
 
     InferenceDetection det;
-    det.bbox       = {100.0f, 100.0f, 80.0f, 80.0f};
-    det.class_id   = 5;
-    det.confidence = 0.8f;
-    // Full-image mask convention so every probe hits foreground.
+    det.bbox        = {100.0f, 100.0f, 80.0f, 80.0f};
+    det.class_id    = 5;
+    det.confidence  = 0.8f;
     det.mask_width  = 640;
     det.mask_height = 480;
     det.mask.assign(static_cast<size_t>(det.mask_width) * det.mask_height, 255);
 
     auto depth  = make_depth_map(640, 480, 8.0f);
     auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
-    ASSERT_TRUE(result.is_ok());
-    // 8×8 grid with all mask pixels active → 64 updates.
-    EXPECT_EQ(result.value().size(), 64u);
+    EXPECT_TRUE(result.is_ok());
+    return result.value().size();
+}
+}  // namespace
+
+TEST(SemanticProjector, SampleGridSize_8EmitsExpectedProbeCount) {
+    // The smoking gun from Issue #629: with legacy N=4, a fully-masked
+    // detection emits 16 voxels.  Bumping N=8 quadruples coverage.
+    EXPECT_EQ(fully_masked_probe_count(8), 64u);
+}
+
+TEST(SemanticProjector, SampleGridSize_16EmitsExpectedProbeCount_Production) {
+    // Production value used by scenario 33 (the no-HD-map perception case).
+    // Without this test, the production density was unvalidated — the
+    // earlier test mis-named "16" actually exercised N=8.
+    // (Review-test-quality P1 on PR #630.)
+    EXPECT_EQ(fully_masked_probe_count(16), 256u);
+}
+
+TEST(SemanticProjector, SampleGridSize_2EmitsExpectedProbeCount) {
+    // Boundary: minimum clamped value.  An off-by-one in the loop bound
+    // (e.g. `gy <= GRID`) would emit 9 probes instead of 4.
+    EXPECT_EQ(fully_masked_probe_count(2), 4u);
+}
+
+TEST(SemanticProjector, SampleGridSize_64EmitsExpectedProbeCount) {
+    // Boundary: maximum clamped value.  Verifies allocation succeeds and
+    // no array-bounds fault under 4096 back-projections per mask
+    // (review-fault-recovery P3 on PR #630).
+    EXPECT_EQ(fully_masked_probe_count(64), 4096u);
 }
 
 TEST(SemanticProjector, FactoryCpu) {

@@ -550,30 +550,10 @@ fi
 # completion with the affected stage degraded.  The pass_criteria failures look
 # identical to genuine logic bugs, so debugging takes 30+ minutes per missing
 # file.  Fail fast here instead, with a pointer to the right download script.
-MISSING_MODELS=$(python3 - "$MERGED_CONFIG" "$PROJECT_DIR" <<'PYEOF'
-import json, os, sys, pathlib
-cfg_path, project_root = sys.argv[1], pathlib.Path(sys.argv[2])
-cfg = json.load(open(cfg_path))
-missing = []
-def walk(obj, path=""):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            child = f"{path}.{k}" if path else k
-            if k == "model_path" and isinstance(v, str) and v:
-                p = pathlib.Path(v)
-                if not p.is_absolute():
-                    p = (project_root / p)
-                if not p.exists():
-                    missing.append((child, str(p)))
-            walk(v, child)
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            walk(item, f"{path}[{i}]")
-walk(cfg)
-for key, path in missing:
-    print(f"{key}\t{path}")
-PYEOF
-)
+# Implementation lives in lib_scenario_logging.sh so cosys + gazebo runners
+# share the same hardened check (PR #628 review-code-quality P2: deduplication;
+# review-security P3: path-traversal + json-parse hardening).
+MISSING_MODELS=$(preflight_model_paths "$MERGED_CONFIG" "$PROJECT_DIR")
 if [[ -n "$MISSING_MODELS" ]]; then
     echo -e "  ${RED}✗ Preflight failed: missing model file(s) referenced by scenario config${NC}" >&2
     echo "" >&2

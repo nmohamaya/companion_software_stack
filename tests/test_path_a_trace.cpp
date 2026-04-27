@@ -27,6 +27,23 @@ std::filesystem::path temp_path(const std::string& name) {
     return p;
 }
 
+/// RAII cleanup so `remove_all` runs even if an EXPECT/ASSERT throws or a
+/// later test crash leaves the temp tree behind (PR #623 review-memory-safety
+/// P2: tests previously leaked drone_logs/ subtrees in /tmp on failure).
+class TempPathCleanup {
+public:
+    explicit TempPathCleanup(std::filesystem::path p) : path_(std::move(p)) {}
+    ~TempPathCleanup() {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);  // best-effort, never throws
+    }
+    TempPathCleanup(const TempPathCleanup&)            = delete;
+    TempPathCleanup& operator=(const TempPathCleanup&) = delete;
+
+private:
+    std::filesystem::path path_;
+};
+
 void fill_batch(std::vector<drone::hal::InferenceDetection>& dets,
                 std::vector<drone::hal::InferenceDetection>& masks,
                 std::vector<drone::hal::VoxelUpdate>&        voxels) {
@@ -70,7 +87,8 @@ TEST(PathATraceTest, EnabledWritesOneJsonlLinePerBatch) {
     const auto        p   = temp_path("write.jsonl");
     const std::string rel = std::string("drone_logs/") +
                             p.filename().string();  // relative → confined
-    const auto abs = std::filesystem::current_path() / rel;
+    const auto      abs = std::filesystem::current_path() / rel;
+    TempPathCleanup cleanup(abs.parent_path());  // RAII removes drone_logs/ even on EXPECT failure
     std::filesystem::create_directories(abs.parent_path());
     std::filesystem::remove(abs);
 
@@ -107,7 +125,6 @@ TEST(PathATraceTest, EnabledWritesOneJsonlLinePerBatch) {
         EXPECT_TRUE(j.contains("voxels"));
         EXPECT_EQ(j["voxels"].size(), 1u);
     }
-    std::filesystem::remove(abs);
 }
 
 TEST(PathATraceTest, PathConfinementRejectsAbsoluteWithoutDroneLogs) {
@@ -126,11 +143,18 @@ TEST(PathATraceTest, PathConfinementAcceptsAbsoluteUnderDroneLogs) {
     auto abs_path = std::filesystem::temp_directory_path() /
                     ("drone_logs_test_" + std::to_string(::getpid())) / "drone_logs" /
                     "path_a_voxel_trace.jsonl";
+    TempPathCleanup cleanup(abs_path.parent_path().parent_path());
     std::filesystem::create_directories(abs_path.parent_path());
     drone::util::PathATrace trace(true, abs_path.string());
     EXPECT_TRUE(trace.enabled()) << "absolute path with drone_logs segment should be accepted: "
                                  << abs_path;
-    std::filesystem::remove_all(abs_path.parent_path().parent_path());
+    // After the writer reports enabled, verify we can actually write.
+    std::vector<drone::hal::InferenceDetection> dets, masks;
+    std::vector<drone::hal::VoxelUpdate>        voxels;
+    fill_batch(dets, masks, voxels);
+    drone::ipc::Pose pose{};
+    pose.quaternion[0] = 1.0;
+    trace.record_batch(1, 1, pose, dets, masks, voxels);
 }
 
 TEST(PathATraceTest, PathConfinementRejectsDotDotEscape) {
@@ -142,19 +166,33 @@ TEST(PathATraceTest, PathConfinementRejectsDotDotEscape) {
 }
 
 TEST(PathATraceTest, PathConfinementStaticHelper) {
-    // Exhaust the is_path_confined() truth table in one place.
+    // Exhaust the is_path_confined() truth table in one place — confinement
+    // logic is the security boundary for trace-path config.
     using drone::util::PathATrace;
+    // Relative — accepted unless they normalise to escape the tree.
     EXPECT_TRUE(PathATrace::is_path_confined("drone_logs/foo.jsonl"));
     EXPECT_TRUE(PathATrace::is_path_confined("foo.jsonl"));
     EXPECT_TRUE(PathATrace::is_path_confined("build/test/a.jsonl"));
     EXPECT_FALSE(PathATrace::is_path_confined(""));
-    EXPECT_FALSE(PathATrace::is_path_confined("/etc/passwd"));
-    EXPECT_FALSE(PathATrace::is_path_confined("/tmp/something.jsonl"));
     EXPECT_FALSE(PathATrace::is_path_confined("../foo.jsonl"));
     EXPECT_FALSE(PathATrace::is_path_confined("../../etc/foo"));
     // Paths that contain "..", but normalise to staying within the tree,
     // are fine (e.g. "foo/../bar.jsonl" normalises to "bar.jsonl").
     EXPECT_TRUE(PathATrace::is_path_confined("foo/../bar.jsonl"));
+    // Absolute — only accepted with a `drone_logs` segment somewhere in the
+    // normalised form.  Scenario runners rely on this path (PR #623).
+    EXPECT_FALSE(PathATrace::is_path_confined("/etc/passwd"));
+    EXPECT_FALSE(PathATrace::is_path_confined("/tmp/something.jsonl"));
+    EXPECT_TRUE(PathATrace::is_path_confined("/home/user/drone_logs/trace.jsonl"));
+    EXPECT_TRUE(PathATrace::is_path_confined("/var/run/drone_logs/x/y.jsonl"));
+    // Exact-segment match: a directory whose name *contains* "drone_logs"
+    // but isn't equal to it must be rejected (would otherwise let
+    // attacker-controlled prefixes pass).
+    EXPECT_FALSE(PathATrace::is_path_confined("/etc/drone_logs_fake/trace.jsonl"));
+    EXPECT_FALSE(PathATrace::is_path_confined("/var/drone_logsx/trace.jsonl"));
+    // Normalisation must not allow `..` to introduce an unintended
+    // drone_logs segment after collapse.
+    EXPECT_FALSE(PathATrace::is_path_confined("/tmp/drone_logs/../../etc/passwd"));
 }
 
 // ── R_body_from_cam frame-convention invariants (Fix #55) ───────────────

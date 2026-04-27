@@ -5,6 +5,7 @@
 
 #include "hal/isemantic_projector.h"
 
+#include <atomic>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -34,7 +35,13 @@ public:
         }
 
         std::vector<VoxelUpdate> updates;
-        updates.reserve(detections.size());
+        // Worst case: every detection has a mask covered by a sample_grid_size_²
+        // probe grid (see project_masked).  Reserving for that bound avoids
+        // mid-loop reallocations when many masked detections come through (e.g.
+        // scenario 33 at sample_grid_size=16 → up to 256 voxels per detection).
+        const int    grid               = sample_grid_size_.load(std::memory_order_acquire);
+        const size_t worst_case_per_det = static_cast<size_t>(grid) * static_cast<size_t>(grid);
+        updates.reserve(detections.size() * worst_case_per_det);
 
         // Scale factors from image coords to depth map coords
         const float depth_src_w = depth.source_width > 0 ? static_cast<float>(depth.source_width)
@@ -74,11 +81,17 @@ public:
     /// range for DA V2 @ 518×518 on the Blocks environment.
     ///
     /// 0.0 = disabled (backward-compatible default).
+    ///
+    /// Threading: stored in `std::atomic<float>` with release/acquire so a
+    /// future hot-reconfiguration path can safely race with the perception
+    /// worker reading the value during `project_masked()`.
     void set_texture_gate_threshold(float threshold) {
-        texture_gate_threshold_ = std::max(0.0f, threshold);
+        texture_gate_threshold_.store(std::max(0.0f, threshold), std::memory_order_release);
     }
 
-    [[nodiscard]] float texture_gate_threshold() const { return texture_gate_threshold_; }
+    [[nodiscard]] float texture_gate_threshold() const {
+        return texture_gate_threshold_.load(std::memory_order_acquire);
+    }
 
     /// Upper metric depth cutoff (PR #620 code-quality review).  Samples
     /// beyond this are rejected as horizon / sky contours.  Must match
@@ -86,10 +99,12 @@ public:
     /// config where the estimator reports depths the projector then
     /// silently drops.  Default 20 m (matches pre-#620 hardcoded value).
     void set_max_obstacle_depth_m(float max_depth_m) {
-        max_obstacle_depth_m_ = std::max(0.1f, max_depth_m);
+        max_obstacle_depth_m_.store(std::max(0.1f, max_depth_m), std::memory_order_release);
     }
 
-    [[nodiscard]] float max_obstacle_depth_m() const { return max_obstacle_depth_m_; }
+    [[nodiscard]] float max_obstacle_depth_m() const {
+        return max_obstacle_depth_m_.load(std::memory_order_acquire);
+    }
 
     /// Mask sampling density (Issue #629).  Each SAM mask is covered by an
     /// `N × N` grid of depth probes that back-project to voxels; higher N
@@ -103,18 +118,32 @@ public:
     ///
     /// Clamped to [2, 64] — a 0 or negative value would produce no voxels;
     /// >64 risks per-frame allocations that starve the detector thread.
-    void set_sample_grid_size(int grid_size) { sample_grid_size_ = std::clamp(grid_size, 2, 64); }
+    ///
+    /// Threading: stored in `std::atomic<int>` with release/acquire ordering
+    /// so a future hot-reconfiguration path can race safely with the
+    /// perception worker reading the value during `project_masked()`.  Today
+    /// the field is set once at init (before the worker thread starts), but
+    /// the atomic eliminates the contract dependency — and matches the
+    /// pattern used by `texture_gate_threshold_` and `max_obstacle_depth_m_`.
+    void set_sample_grid_size(int grid_size) {
+        sample_grid_size_.store(std::clamp(grid_size, 2, 64), std::memory_order_release);
+    }
 
-    [[nodiscard]] int sample_grid_size() const { return sample_grid_size_; }
+    [[nodiscard]] int sample_grid_size() const {
+        return sample_grid_size_.load(std::memory_order_acquire);
+    }
 
 private:
-    CameraIntrinsics intrinsics_{};
-    bool             initialized_{false};
-    float            texture_gate_threshold_{0.0f};
-    float            max_obstacle_depth_m_{20.0f};
+    CameraIntrinsics   intrinsics_{};
+    bool               initialized_{false};
+    std::atomic<float> texture_gate_threshold_{0.0f};
+    std::atomic<float> max_obstacle_depth_m_{20.0f};
     // Default 4 preserves legacy 4×4=16 probes per mask for scenarios that
-    // don't opt in to the higher density (Issue #629).
-    int sample_grid_size_{4};
+    // don't opt in to the higher density (Issue #629).  Atomic so a future
+    // hot-reload path can update the value without racing with the
+    // perception worker's `project_masked()` reads (PR #637 follow-up to
+    // PR #630 review-fault-recovery P2 #1).
+    std::atomic<int> sample_grid_size_{4};
 
     // Back-project pixel (u,v) at depth Z to a world-frame 3D point
     [[nodiscard]] Eigen::Vector3f backproject(float u, float v, float z,
@@ -145,7 +174,7 @@ private:
         // EdgeContourSAM masks picked up every image edge and back-projected
         // them into voxels at 50-100 m depth, filling the grid far past
         // `max_static_cells`.)
-        if (d > max_obstacle_depth_m_) return 0.0f;
+        if (d > max_obstacle_depth_m_.load(std::memory_order_acquire)) return 0.0f;
         // Texture gate (Issue #616) — reject samples where the local depth
         // gradient is below threshold.  Cube faces, sky, untextured walls
         // produce nearly-flat depth output from DA V2 (the network has no
@@ -154,8 +183,8 @@ private:
         // for DA V2 confidence — if the model couldn't see variation, we
         // shouldn't trust the metres it reports.  Disabled by default
         // (threshold=0 short-circuits at the top of the check).
-        if (texture_gate_threshold_ > 0.0f &&
-            depth_gradient_magnitude(depth, dx, dy) < texture_gate_threshold_) {
+        const float texture_thr = texture_gate_threshold_.load(std::memory_order_acquire);
+        if (texture_thr > 0.0f && depth_gradient_magnitude(depth, dx, dy) < texture_thr) {
             return 0.0f;
         }
         return d;
@@ -220,8 +249,11 @@ private:
         // Grid sampling within the mask bounding box (Issue #629).  Legacy
         // default is 4×4=16 probes per mask; scenarios that need denser
         // obstacle discovery (e.g. no-HD-map scenario 33) override via
-        // `perception.semantic_projector.sample_grid_size`.
-        const int   GRID   = sample_grid_size_;
+        // `perception.semantic_projector.sample_grid_size`.  Single load of
+        // the atomic — the GRID value is captured for the duration of this
+        // mask's projection so step_x/step_y stay consistent with the loop
+        // bounds even if a hot-reload races mid-call.
+        const int   GRID   = sample_grid_size_.load(std::memory_order_acquire);
         const float step_x = det.bbox.w / static_cast<float>(GRID);
         const float step_y = det.bbox.h / static_cast<float>(GRID);
 

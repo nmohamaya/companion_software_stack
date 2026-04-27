@@ -128,9 +128,11 @@ public:
     /// yaw-towards-velocity feature flag and velocity threshold so the
     /// orchestration layer (mission_state_tick) can honour the same values
     /// the planner was configured with, without duplicating config wiring
-    /// or downcasting.
-    [[nodiscard]] virtual bool  yaw_towards_velocity_enabled() const = 0;
-    [[nodiscard]] virtual float yaw_velocity_threshold_mps() const   = 0;
+    /// or downcasting.  `noexcept` because both are simple scalar reads of
+    /// already-stored config values — the no-exceptions contract for
+    /// flight-critical accessors (PR #632 review-memory-safety P2).
+    [[nodiscard]] virtual bool  yaw_towards_velocity_enabled() const noexcept = 0;
+    [[nodiscard]] virtual float yaw_velocity_threshold_mps() const noexcept   = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -149,10 +151,10 @@ public:
     /// internally; the post-avoider yaw refresh needs to honour the
     /// same feature flag and threshold without downcasting from the
     /// IGridPlanner interface.
-    [[nodiscard]] bool yaw_towards_velocity_enabled() const override {
+    [[nodiscard]] bool yaw_towards_velocity_enabled() const noexcept override {
         return config_.yaw_towards_velocity;
     }
-    [[nodiscard]] float yaw_velocity_threshold_mps() const override {
+    [[nodiscard]] float yaw_velocity_threshold_mps() const noexcept override {
         return config_.yaw_velocity_threshold_mps;
     }
 

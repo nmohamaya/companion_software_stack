@@ -1036,16 +1036,40 @@ int main(int argc, char* argv[]) {
                 // Issue #629 — mask sampling density.  Legacy default 4×4=16
                 // probes per mask.  Dense-perception / no-HD-map scenarios
                 // (scenario 33) override to 8 or 16 for higher per-frame
-                // discovery rate.
-                const int grid_size = ctx.cfg.get<int>(
-                    drone::cfg_key::perception::semantic_projector::SAMPLE_GRID_SIZE, 4);
-                sp->set_sample_grid_size(grid_size);
-                if (grid_size != 4) {
-                    DRONE_LOG_INFO("[PathA] CpuSemanticProjector sample grid: {}×{} "
-                                   "(= {} probes/mask)",
-                                   sp->sample_grid_size(), sp->sample_grid_size(),
-                                   sp->sample_grid_size() * sp->sample_grid_size());
+                // discovery rate.  Logged unconditionally so post-restart
+                // operators can confirm what density is actually active —
+                // a silent fallback to N=4 in a scenario that needs N=16
+                // is a 16× drop in obstacle discovery (review: PR #630
+                // fault-recovery finding 2).
+                //
+                // Uses `cfg.require<int>()` rather than `cfg.get<int>()` so a
+                // wrong-type config value (e.g. `"sample_grid_size": "dense"`)
+                // surfaces as a WARN instead of silently falling through to
+                // the default 4 (PR #630 review-security P3 #2).
+                constexpr int kDefaultGridSize = 4;
+                int           grid_size_raw    = kDefaultGridSize;
+                const auto    cfg_key_str =
+                    std::string(drone::cfg_key::perception::semantic_projector::SAMPLE_GRID_SIZE);
+                if (auto r = ctx.cfg.require<int>(cfg_key_str); r.is_ok()) {
+                    grid_size_raw = r.value();
+                } else {
+                    if (r.error().code() == drone::util::ErrorCode::TypeMismatch) {
+                        DRONE_LOG_WARN("[PathA] {} has wrong JSON type — using default {} "
+                                       "(error: {})",
+                                       cfg_key_str, kDefaultGridSize, r.error().message());
+                    }
+                    // MissingKey is the common case (no override) — silent.
                 }
+                sp->set_sample_grid_size(grid_size_raw);
+                const int grid_size_eff = sp->sample_grid_size();
+                if (grid_size_raw != grid_size_eff) {
+                    DRONE_LOG_WARN("[PathA] sample_grid_size {} out of [2,64] — clamped to {}",
+                                   grid_size_raw, grid_size_eff);
+                }
+                DRONE_LOG_INFO(
+                    "[PathA] CpuSemanticProjector sample grid: {}×{} (= {} probes/mask){}",
+                    grid_size_eff, grid_size_eff, grid_size_eff * grid_size_eff,
+                    (grid_size_raw == grid_size_eff) ? "" : " [clamped from cfg]");
                 semantic_projector = std::move(sp);
                 const float iou    = ctx.cfg.get<float>(
                     drone::cfg_key::perception::path_a::MASK_CLASS_IOU_THRESHOLD, 0.5f);
