@@ -91,6 +91,12 @@ struct GridPlannerConfig {
     // Recommended: 30-60 s for no-HD-map scenarios so the outbound voxel
     // wake doesn't wall off return corridors.
     float static_cell_ttl_s = 0.0f;
+    // Issue #638 Phase 3 — instance-aware voxel promotion gate.  When > 0,
+    // PATH A voxels are only written to the grid once their tracked
+    // instance has accumulated this many distinct frames of observation.
+    // Noise voxels (instance_id == 0) are unconditionally rejected.
+    // 0 = disabled (legacy behaviour, voxels write directly to grid).
+    int voxel_instance_promotion_observations = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -126,6 +132,15 @@ public:
 
     /// Pause/resume promotion to static layer (e.g. during RTL/LAND).
     virtual void set_promotion_paused(bool paused) = 0;
+
+    /// Issue #638 Phase 3 — clear per-instance observation counters.
+    /// Call on FSM transitions where the perception context resets
+    /// (RTL/LAND, mission abort) so a stale instance_id from earlier in
+    /// the mission can't keep promoting after a P2 restart re-mints
+    /// fresh IDs that collide with existing counters.  Mirror of the
+    /// `set_promotion_paused()` pattern; both protect the grid during
+    /// state transitions that perception is unaware of.
+    virtual void clear_instance_state() = 0;
 
     /// Grid diagnostic counters — exposed on the interface so diagnostic
     /// logging in tick_survey/tick_navigate can avoid dynamic_cast.
@@ -181,7 +196,7 @@ public:
                 config.radar_promotion_hits, config.min_promotion_depth_confidence,
                 config.max_static_cells, config.prediction_enabled, config.prediction_dt_s,
                 config.require_radar_for_promotion, config.voxel_promotion_hits,
-                config.static_cell_ttl_s) {}
+                config.static_cell_ttl_s, config.voxel_instance_promotion_observations) {}
 
     void update_obstacles(const drone::ipc::DetectedObjectList& objects,
                           const drone::ipc::Pose&               pose) override {
@@ -208,6 +223,7 @@ public:
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
 
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
+    void clear_instance_state() override { grid_.clear_instance_state(); }
 
     [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }
     [[nodiscard]] size_t grid_static_count() const override { return grid_.static_count(); }

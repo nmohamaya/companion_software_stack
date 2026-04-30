@@ -225,6 +225,39 @@ int main(int argc, char* argv[]) {
                        "(HD-map cells exempt)",
                        planner_cfg.static_cell_ttl_s);
     }
+    // Issue #638 Phase 3 — instance-aware voxel promotion gate.  0 = legacy
+    // (every voxel writes to grid), >0 = require N frames of observation per
+    // tracked instance before its voxels reach the grid.
+    {
+        // P2-E from PR #641 review: clamp + WARN.  A negative value
+        // silently disables (gated by `> 0` downstream); a massive value
+        // (e.g. 999) would block all obstacles forever and the drone
+        // would collide.  Cap at a reasonable upper bound (60 frames =
+        // 6 s @ 10 Hz) and warn beyond that.
+        constexpr int kMaxObservationsCap = 60;
+        const int     raw_obs             = ctx.cfg.get<int>(
+            drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INSTANCE_PROMOTION_OBSERVATIONS,
+            planner_cfg.voxel_instance_promotion_observations);
+        int obs = raw_obs;
+        if (obs < 0) {
+            DRONE_LOG_WARN("[OccGrid] instance_promotion_observations {} negative — "
+                           "disabling gate (was attempting silent disable)",
+                           raw_obs);
+            obs = 0;
+        } else if (obs > kMaxObservationsCap) {
+            DRONE_LOG_WARN("[OccGrid] instance_promotion_observations {} above cap {} — "
+                           "tracked instances would never promote and obstacles would "
+                           "never reach the grid; clamping to {}",
+                           raw_obs, kMaxObservationsCap, kMaxObservationsCap);
+            obs = kMaxObservationsCap;
+        }
+        planner_cfg.voxel_instance_promotion_observations = obs;
+        if (planner_cfg.voxel_instance_promotion_observations > 0) {
+            DRONE_LOG_INFO("[OccGrid] Instance-promotion gate enabled: {} frames required per "
+                           "tracked instance before voxels reach the grid (#638 Phase 3)",
+                           planner_cfg.voxel_instance_promotion_observations);
+        }
+    }
     // Prediction config — under occupancy_grid.* for consistency with other grid params
     planner_cfg.prediction_enabled =
         ctx.cfg.get<bool>(drone::cfg_key::mission_planner::occupancy_grid::PREDICTION_ENABLED,
@@ -398,6 +431,17 @@ int main(int argc, char* argv[]) {
         drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_POSITION_CLAMP_M, 1000.0f);
     const float voxel_input_min_confidence = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_MIN_CONFIDENCE, 0.3f);
+    // P2-F from PR #641 review: warn on the silent-misconfig trap where
+    // an operator enables the instance gate but forgets to subscribe to
+    // /semantic_voxels.  The gate is configured but no batches arrive,
+    // so it never trips — looks like the gate is "off" when it isn't.
+    if (planner_cfg.voxel_instance_promotion_observations > 0 && !voxel_input_enabled) {
+        DRONE_LOG_WARN("[VoxelSub] instance_promotion_observations={} configured but "
+                       "voxel_input.enabled=false — gate is inert (no /semantic_voxels "
+                       "subscriber).  Either set voxel_input.enabled=true or set "
+                       "instance_promotion_observations=0",
+                       planner_cfg.voxel_instance_promotion_observations);
+    }
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::SemanticVoxelBatch>> voxel_sub;
     if (voxel_input_enabled) {
         if (grid_planner == nullptr) {
@@ -484,9 +528,10 @@ int main(int argc, char* argv[]) {
         // the occupancy grid's static layer.  Non-empty inserts invalidate
         // the cached path via the GridPlannerBase::insert_voxels hook.
         if (voxel_sub && grid_planner) {
-            uint32_t batches_drained = 0;
-            uint32_t inserted_total  = 0;
-            uint32_t dropped_total   = 0;
+            uint32_t batches_drained        = 0;
+            uint32_t inserted_total         = 0;
+            uint32_t dropped_total          = 0;
+            uint32_t instance_skipped_total = 0;  // Phase 3 gate rejections
             for (;;) {
                 drone::ipc::SemanticVoxelBatch batch{};
                 if (!voxel_sub->receive(batch)) break;
@@ -501,14 +546,32 @@ int main(int argc, char* argv[]) {
                 inserted_total += static_cast<uint32_t>(stats.inserted);
                 dropped_total += static_cast<uint32_t>(
                     stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);
+                instance_skipped_total += static_cast<uint32_t>(stats.instance_skipped);
                 ++batches_drained;
                 // Hard cap on drain iterations per tick — a runaway publisher
                 // must not starve the planning loop.
                 if (batches_drained >= 10) break;
             }
             if (batches_drained > 0) {
-                DRONE_LOG_INFO("[VoxelSub] tick={} batches={} inserted={} dropped={}", loop_tick,
-                               batches_drained, inserted_total, dropped_total);
+                DRONE_LOG_INFO("[VoxelSub] tick={} batches={} inserted={} dropped={} "
+                               "instance_skipped={}",
+                               loop_tick, batches_drained, inserted_total, dropped_total,
+                               instance_skipped_total);
+                // Issue #638 P1-A from PR #641 review: when the instance
+                // gate is rejecting all voxels (publisher alive, gate
+                // suppressing every batch), the failure mode looks
+                // identical to a dead publisher (`inserted=0 dropped=0`).
+                // Surface it explicitly so an operator can distinguish
+                // gate-misconfig from sensor silence.  Throttled to
+                // every 10 ticks (~1 s at 10 Hz) to avoid log floods.
+                if (instance_skipped_total > 0 && inserted_total == 0 && (loop_tick % 10) == 0) {
+                    DRONE_LOG_WARN("[VoxelSub] instance gate rejecting all voxels "
+                                   "({} skipped this tick) — check perception.path_a.cluster + "
+                                   "tracker config and "
+                                   "mission_planner.occupancy_grid.voxel_input.instance_promotion_"
+                                   "observations",
+                                   instance_skipped_total);
+                }
             }
         }
 
