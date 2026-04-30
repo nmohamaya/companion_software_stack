@@ -460,11 +460,19 @@ int main(int argc, char* argv[]) {
             // dynamic TTL layer keeps populating, so reactive avoidance of
             // moving objects still works.
             grid_planner->set_promotion_paused(true);
+            // Issue #645 — radar-confirmed bypass.  When enabled, radar-
+            // confirmed tracks promote into the static layer even with the
+            // pause active.  Lets the strategic path planner see radar-
+            // detected obstacles (otherwise only ObstacleAvoider3D's reactive
+            // path knows about them via DetectedObjectList).
+            const bool allow_radar_promotion = ctx.cfg.get<bool>(
+                "mission_planner.occupancy_grid.voxel_input.allow_radar_promotion", false);
+            grid_planner->set_allow_radar_promotion_when_paused(allow_radar_promotion);
             DRONE_LOG_INFO("[VoxelSub] Subscribed to {} (clamp={:.0f} m, min_conf={:.2f}); "
                            "detector-path static promotion PAUSED — PATH A is sole static-cell "
-                           "source while voxel_input is enabled",
+                           "source while voxel_input is enabled (radar bypass: {})",
                            drone::ipc::topics::SEMANTIC_VOXELS, voxel_input_clamp_m,
-                           voxel_input_min_confidence);
+                           voxel_input_min_confidence, allow_radar_promotion ? "ON" : "OFF");
         }
     }
 

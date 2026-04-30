@@ -503,8 +503,23 @@ public:
                      : inflation_cells_;
 
             // Per-object promotion eligibility (invariant across inflated cells).
-            const bool depth_ok    = obj.depth_confidence >= min_promotion_depth_confidence_;
-            const bool can_promote = !skip_promotion && depth_ok && !promotion_paused_;
+            //
+            // Issue #645 — radar-confirmed tracks bypass `promotion_paused_`
+            // when `allow_radar_promotion_when_paused_` is enabled.  Rationale:
+            // the original "pause detector promotion when voxel_input is on"
+            // decision (#635 / #636) was driven by camera-only detections
+            // producing ghost cells.  Radar gives accurate range from the
+            // first hit (no convergence latency), so radar-confirmed tracks
+            // are the safe subset to allow through.  PATH A voxels remain
+            // the primary static-cell source for non-radar-detected geometry;
+            // radar adds strategic-routing visibility for cubes/pillars/walls
+            // that radar sees clearly (which the planner otherwise misses,
+            // since it doesn't consume the avoider's DetectedObjectList).
+            const bool depth_ok     = obj.depth_confidence >= min_promotion_depth_confidence_;
+            const bool radar_bypass = allow_radar_promotion_when_paused_ && obj.has_radar &&
+                                      obj.radar_update_count > 0;
+            const bool effective_pause = promotion_paused_ && !radar_bypass;
+            const bool can_promote     = !skip_promotion && depth_ok && !effective_pause;
 
             // 2D disk inflation: only inflate in XY at the object's Z level.
             // The path planner runs a 2D horizontal search, so vertical
@@ -652,6 +667,22 @@ public:
     /// location and ground-feature detections would pollute the static layer.
     void               set_promotion_paused(bool paused) { promotion_paused_ = paused; }
     [[nodiscard]] bool promotion_paused() const { return promotion_paused_; }
+
+    /// Issue #645 — when promotion_paused_ is on (typically during voxel_input
+    /// scenarios where PATH A voxels are the sole static-cell source), allow
+    /// radar-confirmed detected objects to bypass the pause and promote into
+    /// the static layer.  Radar gives accurate range from the first hit, so
+    /// radar-confirmed tracks don't suffer the convergence-latency / ghost-
+    /// cell problem that originally motivated the pause.  Lets the strategic
+    /// path planner see radar-detected cubes/pillars/walls that would
+    /// otherwise only reach the (reactive) ObstacleAvoider3D via the
+    /// DetectedObjectList feed.  Default false = legacy behaviour.
+    void set_allow_radar_promotion_when_paused(bool allow) {
+        allow_radar_promotion_when_paused_ = allow;
+    }
+    [[nodiscard]] bool allow_radar_promotion_when_paused() const {
+        return allow_radar_promotion_when_paused_;
+    }
 
     /// Issue #638 Phase 3 — number of stable instances tracked for the
     /// instance-promotion gate.  Useful for diagnostics; 0 when the gate
@@ -870,9 +901,12 @@ private:
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
     size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
     bool     promotion_paused_{false};               // pause promotion during RTL/LAND
-    bool     prediction_enabled_{true};              // enable velocity-based prediction inflation
-    float    prediction_dt_s_{2.0f};                 // prediction horizon in seconds
-    bool     require_radar_for_promotion_{false};    // hit-count path needs ≥1 radar update
+    // Issue #645 — radar-confirmed bypass for promotion_paused_; see
+    // `set_allow_radar_promotion_when_paused()` for rationale.
+    bool  allow_radar_promotion_when_paused_{false};
+    bool  prediction_enabled_{true};            // enable velocity-based prediction inflation
+    float prediction_dt_s_{2.0f};               // prediction horizon in seconds
+    bool  require_radar_for_promotion_{false};  // hit-count path needs ≥1 radar update
     // Issue #635 — PATH A voxel observations become permanent static cells
     // only after this many hits.  Lower values pollute the grid with
     // transient detections; higher values require multi-frame robustness
