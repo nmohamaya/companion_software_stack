@@ -2315,3 +2315,58 @@ TEST(DepthEdgeCaseTest, ZeroBboxNoisePxProducesFullConfidence) {
     // With zero noise, confidence should be 1.0 (not NaN or negative)
     EXPECT_NEAR(result.objects[0].depth_confidence, 1.0f, 0.01f);
 }
+
+// Issue #645 — radar-only S-matrix degenerate-recovery fix.
+//
+// Background: kAlpha=1e-3 makes the UT weight w0_cov ≈ -1e6.  When state
+// covariance happens to align with the radar measurement direction, the
+// rank-1 negative-weighted sigma-point outer product can drive S non-PD.
+// Prior behaviour: drop the radar measurement entirely (LLT failure ->
+// return false from try_associate_radar).  New behaviour: regularise +
+// eigenvalue-clamp recovery, then R-only fallback as a final safety net so
+// the radar association never silently disappears.
+
+TEST(RadarFusionTest, SMatrixFallbackCounterStartsAtZero) {
+    // Simple smoke test: the new accessor exists and returns 0 on a
+    // freshly-constructed engine.  Sanity check the API contract.
+    UKFFusionEngine engine(make_test_calib(), RadarNoiseConfig{}, true);
+    EXPECT_EQ(engine.s_matrix_fallback_count(), 0u);
+}
+
+TEST(RadarFusionTest, NormalRadarOnlyFlowDoesNotTriggerFallback) {
+    // Verify the well-conditioned case: a radar-only track that gets a
+    // matching radar detection on each fuse cycle should associate via the
+    // full-S path on every cycle, without ever hitting the fallback.
+    //
+    // We construct a radar-only track by feeding radar detections with no
+    // matching camera tracks, then fuse repeatedly with consistent radar
+    // measurements at the same world position.
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, true);
+
+    // Empty camera input each cycle — radar-only init path.
+    TrackedObjectList empty_tracked;
+    empty_tracked.timestamp_ns   = 0;
+    empty_tracked.frame_sequence = 0;
+    empty_tracked.objects.clear();
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.num_detections = 1;
+    // Detection at 15m range, dead ahead, slight downward elevation.
+    radar_list.detections[0] = make_radar_det(15.0f, 0.0f, -0.05f, 0.0f);
+
+    for (uint64_t t = 1; t <= 30; ++t) {
+        radar_list.timestamp_ns               = t * 33'000'000ULL;  // 30 Hz
+        empty_tracked.timestamp_ns            = radar_list.timestamp_ns;
+        empty_tracked.frame_sequence          = static_cast<uint32_t>(t);
+        radar_list.detections[0].timestamp_ns = radar_list.timestamp_ns;
+        engine.set_radar_detections(radar_list);
+        (void)engine.fuse(empty_tracked);
+    }
+
+    // Well-conditioned radar-only flow → no fallback firings.
+    // (The fix must not introduce false positives on healthy inputs.)
+    EXPECT_EQ(engine.s_matrix_fallback_count(), 0u)
+        << "Healthy radar-only flow should never hit the R-only fallback; "
+        << "got count=" << engine.s_matrix_fallback_count();
+}
