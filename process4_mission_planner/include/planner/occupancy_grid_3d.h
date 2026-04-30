@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -525,10 +526,17 @@ public:
             // is checked FIRST and unconditionally blocks promotion;
             // `promotion_paused_` (the voxel-input "PATH A is sole source"
             // signal) is the bypassable one.
-            const bool depth_ok     = obj.depth_confidence >= min_promotion_depth_confidence_;
-            const bool radar_bypass = allow_radar_promotion_when_paused_ && obj.has_radar &&
+            // PR #661 P2 review: snapshot atomic flags once per object so the
+            // three reads compose into a single consistent decision.  Acquire
+            // ordering pairs with the release on the FSM-tick thread.
+            const bool depth_ok = obj.depth_confidence >= min_promotion_depth_confidence_;
+            const bool allow_radar_bypass =
+                allow_radar_promotion_when_paused_.load(std::memory_order_acquire);
+            const bool paused_now   = promotion_paused_.load(std::memory_order_acquire);
+            const bool landing_now  = landing_pause_.load(std::memory_order_acquire);
+            const bool radar_bypass = allow_radar_bypass && obj.has_radar &&
                                       obj.radar_update_count > 0;
-            const bool effective_pause = landing_pause_ || (promotion_paused_ && !radar_bypass);
+            const bool effective_pause = landing_now || (paused_now && !radar_bypass);
             const bool can_promote     = !skip_promotion && depth_ok && !effective_pause;
 
             // 2D disk inflation: only inflate in XY at the object's Z level.
@@ -675,8 +683,15 @@ public:
     /// are still created (reactive avoidance works) but nothing new promotes.
     /// Intended for RTL/LAND phases where the drone descends toward a known-safe
     /// location and ground-feature detections would pollute the static layer.
-    void               set_promotion_paused(bool paused) { promotion_paused_ = paused; }
-    [[nodiscard]] bool promotion_paused() const { return promotion_paused_; }
+    /// PR #661 P2 review: backed by `std::atomic<bool>` since the FSM tick
+    /// thread (mission_state_tick) writes the flag while update_from_objects()
+    /// reads it on the planner thread.
+    void set_promotion_paused(bool paused) {
+        promotion_paused_.store(paused, std::memory_order_release);
+    }
+    [[nodiscard]] bool promotion_paused() const {
+        return promotion_paused_.load(std::memory_order_acquire);
+    }
 
     /// Issue #645 — when promotion_paused_ is on (typically during voxel_input
     /// scenarios where PATH A voxels are the sole static-cell source), allow
@@ -688,10 +703,10 @@ public:
     /// otherwise only reach the (reactive) ObstacleAvoider3D via the
     /// DetectedObjectList feed.  Default false = legacy behaviour.
     void set_allow_radar_promotion_when_paused(bool allow) {
-        allow_radar_promotion_when_paused_ = allow;
+        allow_radar_promotion_when_paused_.store(allow, std::memory_order_release);
     }
     [[nodiscard]] bool allow_radar_promotion_when_paused() const {
-        return allow_radar_promotion_when_paused_;
+        return allow_radar_promotion_when_paused_.load(std::memory_order_acquire);
     }
 
     /// Issue #645 review fix (#661 P1, SAFETY-CRITICAL): landing-approach
@@ -702,8 +717,12 @@ public:
     /// Distinct from `set_promotion_paused()` which represents "voxel_input
     /// is sole source"; both can be active simultaneously, with
     /// `landing_pause_` taking precedence.  Default false = no landing.
-    void               set_landing_pause(bool landing) { landing_pause_ = landing; }
-    [[nodiscard]] bool landing_pause() const { return landing_pause_; }
+    void set_landing_pause(bool landing) {
+        landing_pause_.store(landing, std::memory_order_release);
+    }
+    [[nodiscard]] bool landing_pause() const {
+        return landing_pause_.load(std::memory_order_acquire);
+    }
 
     /// Issue #638 Phase 3 — number of stable instances tracked for the
     /// instance-promotion gate.  Useful for diagnostics; 0 when the gate
@@ -921,17 +940,22 @@ private:
     int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
     size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
-    bool     promotion_paused_{false};               // pause promotion during RTL/LAND
+    // PR #661 P2 review: pause flags are written by the FSM tick thread
+    // (mission_state_tick) and read by the planner thread inside
+    // update_from_objects().  Atomic with acquire/release ordering closes
+    // the data race; the three flags are read in a fixed order at each
+    // promotion decision so they compose to a consistent snapshot.
+    std::atomic<bool> promotion_paused_{false};  // pause promotion during voxel_input init
     // Issue #645 — radar-confirmed bypass for promotion_paused_; see
     // `set_allow_radar_promotion_when_paused()` for rationale.
-    bool allow_radar_promotion_when_paused_{false};
+    std::atomic<bool> allow_radar_promotion_when_paused_{false};
     // Issue #645 review fix (#661 P1, SAFETY-CRITICAL): landing-approach
     // protection.  When true, blocks ALL promotion including radar bypass.
     // Set/cleared by mission_state_tick.h on RTL/LAND transitions.
-    bool  landing_pause_{false};
-    bool  prediction_enabled_{true};            // enable velocity-based prediction inflation
-    float prediction_dt_s_{2.0f};               // prediction horizon in seconds
-    bool  require_radar_for_promotion_{false};  // hit-count path needs ≥1 radar update
+    std::atomic<bool> landing_pause_{false};
+    bool              prediction_enabled_{true};  // enable velocity-based prediction inflation
+    float             prediction_dt_s_{2.0f};     // prediction horizon in seconds
+    bool require_radar_for_promotion_{false};     // hit-count path needs ≥1 radar update
     // Issue #635 — PATH A voxel observations become permanent static cells
     // only after this many hits.  Lower values pollute the grid with
     // transient detections; higher values require multi-frame robustness
