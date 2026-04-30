@@ -111,8 +111,8 @@
                     "min_pts": 5
                 },
                 "tracker": {
-                    "_comment": "Issue #638 Phase 2 — cross-frame instance tracker. max_match_distance_m=3.0 covers per-frame cluster motion at scenario-33 cruise (drone @2 m/s × 100 ms tick + depth jitter). track_max_age_s=2.0 keeps tracks alive through brief occlusions (yaw past pillar) but drops stale ghosts.",
-                    "max_match_distance_m": 3.0,
+                    "_comment": "Issue #638 Phase 2 — cross-frame instance tracker. Bumped max_match_distance_m 3.0 → 8.0 after run 2026-04-30_095815 showed the tracker minting fresh IDs every frame (4 clusters → 52 tracks); centroid drift exceeded 3 m/frame under aggressive yaw. 8 m tolerates the drift while still rejecting cross-obstacle confusion at scenario-33 obstacle separation (~5+ m). track_max_age_s=2.0 keeps tracks alive through brief occlusions (yaw past pillar) but drops stale ghosts.",
+                    "max_match_distance_m": 8.0,
                     "track_max_age_s": 2.0
                 }
             }
@@ -184,7 +184,7 @@
                     "position_clamp_m": 200.0,
                     "min_confidence": 0.3,
                     "static_cell_ttl_s": 0.0,
-                    "instance_promotion_observations": 5
+                    "instance_promotion_observations": 3
                 }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",

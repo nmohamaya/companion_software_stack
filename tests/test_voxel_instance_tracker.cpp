@@ -13,6 +13,9 @@
 
 #include "perception/voxel_instance_tracker.h"
 
+#include <chrono>
+#include <thread>
+
 #include <gtest/gtest.h>
 
 using drone::hal::VoxelUpdate;
@@ -190,6 +193,9 @@ TEST(VoxelInstanceTracker, TwoConcurrentClustersGetDistinctStableIds) {
 }
 
 TEST(VoxelInstanceTracker, TracksAgeOutAfterTtl) {
+    // Issue #638 Fix 3: ageing now uses steady_clock, not the source-frame
+    // timestamp passed to update().  Tests must actually sleep
+    // `track_max_age_s` between calls.
     VoxelInstanceTracker tracker(/*max_match=*/3.0f, /*track_max_age_s=*/0.1f);
 
     std::vector<VoxelUpdate> v0;
@@ -197,10 +203,12 @@ TEST(VoxelInstanceTracker, TracksAgeOutAfterTtl) {
     tracker.update(v0, 0);
     EXPECT_EQ(tracker.track_count(), 1u);
 
-    // Tick well past max_age with no observations — track must age out.
+    // Real wall-clock wait past max_age (100 ms + margin).
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
     std::vector<VoxelUpdate> empty;
-    tracker.update(empty, 500'000'000ull);  // 0.5 s
+    tracker.update(empty, 0);
     EXPECT_EQ(tracker.track_count(), 0u);
+    EXPECT_EQ(tracker.last_aged_out_count(), 1u);
 }
 
 TEST(VoxelInstanceTracker, NewClustersMintFreshIds) {
@@ -213,9 +221,10 @@ TEST(VoxelInstanceTracker, NewClustersMintFreshIds) {
     tracker.update(v0, 0);
     const uint32_t first_id = v0[0].instance_id;
 
-    // Age out.
+    // Age out (real wall-clock wait — Fix 3: ageing is now steady_clock).
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
     std::vector<VoxelUpdate> empty;
-    tracker.update(empty, 500'000'000ull);
+    tracker.update(empty, 0);
     ASSERT_EQ(tracker.track_count(), 0u);
 
     // New cluster appears — must mint a brand-new ID.
