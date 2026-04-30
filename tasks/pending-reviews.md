@@ -31,17 +31,32 @@ Use `python3 -m orchestrator deploy-review <PR#>` to auto-route.
 
 ## PRs to review
 
+Audit method (2026-04-30): cross-referenced `gh pr view <N> --json comments`
+output for the "Automated Two-Pass Review — PR #N" comment that the
+deploy-review pipeline posts.  Absence of that comment + no review-fix
+commits = unreviewed.
+
+**Confirmed reviewed** (skip these): #639, #640, #641, #642 (each has a
+"Review fixes — landed in commit X" comment), #623/#628/#630/#632
+(PR #637 was the batch-fix that addressed those four).
+
+**Skipped** (don't need full review): #634 (merge consolidation, no new
+code — just stacked-PR rebase on integration).
+
 ### Merged (need post-merge review on integration branch)
 
 | PR | Title | Routing hints | Status |
-|----|-------|---------------|--------|
-| #646 | `fix(#645): ObstacleAvoider3D post-correction toward-obstacle hard clamp` | flight-critical (P4 planner tick), no concurrency primitives changed; route Pass 1 = memory + security + unit + fault-recovery (P4 path), Pass 2 = all four | merged 2026-04-30 |
-| #647 | `feat(#645): surface PATH A voxel-tracked obstacles to ObstacleAvoider3D` | new lock-free TripleBuffer between threads, new IPC payload type, P2 fusion publish path; route Pass 1 = memory + concurrency + security + unit + scenario, Pass 2 = all four | merged 2026-04-30 |
+| --- | --- | --- | --- |
+| #631 | `fix(#626): wire use_cuda through DA V2 with canary-inference fallback` | CUDA wiring + canary-fallback mechanism. Pass 1 = memory (CUDA buffer lifetimes) + fault-recovery (fallback path correctness) + security (no command injection on canary inputs) + unit; Pass 2 = all four | merged 2026-04-24 |
+| #633 | `feat(#626): wire FastSAM CUDA backend (canary-guarded, same pattern as DA V2)` | mirror of #631 for FastSAM; review same axes. Pass 1 + Pass 2 routing identical to #631 | merged 2026-04-24 |
+| #636 | `fix(#635): PATH A voxels flow through dynamic-TTL bucket before promotion` | **flight-critical (P4 occupancy grid promotion logic)** — superseded by #642's instance gate but the dynamic-TTL bucket plumbing remains in production paths. Pass 1 = memory + concurrency + fault-recovery + security + unit + scenario (P4 grid behaviour); Pass 2 = all four. Highest priority of the merged-unreviewed set. | merged 2026-04-27 |
+| #646 | `fix(#645): ObstacleAvoider3D post-correction toward-obstacle hard clamp` | flight-critical (P4 planner tick), no concurrency primitives changed; Pass 1 = memory + security + unit + fault-recovery (P4 path), Pass 2 = all four | merged 2026-04-30 |
+| #647 | `feat(#645): surface PATH A voxel-tracked obstacles to ObstacleAvoider3D` | new lock-free TripleBuffer between threads, new IPC payload type, P2 fusion publish path; Pass 1 = memory + concurrency + security + unit + scenario, Pass 2 = all four | merged 2026-04-30 |
 
 ### Open (review before merge)
 
 | PR | Title | Routing hints | Status |
-|----|-------|---------------|--------|
+| --- | --- | --- | --- |
 | #643 | `fix(#638): tracker tuning + diagnostics for scenario-33 ID-explosion` | tracker config changes + new diagnostic accessors, no flight-critical structural changes | open, 1 comment, 0 reviews |
 | #644 | `fix: ZenohSubscriber latency tracker accumulates phantom samples on quiet topics` | header-only IPC primitive change, adds one `std::atomic<uint64_t>`; concurrency review must verify the relaxed-ordering choice; performance review on hot-path receive() | open, 0 reviews |
 
