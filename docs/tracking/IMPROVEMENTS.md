@@ -34,6 +34,14 @@ The 14-PR scenario-33 fix stack (PRs #646–#666) drove orchestrator reviews on 
 
 - **P3** — comms `fc_tx_thread` issues `latency_tracker_.record()` from inside `receive()` which already runs under `data_mutex_`. Mutex-protected observability on a 20Hz IPC-forwarding thread; tier rule says buffer via lock-free primitive. Low blast radius but worth a DR or fix.
 
+### 2026-04-30 (#643 supersede — items not yet forward-ported, awaiting validation)
+
+PR #643 ("tracker tuning + diagnostics for scenario-33 ID-explosion") was branched on 2026-04-30 morning before the keystone fixes (#651/#660/#658/#659/#642 phase 4) landed.  Its scenario-config diff is now a regression vs current scenario 33 (would revert validated values for `position_clamp_m`, `min_confidence`, `instance_promotion_observations`, `max_static_cells`, `allow_radar_promotion`, `inflation_radius_m`, and the altitude/mask filters).  The genuinely-new content is captured below for follow-up; #643 itself is closed as superseded.
+
+- **P2** — **`tracker.max_match_distance_m: 3.0 → 8.0`** in `config/scenarios/33_non_coco_obstacles.json`.  Hypothesis from run 2026-04-30_095815 (pre-keystone fixes): tracker minted fresh IDs every frame because centroid drift exceeded 3 m/frame under aggressive yaw + voxel-set fluctuation (1186 → 256 → 4188 voxels frame-to-frame).  May already be moot post-#642/#660 (later fixes stabilised voxel counts and tightened upstream gates) — needs an explicit scenario-33 re-run with the current config + tracker diagnostics enabled to confirm whether the ID-explosion still occurs.  If yes, bump to 8.0; if no, keep 3.0 with rationale.
+- **P2** — **`VoxelInstanceTracker` ageing currently uses caller-supplied `now_ns`** (P2 frame timestamp), not `steady_clock::now()`.  Under irregular frame delivery (load spikes, late callbacks), ageing fires at the wrong time.  Switching to `steady_clock::now()` decouples ageing from upstream timestamp jitter — but conflicts with the #670 test pattern that drives ageing by passing future-`now_ns` values.  Right path: dependency-inject a clock function (default `steady_clock::now`) so production gets monotonic ageing while tests can use a fake clock.  Not a blocker; current tests still verify the contract via the `now_ns` API.
+- **P3** — **Tracker diagnostic counters** (`last_aged_out_count_`, `last_match_failure_count_` plus `last_aged_out=N, match_failures=M` in the P2 `[VoxelCluster]` log line).  Useful when investigating future ID-explosion regressions.  Not surfaced today; add when next debugging tracker behaviour.
+
 ### 2026-04-27 (#638 review-driven backlog)
 
 The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review findings across 8 reviewer agents.  P1 + high-value P2 fixes landed in the respective PRs; the items below were deemed correct-but-deferred (proactive backlog).
