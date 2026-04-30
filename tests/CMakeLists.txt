@@ -173,6 +173,8 @@ add_drone_test(test_voxel_clusterer      test_voxel_clusterer.cpp)
 add_drone_test(test_voxel_instance_tracker test_voxel_instance_tracker.cpp)
 # Issue #638 Phase 3 — OccupancyGrid3D instance-promotion gate
 add_drone_test(test_grid_instance_promotion test_grid_instance_promotion.cpp)
+# Issue #645 — voxel-derived obstacle surface to ObstacleAvoider3D
+add_drone_test(test_voxel_obstacle_surface test_voxel_obstacle_surface.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
