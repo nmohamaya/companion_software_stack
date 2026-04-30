@@ -358,6 +358,36 @@ TEST(ZenohSubscriberBranch, LogLatencyIfDueNoSamples) {
     EXPECT_FALSE(sub.log_latency_if_due());
 }
 
+// Regression: a quiet topic must not accumulate latency samples on every
+// receive() call.  Before the 2026-04-30 fix, has_data_=true plus an
+// unchanged timestamp_ns_ caused every poll on a silent publisher to record
+// `now - last_callback_time` as latency, so reported p50 grew at 1s/sec
+// wall-clock and looked like an unbounded queue backlog.  After the fix,
+// only timestamp transitions add samples.
+TEST(ZenohSubscriberBranch, ReceiveDoesNotAccumulateSamplesOnQuietTopic) {
+    ZenohPublisher<Pose>  pub("drone/test/cov_quiet_no_accum");
+    ZenohSubscriber<Pose> sub("drone/test/cov_quiet_no_accum");
+
+    Pose msg{};
+    msg.timestamp_ns = 7;
+    pub.publish(msg);
+
+    Pose out{};
+    ASSERT_TRUE(wait_for([&] { return sub.receive(out); }));
+
+    // Drain many additional receive() calls without publishing anything new.
+    // None of these should add a latency sample.
+    for (int i = 0; i < 200; ++i) {
+        Pose tmp{};
+        (void)sub.receive(tmp);
+    }
+
+    // With the fix only one sample (from the first receive after publish) was
+    // recorded, so the tracker can't satisfy the 100-sample threshold.  Before
+    // the fix it would have ~201 samples and report.
+    EXPECT_FALSE(sub.log_latency_if_due(/*min_samples=*/100));
+}
+
 // ═══════════════════════════════════════════════════════════
 // 6. ZenohServiceServer — error path branches
 // ═══════════════════════════════════════════════════════════
