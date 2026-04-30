@@ -1538,6 +1538,70 @@ TEST(FallbackBehaviourTest, NoCachedPathHoversInPlace) {
     EXPECT_TRUE(planner.using_direct_fallback());
 }
 
+// Plan A — Issue #645 follow-up.  Verify the new `hover_fallback_count()`
+// counter increments when the planner can't find a path AND has nothing
+// cached, but stays at zero on healthy planning cycles.
+TEST(FallbackBehaviourTest, HoverFallbackCounterIncrementsOnNoPath) {
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 4.0f;
+    config.inflation_radius_m = 0.5f;
+    config.smoothing_alpha    = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    config.snap_search_radius = 0;
+    DStarLitePlanner planner(config);
+
+    // Fresh planner — counter starts at 0.
+    EXPECT_EQ(planner.hover_fallback_count(), 0u);
+
+    // Wall off the grid so search fails on every plan() call.
+    drone::ipc::DetectedObjectList objects{};
+    uint32_t                       idx = 0;
+    for (int y = -4; y <= 4; ++y) {
+        for (int x = 1; x <= 3; ++x) {
+            if (idx >= drone::ipc::MAX_DETECTED_OBJECTS) break;
+            objects.objects[idx].position_x = static_cast<float>(x);
+            objects.objects[idx].position_y = static_cast<float>(y);
+            objects.objects[idx].position_z = 0.0f;
+            objects.objects[idx].confidence = 0.9f;
+            ++idx;
+        }
+    }
+    objects.num_objects = idx;
+    drone::ipc::Pose pose{};
+    planner.update_obstacles(objects, pose);
+
+    Waypoint target{4.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+    (void)planner.plan(pose, target);
+    EXPECT_GE(planner.hover_fallback_count(), 1u)
+        << "Counter must tick when search fails with no cached path";
+    EXPECT_TRUE(planner.using_direct_fallback());
+}
+
+TEST(FallbackBehaviourTest, HoverFallbackCounterStaysZeroOnHealthyPath) {
+    // Open grid, healthy planning — the diagnostic counter must NOT fire.
+    // Guards against false positives that would make persistent non-zero
+    // values an unreliable signal in run-report telemetry.
+    GridPlannerConfig config;
+    config.resolution_m       = 1.0f;
+    config.grid_extent_m      = 10.0f;
+    config.inflation_radius_m = 0.5f;
+    config.smoothing_alpha    = 1.0f;
+    config.replan_interval_s  = 0.0f;
+    DStarLitePlanner planner(config);
+
+    drone::ipc::Pose pose{};
+    Waypoint         target{4.0f, 0.0f, 0.0f, 0.0f, 2.0f, 3.0f, false};
+
+    for (int i = 0; i < 5; ++i) {
+        (void)planner.plan(pose, target);
+    }
+
+    EXPECT_EQ(planner.hover_fallback_count(), 0u)
+        << "Healthy planning cycles must not increment the hover-fallback counter";
+    EXPECT_FALSE(planner.using_direct_fallback());
+}
+
 TEST(FallbackBehaviourTest, HoverRecoversToCachedPath) {
     // After hovering (no path), if the grid clears and search succeeds,
     // the planner should resume normal path following.

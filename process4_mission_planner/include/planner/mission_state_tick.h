@@ -397,8 +397,18 @@ private:
                 return planner.plan(pose, *wp);
             }();
             if (grid_planner && grid_planner->using_direct_fallback()) {
+                // Despite the legacy `using_direct_fallback()` name, the planner
+                // hovers when search fails with no cached path — it does NOT
+                // fly a direct line through obstacles.  Surface the accurate
+                // behaviour and the cumulative hover-fallback count so an
+                // operator (or replay) can tell when the grid has become
+                // over-occupied for the current waypoint (Plan A — Issue #645
+                // follow-up; see `GridPlannerBase::plan()` for the hover
+                // branch).
                 diag.add_warning("PathPlan",
-                                 "Planner fallback: no obstacle-free path — using direct line");
+                                 "Planner: no obstacle-free path — hovering in place (no "
+                                 "cached path to follow); cumulative hover-fallback count=" +
+                                     std::to_string(grid_planner->hover_fallback_count()));
             }
             auto traj = [&]() {
                 drone::util::ScopedDiagTimer t(diag, "ObstacleAvoid");

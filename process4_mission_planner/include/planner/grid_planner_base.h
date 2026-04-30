@@ -122,9 +122,20 @@ public:
                                                             uint32_t n, float clamp_m,
                                                             float min_confidence) = 0;
 
-    /// True if the last planning cycle could not find a search path
-    /// and fell back to a direct line toward the target.
+    /// True if the last planning cycle could not find a search path AND
+    /// there was no cached path to keep following — in that case plan()
+    /// returns a hover-in-place command (NOT a direct line through
+    /// obstacles, despite the legacy method name).  See
+    /// `GridPlannerBase::plan()` for the hover branch.
     [[nodiscard]] virtual bool using_direct_fallback() const = 0;
+
+    /// Total number of plan() calls where search failed AND there was no
+    /// cached path to fall back to, so the planner hovered in place
+    /// (Plan A diagnostic — Issue #645 follow-up).  Persistent non-zero
+    /// indicates the obstacle grid is over-occupied for the current
+    /// waypoint and the drone cannot make progress without grid
+    /// reconfiguration.
+    [[nodiscard]] virtual uint64_t hover_fallback_count() const noexcept = 0;
 
     /// Invalidate the cached path, forcing a full replan on the next tick.
     /// Called after collision recovery to avoid re-using a path that led into an obstacle.
@@ -221,6 +232,10 @@ public:
     }
 
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
+
+    [[nodiscard]] uint64_t hover_fallback_count() const noexcept override {
+        return hover_fallback_count_;
+    }
 
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
     void clear_instance_state() override { grid_.clear_instance_state(); }
@@ -340,9 +355,11 @@ public:
                     // No cached path at all — hover in place (zero velocity)
                     // rather than flying a direct line through obstacles.
                     direct_fallback_ = true;
+                    ++hover_fallback_count_;
                     DRONE_LOG_WARN("[PlanBase] Search failed, no cached path — "
-                                   "hovering in place (took {:.0f}ms)",
-                                   replan_ms);
+                                   "hovering in place (took {:.0f}ms, total "
+                                   "hover-fallback count={})",
+                                   replan_ms, hover_fallback_count_);
                 }
             }
         }
@@ -715,9 +732,23 @@ private:
     }
 
     // Cached path
-    std::vector<std::array<float, 3>>     cached_path_;
-    size_t                                path_index_      = 0;
-    bool                                  direct_fallback_ = false;
+    std::vector<std::array<float, 3>> cached_path_;
+    size_t                            path_index_ = 0;
+    // Despite the legacy name, direct_fallback_=true means the planner is
+    // HOVERING in place because search failed and there's no cached path to
+    // keep following.  No code path actually flies a direct line through
+    // obstacles — the hover branch in plan() at the `direct_fallback_ &&
+    // cached_path_.empty()` guard catches it.  Renaming the flag is a wider
+    // refactor (touches IGridPlanner, derived classes, tests, log lines);
+    // deferred to a follow-up — Plan A's observability fix corrects the
+    // user-facing message text without that blast radius.
+    bool direct_fallback_ = false;
+    // Plan A diagnostic — count of plan() calls where search returned no
+    // path AND there was no cached path to fall back to, so the planner
+    // hovered in place.  Persistent non-zero indicates the obstacle grid is
+    // over-occupied for the current waypoint.  Surfaced by
+    // `hover_fallback_count()` for run-report telemetry.
+    uint64_t                              hover_fallback_count_ = 0;
     std::chrono::steady_clock::time_point last_plan_time_{};
 
     // Cached snapped goal — single source of truth for snapped world position.
