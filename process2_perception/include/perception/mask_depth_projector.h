@@ -11,6 +11,9 @@
 #include "util/ilogger.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <vector>
 
 namespace drone::perception {
@@ -22,9 +25,10 @@ public:
     /// (sky misprojections from SAM masks of distant background) and 10%
     /// below 0.3 m (ground patches projected with bias).  Filtering at
     /// the projector boundary stops these reaching the publish stage.
-    /// Both thresholds are world-frame (NED-derived from SLAM pose).
-    /// `max_z_m == 0` disables the upper bound; `min_z_m == 0` disables
-    /// the lower bound.  Default: bypass (legacy behaviour).
+    /// Both thresholds are world-frame and use **ENU** convention (positive
+    /// Z = altitude above ground), matching the SLAM pose published to
+    /// the projector.  `max_z_m == 0` disables the upper bound;
+    /// `min_z_m == 0` disables the lower bound.  Default: bypass.
     struct AltitudeFilter {
         float min_z_m{0.0f};
         float max_z_m{0.0f};
@@ -109,13 +113,23 @@ public:
         if (mask_size_.min_area_px > 0.0f || mask_size_.max_area_px > 0.0f) {
             filtered_masks.reserve(sam_masks.size());
             for (const auto& m : sam_masks) {
-                const float area = m.bbox.w * m.bbox.h;
+                // #659 P2: take absolute value so a malformed bbox with
+                // negative w or h doesn't pass `< min` and `> max` checks
+                // silently.  NaN bbox dimensions reach this gate too — the
+                // !isfinite branch drops them outright (counted as "min"
+                // since NaN is closer to the texture-noise failure mode).
+                const float raw_area = m.bbox.w * m.bbox.h;
+                if (!std::isfinite(raw_area)) {
+                    mask_size_dropped_min_.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                const float area = std::abs(raw_area);
                 if (mask_size_.min_area_px > 0.0f && area < mask_size_.min_area_px) {
-                    ++mask_size_dropped_min_;
+                    mask_size_dropped_min_.fetch_add(1, std::memory_order_relaxed);
                     continue;
                 }
                 if (mask_size_.max_area_px > 0.0f && area > mask_size_.max_area_px) {
-                    ++mask_size_dropped_max_;
+                    mask_size_dropped_max_.fetch_add(1, std::memory_order_relaxed);
                     continue;
                 }
                 filtered_masks.push_back(m);
@@ -154,6 +168,15 @@ public:
             voxels.erase(std::remove_if(voxels.begin(), voxels.end(),
                                         [&](const hal::VoxelUpdate& v) {
                                             const float z = v.position_m.z();
+                                            // #658 P2: NaN z bypasses the
+                                            // band check (both comparisons
+                                            // return false for NaN per IEEE
+                                            // 754).  Drop NaN voxels at the
+                                            // boundary before they reach the
+                                            // grid.
+                                            if (!std::isfinite(z)) {
+                                                return true;
+                                            }
                                             if (altitude_.max_z_m > 0.0f && z > altitude_.max_z_m) {
                                                 return true;
                                             }
@@ -163,7 +186,7 @@ public:
                                             return false;
                                         }),
                          voxels.end());
-            altitude_dropped_ += (before - voxels.size());
+            altitude_dropped_.fetch_add(before - voxels.size(), std::memory_order_relaxed);
         }
 
         return result;
@@ -172,17 +195,20 @@ public:
     [[nodiscard]] float iou_threshold() const { return assigner_.iou_threshold(); }
 
     /// Issue #645 — number of voxels dropped by the altitude filter since
-    /// construction.  Surfaced for diagnostic logging.
-    [[nodiscard]] uint64_t altitude_dropped_count() const noexcept { return altitude_dropped_; }
+    /// construction.  Surfaced for diagnostic logging.  Counter-only,
+    /// relaxed atomic — see private members for thread-safety contract.
+    [[nodiscard]] uint64_t altitude_dropped_count() const noexcept {
+        return altitude_dropped_.load(std::memory_order_relaxed);
+    }
 
     /// Issue #645 — counts of SAM masks dropped by the mask-size filter.
-    /// `min` counter = below `min_area_px` (texture features).
+    /// `min` counter = below `min_area_px` (texture features) OR NaN/inf area.
     /// `max` counter = above `max_area_px` (sky / ground regions).
     [[nodiscard]] uint64_t mask_size_dropped_min_count() const noexcept {
-        return mask_size_dropped_min_;
+        return mask_size_dropped_min_.load(std::memory_order_relaxed);
     }
     [[nodiscard]] uint64_t mask_size_dropped_max_count() const noexcept {
-        return mask_size_dropped_max_;
+        return mask_size_dropped_max_.load(std::memory_order_relaxed);
     }
 
 private:
@@ -190,9 +216,14 @@ private:
     MaskClassAssigner        assigner_;
     AltitudeFilter           altitude_;
     MaskSizeFilter           mask_size_;
-    mutable uint64_t         altitude_dropped_{0};
-    mutable uint64_t         mask_size_dropped_min_{0};
-    mutable uint64_t         mask_size_dropped_max_{0};
+    // Issue #659/#658 P2: counters are mutable in a `const` method, so
+    // even though P2's PATH A path currently calls `project()` from a
+    // single thread, the public API doesn't enforce that — make them
+    // atomic with relaxed ordering.  These are pure observability
+    // counters; no synchronization is implied.
+    mutable std::atomic<uint64_t> altitude_dropped_{0};
+    mutable std::atomic<uint64_t> mask_size_dropped_min_{0};
+    mutable std::atomic<uint64_t> mask_size_dropped_max_{0};
 };
 
 }  // namespace drone::perception

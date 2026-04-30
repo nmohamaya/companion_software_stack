@@ -341,6 +341,13 @@ TEST_F(MaskDepthProjectorTest, AltitudeFilter_PassesVoxelsInBand) {
     EXPECT_EQ(mdp.altitude_dropped_count(), 0u);
 }
 
+// (#658 P2: the !isfinite(z) guard in the altitude filter is defensive
+// against any future projector that might emit non-finite z.  The
+// current CpuSemanticProjector rejects NaN/inf depth upstream, so the
+// guard cannot be exercised through the public projection API today.
+// Keeping the guard prevents a silent NaN-bypass regression if the
+// projector contract ever changes.)
+
 TEST_F(MaskDepthProjectorTest, AltitudeFilter_DefaultDisabled) {
     // No filter passed → no voxels dropped, even at extreme depths.
     MaskDepthProjector mdp(projector_);
@@ -449,4 +456,37 @@ TEST_F(MaskDepthProjectorTest, AltitudeFilter_InvertedBandIsDisabled) {
     auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
     ASSERT_TRUE(result.is_ok());
     EXPECT_FALSE(result.value().empty()) << "Inverted band must be treated as disabled";
+}
+
+// #659 P2 review fix: malformed bbox with negative w or h must not silently
+// pass the size band.  std::abs() in the projector forces magnitude
+// comparison, so a -50×-50 bbox (positive area = 2500) lands in [900, 100k].
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_NegativeBboxDimensionsUseAbsoluteArea) {
+    MaskDepthProjector::MaskSizeFilter ms{900.0f, 100000.0f};
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+
+    // Bbox with negative width and height — area would be +2500 with abs.
+    auto mask   = make_sam_mask(280.0f, 200.0f, -50.0f, -50.0f);
+    auto depth  = make_depth_map(640, 480, 5.0f);
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(mdp.mask_size_dropped_min_count(), 0u)
+        << "Negative-dim bbox with |area|=2500 must NOT drop on min<2500 gate";
+    EXPECT_EQ(mdp.mask_size_dropped_max_count(), 0u)
+        << "Negative-dim bbox with |area|=2500 must NOT drop on max>100000 gate";
+}
+
+// #659 P2 review fix: NaN bbox area must be dropped rather than silently
+// passing both min and max checks (NaN comparisons are false in IEEE 754).
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_NaNBboxAreaIsDropped) {
+    MaskDepthProjector::MaskSizeFilter ms{900.0f, 100000.0f};
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+
+    auto mask   = make_sam_mask(280.0f, 200.0f, std::numeric_limits<float>::quiet_NaN(), 50.0f);
+    auto depth  = make_depth_map(640, 480, 5.0f);
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(mdp.mask_size_dropped_min_count(), 1u)
+        << "NaN bbox area must be dropped (counted as min) so it cannot reach the projector";
+    EXPECT_TRUE(result.value().empty()) << "NaN-bbox mask was the only input; output must be empty";
 }
