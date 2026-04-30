@@ -100,6 +100,11 @@
                     "use_cuda": true
                 },
                 "mask_class_iou_threshold": 0.5,
+                "altitude_filter": {
+                    "_comment": "Issue #645 (#658) — drop voxels above max_z_m (sky misprojections from SAM masking distant background) and below min_z_m (ground patches with depth bias).  Run 2026-04-30_174147 trace analysis: 22% of voxels were above 6 m and 10% below 0.3 m — a guaranteed 32% of every frame was ghost.  World-frame Z; thresholds 0 = disabled.  Mission area obstacles top out at 5 m (pillars), drone flies at 5 m altitude, so anything above 6 m is sky.",
+                    "min_z_m": 0.3,
+                    "max_z_m": 6.0
+                },
                 "diag": {
                     "_comment": "Issue #612 voxel-position trace — JSONL of pose + bboxes + voxel world positions per batch. Consumed by tools/plot_voxel_trace.py. The runner overwrites trace_path with <scenario_log_dir>/path_a_voxel_trace.jsonl so every run is self-contained; keep trace_voxels=true to opt in.",
                     "trace_voxels": true,

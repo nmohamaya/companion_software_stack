@@ -1196,8 +1196,17 @@ int main(int argc, char* argv[]) {
                 semantic_projector = std::move(sp);
                 const float iou    = ctx.cfg.get<float>(
                     drone::cfg_key::perception::path_a::MASK_CLASS_IOU_THRESHOLD, 0.5f);
+                // Issue #645 — altitude filter on back-projected voxels.
+                // Diagnostic on run 2026-04-30_174147 showed 22 % of voxels
+                // above 6 m (sky misprojections) and 10 % below 0.3 m (ground
+                // bias), totalling ~32 % of voxels per frame as guaranteed
+                // ghosts.  Drop them at the projector boundary.  0 disables
+                // the bound; default {0, 0} = legacy behaviour.
+                drone::perception::MaskDepthProjector::AltitudeFilter alt{};
+                alt.min_z_m = ctx.cfg.get<float>("perception.path_a.altitude_filter.min_z_m", 0.0f);
+                alt.max_z_m = ctx.cfg.get<float>("perception.path_a.altitude_filter.max_z_m", 0.0f);
                 mask_projector = std::make_unique<drone::perception::MaskDepthProjector>(
-                    *semantic_projector, iou);
+                    *semantic_projector, iou, alt);
                 voxel_pub = ctx.bus.advertise<drone::ipc::SemanticVoxelBatch>(
                     drone::ipc::topics::SEMANTIC_VOXELS);
                 if (!voxel_pub->is_ready()) {

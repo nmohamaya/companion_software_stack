@@ -282,3 +282,87 @@ TEST(MaskDepthProjectorBasic, IouThresholdClampedToRange) {
     MaskDepthProjector high(proj, 5.0f);
     EXPECT_FLOAT_EQ(high.iou_threshold(), 1.0f);
 }
+
+// ── Issue #645 — Altitude filter (#658) ─────────────────────────────────
+// Drop voxels above max_z_m (sky misprojections) and below min_z_m
+// (ground patches with depth bias) at the projector boundary.
+// Diagnostic on run 2026-04-30_174147 found 22 % of voxels above 6 m
+// and 10 % below 0.3 m — a guaranteed 32 % of every frame was ghost.
+
+TEST_F(MaskDepthProjectorTest, AltitudeFilter_DropsVoxelsAboveMaxZ) {
+    // Camera pose: 5 m altitude, looking straight down (+Z axis tilted to look
+    // at +X direction).  Use identity pose + depth that produces world-Z
+    // voxels comfortably above 6 m to hit the upper bound.
+    //
+    // Easiest fixture: identity pose, depth=15m.  CpuSemanticProjector with
+    // pinhole intrinsics back-projects each mask pixel along the camera
+    // forward axis (+Z in camera frame) → world-Z = 15 m for an identity
+    // pose.  Above max_z_m=6.0, all dropped.
+    MaskDepthProjector::AltitudeFilter alt{0.0f, 6.0f};
+    MaskDepthProjector                 mdp(projector_, 0.5f, alt);
+
+    auto mask  = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto depth = make_depth_map(640, 480, 15.0f);
+
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    const auto& updates = result.value();
+    EXPECT_TRUE(updates.empty()) << "Voxels at z=15 m should be dropped by max_z_m=6";
+    EXPECT_GT(mdp.altitude_dropped_count(), 0u);
+}
+
+TEST_F(MaskDepthProjectorTest, AltitudeFilter_DropsVoxelsBelowMinZ) {
+    // Identity pose + depth=0.1 m → world-Z = 0.1 m, below min_z_m=0.3 m.
+    MaskDepthProjector::AltitudeFilter alt{0.3f, 0.0f};
+    MaskDepthProjector                 mdp(projector_, 0.5f, alt);
+
+    auto mask  = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto depth = make_depth_map(640, 480, 0.1f);
+
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    const auto& updates = result.value();
+    EXPECT_TRUE(updates.empty()) << "Voxels at z=0.1 m should be dropped by min_z_m=0.3";
+    EXPECT_GT(mdp.altitude_dropped_count(), 0u);
+}
+
+TEST_F(MaskDepthProjectorTest, AltitudeFilter_PassesVoxelsInBand) {
+    // Identity pose + depth=3 m → world-Z = 3 m, inside [0.3, 6.0] band.
+    MaskDepthProjector::AltitudeFilter alt{0.3f, 6.0f};
+    MaskDepthProjector                 mdp(projector_, 0.5f, alt);
+
+    auto mask  = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto depth = make_depth_map(640, 480, 3.0f);
+
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    const auto& updates = result.value();
+    EXPECT_FALSE(updates.empty()) << "In-band voxels must survive the filter";
+    EXPECT_EQ(mdp.altitude_dropped_count(), 0u);
+}
+
+TEST_F(MaskDepthProjectorTest, AltitudeFilter_DefaultDisabled) {
+    // No filter passed → no voxels dropped, even at extreme depths.
+    MaskDepthProjector mdp(projector_);
+
+    auto mask  = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto depth = make_depth_map(640, 480, 15.0f);  // would be dropped if filter active
+
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty());
+    EXPECT_EQ(mdp.altitude_dropped_count(), 0u);
+}
+
+TEST_F(MaskDepthProjectorTest, AltitudeFilter_InvertedBandIsDisabled) {
+    // min_z_m >= max_z_m is nonsensical — constructor should disable filter
+    // and emit a warning.
+    MaskDepthProjector::AltitudeFilter alt{6.0f, 3.0f};
+    MaskDepthProjector                 mdp(projector_, 0.5f, alt);
+
+    auto mask   = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto depth  = make_depth_map(640, 480, 15.0f);
+    auto result = mdp.project({mask}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty()) << "Inverted band must be treated as disabled";
+}
