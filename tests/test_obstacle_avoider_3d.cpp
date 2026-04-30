@@ -1356,3 +1356,121 @@ TEST(ObstacleAvoider3DTest, FinalClampInactiveOutsideCloseRegime) {
     // produces; we just assert the clamp didn't engage.
     EXPECT_TRUE(std::isfinite(result.velocity_x));
 }
+
+// ═════════════════════════════════════════════════════════════
+// Issue #645 — AABB-aware distance + repulsion direction
+// Treat `estimated_radius_m` as XY half-extent and
+// `estimated_height_m` as full Z extent.  Clamp drone position
+// into the AABB; distance + repulsion direction are computed from
+// the nearest face, not the centroid.  Backward compatible: when
+// extents are zero the AABB collapses to a point and behaviour
+// matches legacy centroid-distance.
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, AabbAwareDistance_TangentialPassEngagesCloseRegime) {
+    // Drone passes tangentially along a 1×1×5 m cube's south face.  The
+    // legacy centroid-distance treats the cube as a 0.5 m sphere; drone at
+    // 0.9 m centroid distance is "outside" the bubble and close_regime never
+    // engages, so the drone clips the face.
+    //
+    // With AABB-aware distance the drone is 0.4 m from the south face
+    // (0.9 - 0.5), which IS inside min_distance_m, so close_regime fires.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.min_distance_m     = 1.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.vertical_gain      = 0.0f;
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);  // moving +X (tangential)
+    auto pose = make_pose(30.0f, 25.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 30.3f;  // cube centroid south of drone
+    objects.objects[0].position_y         = 24.1f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].estimated_radius_m = 0.5f;  // 1 m cube → 0.5 m XY half-extent
+    objects.objects[0].estimated_height_m = 5.0f;
+    objects.timestamp_ns                  = now_ns();
+
+    (void)avoider.avoid(cmd, pose, objects);
+    EXPECT_TRUE(avoider.close_regime_active())
+        << "AABB-aware distance must engage close_regime for tangential "
+        << "pass at 0.4 m face-distance (despite 0.9 m centroid distance)";
+}
+
+TEST(ObstacleAvoider3DTest, AabbAwareDistance_RepulsionPerpendicularToFace) {
+    // For a tangentially-passing drone the repulsion direction must be
+    // perpendicular to the cube face (i.e. along Y, away from the south
+    // face), not toward the centroid (which has both X and Y components).
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 5.0f;
+    config.min_distance_m        = 1.0f;
+    config.repulsive_gain        = 4.0f;
+    config.max_correction_mps    = 5.0f;
+    config.path_aware            = false;
+    config.brake_in_close_regime = false;  // isolate repulsion direction
+    config.vertical_gain         = 0.0f;
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(0.0f, 0.0f, 0.0f);
+    auto pose = make_pose(30.0f, 25.0f, 5.0f);  // drone NORTH of cube
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 30.3f;
+    objects.objects[0].position_y         = 24.1f;  // cube to the SOUTH of drone
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].estimated_radius_m = 0.5f;
+    objects.objects[0].estimated_height_m = 5.0f;
+    objects.timestamp_ns                  = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    // Drone is at (30.0, 25.0).  Nearest AABB point: x clamped into
+    // [29.8, 30.8] → 30.0; y clamped into [23.6, 24.6] → 24.6.
+    // Vector from nearest point to drone is (0.0, +0.4) — pure +Y.
+    // Repulsion should push drone away in +Y, with near-zero X component.
+    EXPECT_GT(result.velocity_y, 0.5f) << "Expected strong +Y repulsion away from south face";
+    EXPECT_NEAR(result.velocity_x, 0.0f, 0.05f)
+        << "Expected near-zero X component (legacy centroid-direction would give X=-0.087)";
+}
+
+TEST(ObstacleAvoider3DTest, AabbAwareDistance_ZeroExtentsFallsBackToCentroid) {
+    // Backward-compat regression guard: a point-source obstacle (extents=0)
+    // must produce identical behaviour to the legacy centroid-distance
+    // implementation.  The clamp(drone, pos±0, pos±0) returns pos and the
+    // distance reduces to |drone - pos|.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.min_distance_m     = 1.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.vertical_gain      = 0.0f;
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 3.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    // estimated_radius_m and estimated_height_m default to zero — point source
+    objects.timestamp_ns = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    // Distance to obstacle = 3 m.  Repulsion = gain / dist² = 2/9 ≈ 0.22 m/s.
+    // Direction: -X (away from obstacle at +X).  vx = 2 - 0.22 ≈ 1.78.
+    EXPECT_LT(result.velocity_x, 2.0f) << "Repulsion should reduce vx";
+    EXPECT_NEAR(result.velocity_x, 2.0f - 2.0f / 9.0f, 0.02f)
+        << "Zero-extent case must match legacy centroid-distance arithmetic";
+}

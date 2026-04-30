@@ -237,10 +237,39 @@ public:
             float       oy      = obj.position_y + obj.velocity_y * pred_dt;
             float       oz      = obj.position_z + obj.velocity_z * pred_dt;
 
-            // Relative position from drone to obstacle
-            float dx = ox - drone_x;
-            float dy = oy - drone_y;
-            float dz = oz - drone_z;
+            // ── Issue #645 — AABB-aware distance + direction ──────────────
+            // The legacy code computed centroid-distance + centroid-direction
+            // and treated every obstacle as a sphere of radius
+            // `estimated_radius_m`.  For a flat-faced object (cube, wall) the
+            // drone could be 0.4 m from a face but 0.9 m from the centroid;
+            // the avoider would treat that as "comfortably outside the bubble"
+            // and not engage close_regime until it was already touching the
+            // face.  Empirically reproduced as the "skipping to the side and
+            // hitting it" failure on TemplateCube_Rounded_66 in scenario 33.
+            //
+            // New behaviour: interpret `estimated_radius_m` as XY half-extent
+            // (square cross-section) and `estimated_height_m` as full Z extent.
+            // Compute the *nearest point on the AABB* to the drone and use
+            // that for distance + repulsion direction.  When extents are zero
+            // (default for centroid-only obstacles) the AABB collapses to a
+            // single point and the math reduces to legacy centroid-distance —
+            // backward compatible by construction.
+            const float hx     = std::max(0.0f, obj.estimated_radius_m);
+            const float hy     = std::max(0.0f, obj.estimated_radius_m);
+            const float hz     = std::max(0.0f, 0.5f * obj.estimated_height_m);
+            const float ax_min = ox - hx, ax_max = ox + hx;
+            const float ay_min = oy - hy, ay_max = oy + hy;
+            const float az_min = oz - hz, az_max = oz + hz;
+            const float nx = std::clamp(drone_x, ax_min, ax_max);
+            const float ny = std::clamp(drone_y, ay_min, ay_max);
+            const float nz = std::clamp(drone_z, az_min, az_max);
+
+            // Vector from drone INTO the AABB nearest point — same convention
+            // as the legacy `nearest_dx/dy/dz` (drone → obstacle).  When drone
+            // is outside the AABB this points perpendicular to the nearest face.
+            float dx = nx - drone_x;
+            float dy = ny - drone_y;
+            float dz = nz - drone_z;
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
@@ -256,12 +285,13 @@ public:
                 // Inverse-square repulsive force (decays with distance)
                 float repulsion = config_.repulsive_gain_per_class[ci] / (dist * dist);
 
-                // Per-obstacle contribution vector (so we can log its magnitude).
+                // Per-obstacle contribution vector (so we can log its
+                // magnitude).  Direction: outward from the nearest AABB face,
+                // i.e. negative of (drone→nearest_point).
                 const float cx = -(dx / dist) * repulsion;
                 const float cy = -(dy / dist) * repulsion;
                 const float cz = -(dz / dist) * repulsion * config_.vertical_gain;
 
-                // Direction: away from obstacle (negative of relative vector)
                 total_rep_x += cx;
                 total_rep_y += cy;
                 total_rep_z += cz;
