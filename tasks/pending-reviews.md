@@ -59,7 +59,8 @@ code — just stacked-PR rebase on integration).
 | --- | --- | --- | --- |
 | #643 | `fix(#638): tracker tuning + diagnostics for scenario-33 ID-explosion` | tracker config changes + new diagnostic accessors, no flight-critical structural changes | open, 1 comment, 0 reviews |
 | #644 | `fix: ZenohSubscriber latency tracker accumulates phantom samples on quiet topics` | header-only IPC primitive change, adds one `std::atomic<uint64_t>`; concurrency review must verify the relaxed-ordering choice; performance review on hot-path receive() | open, 0 reviews |
-| #649 | `fix(#645): UKF radar-only S-matrix recovery (eigenvalue clamp + R-only fallback)` | UKF math change on flight-critical fusion thread. Pass 1 = memory + concurrency + fault-recovery (degraded-input path) + security + unit; Pass 2 = all four. Adds `<Eigen/Eigenvalues>` include — eigensolver runs only on failure path. | open, 0 reviews |
+| #649 | `fix(#645): UKF radar-only S-matrix recovery (eigenvalue clamp + R-only fallback)` | UKF math change on flight-critical fusion thread. Pass 1 = memory + concurrency + fault-recovery (degraded-input path) + security + unit; Pass 2 = all four. Adds `<Eigen/Eigenvalues>` include — eigensolver runs only on failure path. | merged 2026-04-30 (move to merged section on next sweep) |
+| #650 | `fix(#645): correct misleading planner-fallback message + add hover-fallback counter` | log-text + diagnostic-counter only, no behavioural change to the planner. Pass 1 = unit + fault-recovery (verify counter semantics on real failure paths); Pass 2 = test-quality (false-positive guard test) + api-contract (new IGridPlanner method) + code-quality (legacy flag-name retained). | open, 0 reviews |
 
 ## Concrete review focus areas
 
@@ -89,6 +90,13 @@ Things I noticed while writing the code that reviewers should poke at:
 
 - `max_match_distance_m` bumped 3.0 → 8.0.  Justify against expected per-frame motion vs distinct-pillar separation.  Already in PR body but a reviewer should sanity-check.
 - New `last_aged_out_count()` and `last_match_failure_count()` accessors are written by `update()`, read by `main.cpp`.  Single thread, no atomics needed, but verify.
+
+### #650 (planner hover-fallback observability)
+
+- The legacy `direct_fallback_` flag and `using_direct_fallback()` method were intentionally kept (the rename has wide blast radius).  Code-quality reviewer should weigh in on whether the deferred rename is worth a follow-up issue.
+- New `hover_fallback_count_` is only incremented in the no-cached-path branch — verify that's the right semantic vs. "any plan() call where search failed regardless of cache state".
+- `noexcept` on `hover_fallback_count()` accessor — confirm the return path can never throw (it's a plain `uint64_t` member read, should be safe).
+- The WARN message now does string concatenation via `std::to_string` on a hot-ish path (every plan() that hits the fallback).  Per-call cost negligible; just flag for perf reviewer to confirm.
 
 ### #649 (UKF radar S-matrix recovery)
 
