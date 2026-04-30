@@ -44,6 +44,12 @@ namespace drone::perception {
 class VoxelInstanceTracker {
 public:
     /// One stable track maintained across frames.
+    ///
+    /// `last_seen_ns` clock domain: monotonic nanoseconds, supplied by
+    /// the caller via `update(voxels, now_ns)` and `age_out_tracks_(now_ns)`.
+    /// In production this is `masks_opt->timestamp_ns` (P2 frame timestamp,
+    /// `steady_clock`-derived).  Never wall-clock time — comparisons with
+    /// `track_max_age_ns_` assume monotonicity.
     struct Track {
         Eigen::Vector3f centroid_m{Eigen::Vector3f::Zero()};
         Eigen::Vector3f aabb_min_m{Eigen::Vector3f::Zero()};
@@ -66,7 +72,17 @@ public:
     explicit VoxelInstanceTracker(float max_match_distance_m = 3.0f,
                                   float track_max_age_s      = 2.0f) noexcept
         : max_match_distance_m_(std::max(0.0f, max_match_distance_m))
-        , track_max_age_ns_(static_cast<uint64_t>(std::max(0.0f, track_max_age_s) * 1e9f)) {}
+        // PR #643 P2 review: do the seconds→ns conversion in `double` so
+        // we don't lose sub-second precision past ~4.2 s of `track_max_age_s`
+        // (float has only ~7 significant decimal digits, and 1e9f as
+        // float-32 is exact but `track_max_age_s * 1e9f` truncates).  NaN
+        // input → 0 (std::max(NaN,0) returns NaN, but the multiply NaN→
+        // cast 0); explicit `isfinite` short-circuit makes the contract
+        // visible to the reader.
+        , track_max_age_ns_(
+              std::isfinite(track_max_age_s)
+                  ? static_cast<uint64_t>(std::max(0.0, static_cast<double>(track_max_age_s)) * 1e9)
+                  : 0u) {}
 
     /// Update tracks from this frame's clustered voxels and rewrite each
     /// voxel's `instance_id` to its assigned track's stable ID.

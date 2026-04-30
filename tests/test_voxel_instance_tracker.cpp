@@ -13,6 +13,8 @@
 
 #include "perception/voxel_instance_tracker.h"
 
+#include <limits>
+
 #include <gtest/gtest.h>
 
 using drone::hal::VoxelUpdate;
@@ -240,4 +242,42 @@ TEST(VoxelInstanceTracker, ResetClearsAllState) {
     add_cluster(v2, 5.0f, 5.0f, 5.0f, 1);
     tracker.update(v2, 200'000'000ull);
     EXPECT_EQ(v2[0].instance_id, 1u);
+}
+
+// PR #643 P2 review: the float→ns multiplication used to lose precision
+// past ~4.2 s of track_max_age_s.  Now done in double.  Lock in
+// large-age behaviour; a regression to float would round 60 s to ±64 ns
+// — invisible at this granularity but eventually meaningful.
+TEST(VoxelInstanceTracker, ConstructionAcceptsLargeAgeWithoutPrecisionLoss) {
+    VoxelInstanceTracker     tracker(/*max_match=*/3.0f, /*track_max_age_s=*/60.0f);
+    std::vector<VoxelUpdate> v;
+    add_cluster(v, 5.0f, 5.0f, 5.0f, 1);
+    tracker.update(v, 0);
+    ASSERT_EQ(tracker.track_count(), 1u);
+
+    // 59 s later — still alive.
+    std::vector<VoxelUpdate> empty;
+    tracker.update(empty, 59'000'000'000ull);
+    EXPECT_EQ(tracker.track_count(), 1u);
+
+    // 61 s later — aged out.
+    tracker.update(empty, 61'000'000'000ull);
+    EXPECT_EQ(tracker.track_count(), 0u);
+}
+
+// PR #643 P2 review: NaN track_max_age_s must not UB-cast or wrap to
+// ~2^64 (which would either lock tracks forever or instantly age them).
+// The constructor short-circuits to track_max_age_ns_=0, which is the
+// documented "ageing disabled" sentinel.
+TEST(VoxelInstanceTracker, ConstructionWithNaNAgeDisablesAgeing) {
+    VoxelInstanceTracker     tracker(3.0f, std::numeric_limits<float>::quiet_NaN());
+    std::vector<VoxelUpdate> v;
+    add_cluster(v, 5.0f, 5.0f, 5.0f, 1);
+    tracker.update(v, 0);
+    ASSERT_EQ(tracker.track_count(), 1u);
+
+    std::vector<VoxelUpdate> empty;
+    tracker.update(empty, 60'000'000'000ull);
+    EXPECT_EQ(tracker.track_count(), 1u)
+        << "NaN max_age must short-circuit to ageing-disabled, not wrap";
 }
