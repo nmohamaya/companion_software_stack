@@ -100,6 +100,21 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
     uint64_t send_fail_count = 0;
     uint64_t traj_send_fail  = 0;
 
+    // ── Issue #645 — SimpleFlight 60 ms api_goal_timeout heartbeat ─────────
+    // Cosys SimpleFlight (`OffboardApi.hpp`) prints "API call was not received,
+    // entering hover mode for safety" and seizes control whenever no API call
+    // arrives within 60 ms.  Mission planner ticks at ~10 Hz (100 ms) and
+    // republishes only on new commands, so without a heartbeat the
+    // simulator's safety hover engages constantly — drone ignores our
+    // commands and clips obstacles.  Cache the last successful trajectory and
+    // re-send it on every fc_tx tick (25 ms loop, well under the 60 ms
+    // timeout) so SimpleFlight's `goal_timestamp_` stays fresh.
+    drone::ipc::TrajectoryCmd             last_sent_traj{};
+    bool                                  have_sent_traj  = false;
+    uint64_t                              heartbeat_count = 0;
+    constexpr std::chrono::milliseconds   kHeartbeatPeriod{40};
+    std::chrono::steady_clock::time_point last_traj_send = std::chrono::steady_clock::now();
+
     while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
         // ── Handle FC commands (arm, takeoff, mode) ─────────
@@ -152,13 +167,19 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
 
         // ── Forward trajectory velocity commands (dedup by timestamp) ──
         drone::ipc::TrajectoryCmd cmd{};
+        bool                      sent_this_tick = false;
         if (traj_sub.receive(cmd) && cmd.valid && cmd.timestamp_ns > last_traj_ts) {
             last_traj_ts = cmd.timestamp_ns;
             // TrajectoryCmd stores target_yaw in radians, and IFCLink::send_trajectory
             // now takes yaw in radians by contract — backends convert to their native
             // unit internally. Pass through unchanged.
-            if (!fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z,
-                                    cmd.target_yaw)) {
+            if (fc.send_trajectory(cmd.velocity_x, cmd.velocity_y, cmd.velocity_z,
+                                   cmd.target_yaw)) {
+                last_sent_traj = cmd;
+                have_sent_traj = true;
+                last_traj_send = std::chrono::steady_clock::now();
+                sent_this_tick = true;
+            } else {
                 ++traj_send_fail;
                 if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
                     DRONE_LOG_WARN("[Comms] Trajectory send failed (#{}) — "
@@ -168,11 +189,41 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
             }
         }
 
+        // ── Heartbeat: re-send last trajectory if planner is silent ────────
+        // SimpleFlight's `api_goal_timeout` (60 ms) is shorter than the
+        // mission planner tick (~100 ms), so without a heartbeat the
+        // simulator falls back to its internal hover and ignores our
+        // commands.  See block at top of this thread for full rationale.
+        // Suppressed when last_traj_ts == UINT64_MAX (RTL/LAND mode change
+        // explicitly blocks trajectory commands from re-entering offboard).
+        if (!sent_this_tick && have_sent_traj && last_traj_ts != UINT64_MAX) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_traj_send >= kHeartbeatPeriod) {
+                if (fc.send_trajectory(last_sent_traj.velocity_x, last_sent_traj.velocity_y,
+                                       last_sent_traj.velocity_z, last_sent_traj.target_yaw)) {
+                    last_traj_send = now;
+                    ++heartbeat_count;
+                    if (heartbeat_count == 1 || heartbeat_count % 200 == 0) {
+                        DRONE_LOG_DEBUG("[Comms] Trajectory heartbeat re-sent "
+                                        "(planner silent; total resends={})",
+                                        heartbeat_count);
+                    }
+                }
+                // send failure counted by traj_send_fail above on the
+                // primary-send path; heartbeat path is best-effort.
+            }
+        }
+
         // Log IPC latency from the thread that owns these receive() calls
         traj_sub.log_latency_if_due();
         cmd_sub.log_latency_if_due();
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Loop period reduced 50 ms → 25 ms so the heartbeat path can fire
+        // well within SimpleFlight's 60 ms api_goal_timeout window even when
+        // the planner is silent.  At 25 ms loop period and 40 ms heartbeat
+        // threshold, the worst-case gap between RPC sends is ~65 ms only
+        // when a tick is delayed by scheduling — typical case is 25-50 ms.
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 }
 
