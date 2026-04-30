@@ -59,6 +59,15 @@ struct VoxelObstacleSnapshot {
 
 // Trivially copyable so it can sit in TripleBuffer<>.
 static_assert(sizeof(VoxelObstacleSnapshot) > 0, "snapshot must have non-zero size");
+// Issue #645 review fix (#647 P2): hard-guard against future field
+// additions that would break TripleBuffer's std::move semantics
+// (vector, string, etc.).  CLAUDE.md mandates this for IPC structs;
+// TripleBuffer payloads carry the same risk.
+#include <type_traits>
+static_assert(std::is_trivially_copyable_v<VoxelObstacleSnapshot>,
+              "VoxelObstacleSnapshot must remain trivially copyable for TripleBuffer hand-off");
+static_assert(std::is_trivially_copyable_v<VoxelObstacleEntry>,
+              "VoxelObstacleEntry must remain trivially copyable");
 
 /// Track-id high-bit prefix used to mark synthetic GEOMETRIC_OBSTACLE entries
 /// derived from voxel-cluster tracks (vs. fusion's camera/radar tracks).

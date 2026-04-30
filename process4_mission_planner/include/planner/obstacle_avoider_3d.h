@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -230,6 +231,18 @@ public:
 
             if (obj.confidence < config_.min_confidence_per_class[ci]) continue;
             ++considered;
+
+            // Issue #645 review fix (#646/#657 P2): NaN/Inf guard on obstacle
+            // data — corrupted radar/perception messages with NaN positions
+            // would otherwise propagate through the AABB clamp at line ~257
+            // where std::clamp(drone, NaN, NaN) is undefined behavior
+            // (precondition lo <= hi violated).  Skip the entire obstacle.
+            if (!std::isfinite(obj.position_x) || !std::isfinite(obj.position_y) ||
+                !std::isfinite(obj.position_z) || !std::isfinite(obj.velocity_x) ||
+                !std::isfinite(obj.velocity_y) || !std::isfinite(obj.velocity_z) ||
+                !std::isfinite(obj.estimated_radius_m) || !std::isfinite(obj.estimated_height_m)) {
+                continue;
+            }
 
             // Predicted object position (if velocity is available)
             const float pred_dt = config_.prediction_dt_per_class[ci];
@@ -480,7 +493,13 @@ public:
                 cmd.velocity_y -= v_toward_final * ny;
                 cmd.velocity_z -= v_toward_final * nz;
                 final_clamp_applied = true;
-                ++final_clamp_count_;
+                // Issue #645 review fix (#646 P1): relaxed-ordering atomic
+                // increment.  Counter is read by external diagnostic
+                // accessor on potentially different threads (P7 monitor /
+                // logger).  Relaxed is sufficient because the counter is
+                // a pure observability signal — no synchronization with
+                // other state required.
+                final_clamp_count_.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
@@ -536,7 +555,9 @@ public:
     /// command.  Persistently rising across ticks indicates the rest of the
     /// pipeline (planner + brake + repulsion) was repeatedly trying to push
     /// the drone into an obstacle and the safety floor caught it.
-    [[nodiscard]] uint64_t final_clamp_count() const noexcept { return final_clamp_count_; }
+    [[nodiscard]] uint64_t final_clamp_count() const noexcept {
+        return final_clamp_count_.load(std::memory_order_relaxed);
+    }
 
     /// Mutable config access — for tests that need per-class overrides
     /// after construction (the constructor fills per-class arrays from
@@ -562,7 +583,11 @@ private:
     bool close_regime_active_ = false;
     // Diagnostic counter (Issue #645) — increments every avoid() call where
     // the post-correction toward-obstacle clamp zeroed a positive component.
-    uint64_t final_clamp_count_ = 0;
+    // Issue #645 review fix (#646 P1): atomic counter — written by avoid()
+    // on the planner thread, read by final_clamp_count() accessor which can
+    // be called from any thread (P7 health monitor, logger).  Relaxed
+    // ordering is sufficient — pure observability counter.
+    std::atomic<uint64_t> final_clamp_count_{0};
 };
 
 }  // namespace drone::planner

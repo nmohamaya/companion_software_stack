@@ -19,6 +19,13 @@ public:
     /// Read the latest message. Returns true if a consistent read was obtained.
     /// @param out       Destination for the message payload.
     /// @param timestamp_ns  Optional output for the publisher timestamp.
+    ///
+    /// **Threading contract**: receive() must be called from a SINGLE
+    /// CONSUMER THREAD per subscriber instance.  Implementations
+    /// (ZenohSubscriber etc.) may use relaxed-memory-order self-suppression
+    /// state (e.g. last_recorded_ts_) that assumes single-consumer access.
+    /// Calling receive() concurrently from multiple threads on the same
+    /// subscriber is undefined behaviour.  Issue #645 review fix (#644 P2).
     [[nodiscard]] virtual bool receive(T& out, uint64_t* timestamp_ns = nullptr) const = 0;
 
     /// Returns true if the subscriber is connected to its data source.

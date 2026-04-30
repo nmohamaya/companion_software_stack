@@ -1474,3 +1474,83 @@ TEST(ObstacleAvoider3DTest, AabbAwareDistance_ZeroExtentsFallsBackToCentroid) {
     EXPECT_NEAR(result.velocity_x, 2.0f - 2.0f / 9.0f, 0.02f)
         << "Zero-extent case must match legacy centroid-distance arithmetic";
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Issue #645 review fixes (#646/#657 review comments — batch 1)
+// ═══════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, NaNObstaclePositionIsGuardedAndSkipped) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = std::numeric_limits<float>::quiet_NaN();
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    EXPECT_FLOAT_EQ(result.velocity_x, cmd.velocity_x);
+    EXPECT_FLOAT_EQ(result.velocity_y, cmd.velocity_y);
+    EXPECT_FLOAT_EQ(result.velocity_z, cmd.velocity_z);
+}
+
+TEST(ObstacleAvoider3DTest, NaNAabbExtentIsGuardedAndSkipped) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 3.0f;
+    objects.objects[0].position_y         = 0.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].estimated_radius_m = std::numeric_limits<float>::quiet_NaN();
+    objects.timestamp_ns                  = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    EXPECT_FLOAT_EQ(result.velocity_x, cmd.velocity_x);
+}
+
+TEST(ObstacleAvoider3DTest, FinalClampCounterAtomicAccessor) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 5.0f;
+    config.min_distance_m        = 3.0f;
+    config.repulsive_gain        = 0.1f;
+    config.max_correction_mps    = 0.5f;
+    config.brake_in_close_regime = false;
+    config.path_aware            = false;
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    EXPECT_EQ(avoider.final_clamp_count(), 0u);
+
+    auto                           cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto                           pose = make_pose(0.0f, 0.0f, 5.0f);
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.0f;
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    (void)avoider.avoid(cmd, pose, objects);
+    EXPECT_GE(avoider.final_clamp_count(), 1u);
+}
