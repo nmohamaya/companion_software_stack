@@ -30,6 +30,10 @@ The 14-PR scenario-33 fix stack (PRs #646–#666) drove orchestrator reviews on 
 
 - **P2** (deferred — config-validator wiring): four new perception config keys (`perception.path_a.altitude_filter.{min_z_m,max_z_m}`, `perception.path_a.mask_size_filter.{min_area_px,max_area_px}`) are not registered in `common/util/include/util/config_validator.h`.  The validator is the startup gate that catches typos before flight.  Add the four keys with `[0, 100]` m bounds for altitude and `[0, 4_000_000]` px for mask area.
 
+### 2026-04-30 (scenario-33 forensics)
+
+- **P3** — comms `fc_tx_thread` issues `latency_tracker_.record()` from inside `receive()` which already runs under `data_mutex_`. Mutex-protected observability on a 20Hz IPC-forwarding thread; tier rule says buffer via lock-free primitive. Low blast radius but worth a DR or fix.
+
 ### 2026-04-27 (#638 review-driven backlog)
 
 The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review findings across 8 reviewer agents.  P1 + high-value P2 fixes landed in the respective PRs; the items below were deemed correct-but-deferred (proactive backlog).
@@ -250,4 +254,6 @@ The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review fi
 
 ## Resolved
 
-*(none yet — as improvements land, move entries here with a link to the PR/commit that closed them.)*
+### 2026-04-30
+
+- **P2** — `ZenohSubscriber<T>::receive()` recorded misleading IPC latency on quiet topics (sticky `has_data_` + stale `timestamp_ns_` made polled latency grow at 1 s/sec wall-clock).  Fix: only record a latency sample when the timestamp has changed since the previous `receive()`.  Resolved by PR #644 (cherry-picked forward).
