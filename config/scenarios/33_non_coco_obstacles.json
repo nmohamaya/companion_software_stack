@@ -175,7 +175,8 @@
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
                 "promotion_hits": 10,
-                "max_static_cells": 500,
+                "_comment_max_static_cells": "Issue #645 — was 500, capping the static layer at exactly the budget meant new voxel promotions were silently dropped once the outbound wake filled the cap.  0 = unlimited; with the Phase 3 instance-promotion gate (#642) blocking noise voxels at the source, raw cell-count is bounded by real obstacle volume rather than noise accumulation, so removing the cap is safe.  Empirical: drone collisions dropped 461→112 with all #645 fixes active but `Max promoted = 500` (= cap) — the cap is binding.  Lift it and see if the perception pipeline can keep up.",
+                "max_static_cells": 0,
                 "voxel_input": {
                     "_comment": "PATH A voxel subscriber enabled — MaskDepthProjector batches from P2 feed the grid via the instance-promotion gate.",
                     "_comment_static_cell_ttl_s": "Issue #635 (option A: decay-on-look-away) DISABLED for this scenario — empirical testing across TTL ∈ {0, 8, 15, 30}s and cap ∈ {500, 2000} could not find a setting that solves the failure.  Per-cell promotion fundamentally cannot distinguish noise from real obstacles.  Phase 4 (#638) replaces option A with the per-instance gate below; static_cell_ttl_s stays at 0 because the gate already prevents noise from reaching the static layer.",
