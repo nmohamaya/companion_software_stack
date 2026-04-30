@@ -111,14 +111,26 @@ def load_voxels(trace: Path, max_voxels: int = 200_000):
 
 
 def main():
+    # PR #660 P3 review: prefer DRONE_LOGS_DIR env var or repo-relative path
+    # over a hardcoded absolute developer path.  The previous default leaked
+    # the developer's home dir and worktree name into the published script.
     if len(sys.argv) > 1:
         run_dir = Path(sys.argv[1])
     else:
-        scenario_dir = Path(
-            "/home/nav/Projects/companion_software_stack_worktrees/"
-            "perception-v2-integration/drone_logs/scenarios_cosys/"
-            "33_non_coco_obstacles"
-        )
+        env_logs = os.environ.get("DRONE_LOGS_DIR")
+        if env_logs:
+            scenario_dir = Path(env_logs) / "scenarios_cosys" / "33_non_coco_obstacles"
+        else:
+            # Fall back to repo-relative (script lives in deploy/, logs in
+            # drone_logs/ at repo root).
+            repo_root    = Path(__file__).resolve().parent.parent
+            scenario_dir = repo_root / "drone_logs" / "scenarios_cosys" / "33_non_coco_obstacles"
+        if not scenario_dir.exists():
+            raise SystemExit(
+                f"No scenario logs at {scenario_dir}\n"
+                "Pass a run dir as argv[1], or set DRONE_LOGS_DIR to your "
+                "drone_logs root."
+            )
         run_dir = find_latest_run(scenario_dir)
     print(f"Run dir: {run_dir}")
 
