@@ -16,6 +16,11 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-30 (scenario-33 forensics)
+
+- **P2** — `ZenohSubscriber<T>::receive()` records misleading IPC latency on quiet topics. `has_data_` is set true on the first callback and never cleared; `timestamp_ns_` is overwritten only when a new callback arrives. The fc_tx loop polls every 50ms and, finding `has_data_=true`, records `now - timestamp_ns_` as latency on every poll. On a topic that goes silent (e.g. `drone/comms/fc_command` after ARM/TAKEOFF, `drone/mission/trajectory` after LOITER), the recorded latency grows at exactly 1s/sec wall-clock — looks like an unbounded queue backlog but is purely a measurement artefact. Caused a full debugging detour on 2026-04-30. Fix: only record a latency sample when the timestamp has changed since the previous `receive()` (track `last_recorded_ts_` per subscriber). File: [common/ipc/include/ipc/zenoh_subscriber.h](common/ipc/include/ipc/zenoh_subscriber.h#L80-L100).
+- **P3** — comms `fc_tx_thread` issues `latency_tracker_.record()` from inside `receive()` which already runs under `data_mutex_`. Mutex-protected observability on a 20Hz IPC-forwarding thread; tier rule says buffer via lock-free primitive. Low blast radius but worth a DR or fix.
+
 ### 2026-04-27 (#638 review-driven backlog)
 
 The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review findings across 8 reviewer agents.  P1 + high-value P2 fixes landed in the respective PRs; the items below were deemed correct-but-deferred (proactive backlog).

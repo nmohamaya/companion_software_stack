@@ -90,7 +90,16 @@ public:
         if (timestamp_ns) {
             *timestamp_ns = msg_ts;
         }
-        if (track_latency_ && msg_ts > 0) {
+        // Only record a latency sample when the message timestamp has changed
+        // since the previous receive().  Without this guard, a sticky-true
+        // has_data_ + an unchanged timestamp_ns_ (publisher silent) makes every
+        // poll record `now - last_callback_time`, which grows linearly with
+        // wall-clock and looks like an unbounded queue backlog.  Bug surfaced
+        // during scenario-33 forensics on 2026-04-30 when fc_command latency
+        // appeared to climb to 220s but the publisher was idle after TAKEOFF.
+        if (track_latency_ && msg_ts > 0 &&
+            msg_ts != last_recorded_ts_.load(std::memory_order_relaxed)) {
+            last_recorded_ts_.store(msg_ts, std::memory_order_relaxed);
             uint64_t now = drone::util::LatencyTracker::now_ns();
             if (now > msg_ts) {
                 latency_tracker_.record(now - msg_ts);
@@ -186,6 +195,10 @@ private:
     uint64_t                            timestamp_ns_{0};
     std::atomic<bool>                   has_data_{false};
     mutable drone::util::LatencyTracker latency_tracker_{1024};
+    // Tracks the timestamp of the last message we recorded a latency sample
+    // for.  Lets receive() suppress duplicate samples on quiet topics so the
+    // tracker reports real callback→poll delay rather than wall-clock drift.
+    mutable std::atomic<uint64_t> last_recorded_ts_{0};
 };
 
 }  // namespace drone::ipc
