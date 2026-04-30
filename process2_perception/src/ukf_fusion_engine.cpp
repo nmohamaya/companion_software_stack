@@ -12,6 +12,7 @@
 #include <limits>
 
 #include <Eigen/Cholesky>
+#include <Eigen/Eigenvalues>
 #include <Eigen/LU>
 
 namespace drone::perception {
@@ -706,7 +707,13 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
     // For radar-only tracks, use proper innovation covariance S = Pzz + R
     // that accounts for state uncertainty after predict(). Camera-originated
     // tracks have tight covariance, so R-only gating is sufficient.
-    const bool use_full_S = ukf.radar_only;
+    //
+    // Issue #645 (radar-fusion fix): use_full_S can flip to false within this
+    // block if S is too degenerate to recover even via eigenvalue clamping.
+    // In that fallback path we use R-only Mahalanobis (always PD because R
+    // is diagonal-positive) so the radar measurement is still associated
+    // rather than dropped — preferable to losing the track entirely.
+    bool use_full_S = ukf.radar_only;
 
     Eigen::LLT<ObjectUKF::RadarMeasMat> track_llt;
     bool                                track_llt_ok       = false;
@@ -719,29 +726,70 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
         auto& S         = pred.S;
         auto  z_mean_sp = pred.z_mean;
         track_z_mean    = z_mean_sp;
+        // Symmetrize before any decomposition — float-precision asymmetry from
+        // the sigma-point outer-product sum can push LLT/eigensolver off the
+        // PD cone for an otherwise-recoverable matrix.
+        S = 0.5f * (S + S.transpose().eval());
         track_llt.compute(S);
         track_llt_ok = (track_llt.info() == Eigen::Success);
         if (!track_llt_ok) {
-            // Regularize S by adding small epsilon to diagonal and retry LLT.
+            // Pass 2 — diagonal-epsilon regularisation.  Cheap; fixes the
+            // borderline case where S sits 1 ULP below the PD cone.
             constexpr float kEpsilon = 1e-6f;
             S.diagonal().array() += kEpsilon;
             track_llt.compute(S);
             track_llt_ok = (track_llt.info() == Eigen::Success);
         }
         if (!track_llt_ok) {
-            // S is not positive-definite even after regularization — treat as
-            // association failure (return no-match) rather than using a permissive
-            // diagonal approximation that could underestimate Mahalanobis distance.
-            DRONE_LOG_WARN("[UKF] S-matrix LLT failed for radar-only track {:#x}, skipping "
-                           "association",
-                           ukf.track_id);
-            return false;
+            // Pass 3 — eigenvalue clamp (Issue #645 fix B).  With kAlpha=1e-3
+            // the UT weight w0_cov ≈ -1e6, so a single rank-1 sigma-point
+            // outer product can drive S non-PD by a wide margin that 1e-6
+            // diagonal nudge cannot recover.  Reconstruct S from its
+            // eigendecomposition with a positive-eigenvalue floor — preserves
+            // direction information while restoring positive definiteness.
+            // Floor is a small fraction of the average R diagonal so the
+            // recovered S can never be more permissive than R-only gating.
+            Eigen::SelfAdjointEigenSolver<ObjectUKF::RadarMeasMat> es(S);
+            if (es.info() == Eigen::Success) {
+                const auto& R_radar           = ukf.radar_noise();
+                const float floor_eig         = 1e-3f * std::max(1e-9f, R_radar.diagonal().mean());
+                ObjectUKF::RadarMeasVec evals = es.eigenvalues().cwiseMax(floor_eig);
+                S = es.eigenvectors() * evals.asDiagonal() * es.eigenvectors().transpose();
+                S = 0.5f * (S + S.transpose().eval());
+                track_llt.compute(S);
+                track_llt_ok = (track_llt.info() == Eigen::Success);
+            }
         }
-        // Widen coarse range gate to 3σ of S(0,0) (range innovation variance).
-        // Guard against non-positive diagonal (numerical edge case).
-        if (S(0, 0) > 0.0f) {
-            track_range_3sigma = std::max(range_3sigma, 3.0f * std::sqrt(S(0, 0)));
+        if (!track_llt_ok) {
+            // Pass 4 — R-only fallback (Issue #645 fix A).  S is unrecoverable;
+            // rather than drop the radar measurement (the prior behaviour), use
+            // the R-only Mahalanobis path that camera-originated tracks already
+            // take.  R is diagonal-positive by construction so Pass 4 always
+            // succeeds.  Trade-off: we lose the state-uncertainty contribution
+            // for this association attempt; gained: we never silently lose a
+            // radar measurement on a radar-only track.
+            DRONE_LOG_DEBUG("[UKF] S-matrix degenerate for radar-only track {:#x} "
+                            "(LLT + eigenvalue-clamp both failed) — falling back "
+                            "to R-only gating",
+                            ukf.track_id);
+            ++s_matrix_fallback_count_;
+            use_full_S = false;
+            // Use z_pred instead of z_mean for innovation (matches R-only
+            // gating semantics on the camera-track path).  Keep
+            // track_range_3sigma at the global R-derived default below.
+        } else {
+            // S is PD — widen range gate to 3σ of S(0,0) (range innovation
+            // variance).  Guard against non-positive diagonal (numerical edge).
+            if (S(0, 0) > 0.0f) {
+                track_range_3sigma = std::max(range_3sigma, 3.0f * std::sqrt(S(0, 0)));
+            }
         }
+    }
+    // If we fell back to R-only, refresh z_pred since track_z_mean was set
+    // before the decision was made.  The inner loop branches on use_full_S,
+    // but innovation = z_actual - z_pred for the R-only path.
+    if (!use_full_S) {
+        z_pred = ukf.predicted_radar_measurement();
     }
 
     for (uint32_t ri = 0; ri < radar_dets_.num_detections; ++ri) {
