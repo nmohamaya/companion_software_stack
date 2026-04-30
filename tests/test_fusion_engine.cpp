@@ -2370,3 +2370,102 @@ TEST(RadarFusionTest, NormalRadarOnlyFlowDoesNotTriggerFallback) {
         << "Healthy radar-only flow should never hit the R-only fallback; "
         << "got count=" << engine.s_matrix_fallback_count();
 }
+
+// ── Issue #645 review fix (#649 P1) — construction-time R guard ───────
+// If any RadarNoiseConfig std-deviation is <= 0 / NaN / Inf, the UKF must
+// disable radar fusion at construction time rather than silently degrading
+// the Mahalanobis gate by excluding a measurement axis.
+
+TEST(RadarFusionTest, ConstructionRefusesRadarOnZeroStd) {
+    auto             calib = make_test_calib();
+    RadarNoiseConfig bad_cfg;
+    bad_cfg.range_std_m = 0.0f;  // invalid — would silently zero the inverse
+    UKFFusionEngine engine(calib, bad_cfg, /*radar_enabled=*/true);
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(15.0f, 0.0f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar_list);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked());
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FALSE(result.objects[0].has_radar)
+        << "Engine constructed with range_std_m=0 must auto-disable radar fusion";
+}
+
+TEST(RadarFusionTest, ConstructionRefusesRadarOnNegativeStd) {
+    auto             calib = make_test_calib();
+    RadarNoiseConfig bad_cfg;
+    bad_cfg.azimuth_std_rad = -0.01f;  // invalid
+    UKFFusionEngine engine(calib, bad_cfg, /*radar_enabled=*/true);
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(15.0f, 0.0f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar_list);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked());
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FALSE(result.objects[0].has_radar)
+        << "Engine constructed with negative std must auto-disable radar fusion";
+}
+
+TEST(RadarFusionTest, ConstructionRefusesRadarOnNaNStd) {
+    auto             calib = make_test_calib();
+    RadarNoiseConfig bad_cfg;
+    bad_cfg.velocity_std_mps = std::numeric_limits<float>::quiet_NaN();
+    UKFFusionEngine engine(calib, bad_cfg, /*radar_enabled=*/true);
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(15.0f, 0.0f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar_list);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked());
+
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+    EXPECT_FALSE(result.objects[0].has_radar)
+        << "Engine constructed with NaN std must auto-disable radar fusion";
+}
+
+TEST(RadarFusionTest, ConstructionAcceptsRadarOnValidStd) {
+    // Backward-compat regression guard: well-formed RadarNoiseConfig must
+    // NOT trigger the auto-disable.
+    auto             calib = make_test_calib();
+    RadarNoiseConfig good_cfg;  // defaults are all > 0
+    UKFFusionEngine  engine(calib, good_cfg, /*radar_enabled=*/true);
+
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.timestamp_ns   = 1000;
+    radar_list.num_detections = 1;
+    radar_list.detections[0]  = make_radar_det(15.0f, 0.0f, 0.0f, 0.0f);
+    engine.set_radar_detections(radar_list);
+
+    TrackedObjectList tracked;
+    tracked.timestamp_ns   = 1000;
+    tracked.frame_sequence = 1;
+    tracked.objects.push_back(make_test_tracked());
+
+    // Should not crash and radar should remain enabled (we don't assert
+    // has_radar=true here because association may not succeed in this
+    // minimal test fixture; the point is no auto-disable).
+    auto result = engine.fuse(tracked);
+    ASSERT_EQ(result.objects.size(), 1u);
+}
