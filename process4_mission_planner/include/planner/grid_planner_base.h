@@ -150,6 +150,13 @@ public:
     /// full rationale.
     virtual void set_allow_radar_promotion_when_paused(bool allow) = 0;
 
+    /// Issue #645 review fix (#661 P1, SAFETY-CRITICAL): landing-approach
+    /// protection (Issue #340).  When set true (RTL/LAND), ALL promotion is
+    /// blocked unconditionally — including the radar bypass.  Distinct from
+    /// `set_promotion_paused()`; both can be active.  See
+    /// `OccupancyGrid3D::set_landing_pause()` for the full rationale.
+    virtual void set_landing_pause(bool landing) = 0;
+
     /// Issue #638 Phase 3 — clear per-instance observation counters.
     /// Call on FSM transitions where the perception context resets
     /// (RTL/LAND, mission abort) so a stale instance_id from earlier in
@@ -247,6 +254,7 @@ public:
     void set_allow_radar_promotion_when_paused(bool allow) override {
         grid_.set_allow_radar_promotion_when_paused(allow);
     }
+    void set_landing_pause(bool landing) override { grid_.set_landing_pause(landing); }
     void clear_instance_state() override { grid_.clear_instance_state(); }
 
     [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }

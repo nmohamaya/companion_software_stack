@@ -515,10 +515,20 @@ public:
             // radar adds strategic-routing visibility for cubes/pillars/walls
             // that radar sees clearly (which the planner otherwise misses,
             // since it doesn't consume the avoider's DetectedObjectList).
+            //
+            // Issue #645 review fix (#661 P1, SAFETY-CRITICAL): the radar
+            // bypass MUST NOT apply during RTL/LAND.  The landing-approach
+            // protection from Issue #340 sets `landing_pause_=true` to
+            // prevent any new promotion that could block the descent path.
+            // A radar return spuriously promoting a cell into the planned
+            // descent during RTL would void this guarantee.  `landing_pause_`
+            // is checked FIRST and unconditionally blocks promotion;
+            // `promotion_paused_` (the voxel-input "PATH A is sole source"
+            // signal) is the bypassable one.
             const bool depth_ok     = obj.depth_confidence >= min_promotion_depth_confidence_;
             const bool radar_bypass = allow_radar_promotion_when_paused_ && obj.has_radar &&
                                       obj.radar_update_count > 0;
-            const bool effective_pause = promotion_paused_ && !radar_bypass;
+            const bool effective_pause = landing_pause_ || (promotion_paused_ && !radar_bypass);
             const bool can_promote     = !skip_promotion && depth_ok && !effective_pause;
 
             // 2D disk inflation: only inflate in XY at the object's Z level.
@@ -683,6 +693,17 @@ public:
     [[nodiscard]] bool allow_radar_promotion_when_paused() const {
         return allow_radar_promotion_when_paused_;
     }
+
+    /// Issue #645 review fix (#661 P1, SAFETY-CRITICAL): landing-approach
+    /// protection (Issue #340).  When set true (e.g. on RTL/LAND), ALL
+    /// promotion is blocked unconditionally — including the radar bypass.
+    /// This guarantees that radar returns picked up during the descent path
+    /// cannot promote into static cells that would block the landing.
+    /// Distinct from `set_promotion_paused()` which represents "voxel_input
+    /// is sole source"; both can be active simultaneously, with
+    /// `landing_pause_` taking precedence.  Default false = no landing.
+    void               set_landing_pause(bool landing) { landing_pause_ = landing; }
+    [[nodiscard]] bool landing_pause() const { return landing_pause_; }
 
     /// Issue #638 Phase 3 — number of stable instances tracked for the
     /// instance-promotion gate.  Useful for diagnostics; 0 when the gate
@@ -903,7 +924,11 @@ private:
     bool     promotion_paused_{false};               // pause promotion during RTL/LAND
     // Issue #645 — radar-confirmed bypass for promotion_paused_; see
     // `set_allow_radar_promotion_when_paused()` for rationale.
-    bool  allow_radar_promotion_when_paused_{false};
+    bool allow_radar_promotion_when_paused_{false};
+    // Issue #645 review fix (#661 P1, SAFETY-CRITICAL): landing-approach
+    // protection.  When true, blocks ALL promotion including radar bypass.
+    // Set/cleared by mission_state_tick.h on RTL/LAND transitions.
+    bool  landing_pause_{false};
     bool  prediction_enabled_{true};            // enable velocity-based prediction inflation
     float prediction_dt_s_{2.0f};               // prediction horizon in seconds
     bool  require_radar_for_promotion_{false};  // hit-count path needs ≥1 radar update

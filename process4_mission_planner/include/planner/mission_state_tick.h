@@ -85,7 +85,19 @@ public:
         if (grid_planner != nullptr) {
             const bool landing = (fsm.state() == MissionState::RTL ||
                                   fsm.state() == MissionState::LAND);
-            grid_planner->set_promotion_paused(landing);
+            // Issue #645 review fix (#661 P1, SAFETY-CRITICAL): use the
+            // dedicated landing-pause channel instead of `promotion_paused`.
+            // The previous call to `set_promotion_paused(landing)` would
+            // overwrite the voxel_input scenario's startup setting (which
+            // calls `set_promotion_paused(true)` once at boot for "PATH A
+            // is sole source" semantics) — leaving the grid permanently
+            // un-paused after the first RTL completes.  More importantly,
+            // it didn't unconditionally block promotion: with #661's radar
+            // bypass enabled, radar returns could promote during landing,
+            // voiding the Issue #340 landing-approach protection.
+            // `set_landing_pause` blocks ALL promotion (including radar)
+            // and is independent of the voxel_input pause.
+            grid_planner->set_landing_pause(landing);
             if (landing && !was_landing_) {
                 grid_planner->clear_instance_state();
             }

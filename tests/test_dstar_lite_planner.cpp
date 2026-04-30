@@ -1967,6 +1967,86 @@ TEST(OccupancyGrid3DTest, AllowRadarPromotionWhenPaused_DefaultDisabled) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// Issue #645 review fix (#661 P1, SAFETY-CRITICAL):
+// Landing-approach protection MUST take precedence over radar bypass.
+// Even with allow_radar_promotion_when_paused=true (the voxel_input
+// scenario's strategic-routing fix), radar tracks must NOT promote
+// during RTL/LAND because they could block the descent path.
+// Issue #340 guarantee: landing approach is protected from new
+// promotion regardless of any other configuration.
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, LandingPauseBlocksRadarBypass_SafetyCritical) {
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    // Voxel-input scenario configuration: pause + radar bypass enabled.
+    grid.set_promotion_paused(true);
+    grid.set_allow_radar_promotion_when_paused(true);
+
+    // RTL/LAND triggers landing pause.
+    grid.set_landing_pause(true);
+    EXPECT_TRUE(grid.landing_pause());
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].has_radar          = true;  // radar-confirmed — would normally bypass
+    objects.objects[0].radar_update_count = 5;
+    drone::ipc::Pose pose{};
+
+    for (int i = 0; i < 5; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u)
+        << "SAFETY-CRITICAL: landing_pause must unconditionally block ALL promotion, "
+           "including radar-confirmed tracks that would otherwise bypass via "
+           "allow_radar_promotion_when_paused.  Radar promoting into the descent "
+           "path during RTL would void Issue #340 landing protection.";
+}
+
+TEST(OccupancyGrid3DTest, LandingPauseClearedAllowsRadarBypassAgain) {
+    // Backward-compat regression guard: clearing landing_pause must restore
+    // the radar bypass behaviour.  Verifies the flags are independent.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    grid.set_promotion_paused(true);
+    grid.set_allow_radar_promotion_when_paused(true);
+    grid.set_landing_pause(true);  // landing engaged
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].has_radar          = true;
+    objects.objects[0].radar_update_count = 5;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_EQ(grid.static_count(), 0u);
+
+    // Landing complete — clear the landing pause.
+    grid.set_landing_pause(false);
+    EXPECT_FALSE(grid.landing_pause());
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u)
+        << "After landing_pause cleared, radar bypass must re-enable promotion";
+}
+
+// ═════════════════════════════════════════════════════════════
 // Issue #428: False grid promotion — radar gate + inflation cap
 // ═════════════════════════════════════════════════════════════
 
