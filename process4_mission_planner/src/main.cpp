@@ -532,6 +532,8 @@ int main(int argc, char* argv[]) {
             uint32_t inserted_total         = 0;
             uint32_t dropped_total          = 0;
             uint32_t instance_skipped_total = 0;  // Phase 3 gate rejections
+            uint32_t voxels_with_instance   = 0;  // count of voxels carrying instance_id != 0
+            uint32_t voxels_total           = 0;
             for (;;) {
                 drone::ipc::SemanticVoxelBatch batch{};
                 if (!voxel_sub->receive(batch)) break;
@@ -539,6 +541,16 @@ int main(int argc, char* argv[]) {
                     DRONE_LOG_WARN("[VoxelSub] rejected malformed batch (num_voxels={})",
                                    batch.num_voxels);
                     continue;
+                }
+                // Issue #638 Phase 4 P3 from PR #642 review: detect the
+                // binary-version-mismatch trap.  If the gate is enabled
+                // (Phase 3 binary loaded) but all incoming voxels carry
+                // `instance_id == 0` (producer is Phase-pre-#639 binary,
+                // didn't run the clusterer/tracker), every voxel is
+                // rejected as noise and the grid stays empty silently.
+                voxels_total += batch.num_voxels;
+                for (uint32_t i = 0; i < batch.num_voxels; ++i) {
+                    if (batch.voxels[i].instance_id != 0) ++voxels_with_instance;
                 }
                 auto stats = grid_planner->insert_voxels(batch.voxels, batch.num_voxels,
                                                          voxel_input_clamp_m,
@@ -551,6 +563,25 @@ int main(int argc, char* argv[]) {
                 // Hard cap on drain iterations per tick — a runaway publisher
                 // must not starve the planning loop.
                 if (batches_drained >= 10) break;
+            }
+            // Phase 4 P3: one-shot binary-version-mismatch self-check.
+            // First time the gate is active and we've seen ≥ 100 voxels
+            // total but ZERO carry an instance_id, log a one-time fatal
+            // configuration warning — operators don't have to wait for
+            // the throttled rejection log to figure out why the drone
+            // isn't seeing obstacles.
+            static bool version_mismatch_warned = false;
+            if (planner_cfg.voxel_instance_promotion_observations > 0 && !version_mismatch_warned &&
+                voxels_total >= 100 && voxels_with_instance == 0) {
+                DRONE_LOG_ERROR(
+                    "[VoxelSub] Binary version mismatch: instance gate is enabled "
+                    "(instance_promotion_observations={}) but all {} received voxels carry "
+                    "instance_id=0.  P2 likely runs a pre-#639 binary that doesn't run the "
+                    "clusterer/tracker — every voxel is being rejected as noise and the grid "
+                    "will stay empty.  Either rebuild + redeploy P2, or set "
+                    "instance_promotion_observations=0 to fall back to per-cell promotion.",
+                    planner_cfg.voxel_instance_promotion_observations, voxels_total);
+                version_mismatch_warned = true;
             }
             if (batches_drained > 0) {
                 DRONE_LOG_INFO("[VoxelSub] tick={} batches={} inserted={} dropped={} "
