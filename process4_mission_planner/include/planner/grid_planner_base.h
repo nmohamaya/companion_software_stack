@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <optional>
@@ -247,7 +248,7 @@ public:
     [[nodiscard]] bool using_direct_fallback() const override { return direct_fallback_; }
 
     [[nodiscard]] uint64_t hover_fallback_count() const noexcept override {
-        return hover_fallback_count_;
+        return hover_fallback_count_.load(std::memory_order_relaxed);
     }
 
     void set_promotion_paused(bool paused) override { grid_.set_promotion_paused(paused); }
@@ -372,11 +373,12 @@ public:
                     // No cached path at all — hover in place (zero velocity)
                     // rather than flying a direct line through obstacles.
                     direct_fallback_ = true;
-                    ++hover_fallback_count_;
+                    const uint64_t new_hover_count =
+                        hover_fallback_count_.fetch_add(1, std::memory_order_relaxed) + 1;
                     DRONE_LOG_WARN("[PlanBase] Search failed, no cached path — "
                                    "hovering in place (took {:.0f}ms, total "
                                    "hover-fallback count={})",
-                                   replan_ms, hover_fallback_count_);
+                                   replan_ms, new_hover_count);
                 }
             }
         }
@@ -765,7 +767,10 @@ private:
     // hovered in place.  Persistent non-zero indicates the obstacle grid is
     // over-occupied for the current waypoint.  Surfaced by
     // `hover_fallback_count()` for run-report telemetry.
-    uint64_t                              hover_fallback_count_ = 0;
+    // Issue #650 review fix: telemetry can be read from any thread, so
+    // make the counter atomic.  relaxed ordering is fine — this is a
+    // pure observability counter, not a synchronization barrier.
+    std::atomic<uint64_t>                 hover_fallback_count_{0};
     std::chrono::steady_clock::time_point last_plan_time_{};
 
     // Cached snapped goal — single source of truth for snapped world position.
