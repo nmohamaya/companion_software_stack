@@ -1249,8 +1249,8 @@ TEST(ObstacleAvoider3DTest, FinalClampZeroesTowardComponentWhenBrakeDisabled) {
     EXPECT_TRUE(avoider.close_regime_active());
     // Hard guarantee: in close regime the final command's toward-obstacle
     // component must be ≤ 0.  Obstacle is at +X so velocity_x ≤ 0.
-    EXPECT_LE(result.velocity_x, 1e-4f) << "Final clamp must zero positive toward-component; "
-                                        << "got vx=" << result.velocity_x;
+    EXPECT_LE(result.velocity_x, 1e-4f)
+        << "Final clamp must zero positive toward-component; got vx=" << result.velocity_x;
     EXPECT_GE(avoider.final_clamp_count(), 1u);
 }
 
