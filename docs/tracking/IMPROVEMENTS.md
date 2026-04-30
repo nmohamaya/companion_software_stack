@@ -16,6 +16,20 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-04-30 (#645 scenario-33 review-driven backlog — deferred items)
+
+The 14-PR scenario-33 fix stack (PRs #646–#666) drove orchestrator reviews on the merged PRs.  P1 + most P2 fixes landed in batches (#667–#672).  The items below were deemed correct-but-deferred — risk-of-regression items (e.g. tuning thresholds that scenario 33 now relies on) and lower-impact hygiene items.
+
+#### #661 — radar-confirmed promotion bypass
+
+- **P2** (deferred — regression risk): `radar_bypass` triggers on `obj.radar_update_count > 0`.  Reviewer recommends raising to ≥3 (matching `radar_promotion_hits_`) to require the same multi-frame confirmation that the non-bypass path uses.  Risk: scenario 33 currently passes with the lenient gate; tightening it could re-introduce hover-fallbacks if radar tracks take 3 frames to mature.  Need a re-run of scenario 33 with the tighter gate to confirm no regression before landing.  See `process4_mission_planner/include/planner/occupancy_grid_3d.h:519`.
+- **P2** (deferred — config tuning): scenario 33 has `max_static_cells: 0` (unlimited) **and** radar bypass enabled.  Without a cap, a radar fault that produced spurious tracks could flood the static layer.  Pre-bypass this was safe because `promotion_paused_=true` blocked the detector path entirely; post-bypass the radar path can write unbounded.  Set a defensive cap (e.g. 2000) once we have telemetry on real-world radar track counts.  See `config/scenarios/33_non_coco_obstacles.json:190`.
+- **P2** (deferred — IPC contract change): `DetectedObject::validate()` doesn't bound `class_id` (could be any int) or `radar_update_count` (UINT32_MAX passes the `>0` gate).  Adding bounds requires touching the IPC wire contract and all serialiser/deserialiser tests.  Worth doing in a dedicated PR, not bundled with the scenario-33 fixes.  See `common/ipc/include/ipc/ipc_types.h:81-90`.
+
+#### #658 — perception altitude/mask filters
+
+- **P2** (deferred — config-validator wiring): four new perception config keys (`perception.path_a.altitude_filter.{min_z_m,max_z_m}`, `perception.path_a.mask_size_filter.{min_area_px,max_area_px}`) are not registered in `common/util/include/util/config_validator.h`.  The validator is the startup gate that catches typos before flight.  Add the four keys with `[0, 100]` m bounds for altitude and `[0, 4_000_000]` px for mask area.
+
 ### 2026-04-27 (#638 review-driven backlog)
 
 The four-PR voxel-clustering stack (#639 / #640 / #641 / #642) had ~70 review findings across 8 reviewer agents.  P1 + high-value P2 fixes landed in the respective PRs; the items below were deemed correct-but-deferred (proactive backlog).
