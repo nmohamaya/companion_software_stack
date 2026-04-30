@@ -32,6 +32,7 @@
 #include "hal/isemantic_projector.h"  // for VoxelUpdate
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <unordered_map>
@@ -76,10 +77,23 @@ public:
     ///
     /// @param voxels    voxel batch with frame-local instance IDs from
     ///                  `assign_instance_ids()`.  Modified in-place.
-    /// @param now_ns    monotonic timestamp for this frame (for ageing).
+    /// @param now_ns    source-frame timestamp recorded as `last_seen_ns`
+    ///                  for downstream consumers.  NOT used for ageing —
+    ///                  ageing now uses `steady_clock::now()` internally
+    ///                  to decouple from any irregularities in source-frame
+    ///                  timestamps (review Fix 3 from scenario-33 run
+    ///                  2026-04-30_095815).
     void update(std::vector<drone::hal::VoxelUpdate>& voxels, uint64_t now_ns) {
+        // Wall-clock used for ageing — independent of `now_ns` (source frame).
+        const uint64_t wall_now_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+
         if (voxels.empty()) {
-            age_out_tracks_(now_ns);
+            const size_t aged         = age_out_tracks_(wall_now_ns);
+            last_aged_out_count_      = aged;
+            last_match_failure_count_ = 0;
             return;
         }
 
@@ -127,6 +141,7 @@ public:
         tracks_view.reserve(tracks_.size());
         for (auto& [id, tr] : tracks_) tracks_view.emplace_back(id, &tr);
 
+        size_t mints_this_frame = 0;
         for (auto& [frame_id, cand] : candidates) {
             int   best_idx  = -1;
             float best_dist = max_match_distance_m_;
@@ -146,7 +161,7 @@ public:
                 t.centroid_m            = cand.centroid;
                 t.aabb_min_m            = cand.aabb_min;
                 t.aabb_max_m            = cand.aabb_max;
-                t.last_seen_ns          = now_ns;
+                t.last_seen_ns          = wall_now_ns;
                 ++t.observation_count;
             } else {
                 // Issue #638 P2-D from PR #640 review: detect uint32_t
@@ -168,11 +183,15 @@ public:
                 t.centroid_m        = cand.centroid;
                 t.aabb_min_m        = cand.aabb_min;
                 t.aabb_max_m        = cand.aabb_max;
-                t.last_seen_ns      = now_ns;
+                t.last_seen_ns      = wall_now_ns;
                 t.observation_count = 1;
+                ++mints_this_frame;
             }
             frame_local_to_stable[frame_id] = stable_id;
         }
+        // Suppress unused-variable warning when `now_ns` is otherwise unused
+        // (kept in the public signature for ABI stability + future uses).
+        (void)now_ns;
 
         // ── Pass 3: rewrite voxel instance_id from frame-local → stable ──
         for (auto& v : voxels) {
@@ -182,7 +201,9 @@ public:
         }
 
         // ── Age out unmatched tracks past TTL ──
-        age_out_tracks_(now_ns);
+        const size_t aged         = age_out_tracks_(wall_now_ns);
+        last_aged_out_count_      = aged;
+        last_match_failure_count_ = mints_this_frame;
     }
 
     /// Read-only access to the current set of stable tracks.  Useful for
@@ -197,20 +218,41 @@ public:
     /// Reset all tracker state — for tests and clean restarts.
     void reset() noexcept {
         tracks_.clear();
-        next_stable_id_ = 1;
+        next_stable_id_           = 1;
+        last_aged_out_count_      = 0;
+        last_match_failure_count_ = 0;
+    }
+
+    /// Issue #638 Fix 4 diagnostics — number of tracks aged out on the
+    /// last `update()` call.  Useful for log lines that distinguish
+    /// "tracker is healthy" from "tracker is leaking tracks because
+    /// ageing isn't firing" (run 2026-04-30_095815: 4 clusters → 52
+    /// tracks meant ageing wasn't keeping up).
+    [[nodiscard]] size_t last_aged_out_count() const noexcept { return last_aged_out_count_; }
+
+    /// Number of clusters in the last `update()` that failed to match
+    /// any existing track (forced new-track mints).  Persistently
+    /// nonzero indicates the gate is too tight or centroids are too
+    /// noisy — the exact failure mode of the 2026-04-30_095815 run.
+    [[nodiscard]] size_t last_match_failure_count() const noexcept {
+        return last_match_failure_count_;
     }
 
 private:
-    void age_out_tracks_(uint64_t now_ns) {
-        if (track_max_age_ns_ == 0) return;  // ageing disabled
+    /// Returns the number of tracks erased.
+    size_t age_out_tracks_(uint64_t now_ns) {
+        if (track_max_age_ns_ == 0) return 0;  // ageing disabled
+        size_t aged = 0;
         for (auto it = tracks_.begin(); it != tracks_.end();) {
             if (now_ns > it->second.last_seen_ns &&
                 now_ns - it->second.last_seen_ns > track_max_age_ns_) {
                 it = tracks_.erase(it);
+                ++aged;
             } else {
                 ++it;
             }
         }
+        return aged;
     }
 
     float    max_match_distance_m_;
@@ -221,6 +263,12 @@ private:
     // the tracker's lifetime so consumers can assume IDs are unique.
     uint32_t                            next_stable_id_{1};
     std::unordered_map<uint32_t, Track> tracks_;
+
+    // Issue #638 Fix 4 — per-call diagnostic counters (overwritten on
+    // each `update()`).  Surfaced by `last_*_count()` accessors above
+    // for the P2 log line.
+    size_t last_aged_out_count_{0};
+    size_t last_match_failure_count_{0};
 };
 
 }  // namespace drone::perception

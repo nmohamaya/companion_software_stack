@@ -364,11 +364,19 @@ static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          ma
         }
 
         if (cluster_eps_m > 0.0f && tick_count % 100 == 1) {
+            // Issue #638 Fix 4 — surface tracker diagnostics so logs
+            // distinguish "healthy tracker, gate working" from "tracker
+            // leaking tracks because association keeps failing" (the
+            // exact failure mode of run 2026-04-30_095815: 52 tracks
+            // from 11 clusters because mints kept happening).
+            const size_t aged           = tracker != nullptr ? tracker->last_aged_out_count() : 0u;
+            const size_t match_failures = tracker != nullptr ? tracker->last_match_failure_count()
+                                                             : 0u;
             DRONE_LOG_INFO("[VoxelCluster] frame_seq={}: {} voxels → {} clusters → {} tracks "
-                           "(eps={:.2f}m, min_pts={})",
+                           "(aged_out={}, match_failures={}, eps={:.2f}m, min_pts={})",
                            masks_opt->frame_sequence, voxels.size(), n_clusters,
-                           tracker != nullptr ? tracker->track_count() : 0u, cluster_eps_m,
-                           cluster_min_pts);
+                           tracker != nullptr ? tracker->track_count() : 0u, aged, match_failures,
+                           cluster_eps_m, cluster_min_pts);
         }
 
         // Pack VoxelUpdate[] -> SemanticVoxelBatch.  Truncate by descending
