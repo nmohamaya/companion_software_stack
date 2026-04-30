@@ -1873,6 +1873,100 @@ TEST(OccupancyGrid3DTest, PromotionPausedBlocksPromotion) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// Issue #645 — Radar-confirmed bypass for promotion_paused_
+// ═════════════════════════════════════════════════════════════
+
+TEST(OccupancyGrid3DTest, AllowRadarPromotionWhenPaused_BypassesForRadarTracks) {
+    // When promotion is paused AND allow_radar_promotion_when_paused is
+    // enabled, a radar-confirmed track should still promote.  This is the
+    // mechanism that lets the strategic path planner see radar-detected
+    // obstacles even while PATH A voxels are the primary static-cell source.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    grid.set_promotion_paused(true);
+    grid.set_allow_radar_promotion_when_paused(true);
+    EXPECT_TRUE(grid.allow_radar_promotion_when_paused());
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].has_radar          = true;  // radar-confirmed
+    objects.objects[0].radar_update_count = 5;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_GT(grid.static_count(), 0u)
+        << "Radar-confirmed track must promote even with promotion_paused_=true "
+           "when allow_radar_promotion_when_paused=true";
+}
+
+TEST(OccupancyGrid3DTest, AllowRadarPromotionWhenPaused_StillBlocksCameraOnly) {
+    // Bypass must apply ONLY to radar-confirmed tracks.  Camera-only tracks
+    // (has_radar=false) must remain blocked by the pause — those are the
+    // ghost-prone detections the original pause was guarding against.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    grid.set_promotion_paused(true);
+    grid.set_allow_radar_promotion_when_paused(true);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].has_radar          = false;  // camera-only
+    objects.objects[0].radar_update_count = 0;
+    drone::ipc::Pose pose{};
+
+    for (int i = 0; i < 5; ++i) {
+        grid.update_from_objects(objects, pose);
+    }
+    EXPECT_EQ(grid.static_count(), 0u)
+        << "Camera-only track must STAY blocked by pause; bypass is radar-only";
+}
+
+TEST(OccupancyGrid3DTest, AllowRadarPromotionWhenPaused_DefaultDisabled) {
+    // Backward-compat regression guard: the new flag defaults to false.
+    // Without explicit opt-in, existing scenarios behave identically to
+    // before — a radar-confirmed track during pause does NOT promote.
+    OccupancyGrid3D grid(1.0f, 20.0f, 1.0f, /*ttl=*/3.0f,
+                         /*min_conf=*/0.3f, /*promotion_hits=*/1,
+                         /*radar_promotion_hits=*/3,
+                         /*min_promo_depth_conf=*/0.5f, /*max_static_cells=*/0);
+
+    grid.set_promotion_paused(true);
+    EXPECT_FALSE(grid.allow_radar_promotion_when_paused());
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].depth_confidence   = 1.0f;
+    objects.objects[0].has_radar          = true;
+    objects.objects[0].radar_update_count = 5;
+    drone::ipc::Pose pose{};
+
+    grid.update_from_objects(objects, pose);
+    EXPECT_EQ(grid.static_count(), 0u)
+        << "Default (allow_radar_promotion_when_paused=false) must preserve "
+           "legacy behaviour of blocking ALL promotion during pause";
+}
+
+// ═════════════════════════════════════════════════════════════
 // Issue #428: False grid promotion — radar gate + inflation cap
 // ═════════════════════════════════════════════════════════════
 
