@@ -429,8 +429,25 @@ int main(int argc, char* argv[]) {
         drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_ENABLED, false);
     const float voxel_input_clamp_m = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_POSITION_CLAMP_M, 1000.0f);
-    const float voxel_input_min_confidence = ctx.cfg.get<float>(
+    float voxel_input_min_confidence = ctx.cfg.get<float>(
         drone::cfg_key::mission_planner::occupancy_grid::VOXEL_INPUT_MIN_CONFIDENCE, 0.3f);
+    // PR #660 P2 review: clamp voxel_input.min_confidence to [0, 1].
+    // Out-of-range values silently DoS the grid: a value > 1.0 fails the
+    // `confidence < min_confidence` gate at occupancy_grid_3d.h for every
+    // voxel, leaving the static grid permanently empty so the drone flies
+    // through obstacles with no repulsive field.  A negative value
+    // disables filtering entirely.  SemanticVoxel::validate() already
+    // clamps wire-format confidence to [0, 1], so the only path for an
+    // out-of-range filter threshold is config tampering / typos.
+    if (!std::isfinite(voxel_input_min_confidence) || voxel_input_min_confidence < 0.0f ||
+        voxel_input_min_confidence > 1.0f) {
+        const float raw            = voxel_input_min_confidence;
+        voxel_input_min_confidence = std::clamp(std::isfinite(raw) ? raw : 0.0f, 0.0f, 1.0f);
+        DRONE_LOG_WARN("[VoxelSub] voxel_input.min_confidence {:.2f} outside [0, 1] — "
+                       "clamping to {:.2f}.  >1.0 would drop all voxels (silent DoS); "
+                       "<0.0 disables filter; NaN treated as 0.",
+                       raw, voxel_input_min_confidence);
+    }
     // P2-F from PR #641 review: warn on the silent-misconfig trap where
     // an operator enables the instance gate but forgets to subscribe to
     // /semantic_voxels.  The gate is configured but no batches arrive,
