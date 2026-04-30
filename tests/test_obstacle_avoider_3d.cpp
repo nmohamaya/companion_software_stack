@@ -860,15 +860,21 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_CancelsForwardComponent) {
 }
 
 TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_DisabledLeavesForwardMotion) {
-    // Regression guard: with brake_in_close_regime=false, the pre-#513 additive-
-    // only behaviour must be preserved.  Same geometry as above — verify vx is
-    // only lightly reduced, not reversed.
+    // Regression guard: with brake_in_close_regime=false the planned-velocity
+    // cancel does NOT run — but Issue #645's post-correction final clamp does.
+    // The clamp fires regardless of the brake flag, as a hard safety floor:
+    // in close regime the final velocity must never have a positive toward-
+    // obstacle component.
+    //
+    // To preserve coverage of the pre-#513 additive path, this test now uses
+    // an obstacle FAR enough that close_regime stays inactive (clamp does
+    // NOT engage), so the additive-only repulsion is observable.
     ObstacleAvoider3DConfig config;
     config.influence_radius_m    = 10.0f;
     config.repulsive_gain        = 0.5f;  // weak to isolate brake-vs-deflect
-    config.min_distance_m        = 3.0f;
-    config.max_correction_mps    = 1.5f;   // limit correction authority
-    config.brake_in_close_regime = false;  // pre-#513 behaviour
+    config.min_distance_m        = 1.0f;  // tight close-regime threshold
+    config.max_correction_mps    = 1.5f;
+    config.brake_in_close_regime = false;
     config.path_aware            = false;
     config.vertical_gain         = 0.0f;
     ObstacleAvoider3D avoider(config);
@@ -878,7 +884,7 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_DisabledLeavesForwardMotion) {
 
     drone::ipc::DetectedObjectList objects{};
     objects.num_objects           = 1;
-    objects.objects[0].position_x = 2.0f;
+    objects.objects[0].position_x = 2.0f;  // 2m ahead — outside min_distance_m=1
     objects.objects[0].position_y = 0.0f;
     objects.objects[0].position_z = 5.0f;
     objects.objects[0].confidence = 0.9f;
@@ -889,14 +895,47 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_DisabledLeavesForwardMotion) {
     // Pre-#513: avoider adds repulsion but doesn't cancel forward component.
     // Repulsion: gain=0.5 at dist=2 → raw mag = 0.5 / 4 = 0.125 in -X.
     // Below max_correction_mps clamp (1.5), so no clamping; final vx = 2 - 0.125.
-    // Tight assertion (PR #617 Pass 2 test-quality review): a regression that
-    // reduces vx from 2.0 to 0.01 (still > 0) would slip past a half-plane
-    // EXPECT_GT; EXPECT_NEAR pins the additive-only magnitude exactly.
     EXPECT_NEAR(result.velocity_x, 1.875f, 0.05f)
         << "Pre-#513 additive behaviour: expected vx = 2.0 - 0.125 ≈ 1.875; got "
         << result.velocity_x
-        << " — did repulsion magnitude change, or did brake-disable path break?";
+        << " — did repulsion magnitude change, or did the additive path break?";
+    EXPECT_FALSE(avoider.close_regime_active());
+    EXPECT_EQ(avoider.final_clamp_count(), 0u);
+}
+
+TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_DisabledStillSafeViaFinalClamp) {
+    // Companion to BrakeInCloseRegime_DisabledLeavesForwardMotion: same brake
+    // setting (false) but obstacle close enough to enter close_regime.  The
+    // pre-#513 additive path would leave vx positive (toward); Issue #645's
+    // post-correction clamp must zero it.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.repulsive_gain        = 0.5f;
+    config.min_distance_m        = 3.0f;
+    config.max_correction_mps    = 1.5f;
+    config.brake_in_close_regime = false;
+    config.path_aware            = false;
+    config.vertical_gain         = 0.0f;
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 2.0f;  // 2m ahead — inside min_distance_m=3
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
     EXPECT_TRUE(avoider.close_regime_active());
+    EXPECT_LE(result.velocity_x, 1e-4f)
+        << "Final clamp must zero positive toward-component even with brake disabled; "
+        << "got vx=" << result.velocity_x;
+    EXPECT_GE(avoider.final_clamp_count(), 1u);
 }
 
 TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_ProximityScalingLinear) {
@@ -1168,4 +1207,152 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_ZeroVelocityInput_NoNaN) {
         << "pushes -X; expected vx ≈ -2.0, got " << result.velocity_x;
     EXPECT_NEAR(result.velocity_y, 0.0f, 1e-4f);
     EXPECT_NEAR(result.velocity_z, 0.0f, 1e-4f);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Post-correction toward-obstacle hard clamp — Issue #645
+// In close regime the *final* commanded velocity must never have a
+// positive component toward the nearest obstacle, even if repulsion
+// was capped or multiple obstacles cancelled each other out.  Found
+// in scenario-33 forensics 2026-04-30 where pillar_01 contact was
+// continuous despite the planned-velocity cancel.
+// ═════════════════════════════════════════════════════════════
+
+TEST(ObstacleAvoider3DTest, FinalClampZeroesTowardComponentWhenBrakeDisabled) {
+    // Pure-deflection mode (brake_in_close_regime=false): the planned-velocity
+    // cancel does NOT run, so cmd retains its forward component.  Repulsion
+    // alone (capped by max_correction_mps) is too weak to flip the sign of
+    // the final velocity_x — without the clamp it would land positive.  The
+    // post-correction clamp must zero that final toward-component.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 5.0f;
+    config.min_distance_m        = 3.0f;
+    config.repulsive_gain        = 0.1f;
+    config.max_correction_mps    = 0.5f;   // weaker than planned 2.0 m/s
+    config.brake_in_close_regime = false;  // pure-deflection — no brake stage
+    config.path_aware            = false;
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);  // planner commands +X at 2 m/s
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.0f;  // 1m ahead, inside close regime
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    EXPECT_TRUE(avoider.close_regime_active());
+    // Hard guarantee: in close regime the final command's toward-obstacle
+    // component must be ≤ 0.  Obstacle is at +X so velocity_x ≤ 0.
+    EXPECT_LE(result.velocity_x, 1e-4f) << "Final clamp must zero positive toward-component; "
+                                        << "got vx=" << result.velocity_x;
+    EXPECT_GE(avoider.final_clamp_count(), 1u);
+}
+
+TEST(ObstacleAvoider3DTest, FinalClampFiresUnderMultiObstacleInterference) {
+    // Two obstacles, one ahead (nearest, +X) and one behind (-X).  Their
+    // repulsions partially cancel, leaving a weak net push.  Brake cancels
+    // the planned forward component, then weak repulsion gets added.  The
+    // BEHIND obstacle's repulsion pushes +X (toward the nearest at +X) and
+    // can flip the final velocity_x positive.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.min_distance_m        = 3.0f;
+    config.repulsive_gain        = 1.0f;
+    config.max_correction_mps    = 5.0f;
+    config.brake_in_close_regime = true;
+    config.min_brake_scale       = 0.1f;
+    config.path_aware            = false;
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(0.5f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 2;
+    objects.objects[0].position_x = 1.0f;  // nearest, ahead
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.objects[1].position_x = -2.0f;  // behind, farther
+    objects.objects[1].position_y = 0.0f;
+    objects.objects[1].position_z = 5.0f;
+    objects.objects[1].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    EXPECT_TRUE(avoider.close_regime_active());
+    // Whether or not the multi-obstacle math actually flips vx positive in
+    // this exact tuning, the contract is the same: vx (toward nearest at +X)
+    // must be ≤ 0 in close regime.
+    EXPECT_LE(result.velocity_x, 1e-4f);
+}
+
+TEST(ObstacleAvoider3DTest, FinalClampNoOpWhenAlreadySafe) {
+    // If repulsion + brake already produce a final v_toward ≤ 0, the clamp
+    // must not modify the velocity and the counter must stay zero.
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.min_distance_m        = 3.0f;
+    config.repulsive_gain        = 5.0f;  // strong repulsion
+    config.max_correction_mps    = 5.0f;  // generous cap
+    config.brake_in_close_regime = true;
+    config.path_aware            = false;
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(1.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 1.5f;  // close
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    EXPECT_TRUE(avoider.close_regime_active());
+    // Strong repulsion already gives vx <= 0; clamp should not have fired.
+    EXPECT_LE(result.velocity_x, 0.0f);
+    EXPECT_EQ(avoider.final_clamp_count(), 0u);
+}
+
+TEST(ObstacleAvoider3DTest, FinalClampInactiveOutsideCloseRegime) {
+    // Outside close regime the clamp must not engage even if the final
+    // velocity points toward the obstacle (path-aware planner overrides etc).
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m    = 10.0f;
+    config.min_distance_m        = 1.0f;  // very tight close-regime threshold
+    config.repulsive_gain        = 0.1f;
+    config.max_correction_mps    = 0.5f;
+    config.brake_in_close_regime = true;
+    config.path_aware            = true;  // strip backwards push
+    config.log_corrections       = false;
+    ObstacleAvoider3D avoider(config);
+
+    auto cmd  = make_cmd(2.0f, 0.0f, 0.0f);
+    auto pose = make_pose(0.0f, 0.0f, 5.0f);
+
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects           = 1;
+    objects.objects[0].position_x = 5.0f;  // 5m ahead — far outside close regime
+    objects.objects[0].position_y = 0.0f;
+    objects.objects[0].position_z = 5.0f;
+    objects.objects[0].confidence = 0.9f;
+    objects.timestamp_ns          = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+    EXPECT_FALSE(avoider.close_regime_active());
+    EXPECT_EQ(avoider.final_clamp_count(), 0u);
+    // Final velocity is whatever the path-aware-stripped repulsion + planned
+    // produces; we just assert the clamp didn't engage.
+    EXPECT_TRUE(std::isfinite(result.velocity_x));
 }
