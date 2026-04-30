@@ -421,6 +421,39 @@ public:
         cmd.velocity_y += total_rep_y;
         cmd.velocity_z += total_rep_z;
 
+        // ── Post-correction toward-obstacle hard clamp (Issue #645) ────
+        // The brake-arbitration block above only zeroes the toward-obstacle
+        // component of the *planned* velocity.  After `total_rep` is added
+        // the *final* command can re-acquire a positive toward-component if
+        //   (a) repulsion was capped by max_correction_mps and isn't quite
+        //       enough to cancel forward momentum, or
+        //   (b) the sum of repulsions from multiple obstacles cancelled out
+        //       and left a net push toward the nearest one.
+        // Scenario 33 (run 2026-04-30_101126_FAIL) showed the drone making
+        // continuous contact with pillar_01 despite v_toward(planned) being
+        // cancelled — repulsion saturation alone wasn't enough.  This is the
+        // safety floor: in close regime, the *final* commanded velocity can
+        // never have a positive component toward the nearest obstacle.
+        // Independent of `brake_in_close_regime` so pure-deflection scenarios
+        // also benefit; gated only on `close_regime_active_`.
+        bool  final_clamp_applied = false;
+        float v_toward_final      = 0.0f;
+        if (close_regime_active_ && std::isfinite(min_active_dist) &&
+            min_active_dist > avoider_constants::kMinDistGateM) {
+            const float inv = 1.0f / min_active_dist;
+            const float nx  = nearest_dx * inv;
+            const float ny  = nearest_dy * inv;
+            const float nz  = nearest_dz * inv;
+            v_toward_final  = cmd.velocity_x * nx + cmd.velocity_y * ny + cmd.velocity_z * nz;
+            if (v_toward_final > 0.0f) {
+                cmd.velocity_x -= v_toward_final * nx;
+                cmd.velocity_y -= v_toward_final * ny;
+                cmd.velocity_z -= v_toward_final * nz;
+                final_clamp_applied = true;
+                ++final_clamp_count_;
+            }
+        }
+
         // Single-line summary at the end of every avoid() call (Issue #503).
         // INFO-gated on log_corrections + meaningful delta so quiet ticks stay
         // at DEBUG.  Magnitude is the Euclidean size of the total correction
@@ -443,13 +476,13 @@ public:
                 // ticks the three defaults (0, 0.0, 1.0) aren't informative.  This
                 // saves one fmt::format + alloc per active tick when the brake is
                 // idle (PR #617 perf review).
-                if (brake_applied || brake_scale < 1.0f) {
+                if (brake_applied || brake_scale < 1.0f || final_clamp_applied) {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} "
-                                   "scale={:.2f}",
+                                   "scale={:.2f} final_clamp={} v_toward_final={:.2f}",
                                    considered, active, delta_mag, path_aware_strip_count,
                                    close_regime_active_ ? 1 : 0, brake_applied ? 1 : 0, v_toward,
-                                   brake_scale);
+                                   brake_scale, final_clamp_applied ? 1 : 0, v_toward_final);
                 } else {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={}",
@@ -467,6 +500,13 @@ public:
     /// Whether the avoider is currently in close-regime (path-aware bypassed).
     /// Exposed for tests and diagnostics.
     [[nodiscard]] bool close_regime_active() const { return close_regime_active_; }
+
+    /// Total number of avoid() calls in which the post-correction final clamp
+    /// (Issue #645) zeroed a positive toward-obstacle component on the final
+    /// command.  Persistently rising across ticks indicates the rest of the
+    /// pipeline (planner + brake + repulsion) was repeatedly trying to push
+    /// the drone into an obstacle and the safety floor caught it.
+    [[nodiscard]] uint64_t final_clamp_count() const noexcept { return final_clamp_count_; }
 
     /// Mutable config access — for tests that need per-class overrides
     /// after construction (the constructor fills per-class arrays from
@@ -490,6 +530,9 @@ private:
     // Enters when closest obstacle < min_distance_m; exits when it rises
     // above min_distance_m + path_aware_bypass_hysteresis_m.
     bool close_regime_active_ = false;
+    // Diagnostic counter (Issue #645) — increments every avoid() call where
+    // the post-correction toward-obstacle clamp zeroed a positive component.
+    uint64_t final_clamp_count_ = 0;
 };
 
 }  // namespace drone::planner
