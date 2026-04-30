@@ -129,6 +129,18 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                 case drone::ipc::FCCommandType::ARM:
                     DRONE_LOG_INFO("[Comms] FC cmd: ARM corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok = fc.send_arm(true);
+                    // Issue #645 review fix (#651 P2): reset the
+                    // trajectory-block sentinel on a fresh ARM so the
+                    // heartbeat path is not permanently disabled by a
+                    // prior RTL/LAND that set last_traj_ts = UINT64_MAX.
+                    // ARM is the canonical "starting a new mission"
+                    // signal; pre-existing dedup state must clear.
+                    if (last_traj_ts == UINT64_MAX) {
+                        DRONE_LOG_INFO("[Comms] ARM detected — resetting trajectory dedup "
+                                       "sentinel (was UINT64_MAX from prior RTL/LAND)");
+                        last_traj_ts   = 0;
+                        have_sent_traj = false;
+                    }
                     break;
                 case drone::ipc::FCCommandType::DISARM:
                     DRONE_LOG_INFO("[Comms] FC cmd: DISARM corr={:#x}", fc_cmd.correlation_id);
