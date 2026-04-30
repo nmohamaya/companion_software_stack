@@ -4,9 +4,13 @@
 Reads the latest scenario-33 run's `path_a_voxel_trace.jsonl` and
 produces a 4-panel PNG showing top-down + side views + 3D perspective.
 
+Dependencies:
+    pip3 install matplotlib numpy
+    # or: sudo apt install python3-matplotlib python3-numpy
+
 Usage:
-    python3 /tmp/visualize_voxels.py
-    python3 /tmp/visualize_voxels.py /path/to/run_dir
+    python3 deploy/visualize_voxels.py
+    python3 deploy/visualize_voxels.py /path/to/run_dir
 """
 
 import json
@@ -15,12 +19,20 @@ import os
 import sys
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers projection)
-import numpy as np
-from matplotlib.patches import Rectangle, Circle
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers projection)
+    import numpy as np
+    from matplotlib.patches import Rectangle, Circle
+except ModuleNotFoundError as e:
+    sys.exit(
+        f"Missing dependency: {e.name}\n"
+        "Install with:\n"
+        "  pip3 install matplotlib numpy\n"
+        "  # or: sudo apt install python3-matplotlib python3-numpy"
+    )
 
 
 # ── Spawned scene obstacles for scenario 33 (from scene_populate.log) ──

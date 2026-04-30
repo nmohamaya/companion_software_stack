@@ -195,9 +195,11 @@
                     "enabled": true,
                     "_comment_position_clamp_m": "Issue #645 — was 200 m, far too generous.  Trace analysis on run 2026-04-30_165441 (1747 batches, 6.2 M voxels) showed median voxel X = 42 m, p90 X = 43 m — a ghost wall ~20 m past the farthest obstacle in the mission.  DA V2 + reprojection produces depth-blowup voxels that pile up at the clamp's outer edge.  With voxel_on_target = 3.2 % (target ≥ 20 %), 97 % of cells in the static layer were ghosts, and the planner was routing AROUND ghosts rather than around real obstacles.  Mission area is X∈[0,25], Y∈[0,30], so 30 m gives a safe margin while killing the bulk of the depth-blowup ghost field.",
                     "position_clamp_m": 30.0,
-                    "min_confidence": 0.3,
+                    "_comment_min_confidence": "Issue #645 — was 0.3 (lenient).  Trace analysis on run 2026-04-30_182519: voxel_on_target reached 22 % (passing the threshold) but 3.8 M raw voxels accumulated over the run produced ~3 M off-target ghosts at obstacle altitude (#658 sky/ground filter clipped sky/ground but the residual mid-altitude depth-noise voxels remained).  Tighten to 0.7 — DA V2 reports high confidence on real-surface pixels; depth-noise voxels typically have confidence < 0.5.  Drops the bulk of remaining ghosts at the grid-insert boundary.  Real obstacles re-observed every frame stay confident → keep their static cells.",
+                    "min_confidence": 0.7,
                     "static_cell_ttl_s": 30.0,
-                    "instance_promotion_observations": 5
+                    "_comment_instance_promotion_observations": "Issue #645 — was 5 (≈0.5 s at 10 Hz).  Bump to 8 (≈0.8 s) for additional noise rejection.  Real obstacles in scenario 33 are stationary so ANY observation count works for promotion; transient noise instances flicker for 1-3 frames and never reach 8.  Cost: 0.3 s extra latency before a new real obstacle promotes — acceptable at 2 m/s cruise (drone covers ~0.6 m in that time, well within the 1.5 m inflation halo).",
+                    "instance_promotion_observations": 8
                 }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",
