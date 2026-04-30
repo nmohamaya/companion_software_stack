@@ -30,6 +30,21 @@ public:
         float max_z_m{0.0f};
     };
 
+    /// Issue #645 — SAM mask size filter applied BEFORE back-projection.
+    /// Diagnostic on run 2026-04-30_174147 showed SAM produces 41-47
+    /// masks per 1280×720 frame for scenes with ~7 spawned obstacles.
+    /// The bulk are tiny texture features (60-80 px) or huge background
+    /// regions (sky, ground) — both produce ghost voxels.  Drop masks
+    /// with bbox area outside `[min_area_px, max_area_px]` before they
+    /// hit the back-projection stage.  Real obstacles in scenario 33
+    /// at typical detection distance produce masks of 1-3 k px (small
+    /// pillar) up to ~40 k px (close wall); 100-200 k px masks are
+    /// typically sky.  `0` disables either bound.  Default: bypass.
+    struct MaskSizeFilter {
+        float min_area_px{0.0f};
+        float max_area_px{0.0f};
+    };
+
     MaskDepthProjector(const MaskDepthProjector&)                = delete;
     MaskDepthProjector& operator=(const MaskDepthProjector&)     = delete;
     MaskDepthProjector(MaskDepthProjector&&) noexcept            = default;
@@ -37,10 +52,12 @@ public:
 
     // projector must outlive this object (non-owning reference).
     explicit MaskDepthProjector(hal::ISemanticProjector& projector, float iou_threshold = 0.5f,
-                                AltitudeFilter altitude = AltitudeFilter{0.0f, 0.0f})
+                                AltitudeFilter altitude  = AltitudeFilter{0.0f, 0.0f},
+                                MaskSizeFilter mask_size = MaskSizeFilter{0.0f, 0.0f})
         : projector_(projector)
         , assigner_(std::clamp(iou_threshold, 0.01f, 1.0f))
-        , altitude_(altitude) {
+        , altitude_(altitude)
+        , mask_size_(mask_size) {
         if (iou_threshold < 0.01f || iou_threshold > 1.0f) {
             DRONE_LOG_WARN("[MaskDepthProjector] iou_threshold {:.3f} clamped to [{:.2f}, {:.2f}]",
                            iou_threshold, 0.01f, 1.0f);
@@ -57,6 +74,18 @@ public:
                            "min_z_m={:.2f} max_z_m={:.2f}",
                            altitude_.min_z_m, altitude_.max_z_m);
         }
+        if (mask_size_.min_area_px > 0.0f && mask_size_.max_area_px > 0.0f &&
+            mask_size_.min_area_px >= mask_size_.max_area_px) {
+            DRONE_LOG_WARN("[MaskDepthProjector] mask size filter min_area_px={:.0f} >= "
+                           "max_area_px={:.0f}; disabling.",
+                           mask_size_.min_area_px, mask_size_.max_area_px);
+            mask_size_ = MaskSizeFilter{0.0f, 0.0f};
+        }
+        if (mask_size_.min_area_px > 0.0f || mask_size_.max_area_px > 0.0f) {
+            DRONE_LOG_INFO("[MaskDepthProjector] SAM mask size filter active: "
+                           "min_area_px={:.0f} max_area_px={:.0f}",
+                           mask_size_.min_area_px, mask_size_.max_area_px);
+        }
     }
 
     // Full PATH A pipeline: assign detector classes to SAM masks via bbox IoU,
@@ -71,7 +100,33 @@ public:
             return drone::util::Result<std::vector<hal::VoxelUpdate>, std::string>::ok({});
         }
 
-        auto assignments = assigner_.assign(sam_masks, detector_outputs);
+        // Issue #645 — SAM mask size filter (#659).  Drop masks whose bbox
+        // area falls outside the configured band BEFORE back-projection.
+        // Tiny masks are texture features that produce scattered ghost
+        // voxels; huge masks are sky / ground that produce ghost walls.
+        const std::vector<hal::InferenceDetection>* sam_masks_ptr = &sam_masks;
+        std::vector<hal::InferenceDetection>        filtered_masks;
+        if (mask_size_.min_area_px > 0.0f || mask_size_.max_area_px > 0.0f) {
+            filtered_masks.reserve(sam_masks.size());
+            for (const auto& m : sam_masks) {
+                const float area = m.bbox.w * m.bbox.h;
+                if (mask_size_.min_area_px > 0.0f && area < mask_size_.min_area_px) {
+                    ++mask_size_dropped_min_;
+                    continue;
+                }
+                if (mask_size_.max_area_px > 0.0f && area > mask_size_.max_area_px) {
+                    ++mask_size_dropped_max_;
+                    continue;
+                }
+                filtered_masks.push_back(m);
+            }
+            sam_masks_ptr = &filtered_masks;
+            if (filtered_masks.empty()) {
+                return drone::util::Result<std::vector<hal::VoxelUpdate>, std::string>::ok({});
+            }
+        }
+
+        auto assignments = assigner_.assign(*sam_masks_ptr, detector_outputs);
 
         // Repurpose class_id from COCO-id to ObjectClass ordinal so
         // CpuSemanticProjector writes it into VoxelUpdate::semantic_label.
@@ -120,11 +175,24 @@ public:
     /// construction.  Surfaced for diagnostic logging.
     [[nodiscard]] uint64_t altitude_dropped_count() const noexcept { return altitude_dropped_; }
 
+    /// Issue #645 — counts of SAM masks dropped by the mask-size filter.
+    /// `min` counter = below `min_area_px` (texture features).
+    /// `max` counter = above `max_area_px` (sky / ground regions).
+    [[nodiscard]] uint64_t mask_size_dropped_min_count() const noexcept {
+        return mask_size_dropped_min_;
+    }
+    [[nodiscard]] uint64_t mask_size_dropped_max_count() const noexcept {
+        return mask_size_dropped_max_;
+    }
+
 private:
     hal::ISemanticProjector& projector_;
     MaskClassAssigner        assigner_;
     AltitudeFilter           altitude_;
+    MaskSizeFilter           mask_size_;
     mutable uint64_t         altitude_dropped_{0};
+    mutable uint64_t         mask_size_dropped_min_{0};
+    mutable uint64_t         mask_size_dropped_max_{0};
 };
 
 }  // namespace drone::perception

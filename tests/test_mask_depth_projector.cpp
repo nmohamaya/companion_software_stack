@@ -354,6 +354,90 @@ TEST_F(MaskDepthProjectorTest, AltitudeFilter_DefaultDisabled) {
     EXPECT_EQ(mdp.altitude_dropped_count(), 0u);
 }
 
+// ── Issue #645 — SAM mask size filter (#659) ─────────────────────────
+// Drop SAM masks whose bbox area falls outside [min_area_px, max_area_px]
+// before back-projection.  Tiny masks → texture-feature ghosts; huge
+// masks → sky/ground walls.
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_DropsTinyMasks) {
+    MaskDepthProjector::MaskSizeFilter ms{900.0f, 0.0f};  // min 900 px
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+
+    // 20×20 = 400 px (below 900 px floor)
+    auto tiny  = make_sam_mask(100.0f, 100.0f, 20.0f, 20.0f);
+    auto depth = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({tiny}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_TRUE(result.value().empty()) << "Tiny mask must be dropped before back-projection";
+    EXPECT_EQ(mdp.mask_size_dropped_min_count(), 1u);
+}
+
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_DropsHugeMasks) {
+    MaskDepthProjector::MaskSizeFilter ms{0.0f, 100000.0f};  // max 100k px
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+
+    // 600×400 = 240,000 px (above 100k cap)
+    auto huge  = make_sam_mask(20.0f, 40.0f, 600.0f, 400.0f);
+    auto depth = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({huge}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_TRUE(result.value().empty()) << "Huge mask must be dropped before back-projection";
+    EXPECT_EQ(mdp.mask_size_dropped_max_count(), 1u);
+}
+
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_PassesInBandMasks) {
+    MaskDepthProjector::MaskSizeFilter ms{900.0f, 100000.0f};
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+
+    // 80×80 = 6400 px (in band)
+    auto in_band = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto depth   = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({in_band}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty()) << "In-band mask must back-project";
+    EXPECT_EQ(mdp.mask_size_dropped_min_count(), 0u);
+    EXPECT_EQ(mdp.mask_size_dropped_max_count(), 0u);
+}
+
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_MixedBatch) {
+    // Three masks: tiny / in-band / huge.  Only middle one survives.
+    MaskDepthProjector::MaskSizeFilter ms{900.0f, 100000.0f};
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+
+    auto tiny    = make_sam_mask(0.0f, 0.0f, 20.0f, 20.0f);
+    auto in_band = make_sam_mask(280.0f, 200.0f, 80.0f, 80.0f);
+    auto huge    = make_sam_mask(0.0f, 0.0f, 600.0f, 400.0f);
+    auto depth   = make_depth_map(640, 480, 5.0f);
+
+    auto result = mdp.project({tiny, in_band, huge}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty());
+    EXPECT_EQ(mdp.mask_size_dropped_min_count(), 1u);
+    EXPECT_EQ(mdp.mask_size_dropped_max_count(), 1u);
+}
+
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_DefaultDisabled) {
+    MaskDepthProjector mdp(projector_);
+    auto               tiny   = make_sam_mask(100.0f, 100.0f, 20.0f, 20.0f);
+    auto               depth  = make_depth_map(640, 480, 5.0f);
+    auto               result = mdp.project({tiny}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty()) << "Default constructor disables mask-size filter";
+    EXPECT_EQ(mdp.mask_size_dropped_min_count(), 0u);
+}
+
+TEST_F(MaskDepthProjectorTest, MaskSizeFilter_InvertedBandIsDisabled) {
+    MaskDepthProjector::MaskSizeFilter ms{100000.0f, 1000.0f};  // min > max
+    MaskDepthProjector mdp(projector_, 0.5f, MaskDepthProjector::AltitudeFilter{0.0f, 0.0f}, ms);
+    auto               tiny   = make_sam_mask(100.0f, 100.0f, 20.0f, 20.0f);
+    auto               depth  = make_depth_map(640, 480, 5.0f);
+    auto               result = mdp.project({tiny}, {}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_FALSE(result.value().empty()) << "Inverted band must be treated as disabled";
+}
+
 TEST_F(MaskDepthProjectorTest, AltitudeFilter_InvertedBandIsDisabled) {
     // min_z_m >= max_z_m is nonsensical — constructor should disable filter
     // and emit a warning.

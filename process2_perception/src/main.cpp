@@ -1205,8 +1205,18 @@ int main(int argc, char* argv[]) {
                 drone::perception::MaskDepthProjector::AltitudeFilter alt{};
                 alt.min_z_m = ctx.cfg.get<float>("perception.path_a.altitude_filter.min_z_m", 0.0f);
                 alt.max_z_m = ctx.cfg.get<float>("perception.path_a.altitude_filter.max_z_m", 0.0f);
+                // Issue #645 #659 — SAM mask size filter.  41-47 masks/frame
+                // observed in scenario 33 for a scene with ~7 spawned
+                // obstacles.  Most are tiny texture features (drop with
+                // min_area_px) or huge sky/ground regions (drop with
+                // max_area_px) that produce ghost voxels.
+                drone::perception::MaskDepthProjector::MaskSizeFilter mask_size{};
+                mask_size.min_area_px =
+                    ctx.cfg.get<float>("perception.path_a.mask_size_filter.min_area_px", 0.0f);
+                mask_size.max_area_px =
+                    ctx.cfg.get<float>("perception.path_a.mask_size_filter.max_area_px", 0.0f);
                 mask_projector = std::make_unique<drone::perception::MaskDepthProjector>(
-                    *semantic_projector, iou, alt);
+                    *semantic_projector, iou, alt, mask_size);
                 voxel_pub = ctx.bus.advertise<drone::ipc::SemanticVoxelBatch>(
                     drone::ipc::topics::SEMANTIC_VOXELS);
                 if (!voxel_pub->is_ready()) {

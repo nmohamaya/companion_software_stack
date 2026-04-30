@@ -105,6 +105,11 @@
                     "min_z_m": 0.3,
                     "max_z_m": 6.0
                 },
+                "mask_size_filter": {
+                    "_comment": "Issue #645 (#659) — drop SAM masks whose bbox area falls outside [min_area_px, max_area_px] BEFORE back-projection.  Run 2026-04-30_174147: SAM produced 41-47 masks per 1280×720 frame for ~7 spawned obstacles.  Tiny masks (<900 px ≈ 30×30) are texture features that produce scattered ghost voxels.  Huge masks (>200,000 px ≈ 22% of frame) are sky / ground regions that produce ghost walls.  Real obstacles in this scenario produce masks of ~1k-50k px depending on distance.  0 = disable bound.",
+                    "min_area_px": 900,
+                    "max_area_px": 200000
+                },
                 "diag": {
                     "_comment": "Issue #612 voxel-position trace — JSONL of pose + bboxes + voxel world positions per batch. Consumed by tools/plot_voxel_trace.py. The runner overwrites trace_path with <scenario_log_dir>/path_a_voxel_trace.jsonl so every run is self-contained; keep trace_voxels=true to opt in.",
                     "trace_voxels": true,
