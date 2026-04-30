@@ -171,7 +171,8 @@
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,
-                "inflation_radius_m": 2.5,
+                "_comment_inflation_radius_m": "Issue #645 — was 2.5 m, which created a closed ring of overlapping halos around the spawned obstacle cluster (pillar_01/wall_01/wall_02/couch_01/pillar_02 at coords (8-22, 10-14)).  Pairwise-gap analysis on the cluster: pillar_01↔wall = 0.03 m, wall↔couch = -2.6 m, wall↔bush = -0.4 m, pillar_02↔couch = -3.4 m — FOUR pairs fully blocked, no path WP2→WP3 through the cluster.  D* Lite gave up 108 times in run 2026-04-30_170604; drone hovered at WP2 and timed out to LOITER.  Reducing to 1.5 m reopens four gaps (pillar_01↔wall = 2.0 m, wall↔bush = 1.6 m, pillar_02↔wall = 2.8 m, pillar_01↔chair = 4.5 m) while still blocking the genuinely-too-close pair wall↔couch (5.4 m apart, will always block at any reasonable inflation — drone must go AROUND not through).  Drone is 0.6 m wide so a 1.5 m halo on a 0.5-m-radius obstacle gives 1 m of effective clearance, well above safety margin.",
+                "inflation_radius_m": 1.5,
                 "dynamic_obstacle_ttl_s": 2.0,
                 "min_confidence": 0.5,
                 "promotion_hits": 10,
