@@ -59,18 +59,21 @@ code — just stacked-PR rebase on integration).
 | --- | --- | --- | --- |
 | #643 | `fix(#638): tracker tuning + diagnostics for scenario-33 ID-explosion` | tracker config changes + new diagnostic accessors, no flight-critical structural changes | open, 1 comment, 0 reviews |
 | #644 | `fix: ZenohSubscriber latency tracker accumulates phantom samples on quiet topics` | header-only IPC primitive change, adds one `std::atomic<uint64_t>`; concurrency review must verify the relaxed-ordering choice; performance review on hot-path receive() | open, 0 reviews |
+| #649 | `fix(#645): UKF radar-only S-matrix recovery (eigenvalue clamp + R-only fallback)` | UKF math change on flight-critical fusion thread. Pass 1 = memory + concurrency + fault-recovery (degraded-input path) + security + unit; Pass 2 = all four. Adds `<Eigen/Eigenvalues>` include — eigensolver runs only on failure path. | open, 0 reviews |
 
 ## Concrete review focus areas
 
 Things I noticed while writing the code that reviewers should poke at:
 
 ### #646 (avoider final clamp)
+
 - Is `nearest_dx/dy/dz` always safe to normalise inside the clamp block?  Gated on `min_active_dist > kMinDistGateM`, but verify the bounds.
 - The clamp uses the *nearest* obstacle's direction.  In a multi-obstacle scenario the second-nearest could still have positive v_toward — is single-axis clamping sufficient, or should we clamp against multiple?  (Doc was: "single-nearest is enough as a safety floor; deflection is a separate follow-up.")
 - `final_clamp_count_` is read by `final_clamp_count()` from a different thread (logging).  No memory ordering guarantee.  Probably fine because diagnostic, but flag it.
 - Existing test `BrakeInCloseRegime_DisabledLeavesForwardMotion` was split — review-test-quality should verify the split doesn't reduce coverage.
 
 ### #647 (voxel obstacle surface)
+
 - `kVoxelTrackIdPrefix=0xC0000000`.  Camera/radar tracks are sequential ints.  If a fusion track grows past 0x3FFFFFFF (≈1 B IDs) it would collide.  Realistic?  Document or assert.
 - `TripleBuffer<VoxelObstacleSnapshot>` payload is 64 entries × ~64 bytes ≈ 4 KB × 3 slots = 12 KB stack.  Acceptable but reviewers should verify against the producer's stack budget.
 - `voxel_obstacle_min_observations` and `max_age_ms` use ad-hoc string keys (`"perception.path_a.avoider_surface.min_observations"`).  Should move to `cfg_key.h` per the modularity epic convention.
@@ -78,12 +81,22 @@ Things I noticed while writing the code that reviewers should poke at:
 - Synthesised `velocity = 0` assumes static.  Voxel tracker doesn't compute velocity.  If a moving cube ever shows up, the avoider's predictive look-ahead won't help.  Document as a known limitation or follow-up.
 
 ### #644 (zenoh latency)
+
 - `last_recorded_ts_` uses relaxed memory ordering.  Single reader (the consumer thread), but the comment in the source claims "single-reader, single-writer per subscriber by contract" — verify that contract holds across all callers in the codebase.
 - The fix changes the semantic of `LatencyTracker` samples in a way other consumers might not expect.  Are there other call sites that rely on the old "every receive records a sample" behaviour for non-latency purposes (e.g. counting receive calls)?
 
 ### #643 (tracker tuning)
+
 - `max_match_distance_m` bumped 3.0 → 8.0.  Justify against expected per-frame motion vs distinct-pillar separation.  Already in PR body but a reviewer should sanity-check.
 - New `last_aged_out_count()` and `last_match_failure_count()` accessors are written by `update()`, read by `main.cpp`.  Single thread, no atomics needed, but verify.
+
+### #649 (UKF radar S-matrix recovery)
+
+- Eigenvalue floor `1e-3 · mean(R.diagonal())`: relative to R rather than absolute, so it tracks the radar config.  Verify it's not so tight that the recovered S is essentially R, nor so loose that it admits implausible associations.  Compare to the gate threshold `χ²(4) at 95% = 9.21` to bound worst-case false-acceptance.
+- `0.5 * (S + S.transpose().eval())` symmetrize: `.eval()` allocates a 4×4 temporary on each call.  Failure-path-only so likely fine, but flag for a perf reviewer to confirm against the budget on the radar-only branch.
+- R-only fallback uses `z_pred` (refreshed via `ukf.predicted_radar_measurement()`).  Originally the function set `z_pred` once at the top; with the fallback flipping `use_full_S = false` mid-block, we re-call to get a fresh value.  Verify there's no path where `z_pred` is read stale.
+- New `s_matrix_fallback_count_` is read from the engine externally (run-report); no concurrency annotation.  Single-thread (fusion) by IPC contract — confirm.
+- The previous WARN log was downgraded to DEBUG.  This means scenario runs that exhibit the failure won't surface a noisy log line.  The `s_matrix_fallback_count()` accessor is the canonical signal — make sure run-report or scenario gating reads it (currently doesn't).
 
 ## Workflow for catch-up reviews
 
