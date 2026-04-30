@@ -475,6 +475,36 @@ UKFFusionEngine::UKFFusionEngine(const CalibrationData& calib, const RadarNoiseC
                    radar_enabled_, radar_cfg_.negate_azimuth, radar_cfg_.ground_filter_enabled,
                    radar_cfg_.min_object_altitude_m, radar_cfg_.altitude_gate_m,
                    radar_cfg_.gate_threshold, dormant_merge_radius_m_, max_dormant_);
+
+    // Issue #645 review fix (#649 P1): construction-time check on
+    // `RadarNoiseConfig` std-deviation fields.  When any std is <= 0, the
+    // R-only fallback path in `try_associate_radar` (Pass 4) computes
+    // Mahalanobis as Σ inv * innovation² where inv = 1/std².  A zero or
+    // negative std produces inv=0 and silently excludes that measurement
+    // axis from gating — *more permissive* than configured.  No crash,
+    // no warning, just degraded gate.  Refuse to enable radar fusion in
+    // that case rather than silently degrade.
+    if (radar_enabled_) {
+        const struct {
+            const char* name;
+            float       value;
+        } stds[] = {
+            {"range_std_m", radar_cfg_.range_std_m},
+            {"azimuth_std_rad", radar_cfg_.azimuth_std_rad},
+            {"elevation_std_rad", radar_cfg_.elevation_std_rad},
+            {"velocity_std_mps", radar_cfg_.velocity_std_mps},
+        };
+        for (const auto& [name, value] : stds) {
+            if (!std::isfinite(value) || value <= 0.0f) {
+                DRONE_LOG_WARN("[UKF] RadarNoiseConfig.{} = {} is not strictly positive — "
+                               "Mahalanobis gate would silently exclude this measurement axis. "
+                               "Disabling radar fusion to avoid degraded association behaviour.",
+                               name, value);
+                radar_enabled_ = false;
+                break;
+            }
+        }
+    }
 }
 
 /// Compute depth confidence from pinhole projection uncertainty propagation.
@@ -758,6 +788,14 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
                 S = 0.5f * (S + S.transpose().eval());
                 track_llt.compute(S);
                 track_llt_ok = (track_llt.info() == Eigen::Success);
+            } else {
+                // Issue #645 review fix (#649 P2): explicit else-branch for the
+                // eigensolver-failure path.  Without this branch, control fell
+                // through to the `if (!track_llt_ok)` check below relying on
+                // implicit fallthrough — fragile against future refactors that
+                // might add a return/continue inside the eigensolver block.
+                // track_llt_ok stays false from Pass 2; falls into Pass 4.
+                track_llt_ok = false;
             }
         }
         if (!track_llt_ok) {
@@ -773,6 +811,16 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
                             "to R-only gating",
                             ukf.track_id);
             ++s_matrix_fallback_count_;
+            // Issue #645 review fix (#649 P2): periodic WARN every N=100 fallbacks
+            // so the silent DEBUG-only fallback path becomes visible at INFO level
+            // when persistently firing.  Counter is the canonical signal but
+            // operators don't poll the accessor in real time.
+            if (s_matrix_fallback_count_ % 100 == 0) {
+                DRONE_LOG_WARN("[UKF] S-matrix R-only fallback fired {} times — "
+                               "UT weights are persistently producing degenerate S; "
+                               "consider re-tuning kAlpha (Issue #645 deferred fix C)",
+                               s_matrix_fallback_count_);
+            }
             use_full_S = false;
             // Use z_pred instead of z_mean for innovation (matches R-only
             // gating semantics on the camera-track path).  Keep
