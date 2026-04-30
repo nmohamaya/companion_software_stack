@@ -60,7 +60,8 @@ code — just stacked-PR rebase on integration).
 | #643 | `fix(#638): tracker tuning + diagnostics for scenario-33 ID-explosion` | tracker config changes + new diagnostic accessors, no flight-critical structural changes | open, 1 comment, 0 reviews |
 | #644 | `fix: ZenohSubscriber latency tracker accumulates phantom samples on quiet topics` | header-only IPC primitive change, adds one `std::atomic<uint64_t>`; concurrency review must verify the relaxed-ordering choice; performance review on hot-path receive() | open, 0 reviews |
 | #649 | `fix(#645): UKF radar-only S-matrix recovery (eigenvalue clamp + R-only fallback)` | UKF math change on flight-critical fusion thread. Pass 1 = memory + concurrency + fault-recovery (degraded-input path) + security + unit; Pass 2 = all four. Adds `<Eigen/Eigenvalues>` include — eigensolver runs only on failure path. | merged 2026-04-30 (move to merged section on next sweep) |
-| #650 | `fix(#645): correct misleading planner-fallback message + add hover-fallback counter` | log-text + diagnostic-counter only, no behavioural change to the planner. Pass 1 = unit + fault-recovery (verify counter semantics on real failure paths); Pass 2 = test-quality (false-positive guard test) + api-contract (new IGridPlanner method) + code-quality (legacy flag-name retained). | open, 0 reviews |
+| #650 | `fix(#645): correct misleading planner-fallback message + add hover-fallback counter` | log-text + diagnostic-counter only, no behavioural change to the planner. Pass 1 = unit + fault-recovery (verify counter semantics on real failure paths); Pass 2 = test-quality (false-positive guard test) + api-contract (new IGridPlanner method) + code-quality (legacy flag-name retained). | merged 2026-04-30 (move to merged section on next sweep) |
+| #651 | `fix(#645): comms heartbeat-resend so SimpleFlight stops seizing control on the 60ms timeout` | **flight-critical path** — modifies fc_tx_thread send rate (50 ms → 25 ms) and adds heartbeat-resend logic. Pass 1 = memory (cached `TrajectoryCmd` struct lifetime) + concurrency (single-thread, no atomics added) + fault-recovery (RTL/LAND sentinel suppression preserved) + security + unit; Pass 2 = test-quality (heartbeat path lacks unit test — hard without mock IFCLink), performance (40 ms heartbeat threshold + 25 ms loop period — confirm against fc_tx CPU budget), api-contract, code-quality. | open, 0 reviews |
 
 ## Concrete review focus areas
 
@@ -90,6 +91,14 @@ Things I noticed while writing the code that reviewers should poke at:
 
 - `max_match_distance_m` bumped 3.0 → 8.0.  Justify against expected per-frame motion vs distinct-pillar separation.  Already in PR body but a reviewer should sanity-check.
 - New `last_aged_out_count()` and `last_match_failure_count()` accessors are written by `update()`, read by `main.cpp`.  Single thread, no atomics needed, but verify.
+
+### #651 (SimpleFlight 60 ms heartbeat)
+
+- Loop period reduced 50 ms → 25 ms — doubles the wakeup rate on `fc_tx_thread`. Verify CPU-budget impact (the loop body is cheap, but at 40 Hz it's running twice as often). Profiler reviewer should confirm.
+- 40 ms heartbeat threshold leaves a 20 ms margin against SimpleFlight's 60 ms timeout. Worst-case is 25 + 40 = 65 ms when a tick is delayed by scheduling — borderline. Consider tightening to 30 ms heartbeat OR raising loop frequency further if scenario logs show timeout banners returning under load.
+- Heartbeat path resends `last_sent_traj` verbatim including its (now-stale) `timestamp_ns`. We re-send via `fc.send_trajectory(vx, vy, vz, yaw)` which uses the values, not the timestamp — so the timestamp staleness doesn't affect the RPC. But if a future refactor passes `last_sent_traj` directly, this could become a footgun. Document or refresh the timestamp on resend.
+- The heartbeat path skips when `last_traj_ts == UINT64_MAX` (RTL/LAND sentinel). Verify that re-entering NAVIGATE clears the sentinel — otherwise the heartbeat stays disabled for the rest of the mission.
+- Lacks unit test (acknowledged in PR body). Suggested follow-up: a test-only mock IFCLink that counts `send_trajectory` calls and verifies the heartbeat fires within the heartbeat threshold when no new commands arrive.
 
 ### #650 (planner hover-fallback observability)
 
