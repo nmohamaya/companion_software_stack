@@ -1,5 +1,5 @@
 {
-    "_comment": "Scenario 33: Non-COCO obstacle avoidance via PATH A (SAM + detector fusion). Exercises the full E5 pipeline: SimulatedSAMBackend generates class-agnostic masks, MaskClassAssigner fuses with detector classes, MaskDepthProjector back-projects to 3D voxels. Non-COCO objects (cubes, panels, pillars) get GEOMETRIC_OBSTACLE class. Based on scenario 30 route and scene.",
+    "_comment": "Scenario 33: Non-COCO obstacle avoidance via PATH A (SAM + detector fusion). Exercises the full E5 pipeline: a configured SAM backend (FastSAM ONNX or simulated) generates class-agnostic masks, MaskClassAssigner fuses with detector classes, MaskDepthProjector back-projects to 3D voxels. Non-COCO objects (cubes, panels, pillars) get GEOMETRIC_OBSTACLE class. Based on scenario 30 route and scene.",
     "_epic": "#520 E5",
     "_issue": "#560",
     "gt_class_map": {
@@ -285,11 +285,11 @@
                 "_comment": "PATH A pipeline was activated."
             },
             {
+                "_comment_pr633_review_p1": "PR #633 P1 review: was 'SimulatedSAMBackend' but scenario 33's config_overrides set sam.backend=fastsam, so SimulatedSAMBackend NEVER appears in any log line — the validation silently failed every run, masking PR #633's core correctness contract.  Match the FastSAM ONNX backend's actual log signature instead.",
                 "name": "SAM backend running",
                 "path": "drone_logs/*.log",
-                "pattern": "SimulatedSAMBackend",
-                "min_matches": 1,
-                "_comment": "SimulatedSAMBackend was instantiated."
+                "pattern": "FastSAM.*Model loaded",
+                "min_matches": 1
             },
             {
                 "name": "Radar first scan",

@@ -233,6 +233,14 @@ inline constexpr const char* SAM_BACKEND    = "perception.path_a.sam.backend";
 inline constexpr const char* SAM_MODEL_PATH = "perception.path_a.sam.model_path";
 inline constexpr const char* SAM_INPUT_SIZE = "perception.path_a.sam.input_size";
 inline constexpr const char* SAM_NUM_MASKS  = "perception.path_a.sam.num_masks";
+// PR #633 P2 review: SAM use_cuda key was string-concatenated at the
+// FastSAM call site — every other SAM key has a constant.  Mirror DA V2
+// (perception.depth_estimator.use_cuda) for consistency.
+inline constexpr const char* SAM_USE_CUDA = "perception.path_a.sam.use_cuda";
+inline constexpr const char* SAM_CONFIDENCE_THRESHOLD =
+    "perception.path_a.sam.confidence_threshold";
+inline constexpr const char* SAM_NMS_THRESHOLD = "perception.path_a.sam.nms_threshold";
+inline constexpr const char* SAM_MASK_CHANNELS = "perception.path_a.sam.mask_channels";
 inline constexpr const char* MASK_CLASS_IOU_THRESHOLD =
     "perception.path_a.mask_class_iou_threshold";
 
