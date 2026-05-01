@@ -126,7 +126,17 @@ public:
         , prediction_dt_s_(prediction_dt_s)
         , require_radar_for_promotion_(require_radar_for_promotion)
         , voxel_promotion_hits_(voxel_promotion_hits)
-        , static_cell_ttl_ns_(static_cast<uint64_t>(std::max(0.0f, static_cell_ttl_s) * 1e9f))
+        // PR #636 P2 review: do the seconds→ns conversion in `double`
+        // (matches the same fix applied to VoxelInstanceTracker in
+        // PR #670).  float-32 has ~7 significant decimal digits so for
+        // `static_cell_ttl_s > ~4.2 s` the float multiplication loses
+        // sub-second precision (e.g. 30 s → ±32 ns rounding).  NaN
+        // input short-circuits to ttl=0 (the documented "TTL disabled"
+        // sentinel) so a malformed config doesn't UB-cast or wrap.
+        , static_cell_ttl_ns_(std::isfinite(static_cell_ttl_s)
+                                  ? static_cast<uint64_t>(
+                                        std::max(0.0, static_cast<double>(static_cell_ttl_s)) * 1e9)
+                                  : 0u)
         , voxel_instance_promotion_observations_(voxel_instance_promotion_observations) {}
 
     /// Force-clear all *dynamic* (TTL-based) obstacles (for testing / reset).
@@ -140,12 +150,22 @@ public:
     }
 
     /// Clear all static obstacles (both HD-map and runtime-promoted).
+    /// PR #636 P2 review: also clear `hit_count_`.  Otherwise a
+    /// dynamic cell that had already accumulated promotion-hit
+    /// observations would re-promote on the next observation despite
+    /// the explicit "wipe everything" intent of `clear_static()`.
+    /// This is the fault-recovery path used after RTL/LAND or scenario
+    /// reset; partial-voxel state surviving the wipe was a real
+    /// regression risk.  Same call also clears the per-instance
+    /// observation map so instance-gated promotion starts fresh.
     void clear_static() {
         static_occupied_.clear();
         hd_map_cells_.clear();
         hd_map_static_count_ = 0;
         static_cell_timestamps_.clear();
         promoted_count_ = 0;
+        hit_count_.clear();
+        instances_.clear();
     }
 
     /// Pre-populate the grid with a known static vertical obstacle (HD-map style).
@@ -203,6 +223,18 @@ public:
     /// misfire) can still be cleared by `clear_static()`.
     ///
     /// @return `{inserted, clamped_dropped, low_confidence_dropped, out_of_bounds, cap_blocked, instance_skipped}`
+    ///
+    /// PR #636 P2 review: the `inserted` semantic is **count of dynamic
+    /// grid cells newly written by this batch** — i.e. cells that were
+    /// neither in `occupied_` nor `static_occupied_` before this call
+    /// and are now in `occupied_`.  Re-observed cells (timestamp
+    /// refreshed but cell already present) do NOT increment `inserted`.
+    /// Cells that immediately promoted to the static layer count once
+    /// against `inserted` and are also reflected in `promoted_count_`.
+    /// Tests that previously interpreted `inserted` as "number of
+    /// distinct voxels accepted" should switch to checking
+    /// `inserted + (number of re-observed cells)` if the old semantic
+    /// is needed.
     struct VoxelInsertStats {
         size_t inserted               = 0;
         size_t clamped_dropped        = 0;
@@ -225,6 +257,17 @@ public:
         VoxelInsertStats s;
         if (voxels == nullptr || n == 0) return s;
         const float clamp = std::max(0.0f, clamp_m);
+        // PR #636 P2 review: hoist `steady_clock::now()` out of the
+        // per-voxel-per-cell triple loop.  At ~5000 voxels/frame × 27
+        // inflated cells/voxel, the original placement called
+        // `steady_clock::now()` ~135k times per frame.  All cells
+        // inserted in this batch share the same logical observation
+        // moment; using a single timestamp is also more semantically
+        // correct (a batch is one observation, not 135k).
+        const uint64_t batch_now_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
 
         // Issue #638 Phase 3 — instance-aware promotion gate.
         // When `voxel_instance_promotion_observations_ > 0`, voxels are
@@ -330,10 +373,9 @@ public:
             // cells — the drone's outbound flight deposited an
             // everlasting wake that walled off its return corridor
             // (scenario 33 stuck-at-(24.5, 26.1) failure mode, 2026-04-24).
-            const uint64_t now_ns =
-                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                          std::chrono::steady_clock::now().time_since_epoch())
-                                          .count());
+            // PR #636 P2 review: timestamp is the per-batch value
+            // hoisted above the loop — see `batch_now_ns`.
+            const uint64_t now_ns = batch_now_ns;
             // Small 3D inflation — every cell within `kInflate` of the sample.
             // Most neighbouring inserts collide with cells already present
             // from nearby voxels, so this is idempotent on repeated observations.
@@ -344,11 +386,17 @@ public:
                         const GridCell c{center.x + dx, center.y + dy, center.z + dz};
                         if (!in_bounds(c)) continue;
 
-                        // Already-permanent cell (HD-map seed or previously-
-                        // promoted voxel) — nothing more to do.  Still
-                        // refreshes the dynamic timestamp below so that if
-                        // clear_static() ever wipes it, the dynamic layer
-                        // keeps the obstacle alive until TTL decides.
+                        // PR #636 P2 review: previous comment claimed
+                        // "nothing more to do" for already-promoted
+                        // cells, but the code below actually does
+                        // several things — refreshes the dynamic
+                        // timestamp (line 388), enqueues a changed-cell
+                        // event for D* Lite when a cell first appears
+                        // (line 390), and refreshes the static-cell TTL
+                        // for re-observed promoted cells (line 405).
+                        // Tracking absent-vs-present here so the static
+                        // timestamp can be refreshed without changing
+                        // the inserted count.
                         const bool was_absent = occupied_.count(c) == 0 &&
                                                 static_occupied_.count(c) == 0;
 
@@ -749,9 +797,17 @@ public:
     /// Return and clear the list of cells that changed since the last drain.
     /// Each entry is {cell, is_now_occupied}.
     /// D* Lite uses this to know which edges changed.
+    /// PR #636 P2 review: previously this used a plain `swap` which left
+    /// `changed_cells_` with the freshly-default-constructed vector's
+    /// capacity (0) — every subsequent `push_back` then re-allocated
+    /// the underlying buffer.  Re-reserve the old capacity post-swap
+    /// so steady-state allocations are amortised (~1k cells/tick is
+    /// typical, saving a heap alloc + memcpy per planner tick).
     std::vector<std::pair<GridCell, bool>> drain_changes() {
+        const size_t                           prev_capacity = changed_cells_.capacity();
         std::vector<std::pair<GridCell, bool>> result;
         result.swap(changed_cells_);
+        changed_cells_.reserve(prev_capacity);
         return result;
     }
 
