@@ -51,6 +51,8 @@ namespace drone::hal {
 ///   perception.depth_estimator.input_size                  (default 518)
 ///   perception.depth_estimator.max_fps                     (default 15)
 ///   perception.depth_estimator.max_depth_m                 (default 20.0 — metric ceiling)
+///   perception.depth_estimator.use_cuda                    (default false — opt-in CUDA backend
+///                                                                  with canary-inference fallback)
 ///
 ///   perception.depth_estimator.dav2.calibration_enabled    (default false — per-frame path)
 ///   perception.depth_estimator.dav2.raw_min_ref            (default NaN — per-frame min used)
@@ -83,6 +85,25 @@ public:
     /// diagnostics + tests.
     [[nodiscard]] bool calibration_enabled() const { return calibration_enabled_; }
 
+    /// PR #631 P2 review: tests need to verify config wiring for
+    /// `use_cuda` without loading an actual ONNX model.  Accessor
+    /// returns the configured intent (not whether CUDA actually
+    /// engaged at runtime — that depends on canary inference).
+    [[nodiscard]] bool use_cuda_configured() const noexcept { return use_cuda_; }
+
+    /// PR #631 P2 review: number of CONSECUTIVE estimate() calls whose
+    /// `cv::dnn::Net::forward()` threw.  Resets to 0 on a successful
+    /// estimate.  P7 / run-report can poll this to detect a depth
+    /// pipeline that's silently degraded (CUDA driver crash mid-run,
+    /// OOM, etc.) — without it, persistent runtime failure was
+    /// invisible to the system monitor since each estimate() returned
+    /// `Err` but the process kept running.  Atomic + relaxed since
+    /// it's a pure observability counter (depth thread writes,
+    /// watchdog/run-report reads).
+    [[nodiscard]] uint64_t consecutive_inference_failures() const noexcept {
+        return consecutive_inference_failures_.load(std::memory_order_relaxed);
+    }
+
 private:
     void load_model(const std::string& model_path);
 
@@ -114,6 +135,13 @@ private:
     // depending on GPU — the headline fix for no-HD-map scenarios
     // that depend on PATH A batch rate.
     bool use_cuda_ = false;
+
+    // PR #631 P2 review: persistent runtime depth failure surfaced
+    // only as repeated `Err` returns from estimate() — invisible to
+    // P7 / run-report.  Counter increments on each forward() throw
+    // and resets to 0 on a successful estimate.  See accessor
+    // `consecutive_inference_failures()` above.
+    mutable std::atomic<uint64_t> consecutive_inference_failures_{0};
 };
 
 // ═══════════════════════════════════════════════════════════════════════

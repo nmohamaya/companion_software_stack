@@ -606,3 +606,116 @@ TEST_F(DAv2ModelTest, MaxDepthConfigAffectsOutput) {
     EXPECT_LE(max_20, 20.0f);
     EXPECT_LE(max_50, 50.0f);
 }
+
+// ═══════════════════════════════════════════════════════════
+// PR #631 P2 review — config wiring + observability + path safety
+// ═══════════════════════════════════════════════════════════
+//
+// These tests don't need the ONNX model loaded — they construct DAV2
+// with a non-existent model path (model_loaded_ stays false but the
+// config-driven flags + observability counter are set/initialised
+// regardless).  Verifies the use_cuda config key flows through, the
+// consecutive-failure counter starts at zero, and the path-traversal
+// guard rejects absolute paths and `..` segments.
+
+namespace {
+std::string write_temp_config(const std::string& tag, const std::string& body) {
+    std::string   path = "/tmp/test_dav2_" + tag + "_" + std::to_string(getpid()) + ".json";
+    std::ofstream ofs(path);
+    ofs << body;
+    return path;
+}
+}  // namespace
+
+TEST(DepthAnythingV2ConfigWiringTest, UseCudaTrueIsRead) {
+    auto          path = write_temp_config("usecuda_true", R"({
+        "perception": {
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "models/nonexistent.onnx",
+                "use_cuda": true
+            }
+        }
+    })");
+    drone::Config cfg;
+    cfg.load(path);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_TRUE(estimator.use_cuda_configured())
+        << "perception.depth_estimator.use_cuda=true must reach DAV2 backend";
+    std::remove(path.c_str());
+}
+
+TEST(DepthAnythingV2ConfigWiringTest, UseCudaFalseIsRead) {
+    auto          path = write_temp_config("usecuda_false", R"({
+        "perception": {
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "models/nonexistent.onnx",
+                "use_cuda": false
+            }
+        }
+    })");
+    drone::Config cfg;
+    cfg.load(path);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.use_cuda_configured());
+    std::remove(path.c_str());
+}
+
+TEST(DepthAnythingV2ConfigWiringTest, UseCudaDefaultsFalse) {
+    auto          path = write_temp_config("usecuda_default", R"({
+        "perception": {
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "models/nonexistent.onnx"
+            }
+        }
+    })");
+    drone::Config cfg;
+    cfg.load(path);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.use_cuda_configured())
+        << "default must be false to preserve CPU-only legacy behaviour";
+    std::remove(path.c_str());
+}
+
+TEST(DepthAnythingV2ObservabilityTest, ConsecutiveFailuresStartsAtZero) {
+    auto          path = write_temp_config("obs", R"({
+        "perception": {
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "models/nonexistent.onnx"
+            }
+        }
+    })");
+    drone::Config cfg;
+    cfg.load(path);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_EQ(estimator.consecutive_inference_failures(), 0u);
+    std::remove(path.c_str());
+}
+
+// PR #631 P2 review: absolute model paths from CONFIG must be rejected.
+// Tampered config that injects `/etc/shadow.onnx` would have loaded any
+// arbitrary file before this fix.  Direct construction is trusted (tests
+// + calibration tools build the path themselves).
+TEST(DepthAnythingV2PathTraversalTest, AbsoluteConfigModelPathIsRejected) {
+    auto          path = write_temp_config("abs_path", R"({
+        "perception": {
+            "depth_estimator": {
+                "backend": "depth_anything_v2",
+                "model_path": "/etc/passwd"
+            }
+        }
+    })");
+    drone::Config cfg;
+    cfg.load(path);
+    DepthAnythingV2Estimator estimator(cfg, "perception.depth_estimator");
+    EXPECT_FALSE(estimator.is_loaded()) << "config-injected absolute model paths must be rejected";
+    std::remove(path.c_str());
+}
+
+TEST(DepthAnythingV2PathTraversalTest, RelativePathWithDotDotIsRejected) {
+    DepthAnythingV2Estimator estimator("models/../../etc/passwd", 518, 20.0f);
+    EXPECT_FALSE(estimator.is_loaded()) << "'..' segments must be rejected";
+}
