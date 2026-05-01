@@ -3065,6 +3065,64 @@ TEST(OccupancyGrid3DTest, Issue635_StaticSweepRunsOnInsertVoxelsCadence) {
            "scenario-33 wake never decays when detector path goes idle";
 }
 
+// PR #636 P2 review: clear_static() must wipe hit_count_ and instances_,
+// not just static_occupied_/timestamps.  Otherwise a single voxel
+// observation immediately after the wipe re-promotes a cell that had
+// previously accumulated promotion-hit observations — fault-recovery
+// was broken in this exact way before the fix.
+TEST(OccupancyGrid3DTest, Issue636_ClearStaticAlsoWipesPromotionState) {
+    OccupancyGrid3D grid(/*resolution=*/1.0f, /*extent=*/10.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/10.0f, /*min_confidence=*/0.3f,
+                         /*promotion_hits=*/0, /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.3f,
+                         /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/0.0f,
+                         /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/3, /*static_cell_ttl_s=*/0.0f);
+
+    // Observe the same voxel twice — accumulates hit_count_ but no
+    // promotion yet (threshold = 3).
+    auto v = make_voxel(2.0f, 2.0f, 2.0f);
+    grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    ASSERT_EQ(grid.static_count(), 0u) << "should not be promoted yet (2 hits < 3)";
+
+    // Wipe.  After the fix this clears hit_count_ + instances_ too.
+    grid.clear_static();
+
+    // Re-observe ONCE.  Without the fix, the surviving hit_count_=2
+    // would push us to 3 and immediately promote — partial state from
+    // before the wipe would survive a fault-recovery clear.
+    grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    EXPECT_EQ(grid.static_count(), 0u)
+        << "clear_static() must wipe hit_count_; otherwise a single re-observation "
+           "after fault-recovery wipe falsely promotes (regression risk: phantom "
+           "static cell appears in trajectory window after RTL/LAND clear).";
+}
+
+// PR #636 P2 review: voxel_promotion_hits=0 must mean "promotion
+// disabled entirely", consistent with the equivalent disable on the
+// detector path's promotion_hits=0.  Test pins the contract.
+TEST(OccupancyGrid3DTest, Issue636_VoxelPromotionHitsZeroDisablesPromotion) {
+    OccupancyGrid3D grid(/*resolution=*/1.0f, /*extent=*/10.0f, /*inflation=*/1.0f,
+                         /*cell_ttl_s=*/10.0f, /*min_confidence=*/0.3f,
+                         /*promotion_hits=*/0, /*radar_promotion_hits=*/3,
+                         /*min_promotion_depth_confidence=*/0.3f,
+                         /*max_static_cells=*/0, /*prediction_enabled=*/false,
+                         /*prediction_dt_s=*/0.0f,
+                         /*require_radar_for_promotion=*/false,
+                         /*voxel_promotion_hits=*/0, /*static_cell_ttl_s=*/0.0f);
+
+    // Hammer the same voxel many times — should never promote.
+    auto v = make_voxel(3.0f, 3.0f, 3.0f);
+    for (int i = 0; i < 50; ++i) {
+        grid.insert_voxels(&v, 1, 100.0f, 0.3f);
+    }
+    EXPECT_EQ(grid.static_count(), 0u)
+        << "voxel_promotion_hits=0 must disable promotion entirely (no static cells "
+           "ever written from the voxel path)";
+}
+
 TEST(OccupancyGrid3DTest, Issue635_HdMapCellsImmuneToStaticTtl) {
     // HD-map cells (loaded via add_static_obstacle) must NEVER decay,
     // even when static_cell_ttl_s > 0.  They represent ground-truth
