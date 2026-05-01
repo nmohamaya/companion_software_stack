@@ -53,13 +53,31 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const drone::Config& cfg,
     // CUDA inference (Issue #626) — engage only when the config opts in.
     // Silently ignored in every scenario before this PR.  Set via
     // `perception.depth_estimator.use_cuda`.
-    use_cuda_ = cfg.get<bool>(section + ".use_cuda", false);
+    // PR #631 P2 review: use the canonical config-key constant rather
+    // than `section + ".use_cuda"` string concatenation.  The
+    // constant is fully qualified (matches the documented key), so
+    // bypassing the section param keeps caller and constant in sync
+    // — a future rename of either side surfaces as a build error
+    // instead of a silently-different runtime key.
+    use_cuda_ = cfg.get<bool>(drone::cfg_key::perception::depth_estimator::USE_CUDA, false);
 
     DRONE_LOG_INFO("[DepthAnythingV2] Config: input_size={}, max_depth_m={:.1f}, "
                    "use_cuda={}, calibration={} (a={:.3f}, b={:.3f}, raw_ref=[{:.3f},{:.3f}])",
                    input_size_, max_depth_m_, use_cuda_ ? "true" : "false",
                    calibration_enabled_ ? "on" : "off", calibration_coef_a_, calibration_coef_b_,
                    raw_min_ref_, raw_max_ref_);
+
+    // PR #631 P2 review: relative-only path policy applies to
+    // CONFIG-injected paths (the actual attack surface).  Direct
+    // construction via the (model_path, ...) ctor is trusted —
+    // tests + calibration tools own that path themselves.
+    if (!model_path.empty() && model_path.front() == '/') {
+        DRONE_LOG_ERROR("[DepthAnythingV2] Rejected absolute model path from config "
+                        "(relative-only allowed): {}",
+                        model_path);
+        model_loaded_ = false;
+        return;
+    }
     load_model(model_path);
 }
 
@@ -73,7 +91,11 @@ DepthAnythingV2Estimator::DepthAnythingV2Estimator(const std::string& model_path
 // ── Model loading ───────────────────────────────────────────
 void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     // Path traversal guard: reject paths containing ".." components.
-    // Prevents directory traversal from config-injected paths.
+    // Prevents directory traversal from config-injected paths.  The
+    // stricter "no absolute path" check lives in the config constructor
+    // (`load_model_from_config`); direct construction via the explicit
+    // (model_path, input_size, max_depth_m) ctor is trusted because the
+    // caller (tests, calibration tooling) builds the path itself.
     if (model_path.find("..") != std::string::npos) {
         DRONE_LOG_ERROR("[DepthAnythingV2] Rejected model path with '..': {}", model_path);
         model_loaded_ = false;
@@ -130,13 +152,23 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
                 } catch (const cv::Exception& e) {
                     DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference failed ({}) — "
                                    "falling back to CPU.  Common causes: cuDNN/CUDA version "
-                                   "mismatch (check /usr/local/cuda/lib64 vs libcudnn*), or "
-                                   "OpenCV built without CUDA_DNN.",
+                                   "mismatch, or OpenCV built without CUDA_DNN.",
                                    e.what());
                 } catch (const std::exception& e) {
                     DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference threw std::exception "
                                    "({}) — falling back to CPU",
                                    e.what());
+                } catch (...) {
+                    // PR #631 P2 review: previously a non-cv::Exception
+                    // non-std::exception escaped the outer catch
+                    // silently — model_loaded_ stayed true but the
+                    // backend was in an indeterminate state.  Catch-all
+                    // logs the unknown exception class so the fault
+                    // surfaces in the Depth thread's startup logs
+                    // instead of taking the perception process down on
+                    // first inference.
+                    DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference threw unknown "
+                                   "exception type — falling back to CPU");
                 }
             }
         }
@@ -212,9 +244,22 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
     try {
         output = net_.forward();
     } catch (const cv::Exception& e) {
+        // PR #631 P2 review: track consecutive failures so persistent
+        // runtime degradation (e.g. CUDA driver crash) is visible to
+        // P7 / run-report via `consecutive_inference_failures()`.
+        // Escalating WARN every 10 failures so the log surfaces
+        // chronic failure even when callers swallow the Err result.
+        const uint64_t fails =
+            consecutive_inference_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (fails == 1 || fails % 10 == 0) {
+            DRONE_LOG_WARN("[DepthAnythingV2] forward() failed ({} consecutive): {}", fails,
+                           e.what());
+        }
         return drone::util::Result<DepthMap, std::string>::err(
             std::string("DepthAnythingV2: forward() failed: ") + e.what());
     }
+    // Successful inference resets the streak counter.
+    consecutive_inference_failures_.store(0, std::memory_order_relaxed);
 
     // ── Step 4: Parse output ────────────────────────────────
     // DA V2 output: [1, 1, H, W] or [1, H, W] — relative inverse depth (float32)
