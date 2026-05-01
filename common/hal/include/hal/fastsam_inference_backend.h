@@ -33,6 +33,7 @@
 
 #include "hal/iinference_backend.h"
 #include "util/config.h"
+#include "util/config_keys.h"
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -67,13 +68,19 @@ public:
         // false preserves CPU-only behaviour.  Load-time canary + fallback
         // mirrors DA V2's pattern so a cuDNN/CUDA mismatch degrades cleanly
         // to CPU instead of crashing the perception process at first frame.
-        use_cuda_ = cfg.get<bool>(section + ".use_cuda", false);
+        // PR #633 P2 review: use the canonical config-key constant
+        // (`SAM_USE_CUDA`) instead of string-concatenating `section + ".use_cuda"`.
+        // Other SAM keys all have constants — this one was the outlier.
+        use_cuda_ = cfg.get<bool>(drone::cfg_key::perception::path_a::SAM_USE_CUDA, false);
     }
 
     FastSamInferenceBackend(const FastSamInferenceBackend&)            = delete;
     FastSamInferenceBackend& operator=(const FastSamInferenceBackend&) = delete;
-    FastSamInferenceBackend(FastSamInferenceBackend&&)                 = default;
-    FastSamInferenceBackend& operator=(FastSamInferenceBackend&&)      = default;
+    // PR #633 P2 review: defaulted moves on a class with std::string + cv::Mat
+    // members are noexcept-eligible; mark explicitly so STL containers select
+    // the move path (silent quadratic copies otherwise).
+    FastSamInferenceBackend(FastSamInferenceBackend&&) noexcept            = default;
+    FastSamInferenceBackend& operator=(FastSamInferenceBackend&&) noexcept = default;
 
     [[nodiscard]] bool init(const std::string& model_path, int input_size) override {
         if (!model_path.empty()) model_path_ = model_path;
@@ -140,7 +147,15 @@ public:
             return R::err("[FastSAM] unexpected proposal count: " + std::to_string(cols));
         }
 
-        CV_Assert(det_output.type() == CV_32F);
+        // PR #633 P2 review: CV_Assert was outside try/catch and
+        // would terminate the SAM thread on a malformed ONNX output
+        // — violates the Result<>-return contract of `infer()`.
+        // Return Err so the caller can degrade gracefully (the SAM
+        // thread loops on the next frame instead of taking down P2).
+        if (det_output.type() != CV_32F) {
+            return R::err("[FastSAM] detection output type expected CV_32F (" +
+                          std::to_string(CV_32F) + "), got " + std::to_string(det_output.type()));
+        }
         float* data = reinterpret_cast<float*>(det_output.data);
 
         const float x_scale  = static_cast<float>(width) / static_cast<float>(input_size_);
@@ -260,6 +275,16 @@ public:
 
     [[nodiscard]] std::string name() const override { return "FastSamInferenceBackend"; }
 
+    // PR #633 P2 review: accessors for the configured-and-clamped values
+    // so tests can assert the clamping actually happened (the previous
+    // tests asserted name() instead, which proved nothing).  Also useful
+    // for run-report observability.
+    [[nodiscard]] float confidence_threshold() const noexcept { return confidence_threshold_; }
+    [[nodiscard]] float nms_threshold() const noexcept { return nms_threshold_; }
+    [[nodiscard]] int   input_size() const noexcept { return input_size_; }
+    [[nodiscard]] int   mask_channels() const noexcept { return mask_channels_; }
+    [[nodiscard]] bool  use_cuda_configured() const noexcept { return use_cuda_; }
+
 private:
     static constexpr int kMinInputSize = 128;
     static constexpr int kMaxInputSize = 2048;
@@ -276,6 +301,17 @@ private:
         if (model_path_.empty()) {
             DRONE_LOG_ERROR("[FastSAM] Empty model path — no inference available.  Run "
                             "models/download_fastsam.sh to fetch + export FastSAM-s.");
+            model_loaded_ = false;
+            return false;
+        }
+        // PR #633 P2 review: path traversal guard.  Same policy as
+        // DepthAnythingV2Estimator's load_model — reject `..` here, with
+        // an additional config-time absolute-path check to live in the
+        // config constructor (where config injection is the actual
+        // attack surface).  The earlier diff comment claimed DA V2
+        // parity but the guard was omitted entirely.
+        if (model_path_.find("..") != std::string::npos) {
+            DRONE_LOG_ERROR("[FastSAM] Rejected model path with '..': {}", model_path_);
             model_loaded_ = false;
             return false;
         }
@@ -326,6 +362,22 @@ private:
                         DRONE_LOG_WARN("[FastSAM] CUDA canary threw std::exception ({}) — "
                                        "falling back to CPU",
                                        e.what());
+                    } catch (...) {
+                        // PR #633 P2 review: unknown exception types could
+                        // previously escape the outer catch silently and
+                        // leave net_ in an indeterminate state after a
+                        // partial CUDA setup.  Catch-all rebuilds the
+                        // network from the freshly-loaded ONNX so the
+                        // CPU fallback path starts from a known state.
+                        DRONE_LOG_WARN("[FastSAM] CUDA canary threw unknown exception type — "
+                                       "falling back to CPU after rebuild");
+                    }
+                    // PR #633 P2 review: if the canary path partially
+                    // configured the CUDA backend then threw, net_ is in
+                    // an indeterminate state — rebuild from ONNX before
+                    // the CPU-fallback target is set so we start clean.
+                    if (!cuda_engaged) {
+                        net_ = cv::dnn::readNetFromONNX(model_path_);
                     }
                 }
             }
