@@ -259,6 +259,112 @@ static void imu_reader_thread(drone::hal::IIMUSource& imu, ImuRingBuffer& imu_bu
                    invalid_count);
 }
 
+// ── Cosys-AirSim ground-truth passthrough thread ────────────
+//
+// Issue #696: when stereo frames stall (P1 publisher hiccup, IPC subscription
+// reconnect, etc.) the VIO pipeline thread stops calling backend.process_frame(),
+// so /slam/pose freezes at the last published value with no health degradation
+// signal — the planner then drives off stale pose. As a SIM-ONLY workaround
+// while the underlying VIO freeze is debugged, this thread bypasses the entire
+// VIO pipeline and publishes pose directly from Cosys-AirSim ground truth.
+//
+// SAFETY: this path skips feature tracking, stereo matching, IMU pre-integration,
+// and quality estimation. Never enable on real hardware. The startup banner and
+// sustained INFO logs make the bypass loud in operator logs.
+#ifdef HAVE_COSYS_AIRSIM
+static void cosys_passthrough_pose_thread(
+    drone::ipc::IPublisher<drone::ipc::Pose>& pose_pub, drone::hal::CosysRpcClient& cosys,
+    const std::string& vehicle_name, drone::ipc::ISubscriber<drone::ipc::FaultOverrides>& fault_sub,
+    int publish_rate_hz, std::atomic<bool>& running) {
+    DRONE_LOG_WARN("════════════════════════════════════════════════════════════");
+    DRONE_LOG_WARN("  PASSTHROUGH POSE MODE — VIO PIPELINE BYPASSED");
+    DRONE_LOG_WARN("  Source: Cosys-AirSim simGetGroundTruthKinematics('{}')", vehicle_name);
+    DRONE_LOG_WARN("  Publish rate: {} Hz", publish_rate_hz);
+    DRONE_LOG_WARN("  *** SIMULATION ONLY — DO NOT USE ON REAL HARDWARE ***");
+    DRONE_LOG_WARN("════════════════════════════════════════════════════════════");
+
+    auto      hb       = drone::util::ScopedHeartbeat("pose_publisher", true);
+    const int sleep_ms = publish_rate_hz > 0 ? 1000 / publish_rate_hz : 10;
+
+    uint64_t publish_count   = 0;
+    uint64_t rpc_error_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
+
+        msr::airlib::Kinematics::State kin{};
+        bool                           got = false;
+        try {
+            got = cosys.with_client(
+                [&](auto& rpc) { kin = rpc.simGetGroundTruthKinematics(vehicle_name); });
+        } catch (const std::exception& e) {
+            ++rpc_error_count;
+            if (rpc_error_count == 1 || rpc_error_count % 100 == 0) {
+                DRONE_LOG_WARN("[CosysPassthrough] RPC error #{}: {}", rpc_error_count, e.what());
+            }
+        }
+
+        if (got) {
+            drone::ipc::Pose shm_pose{};
+            const auto       now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+            // Clamp negative steady_clock epoch (paranoia — shouldn't happen) before
+            // narrowing to uint64_t.
+            shm_pose.timestamp_ns = static_cast<uint64_t>(std::max<int64_t>(0, now_ns));
+
+            // AirSim NED → internal (X=N, Y=E, Z=Up): negate Z.
+            shm_pose.translation[0] = static_cast<double>(kin.pose.position.x());
+            shm_pose.translation[1] = static_cast<double>(kin.pose.position.y());
+            shm_pose.translation[2] = -static_cast<double>(kin.pose.position.z());
+
+            // Quaternion NED → ENU: negate y, z components (matches CosysVIOBackend).
+            shm_pose.quaternion[0] = static_cast<double>(kin.pose.orientation.w());
+            shm_pose.quaternion[1] = static_cast<double>(kin.pose.orientation.x());
+            shm_pose.quaternion[2] = -static_cast<double>(kin.pose.orientation.y());
+            shm_pose.quaternion[3] = -static_cast<double>(kin.pose.orientation.z());
+
+            // Linear velocity (also NED → ENU on Z).
+            shm_pose.velocity[0] = static_cast<double>(kin.twist.linear.x());
+            shm_pose.velocity[1] = static_cast<double>(kin.twist.linear.y());
+            shm_pose.velocity[2] = -static_cast<double>(kin.twist.linear.z());
+
+            // Diagonal covariance ~1 mm — ground truth.
+            for (int i = 0; i < 36; ++i) shm_pose.covariance[i] = 0.0;
+            shm_pose.covariance[0]  = 0.001;
+            shm_pose.covariance[7]  = 0.001;
+            shm_pose.covariance[14] = 0.001;
+            shm_pose.covariance[21] = 0.001;
+            shm_pose.covariance[28] = 0.001;
+            shm_pose.covariance[35] = 0.001;
+            shm_pose.quality        = 3;  // excellent — ground truth
+
+            // Apply VIO quality override from fault injector (if active).
+            drone::ipc::FaultOverrides ovr{};
+            if (fault_sub.receive(ovr) && ovr.vio_quality >= 0) {
+                shm_pose.quality =
+                    static_cast<uint32_t>(std::clamp(ovr.vio_quality, int32_t{0}, int32_t{3}));
+            }
+
+            pose_pub.publish(shm_pose);
+            ++publish_count;
+            if (publish_count == 1 || publish_count % 300 == 0) {
+                DRONE_LOG_INFO("[CosysPassthrough] Published #{}: ({:.2f}, {:.2f}, {:.2f}) "
+                               "quality={}",
+                               publish_count, shm_pose.translation[0], shm_pose.translation[1],
+                               shm_pose.translation[2], shm_pose.quality);
+            }
+        }
+
+        fault_sub.log_latency_if_due();
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+    }
+
+    DRONE_LOG_INFO("[CosysPassthrough] Thread stopped — {} poses published, {} RPC errors",
+                   publish_count, rpc_error_count);
+}
+#endif  // HAVE_COSYS_AIRSIM
+
 // ── Pose publisher thread ───────────────────────────────────
 static void pose_publisher_thread(drone::ipc::IPublisher<drone::ipc::Pose>& pose_pub,
                                   PoseDoubleBuffer& pose_buffer, std::atomic<bool>& running,
@@ -319,7 +425,71 @@ int main(int argc, char* argv[]) {
     if (!ctx_result.is_ok()) return ctx_result.error();
     auto& ctx = ctx_result.value();
 
-    // Subscribe to stereo camera from Process 1
+    // Create pose output publisher (needed by both VIO and passthrough paths).
+    auto pose_pub = ctx.bus.advertise<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
+    if (!pose_pub->is_ready()) {
+        DRONE_LOG_ERROR("Failed to create pose publisher");
+        return 1;
+    }
+
+    // ── Early branch: Cosys passthrough mode (issue #696) ─────
+    // Skip the entire VIO pipeline (and the stereo subscription) when
+    // pose_source == "cosys_ground_truth". See cosys_passthrough_pose_thread()
+    // above for the rationale.
+    const auto pose_source = ctx.cfg.get<std::string>(drone::cfg_key::slam::POSE_SOURCE, "vio");
+    if (pose_source == "cosys_ground_truth") {
+#ifndef HAVE_COSYS_AIRSIM
+        DRONE_LOG_ERROR("slam.pose_source=\"cosys_ground_truth\" requires "
+                        "HAVE_COSYS_AIRSIM (rebuild with the AirSim SDK).");
+        return 1;
+#else
+        auto cosys = drone::hal::detail::get_shared_cosys_client(ctx.cfg);
+        if (!cosys) {
+            DRONE_LOG_ERROR("Failed to obtain shared CosysRpcClient — "
+                            "passthrough mode cannot start.");
+            return 1;
+        }
+        const std::string cosys_vehicle = ctx.cfg.get<std::string>(
+            std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0");
+        const int publish_rate =
+            drone::util::clamp_vio_rate(ctx.cfg.get<int>(drone::cfg_key::slam::VIO_RATE_HZ, 100));
+
+        auto fault_sub = ctx.bus.subscribe_optional<drone::ipc::FaultOverrides>(
+            drone::ipc::topics::FAULT_OVERRIDES);
+
+        std::thread t_passthrough(cosys_passthrough_pose_thread, std::ref(*pose_pub),
+                                  std::ref(*cosys), std::cref(cosys_vehicle), std::ref(*fault_sub),
+                                  publish_rate, std::ref(g_running));
+
+        drone::util::ThreadWatchdog watchdog;
+        auto                        thread_health_pub = ctx.bus.advertise<drone::ipc::ThreadHealth>(
+            drone::ipc::topics::THREAD_HEALTH_SLAM_VIO_NAV);
+        drone::util::ThreadHealthPublisher health_publisher(*thread_health_pub, "slam_vio_nav",
+                                                            watchdog);
+
+        DRONE_LOG_INFO("Passthrough mode READY — Cosys ground-truth pose @ {} Hz", publish_rate);
+        drone::systemd::notify_ready();
+
+        while (g_running.load(std::memory_order_acquire)) {
+            drone::systemd::notify_watchdog();
+            health_publisher.publish_snapshot();
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        drone::systemd::notify_stopping();
+        DRONE_LOG_INFO("Shutting down passthrough mode...");
+        t_passthrough.join();
+        DRONE_LOG_INFO("=== SLAM/VIO/Nav process stopped (passthrough) ===");
+        return 0;
+#endif
+    }
+    if (pose_source != "vio") {
+        DRONE_LOG_WARN("Unknown slam.pose_source=\"{}\" — falling back to \"vio\"", pose_source);
+    }
+
+    // Subscribe to stereo camera from Process 1 (VIO path only — passthrough
+    // mode skips this subscription entirely so no stereo frames are received
+    // or queued by P3).
     auto stereo_sub =
         ctx.bus.subscribe<drone::ipc::StereoFrame>(drone::ipc::topics::VIDEO_STEREO_CAM);
     // With Zenoh, is_connected() only becomes true after the first sample
@@ -334,13 +504,6 @@ int main(int argc, char* argv[]) {
         }
         DRONE_LOG_WARN("Stereo subscriber not yet connected "
                        "(normal for Zenoh — data will arrive when publisher starts)");
-    }
-
-    // Create pose output publisher
-    auto pose_pub = ctx.bus.advertise<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
-    if (!pose_pub->is_ready()) {
-        DRONE_LOG_ERROR("Failed to create pose publisher");
-        return 1;
     }
 
     // Thread-safe double-buffer for pose exchange

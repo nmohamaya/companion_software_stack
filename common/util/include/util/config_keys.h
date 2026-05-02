@@ -301,6 +301,18 @@ inline constexpr const char* IMU_RATE_HZ             = "slam.imu_rate_hz";
 inline constexpr const char* VIO_RATE_HZ             = "slam.vio_rate_hz";
 inline constexpr const char* VISUAL_FRONTEND_RATE_HZ = "slam.visual_frontend_rate_hz";
 
+// Pose source selector — controls whether P3 runs the full VIO pipeline or
+// bypasses it and pulls ground-truth pose directly from a simulator.
+// Values:
+//   "vio"                 — default. Stereo + IMU → VIO backend → /slam/pose
+//   "cosys_ground_truth"  — SIM ONLY. Skip VIO entirely; poll Cosys-AirSim
+//                           simGetGroundTruthKinematics() and publish.
+//                           Bypasses every safety property of the VIO pipeline
+//                           (feature tracking, stereo, IMU, health). Only use
+//                           when reproducing perception/planner bugs without
+//                           VIO interference (see issue #696).
+inline constexpr const char* POSE_SOURCE = "slam.pose_source";
+
 namespace keyframe {
 inline constexpr const char* MIN_PARALLAX_PX   = "slam.keyframe.min_parallax_px";
 inline constexpr const char* MIN_TRACKED_RATIO = "slam.keyframe.min_tracked_ratio";
