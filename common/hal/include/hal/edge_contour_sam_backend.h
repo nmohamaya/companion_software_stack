@@ -22,9 +22,14 @@
 // Runtime cost: ~5-15 ms on 1280x720 / Intel-class CPU. Fits comfortably
 // inside the 33 ms/frame budget at 30 Hz.
 //
-// Gracefully degrades when OpenCV isn't available (returns empty output,
-// same pattern as `DepthAnythingV2`).  Scenarios that need this backend
-// must therefore run on builds with `HAS_OPENCV` defined.
+// PR #689 Copilot review: previously this header claimed the backend
+// "gracefully degrades when OpenCV isn't available (returns empty
+// output)".  PR #689 changed that — `init()` now FAILS LOUD with an
+// ERROR log when OpenCV isn't compiled in, so the safety gate doesn't
+// silently bypass.  Scenarios that need this backend must therefore
+// build with `HAS_OPENCV` defined; build configurations missing the
+// dependency will fail the SAM backend init at startup rather than
+// running with a no-op perception pipeline.
 //
 // See Epic #520 / Issue #608 — scenario 33 uses this via
 // `perception.path_a.sam.backend = "edge_contour_sam"`.

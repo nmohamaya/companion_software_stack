@@ -8,7 +8,9 @@
 //
 // Polling thread runs at 20 Hz and converts AirSim RadarData to our
 // RadarDetectionList format. Ground filtering skips returns with
-// elevation < -30 degrees (looking at the ground).
+// elevation > +30 degrees in NED (positive elevation = looking down at the
+// ground; the body-frame Z-axis points down, so asin(z/range) is positive
+// for ground returns).  PR #679 Copilot review aligned this with the code.
 //
 // Thread-safe: uses std::mutex to guard cached RadarDetectionList.
 // Compile guard: only available when HAVE_COSYS_AIRSIM is defined by CMake.
@@ -54,7 +56,7 @@ namespace drone::hal {
 ///      defaults ±60° × ±15°).
 ///   2. **Range gate** — drop |r| < min_range_m or > max_range_m.
 ///   3. **Ground filter** — drop steep downward returns
-///      (elevation > +30° in NED, computed from atan2(z, range)).
+///      (elevation > +30° in NED, computed from `asin(z / range)`).
 ///   4. **Clustering** — bin (range, azimuth, elevation) into
 ///      cluster_range × cluster_az × cluster_el cells; emit one
 ///      RadarDetection per non-empty cell at the centroid.  Bin
@@ -125,7 +127,15 @@ public:
         // unchanged) was clipped to the first 128 raw points by
         // MAX_RADAR_DETECTIONS, dropping ~87 % of returns and producing a
         // narrow contiguous arc that didn't cover real obstacles.
-        , min_range_m_(cfg.get<float>(section + drone::cfg_key::hal::MIN_RANGE_M, 0.5f))
+        // PR #679 Copilot review: clamp `min_range_m_` to a small positive
+        // epsilon.  A LiDAR point at the origin (0, 0, 0) yields
+        // `range == 0`; if min_range_m_ is also 0 (or negative) the
+        // gate `range < min_range_m_` lets it through, then `z / range`
+        // → NaN propagates into asin/atan2 and bin-index `floor(NaN/...)`
+        // is UB.  10 cm is well below any realistic radar near-field
+        // and prevents the degenerate config from taking down P2.
+        , min_range_m_(
+              std::max(0.1f, cfg.get<float>(section + drone::cfg_key::hal::MIN_RANGE_M, 0.5f)))
         , fov_azimuth_rad_(
               cfg.get<float>(section + drone::cfg_key::hal::FOV_AZIMUTH_RAD, 60.0f * kDegToRad))
         , fov_elevation_rad_(
@@ -299,7 +309,12 @@ private:
                     const float z = lidar_data.point_cloud[i + 2];
                     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
                     const float range = std::sqrt(x * x + y * y + z * z);
-                    if (range < min_range_m_ || range > max_range_m_) continue;
+                    // PR #679 Copilot review: belt-and-braces — even with
+                    // the construction-time `min_range_m_` floor, a
+                    // literal range==0 (LiDAR point at vehicle origin)
+                    // would make `z / range` produce NaN in asin below.
+                    // Explicit gate so the NaN-propagation path is closed.
+                    if (range <= 0.0f || range < min_range_m_ || range > max_range_m_) continue;
                     const float azimuth   = std::atan2(y, x);
                     const float elevation = std::asin(std::clamp(z / range, -1.0f, 1.0f));
 

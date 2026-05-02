@@ -178,9 +178,14 @@ static void sam_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_su
         }
 
         // PR #603 P2 review: validate the wire-format frame at the
-        // boundary — pixel_data pointer / dimensions / channels.  Caller
-        // has already filled in `frame.valid` but has not validated the
-        // buffer matches the header.  Skip silently-malformed frames.
+        // boundary.  PR #688 Copilot review: VideoFrame's `pixel_data`
+        // is a fixed-size inline array (not a pointer) and the struct
+        // has no `valid` field — `VideoFrame::validate()` checks that
+        // `width × height × channels` fits within the inline buffer
+        // and that none of those dims are zero.  Stride is NOT
+        // currently validated; if the producer ever sets a stride
+        // that points past the buffer end, that would slip through.
+        // Tracked as a follow-up to extend `VideoFrame::validate()`.
         if (!frame.validate()) {
             ++fail_count;
             if (fail_count % 100 == 1) {

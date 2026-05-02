@@ -141,7 +141,10 @@ private:
     // P7 / run-report.  Counter increments on each forward() throw
     // and resets to 0 on a successful estimate.  See accessor
     // `consecutive_inference_failures()` above.
-    mutable std::atomic<uint64_t> consecutive_inference_failures_{0};
+    // PR #680 Copilot review: dropped `mutable` — only `estimate()`
+    // (non-const) writes the counter, and `std::atomic::load()` is
+    // already const, so const-correctness doesn't need the qualifier.
+    std::atomic<uint64_t> consecutive_inference_failures_{0};
 };
 
 // ═══════════════════════════════════════════════════════════════════════
