@@ -1534,6 +1534,78 @@ TEST(ObstacleAvoider3DTest, AabbAwareDistance_ZeroExtentsFallsBackToCentroid) {
         << "Zero-extent case must match legacy centroid-distance arithmetic";
 }
 
+// PR #657 P1 review (SAFETY-CRITICAL): drone-inside-AABB fault injection.
+// Pre-fix, the clamp() collapsed dx=dy=dz=0 → dist=0 → the close-regime
+// gate `dist > kMinDistGateM` failed and the avoider went deaf at the
+// moment we most need it.  Post-fix, the avoider must:
+//   1. Recognize the drone is inside an obstacle's AABB.
+//   2. Pick the nearest exit face.
+//   3. Apply MAXIMUM repulsion in the exit direction.
+//   4. Engage close_regime_active.
+TEST(ObstacleAvoider3DTest, AabbAwareDistance_DroneInsideAabbReceivesExitRepulsion) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.min_distance_m     = 5.0f;
+    config.repulsive_gain     = 2.0f;
+    config.path_aware         = false;
+    config.vertical_gain      = 0.0f;
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    // Drone at (5, 5, 5), command toward +X at 1 m/s.
+    auto cmd  = make_cmd(1.0f, 0.0f, 0.0f);
+    auto pose = make_pose(5.0f, 5.0f, 5.0f);
+
+    // Obstacle centred at drone position with 2 m XY half-extent + 4 m
+    // height — drone is INSIDE the AABB on every axis.
+    drone::ipc::DetectedObjectList objects{};
+    objects.num_objects                   = 1;
+    objects.objects[0].position_x         = 5.0f;
+    objects.objects[0].position_y         = 5.0f;
+    objects.objects[0].position_z         = 5.0f;
+    objects.objects[0].confidence         = 0.9f;
+    objects.objects[0].estimated_radius_m = 2.0f;  // AABB ±2m XY
+    objects.objects[0].estimated_height_m = 4.0f;  // AABB ±2m Z
+    objects.timestamp_ns                  = now_ns();
+
+    auto result = avoider.avoid(cmd, pose, objects);
+
+    // PR #657 P1 review: pre-fix, drone-inside-AABB silently produced
+    // zero repulsion (dist=0 failed the close-regime gate).  Post-fix
+    // the avoider MUST engage close-regime — this is the most extreme
+    // close-regime case possible.  This is the load-bearing assertion;
+    // without it the bug is undetected.
+    EXPECT_TRUE(avoider.close_regime_active())
+        << "SAFETY-CRITICAL: drone-inside-AABB must engage close-regime; "
+           "pre-fix the dist=0 gate silenced the obstacle entirely "
+           "(avoider went deaf at the moment we most need it)";
+
+    // Sanity: the close-regime brake must zero the toward-obstacle component.
+    // With cmd=(1,0,0) and drone inside an AABB centered on the drone,
+    // the planned +X velocity is "toward" the obstacle in either direction
+    // — brake must collapse it.  Pre-fix vx stayed at planned value (1.0
+    // after smoothing); post-fix it's heavily damped.
+    EXPECT_LT(std::abs(result.velocity_x), 0.5f)
+        << "brake must collapse the planned +X velocity in close-regime; "
+           "got vx="
+        << result.velocity_x;
+}
+
+// PR #657 P2 review: close_regime_active() accessor is now atomic-backed.
+// Test it survives default construction and reads the initial false.
+TEST(ObstacleAvoider3DTest, AabbAwareDistance_CloseRegimeAtomicAccessor) {
+    ObstacleAvoider3DConfig config;
+    config.influence_radius_m = 10.0f;
+    config.min_distance_m     = 3.0f;
+    config.repulsive_gain     = 1.0f;
+    config.path_aware         = false;
+    config.log_corrections    = false;
+    ObstacleAvoider3D avoider(config);
+
+    EXPECT_FALSE(avoider.close_regime_active())
+        << "default-constructed avoider must report close_regime_active() == false";
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Issue #645 review fixes (#646/#657 review comments — batch 1)
 // ═══════════════════════════════════════════════════════════════

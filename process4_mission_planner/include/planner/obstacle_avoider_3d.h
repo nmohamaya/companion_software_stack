@@ -267,9 +267,15 @@ public:
             // (default for centroid-only obstacles) the AABB collapses to a
             // single point and the math reduces to legacy centroid-distance —
             // backward compatible by construction.
-            const float hx     = std::max(0.0f, obj.estimated_radius_m);
-            const float hy     = std::max(0.0f, obj.estimated_radius_m);
-            const float hz     = std::max(0.0f, 0.5f * obj.estimated_height_m);
+            // PR #657 P2 review: `hx` and `hy` were identical expressions
+            // (both `estimated_radius_m`) — restating the assumption inline so
+            // a future per-axis half-extent can replace either side without
+            // confusion.  The "square cross-section" wording is over-precise
+            // for centroid-only obstacles whose extents are 0; clarified.
+            const float radius_xy = std::max(0.0f, obj.estimated_radius_m);
+            const float hx        = radius_xy;  // XY half-extent (square cross-section)
+            const float hy        = radius_xy;  // identical to hx by construction
+            const float hz        = std::max(0.0f, 0.5f * obj.estimated_height_m);
             const float ax_min = ox - hx, ax_max = ox + hx;
             const float ay_min = oy - hy, ay_max = oy + hy;
             const float az_min = oz - hz, az_max = oz + hz;
@@ -285,6 +291,54 @@ public:
             float dz = nz - drone_z;
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+            // PR #657 P1 review (SAFETY-CRITICAL): when the drone is INSIDE
+            // the AABB, the clamp above returns the drone's own position so
+            // `dx=dy=dz=0` and `dist=0`.  The downstream gate
+            // `dist > kMinDistGateM` then silences repulsion entirely —
+            // the avoider goes deaf at the moment we most need it.  This
+            // is the deepest possible interference state and must trigger
+            // MAXIMUM repulsion outward along the shortest-exit axis.
+            //
+            // Rule: when inside AABB, find the nearest exit face; set the
+            // (dx,dy,dz) vector to point AWAY from that face (so the
+            // existing repulsion negation `-(d/dist) * rep` pushes the
+            // drone OUT along the exit), and set `dist` to the depth
+            // along that axis (clamped to kMinDistGateM so the inverse-
+            // square below produces a finite-but-large repulsion).
+            const bool inside_aabb = (drone_x > ax_min && drone_x < ax_max && drone_y > ay_min &&
+                                      drone_y < ay_max && drone_z > az_min && drone_z < az_max);
+            if (inside_aabb) {
+                struct ExitAxis {
+                    float depth;       // distance from drone to the face
+                    float ex, ey, ez;  // unit vector pointing TOWARD the exit face
+                };
+                const ExitAxis axes[6] = {
+                    {drone_x - ax_min, -1.0f, 0.0f, 0.0f},  // exit via -X face
+                    {ax_max - drone_x, +1.0f, 0.0f, 0.0f},  // exit via +X face
+                    {drone_y - ay_min, 0.0f, -1.0f, 0.0f},  // exit via -Y face
+                    {ay_max - drone_y, 0.0f, +1.0f, 0.0f},  // exit via +Y face
+                    {drone_z - az_min, 0.0f, 0.0f, -1.0f},  // exit via -Z face
+                    {az_max - drone_z, 0.0f, 0.0f, +1.0f},  // exit via +Z face
+                };
+                int best = 0;
+                for (int i = 1; i < 6; ++i) {
+                    if (axes[i].depth < axes[best].depth) best = i;
+                }
+                // dx/dy/dz convention is "drone → nearest_AABB_point".  To
+                // push the drone OUT along the exit direction, set
+                // (dx,dy,dz) to point INTO the AABB (opposite the exit
+                // unit vector).  The downstream `-(d/dist) * rep` then
+                // produces a force in the +exit direction.
+                dx = -axes[best].ex;
+                dy = -axes[best].ey;
+                dz = -axes[best].ez;
+                // depth-along-axis is the right scale for repulsion: the
+                // deeper inside, the larger the inverse-square magnitude.
+                // Floor at kMinDistGateM so we don't divide by zero on
+                // the AABB centre.
+                dist = std::max(axes[best].depth, avoider_constants::kMinDistGateM);
+            }
 
             if (dist < config_.influence_radius_per_class[ci] &&
                 dist > avoider_constants::kMinDistGateM) {
@@ -546,9 +600,16 @@ public:
 
     std::string name() const override { return "ObstacleAvoider3D"; }
 
+    /// PR #657 P2 review: backed by `std::atomic<bool>` because the
+    /// accessor `close_regime_active()` is callable from any thread (run-
+    /// report poll, P7 health check), while the mutation in `avoid()`
+    /// runs on the planner thread.  Pure observability flag — relaxed
+    /// ordering (no synchronization implied).
     /// Whether the avoider is currently in close-regime (path-aware bypassed).
     /// Exposed for tests and diagnostics.
-    [[nodiscard]] bool close_regime_active() const { return close_regime_active_; }
+    [[nodiscard]] bool close_regime_active() const {
+        return close_regime_active_.load(std::memory_order_relaxed);
+    }
 
     /// Total number of avoid() calls in which the post-correction final clamp
     /// (Issue #645) zeroed a positive toward-obstacle component on the final
@@ -580,7 +641,10 @@ private:
     // Path-aware bypass hysteresis state (Issue #503).
     // Enters when closest obstacle < min_distance_m; exits when it rises
     // above min_distance_m + path_aware_bypass_hysteresis_m.
-    bool close_regime_active_ = false;
+    // PR #657 P2 review: atomic since accessor is callable off-thread
+    // (run-report / P7).  See accessor doc above.  All in-place
+    // mutations use `relaxed` (pure observability — no sync implied).
+    std::atomic<bool> close_regime_active_{false};
     // Diagnostic counter (Issue #645) — increments every avoid() call where
     // the post-correction toward-obstacle clamp zeroed a positive component.
     // Issue #645 review fix (#646 P1): atomic counter — written by avoid()
