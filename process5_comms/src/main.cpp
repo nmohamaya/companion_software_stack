@@ -8,6 +8,7 @@
 //   gcs_rx   — polls GCS for commands, publishes GCSCommand
 //   gcs_tx   — reads mission status + pose, sends telemetry to GCS
 
+#include "comms/heartbeat_decision.h"
 #include "hal/hal_factory.h"
 #include "ipc/ipc_types.h"
 #include "util/config_keys.h"
@@ -84,9 +85,12 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
     }
 }
 
-// ── FC transmit thread (20 Hz) ──────────────────────────────
+// ── FC transmit thread (40 Hz) ──────────────────────────────
 // Forwards trajectory commands AND FC commands (arm, takeoff, mode)
 // from the mission planner to the flight controller.
+// PR #651 P2 review: docstring previously said 20 Hz but the loop-period
+// fix in #651 brought us to 25 ms (40 Hz) so the heartbeat path can fire
+// inside SimpleFlight's 60 ms api_goal_timeout window.
 static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                          drone::ipc::ISubscriber<drone::ipc::TrajectoryCmd>& traj_sub,
                          drone::ipc::ISubscriber<drone::ipc::FCCommand>&     cmd_sub) {
@@ -107,12 +111,20 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
     // republishes only on new commands, so without a heartbeat the
     // simulator's safety hover engages constantly — drone ignores our
     // commands and clips obstacles.  Cache the last successful trajectory and
-    // re-send it on every fc_tx tick (25 ms loop, well under the 60 ms
-    // timeout) so SimpleFlight's `goal_timestamp_` stays fresh.
+    // re-send it when ≥ kHeartbeatPeriod has elapsed since the last send
+    // (gated, NOT on every tick — earlier comment was misleading).
+    // PR #651 P2 review: kMaxHeartbeatStaleMs bounds heartbeat replay to
+    // 5 s of planner silence.  Beyond that, P4 has likely silently died
+    // (process crash, deadlock, watchdog inflight); replaying a stale
+    // velocity command indefinitely could fly the drone off cliff.  At
+    // staleness > bound, suppress the heartbeat and log WARN — the
+    // operator sees the silence rather than a velocity-locked drone.
     drone::ipc::TrajectoryCmd             last_sent_traj{};
-    bool                                  have_sent_traj  = false;
-    uint64_t                              heartbeat_count = 0;
+    bool                                  have_sent_traj             = false;
+    uint64_t                              heartbeat_count            = 0;
+    uint64_t                              heartbeat_stale_skip_count = 0;
     constexpr std::chrono::milliseconds   kHeartbeatPeriod{40};
+    constexpr std::chrono::milliseconds   kMaxHeartbeatStaleMs{5000};
     std::chrono::steady_clock::time_point last_traj_send = std::chrono::steady_clock::now();
 
     while (g_running.load(std::memory_order_acquire)) {
@@ -129,22 +141,30 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                 case drone::ipc::FCCommandType::ARM:
                     DRONE_LOG_INFO("[Comms] FC cmd: ARM corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok = fc.send_arm(true);
-                    // Issue #645 review fix (#651 P2): reset the
-                    // trajectory-block sentinel on a fresh ARM so the
-                    // heartbeat path is not permanently disabled by a
-                    // prior RTL/LAND that set last_traj_ts = UINT64_MAX.
-                    // ARM is the canonical "starting a new mission"
-                    // signal; pre-existing dedup state must clear.
-                    if (last_traj_ts == UINT64_MAX) {
-                        DRONE_LOG_INFO("[Comms] ARM detected — resetting trajectory dedup "
-                                       "sentinel (was UINT64_MAX from prior RTL/LAND)");
-                        last_traj_ts   = 0;
-                        have_sent_traj = false;
-                    }
+                    // PR #651 P2 review: previously this clear was conditional
+                    // on `last_traj_ts == UINT64_MAX` (only fires after RTL/LAND
+                    // sentinel).  But ARM is the canonical "starting a new
+                    // mission" signal — pre-existing dedup state from any
+                    // prior flight must clear regardless of how the prior
+                    // flight ended.  Otherwise a rearm after a normal landing
+                    // (no RTL/LAND mode change) would carry forward the cached
+                    // trajectory and replay it as the heartbeat — flying the
+                    // drone in the prior flight's last commanded direction.
+                    DRONE_LOG_INFO("[Comms] ARM — clearing trajectory dedup "
+                                   "(prev_ts={:#x} have_sent={})",
+                                   last_traj_ts, have_sent_traj);
+                    last_traj_ts   = 0;
+                    have_sent_traj = false;
                     break;
                 case drone::ipc::FCCommandType::DISARM:
                     DRONE_LOG_INFO("[Comms] FC cmd: DISARM corr={:#x}", fc_cmd.correlation_id);
                     cmd_ok = fc.send_arm(false);
+                    // PR #651 P2 review: DISARM didn't clear cache while ARM did.
+                    // Symmetric clear so the heartbeat doesn't replay against
+                    // a disarmed flight controller (no-op in practice but
+                    // tidy + closes the asymmetry the reviewer flagged).
+                    last_traj_ts   = 0;
+                    have_sent_traj = false;
                     break;
                 case drone::ipc::FCCommandType::TAKEOFF:
                     DRONE_LOG_INFO("[Comms] FC cmd: TAKEOFF to {:.1f}m corr={:#x}", fc_cmd.param1,
@@ -180,7 +200,15 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
         // ── Forward trajectory velocity commands (dedup by timestamp) ──
         drone::ipc::TrajectoryCmd cmd{};
         bool                      sent_this_tick = false;
-        if (traj_sub.receive(cmd) && cmd.valid && cmd.timestamp_ns > last_traj_ts) {
+        // PR #651 P2 review: the `cmd.valid` check is the producer-set
+        // intent flag; `cmd.validate()` is the wire-format check that
+        // rejects NaN/Inf in velocity/yaw fields.  Both must hold —
+        // a publisher could set valid=true but emit NaN through a
+        // float-arithmetic bug, and that NaN would have flown straight
+        // to the FC.  The caller is in P4 mission planner whose code
+        // we trust today, but the wire is a real boundary; defend it.
+        if (traj_sub.receive(cmd) && cmd.valid && cmd.validate() &&
+            cmd.timestamp_ns > last_traj_ts) {
             last_traj_ts = cmd.timestamp_ns;
             // TrajectoryCmd stores target_yaw in radians, and IFCLink::send_trajectory
             // now takes yaw in radians by contract — backends convert to their native
@@ -208,9 +236,32 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
         // commands.  See block at top of this thread for full rationale.
         // Suppressed when last_traj_ts == UINT64_MAX (RTL/LAND mode change
         // explicitly blocks trajectory commands from re-entering offboard).
-        if (!sent_this_tick && have_sent_traj && last_traj_ts != UINT64_MAX) {
-            const auto now = std::chrono::steady_clock::now();
-            if (now - last_traj_send >= kHeartbeatPeriod) {
+        // PR #651 P2 review: bounded staleness — if the planner has been
+        // silent past kMaxHeartbeatStaleMs, P4 has likely silently died
+        // (process crash, deadlock).  Replaying a stale velocity command
+        // indefinitely is unsafe; suppress + WARN so the operator sees
+        // the silence rather than a velocity-locked drone.
+        // Decision logic delegated to the testable helper so the timing +
+        // staleness rules can be exercised by test_comms_heartbeat.cpp.
+        const auto now = std::chrono::steady_clock::now();
+        const auto staleness =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_traj_send);
+        const auto action = drone::comms::evaluate_heartbeat(
+            sent_this_tick, have_sent_traj, last_traj_ts == UINT64_MAX, staleness, kHeartbeatPeriod,
+            kMaxHeartbeatStaleMs);
+        switch (action) {
+            case drone::comms::HeartbeatAction::None: break;
+            case drone::comms::HeartbeatAction::SuppressStale:
+                ++heartbeat_stale_skip_count;
+                if (heartbeat_stale_skip_count == 1 || heartbeat_stale_skip_count % 200 == 0) {
+                    DRONE_LOG_WARN("[Comms] Heartbeat suppressed — last trajectory is "
+                                   "{}ms stale (>{}ms bound); P4 may have died.  "
+                                   "Total stale-skips: {}",
+                                   staleness.count(), kMaxHeartbeatStaleMs.count(),
+                                   heartbeat_stale_skip_count);
+                }
+                break;
+            case drone::comms::HeartbeatAction::Send:
                 if (fc.send_trajectory(last_sent_traj.velocity_x, last_sent_traj.velocity_y,
                                        last_sent_traj.velocity_z, last_sent_traj.target_yaw)) {
                     last_traj_send = now;
@@ -220,10 +271,19 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                                         "(planner silent; total resends={})",
                                         heartbeat_count);
                     }
+                } else {
+                    // PR #651 P2 review: previously silently swallowed.
+                    // Now log on first failure + every 100 so a degraded FC
+                    // link surfaces in the comms log even when the heartbeat
+                    // is the only RPC we're issuing.
+                    ++traj_send_fail;
+                    if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
+                        DRONE_LOG_WARN("[Comms] Heartbeat trajectory send failed (#{}) — "
+                                       "FC link may be degraded",
+                                       traj_send_fail);
+                    }
                 }
-                // send failure counted by traj_send_fail above on the
-                // primary-send path; heartbeat path is best-effort.
-            }
+                break;
         }
 
         // Log IPC latency from the thread that owns these receive() calls

@@ -163,6 +163,10 @@ add_drone_test(test_mask_class_assigner  test_mask_class_assigner.cpp)
 # PR #633 P1 review: FastSAM ONNX backend tests — exercise actual
 # config wiring + clamping + path safety + use_cuda intent flag.
 add_drone_test(test_fastsam_backend      test_fastsam_backend.cpp)
+# PR #651 P1 review: comms-heartbeat decision-rule regression tests.
+# Pins the heartbeat timing + staleness contract so the SimpleFlight
+# 60 ms api_goal_timeout fix can't regress silently.
+add_drone_test(test_comms_heartbeat      test_comms_heartbeat.cpp)
 if(ENABLE_PROCESS_PERCEPTION)
 add_drone_test(test_yolo_seg_backend     test_yolo_seg_backend.cpp
     ${PROJECT_SOURCE_DIR}/process2_perception/src/yolo_seg_inference_backend.cpp
