@@ -6,6 +6,10 @@
 #include "hal/ivolumetric_map.h"
 #include "util/config.h"
 
+// PR #687 Copilot review: explicit `<algorithm>` for std::max — was
+// transitively included via other headers but that's fragile across
+// toolchain/stdlib upgrades.
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 

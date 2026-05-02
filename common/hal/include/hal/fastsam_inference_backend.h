@@ -183,9 +183,26 @@ public:
         // ONNX export would corrupt the SAM thread's stack and crash
         // P2 (causing P7 restart loop in obstacle-dense scenarios).
         // Return Err so the caller can degrade gracefully.
-        if (mask_protos.dims < 4) {
+        // PR #689 Copilot review: validate the FULL expected shape, not
+        // just dims-count.  A model could be exported with extra dims
+        // (>4) or wrong batch / channel counts that pass the dims-only
+        // check but produce wrong-layout reshape() output later.
+        if (mask_protos.dims != 4) {
             return R::err("[FastSAM] mask_protos has " + std::to_string(mask_protos.dims) +
-                          " dims, expected 4 ([1, mask_channels, mask_h, mask_w])");
+                          " dims, expected exactly 4 ([1, mask_channels, mask_h, mask_w])");
+        }
+        if (mask_protos.size[0] != 1) {
+            return R::err("[FastSAM] mask_protos batch dim = " +
+                          std::to_string(mask_protos.size[0]) + ", expected 1");
+        }
+        if (mask_protos.size[1] != mask_channels_) {
+            return R::err(
+                "[FastSAM] mask_protos channels = " + std::to_string(mask_protos.size[1]) +
+                ", expected mask_channels_=" + std::to_string(mask_channels_));
+        }
+        if (mask_protos.type() != CV_32F) {
+            return R::err("[FastSAM] mask_protos type = " + std::to_string(mask_protos.type()) +
+                          ", expected CV_32F (" + std::to_string(CV_32F) + ")");
         }
         const int mask_h = mask_protos.size[2];
         const int mask_w = mask_protos.size[3];

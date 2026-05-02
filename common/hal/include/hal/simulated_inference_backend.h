@@ -42,10 +42,16 @@ public:
         uint32_t /*stride*/) override {
         using R = drone::util::Result<InferenceOutput, std::string>;
         // PR #602 P1 review: previously `initialized_` was set in
-        // init() but never checked here — dead write.  Honour the
-        // contract: refuse infer() before init().
+        // init() but never checked here — dead write.  Now honoured.
+        // PR #687 Copilot review: both ctors set initialized_=true so
+        // this branch is normally unreachable for default-constructed
+        // instances — but if a future caller resets the instance
+        // (or if the explicit init() override gates input_size on
+        // some condition), this guard becomes load-bearing.  Kept as
+        // defensive belt-and-braces with explicit "explicitly
+        // uninitialised/reset" semantics.
         if (!initialized_) {
-            return R::err("SimulatedInferenceBackend not initialized");
+            return R::err("SimulatedInferenceBackend not initialized (explicit reset?)");
         }
         if (!frame_data) {
             return R::err("Null frame data");

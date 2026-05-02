@@ -417,16 +417,24 @@ public:
         // min_distance_m + hysteresis_m.  This matches the contract: path-aware
         // stripping is disabled in the close regime and re-enabled when clearance
         // is comfortably re-established.
+        // PR #685 Copilot review: previous code used implicit atomic
+        // conversions + operator= which default to seq_cst.  Snapshot
+        // the current value once with relaxed, branch on it, and only
+        // store back if the value actually changed — matches the
+        // documented "all in-place mutations use relaxed" intent on
+        // the member declaration.
         if (std::isfinite(min_active_dist)) {
-            if (!close_regime_active_ && min_active_dist < config_.min_distance_m) {
-                close_regime_active_ = true;
-            } else if (close_regime_active_ &&
+            const bool currently_close = close_regime_active_.load(std::memory_order_relaxed);
+            if (!currently_close && min_active_dist < config_.min_distance_m) {
+                close_regime_active_.store(true, std::memory_order_relaxed);
+            } else if (currently_close &&
                        min_active_dist >
                            config_.min_distance_m + config_.path_aware_bypass_hysteresis_m) {
-                close_regime_active_ = false;
+                close_regime_active_.store(false, std::memory_order_relaxed);
             }
         }
-        const bool apply_path_aware = config_.path_aware && !close_regime_active_;
+        const bool apply_path_aware = config_.path_aware &&
+                                      !close_regime_active_.load(std::memory_order_relaxed);
 
         // Path-aware repulsion: remove the component that opposes the planned
         // direction.  This prevents the avoider from fighting the planner when
@@ -489,7 +497,7 @@ public:
         bool  brake_applied = false;
         float brake_scale   = 1.0f;
         float v_toward      = 0.0f;
-        if (close_regime_active_ && config_.brake_in_close_regime &&
+        if (close_regime_active_.load(std::memory_order_relaxed) && config_.brake_in_close_regime &&
             std::isfinite(min_active_dist) && min_active_dist > avoider_constants::kMinDistGateM &&
             config_.min_distance_m > 0.0f) {
             const float inv = 1.0f / min_active_dist;
@@ -546,8 +554,8 @@ public:
         // also benefit; gated only on `close_regime_active_`.
         bool  final_clamp_applied = false;
         float v_toward_final      = 0.0f;
-        if (close_regime_active_ && std::isfinite(min_active_dist) &&
-            min_active_dist > avoider_constants::kMinDistGateM) {
+        if (close_regime_active_.load(std::memory_order_relaxed) &&
+            std::isfinite(min_active_dist) && min_active_dist > avoider_constants::kMinDistGateM) {
             const float inv = 1.0f / min_active_dist;
             const float nx  = nearest_dx * inv;
             const float ny  = nearest_dy * inv;
@@ -595,13 +603,14 @@ public:
                                    "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} "
                                    "scale={:.2f} final_clamp={} v_toward_final={:.2f}",
                                    considered, active, delta_mag, path_aware_strip_count,
-                                   close_regime_active_ ? 1 : 0, brake_applied ? 1 : 0, v_toward,
-                                   brake_scale, final_clamp_applied ? 1 : 0, v_toward_final);
+                                   close_regime_active_.load(std::memory_order_relaxed) ? 1 : 0,
+                                   brake_applied ? 1 : 0, v_toward, brake_scale,
+                                   final_clamp_applied ? 1 : 0, v_toward_final);
                 } else {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={}",
                                    considered, active, delta_mag, path_aware_strip_count,
-                                   close_regime_active_ ? 1 : 0);
+                                   close_regime_active_.load(std::memory_order_relaxed) ? 1 : 0);
                 }
             }
         }
