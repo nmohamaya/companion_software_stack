@@ -973,3 +973,30 @@ The reviewer's "grep across the entire codebase returns zero matches" claim is i
 **Revisit when:** the next config-key typo causes a debugging session, OR when `IMPROVEMENTS.md` accumulates 3+ scenario-config-related issues.
 
 **Date:** 2026-04-27 (PR #642 review-test-coverage P2)
+
+---
+
+## DR-041: ObstacleAvoider3D drone-inside-AABB recovery — defense-in-depth for a "shouldn't happen" state
+
+**Question:** PR #657 (avoider AABB-aware distance) shipped a math bug — when the drone is geometrically inside an obstacle's Axis-Aligned Bounding Box, `clamp(drone, ax_min, ax_max)` returns the drone's own coordinate, so `dx=dy=dz=0` and `dist=0`.  The downstream gate `dist > kMinDistGateM` then SILENCES the obstacle entirely.  PR #685 added an explicit "find nearest exit face, push out via that face with maximum repulsion" branch.
+
+A reviewer (and reasonably the user) might ask: **"the drone shouldn't ever be inside an obstacle's bounding box anyway — why bother with the recovery?"**
+
+**For not bothering ("shouldn't happen, ignore"):** the avoider is the last reactive layer.  In a working stack, the planner + voxel grid + close-regime hysteresis all cooperate to keep the drone outside obstacle boundaries; if those upstream guards fail there's likely a bigger problem than the avoider can paper over.  Code complexity has cost — the exit-face lookup is ~30 lines of branching logic that only fires in a should-be-impossible state.
+
+**For the defense-in-depth fix (our decision):** "shouldn't" is the design intent; "could" is operational reality.  Real causes that put the drone inside an obstacle's AABB:
+
+1. **First-frame race.** PATH A voxels can flicker in/out — SAM mask jitter means an obstacle could be silently absent for one frame and present-with-drone-inside on the next.  We saw this exact pattern in scenario 33 cube collisions before #658/#659/#660 tightened the upstream filters.
+2. **Depth blowup.** DA V2 reports closer than reality.  Obstacle physically at 5m could be reported at 1m; AABB centred at 1m encloses drone at 0m.  Same failure class that drove #654 (`position_clamp_m: 200→30`) and #660 (`min_confidence: 0.3→0.7`).
+3. **Inflated radius estimate.** `estimated_radius_m` from the detector can over-estimate.  A 0.5m cube reported with `estimated_radius_m=1.5m` produces an AABB the drone enters before reaching real geometry.
+4. **VIO drift / pose lag.** Drone pose estimate lags 50-200ms behind reality.  Pose-says-(0,0,0) but actually-at-(5,5,5) places the drone inside any AABB centered nearby.
+5. **Late frame delivery.** Vision pipeline at 10Hz, drone at 5 m/s = 0.5m gap between frames.  AABB radius < gap means the drone can enter between frames.
+6. **Detector trust during stereo migration.** When we move to stereo (Issue #663), depth gets bounded but obstacle classification might lag, briefly producing AABBs sized for the wrong object class.
+
+The previous behaviour (silent failure) is the worst possible outcome — it gives FALSE CONFIDENCE that nothing's wrong while the drone is in fact penetrating an obstacle.  The recovery branch produces a degraded-but-observable output: maximum repulsion outward, close-regime engaged, brake fires.  Operator sees the close-regime-active flag and the WARN log; the drone fights its way out instead of riding through.
+
+**Decision:** Land the exit-face recovery (PR #685) and the regression test (`AabbAwareDistance_DroneInsideAabbReceivesExitRepulsion`).  Treat the avoider as the last reactive line that must produce safe output for ANY input geometry, not just the design-intended subset.  This DR captures the principle so a future reviewer doesn't strip the recovery branch on "shouldn't be reachable" grounds.
+
+**Revisit when:** all six upstream causes above have dedicated regression locks AND are enforced by config-validator gates; the exit-face recovery becomes belt-and-braces that can be downgraded from `WARN` to `DEBUG` on engagement (the bug is then truly elsewhere, not the avoider).
+
+**Date:** 2026-05-02 (PR #685 / PR #657 review-fault-recovery P1)
