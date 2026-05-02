@@ -36,6 +36,7 @@
 #include "util/ilogger.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -66,9 +67,19 @@ public:
 #ifdef HAS_OPENCV
         return true;
 #else
-        DRONE_LOG_WARN("[EdgeContourSAM] OpenCV not available at compile time — backend will "
-                       "return empty output.  Build with HAS_OPENCV to enable.");
-        return true;  // Allow construction; runtime fallback returns empty masks.
+        // PR #611 P2 review: returning `true` without OpenCV silently
+        // bypasses the PATH A safety gate — the SAM thread happily
+        // accepts frames and emits empty masks, the projector runs
+        // every cycle producing zero voxels, and the planner has no
+        // perception input.  Operators see "SAM backend init OK" in
+        // logs and reasonably conclude perception is healthy.  Now
+        // we honestly fail — `false` so the caller (P2 main) detects
+        // the missing dependency at startup and surfaces the build
+        // configuration error.
+        DRONE_LOG_ERROR("[EdgeContourSAM] OpenCV not available at compile time — init() refused.  "
+                        "Rebuild with HAS_OPENCV (apt install libopencv-dev) or select a different "
+                        "PATH A SAM backend in config (perception.path_a.sam.backend).");
+        return false;
 #endif
     }
 
@@ -82,7 +93,12 @@ public:
         }
 
         InferenceOutput output;
-        output.timestamp_ns = ++counter_;
+        // PR #611 P2 review: counter_ now atomic since infer() is the
+        // hot-path entry from sam_thread but the timestamp is also
+        // observable to consumer threads via output.timestamp_ns.
+        // Relaxed ordering — pure monotonic counter, no synchronization
+        // implied between writer and reader.
+        output.timestamp_ns = counter_.fetch_add(1, std::memory_order_relaxed) + 1;
 
 #ifndef HAS_OPENCV
         (void)stride;
@@ -197,14 +213,15 @@ public:
 private:
     static constexpr int kMaxMasks = 32;
 
-    int      max_masks_{8};
-    int      min_area_px_{500};
-    int      canny_low_{50};
-    int      canny_high_{150};
-    int      blur_ksize_{5};
-    int      dilate_ksize_{3};
-    int      downsample_{2};
-    uint64_t counter_{0};
+    int max_masks_{8};
+    int min_area_px_{500};
+    int canny_low_{50};
+    int canny_high_{150};
+    int blur_ksize_{5};
+    int dilate_ksize_{3};
+    int downsample_{2};
+    // PR #611 P2 review: atomic — see infer() above.
+    std::atomic<uint64_t> counter_{0};
 };
 
 }  // namespace drone::hal
