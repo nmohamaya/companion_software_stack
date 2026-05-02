@@ -168,7 +168,15 @@ void DepthAnythingV2Estimator::load_model(const std::string& model_path) {
                     // instead of taking the perception process down on
                     // first inference.
                     DRONE_LOG_WARN("[DepthAnythingV2] CUDA canary inference threw unknown "
-                                   "exception type — falling back to CPU");
+                                   "exception type — falling back to CPU after rebuild");
+                }
+                // PR #634 P2 review: if the canary path partially configured
+                // the CUDA backend then threw, net_ is in an indeterminate
+                // state — rebuild from ONNX before the CPU-fallback target
+                // is set so we start clean.  Mirrors FastSAM's PR #681 fix
+                // for the same canary pattern.
+                if (!cuda_engaged) {
+                    net_ = cv::dnn::readNetFromONNX(canonical.string());
                 }
             }
         }
