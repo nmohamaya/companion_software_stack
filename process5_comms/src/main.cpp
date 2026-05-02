@@ -119,13 +119,24 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
     // velocity command indefinitely could fly the drone off cliff.  At
     // staleness > bound, suppress the heartbeat and log WARN — the
     // operator sees the silence rather than a velocity-locked drone.
-    drone::ipc::TrajectoryCmd             last_sent_traj{};
-    bool                                  have_sent_traj             = false;
-    uint64_t                              heartbeat_count            = 0;
-    uint64_t                              heartbeat_stale_skip_count = 0;
-    constexpr std::chrono::milliseconds   kHeartbeatPeriod{40};
-    constexpr std::chrono::milliseconds   kMaxHeartbeatStaleMs{5000};
-    std::chrono::steady_clock::time_point last_traj_send = std::chrono::steady_clock::now();
+    drone::ipc::TrajectoryCmd           last_sent_traj{};
+    bool                                have_sent_traj             = false;
+    uint64_t                            heartbeat_count            = 0;
+    uint64_t                            heartbeat_stale_skip_count = 0;
+    constexpr std::chrono::milliseconds kHeartbeatPeriod{40};
+    constexpr std::chrono::milliseconds kMaxHeartbeatStaleMs{5000};
+    // PR #684 Copilot review: track TWO timestamps so the stale-bound
+    // can fire when P4 goes silent.  `last_send` ticks forward on
+    // every successful send (heartbeat OR new trajectory) — used for
+    // the heartbeat-period gate.  `last_new_trajectory` updates ONLY
+    // when a brand-new trajectory cmd is forwarded — used for the
+    // stale-bound check.  Without this split, the previous single-
+    // timestamp design had `last_traj_send` updating on every
+    // heartbeat resend, so the 5 s stale-bound never fired even when
+    // P4 had been silent for hours.
+    const auto                            now_init      = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point last_send     = now_init;
+    std::chrono::steady_clock::time_point last_new_traj = now_init;
 
     while (g_running.load(std::memory_order_acquire)) {
         drone::util::ThreadHeartbeatRegistry::instance().touch(hb.handle());
@@ -217,8 +228,14 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
                                    cmd.target_yaw)) {
                 last_sent_traj = cmd;
                 have_sent_traj = true;
-                last_traj_send = std::chrono::steady_clock::now();
-                sent_this_tick = true;
+                // PR #684 Copilot review: a NEW trajectory was received
+                // — update both timestamps.  last_send drives the
+                // heartbeat-period gate; last_new_traj resets the
+                // stale-bound (P4 is alive and producing fresh cmds).
+                const auto now_send = std::chrono::steady_clock::now();
+                last_send           = now_send;
+                last_new_traj       = now_send;
+                sent_this_tick      = true;
             } else {
                 ++traj_send_fail;
                 if (traj_send_fail == 1 || traj_send_fail % 100 == 0) {
@@ -243,28 +260,41 @@ static void fc_tx_thread(drone::hal::IFCLink&                                fc,
         // the silence rather than a velocity-locked drone.
         // Decision logic delegated to the testable helper so the timing +
         // staleness rules can be exercised by test_comms_heartbeat.cpp.
+        // PR #684 Copilot review: pass two distinct durations.
+        // `since_last_send` gates the heartbeat-period throttle; updated
+        // on every successful send (heartbeat OR new traj).
+        // `since_last_new_traj` gates the stale-bound; updated ONLY on
+        // a new trajectory cmd from P4.  Heartbeat replays do not
+        // reset it, so a permanently-silent P4 will eventually trip the
+        // bound regardless of how often the heartbeat fires.
         const auto now = std::chrono::steady_clock::now();
-        const auto staleness =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_traj_send);
+        const auto since_last_send =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_send);
+        const auto since_last_new_traj =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_new_traj);
         const auto action = drone::comms::evaluate_heartbeat(
-            sent_this_tick, have_sent_traj, last_traj_ts == UINT64_MAX, staleness, kHeartbeatPeriod,
-            kMaxHeartbeatStaleMs);
+            sent_this_tick, have_sent_traj, last_traj_ts == UINT64_MAX, since_last_send,
+            since_last_new_traj, kHeartbeatPeriod, kMaxHeartbeatStaleMs);
         switch (action) {
             case drone::comms::HeartbeatAction::None: break;
             case drone::comms::HeartbeatAction::SuppressStale:
                 ++heartbeat_stale_skip_count;
                 if (heartbeat_stale_skip_count == 1 || heartbeat_stale_skip_count % 200 == 0) {
-                    DRONE_LOG_WARN("[Comms] Heartbeat suppressed — last trajectory is "
+                    DRONE_LOG_WARN("[Comms] Heartbeat suppressed — last NEW trajectory is "
                                    "{}ms stale (>{}ms bound); P4 may have died.  "
                                    "Total stale-skips: {}",
-                                   staleness.count(), kMaxHeartbeatStaleMs.count(),
+                                   since_last_new_traj.count(), kMaxHeartbeatStaleMs.count(),
                                    heartbeat_stale_skip_count);
                 }
                 break;
             case drone::comms::HeartbeatAction::Send:
                 if (fc.send_trajectory(last_sent_traj.velocity_x, last_sent_traj.velocity_y,
                                        last_sent_traj.velocity_z, last_sent_traj.target_yaw)) {
-                    last_traj_send = now;
+                    // Heartbeat send: update last_send (gates throttle)
+                    // but NOT last_new_traj (stale-bound continues to
+                    // tick).  This is the actual fix for the P4-dead
+                    // safety net.
+                    last_send = now;
                     ++heartbeat_count;
                     if (heartbeat_count == 1 || heartbeat_count % 200 == 0) {
                         DRONE_LOG_DEBUG("[Comms] Trajectory heartbeat re-sent "
