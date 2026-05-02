@@ -1,5 +1,21 @@
 // tests/test_detector_switcher.cpp
 // Unit tests for DetectorSwitcher — altitude-based COCO/VisDrone switching.
+//
+// PR #603 P1 review (PARTIAL — class logic only): DetectorSwitcher is
+// not yet wired into process2_perception/src/main.cpp.  These tests
+// exercise the dataset-selection logic in isolation and lock the
+// altitude-threshold contract (below threshold → COCO, above →
+// VisDrone, exact-on-threshold → COCO inclusive).  They DO NOT verify
+// pipeline integration — main.cpp does not consult DetectorSwitcher
+// today.  A future PR must (a) wire DetectorSwitcher into the
+// detector-init path AND (b) add an integration test that toggles
+// altitude through the threshold and asserts the active backend
+// changes.
+//
+// Until that integration lands, "all detector_switcher tests pass"
+// must not be read as "altitude-based switching works in production"
+// — it only means the selection class itself is correct.  Tracked in
+// IMPROVEMENTS.md.
 #include "perception/detector_switcher.h"
 #include "test_helpers.h"
 #include "util/config.h"

@@ -177,6 +177,24 @@ static void sam_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_su
             continue;
         }
 
+        // PR #603 P2 review: validate the wire-format frame at the
+        // boundary — pixel_data pointer / dimensions / channels.  Caller
+        // has already filled in `frame.valid` but has not validated the
+        // buffer matches the header.  Skip silently-malformed frames.
+        if (!frame.validate()) {
+            ++fail_count;
+            if (fail_count % 100 == 1) {
+                DRONE_LOG_WARN("[SAM] frame.validate() failed ({} consecutive)", fail_count);
+            }
+            // PR #603 P2 review: backpressure on persistent failure so
+            // we don't busy-loop pulling+rejecting bad frames at the
+            // subscriber's max rate.  100ms gives the upstream camera /
+            // P1 process time to recover; brief enough that operators
+            // see real frames quickly when the stream restores.
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
         auto result = sam.infer(frame.pixel_data, frame.width, frame.height, frame.channels);
         if (!result.is_ok()) {
             ++fail_count;
@@ -184,6 +202,12 @@ static void sam_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_su
                 DRONE_LOG_WARN("[SAM] infer() failed ({} consecutive): {}", fail_count,
                                result.error());
             }
+            // PR #603 P2 review: backpressure on persistent inference
+            // failure (e.g. CUDA driver crash, model file disappeared)
+            // — same 100ms backoff as the validation path.  Without
+            // this the SAM thread spins at frame-arrival rate, burning
+            // CPU on a backend that's known-bad.
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
         fail_count = 0;
