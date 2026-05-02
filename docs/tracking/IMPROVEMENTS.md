@@ -32,7 +32,7 @@ The 14-PR scenario-33 fix stack (PRs #646–#666) drove orchestrator reviews on 
 
 ### 2026-04-30 (scenario-33 forensics)
 
-- **P3** — comms `fc_tx_thread` issues `latency_tracker_.record()` from inside `receive()` which already runs under `data_mutex_`. Mutex-protected observability on a 20Hz IPC-forwarding thread; tier rule says buffer via lock-free primitive. Low blast radius but worth a DR or fix.
+- **P2** — comms `fc_tx_thread` calls `latency_tracker_.record()` (mutex-protected observability) from inside `receive()`. PR #674 P2 review correctly flagged this as P2 per CLAUDE.md: "Mutex-protected observability primitives ... SHOULD NOT be called from flight-critical or real-time threads ... without documented justification." `fc_tx_thread` runs at 40 Hz and drives the SimpleFlight heartbeat — flight-critical. Tier rule: buffer into a lock-free primitive (`LatencyTracker` / `SPSCRing` / `TripleBuffer`) and let a dedicated IO thread drain into the shared observability. **Note:** the earlier claim that `record()` ran "inside `data_mutex_`" was factually wrong — the `lock_guard` in `zenoh_subscriber.h::receive()` goes out of scope at line 89, and `record()` is called at line 105 (after the lock release). The priority is still P2 per the project rule for any mutex-protected observability on a flight-critical thread, regardless of where in receive() the call sits.
 
 ### 2026-04-30 (scenario-33 keystone-fix follow-ups, from #652)
 

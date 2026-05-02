@@ -97,6 +97,18 @@ public:
         // wall-clock and looks like an unbounded queue backlog.  Bug surfaced
         // during scenario-33 forensics on 2026-04-30 when fc_command latency
         // appeared to climb to 220s but the publisher was idle after TAKEOFF.
+        //
+        // PR #674 P1 review: relaxed memory ordering is correct here because
+        // `last_recorded_ts_` is only ever loaded/stored from `receive()`,
+        // which is called from a SINGLE consumer thread per the
+        // `ISubscriber<T>::receive()` contract documented in PR #664.
+        // `on_sample()` (Zenoh callback thread) NEVER touches
+        // `last_recorded_ts_` — only `latest_msg_` and `timestamp_ns_`,
+        // which are guarded by `data_mutex_`.  No inter-thread ordering is
+        // needed because both load and store happen on the same thread;
+        // the atomic exists only to satisfy the formal data-race rule
+        // (the field is `mutable` and the consumer is technically reading
+        // its own previous write across `receive()` calls).
         if (track_latency_ && msg_ts > 0 &&
             msg_ts != last_recorded_ts_.load(std::memory_order_relaxed)) {
             last_recorded_ts_.store(msg_ts, std::memory_order_relaxed);
@@ -117,6 +129,15 @@ public:
     [[nodiscard]] const std::string& topic_name() const override { return key_expr_; }
 
     /// Access the latency tracker for periodic reporting.
+    /// PR #674 P2 review: returns a mutable reference, so a caller that
+    /// directly invokes `latency_tracker().record(...)` would BYPASS
+    /// the dedup invariant maintained by receive() (only-record-on-
+    /// timestamp-change).  The internal callers (`log_latency_if_due`,
+    /// run-report) only read summaries, not record samples.  Per the
+    /// single-consumer-thread contract documented on
+    /// `ISubscriber<T>::receive()`, external callers MUST NOT call
+    /// `record()` on the returned tracker — use the receive() path
+    /// which honours the dedup guard.
     [[nodiscard]] drone::util::LatencyTracker& latency_tracker() const { return latency_tracker_; }
 
     /// Log latency summary if enough samples have been collected.
