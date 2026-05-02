@@ -9,6 +9,7 @@
 #include "perception/ifusion_engine.h"
 #include "perception/types.h"
 
+#include <atomic>
 #include <unordered_map>
 #include <vector>
 
@@ -214,8 +215,13 @@ public:
     /// path failed (LLT + epsilon + eigenvalue-clamp all rejected) and we
     /// fell back to R-only Mahalanobis gating.  Exposed for tests +
     /// run-report diagnostics.
+    /// PR #649 P2 review: backed by `std::atomic<uint64_t>` since this
+    /// accessor is `const noexcept` and could be called from any thread
+    /// (run-report poll, P7 health check) while `try_associate_radar`
+    /// increments the counter on the fusion thread.  Pure observability
+    /// counter — relaxed ordering (no synchronization implied).
     [[nodiscard]] uint64_t s_matrix_fallback_count() const noexcept {
-        return s_matrix_fallback_count_;
+        return s_matrix_fallback_count_.load(std::memory_order_relaxed);
     }
 
 private:
@@ -258,7 +264,10 @@ private:
     // measurement.  Persistent non-zero indicates the UT weights are
     // chronically producing degenerate S — consider re-tuning kAlpha (Issue
     // #645 fix C, deferred).
-    uint64_t s_matrix_fallback_count_{0};
+    // PR #649 P2 review: atomic since the accessor is `const noexcept` and
+    // can be called off-thread (run-report / P7).  Relaxed ordering —
+    // pure observability counter, no synchronization implied.
+    std::atomic<uint64_t> s_matrix_fallback_count_{0};
 
     struct DepthEstimate {
         float depth      = 8.0f;
