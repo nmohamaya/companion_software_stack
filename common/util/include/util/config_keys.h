@@ -120,7 +120,12 @@ inline constexpr const char* INPUT_SIZE      = "perception.depth_estimator.input
 inline constexpr const char* MAX_FPS         = "perception.depth_estimator.max_fps";
 inline constexpr const char* NOISE_STD_M     = "perception.depth_estimator.noise_std_m";
 inline constexpr const char* DEFAULT_DEPTH_M = "perception.depth_estimator.default_depth_m";
-inline constexpr const char* ENABLED         = "perception.depth_estimator.enabled";
+// PR #634 P2 review: MAX_DEPTH_M was missing from the namespace while
+// the PR added two sibling constants (USE_CUDA, MIN_DEPTH_M).  Now
+// added so call sites can use the canonical constant instead of the
+// raw string `"perception.depth_estimator.max_depth_m"`.
+inline constexpr const char* MAX_DEPTH_M = "perception.depth_estimator.max_depth_m";
+inline constexpr const char* ENABLED     = "perception.depth_estimator.enabled";
 // Issue #626 — opt into OpenCV DNN's CUDA backend for DA V2 inference.
 // Default false preserves legacy CPU behaviour on machines without a GPU.
 // When true, DA V2's load_model() probes cv::cuda::getCudaEnabledDeviceCount()

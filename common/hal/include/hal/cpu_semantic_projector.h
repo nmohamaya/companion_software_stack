@@ -279,7 +279,16 @@ private:
         // bounds even if a hot-reload races mid-call.
         // PR #602 P2 review: lowercase `grid` so it doesn't look like a
         // project-wide constexpr (was SCREAMING_SNAKE_CASE).
-        const int   grid   = sample_grid_size_.load(std::memory_order_acquire);
+        // PR #634 P2 review: defensive guards on zero divisors.  `grid`
+        // is clamped to [2, 64] in set_sample_grid_size() so a runtime
+        // 0 is unreachable, but the local guard documents the invariant.
+        // `det.bbox.w/h == 0` IS reachable (degenerate detection, zero-
+        // sized bbox from upstream noise) — skip the detection in that
+        // case rather than divide by zero.
+        const int grid = sample_grid_size_.load(std::memory_order_acquire);
+        if (grid <= 0 || det.bbox.w <= 0.0f || det.bbox.h <= 0.0f) {
+            return;
+        }
         const float step_x = det.bbox.w / static_cast<float>(grid);
         const float step_y = det.bbox.h / static_cast<float>(grid);
 

@@ -57,7 +57,24 @@ public:
     FastSamInferenceBackend() = default;
 
     FastSamInferenceBackend(const drone::Config& cfg, const std::string& section) {
-        model_path_ = cfg.get<std::string>(section + ".model_path", "models/fastsam_s.onnx");
+        const std::string raw_model_path = cfg.get<std::string>(section + ".model_path",
+                                                                "models/fastsam_s.onnx");
+        // PR #634 P2 review: mirror DA V2's relative-only path policy
+        // for config-injected paths (PR #680).  A tampered config could
+        // load any attacker-chosen file via `/etc/something.onnx`.
+        // load_model() already rejects '..' segments; the absolute-path
+        // check belongs at the config-construction layer.  The explicit
+        // `init(model_path, input_size)` ctor stays trusted (tests +
+        // calibration tools build the path themselves).
+        if (!raw_model_path.empty() && raw_model_path.front() == '/') {
+            DRONE_LOG_ERROR("[FastSAM] Rejected absolute model path from config "
+                            "(relative-only allowed): {}",
+                            raw_model_path);
+            // Leave model_path_ empty so load_model() refuses; callers
+            // see init() return false.
+        } else {
+            model_path_ = raw_model_path;
+        }
         confidence_threshold_ = std::clamp(cfg.get<float>(section + ".confidence_threshold", 0.40f),
                                            0.0f, 1.0f);
         nms_threshold_ = std::clamp(cfg.get<float>(section + ".nms_threshold", 0.45f), 0.0f, 1.0f);
