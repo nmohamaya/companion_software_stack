@@ -470,3 +470,93 @@ TEST(SemanticProjector, TextureGateDegenerateDepthMap) {
         << "Degenerate (<3-pixel) DepthMap must fail closed via the texture gate, "
            "not produce voxels from extrapolated gradient values.";
 }
+
+// ── Issue #698 — DA V2 max-clamp saturation band ───────────────
+
+// Default (band == 0) preserves legacy strict-greater-than rejection: a
+// depth sample exactly at max_obstacle_depth_m_ still passes through.
+TEST(SemanticProjector, SaturationBand_DefaultDisabledLegacyBehaviour) {
+    CpuSemanticProjector proj;
+    CameraIntrinsics     intr{500.0f, 500.0f, 320.0f, 240.0f, 640, 480};
+    ASSERT_TRUE(proj.init(intr));
+    proj.set_max_obstacle_depth_m(20.0f);
+    ASSERT_FLOAT_EQ(proj.max_depth_saturation_band_m(), 0.0f);
+
+    InferenceDetection det;
+    det.bbox       = {300.0f, 220.0f, 40.0f, 40.0f};
+    det.class_id   = 3;
+    det.confidence = 0.85f;
+
+    auto depth  = make_depth_map(640, 480, 20.0f);  // exactly at max
+    auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value().size(), 1u)
+        << "With band=0, a depth sample exactly at max_obstacle_depth_m must pass "
+           "(legacy behaviour preserved).";
+}
+
+// With band > 0 a depth sample at exactly max gets rejected — this is the
+// DA V2 "I don't know, defaulting to far" failure mode.
+TEST(SemanticProjector, SaturationBand_RejectsSampleAtMax) {
+    CpuSemanticProjector proj;
+    CameraIntrinsics     intr{500.0f, 500.0f, 320.0f, 240.0f, 640, 480};
+    ASSERT_TRUE(proj.init(intr));
+    proj.set_max_obstacle_depth_m(20.0f);
+    proj.set_max_depth_saturation_band_m(0.5f);
+
+    InferenceDetection det;
+    det.bbox       = {300.0f, 220.0f, 40.0f, 40.0f};
+    det.class_id   = 3;
+    det.confidence = 0.85f;
+
+    auto depth  = make_depth_map(640, 480, 20.0f);
+    auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value().size(), 0u)
+        << "Depth at max_obstacle_depth_m must be rejected when saturation band is active.";
+}
+
+// Inside the band but below max — also rejected.
+TEST(SemanticProjector, SaturationBand_RejectsSampleInsideBand) {
+    CpuSemanticProjector proj;
+    CameraIntrinsics     intr{500.0f, 500.0f, 320.0f, 240.0f, 640, 480};
+    ASSERT_TRUE(proj.init(intr));
+    proj.set_max_obstacle_depth_m(20.0f);
+    proj.set_max_depth_saturation_band_m(0.5f);
+
+    InferenceDetection det;
+    det.bbox       = {300.0f, 220.0f, 40.0f, 40.0f};
+    det.class_id   = 3;
+    det.confidence = 0.85f;
+
+    auto depth  = make_depth_map(640, 480, 19.7f);  // inside the 0.5 m band → rejected
+    auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value().size(), 0u) << "Depth inside the saturation band must be rejected.";
+}
+
+// Just outside the band — accepted. Real obstacles below max - band still pass.
+TEST(SemanticProjector, SaturationBand_AcceptsSampleBelowBand) {
+    CpuSemanticProjector proj;
+    CameraIntrinsics     intr{500.0f, 500.0f, 320.0f, 240.0f, 640, 480};
+    ASSERT_TRUE(proj.init(intr));
+    proj.set_max_obstacle_depth_m(20.0f);
+    proj.set_max_depth_saturation_band_m(0.5f);
+
+    InferenceDetection det;
+    det.bbox       = {300.0f, 220.0f, 40.0f, 40.0f};
+    det.class_id   = 3;
+    det.confidence = 0.85f;
+
+    auto depth  = make_depth_map(640, 480, 19.0f);  // 1 m below max → outside band → kept
+    auto result = proj.project({det}, depth, Eigen::Affine3f::Identity());
+    ASSERT_TRUE(result.is_ok());
+    EXPECT_EQ(result.value().size(), 1u) << "Depth comfortably below max - band must pass through.";
+}
+
+// Negative band values clamp to 0 (disabled) — defensive against bad config.
+TEST(SemanticProjector, SaturationBand_NegativeClampedToZero) {
+    CpuSemanticProjector proj;
+    proj.set_max_depth_saturation_band_m(-1.0f);
+    EXPECT_FLOAT_EQ(proj.max_depth_saturation_band_m(), 0.0f);
+}

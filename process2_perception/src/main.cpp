@@ -1185,6 +1185,21 @@ int main(int argc, char* argv[]) {
                                                            20.0f);
                 sp->set_max_obstacle_depth_m(max_depth);
 
+                // Issue #698 — DA V2 saturation band.  Reject depth samples
+                // within `band` metres of `max_depth` as the estimator's
+                // "I don't know, defaulting to far" signal.  Default 0.5 m
+                // catches the saturation cluster while still admitting real
+                // obstacles up to ~max-band.  Set to 0 to disable.
+                const float saturation_band = ctx.cfg.get<float>(
+                    drone::cfg_key::perception::semantic_projector::MAX_DEPTH_SATURATION_BAND_M,
+                    0.5f);
+                sp->set_max_depth_saturation_band_m(saturation_band);
+                if (saturation_band > 0.0f) {
+                    DRONE_LOG_INFO("[PathA] CpuSemanticProjector saturation band active: "
+                                   "reject d > {:.2f} m (max_depth={:.2f}, band={:.2f})",
+                                   max_depth - saturation_band, max_depth, saturation_band);
+                }
+
                 // Issue #629 — mask sampling density.  Legacy default 4×4=16
                 // probes per mask.  Dense-perception / no-HD-map scenarios
                 // (scenario 33) override to 8 or 16 for higher per-frame
