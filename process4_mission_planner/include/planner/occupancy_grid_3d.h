@@ -841,7 +841,17 @@ private:
     void sweep_static_cells(uint64_t now_ns) {
         if (static_cell_ttl_ns_ == 0) return;
         for (auto it = static_cell_timestamps_.begin(); it != static_cell_timestamps_.end();) {
-            if (now_ns - it->second > static_cell_ttl_ns_) {
+            // PR #611 P2 review: previous `now_ns - it->second` was
+            // an unsigned subtraction with no monotonicity guard.  If
+            // `it->second > now_ns` (clock-source mismatch, replay
+            // loaded older timestamps, or a future caller-supplied
+            // now_ns from a different epoch), the result wraps to
+            // ~2^64 and instantly satisfies `> static_cell_ttl_ns_`,
+            // wiping every promoted cell on a single tick.  Guard
+            // explicitly so the cell is kept (not wiped) on a
+            // backwards-time anomaly.
+            const uint64_t age_ns = (now_ns >= it->second) ? (now_ns - it->second) : 0u;
+            if (age_ns > static_cell_ttl_ns_) {
                 const GridCell c = it->first;
                 static_occupied_.erase(c);
                 changed_cells_.push_back({c, false});

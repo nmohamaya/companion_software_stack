@@ -158,11 +158,25 @@ public:
         }
         float* data = reinterpret_cast<float*>(det_output.data);
 
-        const float x_scale  = static_cast<float>(width) / static_cast<float>(input_size_);
-        const float y_scale  = static_cast<float>(height) / static_cast<float>(input_size_);
-        const int   mask_h   = mask_protos.size[2];
-        const int   mask_w   = mask_protos.size[3];
-        cv::Mat     proto_2d = mask_protos.reshape(1, {mask_channels_, mask_h * mask_w});
+        const float x_scale = static_cast<float>(width) / static_cast<float>(input_size_);
+        const float y_scale = static_cast<float>(height) / static_cast<float>(input_size_);
+        // PR #611 P1 review: validate `mask_protos` actually has 4 dims
+        // before subscripting size[2]/size[3].  cv::MatSize::operator[]
+        // does NOT bounds-check in Release — a flattened or malformed
+        // ONNX export would corrupt the SAM thread's stack and crash
+        // P2 (causing P7 restart loop in obstacle-dense scenarios).
+        // Return Err so the caller can degrade gracefully.
+        if (mask_protos.dims < 4) {
+            return R::err("[FastSAM] mask_protos has " + std::to_string(mask_protos.dims) +
+                          " dims, expected 4 ([1, mask_channels, mask_h, mask_w])");
+        }
+        const int mask_h = mask_protos.size[2];
+        const int mask_w = mask_protos.size[3];
+        if (mask_h <= 0 || mask_w <= 0 || mask_h > 4096 || mask_w > 4096) {
+            return R::err("[FastSAM] mask_protos shape (" + std::to_string(mask_h) + "x" +
+                          std::to_string(mask_w) + ") out of valid range");
+        }
+        cv::Mat proto_2d = mask_protos.reshape(1, {mask_channels_, mask_h * mask_w});
 
         std::vector<float>              confidences;
         std::vector<cv::Rect>           boxes;
@@ -251,8 +265,19 @@ public:
             det.mask_width  = width;
             det.mask_height = height;
             det.mask.assign(static_cast<size_t>(width) * height, uint8_t{0});
+            // PR #611 P2 review: clamp dst_x/dst_y to non-negative AND
+            // bound the output stride.  `det.bbox.x` could be negative
+            // from a malformed detection; the previous code used the
+            // raw int cast directly, allowing the dst_off computation
+            // to wrap into a large size_t and out-of-bounds-write into
+            // det.mask (12 MB at 4K).  Skip the detection if the
+            // top-left lands outside the frame.
             const int dst_x = static_cast<int>(det.bbox.x);
             const int dst_y = static_cast<int>(det.bbox.y);
+            if (dst_x < 0 || dst_y < 0 || dst_x >= static_cast<int>(width) ||
+                dst_y >= static_cast<int>(height)) {
+                continue;
+            }
             for (int row = 0; row < bbox_px_h && (dst_y + row) < static_cast<int>(height); ++row) {
                 const auto dst_off = static_cast<size_t>(dst_y + row) * width +
                                      static_cast<size_t>(dst_x);
