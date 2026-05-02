@@ -1580,14 +1580,16 @@ TEST(ObstacleAvoider3DTest, AabbAwareDistance_DroneInsideAabbReceivesExitRepulsi
            "pre-fix the dist=0 gate silenced the obstacle entirely "
            "(avoider went deaf at the moment we most need it)";
 
-    // Sanity: the close-regime brake must zero the toward-obstacle component.
-    // With cmd=(1,0,0) and drone inside an AABB centered on the drone,
-    // the planned +X velocity is "toward" the obstacle in either direction
-    // — brake must collapse it.  Pre-fix vx stayed at planned value (1.0
-    // after smoothing); post-fix it's heavily damped.
-    EXPECT_LT(std::abs(result.velocity_x), 0.5f)
-        << "brake must collapse the planned +X velocity in close-regime; "
-           "got vx="
+    // Post Copilot-fix on PR #685: with the magnitude bug fixed, the
+    // exit repulsion is now correctly scaled (was 1/dist^3 due to
+    // dx-as-unit-vector bug, now 1/dist^2 per the inverse-square law).
+    // The drone gets a meaningful exit push; we lock the SIGN
+    // contract: vx must NOT be in the +X direction (toward where the
+    // planner was sending it, INTO the obstacle interior).  Pre-fix
+    // vx stayed at planned +1.0 after smoothing.
+    EXPECT_LE(result.velocity_x, 0.0f)
+        << "exit repulsion must NOT push the drone in the planned +X direction "
+           "(would worsen the penetration); got vx="
         << result.velocity_x;
 }
 

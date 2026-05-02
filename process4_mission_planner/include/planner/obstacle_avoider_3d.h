@@ -306,8 +306,12 @@ public:
             // drone OUT along the exit), and set `dist` to the depth
             // along that axis (clamped to kMinDistGateM so the inverse-
             // square below produces a finite-but-large repulsion).
-            const bool inside_aabb = (drone_x > ax_min && drone_x < ax_max && drone_y > ay_min &&
-                                      drone_y < ay_max && drone_z > az_min && drone_z < az_max);
+            // PR #685 Copilot review: use `<=` / `>=` so boundary contact
+            // (drone on AABB face) is also treated as inside — strict
+            // comparisons let dist=0 fall through to the gate below
+            // and re-introduced the silent dead zone for contact cases.
+            const bool inside_aabb = (drone_x >= ax_min && drone_x <= ax_max && drone_y >= ay_min &&
+                                      drone_y <= ay_max && drone_z >= az_min && drone_z <= az_max);
             if (inside_aabb) {
                 struct ExitAxis {
                     float depth;       // distance from drone to the face
@@ -325,19 +329,26 @@ public:
                 for (int i = 1; i < 6; ++i) {
                     if (axes[i].depth < axes[best].depth) best = i;
                 }
-                // dx/dy/dz convention is "drone → nearest_AABB_point".  To
-                // push the drone OUT along the exit direction, set
-                // (dx,dy,dz) to point INTO the AABB (opposite the exit
-                // unit vector).  The downstream `-(d/dist) * rep` then
-                // produces a force in the +exit direction.
-                dx = -axes[best].ex;
-                dy = -axes[best].ey;
-                dz = -axes[best].ez;
-                // depth-along-axis is the right scale for repulsion: the
-                // deeper inside, the larger the inverse-square magnitude.
-                // Floor at kMinDistGateM so we don't divide by zero on
-                // the AABB centre.
-                dist = std::max(axes[best].depth, avoider_constants::kMinDistGateM);
+                // PR #685 Copilot review: previous version set (dx,dy,dz)
+                // to a UNIT vector while `dist` was the depth, breaking the
+                // outside-AABB convention `magnitude(dx,dy,dz) == dist`.
+                // The downstream `(dx/dist) * repulsion` then produces a
+                // 1/dist^3 force scaling — wrong magnitude.  Set
+                // (dx,dy,dz) to the depth-scaled vector so the invariant
+                // holds and the inverse-square law works correctly.
+                //
+                // Floor depth strictly above the gate: previous
+                // `max(depth, kMinDistGateM)` produced exactly-floor
+                // values that the strict `> kMinDistGateM` gate then
+                // skipped — silent dead zone partially re-introduced.
+                // `nextafter(kMinDistGateM, +inf)` is the smallest float
+                // strictly greater than the gate.
+                const float depth_floored = std::nextafter(avoider_constants::kMinDistGateM,
+                                                           std::numeric_limits<float>::infinity());
+                dist                      = std::max(axes[best].depth, depth_floored);
+                dx = -axes[best].ex * dist;  // points INTO AABB; -(dx/dist) = +ex
+                dy = -axes[best].ey * dist;
+                dz = -axes[best].ez * dist;
             }
 
             if (dist < config_.influence_radius_per_class[ci] &&
