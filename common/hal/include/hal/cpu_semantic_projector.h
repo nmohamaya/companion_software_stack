@@ -33,6 +33,17 @@ public:
             return drone::util::Result<std::vector<VoxelUpdate>, std::string>::err(
                 "Invalid depth map");
         }
+        // PR #602 P2 review: validate depth.data array is large enough to
+        // back the (width × height) grid before the per-pixel access in
+        // sample_depth().  Without this, a malformed DepthMap (data
+        // truncated mid-flight, IPC corruption) would silently
+        // out-of-bounds-read further down.
+        const size_t expected_depth_size = static_cast<size_t>(depth.width) *
+                                           static_cast<size_t>(depth.height);
+        if (depth.data.size() < expected_depth_size) {
+            return drone::util::Result<std::vector<VoxelUpdate>, std::string>::err(
+                "Depth map data shorter than width×height");
+        }
 
         std::vector<VoxelUpdate> updates;
         // Worst case: every detection has a mask covered by a sample_grid_size_²
@@ -237,7 +248,7 @@ private:
 
         VoxelUpdate vu;
         vu.position_m     = backproject(u, v, z, camera_pose);
-        vu.semantic_label = static_cast<uint8_t>(std::max(det.class_id, 0));
+        vu.semantic_label = static_cast<uint8_t>(std::clamp(det.class_id, 0, 255));
         vu.confidence     = det.confidence;
         vu.occupancy      = 1.0f;
         updates.push_back(vu);
@@ -246,16 +257,31 @@ private:
     void project_masked(const InferenceDetection& det, const DepthMap& depth,
                         const Eigen::Affine3f& camera_pose, float scale_x, float scale_y,
                         std::vector<VoxelUpdate>& updates) const {
+        // PR #602 P1 review: validate `det.mask` is large enough to back
+        // (mask_width × mask_height) before any indexed access.  A
+        // malformed detection (mask vector truncated, mismatched
+        // header) would otherwise out-of-bounds-read inside the per-
+        // probe sampling loop below — the caller already checked
+        // `det.mask_width > 0` and `det.mask_height > 0` at the call
+        // site, but never verified the buffer matches the header.
+        const size_t expected_mask_size = static_cast<size_t>(det.mask_width) *
+                                          static_cast<size_t>(det.mask_height);
+        if (det.mask.size() < expected_mask_size) {
+            return;  // skip detection — mask data shorter than declared
+        }
+
         // Grid sampling within the mask bounding box (Issue #629).  Legacy
         // default is 4×4=16 probes per mask; scenarios that need denser
         // obstacle discovery (e.g. no-HD-map scenario 33) override via
         // `perception.semantic_projector.sample_grid_size`.  Single load of
-        // the atomic — the GRID value is captured for the duration of this
+        // the atomic — the `grid` value is captured for the duration of this
         // mask's projection so step_x/step_y stay consistent with the loop
         // bounds even if a hot-reload races mid-call.
-        const int   GRID   = sample_grid_size_.load(std::memory_order_acquire);
-        const float step_x = det.bbox.w / static_cast<float>(GRID);
-        const float step_y = det.bbox.h / static_cast<float>(GRID);
+        // PR #602 P2 review: lowercase `grid` so it doesn't look like a
+        // project-wide constexpr (was SCREAMING_SNAKE_CASE).
+        const int   grid   = sample_grid_size_.load(std::memory_order_acquire);
+        const float step_x = det.bbox.w / static_cast<float>(grid);
+        const float step_y = det.bbox.h / static_cast<float>(grid);
 
         // Backends in the codebase use two mask conventions:
         //   1. bbox-local      — mask_width ≈ bbox.w (e.g. YOLOv8-seg tiled masks)
@@ -268,8 +294,8 @@ private:
         const bool mask_is_full_image = static_cast<float>(det.mask_width) >= det.bbox.w * 1.5f &&
                                         static_cast<float>(det.mask_height) >= det.bbox.h * 1.5f;
 
-        for (int gy = 0; gy < GRID; ++gy) {
-            for (int gx = 0; gx < GRID; ++gx) {
+        for (int gy = 0; gy < grid; ++gy) {
+            for (int gx = 0; gx < grid; ++gx) {
                 const float u = det.bbox.x + (static_cast<float>(gx) + 0.5f) * step_x;
                 const float v = det.bbox.y + (static_cast<float>(gy) + 0.5f) * step_y;
 
@@ -295,7 +321,7 @@ private:
 
                 VoxelUpdate vu;
                 vu.position_m     = backproject(u, v, z, camera_pose);
-                vu.semantic_label = static_cast<uint8_t>(std::max(det.class_id, 0));
+                vu.semantic_label = static_cast<uint8_t>(std::clamp(det.class_id, 0, 255));
                 vu.confidence     = det.confidence;
                 vu.occupancy      = 1.0f;
                 updates.push_back(vu);
