@@ -12,16 +12,24 @@ namespace drone::hal {
 
 class SimulatedInferenceBackend : public IInferenceBackend {
 public:
+    // PR #602 P2 review: previously direct + Config ctors left
+    // `initialized_` at false but happily accepted infer() calls.
+    // Now both ctors set initialized_=true since they don't require
+    // a model load.  The init() override stays available for callers
+    // that explicitly want to reset state (e.g. reconfigure
+    // input_size).
     explicit SimulatedInferenceBackend(int num_detections = 2, float confidence_min = 0.4f,
                                        float confidence_max = 0.9f)
         : num_detections_(num_detections)
         , confidence_min_(confidence_min)
-        , confidence_max_(confidence_max) {}
+        , confidence_max_(confidence_max)
+        , initialized_(true) {}
 
     SimulatedInferenceBackend(const drone::Config& cfg, const std::string& section)
         : num_detections_(cfg.get<int>(section + ".num_detections", 2))
         , confidence_min_(cfg.get<float>(section + ".confidence_min", 0.4f))
-        , confidence_max_(cfg.get<float>(section + ".confidence_max", 0.9f)) {}
+        , confidence_max_(cfg.get<float>(section + ".confidence_max", 0.9f))
+        , initialized_(true) {}
 
     [[nodiscard]] bool init(const std::string& /*model_path*/, int input_size) override {
         input_size_  = input_size;
@@ -33,6 +41,12 @@ public:
         const uint8_t* frame_data, uint32_t width, uint32_t height, uint32_t channels,
         uint32_t /*stride*/) override {
         using R = drone::util::Result<InferenceOutput, std::string>;
+        // PR #602 P1 review: previously `initialized_` was set in
+        // init() but never checked here — dead write.  Honour the
+        // contract: refuse infer() before init().
+        if (!initialized_) {
+            return R::err("SimulatedInferenceBackend not initialized");
+        }
         if (!frame_data) {
             return R::err("Null frame data");
         }
