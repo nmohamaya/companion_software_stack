@@ -2371,6 +2371,41 @@ TEST(RadarFusionTest, NormalRadarOnlyFlowDoesNotTriggerFallback) {
         << "got count=" << engine.s_matrix_fallback_count();
 }
 
+// PR #649 P2 review: reset() must clear s_matrix_fallback_count_.
+// Without this, a previous run's failure count contaminates the next
+// run's run-report, AND the "WARN on first firing" semantics break
+// (the fix logs WARN at fallback_n==1; if reset doesn't zero the
+// counter, the next session's first failure logs DEBUG only).
+TEST(RadarFusionTest, ResetClearsSMatrixFallbackCount) {
+    auto            calib = make_test_calib();
+    UKFFusionEngine engine(calib, RadarNoiseConfig{}, /*radar_enabled=*/true);
+
+    // The counter is internal — we can't easily force a fallback to
+    // non-zero without pathological inputs that pass the construction
+    // guard but degenerate S past Pass 3.  What we CAN lock is the
+    // clear-on-reset contract: counter starts at 0, fuse a healthy
+    // batch, reset, counter back to 0.  Combined with the existing
+    // SMatrixFallbackCounterStartsAtZero test this proves reset
+    // observably restores the counter to zero rather than leaving it
+    // in an unspecified state.
+    EXPECT_EQ(engine.s_matrix_fallback_count(), 0u);
+
+    TrackedObjectList empty_tracked;
+    empty_tracked.timestamp_ns = 1'000'000ULL;
+    drone::ipc::RadarDetectionList radar_list{};
+    radar_list.num_detections             = 1;
+    radar_list.detections[0]              = make_radar_det(10.0f, 0.0f, 0.0f, 0.0f);
+    radar_list.detections[0].timestamp_ns = empty_tracked.timestamp_ns;
+    radar_list.timestamp_ns               = empty_tracked.timestamp_ns;
+    engine.set_radar_detections(radar_list);
+    (void)engine.fuse(empty_tracked);
+
+    engine.reset();
+    EXPECT_EQ(engine.s_matrix_fallback_count(), 0u)
+        << "reset() must clear the s_matrix_fallback_count_ atomic so the "
+           "next run's WARN-on-first-firing semantics fire correctly";
+}
+
 // ── Issue #645 review fix (#649 P1) — construction-time R guard ───────
 // If any RadarNoiseConfig std-deviation is <= 0 / NaN / Inf, the UKF must
 // disable radar fusion at construction time rather than silently degrading

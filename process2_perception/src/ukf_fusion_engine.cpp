@@ -669,6 +669,11 @@ void UKFFusionEngine::reset() {
     has_depth_map_       = false;
     latest_depth_map_    = {};
     next_radar_track_id_ = 0x80000000u;
+    // PR #649 P2 review: clear the diagnostic counter on reset() so
+    // test-mode runs and scenario restarts don't carry stale fallback
+    // counts forward.  Otherwise a previous run's failures would
+    // contaminate the next run's run-report.
+    s_matrix_fallback_count_.store(0, std::memory_order_relaxed);
 }
 
 void UKFFusionEngine::set_drone_pose(float north, float east, float up, float yaw) {
@@ -781,8 +786,21 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
             // recovered S can never be more permissive than R-only gating.
             Eigen::SelfAdjointEigenSolver<ObjectUKF::RadarMeasMat> es(S);
             if (es.info() == Eigen::Success) {
-                const auto& R_radar           = ukf.radar_noise();
-                const float floor_eig         = 1e-3f * std::max(1e-9f, R_radar.diagonal().mean());
+                const auto& R_radar = ukf.radar_noise();
+                // PR #649 P2 review: previous floor of `1e-3f * max(1e-9f,
+                // R_radar.diagonal().mean())` collapsed to ~1e-12 if R_radar
+                // was a zero matrix (degenerate config) — effectively no
+                // floor, eigenvalue clamp would not restore positive
+                // definiteness meaningfully.  Use an absolute minimum
+                // floor (1e-6) as the lower bound so the clamp always
+                // produces an observably positive-definite S regardless
+                // of the R magnitude.  Construction-time guard already
+                // refuses radar fusion when any R std-deviation is ≤0
+                // (PR #665), so a literal R==0 should be unreachable in
+                // production, but the explicit floor guards future regressions.
+                static constexpr float kAbsMinFloorEig = 1e-6f;
+                const float            floor_eig =
+                    std::max(kAbsMinFloorEig, 1e-3f * std::max(1e-9f, R_radar.diagonal().mean()));
                 ObjectUKF::RadarMeasVec evals = es.eigenvalues().cwiseMax(floor_eig);
                 S = es.eigenvectors() * evals.asDiagonal() * es.eigenvectors().transpose();
                 S = 0.5f * (S + S.transpose().eval());
@@ -810,16 +828,20 @@ bool UKFFusionEngine::try_associate_radar(ObjectUKF& ukf, std::vector<bool>& rad
                             "(LLT + eigenvalue-clamp both failed) — falling back "
                             "to R-only gating",
                             ukf.track_id);
-            ++s_matrix_fallback_count_;
-            // Issue #645 review fix (#649 P2): periodic WARN every N=100 fallbacks
-            // so the silent DEBUG-only fallback path becomes visible at INFO level
-            // when persistently firing.  Counter is the canonical signal but
-            // operators don't poll the accessor in real time.
-            if (s_matrix_fallback_count_ % 100 == 0) {
+            // PR #649 P2 review: atomic fetch_add (was racy `++` on plain uint64_t).
+            // Capture post-increment value locally so the WARN reflects what
+            // we just incremented to.
+            const uint64_t fallback_n =
+                s_matrix_fallback_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+            // PR #649 P2 review: previous policy logged WARN only at count=100,
+            // so the first 99 fallbacks were DEBUG-only — invisible to P7 /
+            // run-report grep.  Now WARN on the first firing AND every 100
+            // thereafter so chronic degradation surfaces immediately.
+            if (fallback_n == 1 || fallback_n % 100 == 0) {
                 DRONE_LOG_WARN("[UKF] S-matrix R-only fallback fired {} times — "
                                "UT weights are persistently producing degenerate S; "
                                "consider re-tuning kAlpha (Issue #645 deferred fix C)",
-                               s_matrix_fallback_count_);
+                               fallback_n);
             }
             use_full_S = false;
             // Use z_pred instead of z_mean for innovation (matches R-only
