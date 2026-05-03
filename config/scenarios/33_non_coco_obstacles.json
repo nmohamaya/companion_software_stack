@@ -208,9 +208,10 @@
                     "allow_radar_promotion": true
                 },
                 "_comment_cross_veto": "Issue #698 Fix #1 — late-stage cross-modal veto on PATH A static promotion (ADR-013 §2 item 4).  Cells <short_range_m promote on stereo alone; cells >=short_range_m in radar FOV require radar agreement; cells >=short_range_m outside FOV stay dynamic forever (with FOV-residency / dynamic-age-cap escape hatches).  Default policy values come from the research note in #698 — short_range=10m crossover where radar wins range accuracy, 100ms staleness gate aligned to radar's ~20Hz tick, 1m gate-min-radius growing as 0.25R+0.1 with range, 2s positive-silence threshold, 30s age cap.",
+                "_comment_short_range_workaround": "Issue #702 — Cosys-AirSim's lidar-emulated radar misses 5/7 spawned obstacles in this scenario regardless of cluster cap.  Per-object recall analyzer (tools/diag/per_object_recall.py) on run 2026-05-03_134342_ABORTED: spawned-obstacle radar recall = 14% (1/7), voxel recall = 71% (5/7) with sub-meter accuracy.  ADR-013's short_range=10m was tuned for real AWR1843 radar (cm-class range past 10m); Cosys radar is unreliable at all ranges in this scene.  Bumped to 30m so the camera has sole promotion authority within the obstacle field.  The cross-veto only applies past 30m where camera depth is unreliable anyway.  REVERT to 10m once the underlying radar accuracy is fixed (see #702).",
                 "cross_veto": {
                     "enabled": true,
-                    "short_range_m": 10.0,
+                    "short_range_m": 30.0,
                     "radar_max_staleness_ms": 100,
                     "gate_min_radius_m": 1.0,
                     "fov_residency_promote_s": 2.0,
