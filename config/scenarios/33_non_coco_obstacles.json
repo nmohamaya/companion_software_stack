@@ -128,6 +128,8 @@
             }
         },
         "slam": {
+            "_pose_source_comment": "Issue #696 workaround — VIO pipeline froze mid-scenario in run 2026-05-02_153630_ABORTED at (10.22, 20.13) with feat=-1 matches=-1 imu=0; downstream went stale-blind. Until the underlying VIO freeze is debugged, P3 reads ground-truth pose directly from Cosys-AirSim (sim only).",
+            "pose_source": "cosys_ground_truth",
             "vio": {
                 "backend": "cosys_airsim"
             }
