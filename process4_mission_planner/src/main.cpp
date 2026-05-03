@@ -493,6 +493,80 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ── Issue #698 Fix #1 — cross-modal veto wiring (ADR-013 §2 item 4) ─
+    // Gate is constructed unconditionally so it can be tested by ops via
+    // config flips, but the gate pointer passed into insert_voxels is null
+    // unless `cross_veto.enabled = true`.  Without that flag everything
+    // continues to work exactly as before.
+    const bool cross_veto_enabled = ctx.cfg.get<bool>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::ENABLED, false);
+
+    drone::planner::RadarFovConfig fov_cfg;
+    fov_cfg.fov_azimuth_rad =
+        ctx.cfg.get<float>(std::string(drone::cfg_key::perception::radar::SECTION) +
+                               drone::cfg_key::hal::FOV_AZIMUTH_RAD,
+                           fov_cfg.fov_azimuth_rad);
+    fov_cfg.fov_elevation_rad =
+        ctx.cfg.get<float>(std::string(drone::cfg_key::perception::radar::SECTION) +
+                               drone::cfg_key::hal::FOV_ELEVATION_RAD,
+                           fov_cfg.fov_elevation_rad);
+    fov_cfg.min_range_m = ctx.cfg.get<float>(
+        std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MIN_RANGE_M,
+        fov_cfg.min_range_m);
+    fov_cfg.max_range_m = ctx.cfg.get<float>(
+        std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MAX_RANGE_M,
+        fov_cfg.max_range_m);
+
+    drone::planner::CrossVetoPolicy veto_policy;
+    veto_policy.short_range_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::SHORT_RANGE_M,
+        veto_policy.short_range_m);
+    {
+        const auto staleness_ms = ctx.cfg.get<int>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::RADAR_MAX_STALENESS_MS,
+            100);
+        veto_policy.radar_max_staleness_ns = static_cast<uint64_t>(std::max(0, staleness_ms)) *
+                                             1'000'000ULL;
+    }
+    veto_policy.min_gate_radius_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::GATE_MIN_RADIUS_M,
+        veto_policy.min_gate_radius_m);
+    {
+        const auto residency_s = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::FOV_RESIDENCY_PROMOTE_S,
+            2.0f);
+        veto_policy.fov_residency_promote_ns =
+            static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
+    }
+    {
+        const auto cap_s = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::DYNAMIC_AGE_CAP_S, 30.0f);
+        veto_policy.dynamic_age_cap_ns = static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
+    }
+
+    drone::planner::RadarFovGate radar_fov_gate(fov_cfg, veto_policy);
+
+    // Subscribe to /radar_detections so the gate can answer
+    // "is there a radar return near this cell" inside insert_voxels().
+    auto radar_dets_sub =
+        ctx.bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
+
+    if (cross_veto_enabled) {
+        DRONE_LOG_INFO("[CrossVeto] ENABLED — short_range={:.1f}m, gate_min_r={:.2f}m, "
+                       "radar_staleness_ms={}, fov_residency_s={:.2f}, dynamic_age_cap_s={:.1f}; "
+                       "radar FOV ±{:.1f}°×±{:.1f}° range=[{:.1f},{:.1f}]m",
+                       veto_policy.short_range_m, veto_policy.min_gate_radius_m,
+                       veto_policy.radar_max_staleness_ns / 1'000'000ULL,
+                       veto_policy.fov_residency_promote_ns / 1.0e9,
+                       veto_policy.dynamic_age_cap_ns / 1.0e9,
+                       fov_cfg.fov_azimuth_rad * 180.0f / static_cast<float>(M_PI),
+                       fov_cfg.fov_elevation_rad * 180.0f / static_cast<float>(M_PI),
+                       fov_cfg.min_range_m, fov_cfg.max_range_m);
+    } else {
+        DRONE_LOG_INFO("[CrossVeto] disabled (cross_veto.enabled=false) — PATH A promotes "
+                       "unconditionally (legacy behaviour)");
+    }
+
     DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
 
@@ -542,10 +616,37 @@ int main(int argc, char* argv[]) {
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
-        pose_sub->receive(pose);
+        const bool       got_pose = pose_sub->receive(pose);
+        if (got_pose) {
+            // Issue #698 Fix #1 — keep the cross-veto gate's pose cache fresh.
+            // Cheap (vector + quaternion conjugate); safe to call every tick
+            // even if the gate is disabled (the gate just stores the pose).
+            radar_fov_gate.set_pose(pose);
+        }
 
         drone::ipc::DetectedObjectList objects{};
         obj_sub->receive(objects);
+
+        // ── 1a. Drain /radar_detections so the cross-veto gate's cache is
+        // current before insert_voxels() queries it.  Issue #698 Fix #1.
+        // We keep only the latest message — the gate doesn't need history.
+        if (radar_dets_sub) {
+            drone::ipc::RadarDetectionList latest_radar{};
+            bool                           got_any_radar = false;
+            for (int i = 0; i < 16; ++i) {  // bounded drain — single tick budget
+                drone::ipc::RadarDetectionList next{};
+                if (!radar_dets_sub->receive(next)) break;
+                latest_radar  = next;
+                got_any_radar = true;
+            }
+            if (got_any_radar) {
+                const auto now_ns =
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count());
+                radar_fov_gate.set_radar_detections(latest_radar, now_ns);
+            }
+        }
 
         // ── 1b. Drain PATH A voxel batches (Epic #520 / Issue #608) ──
         // Polled on the planner thread to preserve P4's single-threaded
@@ -577,9 +678,17 @@ int main(int argc, char* argv[]) {
                 for (uint32_t i = 0; i < batch.num_voxels; ++i) {
                     if (batch.voxels[i].instance_id != 0) ++voxels_with_instance;
                 }
-                auto stats = grid_planner->insert_voxels(batch.voxels, batch.num_voxels,
-                                                         voxel_input_clamp_m,
-                                                         voxel_input_min_confidence);
+                // Issue #698 Fix #1 — when cross_veto is enabled, pass the
+                // current pose + gate so insert_voxels can apply the
+                // ADR-013 §2 item 4 promotion rule.  When disabled, both
+                // are nullptr and insert_voxels behaves exactly as before.
+                const drone::ipc::Pose* pose_for_veto = (cross_veto_enabled && got_pose) ? &pose
+                                                                                         : nullptr;
+                drone::planner::RadarFovGate* gate_for_veto = cross_veto_enabled ? &radar_fov_gate
+                                                                                 : nullptr;
+                auto                          stats         = grid_planner->insert_voxels(
+                    batch.voxels, batch.num_voxels, voxel_input_clamp_m, voxel_input_min_confidence,
+                    pose_for_veto, gate_for_veto);
                 inserted_total += static_cast<uint32_t>(stats.inserted);
                 dropped_total += static_cast<uint32_t>(
                     stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);
@@ -714,6 +823,20 @@ int main(int argc, char* argv[]) {
         state_tick.tick(fsm, pose, fc_state, objects, *path_planner, grid_planner, *avoider,
                         obstacle_layer, *traj_pub, *payload_pub, send_fc,
                         gcs_handler.active_correlation_id(), diag);
+
+        // ── 8a. Issue #698 Fix #1 — advance per-cell FOV-residency ─
+        // counters so cells outside the radar FOV with no return get a
+        // chance to age into the single-modality-promote escape hatch.
+        // Cheap (O(N) over dynamic cells, ~80 µs at scenario-33 worst case).
+        // Only runs when cross_veto is enabled — disabled grid pays nothing.
+        if (cross_veto_enabled && grid_planner) {
+            const auto now_ns =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+            radar_fov_gate.tick_residency(grid_planner->grid_dynamic_cell_keys(),
+                                          grid_planner->grid_resolution_m(), now_ns);
+        }
 
         // Handle fault reset on landing
         if (state_tick.consume_fault_reset()) {

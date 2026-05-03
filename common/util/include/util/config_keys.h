@@ -467,6 +467,41 @@ inline constexpr const char* STATIC_CELL_TTL_S =
 // 0 = disabled (legacy behaviour, voxels write directly to the grid).
 inline constexpr const char* VOXEL_INSTANCE_PROMOTION_OBSERVATIONS =
     "mission_planner.occupancy_grid.voxel_input.instance_promotion_observations";
+
+// ─── Issue #698 Fix #1 — cross-modal veto (ADR-013) ───
+// Enable the long-range PATH A → static promotion veto.  Per ADR-013
+// §2 item 4: cells <short_range promote on stereo alone; cells >=short_range
+// in radar FOV require radar agreement; cells >=short_range outside FOV
+// stay dynamic forever (with FOV-residency / age-cap escape hatches).
+// Defaults match RadarFovGate.h policy defaults (research-note-derived).
+namespace cross_veto {
+inline constexpr const char* SECTION = "mission_planner.occupancy_grid.cross_veto";
+// false = legacy behaviour (no veto, scratch this codepath).  Default is
+// `false` so legacy scenarios are unaffected; scenarios that opt in flip
+// it explicitly.  Scenario 33 sets it true.
+inline constexpr const char* ENABLED = "mission_planner.occupancy_grid.cross_veto.enabled";
+// Distance below which stereo promotes alone (radar in/near blind zone).
+inline constexpr const char* SHORT_RANGE_M =
+    "mission_planner.occupancy_grid.cross_veto.short_range_m";
+// Maximum acceptable radar-message age at query time.  Older = treat as
+// "didn't see, can't confirm" → veto.  Milliseconds for config sanity;
+// converted to ns internally.
+inline constexpr const char* RADAR_MAX_STALENESS_MS =
+    "mission_planner.occupancy_grid.cross_veto.radar_max_staleness_ms";
+// Minimum spatial association window between a radar return and a
+// candidate cell (the actual gate is `max(min_radius, 0.25 * R + 0.1)`
+// so it grows with range to track radar's own cross-range resolution).
+inline constexpr const char* GATE_MIN_RADIUS_M =
+    "mission_planner.occupancy_grid.cross_veto.gate_min_radius_m";
+// Cumulative time a cell spends inside the radar FOV with NO return
+// before we trust the silence and force-promote (single-modality flag).
+inline constexpr const char* FOV_RESIDENCY_PROMOTE_S =
+    "mission_planner.occupancy_grid.cross_veto.fov_residency_promote_s";
+// Hard cap on dynamic-cell age before force-promote with single-modality
+// flag.  Prevents dynamic-layer bloat for cells structurally outside FOV.
+inline constexpr const char* DYNAMIC_AGE_CAP_S =
+    "mission_planner.occupancy_grid.cross_veto.dynamic_age_cap_s";
+}  // namespace cross_veto
 }  // namespace occupancy_grid
 
 namespace obstacle_avoidance {

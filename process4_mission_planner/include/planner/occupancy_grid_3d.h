@@ -143,8 +143,8 @@ public:
         hd_map_cells_.clear();
         hd_map_static_count_ = 0;
         static_cell_timestamps_.clear();
-        single_modality_static_.clear();         // Issue #698 Fix #1
-        total_cross_veto_deferred_      = 0;     // Issue #698 Fix #1 (Phase 3)
+        single_modality_static_.clear();      // Issue #698 Fix #1
+        total_cross_veto_deferred_      = 0;  // Issue #698 Fix #1 (Phase 3)
         total_single_modality_promoted_ = 0;
         promoted_count_                 = 0;
         hit_count_.clear();
@@ -460,54 +460,54 @@ public:
                                     bool may_promote          = true;
                                     bool single_modality_flag = false;
                                     if (drone_pose && radar_gate) {
-                                        const auto wxyz = grid_to_world(c);
-                                        const auto query =
-                                            radar_gate->query(wxyz[0], wxyz[1], wxyz[2], now_ns);
-                                        const auto decision = decide_promotion(query,
-                                                                               radar_gate->policy());
+                                        const auto wxyz  = grid_to_world(c);
+                                        const auto query = radar_gate->query(wxyz[0], wxyz[1],
+                                                                             wxyz[2], now_ns);
+                                        const auto decision =
+                                            decide_promotion(query, radar_gate->policy());
                                         switch (decision) {
-                                        case PromotionDecision::Promote:
-                                            may_promote = true;
-                                            break;
-                                        case PromotionDecision::DeferToDynamic:
-                                            may_promote = false;
-                                            ++s.cross_veto_deferred;
-                                            ++total_cross_veto_deferred_;
-                                            // Throttled WARN: first event,
-                                            // then every 50th, to surface
-                                            // disagreements without log
-                                            // floods.  Phase 3 will replace
-                                            // this with structured telemetry.
-                                            if (s.cross_veto_deferred == 1 ||
-                                                s.cross_veto_deferred % 50 == 0) {
-                                                DRONE_LOG_WARN(
-                                                    "[CrossVeto] Defer promotion at "
-                                                    "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
-                                                    "in_fov={} radar_present={} "
-                                                    "radar_stale={} (#{} this batch)",
-                                                    wxyz[0], wxyz[1], wxyz[2],
-                                                    query.range_to_drone_m, query.in_fov,
-                                                    query.radar_present, query.radar_stale,
-                                                    s.cross_veto_deferred);
-                                            }
-                                            break;
-                                        case PromotionDecision::PromoteSingleModality:
-                                            may_promote          = true;
-                                            single_modality_flag = true;
-                                            ++s.single_modality_promoted;
-                                            ++total_single_modality_promoted_;
-                                            if (s.single_modality_promoted == 1 ||
-                                                s.single_modality_promoted % 50 == 0) {
-                                                DRONE_LOG_WARN(
-                                                    "[CrossVeto] Single-modality promote at "
-                                                    "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
-                                                    "residency={}ms (#{} this batch)",
-                                                    wxyz[0], wxyz[1], wxyz[2],
-                                                    query.range_to_drone_m,
-                                                    query.residency_ns / 1'000'000ULL,
-                                                    s.single_modality_promoted);
-                                            }
-                                            break;
+                                            case PromotionDecision::Promote:
+                                                may_promote = true;
+                                                break;
+                                            case PromotionDecision::DeferToDynamic:
+                                                may_promote = false;
+                                                ++s.cross_veto_deferred;
+                                                ++total_cross_veto_deferred_;
+                                                // Throttled WARN: first event,
+                                                // then every 50th, to surface
+                                                // disagreements without log
+                                                // floods.  Phase 3 will replace
+                                                // this with structured telemetry.
+                                                if (s.cross_veto_deferred == 1 ||
+                                                    s.cross_veto_deferred % 50 == 0) {
+                                                    DRONE_LOG_WARN(
+                                                        "[CrossVeto] Defer promotion at "
+                                                        "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
+                                                        "in_fov={} radar_present={} "
+                                                        "radar_stale={} (#{} this batch)",
+                                                        wxyz[0], wxyz[1], wxyz[2],
+                                                        query.range_to_drone_m, query.in_fov,
+                                                        query.radar_present, query.radar_stale,
+                                                        s.cross_veto_deferred);
+                                                }
+                                                break;
+                                            case PromotionDecision::PromoteSingleModality:
+                                                may_promote          = true;
+                                                single_modality_flag = true;
+                                                ++s.single_modality_promoted;
+                                                ++total_single_modality_promoted_;
+                                                if (s.single_modality_promoted == 1 ||
+                                                    s.single_modality_promoted % 50 == 0) {
+                                                    DRONE_LOG_WARN(
+                                                        "[CrossVeto] Single-modality promote at "
+                                                        "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
+                                                        "residency={}ms (#{} this batch)",
+                                                        wxyz[0], wxyz[1], wxyz[2],
+                                                        query.range_to_drone_m,
+                                                        query.residency_ns / 1'000'000ULL,
+                                                        s.single_modality_promoted);
+                                                }
+                                                break;
                                         }
                                     }
                                     if (may_promote) {
@@ -812,13 +812,25 @@ public:
     [[nodiscard]] bool is_single_modality_static(const GridCell& c) const {
         return single_modality_static_.count(c) > 0;
     }
+    /// Issue #698 Fix #1 — snapshot of the keys in the dynamic (TTL) layer.
+    /// Returned by-value (a copy) so callers can iterate without holding a
+    /// reference to internal state and without locking — there's no thread
+    /// other than the planner that touches `occupied_`.  Cost: O(N).  At
+    /// scenario-33 worst case (~5 K dynamic cells × 10 Hz) the copy is
+    /// ~80 µs which is negligible vs the planner tick budget.  Used by
+    /// RadarFovGate::tick_residency to advance per-cell FOV-residency
+    /// counters.
+    [[nodiscard]] std::vector<GridCell> dynamic_cell_keys() const {
+        std::vector<GridCell> keys;
+        keys.reserve(occupied_.size());
+        for (const auto& [c, t] : occupied_) keys.push_back(c);
+        return keys;
+    }
     /// Issue #698 Fix #1 (Phase 3 telemetry) — cumulative cross-veto event
     /// counters across the lifetime of this grid.  Surfaced in the periodic
     /// `[Grid]` diagnostic line and aggregated into the scenario run-report
     /// post-processing.  Both reset in `clear_static()`.
-    [[nodiscard]] uint64_t total_cross_veto_deferred() const {
-        return total_cross_veto_deferred_;
-    }
+    [[nodiscard]] uint64_t total_cross_veto_deferred() const { return total_cross_veto_deferred_; }
     [[nodiscard]] uint64_t total_single_modality_promoted() const {
         return total_single_modality_promoted_;
     }

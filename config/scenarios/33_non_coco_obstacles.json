@@ -206,6 +206,15 @@
                     "instance_promotion_observations": 8,
                     "_comment_allow_radar_promotion": "Issue #645 — radar-confirmed detected objects bypass the voxel-input promotion pause and reach the strategic path planner.  Without this, radar tracks only feed ObstacleAvoider3D (reactive deflection) — D* Lite was blind to radar-detected obstacles.  Radar gives accurate range from the first hit (no convergence latency / ghost cells), so it's the safe subset of camera+radar fusion to allow through while voxel_input is the primary static-cell source.",
                     "allow_radar_promotion": true
+                },
+                "_comment_cross_veto": "Issue #698 Fix #1 — late-stage cross-modal veto on PATH A static promotion (ADR-013 §2 item 4).  Cells <short_range_m promote on stereo alone; cells >=short_range_m in radar FOV require radar agreement; cells >=short_range_m outside FOV stay dynamic forever (with FOV-residency / dynamic-age-cap escape hatches).  Default policy values come from the research note in #698 — short_range=10m crossover where radar wins range accuracy, 100ms staleness gate aligned to radar's ~20Hz tick, 1m gate-min-radius growing as 0.25R+0.1 with range, 2s positive-silence threshold, 30s age cap.",
+                "cross_veto": {
+                    "enabled": true,
+                    "short_range_m": 10.0,
+                    "radar_max_staleness_ms": 100,
+                    "gate_min_radius_m": 1.0,
+                    "fov_residency_promote_s": 2.0,
+                    "dynamic_age_cap_s": 30.0
                 }
             },
             "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.",

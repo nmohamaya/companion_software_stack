@@ -119,9 +119,14 @@ public:
     /// (Epic #520 / Issue #608).  See `OccupancyGrid3D::insert_voxels` for
     /// semantics; this is the IGridPlanner pass-through so the P4 voxel
     /// subscriber thread doesn't need a downcast to GridPlannerBase.
-    virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
-                                                            uint32_t n, float clamp_m,
-                                                            float min_confidence) = 0;
+    ///
+    /// Issue #698 Fix #1 — optional `drone_pose` and `radar_gate` parameters
+    /// engage the cross-modal veto from ADR-013 §2 item 4.  When either is
+    /// null (legacy callers, tests not exercising the veto), promotion is
+    /// unconditional — preserves backward compatibility.
+    virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(
+        const drone::ipc::SemanticVoxel* voxels, uint32_t n, float clamp_m, float min_confidence,
+        const drone::ipc::Pose* drone_pose = nullptr, RadarFovGate* radar_gate = nullptr) = 0;
 
     /// True if the last planning cycle could not find a search path AND
     /// there was no cached path to keep following — in that case plan()
@@ -171,7 +176,12 @@ public:
     /// logging in tick_survey/tick_navigate can avoid dynamic_cast.
     [[nodiscard]] virtual size_t grid_occupied_count() const = 0;
     [[nodiscard]] virtual size_t grid_static_count() const   = 0;
-    [[nodiscard]] virtual int    grid_promoted_count() const = 0;
+    /// Issue #698 Fix #1 — snapshot of dynamic-cell keys for the cross-veto
+    /// gate's per-tick FOV-residency advance.  See OccupancyGrid3D for
+    /// cost analysis.  Empty when no grid exists or no cells are tracked.
+    [[nodiscard]] virtual std::vector<GridCell> grid_dynamic_cell_keys() const = 0;
+    [[nodiscard]] virtual float                 grid_resolution_m() const      = 0;
+    [[nodiscard]] virtual int                   grid_promoted_count() const    = 0;
 
     /// Whether the planner has snapped the current goal to an alternate position.
     [[nodiscard]] virtual bool has_snapped_goal() const = 0;
@@ -234,12 +244,16 @@ public:
     }
 
     OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
-                                                    uint32_t n, float clamp_m,
-                                                    float min_confidence) override {
-        auto stats = grid_.insert_voxels(voxels, n, clamp_m, min_confidence);
-        // If any voxel landed, invalidate the cached path so D*Lite/A* replan
-        // against the updated grid on the next tick.
-        if (stats.inserted > 0) {
+                                                    uint32_t n, float clamp_m, float min_confidence,
+                                                    const drone::ipc::Pose* drone_pose = nullptr,
+                                                    RadarFovGate* radar_gate = nullptr) override {
+        auto stats = grid_.insert_voxels(voxels, n, clamp_m, min_confidence, drone_pose,
+                                         radar_gate);
+        // If any voxel landed OR was deferred / single-modality-promoted, the
+        // cached path may be stale (cells changed state in dynamic OR static).
+        // Invalidate so D*Lite/A* replan on the next tick.  Issue #698 Fix #1.
+        if (stats.inserted > 0 || stats.cross_veto_deferred > 0 ||
+            stats.single_modality_promoted > 0) {
             snap_valid_ = false;
         }
         return stats;
@@ -260,7 +274,11 @@ public:
 
     [[nodiscard]] size_t grid_occupied_count() const override { return grid_.occupied_count(); }
     [[nodiscard]] size_t grid_static_count() const override { return grid_.static_count(); }
-    [[nodiscard]] int    grid_promoted_count() const override { return grid_.promoted_count(); }
+    [[nodiscard]] std::vector<GridCell> grid_dynamic_cell_keys() const override {
+        return grid_.dynamic_cell_keys();
+    }
+    [[nodiscard]] float grid_resolution_m() const override { return grid_.resolution(); }
+    [[nodiscard]] int   grid_promoted_count() const override { return grid_.promoted_count(); }
 
     void invalidate_path() override {
         cached_path_.clear();
