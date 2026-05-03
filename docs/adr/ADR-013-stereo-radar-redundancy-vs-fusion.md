@@ -45,9 +45,19 @@ Operationally:
 1. **Stereo path** owns dense local geometry under ~10 m. Replaces the current PATH A camera+SAM+DA V2 chain. Promotes via the existing instance gate (cluster + tracker + N-frame observation count). Saturation-band filter (PR #699) stays in place as a universal "depth source said max → reject" guard.
 2. **Radar path** owns range >10 m and Doppler. Promotes its own grid cells when range is confident *and* the detection has Doppler-consistent re-observation across N frames.
 3. **UKF as track-level cross-checker for moving objects only.** Doppler-positive tracks get camera bearing + radar range fused. Stationary detections do not enter the UKF — the camera is more accurate at bearing than the radar we can fly, so fusing on stationary objects strictly degrades the estimate.
-4. **Late-stage cross-veto at the grid boundary.** When PATH A wants to promote a cell at >10 m and radar reports nothing in that bearing/range cone, the cell stays dynamic (TTL-decay) instead of being cemented. Symmetric: when radar wants to promote a cell at <2 m where it's in the near-field blind zone and stereo says clear, the radar promotion is suppressed. Conflicts are *logged*, not silently resolved — operators see disagreements and can tune.
+4. **Promotion-to-static rule (binding):**
 
-**We explicitly close the door on the unified-UKF refactor for the radar hardware we can fly today.** The decision can be revisited if and when the airframe can carry a 4D imaging radar (~500 g, ~18 W, sub-1° azimuth — see §3 quantitative comparison) where radar bearings become peer-quality to camera bearings.
+    | Cell distance from drone | In radar FOV? | Promotion authority                                        |
+    |--------------------------|---------------|------------------------------------------------------------|
+    | < 10 m                   | any           | Stereo alone — radar is in/near blind zone or sub-resolution |
+    | ≥ 10 m                   | yes           | **Stereo + radar agreement required**                      |
+    | ≥ 10 m                   | no            | **Stays dynamic (TTL-decay), never promotes**              |
+
+    Cells in the third row still appear in the grid, the planner still routes around them, and the reactive avoider still respects them — they just do not earn permanent residency without a second opinion. Because the FSM commands yaw to face the direction of travel, any long-range obstacle the drone is actually flying toward enters the forward radar FOV before it matters; promotion is *deferred* until the geometry makes confirmation possible. This is the core defence-in-depth property the ADR locks in.
+
+5. **Late-stage cross-veto at the grid boundary** implements the §2 item 4 rule. Disagreements are *logged*, not silently resolved — operators see them and can tune. Default-open policy on cross-veto evaluator failure: write the cell rather than silently dropping it, so a fault in the veto logic cannot itself blind the grid.
+
+**We explicitly close the door on the unified-UKF refactor for the radar hardware we can fly today.** The decision can be revisited if and when the airframe can carry a 4D imaging radar (~500 g, ~18 W, sub-1° azimuth — see §3 quantitative comparison) where radar bearings become peer-quality to camera bearings, *or* if the airframe gains additional radar coverage (side/up/down units) such that the "outside FOV" row of the table above becomes empty.
 
 ---
 
@@ -127,6 +137,7 @@ Failure-mode independence is the textbook precondition for **defence-in-depth re
 2. **Doppler under-utilised on static objects.** Radar's Doppler signal is only consumed for moving-object UKF tracks. We give up the theoretical benefit of using zero-Doppler as confirming evidence on static obstacles. Acceptable: static-obstacle promotion already has multiple gates (instance count, observation persistence, TTL decay) and Doppler is one signal among several rather than load-bearing.
 3. **Two thread topologies to maintain.** PATH A clusterer + tracker run independently of the UKF. We carry the operational cost of two state machines that do similar work (per-instance ID, dormant pool, re-ID logic). Documented and accepted; the literature shows the alternative is worse.
 4. **Cross-veto logic is new code.** §2 item 4 introduces a new component in the grid-write path. Must be implemented carefully so that a fault in the cross-veto cannot itself blind both channels (i.e. a default-open policy: if the cross-veto fails to evaluate, write the cell rather than silently dropping it).
+5. **Long-range obstacles outside the radar FOV never promote.** Per §2 item 4 row 3, side/up/down obstacles at >10 m stay in the dynamic layer indefinitely (re-observed every PATH A tick → TTL keeps refreshing → cell persists, just never cements). This is the conservative-by-design property the rule is buying. The operational consequence: if a mission profile flies *sideways* past a long-range obstacle without yawing toward it (e.g. side-scan survey, lateral strafe past a wall), the planner sees a dynamic cell — which the avoider respects — but D* Lite can in principle re-route through it on each replan tick because it's not committed-static. Mitigation today: (a) the FSM commands yaw-to-direction-of-travel on every waypoint transition, so the forward radar covers what the planner is actually heading toward; (b) the dynamic layer is honoured by the reactive avoider on every tick, so braking and deflection still apply; (c) the planner *does* respect dynamic cells in path search, just with a lower cost penalty than static. The remaining gap — sustained side-flight past a long-range, off-axis obstacle — is not in any current mission profile. If a future profile (survey, mapping) introduces it, the answer is to add side-pointing radar coverage, not to weaken the promotion rule.
 
 ### Neutral / out of scope
 
@@ -227,8 +238,10 @@ The cross-veto logic is the only genuinely new code this ADR mandates. Everythin
 This ADR should be reopened if any of the following occur:
 
 1. **Airframe payload allows a 4D imaging radar** (sub-1° azimuth, ~500 g, ~18 W class). Radar bearings become peer-quality to camera; Alternative C in §5 becomes the right answer.
-2. **A field incident demonstrates the cross-veto logic itself failing** in a way that takes down both modalities simultaneously. The defence-in-depth premise is invalidated and the architecture must be reconsidered (likely toward stricter modal isolation, not toward unified fusion).
-3. **Certification authority feedback** specifically requires unified state estimation rather than parallel paths. So far the literature suggests the opposite, but a binding regulatory call would override the analysis.
-4. **Stereo replacement matures to a point where its long-range performance approaches radar** (e.g. learned long-baseline stereo with reliable ≥30 m depth). At that point the radar's primary value is reduced to Doppler and adverse-weather coverage, and a two-channel architecture may simplify to one with radar as a narrowly-scoped specialist.
+2. **Airframe gains side / upward / downward radar coverage** (multi-unit array, conformal antenna, or dome-style scanner) such that the "outside FOV" row in the §2 item 4 promotion table becomes empty. At that point every long-range cell can be cross-checked, and the conservative "stays dynamic forever" branch can be removed.
+3. **Mission profile evolves to include sustained side-flight past long-range obstacles** (e.g. side-scan survey, lateral strafe). Per §4 item 5, the answer is *first* to add radar coverage in the relevant direction (trigger 2 above); only if that's not feasible should the promotion rule be loosened.
+4. **A field incident demonstrates the cross-veto logic itself failing** in a way that takes down both modalities simultaneously. The defence-in-depth premise is invalidated and the architecture must be reconsidered (likely toward stricter modal isolation, not toward unified fusion).
+5. **Certification authority feedback** specifically requires unified state estimation rather than parallel paths. So far the literature suggests the opposite, but a binding regulatory call would override the analysis.
+6. **Stereo replacement matures to a point where its long-range performance approaches radar** (e.g. learned long-baseline stereo with reliable ≥30 m depth). At that point the radar's primary value is reduced to Doppler and adverse-weather coverage, and a two-channel architecture may simplify to one with radar as a narrowly-scoped specialist.
 
 Until one of those triggers fires, the parallel-paths-with-cross-veto architecture is the authoritative shape.
