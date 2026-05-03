@@ -815,14 +815,19 @@ private:
                                              static_cast<double>(kin.pose.position.y()),
                                              -static_cast<double>(kin.pose.position.z()));
 
-                // Quaternion: NED → ENU (negate Y, Z axes via conjugate around X-axis swap)
-                // For ground truth the simplest correct form is to negate Z component of
-                // the rotation axis, which is equivalent to:
+                // Quaternion: NED → NEU (basis transform is Z-flip only — North
+                // and East are the same in both frames; only Z = Up vs Down
+                // differs).  For an axis flip on a single coordinate, the
+                // quaternion transform negates ONLY that component.  Issue #698
+                // — pre-fix the code also negated qy ("equivalent to negating
+                // y and z components"), which was the WRONG transform.  It adds
+                // an extra rotation that flips the full orientation.  Caught
+                // when downstream UKF body_to_world() consistently mirrored
+                // radar tracks across the drone's body axis (run
+                // 2026-05-03_151141_ABORTED).
                 Eigen::Quaterniond q_ned(kin.pose.orientation.w(), kin.pose.orientation.x(),
                                          kin.pose.orientation.y(), kin.pose.orientation.z());
-                // NED → ENU-like (Z flipped): q_enu = R_x(pi) * q_ned * R_x(pi)^-1 simplification:
-                // Equivalent to negating y and z components of the quaternion (yaw sign flip + roll flip)
-                p.orientation = Eigen::Quaterniond(q_ned.w(), q_ned.x(), -q_ned.y(), -q_ned.z());
+                p.orientation = Eigen::Quaterniond(q_ned.w(), q_ned.x(), q_ned.y(), -q_ned.z());
 
                 p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.001;
                 p.quality    = 3;  // excellent — ground truth
