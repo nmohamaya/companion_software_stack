@@ -84,7 +84,9 @@
             },
             "semantic_projector": {
                 "_comment_sample_grid_size": "Issue #629 — dense sampling for no-HD-map scenarios. Each SAM mask gets 16×16=256 back-projection probes instead of the legacy 4×4=16. Per-frame cost ~+0.8 ms (negligible); expected to raise PATH A obstacle-discovery rate enough for the drone to build usable grid occupancy before reaching unknown obstacles (scenario 33 is the 'no HD-map' validation case).",
-                "sample_grid_size": 16
+                "sample_grid_size": 16,
+                "_comment_max_depth_saturation_band_m": "Issue #698 — DA V2 saturates at max_depth_m via NaN/edge-clamp/degenerate-fit code paths in convert_raw_to_metric.  Pre-#698 the projector accepted those saturated samples as legitimate horizon-distance obstacles, seeding 4596 ghost cells in run 2026-05-02_161132_ABORTED that walled off WP2.  Reject anything within 0.5 m of the configured max as 'I don't know, defaulted to far'.  Scenario default sufficient at 0.5 m; tighten to 0.1 if false negatives on real horizon obstacles ever appear.",
+                "max_depth_saturation_band_m": 0.5
             },
             "path_a": {
                 "_comment": "PATH A enabled with real class-agnostic SAM via FastSAM ONNX (YOLOv8-seg architecture trained on SA-1B). Produces masks for every distinct object/surface in the frame regardless of COCO class. Prerequisite: run `bash models/download_fastsam.sh` once to fetch FastSAM-s.pt and export to models/fastsam_s.onnx (~50 MB, ~80 ms/frame CPU). MaskDepthProjector back-projects the masks via Depth Anything V2 into world-frame voxels; non-COCO obstacles (walls, pillars, TemplateCubes) get GEOMETRIC_OBSTACLE labels because they don't match any YOLOv8 detector bbox.",

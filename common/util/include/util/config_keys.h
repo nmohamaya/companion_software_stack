@@ -228,6 +228,25 @@ inline constexpr const char* TEXTURE_GATE_THRESHOLD =
 // 8 or 16 for denser coverage at ~O(N²) CPU cost.  Clamped to [2, 64] by
 // the projector.
 inline constexpr const char* SAMPLE_GRID_SIZE = "perception.semantic_projector.sample_grid_size";
+
+// Issue #698 — DA V2 saturation band.  When a depth sample lands within
+// this band of the configured `max_depth_m`, treat it as a saturation
+// marker (DA V2's "I don't know, defaulting to far") and reject it
+// instead of back-projecting a ghost voxel at the horizon.
+//
+// Why: DA V2's `convert_raw_to_metric` clamps NaN, edge-of-window, and
+// degenerate-fit results to exactly `max_depth_m`.  The pre-#698 cutoff
+// was `d > max_depth_m` (strict), so saturated samples passed through
+// and seeded permanent static cells in the planner grid (scenario 33,
+// 2026-05-02_161132 run: 4596 ghost cells walled off the route to WP2).
+//
+// Default 0.5 m — drops obstacles in the top ~1-2.5% of the depth
+// range while catching the saturation cluster.  Set to 0 to disable
+// (legacy behaviour).  Trade-off: real obstacles within the band get
+// rejected too, but a real obstacle that close to the horizon is
+// usually at the edge of model reliability anyway.
+inline constexpr const char* MAX_DEPTH_SATURATION_BAND_M =
+    "perception.semantic_projector.max_depth_saturation_band_m";
 }  // namespace semantic_projector
 
 // PATH A — SAM + detector fusion (Epic #520)

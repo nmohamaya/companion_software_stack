@@ -117,6 +117,20 @@ public:
         return max_obstacle_depth_m_.load(std::memory_order_acquire);
     }
 
+    /// Issue #698 — DA V2 saturation band.  Depth samples within this band
+    /// of `max_obstacle_depth_m_` are treated as the depth model's "I don't
+    /// know, defaulting to far" signal and rejected outright.  See
+    /// `cfg_key::perception::semantic_projector::MAX_DEPTH_SATURATION_BAND_M`
+    /// for the rationale.  Negative values are clamped to 0 (disabled).
+    /// Default 0 (legacy: only `d > max` was rejected).
+    void set_max_depth_saturation_band_m(float band_m) {
+        max_depth_saturation_band_m_.store(std::max(0.0f, band_m), std::memory_order_release);
+    }
+
+    [[nodiscard]] float max_depth_saturation_band_m() const {
+        return max_depth_saturation_band_m_.load(std::memory_order_acquire);
+    }
+
     /// Mask sampling density (Issue #629).  Each SAM mask is covered by an
     /// `N × N` grid of depth probes that back-project to voxels; higher N
     /// gives denser per-frame coverage at the cost of ~O(N²) depth samples
@@ -149,6 +163,8 @@ private:
     bool               initialized_{false};
     std::atomic<float> texture_gate_threshold_{0.0f};
     std::atomic<float> max_obstacle_depth_m_{20.0f};
+    // Issue #698 — DA V2 saturation band (default 0 = disabled, legacy).
+    std::atomic<float> max_depth_saturation_band_m_{0.0f};
     // Default 4 preserves legacy 4×4=16 probes per mask for scenarios that
     // don't opt in to the higher density (Issue #629).  Atomic so a future
     // hot-reload path can update the value without racing with the
@@ -185,7 +201,19 @@ private:
         // EdgeContourSAM masks picked up every image edge and back-projected
         // them into voxels at 50-100 m depth, filling the grid far past
         // `max_static_cells`.)
-        if (d > max_obstacle_depth_m_.load(std::memory_order_acquire)) return 0.0f;
+        // Issue #698 — reject DA V2 max-clamp saturation marker.  When a
+        // depth sample lands within `saturation_band` metres of the
+        // configured max, treat it as the model's "I don't know, defaulting
+        // to far" signal (the exit path for NaN, edge-of-window, and
+        // degenerate-fit results in `convert_raw_to_metric`) and skip
+        // back-projection.  Pre-#698 this was `d > max` (strict), letting
+        // saturated samples seed permanent ghost cells in the planner grid.
+        // `band == 0` reduces to the legacy strict comparison.
+        const float max_obstacle_depth = max_obstacle_depth_m_.load(std::memory_order_acquire);
+        const float saturation_band  = max_depth_saturation_band_m_.load(std::memory_order_acquire);
+        const float reject_threshold = saturation_band > 0.0f ? max_obstacle_depth - saturation_band
+                                                              : max_obstacle_depth;
+        if (d > reject_threshold) return 0.0f;
         // Texture gate (Issue #616) — reject samples where the local depth
         // gradient is below threshold.  Cube faces, sky, untextured walls
         // produce nearly-flat depth output from DA V2 (the network has no
