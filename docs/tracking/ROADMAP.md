@@ -448,11 +448,12 @@
 >
 > **Goal:** Replace the current single-path YOLO+UKF+single-layer-grid perception with a 3-path (SAM/detector + monocular depth + radar-Doppler), class-conditional IMM tracker, and dual-layer grid. Fixes known bugs (#506 haunted cells, YOLO blindness to non-COCO objects) and adds primary drone-detection capability via radar-Doppler.
 >
-> **Design docs (gitignored):** `docs/design/perception_architecture.md` (spec), `docs/design/perception_rewrite_log.md` (living build log), [ADR-012](../adr/ADR-012-detector-licensing-yolo-vs-rtdetr.md) (detector licensing).
+> **Design docs (gitignored):** `docs/design/perception_architecture.md` (spec), `docs/design/perception_rewrite_log.md` (living build log), [ADR-012](../adr/ADR-012-detector-licensing-yolo-vs-rtdetr.md) (detector licensing), [ADR-013](../adr/ADR-013-stereo-radar-redundancy-vs-fusion.md) (stereo + radar — redundancy vs. unified UKF fusion).
 >
 > **Universal acceptance criteria on every sub-issue:**
 > 1. Update `docs/design/perception_rewrite_log.md` with a beginner-friendly component section + code links.
 > 2. Update `LICENSE` and/or ADR-012 if the work introduces new license obligations (new third-party deps, model weights, datasets).
+> 3. Stereo + radar paths must remain architecturally independent into the occupancy grid per ADR-013; do not fold PATH A clusters into the UKF.
 
 #### Foundations (Phase 13a — no-training, pure-algo)
 
