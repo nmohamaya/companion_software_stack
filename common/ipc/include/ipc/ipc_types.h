@@ -680,7 +680,17 @@ struct RadarDetection {
     }
 };
 
-static constexpr uint32_t MAX_RADAR_DETECTIONS = 128;
+// Issue #698 Fix #1 — bumped 128 → 1024 because Cosys-AirSim's lidar-emulated
+// radar produces ~1400 in-FOV points per scan that cluster into ~150-300
+// distinct (range, az, el) bins.  At cap=128 the HAL silently truncated the
+// excess clusters, dropping legitimate small-obstacle returns and producing
+// the "radar invisible to scenario 33 cubes" failure mode (run
+// 2026-05-03_124450_FAIL: 9% near-hits to spawned obstacles).  At cap=1024
+// the truncation only triggers in genuinely-pathological scenes.  Wire-format
+// cost: each RadarDetection is 56 bytes → list size grows from 7.2 KB to
+// 57 KB; well within Zenoh SHM budget.  Kept as constexpr to make the
+// compile-time array sizing visible.
+static constexpr uint32_t MAX_RADAR_DETECTIONS = 1024;
 
 struct RadarDetectionList {
     uint64_t       timestamp_ns{0};
