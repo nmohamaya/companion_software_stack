@@ -32,7 +32,7 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
-#include "planner/occupancy_grid_3d.h"  // GridCell, GridCellHash
+#include "planner/grid_cell.h"  // GridCell, GridCellHash
 
 #include <Eigen/Geometry>
 
