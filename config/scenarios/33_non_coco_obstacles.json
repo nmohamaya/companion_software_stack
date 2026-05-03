@@ -128,6 +128,10 @@
                     "max_match_distance_m": 3.0,
                     "track_max_age_s": 2.0
                 }
+            },
+            "_comment_radar": "Issue #698 — UKF default `negate_azimuth=true` was diagnosed as a frame-convention bug for the Cosys-AirSim lidar-emulated radar.  Cosys publishes lidar points in NED/FRD body frame (X=Forward, Y=Right, Z=Down), so atan2(y, x) returns FRD-convention azimuth (positive = right).  `body_to_world()` in UKFFusionEngine uses the standard FRD-to-NEU rotation that already assumes body Y is right.  Negating azimuth puts the UKF state into FLU body (Y=left) while body_to_world treats it as FRD body (Y=right) → every radar track gets mirrored across the drone's forward axis.  Symptom in run 2026-05-03_145748_FAIL overlay: red × radar tracks scattered across negative North + negative East quadrants where neither obstacles nor drone path exist, while the actual cubes (Cube_7/9/62/66 in +N/+E quadrant) had almost zero radar tracks on them.  Setting negate_azimuth=false stops the double-flip.  See tools/diag/scene_overlay.py for the visualisation that surfaced this.",
+            "radar": {
+                "negate_azimuth": false
             }
         },
         "slam": {
