@@ -182,6 +182,8 @@ add_drone_test(test_voxel_instance_tracker test_voxel_instance_tracker.cpp)
 add_drone_test(test_grid_instance_promotion test_grid_instance_promotion.cpp)
 # Issue #645 — voxel-derived obstacle surface to ObstacleAvoider3D
 add_drone_test(test_voxel_obstacle_surface test_voxel_obstacle_surface.cpp)
+# Issue #698 Fix #1 — RadarFovGate cross-veto helper (Phase 1)
+add_drone_test(test_radar_fov_gate         test_radar_fov_gate.cpp)
 
 # ── MavlinkFCLink tests ─────────────────────────────────────
 add_drone_test(test_mavlink_fc_link test_mavlink_fc_link.cpp)
