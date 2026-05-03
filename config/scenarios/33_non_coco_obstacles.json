@@ -21,8 +21,9 @@
         "requires_cosys_airsim": true,
         "base_config": "config/cosys_airsim_dev.json",
         "_comment_base_config": "Hint for tests/run_scenario_cosys.sh — used when caller does not pass --base-config. Makes `./tests/run_scenario_cosys.sh config/scenarios/33_non_coco_obstacles.json --gui` work without any extra flags.",
+        "_comment_scene": "Issue #698 — switched from cosys_static.json (9 spawned objects) to cosys_empty.json (no spawned objects).  The Blocks default UE5 scene's TemplateCubes (Cube_7/9/62/66 at known positions per collision-log mining) serve as the obstacle field.  Waypoints are designed around those cubes; spawning more obstacles on top would close the corridors we need.",
         "scene": {
-            "file": "config/scenes/cosys_static.json"
+            "file": "config/scenes/cosys_empty.json"
         },
         "backend_requirements": {
             "video_capture.mission_cam.backend": "cosys_airsim",
