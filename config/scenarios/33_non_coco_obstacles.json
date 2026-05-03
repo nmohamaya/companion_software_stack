@@ -155,7 +155,8 @@
             "takeoff_altitude_m": 5.0,
             "acceptance_radius_m": 2.0,
             "overshoot_proximity_factor": 5.0,
-            "cruise_speed_mps": 2.0,
+            "_comment_cruise_speed_mps": "Issue #698 — slowed 2.0 → 1.0 m/s as a test of whether collision rate drops when the avoider has more time to react.  Run 2026-05-03_135322_ABORTED at 2.0 m/s: drone clipped TemplateCube_Rounded_7 168× because D*Lite kept failing (`No path`), the planner fell back to the last cached path (which routed through the cube before the cube was promoted), and the avoider deflected but couldn't fully arrest forward motion.  At 1.0 m/s the stopping distance halves and the avoider has 4× more reaction time.  Bump back to 2.0 once the underlying stale-cached-path bug (#TBD) is addressed.",
+            "cruise_speed_mps": 1.0,
             "survey_duration_s": 0,
             "path_planner": {
                 "backend": "dstar_lite",
