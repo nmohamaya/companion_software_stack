@@ -128,6 +128,10 @@
                     "max_match_distance_m": 3.0,
                     "track_max_age_s": 2.0
                 }
+            },
+            "_comment_radar": "Issue #698 — set negate_azimuth=false for Cosys-AirSim radar (lidar emulation). Cosys lidar reports NED/FRD body coords (X=Forward, Y=Right, Z=Down per HAL header).  HAL computes azimuth = atan2(y, x) which is right-positive (FRD).  UKF body_to_world() (process2_perception/src/ukf_fusion_engine.cpp:687) uses standard FRD→NEU rotation that already assumes body Y=right.  Negating azimuth (default true) puts the UKF state into FLU body (Y=left) while body_to_world treats it as FRD body (Y=right) → every radar track mirrors across the drone body axis.\n\nFirst attempt at this fix (commit 49c4593) was reverted because the POSE quaternion was ALSO bugged at that time (negating qy instead of qz only — fixed in commit 50742b1).  With both bugs active they accidentally cancelled to 'almost right'; with only the pose fix in place the radar mirror became visible (run 2026-05-03_152755_ABORTED scene_overlay.png — radar tracks all in negative-North quadrant where neither cubes nor drone exist).  Now that pose is correct (yaw_extracted matches motion direction within ~10°), this fix should land cleanly.",
+            "radar": {
+                "negate_azimuth": false
             }
         },
         "slam": {
