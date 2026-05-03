@@ -379,21 +379,53 @@ public:
                     direct_fallback_ = false;
                 }
             } else {
-                if (!cached_path_.empty()) {
-                    // Keep following the last good path — much safer than
-                    // a direct line which flies through obstacles.
+                // Issue #698 — validate the cached path against the CURRENT
+                // grid before reusing it.  Old behaviour: if D*Lite fails
+                // we keep following whatever path was last computed.  But
+                // the grid may have changed since then — newly-promoted
+                // static cells (e.g. a cube the camera just confirmed) may
+                // now sit ON the cached path, and "follow it anyway" would
+                // route the drone straight into the obstacle.  Scenario 33
+                // run 2026-05-03_140302_ABORTED logged 82 stale-cached-path
+                // reuses; the drone collided with both pillar_01 and a
+                // TemplateCube whose cells were in static_occupied_ at the
+                // moment the planner was still following the old path.
+                //
+                // Walk the remaining cached path and check each cell for
+                // current occupancy.  If ANY remaining cell is now an
+                // obstacle, drop the cached path → fall through to hover.
+                bool cached_path_clear = !cached_path_.empty();
+                if (cached_path_clear) {
+                    for (size_t i = path_index_; i < cached_path_.size(); ++i) {
+                        const auto& wp = cached_path_[i];
+                        const GridCell c = grid_.world_to_grid(wp[0], wp[1], wp[2]);
+                        if (grid_.is_occupied(c)) {
+                            cached_path_clear = false;
+                            DRONE_LOG_WARN(
+                                "[PlanBase] Cached path now blocked at idx {} "
+                                "(world ({:.1f},{:.1f},{:.1f})) — dropping cache, "
+                                "falling back to hover",
+                                i, wp[0], wp[1], wp[2]);
+                            break;
+                        }
+                    }
+                }
+                if (cached_path_clear) {
+                    // Cached path is still valid — keep following it.
                     direct_fallback_ = false;
                     last_plan_time_  = now;  // avoid hammering failed replans
                     DRONE_LOG_WARN("[PlanBase] Search failed — keeping last good path "
-                                   "({} pts, idx {}) (took {:.0f}ms)",
+                                   "({} pts, idx {}, validated clear) (took {:.0f}ms)",
                                    cached_path_.size(), path_index_, replan_ms);
                 } else {
-                    // No cached path at all — hover in place (zero velocity)
-                    // rather than flying a direct line through obstacles.
+                    // No cached path or it's blocked — hover in place
+                    // (zero velocity) rather than routing through obstacles.
+                    cached_path_.clear();
+                    path_index_      = 0;
                     direct_fallback_ = true;
                     const uint64_t new_hover_count =
                         hover_fallback_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-                    DRONE_LOG_WARN("[PlanBase] Search failed, no cached path — "
+                    DRONE_LOG_WARN("[PlanBase] Search failed, no usable path — "
                                    "hovering in place (took {:.0f}ms, total "
                                    "hover-fallback count={})",
                                    replan_ms, new_hover_count);
