@@ -516,6 +516,12 @@ int main(int argc, char* argv[]) {
     fov_cfg.max_range_m = ctx.cfg.get<float>(
         std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MAX_RANGE_M,
         fov_cfg.max_range_m);
+    // Issue #348 — match UKF's az_sign convention.  Without this the gate
+    // mirrors radar returns to the wrong side of the body axis and never
+    // matches a same-position camera cell.  Caught in scenario 33 run
+    // 2026-05-03_123538_FAIL (4.7M false vetoes, drone hit cube radar saw).
+    fov_cfg.negate_azimuth = ctx.cfg.get<bool>("perception.radar.negate_azimuth",
+                                               fov_cfg.negate_azimuth);
 
     drone::planner::CrossVetoPolicy veto_policy;
     veto_policy.short_range_m = ctx.cfg.get<float>(

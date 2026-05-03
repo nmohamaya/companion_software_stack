@@ -34,12 +34,12 @@
 #include "ipc/ipc_types.h"
 #include "planner/grid_cell.h"  // GridCell, GridCellHash
 
-#include <Eigen/Geometry>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <unordered_map>
+
+#include <Eigen/Geometry>
 
 namespace drone::planner {
 
@@ -49,6 +49,18 @@ struct RadarFovConfig {
     float fov_elevation_rad{0.698f};  // ±40° default
     float min_range_m{0.5f};          // FMCW near-field blind zone
     float max_range_m{100.0f};
+    /// Issue #348 — radar backends differ in azimuth sign convention.
+    /// Cosys-AirSim publishes azimuth with right-positive (FRD); the rest
+    /// of the stack uses left-positive (FLU body frame).  When true, the
+    /// gate negates the raw azimuth before computing the radar return's
+    /// body-frame position, matching what `UKFFusionEngine::az_sign()` does.
+    /// Without this flip, radar returns and camera-cell positions land on
+    /// opposite sides of the drone and the spatial-association gate never
+    /// matches — every long-range cell gets vetoed and the planner has
+    /// no static obstacles to route around (failure mode caught in scenario
+    /// 33 run 2026-05-03_123538_FAIL: 4.7 M vetoes, drone slammed into a
+    /// cube the radar was clearly seeing).
+    bool negate_azimuth{true};
 };
 
 /// Cross-veto policy — read from `mission_planner.occupancy_grid.cross_veto.*`.
@@ -113,10 +125,9 @@ public:
                                        static_cast<float>(p.translation[2]));
         // Quaternion is (w, x, y, z) per IPC convention — see PoseDoubleBuffer
         // in process3_slam_vio_nav/src/main.cpp for the canonical mapping.
-        const Eigen::Quaternionf q(static_cast<float>(p.quaternion[0]),
-                                   static_cast<float>(p.quaternion[1]),
-                                   static_cast<float>(p.quaternion[2]),
-                                   static_cast<float>(p.quaternion[3]));
+        const Eigen::Quaternionf q(
+            static_cast<float>(p.quaternion[0]), static_cast<float>(p.quaternion[1]),
+            static_cast<float>(p.quaternion[2]), static_cast<float>(p.quaternion[3]));
         // Body-from-world rotation = conjugate of body→world.
         R_body_from_world_ = q.conjugate().toRotationMatrix();
         pose_valid_        = true;
@@ -130,9 +141,9 @@ public:
     /// check is "did the gate see this recently?" not "when was it sampled?"
     void set_radar_detections(const drone::ipc::RadarDetectionList& dets,
                               uint64_t                              now_ns) noexcept {
-        radar_dets_         = dets;
-        last_radar_t_ns_    = now_ns;
-        radar_initialized_  = true;
+        radar_dets_        = dets;
+        last_radar_t_ns_   = now_ns;
+        radar_initialized_ = true;
     }
 
     /// Query the gate for a world-frame point (typically a grid cell centre).
@@ -156,7 +167,7 @@ public:
         // +Z up (ENU body frame, matching the pose channel's world frame).
         // Azimuth: angle in body XY plane from +X, positive toward +Y.
         // Elevation: angle from XY plane toward +Z.
-        const float range = p_body.norm();
+        const float range  = p_body.norm();
         q.range_to_drone_m = range;
 
         if (range < 1e-6f) {
@@ -166,16 +177,14 @@ public:
         } else {
             const float azimuth_rad   = std::atan2(p_body.y(), p_body.x());
             const float elevation_rad = std::asin(std::clamp(p_body.z() / range, -1.0f, 1.0f));
-            q.in_fov                  = (range >= fov_.min_range_m &&
-                        range <= fov_.max_range_m &&
+            q.in_fov                  = (range >= fov_.min_range_m && range <= fov_.max_range_m &&
                         std::abs(azimuth_rad) <= fov_.fov_azimuth_rad &&
                         std::abs(elevation_rad) <= fov_.fov_elevation_rad);
         }
 
         // Staleness: if no radar message within the policy window, treat as stale.
-        if (!radar_initialized_ ||
-            (now_ns >= last_radar_t_ns_ &&
-             (now_ns - last_radar_t_ns_) > policy_.radar_max_staleness_ns)) {
+        if (!radar_initialized_ || (now_ns >= last_radar_t_ns_ &&
+                                    (now_ns - last_radar_t_ns_) > policy_.radar_max_staleness_ns)) {
             q.radar_stale = true;
         }
 
@@ -190,11 +199,14 @@ public:
             for (uint32_t i = 0; i < radar_dets_.num_detections; ++i) {
                 const auto& d = radar_dets_.detections[i];
                 // Body-frame radar position (X forward, Y left, Z up).
-                // Cosys radar convention here matches RadarDetection field
-                // semantics: range_m + azimuth_rad + elevation_rad (body frame).
-                const float cx = d.range_m * std::cos(d.elevation_rad) * std::cos(d.azimuth_rad);
-                const float cy = d.range_m * std::cos(d.elevation_rad) * std::sin(d.azimuth_rad);
-                const float cz = d.range_m * std::sin(d.elevation_rad);
+                // Issue #348: apply azimuth sign-flip to match the rest of
+                // the stack's FLU convention (Cosys publishes FRD).  See
+                // RadarFovConfig::negate_azimuth doc and UKFFusionEngine::
+                // az_sign() for the canonical sign rule.
+                const float           az = fov_.negate_azimuth ? -d.azimuth_rad : d.azimuth_rad;
+                const float           cx = d.range_m * std::cos(d.elevation_rad) * std::cos(az);
+                const float           cy = d.range_m * std::cos(d.elevation_rad) * std::sin(az);
+                const float           cz = d.range_m * std::sin(d.elevation_rad);
                 const Eigen::Vector3f det_body(cx, cy, cz);
                 const float           dx = det_body.x() - p_body.x();
                 const float           dy = det_body.y() - p_body.y();
@@ -267,27 +279,24 @@ public:
     [[nodiscard]] const RadarFovConfig&  fov_config() const noexcept { return fov_; }
     [[nodiscard]] const CrossVetoPolicy& policy() const noexcept { return policy_; }
     [[nodiscard]] bool                   has_pose() const noexcept { return pose_valid_; }
-    [[nodiscard]] uint64_t               last_radar_t_ns() const noexcept {
-        return last_radar_t_ns_;
-    }
+    [[nodiscard]] uint64_t last_radar_t_ns() const noexcept { return last_radar_t_ns_; }
 
     /// Diagnostic — number of cells currently in the residency tracker.
     /// Useful for end-of-run reports + scenario telemetry.
     [[nodiscard]] size_t tracked_cell_count() const noexcept { return residency_.size(); }
 
 private:
-    RadarFovConfig                                              fov_;
-    CrossVetoPolicy                                             policy_;
-    Eigen::Vector3f                                             drone_pos_w_{Eigen::Vector3f::Zero()};
-    Eigen::Matrix3f                                             R_body_from_world_{
-        Eigen::Matrix3f::Identity()};
-    bool                                                        pose_valid_{false};
-    drone::ipc::RadarDetectionList                              radar_dets_{};
-    uint64_t                                                    last_radar_t_ns_{0};
-    bool                                                        radar_initialized_{false};
-    uint64_t                                                    last_tick_ns_{0};
-    bool                                                        tick_initialized_{false};
-    std::unordered_map<GridCell, uint64_t, GridCellHash>        residency_;
+    RadarFovConfig                 fov_;
+    CrossVetoPolicy                policy_;
+    Eigen::Vector3f                drone_pos_w_{Eigen::Vector3f::Zero()};
+    Eigen::Matrix3f                R_body_from_world_{Eigen::Matrix3f::Identity()};
+    bool                           pose_valid_{false};
+    drone::ipc::RadarDetectionList radar_dets_{};
+    uint64_t                       last_radar_t_ns_{0};
+    bool                           radar_initialized_{false};
+    uint64_t                       last_tick_ns_{0};
+    bool                           tick_initialized_{false};
+    std::unordered_map<GridCell, uint64_t, GridCellHash> residency_;
 };
 
 }  // namespace drone::planner
