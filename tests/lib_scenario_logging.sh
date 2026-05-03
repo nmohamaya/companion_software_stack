@@ -545,11 +545,12 @@ _report_grid_peaks() {
     local peaks
     # Parse grid data from two possible log formats:
     #   New: [Grid] ... N dynamic, N static (promoted=N, hd_map=N, ...)
+    #                  ... cross_veto=N single_modality=N  (issue #698 Phase 3)
     #   Old: [DIAG] ... occ=N static=N promoted=N
     peaks=$(grep -aE "\[Grid\]|\[DIAG\].*occ=" "$log" 2>/dev/null | awk '
-    BEGIN { max_occ=0; max_static=0; max_promoted=0 }
+    BEGIN { max_occ=0; max_static=0; max_promoted=0; max_veto=0; max_smod=0 }
     {
-        dyn=0; sta=0; pro=0; occ=0
+        dyn=0; sta=0; pro=0; occ=0; veto=0; smod=0
         for(i=1;i<=NF;i++) {
             # New [Grid] format: "N dynamic, N static (promoted=N, ...)"
             if($(i+1)=="dynamic,") dyn=$i+0
@@ -558,9 +559,11 @@ _report_grid_peaks() {
             gsub(/[(),]/,"",$i)
             n=split($i,kv,"=")
             if(n==2) {
-                if(kv[1]=="promoted") pro=kv[2]+0
-                if(kv[1]=="occ")      occ=kv[2]+0
-                if(kv[1]=="static")   sta=kv[2]+0
+                if(kv[1]=="promoted")        pro=kv[2]+0
+                if(kv[1]=="occ")             occ=kv[2]+0
+                if(kv[1]=="static")          sta=kv[2]+0
+                if(kv[1]=="cross_veto")      veto=kv[2]+0
+                if(kv[1]=="single_modality") smod=kv[2]+0
             }
         }
         # New format: occupied = dynamic + static; Old format: occ= already set
@@ -568,16 +571,22 @@ _report_grid_peaks() {
         if(occ>max_occ) max_occ=occ
         if(sta>max_static) max_static=sta
         if(pro>max_promoted) max_promoted=pro
+        # Cross-veto / single-modality counters are cumulative (monotonic) so
+        # the "max" is the final value — track it the same way for safety.
+        if(veto>max_veto) max_veto=veto
+        if(smod>max_smod) max_smod=smod
     }
-    END { printf "%d|%d|%d\n", max_occ, max_static, max_promoted }
-    ' 2>/dev/null || echo "0|0|0")
+    END { printf "%d|%d|%d|%d|%d\n", max_occ, max_static, max_promoted, max_veto, max_smod }
+    ' 2>/dev/null || echo "0|0|0|0|0")
 
-    local max_occ max_static max_promoted
-    IFS='|' read -r max_occ max_static max_promoted <<< "$peaks"
+    local max_occ max_static max_promoted max_veto max_smod
+    IFS='|' read -r max_occ max_static max_promoted max_veto max_smod <<< "$peaks"
 
-    echo "  Max occupied  : ${max_occ}"
-    echo "  Max static    : ${max_static}"
-    echo "  Max promoted  : ${max_promoted}"
+    echo "  Max occupied   : ${max_occ}"
+    echo "  Max static     : ${max_static}"
+    echo "  Max promoted   : ${max_promoted}"
+    echo "  Cross-veto     : ${max_veto}   (issue #698 Fix #1 — long-range PATH A promotions vetoed)"
+    echo "  Single-modality: ${max_smod}   (issue #698 Fix #1 — promoted via FOV-residency / age-cap escape hatch)"
     echo ""
     echo "  Observations:"
 

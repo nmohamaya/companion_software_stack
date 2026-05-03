@@ -143,8 +143,10 @@ public:
         hd_map_cells_.clear();
         hd_map_static_count_ = 0;
         static_cell_timestamps_.clear();
-        single_modality_static_.clear();  // Issue #698 Fix #1
-        promoted_count_ = 0;
+        single_modality_static_.clear();         // Issue #698 Fix #1
+        total_cross_veto_deferred_      = 0;     // Issue #698 Fix #1 (Phase 3)
+        total_single_modality_promoted_ = 0;
+        promoted_count_                 = 0;
         hit_count_.clear();
         instances_.clear();
     }
@@ -470,6 +472,7 @@ public:
                                         case PromotionDecision::DeferToDynamic:
                                             may_promote = false;
                                             ++s.cross_veto_deferred;
+                                            ++total_cross_veto_deferred_;
                                             // Throttled WARN: first event,
                                             // then every 50th, to surface
                                             // disagreements without log
@@ -492,6 +495,7 @@ public:
                                             may_promote          = true;
                                             single_modality_flag = true;
                                             ++s.single_modality_promoted;
+                                            ++total_single_modality_promoted_;
                                             if (s.single_modality_promoted == 1 ||
                                                 s.single_modality_promoted % 50 == 0) {
                                                 DRONE_LOG_WARN(
@@ -743,15 +747,19 @@ public:
         // (early-out) so legacy scenarios pay nothing.
         sweep_static_cells(now_ns);
 
-        // Diagnostic: log grid state periodically
+        // Diagnostic: log grid state periodically.  Issue #698 Fix #1 (Phase 3)
+        // appended cumulative cross-veto counters so the scenario run-report
+        // post-processor can grep `cross_veto=` and `single_modality=` to
+        // surface gating activity in the run summary.
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             DRONE_LOG_INFO(
                 "[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
-                "drone=({},{},{})",
+                "drone=({},{},{}) cross_veto={} single_modality={}",
                 objects.num_objects, accepted, suppressed, excluded_cells, occupied_.size(),
                 static_occupied_.size(), promoted_count_, hd_map_static_count_, max_static_cells_,
-                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z);
+                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
+                total_cross_veto_deferred_, total_single_modality_promoted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -803,6 +811,16 @@ public:
     }
     [[nodiscard]] bool is_single_modality_static(const GridCell& c) const {
         return single_modality_static_.count(c) > 0;
+    }
+    /// Issue #698 Fix #1 (Phase 3 telemetry) — cumulative cross-veto event
+    /// counters across the lifetime of this grid.  Surfaced in the periodic
+    /// `[Grid]` diagnostic line and aggregated into the scenario run-report
+    /// post-processing.  Both reset in `clear_static()`.
+    [[nodiscard]] uint64_t total_cross_veto_deferred() const {
+        return total_cross_veto_deferred_;
+    }
+    [[nodiscard]] uint64_t total_single_modality_promoted() const {
+        return total_single_modality_promoted_;
     }
     [[nodiscard]] size_t hd_map_cell_count() const { return hd_map_cells_.size(); }
     /// Cumulative count of objects that had velocity-based prediction applied
@@ -1090,6 +1108,12 @@ private:
     int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
     size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
+    // Issue #698 Fix #1 (Phase 3 telemetry) — cumulative cross-veto counters
+    // across the lifetime of this OccupancyGrid3D instance.  Per-batch counts
+    // live in VoxelInsertStats; these aggregates survive across batches and
+    // feed the periodic [Grid] diagnostic line + the scenario run-report.
+    uint64_t total_cross_veto_deferred_{0};
+    uint64_t total_single_modality_promoted_{0};
     // PR #661 P2 review: pause flags are written by the FSM tick thread
     // (mission_state_tick) and read by the planner thread inside
     // update_from_objects().  Atomic with acquire/release ordering closes
