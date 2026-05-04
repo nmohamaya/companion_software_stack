@@ -18,6 +18,26 @@ import re
 import sys
 from pathlib import Path
 
+# Some launchers (systemd, isolated subshells, processes that effectively
+# spawn `python3 -S`) strip standard site paths.  Re-add the common ones so
+# a pip-user-installed matplotlib AND its system-installed dependencies
+# (e.g. `packaging` in /usr/lib/python3/dist-packages) both resolve.
+import site
+_pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+_fallback_paths = []
+try:
+    _fallback_paths.append(site.getusersitepackages())
+except Exception:
+    pass
+_fallback_paths.extend([
+    "/usr/lib/python3/dist-packages",
+    f"/usr/lib/{_pyver}/dist-packages",
+    f"/usr/local/lib/{_pyver}/dist-packages",
+])
+for _p in _fallback_paths:
+    if _p and _p not in sys.path:
+        sys.path.append(_p)
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.patches as mpatches
@@ -31,14 +51,34 @@ scenario_cfg = Path(sys.argv[2]) if len(sys.argv) > 2 else (
     Path(__file__).resolve().parents[2]
     / "config" / "scenarios" / "33_non_coco_obstacles.json")
 
-# ── Default Blocks scene cubes (mined from past collision logs) ──────
-# NEU coords (X=North, Y=East). bbox = (n_min, n_max, e_min, e_max).
-DEFAULT_CUBES = {
-    "Cube_7":  (16.9, 16.9,  4.5, 13.8),   # 10m wall along East
-    "Cube_9":  (16.9, 26.6, 16.7, 24.1),   # 10x7 m block
-    "Cube_62": (27.3, 35.2,  4.1,  4.1),   # 8m wall along North
-    "Cube_66": (27.4, 32.3, 24.1, 24.1),   # 5m wall along North
-}
+# ── Ground-truth scene obstacles ─────────────────────────────────────
+# Issue #698 — replaces the legacy DEFAULT_CUBES dict (which was mined from
+# collision logs and got the geometry wrong; e.g. Cube_4 + Cube_7 are
+# actually halves of a single 10×10×10m stacked block, not separate strips).
+# Source: tools/diag/cosys_scene_inventory.py dump from a live UE5 instance.
+# Re-run the inventory script after any scene change.
+DEFAULT_CUBES = {}  # populated below from blocks_default_inventory.json
+INVENTORY = (Path(__file__).resolve().parent / "blocks_default_inventory.json")
+if INVENTORY.exists():
+    inv = json.loads(INVENTORY.read_text())
+    for o in inv.get("obstacles", []):
+        # Center + scale → axis-aligned bbox.  Unreal "scale" entries are in
+        # 1m units when the source mesh is 1×1×1 m (TemplateCube_Rounded is).
+        # bbox = (n_min, n_max, e_min, e_max) in NEU world coords.
+        cx, cy = o.get("neu_x", 0.0), o.get("neu_y", 0.0)
+        sx, sy, _sz = o.get("scale", [1.0, 1.0, 1.0])
+        DEFAULT_CUBES[o["name"]] = (cx - sx / 2.0, cx + sx / 2.0,
+                                    cy - sy / 2.0, cy + sy / 2.0)
+else:
+    # Legacy fallback (wrong, but keeps the tool working without inventory).
+    DEFAULT_CUBES = {
+        "Cube_7":  (16.9, 16.9,  4.5, 13.8),
+        "Cube_9":  (16.9, 26.6, 16.7, 24.1),
+        "Cube_62": (27.3, 35.2,  4.1,  4.1),
+        "Cube_66": (27.4, 32.3, 24.1, 24.1),
+    }
+    print(f"WARN: {INVENTORY} not found — falling back to hardcoded 4-cube table",
+          file=sys.stderr)
 
 # ── Spawned obstacles + waypoints from scenario config ───────────────
 spawned = []
@@ -104,21 +144,42 @@ if tele.exists():
 # ── Plot ────────────────────────────────────────────────────────────
 fig, ax = plt.subplots(figsize=(12, 12))
 
-# Default cubes as filled purple rectangles with outlines.
+# Determine the mission-area bounding box first so we can filter the cube
+# list to only those overlapping the visible region.
+_xs = [r[1] for r in radar] + [v[1] for v in voxels] + [d[1] for d in drone]
+_ys = [r[0] for r in radar] + [v[0] for v in voxels] + [d[0] for d in drone]
+_xs.extend([w[1] for w in waypoints])
+_ys.extend([w[0] for w in waypoints])
+if _xs and _ys:
+    _view = (min(_xs) - 8, max(_xs) + 8, min(_ys) - 8, max(_ys) + 8)  # e_min, e_max, n_min, n_max
+else:
+    _view = (-10, 40, -10, 40)
+
+# Default cubes — filled purple rectangles, but only the ones that overlap
+# the mission-area view box.  Skips far-field clutter (Blocks scene has
+# 165 cubes spanning ±100 m).
+def _bbox_overlaps(n_min, n_max, e_min, e_max, view):
+    ev_min, ev_max, nv_min, nv_max = view
+    return not (e_max < ev_min or e_min > ev_max or n_max < nv_min or n_min > nv_max)
+
+drawn_cubes = 0
 for name, (n_min, n_max, e_min, e_max) in DEFAULT_CUBES.items():
-    # x = East, y = North in plot — NEU view.  Using matplotlib's standard
-    # coordinate frame: plot.x = East, plot.y = North.
-    width = max(0.5, e_max - e_min)
+    if not _bbox_overlaps(n_min, n_max, e_min, e_max, _view):
+        continue
+    width  = max(0.5, e_max - e_min)
     height = max(0.5, n_max - n_min)
-    # Inflate by 1 m for collision-zone visualisation.
     rect = mpatches.Rectangle(
         (e_min, n_min), width, height,
         linewidth=2, edgecolor="purple", facecolor="purple", alpha=0.25,
         label=None,
     )
     ax.add_patch(rect)
-    ax.text(e_min + width / 2, n_min + height / 2, name,
-            ha="center", va="center", fontsize=9, color="purple", weight="bold")
+    # Trim the long Cosys names ("TemplateCube_Rounded_NN" → "TC_NN") so
+    # labels don't overlap on dense cube fields.
+    short = name.replace("TemplateCube_Rounded_", "TC_")
+    ax.text(e_min + width / 2, n_min + height / 2, short,
+            ha="center", va="center", fontsize=8, color="purple", weight="bold")
+    drawn_cubes += 1
 
 # Voxels as light grey dots (sampled down for speed).
 if voxels:
@@ -168,18 +229,23 @@ ax.set_aspect("equal")
 ax.grid(alpha=0.3)
 ax.legend(loc="upper left", fontsize=9)
 
-# Reasonable axis ranges covering the typical scenario 33 area.
+# Bound the plot to the MISSION AREA (drone path + waypoints + sensor data),
+# then draw only those GT cubes that actually overlap the view.  The Blocks
+# scene has 165 cubes spread across ±100 m; without this, the plot zooms
+# out to encompass cubes 80 m away from the mission and the drone+cubes in
+# the relevant area become unreadable smears.
 all_x = [r[1] for r in radar] + [v[1] for v in voxels] + [d[1] for d in drone]
 all_y = [r[0] for r in radar] + [v[0] for v in voxels] + [d[0] for d in drone]
 all_x.extend([w[1] for w in waypoints])
 all_y.extend([w[0] for w in waypoints])
-for n_min, n_max, e_min, e_max in DEFAULT_CUBES.values():
-    all_x.extend([e_min, e_max])
-    all_y.extend([n_min, n_max])
+margin = 8
 if all_x and all_y:
-    margin = 5
     ax.set_xlim(min(all_x) - margin, max(all_x) + margin)
     ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
+else:
+    # Fallback: scenario-33-ish default if no run data.
+    ax.set_xlim(-10, 40)
+    ax.set_ylim(-10, 40)
 
 out = run / "scene_overlay.png"
 fig.tight_layout()
@@ -190,5 +256,5 @@ print(f"  Drone GT samples : {len(drone)}")
 print(f"  Radar tracks     : {len(radar)}")
 print(f"  PATH A voxels    : {len(voxels)} sampled")
 print(f"  Waypoints        : {len(waypoints)}")
-print(f"  Default cubes    : {len(DEFAULT_CUBES)} (purple rectangles)")
+print(f"  Default cubes    : {drawn_cubes} drawn ({len(DEFAULT_CUBES)} known total)")
 print(f"  Spawned objects  : {len(spawned)}")

@@ -249,6 +249,19 @@ generate_run_report() {
         # ── Overall Assessment ──
         _report_overall_assessment "$mp_log" "$perc_log" "$result" "$pass_count" "$total_count"
 
+        # ── Diagnostic Overlays ──
+        echo ""
+        echo "Diagnostic Overlays"
+        local any_overlay=false
+        for png in scene_overlay.png planner_grid_overlay.png; do
+            if [[ -f "${run_dir}/${png}" ]]; then
+                echo "  ${png}"
+                any_overlay=true
+            fi
+        done
+        $any_overlay || echo "  (none — generator skipped or failed; check *.log siblings)"
+        echo ""
+
         echo "══════════════════════════════════════════════════════════"
     } > "$report"
 
@@ -941,7 +954,7 @@ _report_verification_checks() {
     # log_contains
     while read -r pattern; do
         [[ -z "$pattern" ]] && continue
-        if grep -qai "$pattern" "$combined_log" 2>/dev/null; then
+        if grep -qaiF "$pattern" "$combined_log" 2>/dev/null; then
             echo "  [PASS] Log contains: ${pattern}"
         else
             echo "  [FAIL] Log contains: ${pattern}"
@@ -951,7 +964,7 @@ _report_verification_checks() {
     # log_must_not_contain
     while read -r pattern; do
         [[ -z "$pattern" ]] && continue
-        if grep -qai "$pattern" "$combined_log" 2>/dev/null; then
+        if grep -qaiF "$pattern" "$combined_log" 2>/dev/null; then
             echo "  [FAIL] Log must NOT contain: ${pattern}"
         else
             echo "  [PASS] Log does NOT contain: ${pattern}"

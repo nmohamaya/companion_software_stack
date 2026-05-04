@@ -85,9 +85,15 @@ def main() -> int:
 
     scene_xy = load_scene_xy(args.scene)
     if not scene_xy:
-        print(f"[check_voxel_on_target] ERROR: scene {args.scene} has no objects with x/y — nothing to check against",
-              file=sys.stderr)
-        return 2
+        # Issue #698 — scenarios that use the live UE5 scene's existing
+        # geometry as the obstacle field (no spawned objects in the scene
+        # JSON) have nothing to check against here.  This is a legitimate
+        # configuration (e.g. scenario 33 uses Blocks default cubes via
+        # HD-map static_obstacles instead of spawned scene objects), not
+        # an error.  Exit 0 so the runner doesn't flag a spurious FAIL.
+        print(f"[check_voxel_on_target] SKIP: scene {args.scene} has no spawned "
+              f"objects — nothing to check against (likely an HD-map-based scenario)")
+        return 0
 
     r2 = args.radius_m * args.radius_m
     total = 0

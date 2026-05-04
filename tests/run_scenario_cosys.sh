@@ -1030,9 +1030,17 @@ fi
 
 echo ""
 echo "Log-contains checks:"
+# Issue #698 — use -F (fixed-string) so that bracketed log prefixes like
+# [FSM], [Planner], [CosysGroundTruthRadar] match LITERAL text rather than
+# being interpreted as regex character classes.  Previously e.g. "[FSM]
+# Advanced to waypoint 6/6" silently matched only when one of {F,S,M}
+# happened to appear before "] Advanced..." in the line — fragile and
+# scenario-specific.  pass_criteria.log_contains is conceptually a
+# literal-text contract, not a regex one (the explicit-regex use case is
+# served by validation.checks[].pattern).
 while read -r pattern; do
     [[ -z "$pattern" ]] && continue
-    if grep -qai "$pattern" "$COMBINED_LOG" 2>/dev/null; then
+    if grep -qaiF "$pattern" "$COMBINED_LOG" 2>/dev/null; then
         check "Log contains: ${pattern}" 0
     else
         check "Log missing: ${pattern}" 1
@@ -1046,7 +1054,7 @@ echo ""
 echo "Log-must-not-contain checks:"
 while read -r pattern; do
     [[ -z "$pattern" ]] && continue
-    if grep -qai "$pattern" "$COMBINED_LOG" 2>/dev/null; then
+    if grep -qaiF "$pattern" "$COMBINED_LOG" 2>/dev/null; then
         check "Log unexpectedly contains: ${pattern}" 1
         if [[ "$VERBOSE" == "true" ]]; then
             grep -ai "$pattern" "$COMBINED_LOG" | head -1 | sed 's/^/    /'
@@ -1097,6 +1105,24 @@ if [[ -f "$VOXEL_TRACE" && -x "$VOXEL_CHECK" && -n "$SCENE_FILE" && -f "$SCENE_F
         check "Voxel-on-target ratio within threshold" 1
     fi
 fi
+# ── Diagnostic overlays (best-effort — never fail the run) ────
+# Both overlays read run-local logs and write PNGs into the run dir so
+# they get captured by the report and the post-run finalize.
+SCENE_OVERLAY="${PROJECT_DIR}/tools/diag/scene_overlay.py"
+GRID_OVERLAY="${PROJECT_DIR}/tools/diag/planner_grid_overlay.py"
+if [[ -x "$SCENE_OVERLAY" ]]; then
+    python3 "$SCENE_OVERLAY" "$SCENARIO_LOG_DIR" "$SCENARIO_FILE" \
+        > "${SCENARIO_LOG_DIR}/scene_overlay.log" 2>&1 \
+        && echo "  Generated: scene_overlay.png" \
+        || echo "  WARN: scene_overlay.py failed (see scene_overlay.log)"
+fi
+if [[ -x "$GRID_OVERLAY" ]]; then
+    python3 "$GRID_OVERLAY" "$SCENARIO_LOG_DIR" "$SCENARIO_FILE" \
+        > "${SCENARIO_LOG_DIR}/planner_grid_overlay.log" 2>&1 \
+        && echo "  Generated: planner_grid_overlay.png" \
+        || echo "  WARN: planner_grid_overlay.py failed (see planner_grid_overlay.log)"
+fi
+
 if ss -tlnp 2>/dev/null | grep -q ":${COSYS_RPC_PORT}"; then
     check "RPC port ${COSYS_RPC_PORT} still open" 0
 else

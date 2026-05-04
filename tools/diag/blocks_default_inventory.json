@@ -1,0 +1,1819 @@
+{
+  "obstacles": [
+    {
+      "name": "TemplateCube_Rounded_4",
+      "neu_x": 21.9,
+      "neu_y": 9.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_7",
+      "neu_x": 21.9,
+      "neu_y": 9.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_6",
+      "neu_x": 21.9,
+      "neu_y": -40.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_10",
+      "neu_x": 21.9,
+      "neu_y": -40.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_8",
+      "neu_x": 21.9,
+      "neu_y": 19.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_9",
+      "neu_x": 21.9,
+      "neu_y": 19.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_48",
+      "neu_x": 31.9,
+      "neu_y": -40.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_49",
+      "neu_x": 31.9,
+      "neu_y": -40.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_52",
+      "neu_x": 31.9,
+      "neu_y": -50.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_13",
+      "neu_x": 31.9,
+      "neu_y": -50.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_55",
+      "neu_x": 21.9,
+      "neu_y": -50.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_56",
+      "neu_x": 21.9,
+      "neu_y": -50.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_61",
+      "neu_x": 31.9,
+      "neu_y": 9.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_62",
+      "neu_x": 31.9,
+      "neu_y": 9.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_65",
+      "neu_x": 31.9,
+      "neu_y": 19.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_66",
+      "neu_x": 31.9,
+      "neu_y": 19.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_69",
+      "neu_x": 21.9,
+      "neu_y": -50.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_70",
+      "neu_x": 21.9,
+      "neu_y": -50.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_75",
+      "neu_x": 81.9,
+      "neu_y": -20.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_76",
+      "neu_x": 81.9,
+      "neu_y": -20.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_77",
+      "neu_x": 81.9,
+      "neu_y": -30.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_78",
+      "neu_x": 81.9,
+      "neu_y": -30.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_26",
+      "neu_x": 81.9,
+      "neu_y": -0.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_83",
+      "neu_x": 81.9,
+      "neu_y": -0.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_84",
+      "neu_x": 81.9,
+      "neu_y": -10.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_85",
+      "neu_x": 81.9,
+      "neu_y": -10.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_92",
+      "neu_x": 91.9,
+      "neu_y": -20.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_31",
+      "neu_x": 91.9,
+      "neu_y": -30.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_93",
+      "neu_x": 91.9,
+      "neu_y": -0.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_94",
+      "neu_x": 91.9,
+      "neu_y": -0.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_96",
+      "neu_x": 91.9,
+      "neu_y": -10.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_103",
+      "neu_x": 101.9,
+      "neu_y": -20.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_104",
+      "neu_x": 101.9,
+      "neu_y": -30.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_105",
+      "neu_x": 101.9,
+      "neu_y": -0.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_106",
+      "neu_x": 101.9,
+      "neu_y": -0.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_108",
+      "neu_x": 101.9,
+      "neu_y": -10.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_115",
+      "neu_x": 111.9,
+      "neu_y": -20.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_116",
+      "neu_x": 111.9,
+      "neu_y": -30.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_117",
+      "neu_x": 111.9,
+      "neu_y": -0.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_45",
+      "neu_x": 111.9,
+      "neu_y": -0.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_47",
+      "neu_x": 111.9,
+      "neu_y": -10.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_124",
+      "neu_x": 91.9,
+      "neu_y": -30.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_125",
+      "neu_x": 101.9,
+      "neu_y": -30.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_126",
+      "neu_x": 111.9,
+      "neu_y": -20.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_128",
+      "neu_x": 111.9,
+      "neu_y": -10.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_50",
+      "neu_x": 101.9,
+      "neu_y": -0.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_51",
+      "neu_x": 101.9,
+      "neu_y": -10.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_133",
+      "neu_x": 111.9,
+      "neu_y": -0.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_53",
+      "neu_x": 111.9,
+      "neu_y": -10.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_54",
+      "neu_x": 101.9,
+      "neu_y": -0.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_138",
+      "neu_x": 101.9,
+      "neu_y": -10.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_139",
+      "neu_x": 111.9,
+      "neu_y": -0.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_57",
+      "neu_x": 111.9,
+      "neu_y": -10.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_142",
+      "neu_x": -18.1,
+      "neu_y": 39.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_143",
+      "neu_x": -18.1,
+      "neu_y": 39.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_60",
+      "neu_x": -18.1,
+      "neu_y": 39.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_146",
+      "neu_x": -18.1,
+      "neu_y": 39.1,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_152",
+      "neu_x": -18.1,
+      "neu_y": -70.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_64",
+      "neu_x": -18.1,
+      "neu_y": -70.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_63",
+      "neu_x": -18.1,
+      "neu_y": -70.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_151",
+      "neu_x": -18.1,
+      "neu_y": -70.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_154",
+      "neu_x": -18.1,
+      "neu_y": 39.1,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_160",
+      "neu_x": 111.9,
+      "neu_y": -130.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_159",
+      "neu_x": 111.9,
+      "neu_y": -130.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_68",
+      "neu_x": 111.9,
+      "neu_y": -120.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_67",
+      "neu_x": 111.9,
+      "neu_y": -120.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_74",
+      "neu_x": 101.9,
+      "neu_y": -130.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_73",
+      "neu_x": 101.9,
+      "neu_y": -130.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_72",
+      "neu_x": 101.9,
+      "neu_y": -120.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_71",
+      "neu_x": 101.9,
+      "neu_y": -120.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_82",
+      "neu_x": 111.9,
+      "neu_y": 89.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_81",
+      "neu_x": 111.9,
+      "neu_y": 89.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_80",
+      "neu_x": 111.9,
+      "neu_y": 99.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_79",
+      "neu_x": 111.9,
+      "neu_y": 99.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_176",
+      "neu_x": 101.9,
+      "neu_y": 89.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_175",
+      "neu_x": 101.9,
+      "neu_y": 89.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_174",
+      "neu_x": 101.9,
+      "neu_y": 99.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_173",
+      "neu_x": 101.9,
+      "neu_y": 99.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_90",
+      "neu_x": -28.1,
+      "neu_y": 89.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_89",
+      "neu_x": -28.2,
+      "neu_y": 89.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_88",
+      "neu_x": -28.1,
+      "neu_y": 99.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_87",
+      "neu_x": -28.1,
+      "neu_y": 99.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_86",
+      "neu_x": -38.2,
+      "neu_y": 89.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_187",
+      "neu_x": -38.1,
+      "neu_y": 89.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_186",
+      "neu_x": -38.1,
+      "neu_y": 99.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_185",
+      "neu_x": -38.2,
+      "neu_y": 99.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_98",
+      "neu_x": -28.1,
+      "neu_y": -130.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_97",
+      "neu_x": -28.1,
+      "neu_y": -130.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_200",
+      "neu_x": -28.1,
+      "neu_y": -120.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_199",
+      "neu_x": -28.1,
+      "neu_y": -120.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_198",
+      "neu_x": -38.1,
+      "neu_y": -130.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_197",
+      "neu_x": -38.1,
+      "neu_y": -130.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_196",
+      "neu_x": -38.1,
+      "neu_y": -120.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_91",
+      "neu_x": -38.1,
+      "neu_y": -120.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_102",
+      "neu_x": 21.9,
+      "neu_y": 9.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_101",
+      "neu_x": 21.9,
+      "neu_y": 19.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_100",
+      "neu_x": 31.9,
+      "neu_y": 9.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_99",
+      "neu_x": 31.9,
+      "neu_y": 19.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_212",
+      "neu_x": 111.9,
+      "neu_y": -130.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_211",
+      "neu_x": 111.9,
+      "neu_y": -120.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_210",
+      "neu_x": 101.9,
+      "neu_y": -130.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_209",
+      "neu_x": 101.9,
+      "neu_y": -120.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_110",
+      "neu_x": 71.9,
+      "neu_y": -70.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_109",
+      "neu_x": 71.9,
+      "neu_y": -70.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_218",
+      "neu_x": 71.9,
+      "neu_y": -70.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_217",
+      "neu_x": 71.9,
+      "neu_y": -70.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_114",
+      "neu_x": 71.9,
+      "neu_y": -80.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_113",
+      "neu_x": 71.9,
+      "neu_y": -80.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_112",
+      "neu_x": 71.9,
+      "neu_y": -80.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_111",
+      "neu_x": 71.9,
+      "neu_y": -80.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_122",
+      "neu_x": 71.9,
+      "neu_y": 49.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_121",
+      "neu_x": 71.9,
+      "neu_y": 49.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_120",
+      "neu_x": 71.9,
+      "neu_y": 49.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_119",
+      "neu_x": 71.9,
+      "neu_y": 49.1,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_234",
+      "neu_x": 71.9,
+      "neu_y": 39.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_233",
+      "neu_x": 71.9,
+      "neu_y": 39.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_232",
+      "neu_x": 71.9,
+      "neu_y": 39.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_231",
+      "neu_x": 71.9,
+      "neu_y": 39.1,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_130",
+      "neu_x": 81.9,
+      "neu_y": 49.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_129",
+      "neu_x": 81.9,
+      "neu_y": 49.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_247",
+      "neu_x": 81.9,
+      "neu_y": 49.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_246",
+      "neu_x": 81.9,
+      "neu_y": 49.1,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_245",
+      "neu_x": 81.9,
+      "neu_y": 39.1,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_244",
+      "neu_x": 81.9,
+      "neu_y": 39.1,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_243",
+      "neu_x": 81.9,
+      "neu_y": 39.1,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_123",
+      "neu_x": 81.9,
+      "neu_y": 39.1,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_131",
+      "neu_x": 81.9,
+      "neu_y": -70.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_132",
+      "neu_x": 81.9,
+      "neu_y": -70.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_256",
+      "neu_x": 81.9,
+      "neu_y": -70.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_134",
+      "neu_x": 81.9,
+      "neu_y": -70.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_135",
+      "neu_x": 81.9,
+      "neu_y": -80.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_136",
+      "neu_x": 81.9,
+      "neu_y": -80.9,
+      "neu_z": 6.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_137",
+      "neu_x": 81.9,
+      "neu_y": -80.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_257",
+      "neu_x": 81.9,
+      "neu_y": -80.9,
+      "neu_z": 16.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_266",
+      "neu_x": 71.9,
+      "neu_y": -70.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_140",
+      "neu_x": 71.9,
+      "neu_y": -80.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_141",
+      "neu_x": 71.9,
+      "neu_y": 49.1,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_267",
+      "neu_x": 71.9,
+      "neu_y": 39.1,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_268",
+      "neu_x": 81.9,
+      "neu_y": 49.1,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_144",
+      "neu_x": 81.9,
+      "neu_y": 39.1,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_145",
+      "neu_x": 81.9,
+      "neu_y": -70.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_269",
+      "neu_x": 81.9,
+      "neu_y": -80.9,
+      "neu_z": 21.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_147",
+      "neu_x": 81.9,
+      "neu_y": -20.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_148",
+      "neu_x": 81.9,
+      "neu_y": -30.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_149",
+      "neu_x": 81.9,
+      "neu_y": -0.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_150",
+      "neu_x": 81.9,
+      "neu_y": -10.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_282",
+      "neu_x": 91.9,
+      "neu_y": -30.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_283",
+      "neu_x": 91.9,
+      "neu_y": -0.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_153",
+      "neu_x": 101.9,
+      "neu_y": -30.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_284",
+      "neu_x": 101.9,
+      "neu_y": -0.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_155",
+      "neu_x": 111.9,
+      "neu_y": -20.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_156",
+      "neu_x": 111.9,
+      "neu_y": -30.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_157",
+      "neu_x": 111.9,
+      "neu_y": -0.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_158",
+      "neu_x": 111.9,
+      "neu_y": -10.9,
+      "neu_z": 11.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "SphereReflectionCaptureCentre",
+      "neu_x": 34.74,
+      "neu_y": -15.32,
+      "neu_z": 11.54,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "SphereReflectionCaptureLeft",
+      "neu_x": 35.44,
+      "neu_y": -83.64,
+      "neu_z": 11.54,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "SphereReflectionCaptureRight",
+      "neu_x": 34.74,
+      "neu_y": 60.68,
+      "neu_z": 11.54,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "TemplateCube_Rounded_1",
+      "neu_x": 111.9,
+      "neu_y": -30.9,
+      "neu_z": 1.6,
+      "scale": [
+        10.0,
+        10.0,
+        5.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_0",
+      "neu_x": 6.683,
+      "neu_y": 13.845,
+      "neu_z": 5.088,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_1",
+      "neu_x": 6.683,
+      "neu_y": 13.595,
+      "neu_z": 5.088,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_2",
+      "neu_x": 6.683,
+      "neu_y": 13.72,
+      "neu_z": 5.089,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_3",
+      "neu_x": 5.763,
+      "neu_y": 13.72,
+      "neu_z": 5.089,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_4",
+      "neu_x": 6.223,
+      "neu_y": 13.72,
+      "neu_z": 4.969,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_5",
+      "neu_x": 6.723,
+      "neu_y": 13.72,
+      "neu_z": 5.189,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "BP_PIPCamera_C_6",
+      "neu_x": 6.723,
+      "neu_y": 13.72,
+      "neu_z": 5.189,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  ]
+}
