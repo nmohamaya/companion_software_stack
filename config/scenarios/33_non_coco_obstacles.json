@@ -1,5 +1,5 @@
 {
-    "_comment": "Scenario 33: Non-COCO obstacle avoidance via PATH A (SAM + detector fusion). Exercises the full E5 pipeline: a configured SAM backend (FastSAM ONNX or simulated) generates class-agnostic masks, MaskClassAssigner fuses with detector classes, MaskDepthProjector back-projects to 3D voxels. Non-COCO objects (cubes, panels, pillars) get GEOMETRIC_OBSTACLE class. Based on scenario 30 route and scene.",
+    "_comment": "Scenario 33: PLANNER + AVOIDER validation with HD-map obstacles and ground-truth simulated perception (Cosys-AirSim). Replaces the previous PATH A perception-stress role (now scenario 34, see issue #698). Inputs: (a) static_obstacles populated from tools/diag/blocks_default_inventory.json so the planner has a complete obstacle map; (b) all perception backends swapped to Cosys ground-truth (depth_estimator=cosys_airsim, sam.backend=cosys_airsim, radar.backend=cosys_airsim_groundtruth) so any perception output is pixel/pose perfect. With both inputs trustworthy, this scenario isolates planner+avoider+control-loop behaviour: D* Lite must detour around a 20×20m solid block to reach WP3 at (40, 14), navigate east leg, return home. Pass = mission complete, zero obstacle collisions.",
     "_epic": "#520 E5",
     "_issue": "#560",
     "gt_class_map": {
@@ -14,8 +14,8 @@
         "bush_*":    { "class_id": 58,  "class_name": "potted plant" }
     },
     "scenario": {
-        "name": "non_coco_obstacles",
-        "description": "Flight through environment with non-COCO obstacles. PATH A (SAM + detector fusion) classifies unknown objects as GEOMETRIC_OBSTACLE and populates the occupancy grid for avoidance.",
+        "name": "planner_hdmap_groundtruth_perception",
+        "description": "Planner+avoider validation with HD-map static_obstacles populated from the live Cosys-AirSim scene inventory and ground-truth perception for all sensors (depth, segmentation, radar). Drone must complete a 6-waypoint mission that requires detouring around a 20x20m solid cube block. Isolates planner/avoider/control behaviour from perception completeness — see scenario 34 for the perception-only counterpart.",
         "tier": 3,
         "timeout_s": 180,
         "requires_cosys_airsim": true,
@@ -28,7 +28,7 @@
         "backend_requirements": {
             "video_capture.mission_cam.backend": "cosys_airsim",
             "perception.detector.backend": "color_contour",
-            "perception.depth_estimator.backend": "depth_anything_v2",
+            "perception.depth_estimator.backend": "cosys_airsim",
             "slam_vio_nav.imu_source.backend": "cosys_airsim",
             "slam_vio_nav.depth_source.backend": "cosys_airsim",
             "mission_planner.radar.backend": "cosys_airsim",
@@ -65,12 +65,15 @@
                 "input_size": 640
             },
             "depth_estimator": {
-                "backend": "depth_anything_v2",
+                "_comment": "Issue #698 diagnostic — switched DA V2 → cosys_airsim ground-truth depth (one-run experiment).  DA V2 was producing noise voxels everywhere (mega-cluster id=8 covering 99.5% of voxels regardless of cluster.eps_m setting) because every projected pixel got a depth value, real or hallucinated.  cosys_airsim depth comes straight from UE5's depth buffer — no ML inference, no noise on textureless surfaces.  If voxels now cluster cleanly on real cubes only, DA V2 was the dominant noise source and we know to either (a) stay on cosys_airsim depth for sim testing, (b) add stronger DA V2 noise filters for real-hardware path, or (c) replace DA V2 with stereo depth from the existing P3 stereo cameras.  REVERT to depth_anything_v2 once experiment is logged.  Original DA V2 settings preserved as comments below.",
+                "backend": "cosys_airsim",
+                "camera_name": "mission_cam",
+                "vehicle_name": "Drone0",
                 "enabled": true,
-                "model_path": "models/depth_anything_v2_vits.onnx",
-                "use_cuda": true,
-                "input_height": 384,
-                "input_width": 384
+                "_da_v2_model_path": "models/depth_anything_v2_vits.onnx",
+                "_da_v2_use_cuda": true,
+                "_da_v2_input_height": 384,
+                "_da_v2_input_width": 384
             },
             "tracker": {
                 "backend": "bytetrack",
@@ -84,8 +87,10 @@
                 "measurement_noise_bearing": 0.05
             },
             "semantic_projector": {
-                "_comment_sample_grid_size": "Issue #629 — dense sampling for no-HD-map scenarios. Each SAM mask gets 16×16=256 back-projection probes instead of the legacy 4×4=16. Per-frame cost ~+0.8 ms (negligible); expected to raise PATH A obstacle-discovery rate enough for the drone to build usable grid occupancy before reaching unknown obstacles (scenario 33 is the 'no HD-map' validation case).",
-                "sample_grid_size": 16,
+                "_comment_sample_grid_size": "Issue #698 — reduced 16 → 6 (run 2026-05-04_213343_ABORTED showed 648 promoted phantom cells around the drone after eps_m=0.1 still produced one mega-cluster). 16×16=256 probes per SAM mask × ~37 masks/frame × 408 frames = ~3.9M voxels, density ~88 voxels/m³ across the 50×50×6 m volume. At that density EVERY voxel has ~270 neighbours within 0.9 m so spatial clustering chains across the whole field regardless of eps_m. 6×6=36 probes drops voxel count to 14% (~550K total), density ~12/m³ — sparse enough that real-cube voxels (densely packed on each cube face) cluster as one component while depth-noise stays as small components rejected by min_pts=5. Real cube faces still get >36 probes because masks for nearby large objects span many bbox px; only tiny (background) noise masks lose probes proportionally.",
+                "sample_grid_size": 6,
+                "_comment_texture_gate_threshold": "Issue #698 — enabled (was 0.0 = disabled).  Texture gate rejects depth samples in low-gradient regions of the depth map — exactly where DA V2 noise lives (textureless walls, sky, flat surfaces).  Real cube edges have high depth gradients (neighbour pixels differ by metres) and survive.  0.5 is a documented safe starting value for DA V2 @ 518×518 on Blocks; tighten if more noise leaks through, loosen if real cubes are missed.",
+                "texture_gate_threshold": 0.5,
                 "_comment_max_depth_saturation_band_m": "Issue #698 — DA V2 saturates at max_depth_m via NaN/edge-clamp/degenerate-fit code paths in convert_raw_to_metric.  Pre-#698 the projector accepted those saturated samples as legitimate horizon-distance obstacles, seeding 4596 ghost cells in run 2026-05-02_161132_ABORTED that walled off WP2.  Reject anything within 0.5 m of the configured max as 'I don't know, defaulted to far'.  Scenario default sufficient at 0.5 m; tighten to 0.1 if false negatives on real horizon obstacles ever appear.",
                 "max_depth_saturation_band_m": 0.5
             },
@@ -93,14 +98,22 @@
                 "_comment": "PATH A enabled with real class-agnostic SAM via FastSAM ONNX (YOLOv8-seg architecture trained on SA-1B). Produces masks for every distinct object/surface in the frame regardless of COCO class. Prerequisite: run `bash models/download_fastsam.sh` once to fetch FastSAM-s.pt and export to models/fastsam_s.onnx (~50 MB, ~80 ms/frame CPU). MaskDepthProjector back-projects the masks via Depth Anything V2 into world-frame voxels; non-COCO obstacles (walls, pillars, TemplateCubes) get GEOMETRIC_OBSTACLE labels because they don't match any YOLOv8 detector bbox.",
                 "enabled": true,
                 "sam": {
-                    "backend": "fastsam",
-                    "model_path": "models/fastsam_s.onnx",
-                    "input_size": 1024,
-                    "confidence_threshold": 0.4,
-                    "nms_threshold": 0.45,
-                    "mask_channels": 32,
-                    "_comment_use_cuda": "Issue #626 follow-up — FastSAM on CUDA runs ~10-15 ms/frame vs ~80-150 ms/frame CPU, which is the difference between MaskProj publishing at 10 Hz vs 0.13 Hz (measured scenario 33 run 2026-04-24_170802).  Safe on CPU-only machines: load_model()'s canary falls back automatically.",
-                    "use_cuda": true
+                    "_comment": "Issue #698 — switched fastsam → cosys_airsim (sim-only ground-truth instance segmentation).  CosysSegmentationBackend pulls ImageType::Segmentation from UE5 and emits one InferenceDetection per visible scene object with pixel-perfect masks.  Eliminates SAM-mega-mask collapse + DA-V2-noise-into-flawed-masks.  Pair with depth_estimator.backend=cosys_airsim for end-to-end ground-truth PATH A.  REVERT to fastsam to validate against real-hardware code path.  Original fastsam settings preserved as _fastsam_* keys for easy revert.",
+                    "backend": "cosys_airsim",
+                    "camera_name": "mission_cam",
+                    "vehicle_name": "Drone0",
+                    "obstacle_class_id": 0,
+                    "min_pixels": 25,
+                    "_comment_include": "Allowlist mode — only objects whose names contain TemplateCube, Cube, Wall, Pillar, Couch, or Bush become obstacles. Run 2026-05-04_220346_ABORTED's first init log showed Cosys returns 273 named objects + 2.7M color slots; with the allowlist we're explicit about which named objects matter and don't depend on a complete blocklist.",
+                    "include_substrings": "TemplateCube,Cube,Wall,Pillar,Couch,Bush",
+                    "exclude_substrings": "Ground,Sky,SkyDome,Floor",
+                    "_fastsam_backend": "fastsam",
+                    "_fastsam_model_path": "models/fastsam_s.onnx",
+                    "_fastsam_input_size": 1024,
+                    "_fastsam_confidence_threshold": 0.4,
+                    "_fastsam_nms_threshold": 0.45,
+                    "_fastsam_mask_channels": 32,
+                    "_fastsam_use_cuda": true
                 },
                 "mask_class_iou_threshold": 0.5,
                 "altitude_filter": {
@@ -119,8 +132,8 @@
                     "trace_path": "path_a_voxel_trace.jsonl"
                 },
                 "cluster": {
-                    "_comment": "Issue #638 Phase 1 — voxel 3D clustering. eps_m=1.0 matches OccupancyGrid3D resolution (1m); nearby voxels link into instances. min_pts=5 rejects single-frame depth artefacts (DA V2 horizon contours, edge flickers).",
-                    "eps_m": 1.0,
+                    "_comment": "Issue #698 — eps_m progressively tightened 1.0 → 0.3 → 0.1 (run 2026-05-04_194349_ABORTED still showed 99.7% of voxels in inst=8 at eps=0.3).  Architectural root cause: cpu_semantic_projector.h's project_masked/project_bbox_centre never sets VoxelUpdate.instance_id, so every voxel arrives at the clusterer as instance_id=0 and the clusterer must reconstruct mask membership purely from spatial proximity.  Dense cube-surface voxels chain transitively into adjacent depth-noise voxels and the whole field collapses to one mega-cluster.  At eps_m=0.1 the chain radius drops to ~0.3 m, which is below typical phantom-voxel spacing.  Real-obstacle clusters with dense (<0.3 m) sampling stay merged; sparse depth-noise stays as small components and gets rejected by min_pts=5.  If even this still produces a mega-cluster, the projector needs the architecturally correct fix (propagate per-mask instance_id from SAM into VoxelUpdate).",
+                    "eps_m": 0.1,
                     "min_pts": 5
                 },
                 "tracker": {
@@ -129,8 +142,17 @@
                     "track_max_age_s": 2.0
                 }
             },
-            "_comment_radar": "Issue #698 — set negate_azimuth=false for Cosys-AirSim radar (lidar emulation). Cosys lidar reports NED/FRD body coords (X=Forward, Y=Right, Z=Down per HAL header).  HAL computes azimuth = atan2(y, x) which is right-positive (FRD).  UKF body_to_world() (process2_perception/src/ukf_fusion_engine.cpp:687) uses standard FRD→NEU rotation that already assumes body Y=right.  Negating azimuth (default true) puts the UKF state into FLU body (Y=left) while body_to_world treats it as FRD body (Y=right) → every radar track mirrors across the drone body axis.\n\nFirst attempt at this fix (commit 49c4593) was reverted because the POSE quaternion was ALSO bugged at that time (negating qy instead of qz only — fixed in commit 50742b1).  With both bugs active they accidentally cancelled to 'almost right'; with only the pose fix in place the radar mirror became visible (run 2026-05-03_152755_ABORTED scene_overlay.png — radar tracks all in negative-North quadrant where neither cubes nor drone exist).  Now that pose is correct (yaw_extracted matches motion direction within ~10°), this fix should land cleanly.",
+            "_comment_radar": "Issue #698 — switched perception.radar.backend cosys_airsim → cosys_airsim_groundtruth.  CosysGroundTruthRadarBackend queries simListInstanceSegmentationPoses() instead of doing lidar-emulation cluster binning, so every emitted detection is a real visible scene object with ground-truth (range, azimuth, elevation, radial-velocity).  No ground bounce, no multipath, no regular-grid clutter pattern (run 2026-05-04_220913 planner_grid_overlay showed 68 cyan radar cells in a 2 m-spaced grid pattern around the drone — pure HAL clustering noise).  include_substrings is the SAME allowlist used by CosysSegmentationBackend so radar and camera report the same set of obstacles.  REVERT to cosys_airsim to validate against the lidar-emulation code path.",
             "radar": {
+                "backend": "cosys_airsim_groundtruth",
+                "vehicle_name": "Drone0",
+                "max_range_m": 60.0,
+                "min_range_m": 0.5,
+                "fov_azimuth_rad": 1.0472,
+                "fov_elevation_rad": 0.2618,
+                "update_rate_hz": 20,
+                "include_substrings": "TemplateCube,Cube,Wall,Pillar,Couch,Bush",
+                "exclude_substrings": "Ground,Sky,SkyDome,Floor",
                 "negate_azimuth": false
             }
         },
@@ -223,12 +245,19 @@
                     "dynamic_age_cap_s": 30.0
                 }
             },
-            "_comment_static_obstacles": "No HD-map. Perception-driven avoidance via PATH A pipeline — SAM masks + depth → occupancy grid.  The DEFAULT BLOCKS SCENE provides our obstacle field — see waypoint comments for the cube positions extracted from collision logs.",
-            "static_obstacles": [],
+            "_comment_static_obstacles": "Issue #698 — populated from tools/diag/blocks_default_inventory.json after we discovered (run 2026-05-04_224726) that camera-only perception only sees the SOUTH FACE of the 20×20 m cube (13 static cells promoted, planner thinks the cube interior is free space, plans a straight line through the wall).  Each entry is one of the 4 cube footprints (10×10 m, 3-cube stack vertically) plus the 2 BP_PIPCamera clusters at (~6, 14).  radius_m=5.25 = (10 m / 2) × 1.05 to inscribe the full square footprint with 5% margin; combined with the 1.5 m planner inflation each footprint has ~6.75 m forbidden halo, the 4 cube halos overlap to form one solid 20×20 m blob (correct).  This is Option A from issue #703 follow-up: HD-map populated from sim ground truth so the planner has full obstacle knowledge, isolating planner+avoider behaviour from perception completeness.  REVERT this list to validate the perception-discovers-obstacles path (the real-hardware contract).",
+            "static_obstacles": [
+                {"x": 21.9, "y":  9.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_4/7/102 stack (SW quadrant)"},
+                {"x": 21.9, "y": 19.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_8/9/101 stack (SE quadrant)"},
+                {"x": 31.9, "y":  9.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_61/62/100 stack (NW quadrant)"},
+                {"x": 31.9, "y": 19.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_65/66/99 stack (NE quadrant)"},
+                {"x":  5.8, "y": 13.7, "radius_m": 0.7,  "height_m":  2.0, "_name": "BP_PIPCamera_C_3,4 cluster"},
+                {"x":  6.7, "y": 13.8, "radius_m": 0.7,  "height_m":  2.0, "_name": "BP_PIPCamera_C_0,1,2,5,6 cluster"}
+            ],
             "geofence": {
                 "enabled": false
             },
-            "_comment_waypoints": "Issue #698 — waypoints redesigned around the DEFAULT BLOCKS SCENE cubes (NEU world coords), aggregated from collision logs of every 2026-05 scenario 33 run:\n  TemplateCube_Rounded_7  : N=16.9, E=4-14   (10m wall along East)\n  TemplateCube_Rounded_9  : N=17-27, E=17-24 (10x7m block, NE quadrant)\n  TemplateCube_Rounded_62 : N=27-35, E=4     (8m wall along North)\n  TemplateCube_Rounded_66 : N=27-32, E=24    (5x1m block, NE corner)\nThese form a roughly square frame with: open S+W sides, a 3m N-S corridor between Cube_7 (E_max=14) and Cube_9 (E_min=17) at N=17-27, and a wide 18m E-W gap between Cube_62 (E=4) and Cube_66 (E=24) at N=27-32.  No spawned obstacles in this scenario — the Blocks default scene IS the obstacle field.\n\nRoute: takeoff → SW approach → through 18m N-gap → past E side of Cube_9 → S past Cube_7 East → home.  All WP-to-cube clearances ≥8m so the avoider has clear corridors at every leg.",
+            "_comment_waypoints": "Issue #698 — waypoints redesigned 2026-05-04 after the live scene inventory (tools/diag/blocks_default_inventory.json) revealed the 'cube field' is actually ONE solid 20×20×15m block (12 stacked TC sub-cubes touching at N=17-37, E=4-24, Z=-1..14) plus a small BP_PIPCamera cluster at (~6.5, ~13.5, ~5).  The previous waypoint design assumed 4 separate strips with corridors between them — that was based on a wrong DEFAULT_CUBES table mined from collision logs.  Old WP3 (30, 14) was LITERALLY INSIDE the solid block, making the mission geometrically impossible — drone correctly stopped at the south face every run.\n\nNew route forces real obstacle avoidance without putting any WP inside an obstacle:\n  WP1 (0, 0)   — start\n  WP2 (12, 14) — 5 m south of block, 6 m north of BP_PIPCamera cluster\n  WP3 (40, 14) — 3 m PAST the block's north edge (N=37); planner MUST detour east or west around the wall\n  WP4 (40, 30) — east leg, 6 m clear of block east edge (E=24)\n  WP5 (10, 30) — west leg along N=30, north of block, clear\n  WP6 (0, 0)   — return home\n\nClearances: every WP ≥ 3 m from any cube.  Detour distance WP2→WP3: ~30 m via west side of block (E≤2 corridor) or ~30 m via east side (E≥27 corridor).",
             "waypoints": [
                 {
                     "x": 0, "y": 0, "z": 5,
@@ -236,29 +265,29 @@
                     "_comment": "Start — takeoff at origin."
                 },
                 {
-                    "x": 10, "y": 14, "z": 5,
+                    "x": 12, "y": 14, "z": 5,
                     "yaw": 0, "speed": 2.0, "payload_trigger": false,
-                    "_comment": "Approach from SW.  South of Cube_7 (N=16.9) by 6.9 m, on the East-side gap line.  Clear of all cubes."
+                    "_comment": "South-of-block approach. 5 m south of block (N=17), 6 m north of BP_PIPCamera cluster (N=6.5). Bumped from old (10,14) to (12,14) for camera-cluster clearance."
                 },
                 {
-                    "x": 30, "y": 14, "z": 5,
+                    "x": 40, "y": 14, "z": 5,
                     "yaw": 1.57, "speed": 2.0, "payload_trigger": false,
-                    "_comment": "Threads central N-gap.  9 m clear of Cube_62 corner (30,5) and Cube_66 corner (30,23)."
+                    "_comment": "Past north edge of block (N=37) by 3 m. Planner MUST find a detour route around the 20 m wall — east via E≥27 m corridor or west via E≤2 m corridor. This is the real obstacle-avoidance test."
                 },
                 {
-                    "x": 15, "y": 32, "z": 5,
+                    "x": 40, "y": 30, "z": 5,
                     "yaw": -1.57, "speed": 2.0, "payload_trigger": false,
-                    "_comment": "Past East side of Cube_9 (E_max=24, WP at E=32 = 8.2 m clear of Cube_9 corner (17,24))."
+                    "_comment": "NE leg along N=40, well past block east edge (E=24) by 6 m. Clear straight-line leg from WP3."
                 },
                 {
-                    "x": 0, "y": 14, "z": 5,
+                    "x": 10, "y": 30, "z": 5,
                     "yaw": 3.14, "speed": 2.0, "payload_trigger": false,
-                    "_comment": "South past Cube_7 East face.  17 m clear of Cube_7 corner."
+                    "_comment": "West leg along N=30, north of block (N=27 edge). Clear east-to-west traverse."
                 },
                 {
                     "x": 0, "y": 0, "z": 5,
                     "yaw": 0, "speed": 2.0, "payload_trigger": false,
-                    "_comment": "Return home."
+                    "_comment": "Return home — clear SW diagonal."
                 }
             ]
         },
@@ -276,20 +305,26 @@
         }
     },
     "pass_criteria": {
-        "_comment": "Enforced by tests/run_scenario_cosys.sh Phase 6 (grep against combined.log). Validates the full PATH A pipeline is engaged: P2 SAM thread + MaskDepthProjector publisher and P4 voxel subscriber + grid writer. The log_must_not_contain list rejects the failure modes from the pre-#608 run (STUCK loop → LOITER escalation + silent PATH A init failure).",
+        "_comment": "Issue #698 — re-scoped 2026-05-04 from 'PATH A perception stress' to 'PLANNER + AVOIDER with HD-map + ground-truth perception'.  Pass = mission completed all 6 waypoints, RTL → LAND, zero obstacle collisions, all three Cosys ground-truth perception backends initialised, HD-map obstacles loaded.  The previous PATH A pipeline checks (MaskProj.Published, VoxelSub firing) belong in the next scenario (perception-only test) — they would mask real planner failures here because PATH A may legitimately publish 0 batches when the HD-map is the sole obstacle source.",
         "log_contains": [
-            "[PathA] Enabled",
-            "[SAM] Thread started",
-            "[MaskProj] Thread started",
-            "[MaskProj] Published",
-            "[VoxelSub] Subscribed to",
-            "[VoxelSub]",
-            "Advanced to waypoint 5/5"
+            "[CosysDepth] Created",
+            "[CosysSegmentation] Created",
+            "[CosysGroundTruthRadar] Created",
+            "[CosysGroundTruthRadar] First scan",
+            "[HD-map] Static obstacle at",
+            "[FSM] Advanced to waypoint 6/6",
+            "[Planner] Mission complete",
+            "[FSM] RTL → LAND"
         ],
         "log_must_not_contain": [
-            "[PathA] Requested via config but initialisation failed",
-            "STUCK count 4 exceeded cap 3"
+            "STUCK count 4 exceeded cap 3",
+            "collision #2 with 'TemplateCube",
+            "collision #2 with 'BP_PIPCamera",
+            "collision #2 with 'Pillar",
+            "collision #2 with 'Wall",
+            "collision #2 with 'Cube"
         ],
+        "_comment_collisions": "Collision #1 with 'Ground' is the unavoidable startup-touch from spawning the drone at z=0 (penetration=0) — every Cosys run produces it.  We allow that one and only fail on collision #2+ (which can only happen if the drone hit a real obstacle).  Listing each obstacle name family explicitly (TemplateCube/BP_/Pillar/Wall/Cube) so a typo in one doesn't silently let collisions slip through.",
         "processes_alive": [
             "video_capture",
             "perception",
@@ -303,53 +338,53 @@
     "validation": {
         "checks": [
             {
-                "name": "PATH A enabled",
+                "name": "Ground-truth depth backend",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[MaskDepthProjector\\]|\\[PATH_A\\]|path_a.*enabled.*true",
+                "pattern": "\\[CosysDepth\\] Created",
                 "min_matches": 1,
-                "_comment": "PATH A pipeline was activated."
+                "_comment": "Issue #698 — depth_estimator.backend=cosys_airsim active (not DA V2)."
             },
             {
-                "_comment_pr633_review_p1": "PR #633 P1 review: was 'SimulatedSAMBackend' but scenario 33's config_overrides set sam.backend=fastsam, so SimulatedSAMBackend NEVER appears in any log line — the validation silently failed every run, masking PR #633's core correctness contract.  Match the FastSAM ONNX backend's actual log signature instead.",
-                "name": "SAM backend running",
+                "name": "Ground-truth segmentation backend",
                 "path": "drone_logs/*.log",
-                "pattern": "FastSAM.*Model loaded",
-                "min_matches": 1
-            },
-            {
-                "name": "Radar first scan",
-                "path": "drone_logs/*.log",
-                "pattern": "\\[CosysRadar\\] First scan: \\d+ detections",
+                "pattern": "\\[CosysSegmentation\\] Created",
                 "min_matches": 1,
-                "_comment": "CosysRadar backend successfully polled LiDAR data at least once."
+                "_comment": "Issue #698 — sam.backend=cosys_airsim active (not FastSAM)."
             },
             {
-                "name": "MaskClassAssigner active",
+                "name": "Ground-truth radar backend + first scan",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[MaskClassAssigner\\]|assigned_class=GEOMETRIC_OBSTACLE|assigned_class=",
+                "pattern": "\\[CosysGroundTruthRadar\\] First scan",
                 "min_matches": 1,
-                "_comment": "MaskClassAssigner fused detector classes with SAM masks."
+                "_comment": "Issue #698 — radar.backend=cosys_airsim_groundtruth active and emitting detections."
             },
             {
-                "name": "Detector detections (non-zero)",
+                "name": "HD-map static obstacles loaded",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[(OpenCvYoloDetector|ColorContourDetector)\\].*detections=[1-9]",
-                "min_matches": 10,
-                "_comment": "Detector fired on the spawned/environment objects."
+                "pattern": "\\[HD-map\\] Static obstacle at",
+                "min_matches": 6,
+                "_comment": "All 6 static_obstacles entries from blocks_default_inventory.json loaded into the grid."
             },
             {
-                "name": "Occupancy grid populated",
+                "name": "D* Lite computed valid path",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[OccupancyGrid\\].*(promoted|occupied)=[1-9]",
+                "pattern": "\\[D\\*Lite\\] Path OK",
                 "min_matches": 1,
-                "_comment": "At least one cell promoted from perception output."
+                "_comment": "Planner produced at least one valid path including the WP3 detour."
             },
             {
-                "name": "Avoider sees obstacles",
+                "name": "Mission progressed to last waypoint",
                 "path": "drone_logs/*.log",
-                "pattern": "(\\[D\\*Lite\\].*occupied=[1-9])|(\\[PotentialField.*corrected)",
+                "pattern": "\\[FSM\\] Advanced to waypoint 6/6",
                 "min_matches": 1,
-                "_comment": "Planner or avoider reacted to obstacles."
+                "_comment": "Drone reached the final waypoint."
+            },
+            {
+                "name": "Mission completed (RTL → LAND)",
+                "path": "drone_logs/*.log",
+                "pattern": "\\[FSM\\] RTL → LAND",
+                "min_matches": 1,
+                "_comment": "Drone returned home and transitioned to LAND."
             },
             {
                 "name": "VIO remained NOMINAL",
@@ -359,11 +394,11 @@
                 "_comment": "Inverse check: zero DEGRADED events (Cosys ground-truth VIO should stay green)."
             },
             {
-                "name": "Mission completed (LANDED)",
-                "path": "drone_logs/*.log",
-                "pattern": "\\[FSM\\].*LANDED",
-                "min_matches": 1,
-                "_comment": "FSM reached LANDED — drone navigated the full waypoint loop."
+                "name": "Zero obstacle collisions",
+                "path": "*/collisions.log",
+                "pattern": "collision #2",
+                "min_matches": 0,
+                "_comment": "Inverse check: only the unavoidable startup ground-touch (collision #1) is allowed; any collision #2+ is a real obstacle hit."
             }
         ]
     }
