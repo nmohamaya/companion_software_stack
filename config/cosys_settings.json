@@ -1,5 +1,5 @@
 {
-    "_comment": "Cosys-AirSim settings.json — copy this to ~/Documents/AirSim/settings.json before launching UE5. Vehicle name 'Drone0' and sensor names match scenario 29.",
+    "_comment": "Cosys-AirSim settings.json — copy this to ~/Documents/AirSim/settings.json before launching UE5. Vehicle name 'Drone0' and sensor names ('mission_cam', 'DepthCam', 'imu', 'lidar', 'echo') match every Cosys-AirSim scenario in config/scenarios/.",
     "_comment_simpleflight": "Tier 3 uses SimpleFlight (AirSim's built-in FC) via AirSim RPC. PX4+Cosys HIL integration is broken upstream (PX4 #24033, AirSim #5018) — see ADR-011 amendment for #490. Companion stack drives SimpleFlight via CosysFCLink (MultirotorRpcLibClient). Battery / RC / datalink fault simulation remains in Gazebo Tier 2.",
     "SettingsVersion": 2.0,
     "SimMode": "Multirotor",

@@ -864,11 +864,20 @@ struct ServiceResponse {
 | `SimulatedVIOBackend` | Target-following dynamics + feature extraction + stereo matching + IMU pre-integration |
 | `GazeboVIOBackend` | Ground-truth odometry via gz-transport (HAVE_GAZEBO) |
 | `GazeboFullVIOBackend` | Full VIO pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO) |
+| `CosysVIOBackend` | Cosys-AirSim ground-truth kinematics via RPC (HAVE_COSYS_AIRSIM) |
 
-**Factory:** `create_vio_backend(backend)` — backends: `"simulated"`, `"gazebo"`, `"gazebo_full_vio"`
+**Factory:** `[[nodiscard]] create_vio_backend(backend)` — returns
+`VIOResult<std::unique_ptr<IVIOBackend>>` (PR #704: was `unique_ptr` +
+exception, now Result-based; library code never throws).  Backends:
+`"simulated"`, `"gazebo"`, `"gazebo_full_vio"`, `"cosys_airsim"`.
 
 ```cpp
-auto vio = create_vio_backend("simulated");
+auto vio_result = create_vio_backend("simulated");
+if (vio_result.is_err()) {
+    DRONE_LOG_ERROR("VIO init: {}", vio_result.error().message);
+    return 1;
+}
+auto vio = std::move(vio_result.value());
 auto result = vio->process_frame(stereo_frame, imu_samples);
 ```
 
@@ -1010,6 +1019,10 @@ Radar sensor interface. Returns a `RadarDetectionList` each call to `read()`. De
 | Key | Class | Notes |
 | --- | ----- | ----- |
 | `"simulated"` | `SimulatedRadar` | Configurable FoV, range, target count, and Gaussian noise model. |
+| `"gazebo"` | `GazeboRadarBackend` | gpu_lidar HAL → radar emulation (Gazebo SITL). |
+| `"cosys_airsim"` | `CosysRadarBackend` | Lidar-emulated radar (deprecated; prefer `cosys_echo`). |
+| `"cosys_airsim_groundtruth"` | `CosysGroundTruthRadarBackend` | Ground-truth via `simListInstanceSegmentationPoses` — one detection per visible obstacle, no clutter. Validation oracle. |
+| `"cosys_echo"` | `CosysEchoBackend` | Cosys-Lab Echo sensor (sensor type 7) — physical FMCW radar simulator with multipath + attenuation. |
 
 **Config section:** `perception.radar`
 

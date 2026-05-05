@@ -16,6 +16,33 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-05 (PR #704 review — deferred follow-ups)
+
+Items from the 9-agent review pass on PR #704 (Cosys ground-truth perception baseline) deemed correct-but-deferred or out-of-scope.  Addressed-in-PR items are listed in the PR's Review Fixes table.
+
+#### Cosys segmentation backend
+
+- **P2** (architectural) — Frame synchronisation between Scene RGB (P1 publishes, P2 consumes via `frame_data` parameter) and Segmentation (`CosysSegmentationBackend::infer()` re-fetches via `simGetImages`).  Different RPC calls = potentially different simulator ticks; on a moving drone this misaligns masks vs depth.  Proper fix: have P1 publish Scene + Segmentation in one `simGetImages` call, P2 consumes both from one wire type.  Workaround in this PR: timestamp output from the segmentation response so downstream knows when masks were captured.  See `common/hal/include/hal/cosys_segmentation_backend.h::infer()`.
+- **P2** (perf) — Mask-buffer pooling.  Each `ObjAccum::mask` is `std::move`d into the `InferenceOutput`, so masks don't survive across frames.  At 1080p × 30 Hz × 10 objects this is ~600 MB/s heap churn.  Proper fix: separate `mask_pool_` of `vector<vector<uint8_t>>` swapped in/out of each `ObjAccum`.  Out of scope for this PR (touches the move-semantics of `InferenceDetection::mask`).
+- **P3** — `infer_count_` is plain `uint64_t` with modulo-100 logging.  At >584 years of inference it wraps; theoretical, not blocking.
+
+#### Cosys Echo / GT-radar backends
+
+- **P2** (perf) — `DRONE_LOG_INFO` on the polling thread.  spdlog is mutex-protected, technically a CLAUDE.md "observability on flight-critical thread" violation.  Long-term: lock-free buffer drained by a dedicated IO thread.  Documented in DESIGN_RATIONALE.md as DR-026.
+
+#### Diagnostic tools
+
+- **P3** — `tools/diag/cosys_scene_inventory.py::propose_placement()` heuristic: `0.5 * max(scale.x, scale.y)` assumes unit-mesh actors.  Arbitrary UE5 Static Mesh actors need `simGetMeshPositionVertexBuffers`-based bounding box.  Not needed for the current Blocks-scene workflow.
+- **P3** — `tools/diag/planner_grid_overlay.py` could emit absolute paths (clickable in terminals) instead of relative for the overlay-saved-to filename.
+
+#### Test infrastructure
+
+- **P3** — `FallbackBehaviourTest.SearchFailureKeepsLastGoodPath` (`tests/test_dstar_lite_planner.cpp:1450`) is pre-existing flaky/broken — `cached_path()` is empty after a failed plan when the test expects the prior path to persist.  Not introduced by PR #704; needs a dedicated fix-and-investigate session.
+
+#### Documentation
+
+- **P3** — Issue #621: API.md `IDepthEstimator` / `CpuSemanticProjector` / `IInferenceBackend` sections are still missing.  The new `cosys_segmentation_backend` factory tag was added inline to the IRadar table for now, but a proper IInferenceBackend section should be authored alongside the Issue #621 work.
+
 ### 2026-04-30 (#645 scenario-33 review-driven backlog — deferred items)
 
 The 14-PR scenario-33 fix stack (PRs #646–#666) drove orchestrator reviews on the merged PRs.  P1 + most P2 fixes landed in batches (#667–#672).  The items below were deemed correct-but-deferred — risk-of-regression items (e.g. tuning thresholds that scenario 33 now relies on) and lower-impact hygiene items.

@@ -157,8 +157,7 @@
                 "cluster_az_rad": 0.0873,
                 "cluster_el_rad": 0.0873,
                 "include_substrings": "TemplateCube,Cube,Wall,Pillar,Couch,Bush",
-                "exclude_substrings": "Ground,Sky,SkyDome,Floor",
-                "negate_azimuth": false
+                "exclude_substrings": "Ground,Sky,SkyDome,Floor"
             }
         },
         "slam": {
