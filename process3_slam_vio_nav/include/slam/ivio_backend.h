@@ -23,6 +23,7 @@
 #include "slam/vio_types.h"
 #include "util/diagnostic.h"
 #include "util/ilogger.h"
+#include "util/thread_heartbeat.h"
 
 #include <atomic>
 #include <chrono>
@@ -794,7 +795,12 @@ public:
 
 private:
     void poll_loop() {
+        // Watchdog token: an RPC stall would otherwise leave VIO publishing
+        // `health=NOMINAL` against a stale cached_pose_ forever, with no
+        // signal at the thread or process layer (PR #704 fault-recovery).
+        drone::util::ScopedHeartbeat heartbeat("cosys_vio_poll", /*critical=*/false);
         while (active_.load(std::memory_order_acquire)) {
+            heartbeat.touch();
             try {
                 msr::airlib::Kinematics::State kin{};
                 bool                           got = client_->with_client(
@@ -815,14 +821,19 @@ private:
                                              static_cast<double>(kin.pose.position.y()),
                                              -static_cast<double>(kin.pose.position.z()));
 
-                // Quaternion: NED → ENU (negate Y, Z axes via conjugate around X-axis swap)
-                // For ground truth the simplest correct form is to negate Z component of
-                // the rotation axis, which is equivalent to:
+                // Quaternion: NED → NEU (basis transform is Z-flip only — North
+                // and East are the same in both frames; only Z = Up vs Down
+                // differs).  For an axis flip on a single coordinate, the
+                // quaternion transform negates ONLY that component.  Issue #698
+                // — pre-fix the code also negated qy ("equivalent to negating
+                // y and z components"), which was the WRONG transform.  It adds
+                // an extra rotation that flips the full orientation.  Caught
+                // when downstream UKF body_to_world() consistently mirrored
+                // radar tracks across the drone's body axis (run
+                // 2026-05-03_151141_ABORTED).
                 Eigen::Quaterniond q_ned(kin.pose.orientation.w(), kin.pose.orientation.x(),
                                          kin.pose.orientation.y(), kin.pose.orientation.z());
-                // NED → ENU-like (Z flipped): q_enu = R_x(pi) * q_ned * R_x(pi)^-1 simplification:
-                // Equivalent to negating y and z components of the quaternion (yaw sign flip + roll flip)
-                p.orientation = Eigen::Quaterniond(q_ned.w(), q_ned.x(), -q_ned.y(), -q_ned.z());
+                p.orientation = Eigen::Quaterniond(q_ned.w(), q_ned.x(), q_ned.y(), -q_ned.z());
 
                 p.covariance = Eigen::Matrix<double, 6, 6>::Identity() * 0.001;
                 p.quality    = 3;  // excellent — ground truth
@@ -867,9 +878,14 @@ private:
 ///   "gazebo_full_vio" — full pipeline on Gazebo frames + ground-truth pose (HAVE_GAZEBO only)
 ///   "cosys_airsim"    — Cosys-AirSim ground-truth kinematics via RPC (HAVE_COSYS_AIRSIM only)
 ///
+/// Returns a Result so library code can propagate errors via the standard
+/// project pattern instead of throwing — exceptions in library code break
+/// graceful shutdown / sd_notify(STOPPING) on failed init (PR #704
+/// fault-recovery review).
+///
 /// To add a real VIO algorithm (e.g. MSCKF), add a new class implementing
 /// IVIOBackend and register it here.  The rest of the stack is unchanged.
-inline std::unique_ptr<IVIOBackend> create_vio_backend(
+[[nodiscard]] inline VIOResult<std::unique_ptr<IVIOBackend>> create_vio_backend(
     const std::string& backend = "simulated", const StereoCalibration& calib = {},
     const ImuNoiseParams& imu_params = {},
     const std::string& gz_topic = "/model/x500_companion_0/odometry", float sim_speed_mps = 3.0f,
@@ -897,43 +913,49 @@ inline std::unique_ptr<IVIOBackend> create_vio_backend(
 #endif
 
     if (backend == "simulated") {
-        return std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps,
-                                                     good_trace_max, degraded_trace_max);
+        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(
+            std::make_unique<SimulatedVIOBackend>(calib, imu_params, 5, sim_speed_mps,
+                                                  good_trace_max, degraded_trace_max));
     }
 #ifdef HAVE_GAZEBO
     if (backend == "gazebo") {
         (void)calib;       // ground truth — calibration not used
         (void)imu_params;  // ground truth — IMU params not used
-        return std::make_unique<GazeboVIOBackend>(gz_topic);
+        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(
+            std::make_unique<GazeboVIOBackend>(gz_topic));
     }
     if (backend == "gazebo_full_vio") {
-        return std::make_unique<GazeboFullVIOBackend>(calib, imu_params, gz_topic, 5,
-                                                      good_trace_max, degraded_trace_max);
+        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(
+            std::make_unique<GazeboFullVIOBackend>(calib, imu_params, gz_topic, 5,
+                                                   good_trace_max, degraded_trace_max));
     }
 #endif
 #ifdef HAVE_COSYS_AIRSIM
     if (backend == "cosys_airsim") {
         if (!cosys_client) {
-            throw std::runtime_error("[VIOBackend] 'cosys_airsim' backend requires a shared "
-                                     "CosysRpcClient (pass via cosys_client parameter)");
+            return VIOResult<std::unique_ptr<IVIOBackend>>::err(
+                VIOError(VIOErrorCode::BackendNotReady, "VIOBackend",
+                         "'cosys_airsim' backend requires a shared CosysRpcClient"));
         }
         (void)calib;       // ground truth — calibration not used
         (void)imu_params;  // ground truth — IMU params not used
-        return std::make_unique<CosysVIOBackend>(cosys_client, cosys_vehicle_name);
+        return VIOResult<std::unique_ptr<IVIOBackend>>::ok(
+            std::make_unique<CosysVIOBackend>(cosys_client, cosys_vehicle_name));
     }
 #else
     (void)cosys_client;
     (void)cosys_vehicle_name;
 #endif
-    throw std::runtime_error("[VIOBackend] Unknown backend: '" + backend +
-                             "' (available: simulated"
+    std::string available = "simulated";
 #ifdef HAVE_GAZEBO
-                             ", gazebo, gazebo_full_vio"
+    available += ", gazebo, gazebo_full_vio";
 #endif
 #ifdef HAVE_COSYS_AIRSIM
-                             ", cosys_airsim"
+    available += ", cosys_airsim";
 #endif
-                             ")");
+    return VIOResult<std::unique_ptr<IVIOBackend>>::err(
+        VIOError(VIOErrorCode::BackendNotReady, "VIOBackend",
+                 "Unknown backend '" + backend + "' (available: " + available + ")"));
 }
 
 }  // namespace drone::slam

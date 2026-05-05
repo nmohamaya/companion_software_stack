@@ -1,0 +1,6 @@
+{
+    "_comment": "Empty scene — no spawned obstacles.  Used by scenario 33 (issue #698) which uses the DEFAULT BLOCKS UE5 scene's TemplateCubes as the obstacle field.  Coordinates: +X=North, +Y=East, +Z=Up (scenario convention).",
+    "_epic": "#698",
+    "_issue": "#698",
+    "objects": []
+}

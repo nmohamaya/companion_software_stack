@@ -318,10 +318,19 @@ static void cosys_passthrough_pose_thread(
             shm_pose.translation[1] = static_cast<double>(kin.pose.position.y());
             shm_pose.translation[2] = -static_cast<double>(kin.pose.position.z());
 
-            // Quaternion NED → ENU: negate y, z components (matches CosysVIOBackend).
+            // Quaternion NED → NEU: basis transform is Z-flip only (North and
+            // East are the same in both frames; only Z = Up vs Down differs).
+            // For an axis flip on a single coordinate, the quaternion transform
+            // negates ONLY that component.  Issue #698 — pre-fix the code also
+            // negated qy, which is the WRONG transform — it adds an extra
+            // rotation that flips the full orientation.  Caught in run
+            // 2026-05-03_151141_ABORTED: extracted-yaw vs motion-direction
+            // disagreement of -177° (drone moving NE at +73° but extracted
+            // yaw read -103°), causing radar's body→world projection to
+            // mirror every track across the drone's body axis.
             shm_pose.quaternion[0] = static_cast<double>(kin.pose.orientation.w());
             shm_pose.quaternion[1] = static_cast<double>(kin.pose.orientation.x());
-            shm_pose.quaternion[2] = -static_cast<double>(kin.pose.orientation.y());
+            shm_pose.quaternion[2] = static_cast<double>(kin.pose.orientation.y());
             shm_pose.quaternion[3] = -static_cast<double>(kin.pose.orientation.z());
 
             // Linear velocity (also NED → ENU on Z).
@@ -564,9 +573,16 @@ int main(int argc, char* argv[]) {
             std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0");
     }
 #endif
-    auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic,
-                                               sim_speed_mps, good_trace_max, degraded_trace_max,
-                                               cosys_client, cosys_vehicle);
+    auto vio_result = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params,
+                                                      vio_gz_topic, sim_speed_mps, good_trace_max,
+                                                      degraded_trace_max, cosys_client,
+                                                      cosys_vehicle);
+    if (vio_result.is_err()) {
+        DRONE_LOG_ERROR("[VIOBackend] create_vio_backend failed: {}",
+                        vio_result.error().message);
+        return 1;
+    }
+    auto vio = std::move(vio_result.value());
     DRONE_LOG_INFO("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",
                    vio->name(), sim_speed_mps, good_trace_max, degraded_trace_max);
     DRONE_LOG_INFO("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m",

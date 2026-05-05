@@ -493,6 +493,102 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ── Issue #698 Fix #1 — cross-modal veto wiring (ADR-013 §2 item 4) ─
+    // Gate is constructed unconditionally so it can be tested by ops via
+    // config flips, but the gate pointer passed into insert_voxels is null
+    // unless `cross_veto.enabled = true`.  Without that flag everything
+    // continues to work exactly as before.
+    const bool cross_veto_enabled = ctx.cfg.get<bool>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::ENABLED, false);
+
+    drone::planner::RadarFovConfig fov_cfg;
+    fov_cfg.fov_azimuth_rad =
+        ctx.cfg.get<float>(std::string(drone::cfg_key::perception::radar::SECTION) +
+                               drone::cfg_key::hal::FOV_AZIMUTH_RAD,
+                           fov_cfg.fov_azimuth_rad);
+    fov_cfg.fov_elevation_rad =
+        ctx.cfg.get<float>(std::string(drone::cfg_key::perception::radar::SECTION) +
+                               drone::cfg_key::hal::FOV_ELEVATION_RAD,
+                           fov_cfg.fov_elevation_rad);
+    fov_cfg.min_range_m = ctx.cfg.get<float>(
+        std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MIN_RANGE_M,
+        fov_cfg.min_range_m);
+    fov_cfg.max_range_m = ctx.cfg.get<float>(
+        std::string(drone::cfg_key::perception::radar::SECTION) + drone::cfg_key::hal::MAX_RANGE_M,
+        fov_cfg.max_range_m);
+
+    drone::planner::CrossVetoPolicy veto_policy;
+    veto_policy.short_range_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::SHORT_RANGE_M,
+        veto_policy.short_range_m);
+    {
+        const auto staleness_ms = ctx.cfg.get<int>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::RADAR_MAX_STALENESS_MS,
+            100);
+        veto_policy.radar_max_staleness_ns = static_cast<uint64_t>(std::max(0, staleness_ms)) *
+                                             1'000'000ULL;
+    }
+    veto_policy.min_gate_radius_m = ctx.cfg.get<float>(
+        drone::cfg_key::mission_planner::occupancy_grid::cross_veto::GATE_MIN_RADIUS_M,
+        veto_policy.min_gate_radius_m);
+    {
+        const auto residency_s = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::FOV_RESIDENCY_PROMOTE_S,
+            2.0f);
+        veto_policy.fov_residency_promote_ns =
+            static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
+    }
+    {
+        const auto cap_s = ctx.cfg.get<float>(
+            drone::cfg_key::mission_planner::occupancy_grid::cross_veto::DYNAMIC_AGE_CAP_S, 30.0f);
+        veto_policy.dynamic_age_cap_ns = static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
+    }
+
+    drone::planner::RadarFovGate radar_fov_gate(fov_cfg, veto_policy);
+
+    // Subscribe to /radar_detections so the gate can answer
+    // "is there a radar return near this cell" inside insert_voxels().
+    // Only subscribe when cross_veto.enabled — disabled scenarios should
+    // not pay the per-tick drain cost of a feature that is inactive.
+    // (Copilot review flagged the unconditional subscription on PR #704.)
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>> radar_dets_sub;
+    bool                                                                      radar_sub_failed = false;
+    if (cross_veto_enabled) {
+        radar_dets_sub = ctx.bus.subscribe<drone::ipc::RadarDetectionList>(
+            drone::ipc::topics::RADAR_DETECTIONS);
+        if (!radar_dets_sub) {
+            // Without a radar subscription the gate's `radar_initialized_`
+            // stays false forever, every distant voxel promotion defers,
+            // and the cross-veto gate is silently disabled.  Promote to
+            // ERROR (instead of WARN) so the operator log surfaces the
+            // failure during startup-review, and OR the radar-loss fault
+            // bit into `status.active_faults` each planner tick below
+            // so P7 / GCS see the cross-veto gate is operating blind.
+            radar_sub_failed = true;
+            DRONE_LOG_ERROR(
+                "[CrossVeto] /radar_detections subscription FAILED — gate disabled, all "
+                "distant PATH A promotions will defer.  Setting FAULT_PERCEPTION_DEAD on "
+                "every planner tick so operator + GCS see the degraded state.  Check IPC "
+                "bus and radar publisher health.");
+        }
+    }
+
+    if (cross_veto_enabled) {
+        DRONE_LOG_INFO("[CrossVeto] ENABLED — short_range={:.1f}m, gate_min_r={:.2f}m, "
+                       "radar_staleness_ms={}, fov_residency_s={:.2f}, dynamic_age_cap_s={:.1f}; "
+                       "radar FOV ±{:.1f}°×±{:.1f}° range=[{:.1f},{:.1f}]m",
+                       veto_policy.short_range_m, veto_policy.min_gate_radius_m,
+                       veto_policy.radar_max_staleness_ns / 1'000'000ULL,
+                       veto_policy.fov_residency_promote_ns / 1.0e9,
+                       veto_policy.dynamic_age_cap_ns / 1.0e9,
+                       fov_cfg.fov_azimuth_rad * 180.0f / static_cast<float>(M_PI),
+                       fov_cfg.fov_elevation_rad * 180.0f / static_cast<float>(M_PI),
+                       fov_cfg.min_range_m, fov_cfg.max_range_m);
+    } else {
+        DRONE_LOG_INFO("[CrossVeto] disabled (cross_veto.enabled=false) — PATH A promotes "
+                       "unconditionally (legacy behaviour)");
+    }
+
     DRONE_LOG_INFO("Mission Planner READY — {} waypoints loaded", fsm.total_waypoints());
     drone::systemd::notify_ready();
 
@@ -542,10 +638,37 @@ int main(int argc, char* argv[]) {
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
-        pose_sub->receive(pose);
+        const bool       got_pose = pose_sub->receive(pose);
+        if (got_pose) {
+            // Issue #698 Fix #1 — keep the cross-veto gate's pose cache fresh.
+            // Cheap (vector + quaternion conjugate); safe to call every tick
+            // even if the gate is disabled (the gate just stores the pose).
+            radar_fov_gate.set_pose(pose);
+        }
 
         drone::ipc::DetectedObjectList objects{};
         obj_sub->receive(objects);
+
+        // ── 1a. Drain /radar_detections so the cross-veto gate's cache is
+        // current before insert_voxels() queries it.  Issue #698 Fix #1.
+        // We keep only the latest message — the gate doesn't need history.
+        if (radar_dets_sub) {
+            drone::ipc::RadarDetectionList latest_radar{};
+            bool                           got_any_radar = false;
+            for (int i = 0; i < 16; ++i) {  // bounded drain — single tick budget
+                drone::ipc::RadarDetectionList next{};
+                if (!radar_dets_sub->receive(next)) break;
+                latest_radar  = next;
+                got_any_radar = true;
+            }
+            if (got_any_radar) {
+                const auto now_ns =
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count());
+                radar_fov_gate.set_radar_detections(latest_radar, now_ns);
+            }
+        }
 
         // ── 1b. Drain PATH A voxel batches (Epic #520 / Issue #608) ──
         // Polled on the planner thread to preserve P4's single-threaded
@@ -577,9 +700,18 @@ int main(int argc, char* argv[]) {
                 for (uint32_t i = 0; i < batch.num_voxels; ++i) {
                     if (batch.voxels[i].instance_id != 0) ++voxels_with_instance;
                 }
-                auto stats = grid_planner->insert_voxels(batch.voxels, batch.num_voxels,
-                                                         voxel_input_clamp_m,
-                                                         voxel_input_min_confidence);
+                // Issue #698 Fix #1 — when cross_veto is enabled, pass the
+                // gate so insert_voxels can apply the ADR-013 §2 item 4
+                // promotion rule.  The gate carries its own cached pose
+                // from the most recent set_pose() call (line 624 above), so
+                // we do NOT gate on `got_pose` — that bug intermittently
+                // disabled the veto whenever a tick happened to miss a
+                // pose message (Copilot review on PR #704).
+                drone::planner::RadarFovGate* gate_for_veto = cross_veto_enabled ? &radar_fov_gate
+                                                                                 : nullptr;
+                auto                          stats         = grid_planner->insert_voxels(
+                    batch.voxels, batch.num_voxels, voxel_input_clamp_m, voxel_input_min_confidence,
+                    gate_for_veto);
                 inserted_total += static_cast<uint32_t>(stats.inserted);
                 dropped_total += static_cast<uint32_t>(
                     stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);
@@ -715,6 +847,20 @@ int main(int argc, char* argv[]) {
                         obstacle_layer, *traj_pub, *payload_pub, send_fc,
                         gcs_handler.active_correlation_id(), diag);
 
+        // ── 8a. Issue #698 Fix #1 — advance per-cell FOV-residency ─
+        // counters so cells outside the radar FOV with no return get a
+        // chance to age into the single-modality-promote escape hatch.
+        // Cheap (O(N) over dynamic cells, ~80 µs at scenario-33 worst case).
+        // Only runs when cross_veto is enabled — disabled grid pays nothing.
+        if (cross_veto_enabled && grid_planner) {
+            const auto now_ns =
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+            radar_fov_gate.tick_residency(grid_planner->grid_dynamic_cell_keys(),
+                                          grid_planner->grid_resolution_m(), now_ns);
+        }
+
         // Handle fault reset on landing
         if (state_tick.consume_fault_reset()) {
             fault_mgr.reset();
@@ -741,6 +887,13 @@ int main(int argc, char* argv[]) {
         status.active_faults = fault.active_faults;
         if (state_tick.flight_state().stuck_fault_active) {
             status.active_faults |= drone::ipc::FaultType::FAULT_STUCK;
+        }
+        // Cross-veto gate operating blind because /radar_detections never
+        // came up: surface as FAULT_PERCEPTION_DEAD so the system-health
+        // monitor + GCS see the degraded state instead of treating the
+        // run as nominal while every distant voxel defers.
+        if (radar_sub_failed) {
+            status.active_faults |= drone::ipc::FaultType::FAULT_PERCEPTION_DEAD;
         }
         status.fault_action = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);

@@ -75,7 +75,8 @@
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration + **covariance-derived quality** (`trace(P_position)` from IMU pre-integrator, configurable thresholds) |
 | Integration testing | **20 Tier 1 + 5 Tier 2 scenarios** on Zenoh; sideband fault injector CLI |
 | Test scenarios | 25 parameterized JSON configs with fault sequences + pass criteria |
-| Bug fixes | **48** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Bug fixes | **50** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Cosys-AirSim Tier 3 perception | **Phase 1 baseline locked** — sim-perfect ground-truth depth + segmentation + Echo radar (sensor type 7) end-to-end. Scenario 33 PASS, all 26 checks green, zero cube collisions ([PR #704](https://github.com/nmohamaya/companion_software_stack/pull/704)) |
 
 ---
 
@@ -732,6 +733,17 @@ Mono mission cam (gimbaled, payload-only):
 | ~~[#191](https://github.com/nmohamaya/companion_software_stack/issues/191)~~ | ~~Gazebo Full VIO backend~~ | C: VIO | **Closed** (PR #275) |
 | ~~[#254](https://github.com/nmohamaya/companion_software_stack/issues/254)~~ | ~~Covariance-derived VIO quality~~ | C: VIO | **Closed** (PR #276) |
 | ~~[#255](https://github.com/nmohamaya/companion_software_stack/issues/255)~~ | ~~Remove legacy IVisualFrontend~~ | C: VIO | **Closed** (PR #277) |
+
+---
+
+### Cosys-AirSim Tier 3 Phase 1 Perception (PR #704) — pending merge
+
+| # | Title | State |
+|---|-------|-------|
+| [#698](https://github.com/nmohamaya/companion_software_stack/issues/698) | PATH A voxels cement walls without radar agreement; DA V2 max-clamp ghosts feed the grid | **Closes on PR #704 merge** (sidestepped by ground-truth perception baseline; real-algo follow-ups tracked in Epics #514/#520) |
+| [#702](https://github.com/nmohamaya/companion_software_stack/issues/702) | Cosys-AirSim radar (lidar-emulated) misses 5/7 spawned obstacles | **Closes on PR #704 merge** (replaced by `CosysEchoBackend`) |
+| [#705](https://github.com/nmohamaya/companion_software_stack/issues/705) | Adopt Cosys Echo as physical radar simulator; deprecate lidar-emulated radar | **Closes on PR #704 merge** |
+| [#703](https://github.com/nmohamaya/companion_software_stack/issues/703) | Planner: graceful handling of waypoints inside obstacles | **Open** (deferred — filed during this work) |
 
 ---
 

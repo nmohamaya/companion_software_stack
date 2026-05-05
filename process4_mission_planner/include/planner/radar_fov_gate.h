@@ -1,0 +1,437 @@
+// process4_mission_planner/include/planner/radar_fov_gate.h
+//
+// RadarFovGate — late-stage cross-modal veto helper for the OccupancyGrid3D
+// promotion path.  Encodes the binding three-row promotion rule from ADR-013
+// (docs/adr/ADR-013-stereo-radar-redundancy-vs-fusion.md §2 item 4):
+//
+//   Cell distance from drone | In radar FOV? | Promotion authority
+//   ─────────────────────────────────────────────────────────────────
+//   < 10 m                   | any           | Stereo alone
+//   ≥ 10 m                   | yes           | Stereo + radar agreement required
+//   ≥ 10 m                   | no            | Stays dynamic, never promotes
+//                                              (with FOV-residency escape hatch
+//                                               and dynamic-age cap; see
+//                                               cross_veto_decision.h)
+//
+// This component owns:
+//   - Radar FOV geometry (azimuth/elevation/min-range/max-range)
+//   - The most recent RadarDetectionList + its receive timestamp
+//   - The current drone pose (world → body transform for FOV check)
+//   - Per-GridCell cumulative residency tracking (how many ns the cell has
+//     been *inside* the FOV with *no* radar return), needed for the
+//     "positive silence promotes as single-modality" branch in
+//     decide_promotion().
+//
+// Threading: every method must be called from a single thread (the P4 main
+// loop today: pose update, radar update, residency tick, query, age tracking
+// all share the same thread).  The OccupancyGrid3D atomic pause flags are
+// independent — they are touched by a different (FSM-tick) thread but they
+// don't reach RadarFovGate's state.  If P4 ever gains additional consumer
+// threads, a single mutex around radar_dets_ + pose_ + last_radar_t_ns_ +
+// residency_ + first_seen_ns_ would suffice.
+//
+// Issue: #698 (Fix #1 — long-range radar veto on PATH A grid promotion).
+
+#pragma once
+
+#include "ipc/ipc_types.h"
+#include "planner/grid_cell.h"  // GridCell, GridCellHash
+#include "util/config.h"
+#include "util/config_keys.h"
+
+#include <Eigen/Geometry>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace drone::planner {
+
+/// FOV geometry.  Defaults are conservative (±60°×±40°, 0.5–100 m) and match
+/// the Cosys radar simulator, but every deployment must call `from_cfg()`
+/// against the canonical `perception.radar.*` section so the runtime
+/// behaviour is config-driven.  The defaults exist only so legacy unit tests
+/// constructing a default-init struct compile and run.
+struct RadarFovConfig {
+    float fov_azimuth_rad{1.047f};    // ±60° default
+    float fov_elevation_rad{0.698f};  // ±40° default
+    float min_range_m{0.5f};
+    float max_range_m{100.0f};
+
+    /// Read all fields from `<section>.<canonical-subkey>`, where the
+    /// sub-keys are the central `cfg_key::hal::*` constants registered in
+    /// `common/util/include/util/config_keys.h`.  Missing keys keep the
+    /// struct default.  Use a configurable section so test harnesses can
+    /// load a custom block without trampling the production radar
+    /// section.
+    [[nodiscard]] static RadarFovConfig from_cfg(const drone::Config& cfg,
+                                                 std::string_view     section) {
+        RadarFovConfig c;
+        const std::string s(section);
+        c.fov_azimuth_rad   = cfg.get<float>(s + drone::cfg_key::hal::FOV_AZIMUTH_RAD,
+                                             c.fov_azimuth_rad);
+        c.fov_elevation_rad = cfg.get<float>(s + drone::cfg_key::hal::FOV_ELEVATION_RAD,
+                                             c.fov_elevation_rad);
+        c.min_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MIN_RANGE_M,
+                                             c.min_range_m);
+        c.max_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MAX_RANGE_M,
+                                             c.max_range_m);
+        return c;
+    }
+};
+
+/// Cross-veto policy — read from `mission_planner.occupancy_grid.cross_veto.*`.
+struct CrossVetoPolicy {
+    /// Cells closer than this promote on stereo alone (§2 item 4 row 1).
+    float short_range_m{10.0f};
+
+    /// Maximum acceptable age of a radar measurement when querying.  Older
+    /// than this and the gate reports `radar_stale = true`; callers treat
+    /// stale-radar as "did not see" → veto promotion (research note §6).
+    uint64_t radar_max_staleness_ns{100ULL * 1000ULL * 1000ULL};  // 100 ms
+
+    /// Spatial association window for radar-vs-cell match.  At range R from
+    /// the drone, a radar return is considered "near" the cell if its world-
+    /// frame Euclidean distance to the cell centre is below
+    ///   max(min_gate_radius_m, 0.25 * R + 0.1)
+    /// This grows with range to track the radar's own cross-range resolution
+    /// (~14° boresight for AWR1843 class — that is 0.25·R + bias).  See
+    /// research note §3 and ADR-013 §3 quantitative basis.
+    float min_gate_radius_m{1.0f};
+
+    /// "Positive silence" promotion threshold — a cell that has been inside
+    /// the radar FOV for at least this long with zero radar returns is
+    /// promoted as `PromoteFovSilence` (research note §7 yaw-aware FOV
+    /// residency).  Without this rule, a cell structurally outside FOV that
+    /// later enters FOV after a yaw maneuver would still wait indefinitely
+    /// for a *positive* radar match — which never comes for genuinely-empty
+    /// space.  2 s is the research-note default.
+    uint64_t fov_residency_promote_ns{2ULL * 1000ULL * 1000ULL * 1000ULL};
+
+    /// Hard age cap on dynamic cells.  Past this, a cell that has never
+    /// been radar-confirmed is force-promoted as `PromoteAgeCapEviction`
+    /// with a logged warning, to prevent dynamic-layer bloat for cells
+    /// structurally outside any radar coverage (e.g. cells above the
+    /// elevation FOV).  Compared against `cell_age_ns` (wall time since
+    /// the cell was first observed), independent of FOV residency.  30 s
+    /// default per research note §7.
+    uint64_t dynamic_age_cap_ns{30ULL * 1000ULL * 1000ULL * 1000ULL};
+
+    /// Read all fields from the canonical config keys.  Units match the
+    /// scenario JSON convention (and `cfg_key::mission_planner::occupancy_grid::cross_veto::*`):
+    /// `radar_max_staleness_ms` (ms), `fov_residency_promote_s` (s),
+    /// `dynamic_age_cap_s` (s).  Internally we store all timestamps in ns;
+    /// the conversion happens here.  Negative values are clamped to 0
+    /// before the signed→unsigned cast (CLAUDE.md integer-conversion rule).
+    ///
+    /// `section` is accepted for API symmetry with `RadarFovConfig::from_cfg`
+    /// but ignored — the cross_veto keys are at a fixed canonical path.
+    [[nodiscard]] static CrossVetoPolicy from_cfg(const drone::Config& cfg,
+                                                  std::string_view /*section*/) {
+        namespace ck = drone::cfg_key::mission_planner::occupancy_grid::cross_veto;
+        CrossVetoPolicy p;
+        p.short_range_m = cfg.get<float>(ck::SHORT_RANGE_M, p.short_range_m);
+        p.min_gate_radius_m = cfg.get<float>(ck::GATE_MIN_RADIUS_M, p.min_gate_radius_m);
+
+        const auto staleness_ms = cfg.get<int>(
+            ck::RADAR_MAX_STALENESS_MS,
+            static_cast<int>(p.radar_max_staleness_ns / 1'000'000ULL));
+        p.radar_max_staleness_ns =
+            static_cast<uint64_t>(std::max(0, staleness_ms)) * 1'000'000ULL;
+
+        const auto residency_s = cfg.get<float>(
+            ck::FOV_RESIDENCY_PROMOTE_S,
+            static_cast<float>(p.fov_residency_promote_ns) / 1.0e9f);
+        p.fov_residency_promote_ns =
+            static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
+
+        const auto cap_s = cfg.get<float>(
+            ck::DYNAMIC_AGE_CAP_S,
+            static_cast<float>(p.dynamic_age_cap_ns) / 1.0e9f);
+        p.dynamic_age_cap_ns =
+            static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
+
+        return p;
+    }
+};
+
+/// Result of a per-cell radar query.  Used by decide_promotion() and the
+/// disagreement telemetry to make + audit the gating decision.
+struct RadarQuery {
+    bool     in_fov{false};
+    bool     radar_present{false};
+    bool     radar_stale{false};
+    float    gate_radius_m{0.0f};
+    float    range_to_drone_m{0.0f};
+    /// Cumulative time the cell has been observed *inside* the radar FOV
+    /// with no return.  Drives `PromoteFovSilence`.  Reset whenever the
+    /// cell leaves FOV.  0 if the cell is untracked.
+    uint64_t residency_ns{0};
+    /// Wall time since the cell was first observed in the dynamic layer.
+    /// Drives `PromoteAgeCapEviction`.  Independent of FOV residency, so
+    /// cells structurally outside the radar cone still age-out.  0 if the
+    /// cell is untracked.
+    uint64_t cell_age_ns{0};
+};
+
+class RadarFovGate {
+public:
+    explicit RadarFovGate(RadarFovConfig fov, CrossVetoPolicy policy)
+        : fov_(fov), policy_(policy) {}
+
+    /// Update the cached drone pose.  Called from P4 main loop on each
+    /// `pose_sub->receive(pose)` success.  Cheap — pure store + matrix
+    /// rebuild for the world→body transform.
+    void set_pose(const drone::ipc::Pose& p) noexcept {
+        // Translation (world frame).
+        drone_pos_w_ = Eigen::Vector3f(static_cast<float>(p.translation[0]),
+                                       static_cast<float>(p.translation[1]),
+                                       static_cast<float>(p.translation[2]));
+        // Quaternion is (w, x, y, z) per IPC convention — see PoseDoubleBuffer
+        // in process3_slam_vio_nav/src/main.cpp for the canonical mapping.
+        const Eigen::Quaternionf q(static_cast<float>(p.quaternion[0]),
+                                   static_cast<float>(p.quaternion[1]),
+                                   static_cast<float>(p.quaternion[2]),
+                                   static_cast<float>(p.quaternion[3]));
+        // Body-from-world rotation = conjugate of body→world.
+        R_body_from_world_ = q.conjugate().toRotationMatrix();
+        pose_valid_        = true;
+    }
+
+    /// Update the cached radar detection list.  Called from P4 main loop on
+    /// each `radar_sub->receive(dets)` success.  `now_ns` is the receive
+    /// timestamp (steady_clock::now in nanoseconds) — we use this rather
+    /// than `dets.timestamp_ns` because the latter may live in a different
+    /// epoch (publisher's steady_clock vs subscriber's), and our staleness
+    /// check is "did the gate see this recently?" not "when was it sampled?"
+    void set_radar_detections(const drone::ipc::RadarDetectionList& dets,
+                              uint64_t                              now_ns) noexcept {
+        radar_dets_         = dets;
+        last_radar_t_ns_    = now_ns;
+        radar_initialized_  = true;
+    }
+
+    /// Query the gate for a world-frame point (typically a grid cell centre).
+    /// Returns the FOV / radar-presence / staleness facts the caller needs to
+    /// make a geometry-only decision.  Does NOT populate `residency_ns` /
+    /// `cell_age_ns` — those are per-cell, use `query_cell()` instead.
+    [[nodiscard]] RadarQuery query(float wx, float wy, float wz, uint64_t now_ns) const noexcept {
+        RadarQuery q;
+        if (!pose_valid_) {
+            // No pose yet — caller treats as "unknown FOV" → veto, per the
+            // default-conservative policy.  in_fov = false, radar_stale = true.
+            q.in_fov      = false;
+            q.radar_stale = true;
+            return q;
+        }
+
+        // World → body transform.
+        const Eigen::Vector3f p_world(wx, wy, wz);
+        const Eigen::Vector3f p_body = R_body_from_world_ * (p_world - drone_pos_w_);
+
+        // Spherical body-frame coords.  Body convention: +X forward, +Y left,
+        // +Z up (ENU body frame, matching the pose channel's world frame).
+        // Azimuth: angle in body XY plane from +X, positive toward +Y.
+        // Elevation: angle from XY plane toward +Z.
+        const float range = p_body.norm();
+        q.range_to_drone_m = range;
+
+        if (range < 1e-6f) {
+            // Cell is essentially on the drone — treat as in-FOV by convention
+            // (the avoider will handle this anyway).
+            q.in_fov = true;
+        } else {
+            const float azimuth_rad   = std::atan2(p_body.y(), p_body.x());
+            const float elevation_rad = std::asin(std::clamp(p_body.z() / range, -1.0f, 1.0f));
+            q.in_fov                  = (range >= fov_.min_range_m &&
+                        range <= fov_.max_range_m &&
+                        std::abs(azimuth_rad) <= fov_.fov_azimuth_rad &&
+                        std::abs(elevation_rad) <= fov_.fov_elevation_rad);
+        }
+
+        // Staleness: if no radar message within the policy window, treat as stale.
+        if (!radar_initialized_ ||
+            (now_ns >= last_radar_t_ns_ &&
+             (now_ns - last_radar_t_ns_) > policy_.radar_max_staleness_ns)) {
+            q.radar_stale = true;
+        }
+
+        // Spatial association window — grows with range to track radar's own
+        // cross-range resolution.  See CrossVetoPolicy::min_gate_radius_m doc.
+        q.gate_radius_m = std::max(policy_.min_gate_radius_m, 0.25f * range + 0.1f);
+
+        // Radar-presence check: scan cached detections for any return whose
+        // world-frame position is within gate_radius_m of (wx,wy,wz).
+        if (!q.radar_stale) {
+            const float gate_sq = q.gate_radius_m * q.gate_radius_m;
+            for (uint32_t i = 0; i < radar_dets_.num_detections; ++i) {
+                const auto& d = radar_dets_.detections[i];
+                // Body-frame radar position (X forward, Y left, Z up).
+                // Cosys radar convention here matches RadarDetection field
+                // semantics: range_m + azimuth_rad + elevation_rad (body frame).
+                const float cx = d.range_m * std::cos(d.elevation_rad) * std::cos(d.azimuth_rad);
+                const float cy = d.range_m * std::cos(d.elevation_rad) * std::sin(d.azimuth_rad);
+                const float cz = d.range_m * std::sin(d.elevation_rad);
+                const Eigen::Vector3f det_body(cx, cy, cz);
+                const float           dx = det_body.x() - p_body.x();
+                const float           dy = det_body.y() - p_body.y();
+                const float           dz = det_body.z() - p_body.z();
+                if (dx * dx + dy * dy + dz * dz <= gate_sq) {
+                    q.radar_present = true;
+                    break;
+                }
+            }
+        }
+
+        return q;
+    }
+
+    /// Walk all currently-tracked dynamic cells once per planner tick to
+    /// accrue FOV-residency time AND to maintain the per-cell first-seen
+    /// timestamp used for age-cap eviction.  The caller passes the iterable
+    /// of dynamic cells (from OccupancyGrid3D::dynamic_cell_keys()) and the
+    /// current `now_ns`.
+    ///
+    /// Bookkeeping per cell:
+    ///   - If first observation: stamp `first_seen_ns_[c] = now_ns`.
+    ///   - If in FOV and no radar return and not stale: residency += dt
+    ///     (capped at `fov_residency_promote_ns` — once qualified, no need
+    ///     to keep growing).
+    ///   - If outside FOV or radar present: residency unchanged.  The
+    ///     `PromoteFovSilence` row of decide_promotion() requires both
+    ///     `!in_fov` AND `residency_ns >= fov_residency_promote_ns`, so
+    ///     resetting on FOV exit (the prior buggy behaviour) made the
+    ///     escape hatch unreachable in production.
+    ///   - first_seen_ns_ is NEVER reset by FOV transitions — age-cap
+    ///     eviction depends on lifetime, not on whether we ever saw it.
+    ///
+    /// Stale-entry hygiene: every cell present in residency_ / first_seen_
+    /// but NOT in `dynamic_cells` (TTL-decayed out of the grid) is erased.
+    /// Otherwise a later voxel reappearing at the same coordinates would
+    /// inherit stale state and promote earlier than intended (Copilot
+    /// review on PR #704).
+    ///
+    /// Cost: O(N) where N = |dynamic cells| + small fixed overhead per stale
+    /// entry.  At scenario-33 worst case (~5 K cells × 10 Hz × ~50 ns) this
+    /// is well under 1 ms.
+    template<typename CellIterable>
+    void tick_residency(const CellIterable& dynamic_cells, float resolution_m, uint64_t now_ns) {
+        // Use a separate bool sentinel rather than `last_tick_ns_ > 0`: the
+        // first tick may legitimately fire at now_ns = 0 (test fixtures, replay
+        // mode where the recorded steady_clock starts at zero).
+        const uint64_t dt_ns =
+            (tick_initialized_ && now_ns >= last_tick_ns_) ? (now_ns - last_tick_ns_) : 0;
+        last_tick_ns_     = now_ns;
+        tick_initialized_ = true;
+        if (!pose_valid_) return;
+
+        std::unordered_set<GridCell, GridCellHash> live;
+        live.reserve(residency_.size() + first_seen_ns_.size() + 16);
+
+        const uint64_t cap = policy_.fov_residency_promote_ns;
+        for (const auto& c : dynamic_cells) {
+            live.insert(c);
+            if (first_seen_ns_.find(c) == first_seen_ns_.end()) {
+                first_seen_ns_[c] = now_ns;
+            }
+            if (dt_ns == 0) continue;  // first tick — no time has passed yet.
+
+            const float wx = c.x * resolution_m;
+            const float wy = c.y * resolution_m;
+            const float wz = c.z * resolution_m;
+            const auto  q  = query(wx, wy, wz, now_ns);
+            if (q.in_fov && !q.radar_present && !q.radar_stale) {
+                uint64_t& acc = residency_[c];
+                acc           = std::min(cap, acc + dt_ns);
+            }
+            // Outside FOV / radar present: leave both counters alone.
+            // first_seen_ns_ keeps climbing via age, residency_ stays
+            // at whatever was accumulated during prior in-FOV ticks so
+            // the FOV-silence escape hatch can fire after the cell
+            // exits the FOV.
+        }
+
+        for (auto it = residency_.begin(); it != residency_.end();) {
+            if (live.find(it->first) == live.end()) {
+                it = residency_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = first_seen_ns_.begin(); it != first_seen_ns_.end();) {
+            if (live.find(it->first) == live.end()) {
+                it = first_seen_ns_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    /// Read the residency counter for a single cell.  Returns 0 if untracked.
+    [[nodiscard]] uint64_t residency_ns(const GridCell& c) const noexcept {
+        const auto it = residency_.find(c);
+        return (it == residency_.end()) ? 0 : it->second;
+    }
+
+    /// Read the cell's age (now_ns − first_seen_ns).  Returns 0 if untracked
+    /// or if `now_ns < first_seen_ns_` (clock skew guard).
+    [[nodiscard]] uint64_t cell_age_ns(const GridCell& c, uint64_t now_ns) const noexcept {
+        const auto it = first_seen_ns_.find(c);
+        if (it == first_seen_ns_.end()) return 0;
+        return (now_ns >= it->second) ? (now_ns - it->second) : 0;
+    }
+
+    /// Per-cell query: same as the geometry-only `query()` but additionally
+    /// populates `residency_ns` and `cell_age_ns` from the per-cell trackers.
+    /// This is the entry point the OccupancyGrid3D promotion gate must use —
+    /// without it, `decide_promotion()` cannot reach the escape-hatch rows.
+    [[nodiscard]] RadarQuery query_cell(const GridCell& c, float resolution_m,
+                                        uint64_t now_ns) const noexcept {
+        RadarQuery q = query(c.x * resolution_m, c.y * resolution_m, c.z * resolution_m, now_ns);
+        q.residency_ns = residency_ns(c);
+        q.cell_age_ns  = cell_age_ns(c, now_ns);
+        return q;
+    }
+
+    /// Drop a cell's residency / age entries (call when the cell is promoted
+    /// or evicted from the dynamic layer).
+    void clear_residency(const GridCell& c) noexcept {
+        residency_.erase(c);
+        first_seen_ns_.erase(c);
+    }
+
+    [[nodiscard]] const RadarFovConfig&  fov_config() const noexcept { return fov_; }
+    [[nodiscard]] const CrossVetoPolicy& policy() const noexcept { return policy_; }
+    [[nodiscard]] bool                   has_pose() const noexcept { return pose_valid_; }
+    [[nodiscard]] uint64_t               last_radar_t_ns() const noexcept {
+        return last_radar_t_ns_;
+    }
+
+    /// Diagnostic — number of cells currently in the residency tracker.
+    /// Useful for end-of-run reports + scenario telemetry.
+    [[nodiscard]] size_t tracked_cell_count() const noexcept { return residency_.size(); }
+
+private:
+    RadarFovConfig                                              fov_;
+    CrossVetoPolicy                                             policy_;
+    Eigen::Vector3f                                             drone_pos_w_{Eigen::Vector3f::Zero()};
+    Eigen::Matrix3f                                             R_body_from_world_{
+        Eigen::Matrix3f::Identity()};
+    bool                                                        pose_valid_{false};
+    drone::ipc::RadarDetectionList                              radar_dets_{};
+    uint64_t                                                    last_radar_t_ns_{0};
+    bool                                                        radar_initialized_{false};
+    uint64_t                                                    last_tick_ns_{0};
+    bool                                                        tick_initialized_{false};
+    /// Cumulative time spent in-FOV with no radar return.  Reset on FOV exit.
+    std::unordered_map<GridCell, uint64_t, GridCellHash>        residency_;
+    /// Wall time of first observation in the dynamic layer.  Never reset by
+    /// FOV transitions — only cleared when the cell promotes or TTL-decays.
+    std::unordered_map<GridCell, uint64_t, GridCellHash>        first_seen_ns_;
+};
+
+}  // namespace drone::planner

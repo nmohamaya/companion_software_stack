@@ -6,6 +6,9 @@
 #pragma once
 
 #include "ipc/ipc_types.h"
+#include "planner/cross_veto_decision.h"  // Issue #698 Fix #1 — promotion gate
+#include "planner/grid_cell.h"            // GridCell + GridCellHash (extracted)
+#include "planner/radar_fov_gate.h"       // RadarFovGate (cross-veto helper)
 #include "util/ilogger.h"
 
 #include <algorithm>
@@ -22,31 +25,8 @@
 
 namespace drone::planner {
 
-// ─────────────────────────────────────────────────────────────
-// GridCell — a cell index in the 3D grid
-// ─────────────────────────────────────────────────────────────
-
-struct GridCell {
-    int x = 0, y = 0, z = 0;
-
-    bool operator==(const GridCell& o) const { return x == o.x && y == o.y && z == o.z; }
-    bool operator!=(const GridCell& o) const { return !(*this == o); }
-};
-
-/// Hash for GridCell (for use in unordered containers).
-struct GridCellHash {
-    size_t operator()(const GridCell& c) const {
-        // FNV-1a inspired mixing
-        size_t h = 2166136261u;
-        h ^= static_cast<size_t>(c.x);
-        h *= 16777619u;
-        h ^= static_cast<size_t>(c.y);
-        h *= 16777619u;
-        h ^= static_cast<size_t>(c.z);
-        h *= 16777619u;
-        return h;
-    }
-};
+// GridCell + GridCellHash extracted to planner/grid_cell.h to break the
+// occupancy_grid_3d.h ↔ radar_fov_gate.h include cycle (issue #698 Fix #1).
 
 // ─────────────────────────────────────────────────────────────
 // 26-connected neighbour tables (used by D* Lite grid search)
@@ -163,7 +143,11 @@ public:
         hd_map_cells_.clear();
         hd_map_static_count_ = 0;
         static_cell_timestamps_.clear();
-        promoted_count_ = 0;
+        single_modality_static_.clear();      // Issue #698 Fix #1
+        total_cross_veto_deferred_  = 0;      // Issue #698 Fix #1 (Phase 3)
+        total_fov_silence_promoted_ = 0;
+        total_age_cap_evicted_      = 0;
+        promoted_count_                 = 0;
         hit_count_.clear();
         instances_.clear();
     }
@@ -251,9 +235,33 @@ public:
         // observed in enough frames yet (`voxel_instance_promotion_observations_`).
         // Always 0 when instance promotion is disabled (default).
         size_t instance_skipped = 0;
+        // Issue #698 Fix #1 — cells that hit the promotion threshold but
+        // were vetoed by the cross-modal gate (range >= short_range_m AND
+        // (in FOV with no/stale radar OR outside FOV with insufficient
+        // residency)).  See cross_veto_decision.h decide_promotion().
+        size_t cross_veto_deferred = 0;
+        // Cells promoted via the FOV-silence escape hatch — radar observed
+        // the area for `fov_residency_promote_ns` with no return.  Lower
+        // severity (radar agreed by silence).
+        size_t fov_silence_promoted = 0;
+        // Cells force-promoted via the age-cap escape hatch — cell exceeded
+        // `dynamic_age_cap_ns` lifetime; radar never saw the area.  Higher
+        // severity than fov_silence_promoted.  Telemetry should flag if
+        // these dominate — signals the policy needs tuning, or the cell is
+        // structurally outside any radar coverage.
+        size_t age_cap_evicted = 0;
     };
+    /// Insert PATH A voxels into the grid.  Optional `radar_gate` argument
+    /// enables the cross-modal veto from ADR-013 §2 item 4 (issue #698
+    /// Fix #1).  The veto engages whenever `radar_gate` is non-null AND the
+    /// gate has at least one pose buffered — the gate keeps its own cached
+    /// pose (from the most recent `set_pose()` call), so callers do NOT
+    /// need to gate on a fresh-this-tick pose receive.  When the gate is
+    /// null (legacy callers, unit tests not exercising the veto) all
+    /// promotions proceed unconditionally.
     VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels, uint32_t n,
-                                   float clamp_m, float min_confidence) {
+                                   float clamp_m, float min_confidence,
+                                   RadarFovGate* radar_gate = nullptr) {
         VoxelInsertStats s;
         if (voxels == nullptr || n == 0) return s;
         const float clamp = std::max(0.0f, clamp_m);
@@ -448,17 +456,125 @@ public:
                                     promoted_static_count >=
                                         static_cast<std::size_t>(max_static_cells_);
                                 if (!cap_reached) {
-                                    static_occupied_.insert(c);
-                                    occupied_.erase(c);
-                                    hit_count_.erase(c);
-                                    ++promoted_count_;
-                                    // Record promotion time when static-cell
-                                    // TTL is enabled — the sweep keys off
-                                    // this map.  HD-map cells stay timestamp-
-                                    // free so they can never decay.
-                                    if (static_cell_ttl_ns_ > 0) {
-                                        static_cell_timestamps_[c] = now_ns;
+                                    // Issue #698 Fix #1 — cross-modal veto
+                                    // gate.  When both pose and radar gate
+                                    // were supplied, evaluate ADR-013 §2
+                                    // item 4's three-row promotion rule.
+                                    // When either is null (legacy callers,
+                                    // unit tests not exercising the veto),
+                                    // skip the gate and promote.  See
+                                    // cross_veto_decision.h decide_promotion().
+                                    bool may_promote          = true;
+                                    bool single_modality_flag = false;
+                                    if (radar_gate && radar_gate->has_pose()) {
+                                        const auto wxyz  = grid_to_world(c);
+                                        // query_cell populates residency_ns
+                                        // and cell_age_ns from the per-cell
+                                        // trackers; without it the
+                                        // PromoteFovSilence /
+                                        // PromoteAgeCapEviction branches
+                                        // can never fire.
+                                        const auto query = radar_gate->query_cell(c, resolution_,
+                                                                                  now_ns);
+                                        const auto decision =
+                                            decide_promotion(query, radar_gate->policy());
+                                        switch (decision) {
+                                            case PromotionDecision::Promote:
+                                                may_promote = true;
+                                                break;
+                                            case PromotionDecision::DeferToDynamic:
+                                                may_promote = false;
+                                                ++s.cross_veto_deferred;
+                                                ++total_cross_veto_deferred_;
+                                                // Throttled WARN: first event,
+                                                // then every 50th, to surface
+                                                // disagreements without log
+                                                // floods.  Phase 3 will replace
+                                                // this with structured telemetry.
+                                                if (s.cross_veto_deferred == 1 ||
+                                                    s.cross_veto_deferred % 50 == 0) {
+                                                    DRONE_LOG_WARN(
+                                                        "[CrossVeto] Defer promotion at "
+                                                        "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
+                                                        "in_fov={} radar_present={} "
+                                                        "radar_stale={} (#{} this batch)",
+                                                        wxyz[0], wxyz[1], wxyz[2],
+                                                        query.range_to_drone_m, query.in_fov,
+                                                        query.radar_present, query.radar_stale,
+                                                        s.cross_veto_deferred);
+                                                }
+                                                break;
+                                            case PromotionDecision::PromoteFovSilence:
+                                                may_promote          = true;
+                                                single_modality_flag = true;
+                                                ++s.fov_silence_promoted;
+                                                ++total_fov_silence_promoted_;
+                                                if (s.fov_silence_promoted == 1 ||
+                                                    s.fov_silence_promoted % 50 == 0) {
+                                                    DRONE_LOG_WARN(
+                                                        "[CrossVeto] FOV-silence promote at "
+                                                        "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
+                                                        "residency={}ms (#{} this batch)",
+                                                        wxyz[0], wxyz[1], wxyz[2],
+                                                        query.range_to_drone_m,
+                                                        query.residency_ns / 1'000'000ULL,
+                                                        s.fov_silence_promoted);
+                                                }
+                                                break;
+                                            case PromotionDecision::PromoteAgeCapEviction:
+                                                may_promote          = true;
+                                                single_modality_flag = true;
+                                                ++s.age_cap_evicted;
+                                                ++total_age_cap_evicted_;
+                                                // Age-cap eviction is
+                                                // higher-severity than FOV
+                                                // silence — radar never saw
+                                                // the area, we promote on
+                                                // age alone.  Log every event
+                                                // for the first 10 of a
+                                                // batch (vs 1 + every 50th)
+                                                // so a sudden mass-eviction
+                                                // is loud in the log.
+                                                if (s.age_cap_evicted <= 10 ||
+                                                    s.age_cap_evicted % 50 == 0) {
+                                                    DRONE_LOG_WARN(
+                                                        "[CrossVeto] Age-cap evict at "
+                                                        "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
+                                                        "age={}ms (#{} this batch) — radar "
+                                                        "never saw this area",
+                                                        wxyz[0], wxyz[1], wxyz[2],
+                                                        query.range_to_drone_m,
+                                                        query.cell_age_ns / 1'000'000ULL,
+                                                        s.age_cap_evicted);
+                                                }
+                                                break;
+                                        }
                                     }
+                                    if (may_promote) {
+                                        static_occupied_.insert(c);
+                                        occupied_.erase(c);
+                                        hit_count_.erase(c);
+                                        ++promoted_count_;
+                                        // Record promotion time when static-cell
+                                        // TTL is enabled — the sweep keys off
+                                        // this map.  HD-map cells stay timestamp-
+                                        // free so they can never decay.
+                                        if (static_cell_ttl_ns_ > 0) {
+                                            static_cell_timestamps_[c] = now_ns;
+                                        }
+                                        if (single_modality_flag) {
+                                            single_modality_static_.insert(c);
+                                        }
+                                        // Drop the veto-residency tracker entry
+                                        // for this cell — it's now static.
+                                        if (radar_gate) radar_gate->clear_residency(c);
+                                    }
+                                    // else: vetoed — keep hit_count_ so the
+                                    // cell can promote later if the
+                                    // disagreement resolves (radar appears,
+                                    // residency accrues, drone yaws etc.).
+                                    // The cell stays in occupied_ (dynamic
+                                    // layer) and TTL-decays normally.
                                 } else {
                                     // Cap reached — leave cell in dynamic
                                     // bucket (still observed, still TTL-decays
@@ -671,15 +787,20 @@ public:
         // (early-out) so legacy scenarios pay nothing.
         sweep_static_cells(now_ns);
 
-        // Diagnostic: log grid state periodically
+        // Diagnostic: log grid state periodically.  Issue #698 Fix #1 (Phase 3)
+        // appended cumulative cross-veto counters so the scenario run-report
+        // post-processor can grep `cross_veto=` and `single_modality=` to
+        // surface gating activity in the run summary.
         if (diag_tick_++ % 100 == 0 && objects.num_objects > 0) {
             DRONE_LOG_INFO(
                 "[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
-                "drone=({},{},{})",
+                "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={}",
                 objects.num_objects, accepted, suppressed, excluded_cells, occupied_.size(),
                 static_occupied_.size(), promoted_count_, hd_map_static_count_, max_static_cells_,
-                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z);
+                total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
+                total_cross_veto_deferred_, total_fov_silence_promoted_,
+                total_age_cap_evicted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -721,6 +842,47 @@ public:
     [[nodiscard]] int    promoted_count() const { return promoted_count_; }
     [[nodiscard]] int    max_static_cells() const { return max_static_cells_; }
     [[nodiscard]] size_t hd_map_static_count() const { return hd_map_static_count_; }
+    /// Issue #698 Fix #1 — number of static cells currently held with only
+    /// stereo backing (no radar agreement at promotion time).  Surfaced for
+    /// telemetry / run-report; non-zero is not necessarily a bug, but a
+    /// rapidly-growing value indicates the cross-veto policy is too lenient
+    /// or the radar coverage is failing.
+    [[nodiscard]] size_t single_modality_static_count() const {
+        return single_modality_static_.size();
+    }
+    [[nodiscard]] bool is_single_modality_static(const GridCell& c) const {
+        return single_modality_static_.count(c) > 0;
+    }
+    /// Issue #698 Fix #1 — snapshot of the keys in the dynamic (TTL) layer.
+    /// Returned by-value (a copy) so callers can iterate without holding a
+    /// reference to internal state and without locking — there's no thread
+    /// other than the planner that touches `occupied_`.  Cost: O(N).  At
+    /// scenario-33 worst case (~5 K dynamic cells × 10 Hz) the copy is
+    /// ~80 µs which is negligible vs the planner tick budget.  Used by
+    /// RadarFovGate::tick_residency to advance per-cell FOV-residency
+    /// counters.
+    [[nodiscard]] std::vector<GridCell> dynamic_cell_keys() const {
+        std::vector<GridCell> keys;
+        keys.reserve(occupied_.size());
+        for (const auto& [c, t] : occupied_) keys.push_back(c);
+        return keys;
+    }
+    /// Issue #698 Fix #1 (Phase 3 telemetry) — cumulative cross-veto event
+    /// counters across the lifetime of this grid.  Surfaced in the periodic
+    /// `[Grid]` diagnostic line and aggregated into the scenario run-report
+    /// post-processing.  Both reset in `clear_static()`.
+    [[nodiscard]] uint64_t total_cross_veto_deferred() const { return total_cross_veto_deferred_; }
+    [[nodiscard]] uint64_t total_fov_silence_promoted() const {
+        return total_fov_silence_promoted_;
+    }
+    [[nodiscard]] uint64_t total_age_cap_evicted() const { return total_age_cap_evicted_; }
+    /// Backwards-compatible aggregate of the two single-modality escape
+    /// hatches (FOV silence + age-cap eviction).  Used by the periodic
+    /// `[Grid]` diagnostic line and any consumer that doesn't care which
+    /// branch fired.
+    [[nodiscard]] uint64_t total_single_modality_promoted() const {
+        return total_fov_silence_promoted_ + total_age_cap_evicted_;
+    }
     [[nodiscard]] size_t hd_map_cell_count() const { return hd_map_cells_.size(); }
     /// Cumulative count of objects that had velocity-based prediction applied
     /// across all calls to update_from_objects() (lifetime counter, never reset).
@@ -854,6 +1016,7 @@ private:
             if (age_ns > static_cell_ttl_ns_) {
                 const GridCell c = it->first;
                 static_occupied_.erase(c);
+                single_modality_static_.erase(c);  // Issue #698 Fix #1
                 changed_cells_.push_back({c, false});
                 if (promoted_count_ > 0) --promoted_count_;
                 it = static_cell_timestamps_.erase(it);
@@ -1006,6 +1169,13 @@ private:
     int      max_static_cells_{0};                   // cap on promoted static cells (0 = unlimited)
     int      promoted_count_{0};                     // total cells promoted (diagnostic)
     size_t   hd_map_static_count_{0};                // HD-map cells (excluded from cap)
+    // Issue #698 Fix #1 (Phase 3 telemetry) — cumulative cross-veto counters
+    // across the lifetime of this OccupancyGrid3D instance.  Per-batch counts
+    // live in VoxelInsertStats; these aggregates survive across batches and
+    // feed the periodic [Grid] diagnostic line + the scenario run-report.
+    uint64_t total_cross_veto_deferred_{0};
+    uint64_t total_fov_silence_promoted_{0};
+    uint64_t total_age_cap_evicted_{0};
     // PR #661 P2 review: pause flags are written by the FSM tick thread
     // (mission_state_tick) and read by the planner thread inside
     // update_from_objects().  Atomic with acquire/release ordering closes
@@ -1065,6 +1235,13 @@ private:
     // Subset of static_occupied_ that came from add_static_obstacle() (HD-map).
     // Used to suppress radar promotion near known obstacles (Issue #389).
     std::unordered_set<GridCell, GridCellHash> hd_map_cells_;
+    // Issue #698 Fix #1 — subset of static_occupied_ that was promoted via
+    // the cross-veto's single-modality escape hatch (positive radar silence
+    // after enough FOV residency, or dynamic-age-cap eviction).  Tracked so
+    // telemetry / diagnostics can flag "this static cell only has stereo
+    // backing, not radar agreement."  Phase 3 will surface this in the
+    // run report.
+    std::unordered_set<GridCell, GridCellHash> single_modality_static_;
     // Issue #635 — timestamp side-table for *promoted* static cells (NOT
     // HD-map).  Lookup semantics:
     //   - cell ∈ static_occupied_ AND ∈ hd_map_cells_   → permanent (HD-map)

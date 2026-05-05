@@ -62,6 +62,22 @@ namespace drone::hal {
                                drone::cfg_key::cosys_airsim::VEHICLE_NAME, "Drone0");
 }
 
+/// Resolve AirSim Echo sensor name:
+///   `<section>.echo_name` → `cosys_airsim.echo_name` → "echo".
+[[nodiscard]] inline std::string resolve_echo_name(const drone::Config& cfg,
+                                                   const std::string&   section) {
+    return resolve_airsim_name(cfg, section, ".echo_name",
+                               drone::cfg_key::cosys_airsim::ECHO_NAME, "echo");
+}
+
+/// Resolve AirSim radar sensor name:
+///   `<section>.radar_name` → `cosys_airsim.radar_name` → "radar".
+[[nodiscard]] inline std::string resolve_radar_name(const drone::Config& cfg,
+                                                    const std::string&   section) {
+    return resolve_airsim_name(cfg, section, ".radar_name",
+                               drone::cfg_key::cosys_airsim::RADAR_NAME, "radar");
+}
+
 }  // namespace drone::hal
 
 #endif  // HAVE_COSYS_AIRSIM

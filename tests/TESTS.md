@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **83 C++ + 5 shell + 1 Python** | **1766 (no SDK) / 1807 (+SDK) + 42 + 29 + 250+** | |
+| **Total** | **86 C++ + 5 shell + 1 Python** | **2049 (no SDK) / 2090 (+SDK) + 42 + 29 + 250+** | PR #704 added 15 cross_veto_decision + 35 radar_fov_gate + 15 occupancy_grid_cross_veto integration tests; VIO factory test inverted (Throw → Result). |
 
 ---
 

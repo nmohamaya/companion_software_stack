@@ -1000,3 +1000,30 @@ The previous behaviour (silent failure) is the worst possible outcome — it giv
 **Revisit when:** all six upstream causes above have dedicated regression locks AND are enforced by config-validator gates; the exit-face recovery becomes belt-and-braces that can be downgraded from `WARN` to `DEBUG` on engagement (the bug is then truly elsewhere, not the avoider).
 
 **Date:** 2026-05-02 (PR #685 / PR #657 review-fault-recovery P1)
+
+---
+
+## DR-042: PR #704 — `DRONE_LOG_INFO` on Cosys HAL polling threads (1 Hz cadence) without a lock-free buffer
+
+**Question:** CLAUDE.md "Observability on flight-critical threads" rule states that mutex-protected observability primitives (loggers, profilers) MUST NOT be called from flight-critical or real-time threads without documented justification.  Both `CosysEchoBackend::poll_loop()` and `CosysGroundTruthRadarBackend::poll_loop()` emit `DRONE_LOG_INFO` directly (spdlog default sink — internally mutex-protected), at a rate of 1 Hz (every 20th scan at 20 Hz).  Should these be moved to a lock-free buffer drained by a dedicated IO thread, like the LatencyTracker pattern P3 uses?
+
+**For moving to a lock-free buffer:** The rule exists for a reason — even at 1 Hz, mutex contention can produce priority inversion if a higher-priority thread happens to want spdlog's mutex while the poll thread is mid-`format`.  And the cost is a real spdlog format + sink-write under lock per emission.  In a deployed real-hardware system this could matter.
+
+**For keeping spdlog on the poll thread (our decision):**
+
+1. **Polling threads are not flight-critical.**  P2's hot path (detector, tracker) and P4's planner-tick are flight-critical.  These Cosys HAL threads are sim-only ground-truth feeders running at 20 Hz — they don't touch the FC, the pose estimator, or any real-time control loop.  An RT-priority inversion against them does not flunk the safety analysis.
+2. **20 Hz is "soft real-time" at most.**  Even on a worst-case spdlog hold of 5 ms, that's a 10 % budget at 20 Hz — observable in latency profiling but well outside any flight-critical envelope.
+3. **The rule's primary hazard is priority inversion against mutex-protected logging from a control thread.**  Here the writer is the polling thread itself; there is no higher-priority consumer of the lock at the same level (drainer thread, etc.).
+4. **Throttled to 1 Hz.**  The first-non-zero-emission and per-20-scan summaries are explicitly capped — this is not a blast-radius concern.
+5. **Sim-only code path.**  These backends are guarded by `HAVE_COSYS_AIRSIM`; production drone deployments don't compile them in.  Real-hardware perception is on PATH C / Echo / camera-from-V4L2, not Cosys.
+
+**Risks accepted:**
+
+- Future RT-priority work that gives the Cosys polling thread a real-time priority would expose the inversion hazard — this DR must be revisited.  Currently the threads run at default OS priority.
+- Future spdlog backend changes (async, file-rotate-on-write) could change the mutex hold-time profile.  spdlog 1.13's default sink is well-understood; document this DR as predicated on the current sink class.
+
+**Decision:** Keep `DRONE_LOG_INFO` on the polling thread.  Document this DR.  The IMPROVEMENTS.md backlog item (P2) is the long-term fix once we either (a) deploy Cosys backends to a real-hardware path, or (b) measure latency-budget impact > 0.5 ms.
+
+**Revisit when:** Cosys backends become a flight path on real hardware OR `LatencyProfiler` data shows >0.5 ms tail latency on the Cosys polling threads OR the spdlog sink is replaced with a different mutex profile.
+
+**Date:** 2026-05-05 (PR #704 review-performance P2 + review-concurrency observability rule)

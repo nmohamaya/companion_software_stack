@@ -16,6 +16,79 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-05 (PR #704 second-round review — deferred follow-ups)
+
+Items from the second 9-agent review pass on PR #704, after the first-round fixes landed.  Top-4 items (config-key unit mismatch, fault propagation, header scrub) addressed in commit 593d38b.  The items below are correct-but-deferred:
+
+#### Performance — RadarFovGate::tick_residency hot path
+
+- **P2** — `tick_residency()` allocates a fresh `std::unordered_set<GridCell> live` every tick (10 Hz × ~5K cells = ~40-80 KB allocator round-trip per tick).  Promote `live_scratch_` to a class member and `clear()` between ticks (matches the `by_color_pool_` pattern already used in CosysSegmentation).
+- **P2** — `first_seen_ns_.find(c)` followed by `first_seen_ns_[c] = now_ns` does two hash computations per cell.  Replace with `first_seen_ns_.try_emplace(c, now_ns)` for one hash on the hit path.
+- **P3** — `query_cell()` does `query()` + two separate `find()` calls on `residency_` and `first_seen_ns_`.  Cache iterators or fuse into one map type to avoid the extra hash on the per-promotion-candidate path.
+
+#### Test quality — integration test wall-clock dependence
+
+- **P2** — `test_occupancy_grid_cross_veto.cpp::AgeCapEvict_FiresIndependentOfResidency` and the Row-1/Row-2 tests use `now_real_ns()` for radar freshness, but `insert_voxels` reads `steady_clock::now()` internally.  On a heavily-loaded CI box the gap could exceed `radar_max_staleness_ns` and Row 2 *agree* test could flip from `Promote` to `DeferToDynamic`.  Real fix: inject a clock into `OccupancyGrid3D` (`ScopedMockClock` pattern) so integration tests don't depend on real time.
+- **P3** — `GateRadiusBoundaryRespectsLeq` uses hardcoded `gate_r=3.85f` recomputed by hand.  Derive from `q.gate_radius_m` of a prior `query()` call so the boundary tracks the implementation.
+- **P3** — `NanQuaternionPose_QueryReturnsConservativeVeto` only asserts `SUCCEED()`.  Tighten to `EXPECT_FALSE(q.in_fov)` + `EXPECT_TRUE(q.radar_stale)` per the conservative-veto contract.
+- **P3** — `NanVoxelPosition_ClampedDropped_DoesNotReachGate` asserts `s.clamped_dropped + s.out_of_bounds > 0` (an OR).  Pin which branch fires.
+- **P3** — `make_gazebo_full_vio` returns `nullptr` silently on `is_err()`.  Capture `r.error().to_string()` into `ADD_FAILURE()` before returning nullptr so the test diagnostic surfaces the real error.
+- **P3** — `tests/TESTS.md` does not yet list per-file entries for `test_cross_veto_decision.cpp`, `test_radar_fov_gate.cpp`, or `test_occupancy_grid_cross_veto.cpp`.  Total count was bumped but the per-file rows are missing.
+
+#### Concurrency / API hygiene
+
+- **P3** — `cosys_echo_backend.h:130-141` and `cosys_groundtruth_radar.h:141-145` start the polling thread while holding `mutex_`.  No deadlock today (thread doesn't reach the lock during init), but holding `mutex_` across `std::thread` construction is a smell.  Move the thread-spawn outside the lock.
+- **P3** — `cosys_echo_backend.h::scan_count_.fetch_add(…, memory_order_release)` vs `cosys_groundtruth_radar.h::scan_count_.fetch_add(…, memory_order_acq_rel)` — same logical operation, inconsistent ordering.  Align both to `release` or document the choice.
+- **P3** — `GazeboVIOBackend` uses `memory_order_relaxed` on `health_` while `GazeboFullVIOBackend` uses `release/acquire`.  Pre-existing inconsistency, low risk.  Either upgrade or add a one-line justification.
+- **P3** — `process3_slam_vio_nav/include/slam/ivio_backend.h:33` `<stdexcept>` include is now dead (no `std::runtime_error` after the throw was removed).  clang-tidy `misc-include-cleaner` will flag it.
+- **P3** — `process3_slam_vio_nav/src/main.cpp:286 + 384` register two threads with the same `ScopedHeartbeat("pose_publisher", true)` name.  Only one runs per build but the registry slot name collision makes watchdog reports ambiguous.  Rename the passthrough variant.
+
+#### Security — input confinement gaps
+
+- **P2** — `tests/run_scenario_cosys.sh` accepts `--base-config` and the scenario positional arg without confining either to project root.  An attacker or misconfigured CI could supply `--base-config /etc/shadow` or `../../some_other_project/config.json` and have it read + merged before `preflight_model_paths` runs.  Apply the same `pathlib.resolve().relative_to(PROJECT_DIR)` check that already runs against `model_path` entries.
+- **P2** — `cosys_echo_backend.h::data.groundtruth.size() < n_points` silently passes unnamed returns through the include/exclude name filter without warning.  Add a one-shot warn (matching `partial_point_warned_` pattern) so a malicious or buggy Cosys plugin returning truncated groundtruth is observable.
+- **P3** — `tools/check_voxel_on_target.py::load_scene_xy` and `load_scenario_static_obstacles` cast `obj["x"]`/`obj["y"]` to `float()` without try/except.  A misconfigured scene file with string values raises an unhandled traceback.
+- **P3** — `tests/run_scenario_cosys.sh:752` uses `python3 -c "...${AIRSIM_SETTINGS_DIR}..."` instead of the heredoc `python3 - "${path}" <<'PYEOF'` pattern used elsewhere in the file.  Inconsistent quoting.
+
+#### API contract polish
+
+- **P3** — `radar_fov_gate.h:404` `residency_` private-member comment says "Reset on FOV exit" — directly contradicts the intentional fix from this PR (residency now persists).  Update to match current behaviour.
+- **P3** — `occupancy_grid_3d.h:209` `VoxelInsertStats` `@return` doxygen lists 6 of 9 fields (missing `cross_veto_deferred`, `fov_silence_promoted`, `age_cap_evicted`).  Update the doxygen.
+- **P3** — `total_single_modality_promoted()` aggregate getter name conflates two distinct severity classes.  Rename to `total_escape_hatch_promoted()` or remove and update the two log call sites.
+- **P3** — API.md IVIOBackend factory note "(PR #704: was `unique_ptr` + exception, now Result-based...)" is informal historical commentary in the permanent reference table.  Replace with stable semantics: "Returns `Err` on unknown backend or missing client; never throws."
+- **P3** — `cosys_name_filter.h` whitespace trim uses manual `while` loops; could be `tok.erase(0, tok.find_first_not_of(" \t"))` and the symmetric trailing form.
+
+#### Scenario / runner
+
+- **P3** — `run_scenario_cosys.sh:1153` voxel check fires only when `SCENE_FILE` is present.  Future scenarios that enable `path_a.diag.trace_voxels=true` but omit `scenario.scene.file` skip the check silently.  Add a fallback warn.
+
+### 2026-05-05 (PR #704 review — deferred follow-ups)
+
+Items from the 9-agent review pass on PR #704 (Cosys ground-truth perception baseline) deemed correct-but-deferred or out-of-scope.  Addressed-in-PR items are listed in the PR's Review Fixes table.
+
+#### Cosys segmentation backend
+
+- **P2** (architectural) — Frame synchronisation between Scene RGB (P1 publishes, P2 consumes via `frame_data` parameter) and Segmentation (`CosysSegmentationBackend::infer()` re-fetches via `simGetImages`).  Different RPC calls = potentially different simulator ticks; on a moving drone this misaligns masks vs depth.  Proper fix: have P1 publish Scene + Segmentation in one `simGetImages` call, P2 consumes both from one wire type.  Workaround in this PR: timestamp output from the segmentation response so downstream knows when masks were captured.  See `common/hal/include/hal/cosys_segmentation_backend.h::infer()`.
+- **P2** (perf) — Mask-buffer pooling.  Each `ObjAccum::mask` is `std::move`d into the `InferenceOutput`, so masks don't survive across frames.  At 1080p × 30 Hz × 10 objects this is ~600 MB/s heap churn.  Proper fix: separate `mask_pool_` of `vector<vector<uint8_t>>` swapped in/out of each `ObjAccum`.  Out of scope for this PR (touches the move-semantics of `InferenceDetection::mask`).
+- **P3** — `infer_count_` is plain `uint64_t` with modulo-100 logging.  At >584 years of inference it wraps; theoretical, not blocking.
+
+#### Cosys Echo / GT-radar backends
+
+- **P2** (perf) — `DRONE_LOG_INFO` on the polling thread.  spdlog is mutex-protected, technically a CLAUDE.md "observability on flight-critical thread" violation.  Long-term: lock-free buffer drained by a dedicated IO thread.  Documented in DESIGN_RATIONALE.md as DR-026.
+
+#### Diagnostic tools
+
+- **P3** — `tools/diag/cosys_scene_inventory.py::propose_placement()` heuristic: `0.5 * max(scale.x, scale.y)` assumes unit-mesh actors.  Arbitrary UE5 Static Mesh actors need `simGetMeshPositionVertexBuffers`-based bounding box.  Not needed for the current Blocks-scene workflow.
+- **P3** — `tools/diag/planner_grid_overlay.py` could emit absolute paths (clickable in terminals) instead of relative for the overlay-saved-to filename.
+
+#### Test infrastructure
+
+- **P3** — `FallbackBehaviourTest.SearchFailureKeepsLastGoodPath` (`tests/test_dstar_lite_planner.cpp:1450`) is pre-existing flaky/broken — `cached_path()` is empty after a failed plan when the test expects the prior path to persist.  Not introduced by PR #704; needs a dedicated fix-and-investigate session.
+
+#### Documentation
+
+- **P3** — Issue #621: API.md `IDepthEstimator` / `CpuSemanticProjector` / `IInferenceBackend` sections are still missing.  The new `cosys_segmentation_backend` factory tag was added inline to the IRadar table for now, but a proper IInferenceBackend section should be authored alongside the Issue #621 work.
+
 ### 2026-04-30 (#645 scenario-33 review-driven backlog — deferred items)
 
 The 14-PR scenario-33 fix stack (PRs #646–#666) drove orchestrator reviews on the merged PRs.  P1 + most P2 fixes landed in batches (#667–#672).  The items below were deemed correct-but-deferred — risk-of-regression items (e.g. tuning thresholds that scenario 33 now relies on) and lower-impact hygiene items.

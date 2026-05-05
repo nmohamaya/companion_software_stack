@@ -55,8 +55,11 @@
 #ifdef HAVE_COSYS_AIRSIM
 #include "hal/cosys_camera.h"
 #include "hal/cosys_depth.h"
+#include "hal/cosys_segmentation_backend.h"
 #include "hal/cosys_fc_link.h"
 #include "hal/cosys_imu.h"
+#include "hal/cosys_echo_backend.h"
+#include "hal/cosys_groundtruth_radar.h"
 #include "hal/cosys_radar.h"
 #include "hal/cosys_rpc_client.h"
 #endif
@@ -295,6 +298,25 @@ template<typename Interface>
         return std::make_unique<CosysRadarBackend>(detail::get_shared_cosys_client(cfg), cfg,
                                                    section);
     }
+    // Issue #698 — sim-only ground-truth radar.  Skips the lidar-emulation
+    // pipeline entirely and emits one RadarDetection per visible scene
+    // object using simListInstanceSegmentationPoses().  Zero clutter, zero
+    // multipath; useful for isolating planner / avoider bugs from radar
+    // sensor noise.  Pair with depth_estimator.backend=cosys_airsim and
+    // path_a.sam.backend=cosys_airsim for end-to-end ground-truth perception.
+    if (backend == "cosys_airsim_groundtruth") {
+        return std::make_unique<CosysGroundTruthRadarBackend>(
+            detail::get_shared_cosys_client(cfg), cfg, section);
+    }
+    // Issue #705 — Cosys-Lab Echo sensor (sensor type 7) — physical FMCW-
+    // style radar simulator with beam pattern, multipath reflections, and
+    // attenuation.  Replaces CosysRadarBackend (lidar emulation, #702) for
+    // the proper "radar physics" role.  CosysGroundTruthRadarBackend stays
+    // available as a validation oracle.
+    if (backend == "cosys_echo") {
+        return std::make_unique<CosysEchoBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                   section);
+    }
 #endif
 
 #ifdef HAVE_PLUGINS
@@ -374,6 +396,17 @@ template<typename Interface>
     if (backend == "fastsam") {
         return std::make_unique<FastSamInferenceBackend>(cfg, section);
     }
+#ifdef HAVE_COSYS_AIRSIM
+    // Issue #698 — sim-only ground-truth instance segmentation.  Pulls
+    // ImageType::Segmentation from Cosys-AirSim and emits one detection
+    // per visible scene object with pixel-perfect masks.  Pair with
+    // depth_estimator.backend=cosys_airsim for end-to-end ground-truth
+    // PATH A (no ML inference, no SAM mega-mask collapse).
+    if (backend == "cosys_airsim") {
+        return std::make_unique<CosysSegmentationBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                          section);
+    }
+#endif
 #ifdef HAVE_PLUGINS
     if (backend == "plugin") {
         return load_plugin<IInferenceBackend>(cfg, section, "inference backend");

@@ -162,13 +162,18 @@ TEST(VIOBackendTest, TimingIsRecorded) {
 }
 
 TEST(VIOBackendTest, FactoryCreatesSimulated) {
-    auto backend = create_vio_backend("simulated");
+    auto result = create_vio_backend("simulated");
+    ASSERT_TRUE(result.is_ok());
+    auto backend = std::move(result.value());
     ASSERT_NE(backend, nullptr);
     EXPECT_EQ(backend->name(), "SimulatedVIOBackend");
 }
 
-TEST(VIOBackendTest, FactoryThrowsOnUnknown) {
-    EXPECT_THROW(create_vio_backend("nonexistent"), std::runtime_error);
+TEST(VIOBackendTest, FactoryReturnsErrOnUnknown) {
+    // PR #704 fault-recovery review — factory now returns Result<>, not throws.
+    auto result = create_vio_backend("nonexistent");
+    ASSERT_TRUE(result.is_err());
+    EXPECT_EQ(result.error().code, drone::slam::VIOErrorCode::BackendNotReady);
 }
 
 TEST(VIOBackendTest, InvalidFrameDimensionsCauseError) {
@@ -398,7 +403,9 @@ TEST(VIOCovarianceTest, PositionTraceField) {
 }
 
 TEST(VIOCovarianceTest, FactoryAcceptsQualityThresholds) {
-    auto backend = create_vio_backend("simulated", {}, {}, "/unused", 3.0f, 0.5, 2.0);
+    auto result = create_vio_backend("simulated", {}, {}, "/unused", 3.0f, 0.5, 2.0);
+    ASSERT_TRUE(result.is_ok());
+    auto backend = std::move(result.value());
     ASSERT_NE(backend, nullptr);
     EXPECT_EQ(backend->name(), "SimulatedVIOBackend");
 }
@@ -409,27 +416,38 @@ TEST(VIOCovarianceTest, FactoryAcceptsQualityThresholds) {
 
 #ifdef HAVE_GAZEBO
 
+namespace {
+// Helper — Result<> unwrap with an ASSERT.  Each test owns its `backend`
+// std::unique_ptr<>; the Result<> is unwrapped to .value() so the rest of
+// the test reads as before.
+inline std::unique_ptr<IVIOBackend> make_gazebo_full_vio(
+    StereoCalibration calib = {}, ImuNoiseParams imu_params = {},
+    const std::string& topic = "/model/x500_companion_0/odometry") {
+    auto r = create_vio_backend("gazebo_full_vio", calib, imu_params, topic);
+    if (r.is_err()) return nullptr;
+    return std::move(r.value());
+}
+}  // namespace
+
 TEST(GazeboFullVIOTest, FactoryCreatesBackend) {
-    auto backend = create_vio_backend("gazebo_full_vio");
+    auto backend = make_gazebo_full_vio();
     ASSERT_NE(backend, nullptr);
     EXPECT_NE(backend->name().find("GazeboFullVIOBackend"), std::string::npos);
 }
 
 TEST(GazeboFullVIOTest, ProcessFrameRunsPipeline) {
-    auto backend = create_vio_backend("gazebo_full_vio");
+    auto backend = make_gazebo_full_vio();
     auto frame   = make_frame(1);
     auto imu     = make_imu_samples(13);
 
     auto result = backend->process_frame(frame, imu);
     ASSERT_TRUE(result.is_ok()) << result.error().to_string();
-
-    // Pipeline ran — should have real feature/match counts (not -1 like ground-truth backend)
     EXPECT_GT(result.value().num_features, 0);
     EXPECT_GT(result.value().num_stereo_matches, 0);
 }
 
 TEST(GazeboFullVIOTest, ImuSamplesConsumed) {
-    auto backend = create_vio_backend("gazebo_full_vio");
+    auto backend = make_gazebo_full_vio();
     auto frame   = make_frame(1);
     auto imu     = make_imu_samples(26);
 
@@ -439,14 +457,12 @@ TEST(GazeboFullVIOTest, ImuSamplesConsumed) {
 }
 
 TEST(GazeboFullVIOTest, HealthStartsInitializing) {
-    auto backend = create_vio_backend("gazebo_full_vio");
+    auto backend = make_gazebo_full_vio();
     EXPECT_EQ(backend->health(), VIOHealth::INITIALIZING);
 }
 
 TEST(GazeboFullVIOTest, NoOdometryKeepsInitializing) {
-    // Use a bogus topic so no real Gazebo odom can arrive — ensures
-    // health stays INITIALIZING regardless of frame count.
-    auto backend = create_vio_backend("gazebo_full_vio", {}, {}, "/test/no_odom");
+    auto backend = make_gazebo_full_vio({}, {}, "/test/no_odom");
 
     for (int i = 0; i < 10; ++i) {
         auto frame = make_frame(static_cast<uint64_t>(i));
@@ -458,7 +474,7 @@ TEST(GazeboFullVIOTest, NoOdometryKeepsInitializing) {
 }
 
 TEST(GazeboFullVIOTest, NameContainsTopic) {
-    auto backend = create_vio_backend("gazebo_full_vio", {}, {}, "/test/odom");
+    auto backend = make_gazebo_full_vio({}, {}, "/test/odom");
     EXPECT_NE(backend->name().find("/test/odom"), std::string::npos);
 }
 
