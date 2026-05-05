@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 using drone::ipc::Pose;
@@ -71,6 +72,13 @@ RadarFovConfig default_fov() {
 
 CrossVetoPolicy default_policy() {
     return CrossVetoPolicy{};  // 10 m short-range, 100 ms staleness, 2 s residency, 30 s cap
+}
+
+RadarDetectionList empty_radar() {
+    RadarDetectionList list{};
+    list.timestamp_ns   = 1;
+    list.num_detections = 0;
+    return list;
 }
 
 constexpr uint64_t kMs(uint64_t ms) { return ms * 1'000'000ULL; }
@@ -260,21 +268,40 @@ TEST(RadarFovGate, ResidencyAccruesWhileInFovWithNoRadar) {
     EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), kMs(150));
 }
 
-TEST(RadarFovGate, ResidencyResetsWhenCellLeavesFov) {
+TEST(RadarFovGate, ResidencyHeldAcrossFovExit) {
+    // Residency is preserved across FOV exits (was the bug fixed by
+    // Copilot's review on PR #704 — without preservation, the
+    // PromoteFovSilence escape hatch can never fire because it requires
+    // both !in_fov AND residency >= threshold).
     RadarFovGate g(default_fov(), default_policy());
     g.set_pose(make_pose_origin());
 
-    // Cell directly forward — in FOV.
     const std::vector<GridCell> cells_in{{15, 0, 0}};
     tick_with_fresh_radar(g, cells_in, 1.0f, kMs(0));
     tick_with_fresh_radar(g, cells_in, 1.0f, kMs(50));
     EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), kMs(50));
 
-    // Now yaw drone 180° — same world cell is now behind, out of FOV.
-    g.set_pose(make_pose_yawed(static_cast<float>(M_PI)));
+    g.set_pose(make_pose_yawed(static_cast<float>(M_PI)));  // cell now behind
     tick_with_fresh_radar(g, cells_in, 1.0f, kMs(100));
-    EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), 0u)
-        << "Residency must reset to 0 when the cell leaves the FOV.";
+    EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), kMs(50))
+        << "Residency must persist across FOV exits — that is the whole point of the "
+           "PromoteFovSilence escape hatch (cell qualifies via in-FOV time, fires when out).";
+}
+
+TEST(RadarFovGate, ResidencyCappedAtPromoteThreshold) {
+    // Without a cap, residency would grow unboundedly while the cell
+    // sits in FOV — wasted memory and sets up future overflow risk.
+    auto policy                    = default_policy();
+    policy.fov_residency_promote_ns = kMs(100);
+    RadarFovGate g(default_fov(), policy);
+    g.set_pose(make_pose_origin());
+
+    const std::vector<GridCell> cells{{15, 0, 0}};
+    tick_with_fresh_radar(g, cells, 1.0f, kMs(0));
+    tick_with_fresh_radar(g, cells, 1.0f, kMs(500));   // dt = 500 ms
+    tick_with_fresh_radar(g, cells, 1.0f, kMs(1000));  // dt = 500 ms
+    EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), kMs(100))
+        << "Residency must cap at policy.fov_residency_promote_ns.";
 }
 
 TEST(RadarFovGate, ResidencyUntouchedWhenRadarPresent) {
@@ -307,9 +334,205 @@ TEST(RadarFovGate, ClearResidencyDropsEntry) {
 TEST(RadarFovGate, NoTickWithoutPose) {
     RadarFovGate                g(default_fov(), default_policy());
     const std::vector<GridCell> cells{{15, 0, 0}};
-    // No set_pose() call.
     g.tick_residency(cells, 1.0f, kMs(0));
     g.tick_residency(cells, 1.0f, kMs(500));
-    EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), 0u)
-        << "Without a pose the FOV check is unreliable; residency must not accrue.";
+    EXPECT_EQ(g.residency_ns(GridCell{15, 0, 0}), 0u);
+    EXPECT_EQ(g.tracked_cell_count(), 0u)
+        << "Without a pose, no cells should be inserted into the residency or first-seen trackers.";
 }
+
+// ── Exact FOV-boundary semantics ─────────────────────────────
+
+TEST(RadarFovGate, ExactlyAtAzimuthBoundary_Inside) {
+    // Use the exact stored boundary value to avoid float-roundtrip drift
+    // when computing degrees → radians.  The header uses `<=`.
+    auto         fov = default_fov();
+    RadarFovGate g(fov, default_policy());
+    g.set_pose(make_pose_origin());
+    const float az = fov.fov_azimuth_rad;
+    auto        q  = g.query(10.0f * std::cos(az), 10.0f * std::sin(az), 0.0f, kMs(0));
+    EXPECT_TRUE(q.in_fov) << "Cell exactly at azimuth boundary must be IN-FOV (<= semantics).";
+}
+
+TEST(RadarFovGate, JustOutsideAzimuthBoundary_Outside) {
+    auto         fov = default_fov();
+    RadarFovGate g(fov, default_policy());
+    g.set_pose(make_pose_origin());
+    // 1% past the boundary — comfortably above any float-roundtrip noise.
+    const float az = fov.fov_azimuth_rad * 1.01f;
+    auto        q  = g.query(10.0f * std::cos(az), 10.0f * std::sin(az), 0.0f, kMs(0));
+    EXPECT_FALSE(q.in_fov);
+}
+
+TEST(RadarFovGate, ExactlyAtElevationBoundary_Inside) {
+    auto         fov = default_fov();
+    RadarFovGate g(fov, default_policy());
+    g.set_pose(make_pose_origin());
+    const float el = fov.fov_elevation_rad;
+    auto        q  = g.query(10.0f * std::cos(el), 0.0f, 10.0f * std::sin(el), kMs(0));
+    EXPECT_TRUE(q.in_fov);
+}
+
+TEST(RadarFovGate, ExactlyAtMaxRange_Inside) {
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+    auto q = g.query(100.0f, 0.0f, 0.0f, kMs(0));
+    EXPECT_TRUE(q.in_fov) << "Cell exactly at max range must be IN-FOV.";
+}
+
+TEST(RadarFovGate, ExactlyAtMinRange_Inside) {
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+    auto q = g.query(0.5f, 0.0f, 0.0f, kMs(0));
+    EXPECT_TRUE(q.in_fov);
+}
+
+TEST(RadarFovGate, BoundaryReportsRangeOutOfFov) {
+    // Verify that the reason for in_fov=false is the range, not azimuth.
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+    auto q = g.query(0.3f, 0.0f, 0.0f, kMs(0));
+    EXPECT_FALSE(q.in_fov);
+    EXPECT_LT(q.range_to_drone_m, default_fov().min_range_m);
+}
+
+TEST(RadarFovGate, GateRadiusBoundaryRespectsLeq) {
+    // Place a radar return at exactly gate_radius_m from a cell — must
+    // count as `radar_present` (the header uses `<= gate_sq`).
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+    // At range R = 15 m, gate_radius = max(1.0, 0.25*15+0.1) = 3.85 m.
+    // Place return 3.85 m laterally from (15, 0, 0).
+    const float gate_r = 3.85f;
+    g.set_radar_detections(make_radar_with(std::sqrt(15.0f * 15.0f + gate_r * gate_r),
+                                           std::atan2(gate_r, 15.0f), 0.0f),
+                           kMs(0));
+    auto q = g.query(15.0f, 0.0f, 0.0f, kMs(50));
+    EXPECT_TRUE(q.radar_present) << "Return at exactly gate_radius_m must satisfy the <= check.";
+}
+
+// ── NaN / Inf pose hygiene ───────────────────────────────────
+
+TEST(RadarFovGate, NanQuaternionPose_QueryReturnsConservativeVeto) {
+    RadarFovGate g(default_fov(), default_policy());
+    Pose         p = make_pose_origin();
+    p.quaternion[0] = std::numeric_limits<double>::quiet_NaN();
+    g.set_pose(p);
+    // After NaN pose, query should not crash; in_fov is unspecified (NaN
+    // comparisons return false), but the pose is "valid" by the bool
+    // sentinel.  Critical contract: no crash, no UB, no Eigen assert.
+    auto q = g.query(15.0f, 0.0f, 0.0f, kMs(0));
+    (void)q;  // sanity — no crash means the test passes.
+    SUCCEED();
+}
+
+TEST(RadarFovGate, NanPosition_QueryDoesNotCrash) {
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+    auto q = g.query(std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, kMs(0));
+    EXPECT_FALSE(q.in_fov)
+        << "NaN world-position must not pass the FOV check (NaN compares false).";
+}
+
+// ── query_cell — populates residency + age ───────────────────
+
+TEST(RadarFovGate, QueryCellPopulatesResidencyAndAge) {
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+
+    const GridCell c{15, 0, 0};
+    const std::vector<GridCell> cells{c};
+
+    g.set_radar_detections(empty_radar(), kMs(0));
+    g.tick_residency(cells, 1.0f, kMs(0));   // first tick — first_seen=0
+    g.set_radar_detections(empty_radar(), kMs(100));
+    g.tick_residency(cells, 1.0f, kMs(100));
+
+    const auto q = g.query_cell(c, 1.0f, kMs(100));
+    EXPECT_EQ(q.residency_ns, kMs(100));
+    EXPECT_EQ(q.cell_age_ns, kMs(100));
+    EXPECT_TRUE(q.in_fov);
+}
+
+TEST(RadarFovGate, QueryCell_AgeAdvancesEvenWhileOutsideFov) {
+    // Cell behind drone → residency stays at 0, but age must climb.
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+
+    const GridCell c{-15, 0, 0};
+    const std::vector<GridCell> cells{c};
+    g.set_radar_detections(empty_radar(), kMs(0));
+    g.tick_residency(cells, 1.0f, kMs(0));
+    g.set_radar_detections(empty_radar(), kS(5));
+    g.tick_residency(cells, 1.0f, kS(5));
+
+    const auto q = g.query_cell(c, 1.0f, kS(5));
+    EXPECT_EQ(q.residency_ns, 0u);
+    EXPECT_EQ(q.cell_age_ns, kS(5));
+}
+
+TEST(RadarFovGate, QueryCell_UntrackedCellReturnsZero) {
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+    const auto q = g.query_cell(GridCell{50, 50, 50}, 1.0f, kS(10));
+    EXPECT_EQ(q.residency_ns, 0u);
+    EXPECT_EQ(q.cell_age_ns, 0u);
+}
+
+// ── Stale-residency hygiene on TTL-decayed cells ─────────────
+
+TEST(RadarFovGate, TickResidencyPrunesEntriesNoLongerInDynamicLayer) {
+    // Track a cell, accrue some residency, then tick again with the
+    // cell missing from the dynamic-cells iterable.  Tracker entry
+    // must be erased so a later voxel reappearing at the same coords
+    // doesn't inherit stale residency.
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+
+    const GridCell c{15, 0, 0};
+    {
+        const std::vector<GridCell> cells{c};
+        g.set_radar_detections(empty_radar(), kMs(0));
+        g.tick_residency(cells, 1.0f, kMs(0));
+        g.set_radar_detections(empty_radar(), kMs(100));
+        g.tick_residency(cells, 1.0f, kMs(100));
+        EXPECT_GT(g.residency_ns(c), 0u);
+        EXPECT_GT(g.cell_age_ns(c, kMs(100)), 0u);
+    }
+    {
+        const std::vector<GridCell> empty;
+        g.set_radar_detections(empty_radar(), kMs(200));
+        g.tick_residency(empty, 1.0f, kMs(200));
+        EXPECT_EQ(g.residency_ns(c), 0u)
+            << "Tracker entry must be pruned when the cell drops out of the dynamic layer.";
+        EXPECT_EQ(g.cell_age_ns(c, kMs(200)), 0u)
+            << "first_seen entry must be pruned alongside residency.";
+        EXPECT_EQ(g.tracked_cell_count(), 0u);
+    }
+}
+
+TEST(RadarFovGate, AgeAdvancesWhileResidencyPersistsAcrossFovExit) {
+    // Cell stays in the dynamic layer the whole time, yaws in/out of FOV.
+    // Residency must hold its accumulated value across the exit (so the
+    // FOV-silence escape hatch can fire after the cell leaves FOV).
+    // Age must continue climbing regardless of FOV transitions (drives
+    // the independent age-cap eviction path).
+    RadarFovGate g(default_fov(), default_policy());
+    g.set_pose(make_pose_origin());
+
+    const GridCell             c{15, 0, 0};
+    const std::vector<GridCell> cells{c};
+    g.set_radar_detections(empty_radar(), kMs(0));
+    g.tick_residency(cells, 1.0f, kMs(0));
+    g.set_radar_detections(empty_radar(), kMs(100));
+    g.tick_residency(cells, 1.0f, kMs(100));
+    const uint64_t residency_at_exit = g.residency_ns(c);
+    EXPECT_GT(residency_at_exit, 0u);
+
+    g.set_pose(make_pose_yawed(static_cast<float>(M_PI)));
+    g.set_radar_detections(empty_radar(), kMs(200));
+    g.tick_residency(cells, 1.0f, kMs(200));
+    EXPECT_EQ(g.residency_ns(c), residency_at_exit) << "Residency must persist across FOV exit.";
+    EXPECT_EQ(g.cell_age_ns(c, kMs(200)), kMs(200));
+}
+

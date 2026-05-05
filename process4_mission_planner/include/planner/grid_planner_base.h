@@ -120,13 +120,16 @@ public:
     /// semantics; this is the IGridPlanner pass-through so the P4 voxel
     /// subscriber thread doesn't need a downcast to GridPlannerBase.
     ///
-    /// Issue #698 Fix #1 — optional `drone_pose` and `radar_gate` parameters
-    /// engage the cross-modal veto from ADR-013 §2 item 4.  When either is
-    /// null (legacy callers, tests not exercising the veto), promotion is
-    /// unconditional — preserves backward compatibility.
+    /// Issue #698 Fix #1 — optional `radar_gate` parameter engages the
+    /// cross-modal veto from ADR-013 §2 item 4.  When null (legacy callers,
+    /// tests not exercising the veto), promotion is unconditional —
+    /// preserves backward compatibility.  When non-null, the gate must have
+    /// been seeded with at least one `set_pose()` call before it activates;
+    /// the gate's own cached pose is used, so callers do not need to gate
+    /// on a fresh-this-tick pose receive.
     virtual OccupancyGrid3D::VoxelInsertStats insert_voxels(
         const drone::ipc::SemanticVoxel* voxels, uint32_t n, float clamp_m, float min_confidence,
-        const drone::ipc::Pose* drone_pose = nullptr, RadarFovGate* radar_gate = nullptr) = 0;
+        RadarFovGate* radar_gate = nullptr) = 0;
 
     /// True if the last planning cycle could not find a search path AND
     /// there was no cached path to keep following — in that case plan()
@@ -245,15 +248,13 @@ public:
 
     OccupancyGrid3D::VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels,
                                                     uint32_t n, float clamp_m, float min_confidence,
-                                                    const drone::ipc::Pose* drone_pose = nullptr,
                                                     RadarFovGate* radar_gate = nullptr) override {
-        auto stats = grid_.insert_voxels(voxels, n, clamp_m, min_confidence, drone_pose,
-                                         radar_gate);
+        auto stats = grid_.insert_voxels(voxels, n, clamp_m, min_confidence, radar_gate);
         // If any voxel landed OR was deferred / single-modality-promoted, the
         // cached path may be stale (cells changed state in dynamic OR static).
         // Invalidate so D*Lite/A* replan on the next tick.  Issue #698 Fix #1.
         if (stats.inserted > 0 || stats.cross_veto_deferred > 0 ||
-            stats.single_modality_promoted > 0) {
+            stats.fov_silence_promoted > 0 || stats.age_cap_evicted > 0) {
             snap_valid_ = false;
         }
         return stats;

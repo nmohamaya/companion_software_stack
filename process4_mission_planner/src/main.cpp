@@ -548,8 +548,19 @@ int main(int argc, char* argv[]) {
 
     // Subscribe to /radar_detections so the gate can answer
     // "is there a radar return near this cell" inside insert_voxels().
-    auto radar_dets_sub =
-        ctx.bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
+    // Only subscribe when cross_veto.enabled — disabled scenarios should
+    // not pay the per-tick drain cost of a feature that is inactive.
+    // (Copilot review flagged the unconditional subscription on PR #704.)
+    std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>> radar_dets_sub;
+    if (cross_veto_enabled) {
+        radar_dets_sub = ctx.bus.subscribe<drone::ipc::RadarDetectionList>(
+            drone::ipc::topics::RADAR_DETECTIONS);
+        if (!radar_dets_sub) {
+            DRONE_LOG_WARN("[CrossVeto] /radar_detections subscription failed — gate will see "
+                           "stale-radar forever and defer all distant promotions; check IPC bus "
+                           "and radar publisher health");
+        }
+    }
 
     if (cross_veto_enabled) {
         DRONE_LOG_INFO("[CrossVeto] ENABLED — short_range={:.1f}m, gate_min_r={:.2f}m, "
@@ -679,16 +690,17 @@ int main(int argc, char* argv[]) {
                     if (batch.voxels[i].instance_id != 0) ++voxels_with_instance;
                 }
                 // Issue #698 Fix #1 — when cross_veto is enabled, pass the
-                // current pose + gate so insert_voxels can apply the
-                // ADR-013 §2 item 4 promotion rule.  When disabled, both
-                // are nullptr and insert_voxels behaves exactly as before.
-                const drone::ipc::Pose* pose_for_veto = (cross_veto_enabled && got_pose) ? &pose
-                                                                                         : nullptr;
+                // gate so insert_voxels can apply the ADR-013 §2 item 4
+                // promotion rule.  The gate carries its own cached pose
+                // from the most recent set_pose() call (line 624 above), so
+                // we do NOT gate on `got_pose` — that bug intermittently
+                // disabled the veto whenever a tick happened to miss a
+                // pose message (Copilot review on PR #704).
                 drone::planner::RadarFovGate* gate_for_veto = cross_veto_enabled ? &radar_fov_gate
                                                                                  : nullptr;
                 auto                          stats         = grid_planner->insert_voxels(
                     batch.voxels, batch.num_voxels, voxel_input_clamp_m, voxel_input_min_confidence,
-                    pose_for_veto, gate_for_veto);
+                    gate_for_veto);
                 inserted_total += static_cast<uint32_t>(stats.inserted);
                 dropped_total += static_cast<uint32_t>(
                     stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);

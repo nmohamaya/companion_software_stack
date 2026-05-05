@@ -144,8 +144,9 @@ public:
         hd_map_static_count_ = 0;
         static_cell_timestamps_.clear();
         single_modality_static_.clear();      // Issue #698 Fix #1
-        total_cross_veto_deferred_      = 0;  // Issue #698 Fix #1 (Phase 3)
-        total_single_modality_promoted_ = 0;
+        total_cross_veto_deferred_  = 0;      // Issue #698 Fix #1 (Phase 3)
+        total_fov_silence_promoted_ = 0;
+        total_age_cap_evicted_      = 0;
         promoted_count_                 = 0;
         hit_count_.clear();
         instances_.clear();
@@ -239,22 +240,28 @@ public:
         // (in FOV with no/stale radar OR outside FOV with insufficient
         // residency)).  See cross_veto_decision.h decide_promotion().
         size_t cross_veto_deferred = 0;
-        // Cells force-promoted via the single-modality escape hatch (positive
-        // radar silence after enough FOV residency, or dynamic-age-cap
-        // eviction).  Tracked separately so telemetry can flag if these
-        // dominate — that signals the policy needs tuning.
-        size_t single_modality_promoted = 0;
+        // Cells promoted via the FOV-silence escape hatch — radar observed
+        // the area for `fov_residency_promote_ns` with no return.  Lower
+        // severity (radar agreed by silence).
+        size_t fov_silence_promoted = 0;
+        // Cells force-promoted via the age-cap escape hatch — cell exceeded
+        // `dynamic_age_cap_ns` lifetime; radar never saw the area.  Higher
+        // severity than fov_silence_promoted.  Telemetry should flag if
+        // these dominate — signals the policy needs tuning, or the cell is
+        // structurally outside any radar coverage.
+        size_t age_cap_evicted = 0;
     };
-    /// Insert PATH A voxels into the grid.  Optional `drone_pose` and
-    /// `radar_gate` arguments enable the cross-modal veto from ADR-013 §2
-    /// item 4 (issue #698 Fix #1).  When either is null, all promotions
-    /// proceed unconditionally — preserves legacy behaviour for unit tests
-    /// and pre-Phase-4 callers that haven't been migrated yet.  Both must
-    /// be non-null for the veto to engage.
+    /// Insert PATH A voxels into the grid.  Optional `radar_gate` argument
+    /// enables the cross-modal veto from ADR-013 §2 item 4 (issue #698
+    /// Fix #1).  The veto engages whenever `radar_gate` is non-null AND the
+    /// gate has at least one pose buffered — the gate keeps its own cached
+    /// pose (from the most recent `set_pose()` call), so callers do NOT
+    /// need to gate on a fresh-this-tick pose receive.  When the gate is
+    /// null (legacy callers, unit tests not exercising the veto) all
+    /// promotions proceed unconditionally.
     VoxelInsertStats insert_voxels(const drone::ipc::SemanticVoxel* voxels, uint32_t n,
                                    float clamp_m, float min_confidence,
-                                   const drone::ipc::Pose* drone_pose = nullptr,
-                                   RadarFovGate*           radar_gate = nullptr) {
+                                   RadarFovGate* radar_gate = nullptr) {
         VoxelInsertStats s;
         if (voxels == nullptr || n == 0) return s;
         const float clamp = std::max(0.0f, clamp_m);
@@ -459,10 +466,16 @@ public:
                                     // cross_veto_decision.h decide_promotion().
                                     bool may_promote          = true;
                                     bool single_modality_flag = false;
-                                    if (drone_pose && radar_gate) {
+                                    if (radar_gate && radar_gate->has_pose()) {
                                         const auto wxyz  = grid_to_world(c);
-                                        const auto query = radar_gate->query(wxyz[0], wxyz[1],
-                                                                             wxyz[2], now_ns);
+                                        // query_cell populates residency_ns
+                                        // and cell_age_ns from the per-cell
+                                        // trackers; without it the
+                                        // PromoteFovSilence /
+                                        // PromoteAgeCapEviction branches
+                                        // can never fire.
+                                        const auto query = radar_gate->query_cell(c, resolution_,
+                                                                                  now_ns);
                                         const auto decision =
                                             decide_promotion(query, radar_gate->policy());
                                         switch (decision) {
@@ -491,21 +504,48 @@ public:
                                                         s.cross_veto_deferred);
                                                 }
                                                 break;
-                                            case PromotionDecision::PromoteSingleModality:
+                                            case PromotionDecision::PromoteFovSilence:
                                                 may_promote          = true;
                                                 single_modality_flag = true;
-                                                ++s.single_modality_promoted;
-                                                ++total_single_modality_promoted_;
-                                                if (s.single_modality_promoted == 1 ||
-                                                    s.single_modality_promoted % 50 == 0) {
+                                                ++s.fov_silence_promoted;
+                                                ++total_fov_silence_promoted_;
+                                                if (s.fov_silence_promoted == 1 ||
+                                                    s.fov_silence_promoted % 50 == 0) {
                                                     DRONE_LOG_WARN(
-                                                        "[CrossVeto] Single-modality promote at "
+                                                        "[CrossVeto] FOV-silence promote at "
                                                         "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
                                                         "residency={}ms (#{} this batch)",
                                                         wxyz[0], wxyz[1], wxyz[2],
                                                         query.range_to_drone_m,
                                                         query.residency_ns / 1'000'000ULL,
-                                                        s.single_modality_promoted);
+                                                        s.fov_silence_promoted);
+                                                }
+                                                break;
+                                            case PromotionDecision::PromoteAgeCapEviction:
+                                                may_promote          = true;
+                                                single_modality_flag = true;
+                                                ++s.age_cap_evicted;
+                                                ++total_age_cap_evicted_;
+                                                // Age-cap eviction is
+                                                // higher-severity than FOV
+                                                // silence — radar never saw
+                                                // the area, we promote on
+                                                // age alone.  Log every event
+                                                // for the first 10 of a
+                                                // batch (vs 1 + every 50th)
+                                                // so a sudden mass-eviction
+                                                // is loud in the log.
+                                                if (s.age_cap_evicted <= 10 ||
+                                                    s.age_cap_evicted % 50 == 0) {
+                                                    DRONE_LOG_WARN(
+                                                        "[CrossVeto] Age-cap evict at "
+                                                        "({:.1f},{:.1f},{:.1f}) range={:.1f}m "
+                                                        "age={}ms (#{} this batch) — radar "
+                                                        "never saw this area",
+                                                        wxyz[0], wxyz[1], wxyz[2],
+                                                        query.range_to_drone_m,
+                                                        query.cell_age_ns / 1'000'000ULL,
+                                                        s.age_cap_evicted);
                                                 }
                                                 break;
                                         }
@@ -755,11 +795,12 @@ public:
             DRONE_LOG_INFO(
                 "[Grid] {} objs (accepted={}, suppressed={}, excluded_cells={}), "
                 "{} dynamic, {} static (promoted={}, hd_map={}, max={}, predictions={}), "
-                "drone=({},{},{}) cross_veto={} single_modality={}",
+                "drone=({},{},{}) cross_veto={} fov_silence={} age_cap={}",
                 objects.num_objects, accepted, suppressed, excluded_cells, occupied_.size(),
                 static_occupied_.size(), promoted_count_, hd_map_static_count_, max_static_cells_,
                 total_predictions_applied_, drone_cell.x, drone_cell.y, drone_cell.z,
-                total_cross_veto_deferred_, total_single_modality_promoted_);
+                total_cross_veto_deferred_, total_fov_silence_promoted_,
+                total_age_cap_evicted_);
             for (uint32_t i = 0; i < std::min(objects.num_objects, uint32_t{8}); ++i) {
                 const auto& obj = objects.objects[i];
                 if (obj.confidence >= min_confidence_) {
@@ -831,8 +872,16 @@ public:
     /// `[Grid]` diagnostic line and aggregated into the scenario run-report
     /// post-processing.  Both reset in `clear_static()`.
     [[nodiscard]] uint64_t total_cross_veto_deferred() const { return total_cross_veto_deferred_; }
+    [[nodiscard]] uint64_t total_fov_silence_promoted() const {
+        return total_fov_silence_promoted_;
+    }
+    [[nodiscard]] uint64_t total_age_cap_evicted() const { return total_age_cap_evicted_; }
+    /// Backwards-compatible aggregate of the two single-modality escape
+    /// hatches (FOV silence + age-cap eviction).  Used by the periodic
+    /// `[Grid]` diagnostic line and any consumer that doesn't care which
+    /// branch fired.
     [[nodiscard]] uint64_t total_single_modality_promoted() const {
-        return total_single_modality_promoted_;
+        return total_fov_silence_promoted_ + total_age_cap_evicted_;
     }
     [[nodiscard]] size_t hd_map_cell_count() const { return hd_map_cells_.size(); }
     /// Cumulative count of objects that had velocity-based prediction applied
@@ -1125,7 +1174,8 @@ private:
     // live in VoxelInsertStats; these aggregates survive across batches and
     // feed the periodic [Grid] diagnostic line + the scenario run-report.
     uint64_t total_cross_veto_deferred_{0};
-    uint64_t total_single_modality_promoted_{0};
+    uint64_t total_fov_silence_promoted_{0};
+    uint64_t total_age_cap_evicted_{0};
     // PR #661 P2 review: pause flags are written by the FSM tick thread
     // (mission_state_tick) and read by the planner thread inside
     // update_from_objects().  Atomic with acquire/release ordering closes

@@ -22,10 +22,13 @@
 //     "positive silence promotes as single-modality" branch in
 //     decide_promotion().
 //
-// Threading: P4 is single-threaded today (one mission planner loop).  All
-// methods are called from that thread.  No locking required.  If P4 ever
-// gains additional consumer threads, a single mutex around radar_dets_ +
-// pose_ + last_radar_t_ns_ would suffice.
+// Threading: every method must be called from a single thread (the P4 main
+// loop today: pose update, radar update, residency tick, query, age tracking
+// all share the same thread).  The OccupancyGrid3D atomic pause flags are
+// independent — they are touched by a different (FSM-tick) thread but they
+// don't reach RadarFovGate's state.  If P4 ever gains additional consumer
+// threads, a single mutex around radar_dets_ + pose_ + last_radar_t_ns_ +
+// residency_ + first_seen_ns_ would suffice.
 //
 // Issue: #698 (Fix #1 — long-range radar veto on PATH A grid promotion).
 
@@ -33,22 +36,44 @@
 
 #include "ipc/ipc_types.h"
 #include "planner/grid_cell.h"  // GridCell, GridCellHash
+#include "util/config.h"
 
 #include <Eigen/Geometry>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace drone::planner {
 
-/// FOV geometry — read once from `perception.radar.*` config at construction.
+/// FOV geometry.  Defaults are conservative (±60°×±40°, 0.5–100 m) and match
+/// the Cosys radar simulator, but every deployment must call `from_cfg()`
+/// against the canonical `perception.radar.*` section so the runtime
+/// behaviour is config-driven.  The defaults exist only so legacy unit tests
+/// constructing a default-init struct compile and run.
 struct RadarFovConfig {
-    float fov_azimuth_rad{1.047f};    // ±60° default (matches Cosys radar)
+    float fov_azimuth_rad{1.047f};    // ±60° default
     float fov_elevation_rad{0.698f};  // ±40° default
-    float min_range_m{0.5f};          // FMCW near-field blind zone
+    float min_range_m{0.5f};
     float max_range_m{100.0f};
+
+    /// Read all fields from `<section>.fov_azimuth_rad`, etc.  Missing keys
+    /// keep the struct default — caller is responsible for validating that
+    /// the section exists in the active config.
+    [[nodiscard]] static RadarFovConfig from_cfg(const drone::Config& cfg,
+                                                 std::string_view     section) {
+        RadarFovConfig c;
+        const std::string s(section);
+        c.fov_azimuth_rad   = cfg.get<float>(s + ".fov_azimuth_rad", c.fov_azimuth_rad);
+        c.fov_elevation_rad = cfg.get<float>(s + ".fov_elevation_rad", c.fov_elevation_rad);
+        c.min_range_m       = cfg.get<float>(s + ".min_range_m", c.min_range_m);
+        c.max_range_m       = cfg.get<float>(s + ".max_range_m", c.max_range_m);
+        return c;
+    }
 };
 
 /// Cross-veto policy — read from `mission_planner.occupancy_grid.cross_veto.*`.
@@ -72,7 +97,7 @@ struct CrossVetoPolicy {
 
     /// "Positive silence" promotion threshold — a cell that has been inside
     /// the radar FOV for at least this long with zero radar returns is
-    /// promoted as `PromoteSingleModality` (research note §7 yaw-aware FOV
+    /// promoted as `PromoteFovSilence` (research note §7 yaw-aware FOV
     /// residency).  Without this rule, a cell structurally outside FOV that
     /// later enters FOV after a yaw maneuver would still wait indefinitely
     /// for a *positive* radar match — which never comes for genuinely-empty
@@ -80,22 +105,51 @@ struct CrossVetoPolicy {
     uint64_t fov_residency_promote_ns{2ULL * 1000ULL * 1000ULL * 1000ULL};
 
     /// Hard age cap on dynamic cells.  Past this, a cell that has never
-    /// been radar-confirmed is force-promoted as `PromoteSingleModality`
+    /// been radar-confirmed is force-promoted as `PromoteAgeCapEviction`
     /// with a logged warning, to prevent dynamic-layer bloat for cells
     /// structurally outside any radar coverage (e.g. cells above the
-    /// elevation FOV).  30 s default per research note §7.
+    /// elevation FOV).  Compared against `cell_age_ns` (wall time since
+    /// the cell was first observed), independent of FOV residency.  30 s
+    /// default per research note §7.
     uint64_t dynamic_age_cap_ns{30ULL * 1000ULL * 1000ULL * 1000ULL};
+
+    /// Read all fields from `<section>.short_range_m`, etc.
+    [[nodiscard]] static CrossVetoPolicy from_cfg(const drone::Config& cfg,
+                                                  std::string_view     section) {
+        CrossVetoPolicy p;
+        const std::string s(section);
+        p.short_range_m = cfg.get<float>(s + ".short_range_m", p.short_range_m);
+        p.radar_max_staleness_ns = static_cast<uint64_t>(
+            cfg.get<int64_t>(s + ".radar_max_staleness_ns",
+                             static_cast<int64_t>(p.radar_max_staleness_ns)));
+        p.min_gate_radius_m = cfg.get<float>(s + ".min_gate_radius_m", p.min_gate_radius_m);
+        p.fov_residency_promote_ns = static_cast<uint64_t>(
+            cfg.get<int64_t>(s + ".fov_residency_promote_ns",
+                             static_cast<int64_t>(p.fov_residency_promote_ns)));
+        p.dynamic_age_cap_ns = static_cast<uint64_t>(
+            cfg.get<int64_t>(s + ".dynamic_age_cap_ns",
+                             static_cast<int64_t>(p.dynamic_age_cap_ns)));
+        return p;
+    }
 };
 
 /// Result of a per-cell radar query.  Used by decide_promotion() and the
-/// disagreement telemetry (Phase 3) to make + audit the gating decision.
+/// disagreement telemetry to make + audit the gating decision.
 struct RadarQuery {
     bool     in_fov{false};
     bool     radar_present{false};
     bool     radar_stale{false};
     float    gate_radius_m{0.0f};
     float    range_to_drone_m{0.0f};
-    uint64_t residency_ns{0};  // how long this cell has accrued FOV-with-no-return
+    /// Cumulative time the cell has been observed *inside* the radar FOV
+    /// with no return.  Drives `PromoteFovSilence`.  Reset whenever the
+    /// cell leaves FOV.  0 if the cell is untracked.
+    uint64_t residency_ns{0};
+    /// Wall time since the cell was first observed in the dynamic layer.
+    /// Drives `PromoteAgeCapEviction`.  Independent of FOV residency, so
+    /// cells structurally outside the radar cone still age-out.  0 if the
+    /// cell is untracked.
+    uint64_t cell_age_ns{0};
 };
 
 class RadarFovGate {
@@ -136,8 +190,9 @@ public:
     }
 
     /// Query the gate for a world-frame point (typically a grid cell centre).
-    /// Returns the FOV / radar-presence / staleness / residency facts the
-    /// caller needs to make a promotion decision.
+    /// Returns the FOV / radar-presence / staleness facts the caller needs to
+    /// make a geometry-only decision.  Does NOT populate `residency_ns` /
+    /// `cell_age_ns` — those are per-cell, use `query_cell()` instead.
     [[nodiscard]] RadarQuery query(float wx, float wy, float wz, uint64_t now_ns) const noexcept {
         RadarQuery q;
         if (!pose_valid_) {
@@ -210,15 +265,33 @@ public:
     }
 
     /// Walk all currently-tracked dynamic cells once per planner tick to
-    /// accrue FOV-residency time.  The caller passes the iterable of dynamic
-    /// cells (from OccupancyGrid3D::occupied_) and the current `now_ns`.
-    /// Cells inside the FOV without a radar return have their residency
-    /// counter incremented by `dt_ns_since_last_tick`; cells outside the FOV
-    /// have their counter reset (we want CUMULATIVE-WHILE-IN-FOV-WITH-NO-RETURN,
-    /// not lifetime).
+    /// accrue FOV-residency time AND to maintain the per-cell first-seen
+    /// timestamp used for age-cap eviction.  The caller passes the iterable
+    /// of dynamic cells (from OccupancyGrid3D::dynamic_cell_keys()) and the
+    /// current `now_ns`.
     ///
-    /// Cost: O(N) where N = |dynamic cells|.  At scenario-33 worst case
-    /// (~5 K cells × 10 Hz × ~50 ns FOV math) this is well under 1 ms.
+    /// Bookkeeping per cell:
+    ///   - If first observation: stamp `first_seen_ns_[c] = now_ns`.
+    ///   - If in FOV and no radar return and not stale: residency += dt
+    ///     (capped at `fov_residency_promote_ns` — once qualified, no need
+    ///     to keep growing).
+    ///   - If outside FOV or radar present: residency unchanged.  The
+    ///     `PromoteFovSilence` row of decide_promotion() requires both
+    ///     `!in_fov` AND `residency_ns >= fov_residency_promote_ns`, so
+    ///     resetting on FOV exit (the prior buggy behaviour) made the
+    ///     escape hatch unreachable in production.
+    ///   - first_seen_ns_ is NEVER reset by FOV transitions — age-cap
+    ///     eviction depends on lifetime, not on whether we ever saw it.
+    ///
+    /// Stale-entry hygiene: every cell present in residency_ / first_seen_
+    /// but NOT in `dynamic_cells` (TTL-decayed out of the grid) is erased.
+    /// Otherwise a later voxel reappearing at the same coordinates would
+    /// inherit stale state and promote earlier than intended (Copilot
+    /// review on PR #704).
+    ///
+    /// Cost: O(N) where N = |dynamic cells| + small fixed overhead per stale
+    /// entry.  At scenario-33 worst case (~5 K cells × 10 Hz × ~50 ns) this
+    /// is well under 1 ms.
     template<typename CellIterable>
     void tick_residency(const CellIterable& dynamic_cells, float resolution_m, uint64_t now_ns) {
         // Use a separate bool sentinel rather than `last_tick_ns_ > 0`: the
@@ -228,29 +301,47 @@ public:
             (tick_initialized_ && now_ns >= last_tick_ns_) ? (now_ns - last_tick_ns_) : 0;
         last_tick_ns_     = now_ns;
         tick_initialized_ = true;
-        if (!pose_valid_ || dt_ns == 0) return;
+        if (!pose_valid_) return;
 
+        std::unordered_set<GridCell, GridCellHash> live;
+        live.reserve(residency_.size() + first_seen_ns_.size() + 16);
+
+        const uint64_t cap = policy_.fov_residency_promote_ns;
         for (const auto& c : dynamic_cells) {
-            // Cell centre in world coords.
+            live.insert(c);
+            if (first_seen_ns_.find(c) == first_seen_ns_.end()) {
+                first_seen_ns_[c] = now_ns;
+            }
+            if (dt_ns == 0) continue;  // first tick — no time has passed yet.
+
             const float wx = c.x * resolution_m;
             const float wy = c.y * resolution_m;
             const float wz = c.z * resolution_m;
             const auto  q  = query(wx, wy, wz, now_ns);
             if (q.in_fov && !q.radar_present && !q.radar_stale) {
-                residency_[c] += dt_ns;
-            } else if (!q.in_fov) {
-                // Outside FOV → reset; the rule is "T seconds CUMULATIVE
-                // while inside FOV with no return", per research note §7.
-                // A drone yawing in and out of viewing the cell would
-                // otherwise see its counter slowly climb on disjoint glances.
-                // That's acceptable as a safety property — we want the
-                // counter to reflect "we have *recently* been pointing at
-                // this cell", not "we glanced at it once five minutes ago".
-                residency_.erase(c);
+                uint64_t& acc = residency_[c];
+                acc           = std::min(cap, acc + dt_ns);
             }
-            // If radar_present: leave the counter alone.  The cell will
-            // promote via the regular "Promote" path on its next
-            // insert_voxels() round, no special handling needed.
+            // Outside FOV / radar present: leave both counters alone.
+            // first_seen_ns_ keeps climbing via age, residency_ stays
+            // at whatever was accumulated during prior in-FOV ticks so
+            // the FOV-silence escape hatch can fire after the cell
+            // exits the FOV.
+        }
+
+        for (auto it = residency_.begin(); it != residency_.end();) {
+            if (live.find(it->first) == live.end()) {
+                it = residency_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = first_seen_ns_.begin(); it != first_seen_ns_.end();) {
+            if (live.find(it->first) == live.end()) {
+                it = first_seen_ns_.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 
@@ -260,9 +351,32 @@ public:
         return (it == residency_.end()) ? 0 : it->second;
     }
 
-    /// Drop a cell's residency entry (call when the cell is promoted or
-    /// evicted from the dynamic layer).
-    void clear_residency(const GridCell& c) noexcept { residency_.erase(c); }
+    /// Read the cell's age (now_ns − first_seen_ns).  Returns 0 if untracked
+    /// or if `now_ns < first_seen_ns_` (clock skew guard).
+    [[nodiscard]] uint64_t cell_age_ns(const GridCell& c, uint64_t now_ns) const noexcept {
+        const auto it = first_seen_ns_.find(c);
+        if (it == first_seen_ns_.end()) return 0;
+        return (now_ns >= it->second) ? (now_ns - it->second) : 0;
+    }
+
+    /// Per-cell query: same as the geometry-only `query()` but additionally
+    /// populates `residency_ns` and `cell_age_ns` from the per-cell trackers.
+    /// This is the entry point the OccupancyGrid3D promotion gate must use —
+    /// without it, `decide_promotion()` cannot reach the escape-hatch rows.
+    [[nodiscard]] RadarQuery query_cell(const GridCell& c, float resolution_m,
+                                        uint64_t now_ns) const noexcept {
+        RadarQuery q = query(c.x * resolution_m, c.y * resolution_m, c.z * resolution_m, now_ns);
+        q.residency_ns = residency_ns(c);
+        q.cell_age_ns  = cell_age_ns(c, now_ns);
+        return q;
+    }
+
+    /// Drop a cell's residency / age entries (call when the cell is promoted
+    /// or evicted from the dynamic layer).
+    void clear_residency(const GridCell& c) noexcept {
+        residency_.erase(c);
+        first_seen_ns_.erase(c);
+    }
 
     [[nodiscard]] const RadarFovConfig&  fov_config() const noexcept { return fov_; }
     [[nodiscard]] const CrossVetoPolicy& policy() const noexcept { return policy_; }
@@ -287,7 +401,11 @@ private:
     bool                                                        radar_initialized_{false};
     uint64_t                                                    last_tick_ns_{0};
     bool                                                        tick_initialized_{false};
+    /// Cumulative time spent in-FOV with no radar return.  Reset on FOV exit.
     std::unordered_map<GridCell, uint64_t, GridCellHash>        residency_;
+    /// Wall time of first observation in the dynamic layer.  Never reset by
+    /// FOV transitions — only cleared when the cell promotes or TTL-decays.
+    std::unordered_map<GridCell, uint64_t, GridCellHash>        first_seen_ns_;
 };
 
 }  // namespace drone::planner
