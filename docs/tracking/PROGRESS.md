@@ -3354,4 +3354,59 @@ Scenario 30 also switched to the `color_contour` detector (live-validated: drone
 
 ---
 
-*Last updated after Improvement #86 (Issue #608 PR 1). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
+### Improvement #87 — Phase 1 Sim-Perfect Cosys Perception: scenario 33 PASS end-to-end (Issues #698, #702, #705, PR #704)
+
+**Date:** 2026-05-05
+**Category:** Feature — Perception / HAL / Test Infrastructure
+**Issues:** [#698](https://github.com/nmohamaya/companion_software_stack/issues/698) (PATH A voxel ghosts), [#702](https://github.com/nmohamaya/companion_software_stack/issues/702) (lidar-emulated radar), [#705](https://github.com/nmohamaya/companion_software_stack/issues/705) (Echo backend); follow-up [#703](https://github.com/nmohamaya/companion_software_stack/issues/703) filed
+**PR:** [#704](https://github.com/nmohamaya/companion_software_stack/pull/704) (against `feature/perception-v2-integration`)
+
+**What:**
+
+Establishes the "Phase 1" ground-truth perception baseline for the Cosys-AirSim Tier 3 stack. With every backend now driven by simulator ground truth, scenario 33 (`33_non_coco_obstacles.json`) passes deterministically with zero cube collisions, mission complete, RTL → LAND, all 26 pass-criteria checks green. This becomes the reference run that future "Phase 3" real-algorithm backends will be measured against, one swap at a time.
+
+- **`CosysSegmentationBackend`** (`common/hal/include/hal/cosys_segmentation_backend.h`) — `IInferenceBackend` over `simGetImages(Segmentation)` + `simGetSegmentationColorMap`. Allowlist (`include_substrings`) takes precedence over blocklist (`exclude_substrings`); blocklist mode returns `false` for unknown colours so unmapped pixels are preserved.
+- **`CosysGroundTruthRadarBackend`** (`common/hal/include/hal/cosys_groundtruth_radar.h`) — `IRadar` over `simListInstanceSegmentationPoses(only_visible=true)` + `simGetGroundTruthKinematics`. Transforms world poses into drone FRD body frame, FOV-gated. Now used as a validation oracle alongside Echo.
+- **`CosysEchoBackend`** (`common/hal/include/hal/cosys_echo_backend.h`) — `IRadar` over Cosys-Lab Echo (sensor type 7), the FMCW physical radar simulator (ray-cast beam pattern + multipath + per-distance/per-reflection attenuation). Decodes the 5-floats-per-point return format, applies `[1, -1, -1]` axis flip for NED, FOV gates ±60° az × ±15° el, range-gates, name-based allowlist/exclude via parallel groundtruth vector, and bins detections into range/az/el clusters. Replaces the lidar-emulated `CosysRadarBackend` (root cause of #702 — lidar treated as radar produced 350 ground-clutter clusters/scan).
+- **Factory wiring** (`common/hal/include/hal/hal_factory.h`) — three new branches: `cosys_segmentation_backend`, `cosys_airsim_groundtruth`, `cosys_echo`, all `HAVE_COSYS_AIRSIM`-guarded.
+- **Echo sensor declaration** (`config/cosys_settings.json`) — Echo sensor with tuned parameters (5000 traces, 0.1 dB/m attenuation, 1.0 dB/reflection, 50 m range, ±60° × ±15° FOV, 20 Hz update). Must be redeployed to `~/Documents/AirSim/settings.json` and UE5 restarted.
+- **Scenario 33 re-scoped** (`config/scenarios/33_non_coco_obstacles.json`) — from "PATH A perception stress" to "planner + HD-map + ground-truth perception". Depth backend → `cosys_airsim`, SAM backend → `cosys_airsim`, radar backend → `cosys_echo`. Static obstacles populated from a fresh inventory dump (4 cube cylinders + 2 BP_PIPCamera clusters), cylinder radius 5.25 → 7.5 m to circumscribe rather than inscribe the 10×10 m square cubes (the geometric error was masked by the previous radar's centre-point detections + UKF inflation; Echo's surface returns exposed it). Waypoints redesigned so WP3 is no longer inside a stacked-cube body, and `timeout_s` 180 → 240 to accommodate the east detour.
+- **Diagnostic overlays auto-invoked** (`tests/run_scenario_cosys.sh`, `tests/lib_scenario_logging.sh`) — `tools/diag/scene_overlay.py` and `tools/diag/planner_grid_overlay.py` produce post-run PNGs, with view-clip to mission area and trimmed labels. Robust matplotlib path falls back through system + user-site so runner-spawned Python finds the package.
+- **Live scene inventory** (`tools/diag/blocks_default_inventory.json`) — authoritative dump of 165 scene objects from live UE5 via `simListInstanceSegmentationObjects` + `simListInstanceSegmentationPoses`. Replaces the wrong `DEFAULT_CUBES` table mined from collision logs.
+- **Voxel-on-target script** (`tools/check_voxel_on_target.py`) — exit 0 with SKIP message when scene has no spawned objects (HD-map-only scenarios) instead of failing the run.
+
+**Runner Phase 6 ordering & log handling:**
+
+- Process-liveness checks now run **before** graceful shutdown (the previous fix that moved combined-log assembly behind shutdown accidentally killed processes before alive-checks ran).
+- `combined.log` is assembled with `cat *.log` only after each process has been signalled and given time to flush — fixes the cat-vs-flush race where mission completion lines were truncated.
+- `pass_criteria` `log_contains` / `log_must_not_contain` now use `grep -qaiF` (fixed strings) — the previous regex mode misread `[FSM]` as a character class and silently failed valid checks.
+
+**Bugs resolved:**
+
+- **Fix #504** — scenario 33 multi-layer perception failure (DA V2 1000× depth noise, SAM mega-mask collapse, lidar-emulation ground clutter, camera-can't-see-through-walls, WP3 inside solid block, runner regex misinterpreting `[FSM]`, voxel-on-target SCRIPT errors on HD-map-only scenarios). Documented in [BUG_FIXES.md](BUG_FIXES.md).
+- **Fix #505** — HD-map cylinders inscribed (r=5.25) instead of circumscribed (r=7.5) the 10×10 m square cubes; runner cat-vs-flush race truncated final mission lines; runner alive-check ordered after own kill; scenario timeout too tight for east-detour route.
+
+**Files added:**
+- `common/hal/include/hal/cosys_segmentation_backend.h`
+- `common/hal/include/hal/cosys_groundtruth_radar.h`
+- `common/hal/include/hal/cosys_echo_backend.h`
+- `tools/diag/scene_overlay.py`, `tools/diag/planner_grid_overlay.py`, `tools/diag/blocks_default_inventory.json`
+
+**Files modified:**
+- `common/hal/include/hal/hal_factory.h`
+- `config/cosys_settings.json`, `config/scenarios/33_non_coco_obstacles.json`
+- `tests/run_scenario_cosys.sh`, `tests/lib_scenario_logging.sh`
+- `tools/check_voxel_on_target.py`
+- `docs/tracking/BUG_FIXES.md` (Fix #504, Fix #505)
+
+**Why:**
+
+Phase 1 of the perception-replacement roadmap calls for a known-good baseline driven by simulator ground truth across every channel — depth, segmentation, radar — so the planner + HD-map + UKF dormant-pool + occupancy-grid pipeline can be validated independently of any algorithm uncertainty. Once Phase 1 is locked, each real-world algorithm (DA V2, SAM, CFAR + micro-Doppler) can be swapped in one at a time and benchmarked against this reference. Bringing Cosys Echo in (instead of keeping the lidar-emulated radar) closes the last "fake physics" hole — Echo provides actual ray-cast beam pattern + multipath returns, so the same backend will exercise the same UKF code paths in real-world deployments.
+
+**Test:** Live UE5 5.4 + Cosys-AirSim Blocks scene. `./tests/run_scenario_cosys.sh 33_non_coco_obstacles.json --gui` produces a `_PASS` run directory: 26/26 pass criteria, mission complete → RTL → LAND in mission_planner.log, zero `collision #2+` for cubes (Ground startup touch only), drone takes east detour (E ≥ 27) confirming the circumscribed cylinders block the west corridor, and Echo emits 67–168 raw / 5–7 emitted clusters per scan when looking at obstacles.
+
+**Deployment note:** `config/cosys_settings.json` must be copied to `~/Documents/AirSim/settings.json` and UE5 restarted before the Echo sensor declaration takes effect. Real-hardware path is **not** validated by this PR — sim-test only.
+
+---
+
+*Last updated after Improvement #87 (PR #704). See [tests/TESTS.md](../../tests/TESTS.md) for current test counts and scenario inventory.*
