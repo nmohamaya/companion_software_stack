@@ -742,6 +742,7 @@ inline constexpr const char* HOST         = "cosys_airsim.host";
 inline constexpr const char* PORT         = "cosys_airsim.port";
 inline constexpr const char* CAMERA_NAME  = "cosys_airsim.camera_name";
 inline constexpr const char* RADAR_NAME   = "cosys_airsim.radar_name";
+inline constexpr const char* ECHO_NAME    = "cosys_airsim.echo_name";
 inline constexpr const char* IMU_NAME     = "cosys_airsim.imu_name";
 inline constexpr const char* VEHICLE_NAME = "cosys_airsim.vehicle_name";
 }  // namespace cosys_airsim

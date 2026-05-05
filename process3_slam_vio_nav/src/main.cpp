@@ -573,9 +573,16 @@ int main(int argc, char* argv[]) {
             std::string(drone::cfg_key::cosys_airsim::VEHICLE_NAME), "Drone0");
     }
 #endif
-    auto vio = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params, vio_gz_topic,
-                                               sim_speed_mps, good_trace_max, degraded_trace_max,
-                                               cosys_client, cosys_vehicle);
+    auto vio_result = drone::slam::create_vio_backend(vio_backend_name, calib, imu_params,
+                                                      vio_gz_topic, sim_speed_mps, good_trace_max,
+                                                      degraded_trace_max, cosys_client,
+                                                      cosys_vehicle);
+    if (vio_result.is_err()) {
+        DRONE_LOG_ERROR("[VIOBackend] create_vio_backend failed: {}",
+                        vio_result.error().message);
+        return 1;
+    }
+    auto vio = std::move(vio_result.value());
     DRONE_LOG_INFO("VIO backend: {} (sim_speed={:.1f} m/s, quality: good<={:.2f} degraded<={:.2f})",
                    vio->name(), sim_speed_mps, good_trace_max, degraded_trace_max);
     DRONE_LOG_INFO("Stereo calib: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.3f}m",

@@ -17,17 +17,22 @@
 // Issue: #698 — paired with CosysSegmentationBackend + CosysDepthBackend
 // to give end-to-end ground-truth perception.
 //
-// NOT thread-safe for read() observation; the polling thread populates
-// cached_detections_ under mutex.
+// Threading: same contract as CosysEchoBackend — init/shutdown serialized
+// by std::call_once, read() concurrent with poll thread under mutex,
+// poll thread touches a heartbeat token each iteration.
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_name_filter.h"
 #include "hal/cosys_name_resolver.h"
 #include "hal/cosys_rpc_client.h"
 #include "hal/iradar.h"
 #include "ipc/ipc_types.h"
 #include "util/config.h"
 #include "util/ilogger.h"
+#include "util/thread_heartbeat.h"
+
+#include <Eigen/Geometry>
 
 #include <algorithm>
 #include <atomic>
@@ -62,31 +67,28 @@ namespace drone::hal {
 ///   `<section>.exclude_substrings`  blocklist for background (default "Ground,Sky,SkyDome,Floor")
 class CosysGroundTruthRadarBackend : public IRadar {
 public:
-    static constexpr float kPi       = 3.14159265358979323846f;
-    static constexpr float kDegToRad = kPi / 180.0f;
-    static constexpr float kRadToDeg = 180.0f / kPi;
-
     explicit CosysGroundTruthRadarBackend(std::shared_ptr<CosysRpcClient> client,
                                           const drone::Config& cfg, const std::string& section)
         : client_(std::move(client))
         , vehicle_name_(drone::hal::resolve_vehicle_name(cfg, section))
         , max_range_m_(cfg.get<float>(section + ".max_range_m", 100.0f))
         , min_range_m_(std::max(0.1f, cfg.get<float>(section + ".min_range_m", 0.5f)))
-        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad", 60.0f * kDegToRad))
-        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 15.0f * kDegToRad))
-        , update_rate_hz_(std::max(1, cfg.get<int>(section + ".update_rate_hz", 20))) {
-        include_substrings_ = parse_csv(
-            cfg.get<std::string>(section + ".include_substrings", std::string{}));
-        exclude_substrings_ = parse_csv(
-            cfg.get<std::string>(section + ".exclude_substrings", "Ground,Sky,SkyDome,Floor"));
-        exclude_substrings_.push_back(vehicle_name_);
-
+        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad",
+                                          60.0f * static_cast<float>(M_PI) / 180.0f))
+        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad",
+                                            15.0f * static_cast<float>(M_PI) / 180.0f))
+        , update_rate_hz_(std::max(1, cfg.get<int>(section + ".update_rate_hz", 20)))
+        , filter_(cfg, section,
+                  /*default_excludes=*/"Ground,Sky,SkyDome,Floor",
+                  /*vehicle_name=*/vehicle_name_,
+                  /*unknown_action=*/CosysNameFilterUnknown::Keep) {
+        const float rad_to_deg = 180.0f / static_cast<float>(M_PI);
         DRONE_LOG_INFO(
             "[CosysGroundTruthRadar] Created for {} vehicle='{}' range=[{:.1f},{:.1f}]m "
             "FOV=±{:.0f}°×±{:.0f}° rate={}Hz mode={}",
             client_->endpoint(), vehicle_name_, min_range_m_, max_range_m_,
-            fov_azimuth_rad_ * kRadToDeg, fov_elevation_rad_ * kRadToDeg, update_rate_hz_,
-            include_substrings_.empty() ? "blocklist" : "allowlist");
+            fov_azimuth_rad_ * rad_to_deg, fov_elevation_rad_ * rad_to_deg, update_rate_hz_,
+            filter_.has_allowlist() ? "allowlist" : "blocklist");
     }
 
     ~CosysGroundTruthRadarBackend() override { shutdown(); }
@@ -96,7 +98,7 @@ public:
     CosysGroundTruthRadarBackend(CosysGroundTruthRadarBackend&&)                 = delete;
     CosysGroundTruthRadarBackend& operator=(CosysGroundTruthRadarBackend&&)      = delete;
 
-    bool init() override {
+    [[nodiscard]] bool init() override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_.load(std::memory_order_acquire)) {
             DRONE_LOG_WARN("[CosysGroundTruthRadar] Already initialised");
@@ -127,7 +129,7 @@ public:
         keep_index_.assign(object_names_.size(), 0);
         size_t n_kept = 0;
         for (size_t i = 0; i < object_names_.size(); ++i) {
-            if (!is_excluded(object_names_[i])) {
+            if (!filter_.is_excluded(object_names_[i])) {
                 keep_index_[i] = 1;
                 ++n_kept;
             }
@@ -144,13 +146,15 @@ public:
     }
 
     void shutdown() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (!active_.load(std::memory_order_acquire)) return;
-            active_.store(false, std::memory_order_release);
-        }
-        if (poll_thread_.joinable()) poll_thread_.join();
-        DRONE_LOG_INFO("[CosysGroundTruthRadar] Shut down");
+        std::call_once(shutdown_once_, [this] {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!active_.load(std::memory_order_acquire)) return;
+                active_.store(false, std::memory_order_release);
+            }
+            if (poll_thread_.joinable()) poll_thread_.join();
+            DRONE_LOG_INFO("[CosysGroundTruthRadar] Shut down");
+        });
     }
 
     drone::ipc::RadarDetectionList read() override {
@@ -170,10 +174,13 @@ public:
 private:
     void poll_loop() {
         const auto poll_interval = std::chrono::milliseconds(1000 / update_rate_hz_);
+        // Watchdog token — see CosysEchoBackend for rationale.
+        drone::util::ScopedHeartbeat heartbeat("cosys_gt_radar_poll", /*critical=*/false);
         DRONE_LOG_INFO("[CosysGroundTruthRadar] Polling thread started (interval={}ms)",
                        poll_interval.count());
 
         while (active_.load(std::memory_order_acquire)) {
+            heartbeat.touch();
             try {
                 using namespace msr::airlib;
                 std::vector<Pose>           poses;
@@ -198,23 +205,40 @@ private:
                                         .count();
                 list.timestamp_ns = static_cast<uint64_t>(std::max(decltype(now_ns){0}, now_ns));
 
-                // Drone pose in NED (Cosys/AirSim convention).
-                const float drone_n = static_cast<float>(drone_kin.pose.position.x());
-                const float drone_e = static_cast<float>(drone_kin.pose.position.y());
-                const float drone_d = static_cast<float>(drone_kin.pose.position.z());
+                // Defensive: if the simulator dynamically spawned/pruned objects
+                // between init() and this poll, poses.size() will diverge from
+                // object_names_.size().  Without this guard the parallel
+                // (poses[i] ↔ object_names_[i]) invariant breaks and we get
+                // phantom detections at attacker-chosen positions (PR #704
+                // security review).  Drop the scan entirely and warn once.
+                if (poses.size() != object_names_.size()) {
+                    if (!size_mismatch_warned_) {
+                        DRONE_LOG_WARN(
+                            "[CosysGroundTruthRadar] pose/name list size mismatch ({} vs {}) — "
+                            "scene was modified after init().  Dropping scans until matched.  "
+                            "Logging once.",
+                            poses.size(), object_names_.size());
+                        size_mismatch_warned_ = true;
+                    }
+                    std::this_thread::sleep_for(poll_interval);
+                    continue;
+                }
+                size_mismatch_warned_ = false;  // reset if we recover
 
-                // Drone heading (yaw) in NED — extract yaw from body→world quaternion.
-                // yaw_NED = atan2(2(qw·qz + qx·qy), 1 − 2(qy² + qz²))
-                const float qw = static_cast<float>(drone_kin.pose.orientation.w());
-                const float qx = static_cast<float>(drone_kin.pose.orientation.x());
-                const float qy = static_cast<float>(drone_kin.pose.orientation.y());
-                const float qz = static_cast<float>(drone_kin.pose.orientation.z());
-                const float yaw_ned =
-                    std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
-                // World→body rotation about +Z (down).  body_x = forward, body_y = right
-                // (FRD).  See body-frame computation below.
-                const float cos_yaw = std::cos(yaw_ned);
-                const float sin_yaw = std::sin(yaw_ned);
+                // Drone pose in NED (Cosys/AirSim convention).  Use the full
+                // quaternion (not yaw-only) to rotate the world→body delta.
+                // PR #704 — the prior yaw-only matrix was wrong during pitch /
+                // roll: takeoff, braking, aggressive turns put the radar body
+                // frame off-level and azimuth/elevation became meaningless.
+                const Eigen::Vector3f drone_pos_w(static_cast<float>(drone_kin.pose.position.x()),
+                                                  static_cast<float>(drone_kin.pose.position.y()),
+                                                  static_cast<float>(drone_kin.pose.position.z()));
+                const Eigen::Quaternionf q_body_world(
+                    static_cast<float>(drone_kin.pose.orientation.w()),
+                    static_cast<float>(drone_kin.pose.orientation.x()),
+                    static_cast<float>(drone_kin.pose.orientation.y()),
+                    static_cast<float>(drone_kin.pose.orientation.z()));
+                const Eigen::Matrix3f R_body_from_world = q_body_world.conjugate().toRotationMatrix();
 
                 // Drone linear velocity in NED for radial-velocity computation.
                 const float vN = static_cast<float>(drone_kin.twist.linear.x());
@@ -222,13 +246,16 @@ private:
                 const float vD = static_cast<float>(drone_kin.twist.linear.z());
 
                 size_t in_fov = 0, out_fov = 0, kept = 0, missing_pose = 0;
-                const size_t n = std::min(poses.size(), object_names_.size());
+                const size_t n = poses.size();
                 for (size_t i = 0; i < n; ++i) {
                     if (!keep_index_[i]) continue;
 
                     // simListInstanceSegmentationPoses(only_visible=true) returns
-                    // identity (NaN/0) entries for non-visible objects — filter
-                    // those by checking for finite + non-zero position.
+                    // non-finite pose entries for hidden objects — filter on the
+                    // finite check.  We do NOT additionally treat (0,0,0) as a
+                    // sentinel: a real scene object placed at the world origin
+                    // would otherwise be invisible to the radar (Copilot review
+                    // on PR #704).
                     const float wn = static_cast<float>(poses[i].position.x());
                     const float we = static_cast<float>(poses[i].position.y());
                     const float wd = static_cast<float>(poses[i].position.z());
@@ -236,27 +263,19 @@ private:
                         ++missing_pose;
                         continue;
                     }
-                    if (wn == 0.0f && we == 0.0f && wd == 0.0f) {
-                        ++missing_pose;
-                        continue;
-                    }
 
-                    // Translate object into drone-relative world coords (NED).
-                    const float dx_world = wn - drone_n;
-                    const float dy_world = we - drone_e;
-                    const float dz_world = wd - drone_d;
-                    const float range    = std::sqrt(dx_world * dx_world + dy_world * dy_world +
-                                                  dz_world * dz_world);
+                    // World-relative vector (NED).
+                    const Eigen::Vector3f delta_world(wn - drone_pos_w.x(), we - drone_pos_w.y(),
+                                                      wd - drone_pos_w.z());
+                    const float range = delta_world.norm();
                     if (range < min_range_m_ || range > max_range_m_) continue;
 
-                    // Rotate world-relative vector (NED) into drone body frame (FRD):
-                    //   body_x (forward) =  dN·cos(yaw) + dE·sin(yaw)
-                    //   body_y (right)   = -dN·sin(yaw) + dE·cos(yaw)
-                    //   body_z (down)    =  dD          (NED-Z axis preserved in FRD)
-                    // Using the cos_yaw/sin_yaw computed above.
-                    const float body_fx =  dx_world * cos_yaw + dy_world * sin_yaw;
-                    const float body_fy = -dx_world * sin_yaw + dy_world * cos_yaw;
-                    const float body_fz =  dz_world;
+                    // Full 3D rotation: body-frame delta = R_body_from_world * delta_world.
+                    // Body convention (FRD): +X forward, +Y right, +Z down.
+                    const Eigen::Vector3f delta_body = R_body_from_world * delta_world;
+                    const float           body_fx   = delta_body.x();
+                    const float           body_fy   = delta_body.y();
+                    const float           body_fz   = delta_body.z();
 
                     const float azimuth   = std::atan2(body_fy, body_fx);
                     const float elevation = std::asin(std::clamp(body_fz / range, -1.0f, 1.0f));
@@ -269,10 +288,12 @@ private:
                     ++in_fov;
 
                     // Radial velocity along the look vector.  Positive = receding
-                    // (matches automotive-radar convention).
-                    const float look_n = dx_world / range;
-                    const float look_e = dy_world / range;
-                    const float look_d = dz_world / range;
+                    // (matches automotive-radar convention).  Look vector in
+                    // world frame (NED) — drone twist is also NED so no
+                    // rotation needed for the dot product.
+                    const float look_n = delta_world.x() / range;
+                    const float look_e = delta_world.y() / range;
+                    const float look_d = delta_world.z() / range;
                     // Object is stationary in the scene; drone motion contributes
                     // the entire relative-velocity component along the look vector.
                     // Radial-velocity SIGN convention: closing rate is negative,
@@ -320,37 +341,6 @@ private:
         DRONE_LOG_INFO("[CosysGroundTruthRadar] Polling thread stopped");
     }
 
-    [[nodiscard]] bool is_excluded(const std::string& obj_name) const {
-        if (!include_substrings_.empty()) {
-            if (obj_name.empty()) return true;
-            for (const auto& sub : include_substrings_) {
-                if (!sub.empty() && obj_name.find(sub) != std::string::npos) return false;
-            }
-            return true;
-        }
-        if (obj_name.empty()) return false;
-        for (const auto& sub : exclude_substrings_) {
-            if (!sub.empty() && obj_name.find(sub) != std::string::npos) return true;
-        }
-        return false;
-    }
-
-    [[nodiscard]] static std::vector<std::string> parse_csv(const std::string& raw) {
-        std::vector<std::string> out;
-        size_t                   start = 0;
-        while (start < raw.size()) {
-            const size_t comma = raw.find(',', start);
-            const size_t end   = (comma == std::string::npos) ? raw.size() : comma;
-            std::string  tok   = raw.substr(start, end - start);
-            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(0, 1);
-            while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.pop_back();
-            if (!tok.empty()) out.push_back(std::move(tok));
-            if (comma == std::string::npos) break;
-            start = comma + 1;
-        }
-        return out;
-    }
-
     std::shared_ptr<CosysRpcClient> client_;
     std::string                     vehicle_name_;
     float                           max_range_m_;
@@ -358,8 +348,7 @@ private:
     float                           fov_azimuth_rad_;
     float                           fov_elevation_rad_;
     int                             update_rate_hz_;
-    std::vector<std::string>        include_substrings_;
-    std::vector<std::string>        exclude_substrings_;
+    CosysNameFilter                 filter_;
 
     std::vector<std::string>        object_names_;   ///< Cached at init(), parallel to keep_index_
     std::vector<uint8_t>            keep_index_;     ///< 1 if object should appear as obstacle
@@ -368,7 +357,9 @@ private:
     drone::ipc::RadarDetectionList  cached_detections_{};
     std::atomic<bool>               active_{false};
     std::atomic<uint64_t>           scan_count_{0};
+    bool                            size_mismatch_warned_ = false;  ///< poll-thread only
     std::thread                     poll_thread_;
+    std::once_flag                  shutdown_once_;
 };
 
 }  // namespace drone::hal

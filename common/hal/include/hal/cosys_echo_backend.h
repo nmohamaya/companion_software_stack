@@ -14,11 +14,18 @@
 //
 // Issue: #705 (parent: #698 perception epic, supersedes #702)
 //
-// NOT thread-safe for read() observation; the polling thread populates
-// cached_detections_ under mutex.
+// Threading contract:
+//   - init() / shutdown() are NOT reentrant — call them from a single thread.
+//     Both internally serialise via std::call_once so a dtor racing with an
+//     explicit shutdown is safe, but this is belt-and-braces.
+//   - read() may be called concurrently with the polling thread (mutex
+//     protects cached_detections_).
+//   - The polling thread touches a ThreadHeartbeat token at the top of each
+//     iteration so the watchdog detects an Echo RPC stall.
 #pragma once
 #ifdef HAVE_COSYS_AIRSIM
 
+#include "hal/cosys_name_filter.h"
 #include "hal/cosys_name_resolver.h"
 #include "hal/cosys_rpc_client.h"
 #include "hal/iradar.h"
@@ -26,6 +33,7 @@
 #include "util/config.h"
 #include "util/config_keys.h"
 #include "util/ilogger.h"
+#include "util/thread_heartbeat.h"
 
 #include <algorithm>
 #include <atomic>
@@ -35,6 +43,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -67,9 +76,6 @@ namespace drone::hal {
 ///   `<section>.exclude_substrings`  default "Ground,Sky,SkyDome,Floor"
 class CosysEchoBackend : public IRadar {
 public:
-    static constexpr float kPi       = 3.14159265358979323846f;
-    static constexpr float kDegToRad = kPi / 180.0f;
-    static constexpr float kRadToDeg = 180.0f / kPi;
     static constexpr float kMinClusterBinM   = 1e-3f;
     static constexpr float kMinClusterBinRad = 1e-6f;
 
@@ -81,33 +87,35 @@ public:
     explicit CosysEchoBackend(std::shared_ptr<CosysRpcClient> client, const drone::Config& cfg,
                               const std::string& section)
         : client_(std::move(client))
-        , echo_name_(cfg.get<std::string>(section + ".echo_name",
-                                          cfg.get<std::string>("cosys_airsim.echo_name", "echo")))
+        , echo_name_(drone::hal::resolve_echo_name(cfg, section))
         , vehicle_name_(drone::hal::resolve_vehicle_name(cfg, section))
         , max_range_m_(cfg.get<float>(section + ".max_range_m", 50.0f))
         , min_range_m_(std::max(0.1f, cfg.get<float>(section + ".min_range_m", 0.5f)))
-        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad", 60.0f * kDegToRad))
-        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad", 15.0f * kDegToRad))
+        , fov_azimuth_rad_(cfg.get<float>(section + ".fov_azimuth_rad",
+                                          60.0f * static_cast<float>(M_PI) / 180.0f))
+        , fov_elevation_rad_(cfg.get<float>(section + ".fov_elevation_rad",
+                                            15.0f * static_cast<float>(M_PI) / 180.0f))
         , update_rate_hz_(std::max(1, cfg.get<int>(section + ".update_rate_hz", 20)))
         , cluster_range_m_(std::max(kMinClusterBinM,
                                     cfg.get<float>(section + ".cluster_range_m", 1.0f)))
         , cluster_az_rad_(std::max(kMinClusterBinRad,
-                                   cfg.get<float>(section + ".cluster_az_rad", 5.0f * kDegToRad)))
+                                   cfg.get<float>(section + ".cluster_az_rad",
+                                                  5.0f * static_cast<float>(M_PI) / 180.0f)))
         , cluster_el_rad_(std::max(kMinClusterBinRad,
-                                   cfg.get<float>(section + ".cluster_el_rad", 5.0f * kDegToRad))) {
-        include_substrings_ = parse_csv(
-            cfg.get<std::string>(section + ".include_substrings", std::string{}));
-        exclude_substrings_ = parse_csv(
-            cfg.get<std::string>(section + ".exclude_substrings", "Ground,Sky,SkyDome,Floor"));
-        exclude_substrings_.push_back(vehicle_name_);
-
+                                   cfg.get<float>(section + ".cluster_el_rad",
+                                                  5.0f * static_cast<float>(M_PI) / 180.0f)))
+        , filter_(cfg, section,
+                  /*default_excludes=*/"Ground,Sky,SkyDome,Floor",
+                  /*vehicle_name=*/vehicle_name_,
+                  /*unknown_action=*/CosysNameFilterUnknown::Keep) {
+        const float rad_to_deg = 180.0f / static_cast<float>(M_PI);
         DRONE_LOG_INFO(
             "[CosysEcho] Created for {} echo='{}' vehicle='{}' range=[{:.1f},{:.1f}]m "
             "FOV=±{:.0f}°×±{:.0f}° rate={}Hz cluster={:.1f}m×{:.0f}°×{:.0f}° mode={}",
             client_->endpoint(), echo_name_, vehicle_name_, min_range_m_, max_range_m_,
-            fov_azimuth_rad_ * kRadToDeg, fov_elevation_rad_ * kRadToDeg, update_rate_hz_,
-            cluster_range_m_, cluster_az_rad_ * kRadToDeg, cluster_el_rad_ * kRadToDeg,
-            include_substrings_.empty() ? "blocklist" : "allowlist");
+            fov_azimuth_rad_ * rad_to_deg, fov_elevation_rad_ * rad_to_deg, update_rate_hz_,
+            cluster_range_m_, cluster_az_rad_ * rad_to_deg, cluster_el_rad_ * rad_to_deg,
+            filter_.has_allowlist() ? "allowlist" : "blocklist");
     }
 
     ~CosysEchoBackend() override { shutdown(); }
@@ -117,7 +125,7 @@ public:
     CosysEchoBackend(CosysEchoBackend&&)                 = delete;
     CosysEchoBackend& operator=(CosysEchoBackend&&)      = delete;
 
-    bool init() override {
+    [[nodiscard]] bool init() override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_.load(std::memory_order_acquire)) {
             DRONE_LOG_WARN("[CosysEcho] Already initialised");
@@ -134,13 +142,18 @@ public:
     }
 
     void shutdown() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (!active_.load(std::memory_order_acquire)) return;
-            active_.store(false, std::memory_order_release);
-        }
-        if (poll_thread_.joinable()) poll_thread_.join();
-        DRONE_LOG_INFO("[CosysEcho] Shut down");
+        // call_once guarantees idempotent + race-free shutdown even if dtor
+        // and an explicit shutdown() fire from different threads.  Inner
+        // body still uses the mutex to publish active_=false to read().
+        std::call_once(shutdown_once_, [this] {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!active_.load(std::memory_order_acquire)) return;
+                active_.store(false, std::memory_order_release);
+            }
+            if (poll_thread_.joinable()) poll_thread_.join();
+            DRONE_LOG_INFO("[CosysEcho] Shut down");
+        });
     }
 
     drone::ipc::RadarDetectionList read() override {
@@ -160,6 +173,12 @@ public:
 private:
     void poll_loop() {
         const auto poll_interval = std::chrono::milliseconds(1000 / update_rate_hz_);
+        // Watchdog token: an Echo RPC stall would otherwise leave the
+        // thread silently spinning forever, with cached_detections_ growing
+        // stale and the cross-veto gate's `radar_stale` flag firing
+        // indefinitely with no upstream signal.  Touching the heartbeat
+        // each iteration lets ThreadWatchdog detect the hang.
+        drone::util::ScopedHeartbeat heartbeat("cosys_echo_poll", /*critical=*/false);
         DRONE_LOG_INFO("[CosysEcho] Polling thread started (interval={}ms)",
                        poll_interval.count());
 
@@ -176,8 +195,11 @@ private:
             // Most-frequent groundtruth name for this cluster (best-effort —
             // ties broken by first-seen).  Used for include/exclude filtering
             // post-cluster so a single ground-bounce ray within an obstacle
-            // cluster doesn't kill the whole detection.
-            std::unordered_map<std::string, uint32_t> name_votes;
+            // cluster doesn't kill the whole detection.  Flat vector beats
+            // unordered_map at the typical N=1-2 unique names per bin and
+            // costs zero heap allocations per scan when reused (PR #704
+            // perf review P1).
+            std::vector<std::pair<std::string, uint32_t>> name_votes;
         };
         std::unordered_map<uint64_t, ClusterAcc> bins;
 
@@ -188,6 +210,7 @@ private:
         };
 
         while (active_.load(std::memory_order_acquire)) {
+            heartbeat.touch();
             try {
                 using namespace msr::airlib;
                 EchoData data;
@@ -206,13 +229,20 @@ private:
                 list.timestamp_ns = static_cast<uint64_t>(std::max(decltype(now_ns){0}, now_ns));
 
                 bins.clear();
-                size_t raw = 0, in_fov = 0, dropped_range = 0;
+                size_t raw = 0, in_fov = 0, dropped_range = 0, dropped_nonfinite = 0;
 
                 // Each Echo point is 5 floats: (x, y, z, attenuation_dB, distance_m)
                 // in Unreal coords.  Apply [1, -1, -1] flip to match NED body
                 // (Cosys's own echo_test.py reference does the same flip).
-                const auto& pc = data.point_cloud;
+                const auto&  pc       = data.point_cloud;
                 const size_t n_points = pc.size() / kFloatsPerEchoPoint;
+                if (pc.size() % kFloatsPerEchoPoint != 0 && !partial_point_warned_) {
+                    DRONE_LOG_WARN(
+                        "[CosysEcho] Echo returned partial point ({} floats; expected multiple "
+                        "of {}). Truncating last point. Logging once.",
+                        pc.size(), kFloatsPerEchoPoint);
+                    partial_point_warned_ = true;
+                }
                 for (size_t i = 0; i < n_points; ++i) {
                     ++raw;
                     const float x = pc[i * kFloatsPerEchoPoint + 0];
@@ -222,7 +252,11 @@ private:
                     // pc[i*5 + 4] is total path distance (including multipath);
                     // we recompute straight-line range from xyz instead, since
                     // that's what the UKF expects.
-                    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+                    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+                        !std::isfinite(attenuation_dB)) {
+                        ++dropped_nonfinite;
+                        continue;
+                    }
 
                     const float range = std::sqrt(x * x + y * y + z * z);
                     if (range < min_range_m_ || range > max_range_m_) {
@@ -238,8 +272,9 @@ private:
 
                     // Per-point name from parallel groundtruth vector.  May be
                     // empty if Echo didn't tag this return (e.g. multipath
-                    // reflection beyond the first bounce).
-                    std::string gt_name;
+                    // reflection beyond the first bounce).  string_view to
+                    // avoid per-point heap allocation.
+                    std::string_view gt_name;
                     if (i < data.groundtruth.size()) gt_name = data.groundtruth[i];
 
                     const int rb = static_cast<int>(std::floor(range / cluster_range_m_));
@@ -255,7 +290,21 @@ private:
                     acc.sum_el    += elevation;
                     acc.sum_atten += attenuation_dB;
                     ++acc.count;
-                    if (!gt_name.empty()) ++acc.name_votes[gt_name];
+                    if (!gt_name.empty()) {
+                        // name_votes is a small flat vector — usually 1-2
+                        // unique names per bin, so linear scan is faster
+                        // than the unordered_map allocation per bin per scan
+                        // (PR #704 perf review P1).
+                        bool found = false;
+                        for (auto& [n, v] : acc.name_votes) {
+                            if (n == gt_name) {
+                                ++v;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) acc.name_votes.emplace_back(std::string(gt_name), 1u);
+                    }
                 }
 
                 // Emit one detection per non-empty bin (centroid).  Skip bins
@@ -266,15 +315,15 @@ private:
                     if (acc.count == 0) continue;
 
                     // Pick dominant groundtruth name (most votes).
-                    std::string dominant_name;
-                    uint32_t    best_votes = 0;
+                    std::string_view dominant_name;
+                    uint32_t         best_votes = 0;
                     for (const auto& [n, v] : acc.name_votes) {
                         if (v > best_votes) {
                             best_votes    = v;
                             dominant_name = n;
                         }
                     }
-                    if (is_excluded(dominant_name)) {
+                    if (filter_.is_excluded(dominant_name)) {
                         ++skipped_filter;
                         continue;
                     }
@@ -288,9 +337,13 @@ private:
                     det.radial_velocity_mps = 0.0f;  // Echo doesn't provide Doppler
                     // SNR derived from attenuation: less attenuation = stronger return.
                     // attenuation_dB is negative or zero in Cosys; SNR = -mean_attenuation
-                    // gives a positive signal-strength-style metric.
+                    // gives a positive signal-strength-style metric.  isfinite guard
+                    // is belt-and-braces — per-point NaN/Inf already filters above
+                    // (PR #704 security review).
                     const float mean_atten = acc.sum_atten * inv;
-                    const float snr_db     = std::max(0.0f, -mean_atten);
+                    const float snr_db     = std::isfinite(mean_atten)
+                                                 ? std::max(0.0f, -mean_atten)
+                                                 : 0.0f;
                     det.snr_db              = snr_db;
                     det.confidence          = std::clamp(snr_db / 30.0f, 0.0f, 1.0f);
                     det.rcs_dbsm            = 0.0f;
@@ -304,18 +357,17 @@ private:
                     cached_detections_ = list;
                 }
 
-                const uint64_t scan = scan_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-                // Issue #705 — denser logging.  Was every 200 scans (= 10 s);
-                // now every 20 scans (= 1 s) so we can see real emission rate
-                // when debugging Echo signal density.  Plus a one-shot loud
-                // log on first non-zero emission so we know exactly when Echo
-                // starts producing returns vs. being silent on takeoff pose.
+                const uint64_t scan = scan_count_.fetch_add(1, std::memory_order_release) + 1;
+                // Two summary cadences: a one-shot loud log on the first
+                // non-zero emission (so the operator can see exactly when
+                // Echo starts producing returns vs. silence on takeoff
+                // pose), and a periodic 1 Hz summary thereafter.
                 if (scan == 1) {
                     DRONE_LOG_INFO(
-                        "[CosysEcho] First scan: {} raw → {} in FOV ({} dropped on range), "
-                        "{} unique bins → {} emitted ({} skipped by name filter)",
-                        raw, in_fov, dropped_range, bins.size(), list.num_detections,
-                        skipped_filter);
+                        "[CosysEcho] First scan: {} raw → {} in FOV ({} dropped on range, "
+                        "{} non-finite), {} unique bins → {} emitted ({} skipped by name filter)",
+                        raw, in_fov, dropped_range, dropped_nonfinite, bins.size(),
+                        list.num_detections, skipped_filter);
                 } else if (raw > 0 && !first_nonzero_logged_) {
                     DRONE_LOG_INFO(
                         "[CosysEcho] First NON-ZERO scan #{}: {} raw → {} in FOV → "
@@ -336,37 +388,6 @@ private:
         DRONE_LOG_INFO("[CosysEcho] Polling thread stopped");
     }
 
-    [[nodiscard]] bool is_excluded(const std::string& obj_name) const {
-        if (!include_substrings_.empty()) {
-            if (obj_name.empty()) return true;
-            for (const auto& sub : include_substrings_) {
-                if (!sub.empty() && obj_name.find(sub) != std::string::npos) return false;
-            }
-            return true;
-        }
-        if (obj_name.empty()) return false;
-        for (const auto& sub : exclude_substrings_) {
-            if (!sub.empty() && obj_name.find(sub) != std::string::npos) return true;
-        }
-        return false;
-    }
-
-    [[nodiscard]] static std::vector<std::string> parse_csv(const std::string& raw) {
-        std::vector<std::string> out;
-        size_t                   start = 0;
-        while (start < raw.size()) {
-            const size_t comma = raw.find(',', start);
-            const size_t end   = (comma == std::string::npos) ? raw.size() : comma;
-            std::string  tok   = raw.substr(start, end - start);
-            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(0, 1);
-            while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.pop_back();
-            if (!tok.empty()) out.push_back(std::move(tok));
-            if (comma == std::string::npos) break;
-            start = comma + 1;
-        }
-        return out;
-    }
-
     static constexpr int kBinIndexMin = -32768;
     static constexpr int kBinIndexMax = 32767;
 
@@ -381,15 +402,17 @@ private:
     float                           cluster_range_m_;
     float                           cluster_az_rad_;
     float                           cluster_el_rad_;
-    std::vector<std::string>        include_substrings_;
-    std::vector<std::string>        exclude_substrings_;
+    CosysNameFilter                 filter_;
 
     mutable std::mutex             mutex_;
     drone::ipc::RadarDetectionList cached_detections_{};
     std::atomic<bool>              active_{false};
     std::atomic<uint64_t>          scan_count_{0};
+    /// poll thread only — no synchronisation needed.
     bool                           first_nonzero_logged_ = false;
+    bool                           partial_point_warned_ = false;
     std::thread                    poll_thread_;
+    std::once_flag                 shutdown_once_;
 };
 
 }  // namespace drone::hal
