@@ -914,17 +914,21 @@ cam_pose.linear() = q.toRotationMatrix() * R_body_from_cam;
 
 ---
 
-### Fix #505 — HD-Map Cylinders Inscribed Square Cubes Instead of Circumscribing Them; Runner Generated combined.log Before Process Flush (Issue #705)
+### Fix #505 — HD-Map Cylinders Inscribed Square Cubes; Runner Generated combined.log Before Process Flush; Runner Killed Processes Before Liveness Check (Issue #705)
 
 **Date:** 2026-05-05
 **Severity:** High (latent map error masked by previous radar backend; surfaced as 587 cube collisions when we switched to physically-realistic radar)
 **Files:** `config/scenarios/33_non_coco_obstacles.json`, `tests/run_scenario_cosys.sh`
 
-**What:** Two related bugs found in a single debug session, both surfaced when we switched scenario 33's radar from `CosysGroundTruthRadarBackend` to `CosysEchoBackend` (Cosys's physical FMCW radar simulator):
+**What:** Three related bugs found in a single debug session, the first two surfaced when we switched scenario 33's radar from `CosysGroundTruthRadarBackend` to `CosysEchoBackend` (Cosys's physical FMCW radar simulator), the third introduced and then fixed in the runner-ordering chain:
 
 1. **HD-map static cylinders inscribed the square cube footprints instead of circumscribing them.**  Each 10×10 m cube footprint was modelled as a cylinder with `radius_m=5.25` (the inscribed circle that *fits inside* the square).  This left the four corners of each cube — sticking out 1.8 m beyond the cylinder edge — unprotected.  Run 2026-05-05_152100 collided **587 times** with `TemplateCube_Rounded_62`'s SW corner because D* Lite routed the drone through what the planner thought was free space (the corner gap), but was solid cube wall.
 
 2. **Runner's `combined.log` was generated ~2 s before mission_planner finished writing.**  Phase 6's `cat *.log > combined.log` (in `tests/run_scenario_cosys.sh`) ran while companion processes were still active.  The final `[Planner] Mission complete — RTL` and `[FSM] RTL → LAND` lines were emitted AFTER the cat snapshot.  Pass criteria checks therefore failed `Log contains: [Planner] Mission complete` even when the mission completed cleanly — runner reported `_FAIL` despite a perfect run.
+
+3. **Runner killed companion processes before checking they were alive** (a follow-up bug introduced by the fix for #2).  The first attempt at fixing #2 was to graceful-shutdown processes BEFORE the cat — which worked, but then the existing process-liveness checks (`pgrep -f build/bin/<name>`) ran AFTER and found 7 dead processes (the ones we just killed).  Run 2026-05-05_154924 had a clean mission AND complete combined.log AND all 14 log_contains/log_must_not_contain checks PASS — but still reported `_FAIL` (19/26) because of these self-inflicted process-alive failures.
+
+4. **Scenario 33 timeout 180 s was insufficient for the longer-but-correct east-detour route.**  With circumscribed cylinders blocking the direct/west corridor, D* Lite's only viable path goes E ≥ 27 m around the cube — adding ~30 s vs. the (geometrically-impossible) straight line.  Run 2026-05-05_154301 reached `Advanced to waypoint 6/6` cleanly but timed out before completing RTL → LAND.
 
 **Error messages (searchable):**
 - `collision #N with 'TemplateCube_Rounded_62' (id=0) at (35.X, 4.1, -5.X)` — repeated 587×
@@ -959,33 +963,36 @@ Bumped `radius_m` from 5.25 → **7.5** for all four 10×10 m cube quadrants.  7
 
 The `_comment_static_obstacles` was rewritten to call out the inscribed-vs-circumscribed reasoning so future scenario authors don't repeat the bug.
 
-*Runner combined.log race (`tests/run_scenario_cosys.sh`):*
+*Runner combined.log race + process-liveness ordering (`tests/run_scenario_cosys.sh`):*
 
-Added an explicit graceful-shutdown sequence at the start of Phase 6, BEFORE the cat:
+Phase 6 reordered:
 
-```bash
-echo "  Stopping companion processes (SIGINT, then SIGKILL after 2 s)..."
-for pid in "${COMPANION_PIDS[@]}"; do
-    kill -SIGINT "$pid" 2>/dev/null || true
-done
-sleep 2
-for pid in "${COMPANION_PIDS[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then kill -SIGKILL "$pid" 2>/dev/null || true; fi
-done
-sleep 1   # filesystem flush window
+1. **Process-liveness checks FIRST**, while processes are still running, so `pgrep -f build/bin/<name>` actually finds them.
+2. **THEN** graceful shutdown — SIGINT all companion PIDs, sleep 2 s for spdlog to flush on signal, SIGKILL any stragglers, sleep 1 s for filesystem sync.
+3. **THEN** `cat *.log > combined.log` — captures complete logs including the post-WP6 RTL/LAND lines.
+4. THEN log_contains / log_must_not_contain / UE5-RPC / voxel-on-target checks.
 
-COMBINED_LOG="${SCENARIO_LOG_DIR}/combined.log"
-cat "${SCENARIO_LOG_DIR}"/*.log > "$COMBINED_LOG" 2>/dev/null || true
-```
+The existing `cleanup_scenario` trap still runs at script exit; double-kill is idempotent.
 
-This gives every process 2 s to handle SIGINT (spdlog flushes on signal), then SIGKILL anything still alive, then 1 s for filesystem sync — then cat captures complete logs.  The existing `cleanup_scenario` trap still runs at script exit; double-kill is idempotent.
+*Scenario timeout (`config/scenarios/33_non_coco_obstacles.json`):*
 
-**Found by:** Iterative debug session 2026-05-05 — first run after switching from `CosysGroundTruthRadarBackend` to `CosysEchoBackend` produced 587 cube collisions despite zero changes to the HD-map.  Direct A/B comparison of the two runs (same scenario JSON, same WPs, same inflation, same Echo/depth/segmentation; only radar backend differs) made the centre-point-vs-surface-point coverage gap visible.  Subsequent run with `radius_m=7.5` had drone pass cleanly (zero collisions, mission complete + RTL fired in mission_planner.log) but runner still mis-reported FAIL — pinpointed the cat-vs-flush race by comparing `combined.log` last entry to `mission_planner.log` last entry.
+Bumped `timeout_s` 180 → 240 s.  Path budget for east detour: ~150 m flight at 2 m/s = 75 s + 2-3 STUCK recoveries (~30 s) + RTL approach (~15 s) + LAND (~10 s) + pre-flight + takeoff (~30 s) ≈ 160 s typical, 240 s gives margin.
+
+**Found by:** Iterative debug session 2026-05-05 with five runs in sequence:
+
+1. `2026-05-05_152100` — Echo radar replaced ground-truth oracle → 587 cube corner collisions (revealed inscribed-vs-circumscribed cylinder bug).
+2. `2026-05-05_153302` — `radius_m=7.5` applied → zero cube collisions, drone reached WP6, but runner reported FAIL because cat-vs-flush race truncated the `Mission complete` line out of combined.log.
+3. `2026-05-05_154301` — added pre-cat graceful shutdown → fixed cat-vs-flush, but mission timed out at 180 s (drone reached WP6 but ran out of time before RTL).
+4. `2026-05-05_154924` — bumped timeout 180 → 240 s → mission ran to completion (Mission complete + RTL → LAND in mission_planner.log AND combined.log), but runner still reported `_FAIL` because process-liveness checks ran AFTER the early-kill (we asked "is mission_planner alive?" two seconds after we killed it).
+5. After re-ordering Phase 6 (alive-check before kill) → all 26 checks PASS, run dir tagged `_PASS`.
 
 **Regression test:** `./tests/run_scenario_cosys.sh 33_non_coco_obstacles.json --gui` against live Cosys-AirSim Blocks-scene UE5 must:
-- Have zero `collision #2+` entries in `collisions.log` (only the unavoidable Ground startup touch is allowed)
-- `combined.log` must contain `[Planner] Mission complete` (verifies the runner cat-vs-flush fix)
-- Drone should take the EAST detour (E≥27 corridor) since the now-properly-sized cylinders block the west corridor (E≤2).
+
+- Have zero `collision #2+` entries in `collisions.log` for any cube/wall/pillar/BP_PIPCamera (only the unavoidable Ground startup touch is allowed)
+- `combined.log` must contain `[Planner] Mission complete` and `[FSM] RTL → LAND` (verifies the cat-vs-flush fix)
+- All 7 process-liveness checks pass (verifies the alive-check-before-kill ordering)
+- Drone takes the EAST detour (E ≥ 27 corridor) since circumscribed cylinders block the west corridor (E ≤ 2)
+- Run dir tagged `_PASS`, runner reports 26/26 checks
 
 **Follow-up notes:**
 - Box-shaped HD-map static obstacles (rather than circles) would be the architecturally correct fix — would give exact representation instead of circumscribed-circle approximation.  Filed as a follow-up improvement; not blocking this scenario.
