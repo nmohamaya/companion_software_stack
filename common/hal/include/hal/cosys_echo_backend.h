@@ -305,16 +305,28 @@ private:
                 }
 
                 const uint64_t scan = scan_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
+                // Issue #705 — denser logging.  Was every 200 scans (= 10 s);
+                // now every 20 scans (= 1 s) so we can see real emission rate
+                // when debugging Echo signal density.  Plus a one-shot loud
+                // log on first non-zero emission so we know exactly when Echo
+                // starts producing returns vs. being silent on takeoff pose.
                 if (scan == 1) {
                     DRONE_LOG_INFO(
                         "[CosysEcho] First scan: {} raw → {} in FOV ({} dropped on range), "
                         "{} unique bins → {} emitted ({} skipped by name filter)",
                         raw, in_fov, dropped_range, bins.size(), list.num_detections,
                         skipped_filter);
-                } else if (scan % 200 == 0) {
+                } else if (raw > 0 && !first_nonzero_logged_) {
                     DRONE_LOG_INFO(
-                        "[CosysEcho] scan #{}: {} raw → {} in FOV → {} bins → {} emitted",
-                        scan, raw, in_fov, bins.size(), list.num_detections);
+                        "[CosysEcho] First NON-ZERO scan #{}: {} raw → {} in FOV → "
+                        "{} bins → {} emitted ({} skipped)",
+                        scan, raw, in_fov, bins.size(), list.num_detections, skipped_filter);
+                    first_nonzero_logged_ = true;
+                } else if (scan % 20 == 0) {
+                    DRONE_LOG_INFO(
+                        "[CosysEcho] scan #{}: {} raw → {} in FOV → {} bins → {} emitted "
+                        "({} skipped)",
+                        scan, raw, in_fov, bins.size(), list.num_detections, skipped_filter);
                 }
             } catch (const std::exception& e) {
                 DRONE_LOG_WARN("[CosysEcho] RPC error: {}", e.what());
@@ -376,6 +388,7 @@ private:
     drone::ipc::RadarDetectionList cached_detections_{};
     std::atomic<bool>              active_{false};
     std::atomic<uint64_t>          scan_count_{0};
+    bool                           first_nonzero_logged_ = false;
     std::thread                    poll_thread_;
 };
 
