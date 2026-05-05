@@ -1019,12 +1019,28 @@ check_deadline
 echo ""
 echo "Phase 6: Verification..."
 
-# Issue #705 follow-up — gracefully stop companion processes BEFORE building
-# combined.log so the cat captures the final Mission-complete / RTL → LAND
-# log lines.  Run 2026-05-05_153302 had the cat fire ~2 s before
-# mission_planner finished writing "Mission complete — RTL", making the
-# runner spuriously report `_FAIL` despite zero collisions and full
-# waypoint progression.
+# Issue #705 follow-up — process liveness checks must run BEFORE the
+# graceful shutdown that flushes process logs into combined.log.
+# Otherwise we kill our own processes and then ask "is process N alive?"
+# (it isn't — we just killed it).  Run 2026-05-05_154924 had the
+# pass-criteria log_contains/log_must_not_contain checks all PASS but
+# 7 process-alive checks fail because of this ordering bug.
+echo "Process liveness checks (run before graceful shutdown):"
+while read -r proc; do
+    [[ -z "$proc" ]] && continue
+    if pgrep -f "build/bin/${proc}" > /dev/null 2>&1; then
+        check "Process alive: ${proc}" 0
+    else
+        check "Process NOT alive: ${proc}" 1
+    fi
+done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.processes_alive")
+echo ""
+
+# NOW gracefully stop companion processes so the cat captures the final
+# Mission-complete / RTL → LAND log lines.  Run 2026-05-05_153302 had
+# the cat fire ~2 s before mission_planner finished writing "Mission
+# complete — RTL", making the runner spuriously report `_FAIL` despite
+# zero collisions and full waypoint progression.
 echo "  Stopping companion processes (SIGINT, then SIGKILL after 2 s)..."
 for pid in "${COMPANION_PIDS[@]}"; do
     kill -SIGINT "$pid" 2>/dev/null || true
@@ -1085,17 +1101,9 @@ while read -r pattern; do
 done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.log_must_not_contain")
 
 echo ""
-echo "Process liveness checks:"
-while read -r proc; do
-    [[ -z "$proc" ]] && continue
-    if pgrep -f "build/bin/${proc}" > /dev/null 2>&1; then
-        check "Process alive: ${proc}" 0
-    else
-        check "Process NOT alive: ${proc}" 1
-    fi
-done < <(json_get_array "$SCENARIO_FILE" "pass_criteria.processes_alive")
-
-echo ""
+# Process-liveness checks moved to BEFORE the graceful shutdown above
+# (Issue #705 follow-up — we were killing our own processes then asking
+# whether they're alive).
 echo "UE5 / RPC checks:"
 if kill -0 "$UE5_PID" 2>/dev/null; then
     check "Cosys-AirSim (UE5) still running" 0
