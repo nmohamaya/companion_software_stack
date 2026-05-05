@@ -118,7 +118,17 @@ while [[ $# -gt 0 ]]; do
         --verbose)      VERBOSE=true ;;
         --gui)          GUI=true ;;
         --json-logs)    JSON_LOGS="--json-logs" ;;
-        --env)          UE5_ENV="$2"; shift ;;
+        --env)
+            # Allow only [A-Za-z0-9_-] in env names — avoids ../ path
+            # traversal in find_ue5_binary(), which interpolates UE5_ENV
+            # into candidate path arrays (PR #704 security review).
+            UE5_ENV_RAW="$2"
+            UE5_ENV=$(printf '%s' "$UE5_ENV_RAW" | tr -cd 'A-Za-z0-9_-')
+            if [[ "$UE5_ENV" != "$UE5_ENV_RAW" ]]; then
+                echo -e "${RED}ERROR: --env contains invalid characters; allowed: [A-Za-z0-9_-]${NC}" >&2
+                exit 2
+            fi
+            shift ;;
         --ipc)
             IPC_BACKEND="$2"
             if [[ "$IPC_BACKEND" != "shm" && "$IPC_BACKEND" != "zenoh" ]]; then
@@ -554,13 +564,27 @@ fi
 # share the same hardened check (PR #628 review-code-quality P2: deduplication;
 # review-security P3: path-traversal + json-parse hardening).
 MISSING_MODELS=$(preflight_model_paths "$MERGED_CONFIG" "$PROJECT_DIR")
-if [[ -n "$MISSING_MODELS" ]]; then
-    echo -e "  ${RED}✗ Preflight failed: missing model file(s) referenced by scenario config${NC}" >&2
+PREFLIGHT_RC=$?
+# Three exit-code branches (PR #704 security + test-scenario reviews —
+# previously the script always returned 0 and parse-errors were
+# misclassified as "missing model"):
+#   0 — clean: no missing files, no path-traversal
+#   1 — missing files OR path-traversal entries (stdout lists them)
+#   2 — JSON parse error (stderr already printed)
+if [[ $PREFLIGHT_RC -eq 2 ]]; then
+    echo -e "  ${RED}✗ Preflight failed: scenario config could not be parsed${NC}" >&2
+    SCENARIO_LOG_DIR=$(abort_run_dir "$SCENARIO_LOG_DIR")
+    exit 1
+fi
+if [[ $PREFLIGHT_RC -ne 0 ]]; then
+    echo -e "  ${RED}✗ Preflight failed: missing model file(s) or path-traversal entry referenced by scenario config${NC}" >&2
     echo "" >&2
     echo "$MISSING_MODELS" | while IFS=$'\t' read -r key path; do
         echo "    config key:  $key" >&2
         echo "    expected at: $path" >&2
         case "$path" in
+            *escapes\ project\ root*)
+                echo "    → SECURITY: model path resolves outside project tree — refusing" >&2 ;;
             *yolov8n*)             echo "    → run: bash models/download_yolov8n.sh"          >&2 ;;
             *yolov8s*)             echo "    → run: bash models/download_yolov8n.sh # use 'n' variant" >&2 ;;
             *yolov8*visdrone*)     echo "    → run: bash models/download_yolov8n_visdrone.sh"  >&2 ;;
@@ -866,46 +890,50 @@ rm -f /dev/shm/zenoh_shm_* /dev/shm/drone_* \
       /dev/shm/system_health /dev/shm/fc_commands \
       /dev/shm/mission_upload /dev/shm/fault_overrides 2>/dev/null || true
 
-CONFIG_ARG="--config ${MERGED_CONFIG}"
+# Array form preserves quoting on the merged-config path — a path with
+# spaces (e.g. a custom --log-dir with whitespace) was previously
+# word-split into separate arguments, leaving each binary with a
+# malformed --config (PR #704 security review).
+CONFIG_ARGS=("--config" "${MERGED_CONFIG}")
 
 echo "  [1/7] system_monitor"
-"${BIN_DIR}/system_monitor" ${CONFIG_ARG} \
+"${BIN_DIR}/system_monitor" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/system_monitor.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [2/7] video_capture"
-"${BIN_DIR}/video_capture" ${CONFIG_ARG} \
+"${BIN_DIR}/video_capture" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/video_capture.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [3/7] comms"
-"${BIN_DIR}/comms" ${CONFIG_ARG} \
+"${BIN_DIR}/comms" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/comms.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 1
 
 echo "  [4/7] perception"
-"${BIN_DIR}/perception" ${CONFIG_ARG} \
+"${BIN_DIR}/perception" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/perception.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [5/7] slam_vio_nav"
-"${BIN_DIR}/slam_vio_nav" ${CONFIG_ARG} \
+"${BIN_DIR}/slam_vio_nav" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/slam_vio_nav.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [6/7] mission_planner"
-"${BIN_DIR}/mission_planner" ${CONFIG_ARG} \
+"${BIN_DIR}/mission_planner" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/mission_planner.log" 2>&1 &
 COMPANION_PIDS+=($!)
 sleep 0.3
 
 echo "  [7/7] payload_manager"
-"${BIN_DIR}/payload_manager" ${CONFIG_ARG} \
+"${BIN_DIR}/payload_manager" "${CONFIG_ARGS[@]}" \
     > "${SCENARIO_LOG_DIR}/payload_manager.log" 2>&1 &
 COMPANION_PIDS+=($!)
 
@@ -1093,7 +1121,11 @@ while read -r pattern; do
     if grep -qaiF "$pattern" "$COMBINED_LOG" 2>/dev/null; then
         check "Log unexpectedly contains: ${pattern}" 1
         if [[ "$VERBOSE" == "true" ]]; then
-            grep -ai "$pattern" "$COMBINED_LOG" | head -1 | sed 's/^/    /'
+            # -F here too — keep the diagnostic grep consistent with the
+            # decision grep above so a pattern containing regex meta-
+            # characters ([, *, .) doesn't print a different match (PR
+            # #704 test-scenario review).
+            grep -aiF "$pattern" "$COMBINED_LOG" | head -1 | sed 's/^/    /'
         fi
     else
         check "Log correctly does NOT contain: ${pattern}" 0
@@ -1124,7 +1156,7 @@ if [[ -f "$VOXEL_TRACE" && -x "$VOXEL_CHECK" && -n "$SCENE_FILE" && -f "$SCENE_F
     # Pull threshold from scenario JSON if present; otherwise use the default.
     VOX_MIN_RATIO=$(json_get "$SCENARIO_FILE" "pass_criteria.voxel_on_target_ratio_min")
     VOX_RADIUS=$(json_get "$SCENARIO_FILE" "pass_criteria.voxel_on_target_radius_m")
-    VOX_ARGS=(--trace "$VOXEL_TRACE" --scene "$SCENE_FILE")
+    VOX_ARGS=(--trace "$VOXEL_TRACE" --scene "$SCENE_FILE" --scenario "$SCENARIO_FILE")
     [[ -n "$VOX_MIN_RATIO" && "$VOX_MIN_RATIO" != "None" ]] && VOX_ARGS+=(--min-ratio "$VOX_MIN_RATIO")
     [[ -n "$VOX_RADIUS"    && "$VOX_RADIUS"    != "None" ]] && VOX_ARGS+=(--radius-m "$VOX_RADIUS")
     if python3 "$VOXEL_CHECK" "${VOX_ARGS[@]}" 2>&1 | tee "${SCENARIO_LOG_DIR}/voxel_on_target.log"; then

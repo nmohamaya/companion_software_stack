@@ -67,10 +67,42 @@ def iter_voxels(trace_path: Path):
                     yield float(v[0]), float(v[1]), float(v[2])
 
 
+def load_scenario_static_obstacles(scenario_path: Path) -> list[tuple[float, float, str]]:
+    """Load scenario.json -> mission_planner.static_obstacles[] as XY targets.
+
+    HD-map scenarios (no spawned scene objects, all obstacles defined as
+    cylinders in static_obstacles) need an alternative source for the
+    voxel-on-target regression check.  Each static_obstacle entry has
+    {x, y, radius_m, ...} — we use (x, y) as the centre.  The cylinder
+    radius is added to --radius-m at call time so a tight radius still
+    catches voxels landing on the obstacle surface.
+    """
+    try:
+        with scenario_path.open() as f:
+            sc = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    out = []
+    obs = sc.get("mission_planner", {}).get("static_obstacles", [])
+    for o in obs:
+        if not isinstance(o, dict):
+            continue
+        if "x" in o and "y" in o:
+            label = o.get("name") or o.get("label") or "static_obstacle"
+            out.append((float(o["x"]), float(o["y"]), str(label),
+                        float(o.get("radius_m", 0.0))))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--trace", required=True, type=Path, help="path_a_voxel_trace.jsonl from a scenario run")
     ap.add_argument("--scene", required=True, type=Path, help="scene JSON (e.g. config/scenes/cosys_static.json)")
+    ap.add_argument("--scenario", type=Path, default=None,
+                    help="optional scenario JSON; if --scene has no spawned objects, "
+                         "fall back to scenario.mission_planner.static_obstacles[] so "
+                         "HD-map scenarios still get a voxel-on-target regression check "
+                         "(PR #704 test-scenario review).")
     ap.add_argument("--radius-m", type=float, default=3.0, help="XY radius around each scene object counted as 'on target'")
     ap.add_argument("--min-ratio", type=float, default=0.20, help="minimum fraction of voxels that must land within --radius-m")
     ap.add_argument("--min-voxels", type=int, default=100, help="skip the check if fewer total voxels than this (run too short to assess)")
@@ -84,23 +116,33 @@ def main() -> int:
         return 2
 
     scene_xy = load_scene_xy(args.scene)
-    if not scene_xy:
-        # Issue #698 — scenarios that use the live UE5 scene's existing
-        # geometry as the obstacle field (no spawned objects in the scene
-        # JSON) have nothing to check against here.  This is a legitimate
-        # configuration (e.g. scenario 33 uses Blocks default cubes via
-        # HD-map static_obstacles instead of spawned scene objects), not
-        # an error.  Exit 0 so the runner doesn't flag a spurious FAIL.
-        print(f"[check_voxel_on_target] SKIP: scene {args.scene} has no spawned "
-              f"objects — nothing to check against (likely an HD-map-based scenario)")
+    # `targets` is a normalised list of (x, y, label, extra_radius_m).
+    # For spawned scene objects extra_radius_m=0; for HD-map static
+    # obstacles we use the cylinder radius so a 3-m default still catches
+    # surface returns.
+    targets: list[tuple[float, float, str, float]] = [(x, y, n, 0.0) for (x, y, n) in scene_xy]
+    if not targets and args.scenario is not None and args.scenario.exists():
+        targets = load_scenario_static_obstacles(args.scenario)
+        if targets:
+            print(f"[check_voxel_on_target] HD-map fallback: using {len(targets)} static_obstacles "
+                  f"from {args.scenario}")
+    if not targets:
+        # Truly nothing to check — both scene and scenario fallback empty.
+        # Exit 0 so the runner doesn't flag a spurious FAIL on scenarios
+        # that legitimately don't spawn anything (e.g. fault-injection
+        # tests that just need the planner to ARM and hover).
+        print(f"[check_voxel_on_target] SKIP: scene {args.scene} has no spawned objects "
+              f"and no scenario static_obstacles fallback available — nothing to check against")
         return 0
 
-    r2 = args.radius_m * args.radius_m
+    base_r2 = args.radius_m * args.radius_m
     total = 0
     on_target = 0
     for vx, vy, _vz in iter_voxels(args.trace):
         total += 1
-        for (ox, oy, _name) in scene_xy:
+        for (ox, oy, _name, extra_r) in targets:
+            r = args.radius_m + extra_r  # cylinder surface gets the cylinder radius added
+            r2 = r * r if extra_r > 0.0 else base_r2
             dx = vx - ox
             dy = vy - oy
             if dx * dx + dy * dy <= r2:
@@ -119,9 +161,10 @@ def main() -> int:
     ratio = on_target / total
     verdict = "PASS" if ratio >= args.min_ratio else "FAIL"
     print(f"[check_voxel_on_target] {verdict}: {on_target}/{total} voxels "
-          f"({ratio * 100:.1f} %) landed within {args.radius_m:.1f} m XY of a scene object "
+          f"({ratio * 100:.1f} %) landed within {args.radius_m:.1f} m XY of a target "
           f"(threshold {args.min_ratio * 100:.0f} %)")
-    print(f"[check_voxel_on_target] scene objects checked: {len(scene_xy)} from {args.scene}")
+    print(f"[check_voxel_on_target] targets checked: {len(targets)} ("
+          f"{len(scene_xy)} scene objects, {len(targets) - len(scene_xy)} HD-map fallback)")
     if verdict == "FAIL":
         print(f"[check_voxel_on_target] Fix #55 regression indicator — see PR #614 / Issue #612", file=sys.stderr)
         return 1

@@ -95,7 +95,17 @@ if scenario_cfg_path.exists():
     mp = cfg.get("config_overrides", {}).get("mission_planner", {})
     og = mp.get("occupancy_grid", {})
     resolution_m = float(og.get("resolution_m", resolution_m))
-    promotion_hits = int(og.get("promotion_hits", promotion_hits))
+    # Voxel pipeline uses `voxel_input.promotion_hits` (default 3 for PATH A);
+    # the top-level `promotion_hits` is the *detected-objects* gate (default 10).
+    # Earlier this overlay incorrectly read the detected-objects threshold,
+    # so the orange "promoted" cells in the PNG didn't match what
+    # insert_voxels() actually cements.  Read the voxel-input key first
+    # (matches the path the trace records), fall back to top-level
+    # `promotion_hits` only if voxel_input is absent (Copilot review on
+    # PR #704).
+    voxel_input_cfg = og.get("voxel_input", {})
+    promotion_hits = int(voxel_input_cfg.get("promotion_hits",
+                                             og.get("promotion_hits", promotion_hits)))
     inflation_m = float(og.get("inflation_radius_m", inflation_m))
     vi = og.get("voxel_input", {})
     min_confidence = float(vi.get("min_confidence", min_confidence))
@@ -112,22 +122,31 @@ hits_2d = defaultdict(int)             # (cn, ce) -> hit count (any conf, any z)
 hits_2d_conf = defaultdict(int)        # (cn, ce) -> hits passing min_conf
 trace = run / "path_a_voxel_trace.jsonl"
 total_voxels = 0
-with open(trace) as f:
-    for line in f:
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        for v in rec.get("voxels", []):
-            if len(v) < 5:
+# Existence guard: the runner now invokes this overlay for every Cosys
+# scenario, but not every scenario emits a PATH A trace (HD-map-only
+# tests, fault injection, etc.).  Without the guard `open()` raises
+# FileNotFoundError and the overlay aborts before drawing the cubes
+# and drone path that ARE available (Copilot review on PR #704).
+if trace.exists():
+    with open(trace) as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
                 continue
-            n, e, _z, _inst, conf = v[0], v[1], v[2], v[3], v[4]
-            cn = int(round(n / resolution_m))
-            ce = int(round(e / resolution_m))
-            hits_2d[(cn, ce)] += 1
-            if conf >= min_confidence:
-                hits_2d_conf[(cn, ce)] += 1
-            total_voxels += 1
+            for v in rec.get("voxels", []):
+                if len(v) < 5:
+                    continue
+                n, e, _z, _inst, conf = v[0], v[1], v[2], v[3], v[4]
+                cn = int(round(n / resolution_m))
+                ce = int(round(e / resolution_m))
+                hits_2d[(cn, ce)] += 1
+                if conf >= min_confidence:
+                    hits_2d_conf[(cn, ce)] += 1
+                total_voxels += 1
+else:
+    print(f"[planner_grid_overlay] {trace.name} not found — generating partial overlay "
+          f"(drone path + waypoints + scene cubes only)", file=sys.stderr)
 
 # Cells that would have been promoted: confident hits >= promotion_hits.
 promoted = {c for c, h in hits_2d_conf.items() if h >= promotion_hits}
@@ -284,13 +303,19 @@ ax.set_aspect("equal")
 ax.grid(alpha=0.3)
 ax.legend(handles=legend_handles, loc="upper left", fontsize=8)
 
-# Frame: cover cubes + drone + waypoints + promoted cells with margin.
+# Frame: cover drone + waypoints + promoted cells with margin.  Skip
+# cubes that were view-clipped above — re-adding the full DEFAULT_CUBES
+# inventory here pulls the limits back out to the full ±100 m Blocks
+# scene and undoes the mission-area clipping (Copilot review on PR
+# #704).
 xs = [d[1] for d in drone] + [w[1] for w in waypoints]
 ys = [d[0] for d in drone] + [w[0] for w in waypoints]
 for (cn, ce) in inflated:
     xs.append(ce * resolution_m)
     ys.append(cn * resolution_m)
 for n_min, n_max, e_min, e_max in DEFAULT_CUBES.values():
+    if not _bbox_overlaps(n_min, n_max, e_min, e_max, _view):
+        continue
     xs.extend([e_min, e_max])
     ys.extend([n_min, n_max])
 if xs and ys:

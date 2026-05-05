@@ -112,21 +112,40 @@ def horizontal_distance(a, b):
     return math.hypot(a["neu_x"] - b["neu_x"], a["neu_y"] - b["neu_y"])
 
 
+def obstacle_extent_m(obstacle) -> float:
+    """Approximate horizontal radius (m) of a default-scene actor.
+
+    Cosys/UE5 templates are ~1 m base meshes, so `scale.x` and `scale.y`
+    in the inventory map roughly to "metres of half-extent".  We take
+    half of the larger horizontal extent as a circumscribed-circle proxy
+    so a square cube isn't approximated as a point at its centre — that
+    was the original bug flagged on PR #704 (Copilot review): candidates
+    landed inside large-cube footprints because the gap was measured to
+    the cube's centre, ignoring the cube's edges.
+    """
+    sc = obstacle.get("scale") or [1.0, 1.0, 1.0]
+    sx = abs(float(sc[0])) if len(sc) > 0 else 1.0
+    sy = abs(float(sc[1])) if len(sc) > 1 else 1.0
+    return 0.5 * max(sx, sy)
+
+
 def propose_placement(inventory, min_gap_m: float = 8.0,
                       bbox=((-30.0, 30.0), (-30.0, 30.0))):
     """Find 5 obstacle slots at least min_gap_m from every default-scene actor
-    AND from each other, inside the bbox, on a corridor the drone can navigate.
+    (taking each actor's extents into account) AND from each other, inside
+    the bbox, on a corridor the drone can navigate.
 
     bbox = ((north_min, north_max), (east_min, east_max))
     """
     print(f"\nLooking for 5 spaced slots (≥{min_gap_m} m clearance) in "
           f"N=[{bbox[0][0]}, {bbox[0][1]}] × E=[{bbox[1][0]}, {bbox[1][1]}] ...")
 
-    # Inflate every default obstacle by min_gap_m to define a forbidden zone.
-    forbidden = inventory[:]
+    # Inflate every default obstacle by (min_gap_m + its half-extent) so
+    # a candidate inside the cube footprint isn't accepted just because
+    # the cube's centre is far enough away.
+    forbidden = [(d, obstacle_extent_m(d)) for d in inventory]
 
     # Candidate grid: 1 m steps inside the bbox at the drone's altitude (~5 m).
-    # Inventory positions are world-XY; we ignore Z for placement.
     candidates = []
     n_min, n_max = bbox[0]
     e_min, e_max = bbox[1]
@@ -138,9 +157,14 @@ def propose_placement(inventory, min_gap_m: float = 8.0,
             e += 1.0
         n += 1.0
 
-    # Filter candidates clear of all default obstacles.
-    clear = [c for c in candidates
-             if all(horizontal_distance(c, d) >= min_gap_m for d in forbidden)]
+    # Filter candidates clear of all default obstacles, accounting for extents.
+    def clear_of_all(c):
+        for d, half_extent in forbidden:
+            if horizontal_distance(c, d) - half_extent < min_gap_m:
+                return False
+        return True
+
+    clear = [c for c in candidates if clear_of_all(c)]
     print(f"  {len(clear)}/{len(candidates)} candidate cells clear of default scene")
     if not clear:
         return []
@@ -174,9 +198,14 @@ def propose_placement(inventory, min_gap_m: float = 8.0,
 
     print(f"  Selected {len(chosen)} obstacle slots:")
     for i, c in enumerate(chosen):
-        nearest_default = min((horizontal_distance(c, d), d["name"]) for d in forbidden)
+        # Report edge-distance (centre minus half-extent) so the printed
+        # number matches the gap actually enforced.
+        nearest_default = min(
+            (horizontal_distance(c, d) - half_extent, d["name"])
+            for d, half_extent in forbidden
+        )
         print(f"    slot {i + 1}: NEU=({c['neu_x']:.1f}, {c['neu_y']:.1f})  "
-              f"nearest default = {nearest_default[1]} at {nearest_default[0]:.1f} m")
+              f"nearest default = {nearest_default[1]} at {nearest_default[0]:.1f} m (edge)")
     return chosen
 
 

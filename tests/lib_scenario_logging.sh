@@ -1051,8 +1051,11 @@ try:
     with open(cfg_path) as f:
         cfg = json.load(f)
 except (OSError, json.JSONDecodeError) as e:
-    print(f"_parse_error\tcould not read {cfg_path}: {e}")
-    sys.exit(1)
+    # stderr — caller prints stdout for missing-paths; parse errors must
+    # not be misclassified as a missing file.  Distinct exit code so the
+    # bash side can branch.
+    print(f"PARSE_ERROR could not read {cfg_path}: {e}", file=sys.stderr)
+    sys.exit(2)
 
 missing = []
 def walk(obj, path=""):
@@ -1081,6 +1084,12 @@ def walk(obj, path=""):
 walk(cfg)
 for key, path in missing:
     print(f"{key}\t{path}")
-sys.exit(0 if not missing else 0)  # missing list is non-empty stdout; caller checks
+# Exit 0 only when nothing is missing AND no path-traversal entries were
+# flagged.  Caller checks both the non-zero exit AND parses stdout for
+# each offending key/path.  Previous behaviour (`sys.exit(0 if not
+# missing else 0)`) was a no-op tautology — path-traversal entries hit
+# the `[escapes project root]` branch and silently passed (PR #704
+# security review + test-scenario review independently flagged this).
+sys.exit(1 if missing else 0)
 PYEOF
 }
