@@ -20,13 +20,9 @@
 //     the whole detection.  Pass `default_unknown_action::Keep`.
 //
 //   - Dense-source backends (Segmentation: every pixel emits a "name") MUST
-//     treat unknown as DROP — a partial color map otherwise paints every
-//     unmapped pixel as an obstacle, which is an unsafe-by-default failure
-//     mode flagged in PR #704 review (Copilot inline + security audit).
-//     Pass `default_unknown_action::Drop`.
-//
-// Issue: PR #704 review (DRY, observed by review-code-quality, review-api-
-// contract, Copilot).
+//     treat unknown as DROP.  A partial color map otherwise paints every
+//     unmapped pixel as an obstacle — an unsafe-by-default failure mode on
+//     a flight-critical promotion path.  Pass `CosysNameFilterUnknown::Drop`.
 #pragma once
 
 #include "util/config.h"

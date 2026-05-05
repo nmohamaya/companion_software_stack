@@ -37,6 +37,7 @@
 #include "ipc/ipc_types.h"
 #include "planner/grid_cell.h"  // GridCell, GridCellHash
 #include "util/config.h"
+#include "util/config_keys.h"
 
 #include <Eigen/Geometry>
 
@@ -61,17 +62,24 @@ struct RadarFovConfig {
     float min_range_m{0.5f};
     float max_range_m{100.0f};
 
-    /// Read all fields from `<section>.fov_azimuth_rad`, etc.  Missing keys
-    /// keep the struct default — caller is responsible for validating that
-    /// the section exists in the active config.
+    /// Read all fields from `<section>.<canonical-subkey>`, where the
+    /// sub-keys are the central `cfg_key::hal::*` constants registered in
+    /// `common/util/include/util/config_keys.h`.  Missing keys keep the
+    /// struct default.  Use a configurable section so test harnesses can
+    /// load a custom block without trampling the production radar
+    /// section.
     [[nodiscard]] static RadarFovConfig from_cfg(const drone::Config& cfg,
                                                  std::string_view     section) {
         RadarFovConfig c;
         const std::string s(section);
-        c.fov_azimuth_rad   = cfg.get<float>(s + ".fov_azimuth_rad", c.fov_azimuth_rad);
-        c.fov_elevation_rad = cfg.get<float>(s + ".fov_elevation_rad", c.fov_elevation_rad);
-        c.min_range_m       = cfg.get<float>(s + ".min_range_m", c.min_range_m);
-        c.max_range_m       = cfg.get<float>(s + ".max_range_m", c.max_range_m);
+        c.fov_azimuth_rad   = cfg.get<float>(s + drone::cfg_key::hal::FOV_AZIMUTH_RAD,
+                                             c.fov_azimuth_rad);
+        c.fov_elevation_rad = cfg.get<float>(s + drone::cfg_key::hal::FOV_ELEVATION_RAD,
+                                             c.fov_elevation_rad);
+        c.min_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MIN_RANGE_M,
+                                             c.min_range_m);
+        c.max_range_m       = cfg.get<float>(s + drone::cfg_key::hal::MAX_RANGE_M,
+                                             c.max_range_m);
         return c;
     }
 };
@@ -113,22 +121,40 @@ struct CrossVetoPolicy {
     /// default per research note §7.
     uint64_t dynamic_age_cap_ns{30ULL * 1000ULL * 1000ULL * 1000ULL};
 
-    /// Read all fields from `<section>.short_range_m`, etc.
+    /// Read all fields from the canonical config keys.  Units match the
+    /// scenario JSON convention (and `cfg_key::mission_planner::occupancy_grid::cross_veto::*`):
+    /// `radar_max_staleness_ms` (ms), `fov_residency_promote_s` (s),
+    /// `dynamic_age_cap_s` (s).  Internally we store all timestamps in ns;
+    /// the conversion happens here.  Negative values are clamped to 0
+    /// before the signed→unsigned cast (CLAUDE.md integer-conversion rule).
+    ///
+    /// `section` is accepted for API symmetry with `RadarFovConfig::from_cfg`
+    /// but ignored — the cross_veto keys are at a fixed canonical path.
     [[nodiscard]] static CrossVetoPolicy from_cfg(const drone::Config& cfg,
-                                                  std::string_view     section) {
+                                                  std::string_view /*section*/) {
+        namespace ck = drone::cfg_key::mission_planner::occupancy_grid::cross_veto;
         CrossVetoPolicy p;
-        const std::string s(section);
-        p.short_range_m = cfg.get<float>(s + ".short_range_m", p.short_range_m);
-        p.radar_max_staleness_ns = static_cast<uint64_t>(
-            cfg.get<int64_t>(s + ".radar_max_staleness_ns",
-                             static_cast<int64_t>(p.radar_max_staleness_ns)));
-        p.min_gate_radius_m = cfg.get<float>(s + ".min_gate_radius_m", p.min_gate_radius_m);
-        p.fov_residency_promote_ns = static_cast<uint64_t>(
-            cfg.get<int64_t>(s + ".fov_residency_promote_ns",
-                             static_cast<int64_t>(p.fov_residency_promote_ns)));
-        p.dynamic_age_cap_ns = static_cast<uint64_t>(
-            cfg.get<int64_t>(s + ".dynamic_age_cap_ns",
-                             static_cast<int64_t>(p.dynamic_age_cap_ns)));
+        p.short_range_m = cfg.get<float>(ck::SHORT_RANGE_M, p.short_range_m);
+        p.min_gate_radius_m = cfg.get<float>(ck::GATE_MIN_RADIUS_M, p.min_gate_radius_m);
+
+        const auto staleness_ms = cfg.get<int>(
+            ck::RADAR_MAX_STALENESS_MS,
+            static_cast<int>(p.radar_max_staleness_ns / 1'000'000ULL));
+        p.radar_max_staleness_ns =
+            static_cast<uint64_t>(std::max(0, staleness_ms)) * 1'000'000ULL;
+
+        const auto residency_s = cfg.get<float>(
+            ck::FOV_RESIDENCY_PROMOTE_S,
+            static_cast<float>(p.fov_residency_promote_ns) / 1.0e9f);
+        p.fov_residency_promote_ns =
+            static_cast<uint64_t>(std::max(0.0f, residency_s) * 1.0e9f);
+
+        const auto cap_s = cfg.get<float>(
+            ck::DYNAMIC_AGE_CAP_S,
+            static_cast<float>(p.dynamic_age_cap_ns) / 1.0e9f);
+        p.dynamic_age_cap_ns =
+            static_cast<uint64_t>(std::max(0.0f, cap_s) * 1.0e9f);
+
         return p;
     }
 };

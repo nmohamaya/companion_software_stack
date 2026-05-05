@@ -552,13 +552,24 @@ int main(int argc, char* argv[]) {
     // not pay the per-tick drain cost of a feature that is inactive.
     // (Copilot review flagged the unconditional subscription on PR #704.)
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>> radar_dets_sub;
+    bool                                                                      radar_sub_failed = false;
     if (cross_veto_enabled) {
         radar_dets_sub = ctx.bus.subscribe<drone::ipc::RadarDetectionList>(
             drone::ipc::topics::RADAR_DETECTIONS);
         if (!radar_dets_sub) {
-            DRONE_LOG_WARN("[CrossVeto] /radar_detections subscription failed — gate will see "
-                           "stale-radar forever and defer all distant promotions; check IPC bus "
-                           "and radar publisher health");
+            // Without a radar subscription the gate's `radar_initialized_`
+            // stays false forever, every distant voxel promotion defers,
+            // and the cross-veto gate is silently disabled.  Promote to
+            // ERROR (instead of WARN) so the operator log surfaces the
+            // failure during startup-review, and OR the radar-loss fault
+            // bit into `status.active_faults` each planner tick below
+            // so P7 / GCS see the cross-veto gate is operating blind.
+            radar_sub_failed = true;
+            DRONE_LOG_ERROR(
+                "[CrossVeto] /radar_detections subscription FAILED — gate disabled, all "
+                "distant PATH A promotions will defer.  Setting FAULT_PERCEPTION_DEAD on "
+                "every planner tick so operator + GCS see the degraded state.  Check IPC "
+                "bus and radar publisher health.");
         }
     }
 
@@ -876,6 +887,13 @@ int main(int argc, char* argv[]) {
         status.active_faults = fault.active_faults;
         if (state_tick.flight_state().stuck_fault_active) {
             status.active_faults |= drone::ipc::FaultType::FAULT_STUCK;
+        }
+        // Cross-veto gate operating blind because /radar_detections never
+        // came up: surface as FAULT_PERCEPTION_DEAD so the system-health
+        // monitor + GCS see the degraded state instead of treating the
+        // run as nominal while every distant voxel defers.
+        if (radar_sub_failed) {
+            status.active_faults |= drone::ipc::FaultType::FAULT_PERCEPTION_DEAD;
         }
         status.fault_action = static_cast<uint8_t>(fault.recommended_action);
         status_pub->publish(status);
