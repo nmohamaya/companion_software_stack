@@ -1019,6 +1019,26 @@ check_deadline
 echo ""
 echo "Phase 6: Verification..."
 
+# Issue #705 follow-up — gracefully stop companion processes BEFORE building
+# combined.log so the cat captures the final Mission-complete / RTL → LAND
+# log lines.  Run 2026-05-05_153302 had the cat fire ~2 s before
+# mission_planner finished writing "Mission complete — RTL", making the
+# runner spuriously report `_FAIL` despite zero collisions and full
+# waypoint progression.
+echo "  Stopping companion processes (SIGINT, then SIGKILL after 2 s)..."
+for pid in "${COMPANION_PIDS[@]}"; do
+    kill -SIGINT "$pid" 2>/dev/null || true
+done
+sleep 2
+for pid in "${COMPANION_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -SIGKILL "$pid" 2>/dev/null || true
+    fi
+done
+# Brief flush window for any in-flight log writes (spdlog flushes on signal,
+# but the file system may not have synced yet).
+sleep 1
+
 COMBINED_LOG="${SCENARIO_LOG_DIR}/combined.log"
 cat "${SCENARIO_LOG_DIR}"/*.log > "$COMBINED_LOG" 2>/dev/null || true
 

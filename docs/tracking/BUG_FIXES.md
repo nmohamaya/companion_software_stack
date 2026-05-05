@@ -914,6 +914,85 @@ cam_pose.linear() = q.toRotationMatrix() * R_body_from_cam;
 
 ---
 
+### Fix #505 — HD-Map Cylinders Inscribed Square Cubes Instead of Circumscribing Them; Runner Generated combined.log Before Process Flush (Issue #705)
+
+**Date:** 2026-05-05
+**Severity:** High (latent map error masked by previous radar backend; surfaced as 587 cube collisions when we switched to physically-realistic radar)
+**Files:** `config/scenarios/33_non_coco_obstacles.json`, `tests/run_scenario_cosys.sh`
+
+**What:** Two related bugs found in a single debug session, both surfaced when we switched scenario 33's radar from `CosysGroundTruthRadarBackend` to `CosysEchoBackend` (Cosys's physical FMCW radar simulator):
+
+1. **HD-map static cylinders inscribed the square cube footprints instead of circumscribing them.**  Each 10×10 m cube footprint was modelled as a cylinder with `radius_m=5.25` (the inscribed circle that *fits inside* the square).  This left the four corners of each cube — sticking out 1.8 m beyond the cylinder edge — unprotected.  Run 2026-05-05_152100 collided **587 times** with `TemplateCube_Rounded_62`'s SW corner because D* Lite routed the drone through what the planner thought was free space (the corner gap), but was solid cube wall.
+
+2. **Runner's `combined.log` was generated ~2 s before mission_planner finished writing.**  Phase 6's `cat *.log > combined.log` (in `tests/run_scenario_cosys.sh`) ran while companion processes were still active.  The final `[Planner] Mission complete — RTL` and `[FSM] RTL → LAND` lines were emitted AFTER the cat snapshot.  Pass criteria checks therefore failed `Log contains: [Planner] Mission complete` even when the mission completed cleanly — runner reported `_FAIL` despite a perfect run.
+
+**Error messages (searchable):**
+- `collision #N with 'TemplateCube_Rounded_62' (id=0) at (35.X, 4.1, -5.X)` — repeated 587×
+- `[FSM] STUCK count 4 exceeded cap 3 — escalating to LOITER`
+- `[Planner] Planner: no obstacle-free path — hovering in place`
+- Runner output: `[FAIL] Log missing: [Planner] Mission complete` (despite log clearly containing it on disk)
+
+**Reproduce (for the cylinder geometry bug):**
+1. Check out commit `f88a11b` (Echo backend live, cylinders still r=5.25).
+2. Launch UE5 Blocks scene + Cosys plugin.
+3. `./tests/run_scenario_cosys.sh 33_non_coco_obstacles.json --gui`
+4. Observe: drone takes west detour (E≤4 corridor), grazes TC_62 SW corner, ~600 cube collisions, FSM escalates to LOITER.
+
+**Why (Root Cause):**
+
+**Cylinder geometry:**
+- 10×10 m square has half-extent 5 m, so its **inscribed** circle (largest circle that fits inside the square) has radius = 5 m, and its **circumscribed** circle (smallest circle that contains the square) has radius = 5√2 ≈ 7.07 m.
+- The original `radius_m=5.25` was a 5% margin on the *inscribed* circle — which leaves the four corners of the square sticking out by 1.8 m at the diagonals.
+- With `inflation_radius_m=1.5` the planner's forbidden halo is 6.75 m, still inside the 7.07 m corner reach.
+- The previous PASS run (`2026-05-04_231328`) was using `CosysGroundTruthRadarBackend`, which emits one detection per visible cube **at the cube's centre**.  The UKF inflates that into a *dynamic*-grid halo around the centre, which happens to fill in the corner gaps the static cylinder misses.  The PASS therefore wasn't validating the static map — it was leaning on the radar dynamic layer to backfill the static layer's geometric error.
+- When we switched to `CosysEchoBackend` (physically-realistic surface returns instead of centre-point oracles), radar tracks formed thin bands along visible cube faces, NOT around object centres — the corner gap was no longer backfilled, and D* Lite routed straight through it.
+
+**Runner combined.log race:**
+- `tests/run_scenario_cosys.sh` Phase 6 ran `cat ${SCENARIO_LOG_DIR}/*.log > combined.log` immediately after Phase 5's collection sleep ended, but BEFORE companion processes were stopped.  Companion processes (especially mission_planner) continued writing their per-process logs after the cat snapshot.  Final mission-complete / RTL / LAND lines never made it into the combined log used for pass-criteria grep.
+- Symptom: `mission_planner.log` last entry at 15:36:31; `combined.log` last `mission_planner` line at 15:36:24 — 7 s of post-cat activity missed.
+
+**How (Fix):**
+
+*Cylinder geometry (`config/scenarios/33_non_coco_obstacles.json`):*
+
+Bumped `radius_m` from 5.25 → **7.5** for all four 10×10 m cube quadrants.  7.5 m = 5√2 × 1.06 to circumscribe the full square footprint with 6 % margin; combined with the 1.5 m planner inflation gives a 9 m forbidden halo, well past the 7.07 m corner reach.  The four halos still overlap to cover the full 20×20 m wall.  Now the static layer alone covers the obstacle regardless of which radar backend backfills, AND prepares for the real-hardware case where there's no friendly centre-point oracle.
+
+The `_comment_static_obstacles` was rewritten to call out the inscribed-vs-circumscribed reasoning so future scenario authors don't repeat the bug.
+
+*Runner combined.log race (`tests/run_scenario_cosys.sh`):*
+
+Added an explicit graceful-shutdown sequence at the start of Phase 6, BEFORE the cat:
+
+```bash
+echo "  Stopping companion processes (SIGINT, then SIGKILL after 2 s)..."
+for pid in "${COMPANION_PIDS[@]}"; do
+    kill -SIGINT "$pid" 2>/dev/null || true
+done
+sleep 2
+for pid in "${COMPANION_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then kill -SIGKILL "$pid" 2>/dev/null || true; fi
+done
+sleep 1   # filesystem flush window
+
+COMBINED_LOG="${SCENARIO_LOG_DIR}/combined.log"
+cat "${SCENARIO_LOG_DIR}"/*.log > "$COMBINED_LOG" 2>/dev/null || true
+```
+
+This gives every process 2 s to handle SIGINT (spdlog flushes on signal), then SIGKILL anything still alive, then 1 s for filesystem sync — then cat captures complete logs.  The existing `cleanup_scenario` trap still runs at script exit; double-kill is idempotent.
+
+**Found by:** Iterative debug session 2026-05-05 — first run after switching from `CosysGroundTruthRadarBackend` to `CosysEchoBackend` produced 587 cube collisions despite zero changes to the HD-map.  Direct A/B comparison of the two runs (same scenario JSON, same WPs, same inflation, same Echo/depth/segmentation; only radar backend differs) made the centre-point-vs-surface-point coverage gap visible.  Subsequent run with `radius_m=7.5` had drone pass cleanly (zero collisions, mission complete + RTL fired in mission_planner.log) but runner still mis-reported FAIL — pinpointed the cat-vs-flush race by comparing `combined.log` last entry to `mission_planner.log` last entry.
+
+**Regression test:** `./tests/run_scenario_cosys.sh 33_non_coco_obstacles.json --gui` against live Cosys-AirSim Blocks-scene UE5 must:
+- Have zero `collision #2+` entries in `collisions.log` (only the unavoidable Ground startup touch is allowed)
+- `combined.log` must contain `[Planner] Mission complete` (verifies the runner cat-vs-flush fix)
+- Drone should take the EAST detour (E≥27 corridor) since the now-properly-sized cylinders block the west corridor (E≤2).
+
+**Follow-up notes:**
+- Box-shaped HD-map static obstacles (rather than circles) would be the architecturally correct fix — would give exact representation instead of circumscribed-circle approximation.  Filed as a follow-up improvement; not blocking this scenario.
+- The same `combined.log` race likely exists in `tests/run_scenario.sh` (companion-stack runner) and `tests/run_scenario_gazebo.sh` — apply the same fix when each is next touched.
+
+---
+
 ### Fix #504 — Scenario 33 Multi-Layer Failure: Perception Noise + HD-Map Misalignment + Runner Regex Misinterpretation (Issue #698)
 
 **Date:** 2026-05-04

@@ -249,14 +249,14 @@
                     "dynamic_age_cap_s": 30.0
                 }
             },
-            "_comment_static_obstacles": "Issue #698 — populated from tools/diag/blocks_default_inventory.json after we discovered (run 2026-05-04_224726) that camera-only perception only sees the SOUTH FACE of the 20×20 m cube (13 static cells promoted, planner thinks the cube interior is free space, plans a straight line through the wall).  Each entry is one of the 4 cube footprints (10×10 m, 3-cube stack vertically) plus the 2 BP_PIPCamera clusters at (~6, 14).  radius_m=5.25 = (10 m / 2) × 1.05 to inscribe the full square footprint with 5% margin; combined with the 1.5 m planner inflation each footprint has ~6.75 m forbidden halo, the 4 cube halos overlap to form one solid 20×20 m blob (correct).  This is Option A from issue #703 follow-up: HD-map populated from sim ground truth so the planner has full obstacle knowledge, isolating planner+avoider behaviour from perception completeness.  REVERT this list to validate the perception-discovers-obstacles path (the real-hardware contract).",
+            "_comment_static_obstacles": "Issue #698 / #705 — populated from tools/diag/blocks_default_inventory.json so the planner has full obstacle knowledge (sim-only crutch, see #703 for the real-hardware counterpart).  Each entry is one of the 4 cube footprints (10×10 m, 3-cube stack vertically) plus the 2 BP_PIPCamera clusters at (~6, 14).\n\nradius_m=7.5 = (10 m × √2 / 2) × 1.06 to CIRCUMSCRIBE the full 10×10 m square footprint (the inscribed circle at r=5.25 used initially leaves the four cube corners protruding ~1.8 m beyond the planner's forbidden halo).  The previous PASS (run 2026-05-04_231328 with cosys_airsim_groundtruth radar) accidentally hid this geometric error: ground-truth radar emits one detection at the cube CENTER, the UKF inflates that into a dynamic-grid halo around the centre, and the radar-track halo backfills the corner gap the static cylinder misses.  When we switched to Cosys Echo (physically realistic surface returns, not centre-point oracles, run 2026-05-05_152100) the radar halos formed thin bands along visible FACES instead of around centres, exposing the corner gap → drone routed through the SW corner of TC_62 and collided 587 times.  The right fix (this commit) is to expand the static cylinder so it CONTAINS the square cube, so the static layer alone covers the obstacle regardless of which radar backend backfills.  Combined with the 1.5 m planner inflation each footprint now has a ~9 m forbidden halo, the 4 cube halos still overlap to form one solid blob covering the full 20×20 m wall.",
             "static_obstacles": [
-                {"x": 21.9, "y":  9.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_4/7/102 stack (SW quadrant)"},
-                {"x": 21.9, "y": 19.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_8/9/101 stack (SE quadrant)"},
-                {"x": 31.9, "y":  9.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_61/62/100 stack (NW quadrant)"},
-                {"x": 31.9, "y": 19.1, "radius_m": 5.25, "height_m": 15.0, "_name": "TC_65/66/99 stack (NE quadrant)"},
-                {"x":  5.8, "y": 13.7, "radius_m": 0.7,  "height_m":  2.0, "_name": "BP_PIPCamera_C_3,4 cluster"},
-                {"x":  6.7, "y": 13.8, "radius_m": 0.7,  "height_m":  2.0, "_name": "BP_PIPCamera_C_0,1,2,5,6 cluster"}
+                {"x": 21.9, "y":  9.1, "radius_m": 7.5, "height_m": 15.0, "_name": "TC_4/7/102 stack (SW quadrant)"},
+                {"x": 21.9, "y": 19.1, "radius_m": 7.5, "height_m": 15.0, "_name": "TC_8/9/101 stack (SE quadrant)"},
+                {"x": 31.9, "y":  9.1, "radius_m": 7.5, "height_m": 15.0, "_name": "TC_61/62/100 stack (NW quadrant)"},
+                {"x": 31.9, "y": 19.1, "radius_m": 7.5, "height_m": 15.0, "_name": "TC_65/66/99 stack (NE quadrant)"},
+                {"x":  5.8, "y": 13.7, "radius_m": 0.7, "height_m":  2.0, "_name": "BP_PIPCamera_C_3,4 cluster"},
+                {"x":  6.7, "y": 13.8, "radius_m": 0.7, "height_m":  2.0, "_name": "BP_PIPCamera_C_0,1,2,5,6 cluster"}
             ],
             "geofence": {
                 "enabled": false
