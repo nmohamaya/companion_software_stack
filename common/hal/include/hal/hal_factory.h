@@ -58,6 +58,7 @@
 #include "hal/cosys_segmentation_backend.h"
 #include "hal/cosys_fc_link.h"
 #include "hal/cosys_imu.h"
+#include "hal/cosys_echo_backend.h"
 #include "hal/cosys_groundtruth_radar.h"
 #include "hal/cosys_radar.h"
 #include "hal/cosys_rpc_client.h"
@@ -306,6 +307,15 @@ template<typename Interface>
     if (backend == "cosys_airsim_groundtruth") {
         return std::make_unique<CosysGroundTruthRadarBackend>(
             detail::get_shared_cosys_client(cfg), cfg, section);
+    }
+    // Issue #705 — Cosys-Lab Echo sensor (sensor type 7) — physical FMCW-
+    // style radar simulator with beam pattern, multipath reflections, and
+    // attenuation.  Replaces CosysRadarBackend (lidar emulation, #702) for
+    // the proper "radar physics" role.  CosysGroundTruthRadarBackend stays
+    // available as a validation oracle.
+    if (backend == "cosys_echo") {
+        return std::make_unique<CosysEchoBackend>(detail::get_shared_cosys_client(cfg), cfg,
+                                                   section);
     }
 #endif
 

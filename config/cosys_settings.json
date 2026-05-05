@@ -36,6 +36,26 @@
                     "HorizontalFOVEnd": 180,
                     "VerticalFOVUpper": 30,
                     "VerticalFOVLower": -30
+                },
+                "echo": {
+                    "_comment": "Issue #705 — Cosys-Lab Echo sensor (sensor type 7) — physical FMCW-style radar simulator with ray-cast beam pattern + multipath reflections + attenuation. Replaces the lidar-emulated CosysRadarBackend (#702 root cause: lidar treated as radar produces structured ground clutter). 20 Hz matches the existing radar tick; 1000 traces gives reasonable beam-pattern resolution; 50 m distance limit matches our radar max_range; FOV ±60°×±15° is forward-looking automotive style; mounted slightly forward + slightly above body origin.",
+                    "SensorType": 7,
+                    "Enabled": true,
+                    "MeasurementFrequency": 20,
+                    "NumberOfTraces": 1000,
+                    "DistanceLimit": 50.0,
+                    "ReflectionLimit": 3,
+                    "AttenuationPerDistance": 0.5,
+                    "AttenuationPerReflection": 3.0,
+                    "AttenuationLimit": -100,
+                    "SensorLowerAzimuthLimit": -60,
+                    "SensorUpperAzimuthLimit": 60,
+                    "SensorLowerElevationLimit": -15,
+                    "SensorUpperElevationLimit": 15,
+                    "Active": true,
+                    "Passive": false,
+                    "X": 0.2, "Y": 0, "Z": -0.1,
+                    "Yaw": 0, "Pitch": 0, "Roll": 0
                 }
             }
         }

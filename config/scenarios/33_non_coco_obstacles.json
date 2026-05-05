@@ -142,15 +142,19 @@
                     "track_max_age_s": 2.0
                 }
             },
-            "_comment_radar": "Issue #698 — switched perception.radar.backend cosys_airsim → cosys_airsim_groundtruth.  CosysGroundTruthRadarBackend queries simListInstanceSegmentationPoses() instead of doing lidar-emulation cluster binning, so every emitted detection is a real visible scene object with ground-truth (range, azimuth, elevation, radial-velocity).  No ground bounce, no multipath, no regular-grid clutter pattern (run 2026-05-04_220913 planner_grid_overlay showed 68 cyan radar cells in a 2 m-spaced grid pattern around the drone — pure HAL clustering noise).  include_substrings is the SAME allowlist used by CosysSegmentationBackend so radar and camera report the same set of obstacles.  REVERT to cosys_airsim to validate against the lidar-emulation code path.",
+            "_comment_radar": "Issue #705 — switched perception.radar.backend cosys_airsim_groundtruth → cosys_echo (Cosys-Lab Echo sensor type 7, physical FMCW-style radar simulator with ray-cast beam pattern + multipath + attenuation).  Echo is the proper radar physics sensor that the lidar-emulation CosysRadarBackend was a workaround for (root cause of #702 ground clutter); the ground-truth backend remains available as a validation oracle.  Pair with config/cosys_settings.json's echo sensor declaration (must be deployed to ~/Documents/AirSim/settings.json before launching UE5).  include_substrings matches CosysSegmentationBackend so radar and camera report the same set of obstacles.  REVERT to cosys_airsim_groundtruth to validate against the per-object oracle, or cosys_airsim to validate against the lidar-emulation code path.",
             "radar": {
-                "backend": "cosys_airsim_groundtruth",
+                "backend": "cosys_echo",
+                "echo_name": "echo",
                 "vehicle_name": "Drone0",
-                "max_range_m": 60.0,
+                "max_range_m": 50.0,
                 "min_range_m": 0.5,
                 "fov_azimuth_rad": 1.0472,
                 "fov_elevation_rad": 0.2618,
                 "update_rate_hz": 20,
+                "cluster_range_m": 1.0,
+                "cluster_az_rad": 0.0873,
+                "cluster_el_rad": 0.0873,
                 "include_substrings": "TemplateCube,Cube,Wall,Pillar,Couch,Bush",
                 "exclude_substrings": "Ground,Sky,SkyDome,Floor",
                 "negate_azimuth": false
@@ -309,8 +313,8 @@
         "log_contains": [
             "[CosysDepth] Created",
             "[CosysSegmentation] Created",
-            "[CosysGroundTruthRadar] Created",
-            "[CosysGroundTruthRadar] First scan",
+            "[CosysEcho] Created",
+            "[CosysEcho] First scan",
             "[HD-map] Static obstacle at",
             "[FSM] Advanced to waypoint 6/6",
             "[Planner] Mission complete",
@@ -352,11 +356,11 @@
                 "_comment": "Issue #698 — sam.backend=cosys_airsim active (not FastSAM)."
             },
             {
-                "name": "Ground-truth radar backend + first scan",
+                "name": "Echo radar backend + first scan",
                 "path": "drone_logs/*.log",
-                "pattern": "\\[CosysGroundTruthRadar\\] First scan",
+                "pattern": "\\[CosysEcho\\] First scan",
                 "min_matches": 1,
-                "_comment": "Issue #698 — radar.backend=cosys_airsim_groundtruth active and emitting detections."
+                "_comment": "Issue #705 — radar.backend=cosys_echo active (Cosys-Lab Echo sensor type 7, physical radar simulator) and emitting detections."
             },
             {
                 "name": "HD-map static obstacles loaded",
