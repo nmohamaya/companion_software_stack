@@ -29,7 +29,20 @@
             "waypoints": [
                 {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
                 {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false}
-            ]
+            ],
+            "obstacle_avoidance": {
+                "_comment_706": "Issue #706 — Gazebo scenario, run with legacy main-branch avoider behaviour (no scenario-33 safety nets) for empirical comparison.",
+                "close_regime_final_clamp": false,
+                "aabb_aware_distance": false
+            }
+        },
+        "perception": {
+            "path_a": {
+                "_comment_706": "Issue #706 — explicitly disable PR #647 voxel-snapshot append. PATH A inactive in this scenario, so mainly documentation.",
+                "avoider_surface": {
+                    "enabled": false
+                }
+            }
         }
     },
     "fault_sequence": {
