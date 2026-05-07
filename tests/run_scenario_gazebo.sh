@@ -495,6 +495,18 @@ pkill -9 -f "gz sim" 2>/dev/null || true
 pkill -9 -f "ruby.*gz" 2>/dev/null || true
 # Only kill PX4 process if it's our SITL instance (not system services)
 pkill -9 -f "px4.*sitl" 2>/dev/null || true
+# Issue #708 — also kill any leftover companion binaries from prior runs.
+# Without this loop, a stale `comms` process holding UDP 14540 (or any
+# other Zenoh-publishing companion left behind by a crashed/aborted run)
+# silently corrupts the new run with `BindError` or stale-publisher races.
+# The post-run cleanup_scenario() trap below covers normal exit paths, but
+# this pre-cleanup is the catch-all for orphaned processes from sessions
+# that died without firing their trap (e.g. terminal closed, parent shell
+# SIGKILLed, OOM kill).
+for _bin in video_capture perception slam_vio_nav mission_planner \
+            comms payload_manager system_monitor; do
+    pkill -9 -f "build/bin/$_bin" 2>/dev/null || true
+done
 sleep 1
 
 cleanup_scenario() {
