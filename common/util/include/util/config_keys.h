@@ -535,6 +535,31 @@ inline constexpr const char* BRAKE_IN_CLOSE_REGIME =
 // Persistent obstacles still drive the scale to this floor over multiple
 // ticks, so the safety property is preserved.  Default 0.1 (10 %).
 inline constexpr const char* MIN_BRAKE_SCALE = "mission_planner.obstacle_avoidance.min_brake_scale";
+// Issue #706 — gate scenario-33 safety nets behind config flags.
+// Default true so existing behaviour is preserved on the integration branch
+// and on Cosys scenarios.  Gazebo scenarios (02/17/26) override to false to
+// recover legacy main-branch behaviour for empirical comparison.
+//
+// CLOSE_REGIME_FINAL_CLAMP (PR #646) — when true, the avoider applies a
+// post-correction safety clamp after all repulsion + brake math: in close
+// regime, the *final* commanded velocity has its toward-obstacle component
+// zeroed.  Independent of brake_in_close_regime so pure-deflection scenarios
+// also benefit.  When false, the correction stops at the planned-velocity
+// cancellation step (legacy pre-#646 behaviour).
+inline constexpr const char* CLOSE_REGIME_FINAL_CLAMP =
+    "mission_planner.obstacle_avoidance.close_regime_final_clamp";
+// AABB_AWARE_DISTANCE (PR #657 + #685 + #692) — when true, the avoider
+// computes distance to the nearest face of each obstacle's AABB
+// (centroid ± estimated_radius_m XY, ± 0.5×estimated_height_m Z) and
+// special-cases the drone-inside-AABB case with dead-zone floor + atomic
+// close-regime entry.  When false, the AABB collapses to the centroid
+// (extents = 0) and the distance reduces to point-to-point — legacy
+// pre-#657 behaviour.  Note: turning this off increases collision risk for
+// obstacles whose physical extent is much larger than `min_distance_m`
+// (e.g. tall thick cylinders).  Required for scenario 33's HD-map
+// obstacles where Cosys ground-truth segmentation provides tight AABBs.
+inline constexpr const char* AABB_AWARE_DISTANCE =
+    "mission_planner.obstacle_avoidance.aabb_aware_distance";
 // Per-class overrides (Epic #519 — per-class config schema)
 inline constexpr const char* PER_CLASS_INFLUENCE_RADIUS_M =
     "mission_planner.obstacle_avoidance.per_class.influence_radius_m";

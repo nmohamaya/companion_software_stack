@@ -1370,13 +1370,21 @@ int main(int argc, char* argv[]) {
         ctx.cfg.get<int>("perception.path_a.avoider_surface.max_age_ms", 1000), 50, 60000);
     const uint64_t voxel_obstacle_max_age_ns = static_cast<uint64_t>(voxel_obstacle_max_age_ms) *
                                                1'000'000ULL;
+    // Issue #706 — feature flag gating PR #647's voxel-snapshot append.  When
+    // OFF we pass nullptr to the fusion thread so the existing nullptr-skip
+    // path takes over (no branch in the hot path; behaviour matches pre-#647
+    // mainline).  Default ON preserves Cosys scenario 33 behaviour.
+    const bool avoider_surface_enabled =
+        ctx.cfg.get<bool>("perception.path_a.avoider_surface.enabled", true);
+    DRONE_LOG_INFO("[Fusion] Issue #706 flag: avoider_surface_enabled={}",
+                   avoider_surface_enabled ? "ON" : "OFF");
 
     std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
                          std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_shutdown_phase),
                          std::ref(*fusion_engine), fusion_rate_hz,
                          depth_enabled ? &depth_to_fusion : nullptr, drain_timeout_ms, profiler_ptr,
-                         &voxel_obstacle_to_fusion, static_cast<uint32_t>(voxel_obstacle_min_obs),
-                         voxel_obstacle_max_age_ns);
+                         avoider_surface_enabled ? &voxel_obstacle_to_fusion : nullptr,
+                         static_cast<uint32_t>(voxel_obstacle_min_obs), voxel_obstacle_max_age_ns);
 
     // Launch depth estimation thread if HAL is active (Issue #430)
     // Subscriber must outlive the thread — declare in outer scope (same pattern as pose_sub, radar_sub)
