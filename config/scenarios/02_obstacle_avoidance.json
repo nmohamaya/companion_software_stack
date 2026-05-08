@@ -23,7 +23,10 @@
                 "max_correction_mps": 1.5,
                 "vertical_gain": 0.0,
                 "path_aware": true,
-                "_comment": "D* Lite is primary avoidance. Avoider is safety net: 8m influence, 1.5 max correction (100% of cruise), gain=3.0."
+                "_comment": "D* Lite is primary avoidance. Avoider is safety net: 8m influence, 1.5 max correction (100% of cruise), gain=3.0.",
+                "_comment_706": "Issue #706 — turn OFF the scenario-33 safety nets so this Gazebo scenario runs with legacy main-branch avoider behaviour for empirical comparison.",
+                "close_regime_final_clamp": false,
+                "aabb_aware_distance": false
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,
@@ -88,6 +91,12 @@
                     "min_object_altitude_m": 1.5,
                     "altitude_gate_m": 2.0,
                     "_comment": "Camera+radar UKF fusion with ground filter + altitude gate"
+                }
+            },
+            "path_a": {
+                "_comment_706": "Issue #706 — explicitly disable PR #647 voxel-snapshot append for legacy main-parity. PATH A is already disabled by default in this scenario (color_contour detector, no SAM), so this is documentation more than functional change.",
+                "avoider_surface": {
+                    "enabled": false
                 }
             }
         }

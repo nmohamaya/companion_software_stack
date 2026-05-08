@@ -70,6 +70,11 @@ struct ObstacleAvoider3DConfig {
     // while rejecting one-tick noise events.  Default 0.1 (= 10 % of
     // cruise).
     float min_brake_scale = 0.1f;
+    // Issue #706 — scenario-33 safety-net feature flags.
+    // Default true; Gazebo scenarios override to false for main-parity
+    // behaviour.  See config_keys.h for full rationale.
+    bool close_regime_final_clamp = true;  // PR #646
+    bool aabb_aware_distance      = true;  // PR #657 + #685 + #692
 
     // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
     // Zero-initialized here; the ObstacleAvoider3D constructor fills them
@@ -158,6 +163,17 @@ public:
         config_.min_brake_scale =
             cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_BRAKE_SCALE,
                            config_.min_brake_scale);
+        // Issue #706 — scenario-33 safety-net flags.
+        config_.close_regime_final_clamp = cfg.get<bool>(
+            drone::cfg_key::mission_planner::obstacle_avoidance::CLOSE_REGIME_FINAL_CLAMP,
+            config_.close_regime_final_clamp);
+        config_.aabb_aware_distance =
+            cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::AABB_AWARE_DISTANCE,
+                          config_.aabb_aware_distance);
+        DRONE_LOG_INFO("[ObstacleAvoider3D] Issue #706 flags: "
+                       "close_regime_final_clamp={} aabb_aware_distance={}",
+                       config_.close_regime_final_clamp ? "ON" : "OFF",
+                       config_.aabb_aware_distance ? "ON" : "OFF");
         // PR #617 review: a config mistake of min_distance_m=0 silently disables
         // BOTH the brake path (guarded by `min_distance_m > 0` inside avoid())
         // AND the close_regime_active_ hysteresis (entry condition is
@@ -272,10 +288,18 @@ public:
             // a future per-axis half-extent can replace either side without
             // confusion.  The "square cross-section" wording is over-precise
             // for centroid-only obstacles whose extents are 0; clarified.
-            const float radius_xy = std::max(0.0f, obj.estimated_radius_m);
-            const float hx        = radius_xy;  // XY half-extent (square cross-section)
-            const float hy        = radius_xy;  // identical to hx by construction
-            const float hz        = std::max(0.0f, 0.5f * obj.estimated_height_m);
+            //
+            // Issue #706 — when aabb_aware_distance is OFF, force extents to 0
+            // so the AABB collapses to the centroid and the math reduces to
+            // legacy point-to-point distance (pre-#657 behaviour).  The
+            // downstream inside-AABB logic naturally never triggers because
+            // the boundary is a single point.
+            const float radius_xy =
+                config_.aabb_aware_distance ? std::max(0.0f, obj.estimated_radius_m) : 0.0f;
+            const float hx = radius_xy;  // XY half-extent (square cross-section)
+            const float hy = radius_xy;  // identical to hx by construction
+            const float hz =
+                config_.aabb_aware_distance ? std::max(0.0f, 0.5f * obj.estimated_height_m) : 0.0f;
             const float ax_min = ox - hx, ax_max = ox + hx;
             const float ay_min = oy - hy, ay_max = oy + hy;
             const float az_min = oz - hz, az_max = oz + hz;
@@ -552,9 +576,16 @@ public:
         // never have a positive component toward the nearest obstacle.
         // Independent of `brake_in_close_regime` so pure-deflection scenarios
         // also benefit; gated only on `close_regime_active_`.
+        //
+        // Issue #706 — config_.close_regime_final_clamp gates this whole block
+        // so Gazebo scenarios can run with legacy pre-#646 behaviour.  When
+        // OFF the loop body is skipped (final_clamp_applied stays false,
+        // v_toward_final stays 0); the diagnostic log block downstream still
+        // compiles cleanly because the variables are declared regardless.
         bool  final_clamp_applied = false;
         float v_toward_final      = 0.0f;
-        if (close_regime_active_.load(std::memory_order_relaxed) &&
+        if (config_.close_regime_final_clamp &&
+            close_regime_active_.load(std::memory_order_relaxed) &&
             std::isfinite(min_active_dist) && min_active_dist > avoider_constants::kMinDistGateM) {
             const float inv = 1.0f / min_active_dist;
             const float nx  = nearest_dx * inv;

@@ -136,7 +136,13 @@
                 "input_size": 1024,
                 "num_masks": 3
             },
-            "mask_class_iou_threshold": 0.5
+            "mask_class_iou_threshold": 0.5,
+            "avoider_surface": {
+                "_comment_706": "Issue #706 — gates PR #647 voxel-snapshot append. Default true preserves Cosys (scenario 33+) behaviour. Gazebo scenarios override to false in their per-scenario configs.",
+                "enabled": true,
+                "min_observations": 3,
+                "max_age_ms": 1000
+            }
         },
         "fusion": {
             "rate_hz": 30,
@@ -246,6 +252,9 @@
             "min_confidence": 0.3,
             "prediction_dt_s": 0.5,
             "max_age_ms": 500,
+            "_comment_706": "Issue #706 — scenario-33 safety-net flags. Default true preserves Cosys (scenario 33+) behaviour. Gazebo scenarios (02/17/26) override to false in their per-scenario configs to recover legacy main-branch parity for empirical comparison.",
+            "close_regime_final_clamp": true,
+            "aabb_aware_distance": true,
             "per_class": {
                 "_comment": "Per-class overrides (Epic #519). Unspecified classes use 'default'.",
                 "influence_radius_m": { "default": 5.0, "person": 3.0, "vehicle_truck": 8.0, "building": 2.0, "tree": 2.0, "geometric_obstacle": 4.0 },
