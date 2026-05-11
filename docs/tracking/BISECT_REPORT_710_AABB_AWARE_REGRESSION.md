@@ -192,3 +192,86 @@ Main worktree comparison run at:
 ```
 
 Bisect log preserved by `git bisect log` (re-runnable for verification).
+
+---
+
+## Addendum — Empirical sweep on Cosys scenario 33 (2026-05-11)
+
+After the initial bisect identified PR #657 as the regression source, an empirical sweep was run on Cosys scenario 33 to determine which of the three #706 flags are actually load-bearing in Cosys ground-truth perception.
+
+### Sweep methodology
+Each test toggled one (or all) of the three flags on `config/scenarios/33_non_coco_obstacles.json` and ran a clean scenario.  Baseline = all three flags ON (`close_regime_final_clamp`, `aabb_aware_distance`, `avoider_surface_enabled`).
+
+### Sweep results
+
+| # | Config | Result | UNSTUCK | Hover-fallbacks | RTL→LAND | Notes |
+|---|--------|--------|---------|-----------------|----------|-------|
+| Baseline | all 3 ON | PASS 26/26 | 2 | 0 | yes | reference |
+| A | only `close_regime_final_clamp` OFF | PASS 26/26 | **0** | 0 | yes | cleaner than baseline |
+| B | only `aabb_aware_distance` OFF | **FAIL 22/26** | 3 | **81 → LOITER** | no | confirmed bisect culprit |
+| C | only `avoider_surface_enabled` OFF | PASS 26/26 | 0 | 0 | yes | clean |
+| **D run 1** | **all 3 OFF (= `main`)** | **PASS 26/26** | 0 | 21 | yes | unexpected clean PASS |
+| **D run 2** | **all 3 OFF (validation)** | **PASS 26/26** | 0 | 20 | yes | reproducible |
+
+### Critical finding from Sweep D
+
+**Sweep B's failure was an interaction effect, not an intrinsic PR #657 dependency.**
+
+Sweep B (only #657 OFF, with #646 and #647 still ON) FAILed with 81 hover-fallbacks.  Sweep D (all three OFF together) PASSed cleanly.  This means PR #657's apparent load-bearing nature was **caused by interactions with the dead-weight #646/#647 flags** — when all three are removed together, scenario 33 passes cleanly with the legacy centroid-distance avoider.
+
+Bonus signal from Sweep A's diagnostic counter: `final_clamp_count = 0` in baseline runs — PR #646's mechanism was already not firing in production.  The code was running but the inner condition (`v_toward_final > 0` in close regime) was never satisfied.
+
+### Updated verdict matrix
+
+| PR | Pre-sweep verdict | Post-sweep verdict |
+|----|-------------------|--------------------|
+| **#646** `close_regime_final_clamp` | unknown | **Dead weight** — `final_clamp` never fires |
+| **#657** `aabb_aware_distance` | load-bearing for Cosys-33 (per #710 design) | **Dead weight** — only "load-bearing" via interaction with #646/#647 |
+| **#647** `avoider_surface_enabled` | probably dead weight | **Dead weight** — Cosys GT-segmentation supersedes the voxel-snapshot path |
+
+### Why dead weight now (root cause)
+
+PR #657 (and its companions #646/#647) were validated for scenario 33 when the perception pipeline was **PATH A: FastSAM + Depth Anything V2** — that pipeline produced noisy masks and inflated extents, requiring the AABB-aware geometry to compensate.  Subsequent move to **Cosys ground-truth segmentation** (`sam.backend = cosys_airsim`, `depth_estimator.backend = cosys_airsim`) produces pixel-perfect masks and depth.  The downstream `estimated_radius_m` / `estimated_height_m` from the fused tracks are already accurate without the geometric safety nets.
+
+### Final recommendation: full code removal
+
+All three code paths can be deleted from the codebase.  Tracked in **Issue #712**.  Implementation = 4 sequential commits on `feature/issue-710-empirical-cleanup`:
+
+| # | Commit | Effect | Validation |
+|---|--------|--------|------------|
+| 1 | `42e7af9` — remove PR #647 voxel-snapshot | -522 lines, voxel_obstacle_snapshot.h deleted, 9 tests gone | Cosys-33 PASS 26/26 |
+| 2 | `aa69d53` — remove PR #646 final clamp | -294 lines, final_clamp_count atomic gone, 6 tests gone | Cosys-33 PASS 26/26 ×2 runs |
+| 3 | `e6bf478` — remove PR #657 AABB-aware | -376 lines, ~150 lines of geometry → 4-line centroid math, 6 tests gone | Cosys-33 PASS 26/26 |
+| 4 | docs refresh (this update) | doc-only | n/a |
+
+**Cumulative deletion: -1192 / +56 = net -1136 lines across 3 commits.**
+
+### Caveat — Gazebo scenario 18 (sensor-driven) still on the edge
+
+After commit 3, Cosys scenario 33 PASSes clean reproducibly.  Gazebo scenario 18 (sensor-driven, no HD-map) remains intermittently flaky — but the flakiness is from **two separate pre-existing issues** unrelated to the #712 cleanup:
+
+1. **PX4 SITL ↔ Gazebo bridge timing race** (Issue #710) — intermittent EKF/compass/baro preflight failures at takeoff
+2. **Runtime perception ghost obstacles in Gazebo** (color_contour + UKF radar fusion produces extra phantom tracks) — to be filed as a follow-up issue
+
+These were observable on the branch before commit 3 too (e.g. 14:05 and 14:08 PASS runs had the same rotor-spin-up delay).  Commit 3 doesn't cause them but does make scenario 18 more vulnerable to them (no AABB-aware safety net to mask perception noise).
+
+### Sweep run logs
+
+| Sweep | Run path |
+|-------|----------|
+| Baseline | `drone_logs/scenarios_cosys/33_planner_hdmap_groundtruth_perception/2026-05-11_103801_PASS` |
+| A | `drone_logs/scenarios_cosys/33_planner_hdmap_groundtruth_perception/2026-05-11_105911_PASS` |
+| B | `drone_logs/scenarios_cosys/33_planner_hdmap_groundtruth_perception/2026-05-11_110726_FAIL` |
+| C | `drone_logs/scenarios_cosys/33_planner_hdmap_groundtruth_perception/2026-05-11_111759_PASS` |
+| D run 1 | `drone_logs/scenarios_cosys/33_planner_hdmap_groundtruth_perception/2026-05-11_113106_PASS` |
+| D run 2 | `drone_logs/scenarios_cosys/33_planner_hdmap_groundtruth_perception/2026-05-11_114408_PASS` |
+
+Post-commit validation runs:
+
+| Commit | Run path |
+|--------|----------|
+| Commit 1 r1 (failed — variance) | `2026-05-11_121138_FAIL` |
+| Commit 1 r2 (passed) | `2026-05-11_123031_PASS` |
+| Commit 2 r1 | `2026-05-11_134219_PASS` |
+| Commit 2 r2 | `2026-05-11_134805_PASS` |
+| Commit 3 | `2026-05-11_142111_PASS` |

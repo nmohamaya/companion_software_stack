@@ -70,12 +70,6 @@ struct ObstacleAvoider3DConfig {
     // while rejecting one-tick noise events.  Default 0.1 (= 10 % of
     // cruise).
     float min_brake_scale = 0.1f;
-    // Issue #706 — scenario-33 safety-net feature flags.
-    // Default true; Gazebo scenarios override to false for main-parity
-    // behaviour.  See config_keys.h for full rationale.
-    bool close_regime_final_clamp = true;  // PR #646
-    bool aabb_aware_distance      = true;  // PR #657 + #685 + #692
-
     // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
     // Zero-initialized here; the ObstacleAvoider3D constructor fills them
     // from the global scalars above, then the Config-driven constructor
@@ -163,17 +157,6 @@ public:
         config_.min_brake_scale =
             cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_BRAKE_SCALE,
                            config_.min_brake_scale);
-        // Issue #706 — scenario-33 safety-net flags.
-        config_.close_regime_final_clamp = cfg.get<bool>(
-            drone::cfg_key::mission_planner::obstacle_avoidance::CLOSE_REGIME_FINAL_CLAMP,
-            config_.close_regime_final_clamp);
-        config_.aabb_aware_distance =
-            cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::AABB_AWARE_DISTANCE,
-                          config_.aabb_aware_distance);
-        DRONE_LOG_INFO("[ObstacleAvoider3D] Issue #706 flags: "
-                       "close_regime_final_clamp={} aabb_aware_distance={}",
-                       config_.close_regime_final_clamp ? "ON" : "OFF",
-                       config_.aabb_aware_distance ? "ON" : "OFF");
         // PR #617 review: a config mistake of min_distance_m=0 silently disables
         // BOTH the brake path (guarded by `min_distance_m > 0` inside avoid())
         // AND the close_regime_active_ hysteresis (entry condition is
@@ -248,11 +231,16 @@ public:
             if (obj.confidence < config_.min_confidence_per_class[ci]) continue;
             ++considered;
 
-            // Issue #645 review fix (#646/#657 P2): NaN/Inf guard on obstacle
-            // data — corrupted radar/perception messages with NaN positions
-            // would otherwise propagate through the AABB clamp at line ~257
-            // where std::clamp(drone, NaN, NaN) is undefined behavior
-            // (precondition lo <= hi violated).  Skip the entire obstacle.
+            // NaN/Inf guard on obstacle data — corrupted radar/perception
+            // messages with NaN positions or velocities would otherwise
+            // propagate into the `dist = sqrt(dx² + dy² + dz²)` computation
+            // below, producing NaN dist that silently bypasses the
+            // influence-radius gate and corrupts the repulsion accumulator
+            // with NaN.  Skip the entire obstacle.
+            // (`estimated_radius_m` / `estimated_height_m` are no longer
+            // consumed by the avoider after #712, but kept in the guard for
+            // defence-in-depth — they ride along with the rest of the IPC
+            // struct and a NaN in either signals a corrupted upstream.)
             if (!std::isfinite(obj.position_x) || !std::isfinite(obj.position_y) ||
                 !std::isfinite(obj.position_z) || !std::isfinite(obj.velocity_x) ||
                 !std::isfinite(obj.velocity_y) || !std::isfinite(obj.velocity_z) ||
@@ -266,114 +254,14 @@ public:
             float       oy      = obj.position_y + obj.velocity_y * pred_dt;
             float       oz      = obj.position_z + obj.velocity_z * pred_dt;
 
-            // ── Issue #645 — AABB-aware distance + direction ──────────────
-            // The legacy code computed centroid-distance + centroid-direction
-            // and treated every obstacle as a sphere of radius
-            // `estimated_radius_m`.  For a flat-faced object (cube, wall) the
-            // drone could be 0.4 m from a face but 0.9 m from the centroid;
-            // the avoider would treat that as "comfortably outside the bubble"
-            // and not engage close_regime until it was already touching the
-            // face.  Empirically reproduced as the "skipping to the side and
-            // hitting it" failure on TemplateCube_Rounded_66 in scenario 33.
-            //
-            // New behaviour: interpret `estimated_radius_m` as XY half-extent
-            // (square cross-section) and `estimated_height_m` as full Z extent.
-            // Compute the *nearest point on the AABB* to the drone and use
-            // that for distance + repulsion direction.  When extents are zero
-            // (default for centroid-only obstacles) the AABB collapses to a
-            // single point and the math reduces to legacy centroid-distance —
-            // backward compatible by construction.
-            // PR #657 P2 review: `hx` and `hy` were identical expressions
-            // (both `estimated_radius_m`) — restating the assumption inline so
-            // a future per-axis half-extent can replace either side without
-            // confusion.  The "square cross-section" wording is over-precise
-            // for centroid-only obstacles whose extents are 0; clarified.
-            //
-            // Issue #706 — when aabb_aware_distance is OFF, force extents to 0
-            // so the AABB collapses to the centroid and the math reduces to
-            // legacy point-to-point distance (pre-#657 behaviour).  The
-            // downstream inside-AABB logic naturally never triggers because
-            // the boundary is a single point.
-            const float radius_xy =
-                config_.aabb_aware_distance ? std::max(0.0f, obj.estimated_radius_m) : 0.0f;
-            const float hx = radius_xy;  // XY half-extent (square cross-section)
-            const float hy = radius_xy;  // identical to hx by construction
-            const float hz =
-                config_.aabb_aware_distance ? std::max(0.0f, 0.5f * obj.estimated_height_m) : 0.0f;
-            const float ax_min = ox - hx, ax_max = ox + hx;
-            const float ay_min = oy - hy, ay_max = oy + hy;
-            const float az_min = oz - hz, az_max = oz + hz;
-            const float nx = std::clamp(drone_x, ax_min, ax_max);
-            const float ny = std::clamp(drone_y, ay_min, ay_max);
-            const float nz = std::clamp(drone_z, az_min, az_max);
-
-            // Vector from drone INTO the AABB nearest point — same convention
-            // as the legacy `nearest_dx/dy/dz` (drone → obstacle).  When drone
-            // is outside the AABB this points perpendicular to the nearest face.
-            float dx = nx - drone_x;
-            float dy = ny - drone_y;
-            float dz = nz - drone_z;
+            // Drone-to-centroid distance + direction.  Treats each obstacle as
+            // a point at its position.  Repulsion direction = drone → centroid
+            // (negated downstream so the force pushes the drone away).
+            float dx = ox - drone_x;
+            float dy = oy - drone_y;
+            float dz = oz - drone_z;
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-            // PR #657 P1 review (SAFETY-CRITICAL): when the drone is INSIDE
-            // the AABB, the clamp above returns the drone's own position so
-            // `dx=dy=dz=0` and `dist=0`.  The downstream gate
-            // `dist > kMinDistGateM` then silences repulsion entirely —
-            // the avoider goes deaf at the moment we most need it.  This
-            // is the deepest possible interference state and must trigger
-            // MAXIMUM repulsion outward along the shortest-exit axis.
-            //
-            // Rule: when inside AABB, find the nearest exit face; set the
-            // (dx,dy,dz) vector to point AWAY from that face (so the
-            // existing repulsion negation `-(d/dist) * rep` pushes the
-            // drone OUT along the exit), and set `dist` to the depth
-            // along that axis (clamped to kMinDistGateM so the inverse-
-            // square below produces a finite-but-large repulsion).
-            // PR #685 Copilot review: use `<=` / `>=` so boundary contact
-            // (drone on AABB face) is also treated as inside — strict
-            // comparisons let dist=0 fall through to the gate below
-            // and re-introduced the silent dead zone for contact cases.
-            const bool inside_aabb = (drone_x >= ax_min && drone_x <= ax_max && drone_y >= ay_min &&
-                                      drone_y <= ay_max && drone_z >= az_min && drone_z <= az_max);
-            if (inside_aabb) {
-                struct ExitAxis {
-                    float depth;       // distance from drone to the face
-                    float ex, ey, ez;  // unit vector pointing TOWARD the exit face
-                };
-                const ExitAxis axes[6] = {
-                    {drone_x - ax_min, -1.0f, 0.0f, 0.0f},  // exit via -X face
-                    {ax_max - drone_x, +1.0f, 0.0f, 0.0f},  // exit via +X face
-                    {drone_y - ay_min, 0.0f, -1.0f, 0.0f},  // exit via -Y face
-                    {ay_max - drone_y, 0.0f, +1.0f, 0.0f},  // exit via +Y face
-                    {drone_z - az_min, 0.0f, 0.0f, -1.0f},  // exit via -Z face
-                    {az_max - drone_z, 0.0f, 0.0f, +1.0f},  // exit via +Z face
-                };
-                int best = 0;
-                for (int i = 1; i < 6; ++i) {
-                    if (axes[i].depth < axes[best].depth) best = i;
-                }
-                // PR #685 Copilot review: previous version set (dx,dy,dz)
-                // to a UNIT vector while `dist` was the depth, breaking the
-                // outside-AABB convention `magnitude(dx,dy,dz) == dist`.
-                // The downstream `(dx/dist) * repulsion` then produces a
-                // 1/dist^3 force scaling — wrong magnitude.  Set
-                // (dx,dy,dz) to the depth-scaled vector so the invariant
-                // holds and the inverse-square law works correctly.
-                //
-                // Floor depth strictly above the gate: previous
-                // `max(depth, kMinDistGateM)` produced exactly-floor
-                // values that the strict `> kMinDistGateM` gate then
-                // skipped — silent dead zone partially re-introduced.
-                // `nextafter(kMinDistGateM, +inf)` is the smallest float
-                // strictly greater than the gate.
-                const float depth_floored = std::nextafter(avoider_constants::kMinDistGateM,
-                                                           std::numeric_limits<float>::infinity());
-                dist                      = std::max(axes[best].depth, depth_floored);
-                dx = -axes[best].ex * dist;  // points INTO AABB; -(dx/dist) = +ex
-                dy = -axes[best].ey * dist;
-                dz = -axes[best].ez * dist;
-            }
 
             if (dist < config_.influence_radius_per_class[ci] &&
                 dist > avoider_constants::kMinDistGateM) {
@@ -388,8 +276,8 @@ public:
                 float repulsion = config_.repulsive_gain_per_class[ci] / (dist * dist);
 
                 // Per-obstacle contribution vector (so we can log its
-                // magnitude).  Direction: outward from the nearest AABB face,
-                // i.e. negative of (drone→nearest_point).
+                // magnitude).  Direction: outward from the obstacle centroid,
+                // i.e. negative of (drone→centroid).
                 const float cx = -(dx / dist) * repulsion;
                 const float cy = -(dy / dist) * repulsion;
                 const float cz = -(dz / dist) * repulsion * config_.vertical_gain;
@@ -561,52 +449,6 @@ public:
         cmd.velocity_y += total_rep_y;
         cmd.velocity_z += total_rep_z;
 
-        // ── Post-correction toward-obstacle hard clamp (Issue #645) ────
-        // The brake-arbitration block above only zeroes the toward-obstacle
-        // component of the *planned* velocity.  After `total_rep` is added
-        // the *final* command can re-acquire a positive toward-component if
-        //   (a) repulsion was capped by max_correction_mps and isn't quite
-        //       enough to cancel forward momentum, or
-        //   (b) the sum of repulsions from multiple obstacles cancelled out
-        //       and left a net push toward the nearest one.
-        // Scenario 33 (run 2026-04-30_101126_FAIL) showed the drone making
-        // continuous contact with pillar_01 despite v_toward(planned) being
-        // cancelled — repulsion saturation alone wasn't enough.  This is the
-        // safety floor: in close regime, the *final* commanded velocity can
-        // never have a positive component toward the nearest obstacle.
-        // Independent of `brake_in_close_regime` so pure-deflection scenarios
-        // also benefit; gated only on `close_regime_active_`.
-        //
-        // Issue #706 — config_.close_regime_final_clamp gates this whole block
-        // so Gazebo scenarios can run with legacy pre-#646 behaviour.  When
-        // OFF the loop body is skipped (final_clamp_applied stays false,
-        // v_toward_final stays 0); the diagnostic log block downstream still
-        // compiles cleanly because the variables are declared regardless.
-        bool  final_clamp_applied = false;
-        float v_toward_final      = 0.0f;
-        if (config_.close_regime_final_clamp &&
-            close_regime_active_.load(std::memory_order_relaxed) &&
-            std::isfinite(min_active_dist) && min_active_dist > avoider_constants::kMinDistGateM) {
-            const float inv = 1.0f / min_active_dist;
-            const float nx  = nearest_dx * inv;
-            const float ny  = nearest_dy * inv;
-            const float nz  = nearest_dz * inv;
-            v_toward_final  = cmd.velocity_x * nx + cmd.velocity_y * ny + cmd.velocity_z * nz;
-            if (v_toward_final > 0.0f) {
-                cmd.velocity_x -= v_toward_final * nx;
-                cmd.velocity_y -= v_toward_final * ny;
-                cmd.velocity_z -= v_toward_final * nz;
-                final_clamp_applied = true;
-                // Issue #645 review fix (#646 P1): relaxed-ordering atomic
-                // increment.  Counter is read by external diagnostic
-                // accessor on potentially different threads (P7 monitor /
-                // logger).  Relaxed is sufficient because the counter is
-                // a pure observability signal — no synchronization with
-                // other state required.
-                final_clamp_count_.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-
         // Single-line summary at the end of every avoid() call (Issue #503).
         // INFO-gated on log_corrections + meaningful delta so quiet ticks stay
         // at DEBUG.  Magnitude is the Euclidean size of the total correction
@@ -629,14 +471,13 @@ public:
                 // ticks the three defaults (0, 0.0, 1.0) aren't informative.  This
                 // saves one fmt::format + alloc per active tick when the brake is
                 // idle (PR #617 perf review).
-                if (brake_applied || brake_scale < 1.0f || final_clamp_applied) {
+                if (brake_applied || brake_scale < 1.0f) {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} "
-                                   "scale={:.2f} final_clamp={} v_toward_final={:.2f}",
+                                   "scale={:.2f}",
                                    considered, active, delta_mag, path_aware_strip_count,
                                    close_regime_active_.load(std::memory_order_relaxed) ? 1 : 0,
-                                   brake_applied ? 1 : 0, v_toward, brake_scale,
-                                   final_clamp_applied ? 1 : 0, v_toward_final);
+                                   brake_applied ? 1 : 0, v_toward, brake_scale);
                 } else {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={}",
@@ -660,15 +501,6 @@ public:
     /// Exposed for tests and diagnostics.
     [[nodiscard]] bool close_regime_active() const {
         return close_regime_active_.load(std::memory_order_relaxed);
-    }
-
-    /// Total number of avoid() calls in which the post-correction final clamp
-    /// (Issue #645) zeroed a positive toward-obstacle component on the final
-    /// command.  Persistently rising across ticks indicates the rest of the
-    /// pipeline (planner + brake + repulsion) was repeatedly trying to push
-    /// the drone into an obstacle and the safety floor caught it.
-    [[nodiscard]] uint64_t final_clamp_count() const noexcept {
-        return final_clamp_count_.load(std::memory_order_relaxed);
     }
 
     /// Mutable config access — for tests that need per-class overrides
@@ -696,13 +528,6 @@ private:
     // (run-report / P7).  See accessor doc above.  All in-place
     // mutations use `relaxed` (pure observability — no sync implied).
     std::atomic<bool> close_regime_active_{false};
-    // Diagnostic counter (Issue #645) — increments every avoid() call where
-    // the post-correction toward-obstacle clamp zeroed a positive component.
-    // Issue #645 review fix (#646 P1): atomic counter — written by avoid()
-    // on the planner thread, read by final_clamp_count() accessor which can
-    // be called from any thread (P7 health monitor, logger).  Relaxed
-    // ordering is sufficient — pure observability counter.
-    std::atomic<uint64_t> final_clamp_count_{0};
 };
 
 }  // namespace drone::planner

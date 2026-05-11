@@ -375,13 +375,58 @@ PotentialFieldAvoider (2D) removed in Issue #207 — ObstacleAvoider3D is the on
 ### ObstacleAvoider3D (`"3d"` / `"obstacle_avoider_3d"` / `"potential_field_3d"`)
 
 - **Header:** [`obstacle_avoider_3d.h`](../process4_mission_planner/include/planner/obstacle_avoider_3d.h)
-- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (18 tests)
+- **Tests:** [`test_obstacle_avoider_3d.cpp`](../tests/test_obstacle_avoider_3d.cpp) (35 tests)
 - Full 3D repulsive field (includes Z component via configurable `vertical_gain`)
 - Predictive avoidance: uses object velocities for 0.5 s look-ahead
 - Inverse-square force decay with configurable repulsive gain
 - Clamped corrections: max ±`max_correction_mps` per axis (default 3.0)
 - Filters: stale objects (>`max_age_ms`, default 500 ms), low-confidence (<0.3)
 - NaN input protection
+- **Distance model:** centroid-distance — each obstacle is treated as a point at
+  its `position_{x,y,z}`.  Repulsion direction is `drone → centroid` (negated
+  downstream to push the drone away).  The grid layer (OccupancyGrid3D) uses
+  `estimated_radius_m` for cell inflation; the avoider does not.
+
+#### Close-regime brake arbitration (Issue #513)
+
+When the closest active obstacle is within `min_distance_m` (hysteresis-gated
+to prevent chatter at the boundary), the avoider enters **close regime** and
+applies a brake arbitration step *before* repulsion:
+
+1. Cancel the component of `planned_velocity` pointing toward the nearest obstacle.
+2. Scale the remaining velocity by a proximity factor in `[min_brake_scale, 1.0]`
+   where 1.0 = at `min_distance_m`, `min_brake_scale` = at the
+   `kMinDistGateM` floor.  Default `min_brake_scale = 0.1`.
+
+This is the primary safety mechanism for cube/wall geometries — pure deflection
+isn't enough when the planner aims a cruise vector directly at an obstacle.
+
+`brake_in_close_regime` (default `true`) gates the brake.  When `false`, the
+avoider falls back to pure deflection (additive repulsion only).
+
+#### Removed in #712 (2026-05-11)
+
+The avoider previously had three scenario-33-specific safety nets that were
+empirically validated as dead weight (no longer needed with the Cosys
+ground-truth perception pipeline replacing FastSAM/DA-V2):
+
+- PR #657 — **AABB-aware distance + face-perpendicular repulsion**.  Used the
+  obstacle's `estimated_radius_m`/`estimated_height_m` to compute distance to
+  the nearest AABB face rather than centroid-distance.  Removed: Cosys
+  ground-truth segmentation produces tight extents that the OccupancyGrid3D
+  already consumes via cell inflation; the avoider doesn't need redundant
+  geometric reasoning.
+- PR #646 — **Post-correction final velocity clamp** in close regime.
+  Diagnostic counter showed it never fired in production (the inner
+  `v_toward_final > 0` condition was always false after the brake arbitration
+  step zeroed the toward-component).  Pure dead code.
+- PR #647 — **PATH A voxel-snapshot → DetectedObjectList** synthetic obstacle
+  injection.  Cosys GT-segmentation emits proper `GEOMETRIC_OBSTACLE`
+  detections via the normal fusion path; the parallel voxel-snapshot side
+  channel was redundant.
+
+See [BISECT_REPORT_710_AABB_AWARE_REGRESSION.md](../tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md)
+for the full empirical sweep + Cosys validation data.
 
 #### Path-Aware Mode (Issue #229)
 
