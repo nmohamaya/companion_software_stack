@@ -978,6 +978,17 @@ The reviewer's "grep across the entire codebase returns zero matches" claim is i
 
 ## DR-041: ObstacleAvoider3D drone-inside-AABB recovery — defense-in-depth for a "shouldn't happen" state
 
+> ⚠️ **TOMBSTONED 2026-05-11 (PR #712 / DR-043).**  The entire AABB-aware
+> distance code path discussed in this DR — both the math bug and the
+> drone-inside-AABB recovery branch that fixed it — was empirically
+> validated as dead weight in Cosys scenario 33 and **removed from the
+> codebase**.  The avoider now uses centroid-distance throughout (no
+> AABB clamp, no inside-AABB recovery, no exit-face logic).  This DR
+> is retained for historical context only; the design considerations
+> here no longer apply to the production code.  If a future PR re-
+> introduces AABB-aware geometry, refer back to this DR before
+> stripping the recovery branch.
+
 **Question:** PR #657 (avoider AABB-aware distance) shipped a math bug — when the drone is geometrically inside an obstacle's Axis-Aligned Bounding Box, `clamp(drone, ax_min, ax_max)` returns the drone's own coordinate, so `dx=dy=dz=0` and `dist=0`.  The downstream gate `dist > kMinDistGateM` then SILENCES the obstacle entirely.  PR #685 added an explicit "find nearest exit face, push out via that face with maximum repulsion" branch.
 
 A reviewer (and reasonably the user) might ask: **"the drone shouldn't ever be inside an obstacle's bounding box anyway — why bother with the recovery?"**
@@ -1027,3 +1038,60 @@ The previous behaviour (silent failure) is the worst possible outcome — it giv
 **Revisit when:** Cosys backends become a flight path on real hardware OR `LatencyProfiler` data shows >0.5 ms tail latency on the Cosys polling threads OR the spdlog sink is replaced with a different mutex profile.
 
 **Date:** 2026-05-05 (PR #704 review-performance P2 + review-concurrency observability rule)
+
+---
+
+## DR-043: Remove three scenario-33 avoider safety nets after empirical sweep showed they are dead weight
+
+**Question:** PR #712 (commits `42e7af9` / `aa69d53` / `e6bf478` / `b721481` on `feature/issue-710-empirical-cleanup`) removes three avoider/perception code paths originally added as scenario-33 safety nets:
+
+- **PR #646** — `close_regime_final_clamp`: post-correction velocity clamp that zeroed the toward-obstacle component AFTER all repulsion + brake math.  Designed as a "hard safety floor" so the final commanded velocity could never have a positive toward-obstacle component in close regime.
+- **PR #657** — `aabb_aware_distance`: replaced centroid-distance with AABB-face-distance + perpendicular repulsion direction.  Designed to fix cube/wall tangential-contact collisions where centroid-distance under-estimates the safety margin.
+- **PR #647** — `avoider_surface_enabled`: appended synthetic `GEOMETRIC_OBSTACLE` entries from the PATH A voxel-instance tracker into `DetectedObjectList`.  Designed so the avoider could repel from non-COCO geometry (cubes/pillars/walls) that the YOLO detector doesn't classify.
+
+Removing safety code is by definition a defensible-on-both-sides decision.  The argument FOR keeping them is real: they were each motivated by a specific observed scenario-33 failure mode and protect against the same class of failure if it recurs.  The argument FOR removing them is empirical: with the current Cosys ground-truth perception pipeline the failure modes don't occur, and dead safety code carries cost (complexity, surprise factor for future contributors, ongoing maintenance burden, test surface).
+
+**Empirical evidence justifying removal:**
+
+The #710 bisect (full report at [`docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md`](BISECT_REPORT_710_AABB_AWARE_REGRESSION.md)) was followed by a controlled empirical sweep on Cosys scenario 33:
+
+| Sweep | Config | Result | UNSTUCK | Hover-fb | Notes |
+|---|---|---|---|---|---|
+| Baseline | all 3 ON | PASS 26/26 | 2 | 0 | reference |
+| A | only #646 OFF | PASS 26/26 | **0** | 0 | cleaner than baseline |
+| B | only #657 OFF | **FAIL 22/26** | 3 | 81 → LOITER | drove the original #710 verdict |
+| C | only #647 OFF | PASS 26/26 | 0 | 0 | clean |
+| **D run 1** | **all 3 OFF** | **PASS 26/26** | 0 | 21 | unexpected clean PASS |
+| **D run 2** | **all 3 OFF (validation)** | **PASS 26/26** | 0 | 20 | reproducible |
+
+The critical signal from Sweep D: PR #657 only appeared load-bearing in Sweep B (only #657 off) because of an **interaction effect** with #646 and #647.  With all three off together, scenario 33 passes cleanly.
+
+The critical signal from Sweep A: `final_clamp_count` was 0 in the baseline run — PR #646's mechanism was already not firing in production even when enabled.  It was solving a problem that doesn't manifest in the current pipeline.
+
+**Why the failure modes are no longer present:** PR #657 (and its companions) were validated on the OLD scenario-33 pipeline (FastSAM masks + Depth Anything V2 → noisy extents, geometric-mismatch hazards).  The current pipeline uses Cosys ground-truth segmentation (`sam.backend = cosys_airsim`, `depth_estimator.backend = cosys_airsim`) which produces pixel-perfect masks and depth, so the fused `estimated_radius_m` / `estimated_height_m` are accurate without any of the geometric safety nets.
+
+**What remains as safety mechanisms after removal:**
+
+- `brake_in_close_regime` (Issue #513) — proximity-based brake arbitration cancels the toward-obstacle component of planned velocity before repulsion runs.  Default `true`.
+- `path_aware` (Issue #229) — strips repulsion opposing planned direction.  Default `true`.
+- `close_regime_active_` atomic flag with hysteresis — prevents chatter at boundary.
+- `OccupancyGrid3D` cell-inflation layer — uses `estimated_radius_m` to inflate the planner's view of each obstacle.  Untouched by #712.
+
+**Caveat — Gazebo scenario 18 (sensor-driven, no HD-map):** Pre-#712 the AABB-aware avoider was masking two unrelated regressions: (a) PX4 SITL ↔ Gazebo bridge timing race on takeoff, (b) runtime-perception over-publishing of obstacles from camera+radar UKF fusion.  Both are filed as separate follow-up issues (#713 + IMPROVEMENTS.md 2026-05-11) and were already present before #712.  Scenario 33 (Cosys) is the regression-pin scenario this PR was validated against.
+
+**For keeping the code (argument we considered but rejected):**
+
+- "The empirical sweep only covers Cosys-33.  Other scenarios or real-hardware paths might still need the safety nets."  Counter: empirical evidence > theoretical worst-case.  If a real-world failure re-emerges, the revert is one PR away and we have the original commits to reference (`760bcc1`, etc.).
+- "Two validation runs is a thin statistical basis for removing safety code."  Counter: combined with `final_clamp_count=0` (a stronger zero-firing signal than pass/fail) and the consistent passes in Sweep A + Sweep C + Sweep D (4 PASS runs of all-off-equivalent configs), the evidence is strong.
+
+**For removing (our decision):** Dead safety code is worse than absent safety code — it creates false confidence and adds complexity that obscures the real safety mechanisms.  The empirical sweep is reproducible and documents the conditions under which removal is safe.
+
+**Decision:** Remove all three code paths (PR #712, four commits totalling -1192/+207 net).  Retain the bisect report and this DR as the audit trail.  Treat this DR as the formal record that the removal was deliberate, empirically grounded, and reversible.
+
+**Revisit when:**
+
+1. A new perception backend is introduced that differs materially from Cosys-AirSim ground-truth (e.g. real-hardware stereo + segmentation, or a new SAM-class real-time mask model).  Each new backend's `estimated_radius_m` / `estimated_height_m` confidence properties must be re-validated; if they're noisy in the way FastSAM+DA-V2 was, the AABB-aware safety net may need to come back.
+2. Issue #713 (Gazebo SITL rotor-spin-up regression) is resolved — Gazebo scenarios become a routine validation surface again; re-test scenarios 02/17/18/26 to confirm the centroid-distance avoider is sufficient for runtime perception.
+3. A real-hardware deployment is approached.  Pre-flight checklist: re-run the Cosys-33 sweep on the production HW + perception pipeline before committing to the leaner avoider.
+
+**Date:** 2026-05-11 (PR #712 review-fault-recovery + review-api-contract — DR-NNN audit trail)

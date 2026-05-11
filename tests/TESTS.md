@@ -142,7 +142,7 @@ bash deploy/build.sh --test-filter watchdog
 | [Benchmark — Baseline Capture](#test_baseline_capturecpp--17-tests) | 1 | 17 | Metric accumulation, per-class breakdown with class names, multi-scenario insertion order, JSON round-trip (write + load + full field verification), latency content fidelity, tracking metrics (MOTP bounds, ID switches, fragmentations), empty/nonexistent/duplicate scenarios, malformed/wrong-schema JSON, state preservation on load failure |
 | [Benchmark — Baseline Comparator](#test_baseline_comparatorcpp--21-tests) | 1 | 21 | Regression detection (recall/precision/mAP/MOTA/MOTP/latency), configurable thresholds, zero-baseline skip, missing scenario detection, boundary tests, latency defensive paths, format rendering, partial failure |
 | Benchmark — Dashboard Renderer | 7 | 29 | Baseline loading (valid/missing/invalid/no-scenarios), scenario comparison (improvement/regression/boundary/zero-skip/missing/latency-string), PR comment rendering (sections/vacuous-warning/missing), full report rendering (detail/missing/skipped), top-changes ranking (higher/lower-is-better/skipped), latency deserialization, CLI main |
-| **Total** | **86 C++ + 5 shell + 1 Python** | **2049 (no SDK) / 2090 (+SDK) + 42 + 29 + 250+** | PR #704 added 15 cross_veto_decision + 35 radar_fov_gate + 15 occupancy_grid_cross_veto integration tests; VIO factory test inverted (Throw → Result). |
+| **Total** | **85 C++ + 5 shell + 1 Python** | **2028 (no SDK) / 2069 (+SDK) + 42 + 29 + 250+** | PR #712 removed 12 avoider dead-weight tests + entire `test_voxel_obstacle_surface.cpp` (9 tests) = -21 after empirical sweep validated Cosys scenario 33 passes without the three safety nets (DR-043). PR #704 added 15 cross_veto_decision + 35 radar_fov_gate + 15 occupancy_grid_cross_veto integration tests; VIO factory test inverted (Throw → Result). |
 
 ---
 
@@ -711,12 +711,15 @@ tracking variables.
 
 ---
 
-### test_obstacle_avoider_3d.cpp — 29 tests
+### test_obstacle_avoider_3d.cpp — 39 tests
 
 **What it tests:** ObstacleAvoider3D — 3D repulsive field with velocity prediction,
 factory registration (including `"potential_field_3d"` alias), name accessor, vertical gain,
 path-aware mode, Euclidean-magnitude clamp, close-regime path-aware bypass (Issue #503),
-per-class config overrides (Epic #519), OOB class_id safety, and Result<>-based factory errors.
+per-class config overrides (Epic #519), OOB class_id safety, Result<>-based factory errors,
+brake-in-close-regime forward-component cancellation (Issue #513), multi-obstacle interference,
+and NaN obstacle-position guards. PR #712 removed 12 dead-weight tests (post-correction final
+clamp + AABB-aware distance) after empirical sweep showed Cosys scenario 33 passes without them.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
@@ -725,12 +728,14 @@ per-class config overrides (Epic #519), OOB class_id safety, and Result<>-based 
 | `ObstacleAvoider3DTest` | 2 | Name is correct, convenience constructor |
 | `ObstacleAvoider3DTest` | 1 | Very close object (< 0.1m) produces maximum repulsion (dead zone fix) |
 | `ObstacleAvoider3DTest` | 2 | `vertical_gain=0` eliminates Z repulsion, `vertical_gain=1` produces Z repulsion |
-| `ObstacleAvoider3DTest` | 4 | Path-aware mode: strips backward repulsion, preserves lateral, preserves same-direction, disabled fallback |
+| `ObstacleAvoider3DTest` | 5 | Path-aware mode: strips backward repulsion, preserves lateral, preserves same-direction, no Z-leak when vertical_gain=0, disabled fallback |
 | `ObstacleAvoider3DTest` | 3 | Euclidean-magnitude clamp (not per-axis), close-regime bypass pushes opposite planner, bypass hysteresis prevents flip-flop (Issue #503) |
 | `ObstacleAvoider3DTest` | 3 | Per-class influence radius (PERSON vs TRUCK at same distance), per-class confidence threshold (DRONE filtered at 0.5 when threshold=0.8), per-class prediction dt (BUILDING stationary vs DRONE aggressive prediction) (Epic #519) |
-| `ObstacleAvoider3DTest` | 1 | Config-driven constructor loads per-class from JSON |
+| `ObstacleAvoider3DTest` | 1 | Config-driven constructor loads per-class from JSON (PERSON influence=3.0, default=5.0) |
 | `ObstacleAvoider3DTest` | 1 | OOB class_id (255) is safely skipped — no repulsion applied |
-| `ObstacleAvoider3DTest` | 1 | Config-driven per-class loading from JSON (PERSON influence=3.0, default=5.0) |
+| `ObstacleAvoider3DTest` | 8 | `brake_in_close_regime` (Issue #513): cancels forward velocity component when in close regime, disabled leaves forward motion, linear proximity scaling, no effect outside close regime, obstacle-behind skips cancel but applies scale, min-brake-scale floor, hysteresis-exit disengages brake, zero-velocity input produces no NaN |
+| `ObstacleAvoider3DTest` | 1 | Multi-obstacle interference still satisfies brake-arbitration safety contract |
+| `ObstacleAvoider3DTest` | 1 | NaN obstacle position guarded and skipped (no propagation into `sqrt(dx²+dy²+dz²)`) |
 
 **Key files under test:** `planner/obstacle_avoider_3d.h`, `planner/iobstacle_avoider.h`
 

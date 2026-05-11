@@ -231,11 +231,16 @@ public:
             if (obj.confidence < config_.min_confidence_per_class[ci]) continue;
             ++considered;
 
-            // Issue #645 review fix (#646/#657 P2): NaN/Inf guard on obstacle
-            // data — corrupted radar/perception messages with NaN positions
-            // would otherwise propagate through the AABB clamp at line ~257
-            // where std::clamp(drone, NaN, NaN) is undefined behavior
-            // (precondition lo <= hi violated).  Skip the entire obstacle.
+            // NaN/Inf guard on obstacle data — corrupted radar/perception
+            // messages with NaN positions or velocities would otherwise
+            // propagate into the `dist = sqrt(dx² + dy² + dz²)` computation
+            // below, producing NaN dist that silently bypasses the
+            // influence-radius gate and corrupts the repulsion accumulator
+            // with NaN.  Skip the entire obstacle.
+            // (`estimated_radius_m` / `estimated_height_m` are no longer
+            // consumed by the avoider after #712, but kept in the guard for
+            // defence-in-depth — they ride along with the rest of the IPC
+            // struct and a NaN in either signals a corrupted upstream.)
             if (!std::isfinite(obj.position_x) || !std::isfinite(obj.position_y) ||
                 !std::isfinite(obj.position_z) || !std::isfinite(obj.velocity_x) ||
                 !std::isfinite(obj.velocity_y) || !std::isfinite(obj.velocity_z) ||

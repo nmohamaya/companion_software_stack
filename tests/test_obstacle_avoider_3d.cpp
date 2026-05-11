@@ -860,15 +860,13 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_CancelsForwardComponent) {
 }
 
 TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_DisabledLeavesForwardMotion) {
-    // Regression guard: with brake_in_close_regime=false the planned-velocity
-    // cancel does NOT run — but Issue #645's post-correction final clamp does.
-    // The clamp fires regardless of the brake flag, as a hard safety floor:
-    // in close regime the final velocity must never have a positive toward-
-    // obstacle component.
+    // Regression guard for the pre-#513 additive-repulsion path.
     //
-    // To preserve coverage of the pre-#513 additive path, this test now uses
-    // an obstacle FAR enough that close_regime stays inactive (clamp does
-    // NOT engage), so the additive-only repulsion is observable.
+    // With brake_in_close_regime=false the planned-velocity cancel does NOT
+    // run, so the avoider falls back to pure additive repulsion (planned ±
+    // capped repulsion vector).  The obstacle is placed FAR enough that
+    // close_regime stays inactive, so this isolates the additive path with
+    // no interaction from any close-regime mechanism.
     ObstacleAvoider3DConfig config;
     config.influence_radius_m    = 10.0f;
     config.repulsive_gain        = 0.5f;  // weak to isolate brake-vs-deflect
@@ -1174,30 +1172,21 @@ TEST(ObstacleAvoider3DTest, BrakeInCloseRegime_ZeroVelocityInput_NoNaN) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// Post-correction toward-obstacle hard clamp — Issue #645
-// In close regime the *final* commanded velocity must never have a
-// positive component toward the nearest obstacle, even if repulsion
-// was capped or multiple obstacles cancelled each other out.  Found
-// in scenario-33 forensics 2026-04-30 where pillar_01 contact was
-// continuous despite the planned-velocity cancel.
+// Multi-obstacle close-regime safety contract
+// In close regime, the final commanded velocity must never have a
+// positive component toward the nearest obstacle.  This is enforced
+// by the brake-arbitration path (Issue #513) which cancels the
+// toward-obstacle component of the planned velocity before adding
+// repulsion.  (The PR #646 post-correction final clamp that used to
+// provide a redundant safety floor was removed in #712 after empirical
+// sweep showed it never fired in production — the brake path handles
+// every observed case on its own.)
 // ═════════════════════════════════════════════════════════════
 
-// PR #646 P1 review: the previous test name claimed
-// "FinalClampFiresUnderMultiObstacleInterference", but tracing the math
-// (obstacle 0 at +1m gives repulsion 1.0 in -X, obstacle 1 at -2m gives
-// 0.25 in +X → total -0.75; brake zeroes the +0.5 forward component;
-// final vx = -0.75 ≤ 0) showed the clamp never actually fires under
-// that geometry.  The test passed (contract holds: vx ≤ 0) but for the
-// wrong reason.  Renamed to reflect what it actually verifies, and a
-// new test below (`FinalClampFiresWhen…`) genuinely exercises the
-// clamp by tuning geometry so post-brake repulsion flips vx positive.
 TEST(ObstacleAvoider3DTest, MultiObstacleInterferenceStillSatisfiesContract) {
     // Two obstacles, one ahead (nearest, +X) and one behind (-X).  Their
-    // repulsions partially cancel.  This case is interesting because the
-    // brake-only path is sufficient to satisfy vx ≤ 0; the clamp would
-    // be redundant.  We pin the contract regardless: in close regime,
-    // vx (toward nearest at +X) must be ≤ 0 even when the clamp itself
-    // does not fire.
+    // repulsions partially cancel.  Brake arbitration alone is sufficient
+    // to satisfy vx ≤ 0 in close regime; this test pins that contract.
     ObstacleAvoider3DConfig config;
     config.influence_radius_m    = 10.0f;
     config.min_distance_m        = 3.0f;
@@ -1228,22 +1217,6 @@ TEST(ObstacleAvoider3DTest, MultiObstacleInterferenceStillSatisfiesContract) {
     EXPECT_TRUE(avoider.close_regime_active());
     EXPECT_LE(result.velocity_x, 1e-4f);
 }
-
-// PR #646 P1 review: a test that genuinely demonstrates the clamp
-// firing requires geometry where the post-brake net repulsion is
-// toward the NEAREST obstacle (not just any positive direction).
-// The naive "behind obstacle dominates" approach makes the behind
-// obstacle the nearest, flipping which side the clamp guards.
-// Logged as P2 in IMPROVEMENTS.md as "construct a multi-obstacle
-// geometry that demonstrably exercises the clamp counter increment
-// path" — needs a careful walkthrough of the avoider's nearest-
-// obstacle selection + per-axis clamp direction logic.
-
-// PR #646 P2 review: lateral velocity (perpendicular to nearest-obstacle
-// direction) must be PRESERVED when the clamp fires.  The clamp zeroes
-// only the toward-component, not the perpendicular component.  Without
-// this lock, a future "clamp full velocity" regression would silently
-// kill all motion when any obstacle approaches.
 
 TEST(ObstacleAvoider3DTest, NaNObstaclePositionIsGuardedAndSkipped) {
     ObstacleAvoider3DConfig config;
