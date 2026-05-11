@@ -246,8 +246,6 @@
             "min_confidence": 0.3,
             "prediction_dt_s": 0.5,
             "max_age_ms": 500,
-            "_comment_706": "Issue #706/#710 — scenario-33 safety-net flag. aabb_aware_distance default is false; Cosys scenario 33 explicitly opts in via its scenario JSON. See docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md and #712 cleanup commits.",
-            "aabb_aware_distance": false,
             "per_class": {
                 "_comment": "Per-class overrides (Epic #519). Unspecified classes use 'default'.",
                 "influence_radius_m": { "default": 5.0, "person": 3.0, "vehicle_truck": 8.0, "building": 2.0, "tree": 2.0, "geometric_obstacle": 4.0 },

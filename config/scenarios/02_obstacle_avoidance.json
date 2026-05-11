@@ -23,9 +23,7 @@
                 "max_correction_mps": 1.5,
                 "vertical_gain": 0.0,
                 "path_aware": true,
-                "_comment": "D* Lite is primary avoidance. Avoider is safety net: 8m influence, 1.5 max correction (100% of cruise), gain=3.0.",
-                "_comment_706": "Issue #706/#712 — aabb_aware_distance defaults to false (Gazebo runtime perception inflates AABB extents). Explicit override kept here for documentation.",
-                "aabb_aware_distance": false
+                "_comment": "D* Lite is primary avoidance. Avoider is safety net: 8m influence, 1.5 max correction (100% of cruise), gain=3.0."
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,

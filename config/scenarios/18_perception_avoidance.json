@@ -24,9 +24,7 @@
                 "max_correction_mps": 1.5,
                 "vertical_gain": 0.0,
                 "path_aware": true,
-                "_comment": "D* Lite is the primary avoidance. Avoider is a strong safety net: 8m influence (early reaction), 1.5 max correction (100% of cruise), gain=3.0. Compensates for depth estimation uncertainty and 5m-tall obstacles at 4m flight altitude.",
-                "_comment_706": "Issue #706/#712 — aabb_aware_distance defaults to false (Gazebo runtime perception inflates AABB extents). Explicit override kept here for documentation.",
-                "aabb_aware_distance": false
+                "_comment": "D* Lite is the primary avoidance. Avoider is a strong safety net: 8m influence (early reaction), 1.5 max correction (100% of cruise), gain=3.0. Compensates for depth estimation uncertainty and 5m-tall obstacles at 4m flight altitude."
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,

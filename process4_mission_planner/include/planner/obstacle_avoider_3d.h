@@ -70,12 +70,6 @@ struct ObstacleAvoider3DConfig {
     // while rejecting one-tick noise events.  Default 0.1 (= 10 % of
     // cruise).
     float min_brake_scale = 0.1f;
-    // Issue #706 — scenario-33 safety-net feature flag.  PR #646's
-    // close_regime_final_clamp was removed by #712 after empirical sweep
-    // showed it never fired in scenario 33 (dead weight).  See
-    // docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md.
-    bool aabb_aware_distance = true;  // PR #657 + #685 + #692
-
     // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
     // Zero-initialized here; the ObstacleAvoider3D constructor fills them
     // from the global scalars above, then the Config-driven constructor
@@ -163,12 +157,6 @@ public:
         config_.min_brake_scale =
             cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_BRAKE_SCALE,
                            config_.min_brake_scale);
-        // Issue #706 — scenario-33 safety-net flag (remaining: aabb_aware_distance).
-        config_.aabb_aware_distance =
-            cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::AABB_AWARE_DISTANCE,
-                          config_.aabb_aware_distance);
-        DRONE_LOG_INFO("[ObstacleAvoider3D] Issue #706 flag: aabb_aware_distance={}",
-                       config_.aabb_aware_distance ? "ON" : "OFF");
         // PR #617 review: a config mistake of min_distance_m=0 silently disables
         // BOTH the brake path (guarded by `min_distance_m > 0` inside avoid())
         // AND the close_regime_active_ hysteresis (entry condition is
@@ -261,114 +249,14 @@ public:
             float       oy      = obj.position_y + obj.velocity_y * pred_dt;
             float       oz      = obj.position_z + obj.velocity_z * pred_dt;
 
-            // ── Issue #645 — AABB-aware distance + direction ──────────────
-            // The legacy code computed centroid-distance + centroid-direction
-            // and treated every obstacle as a sphere of radius
-            // `estimated_radius_m`.  For a flat-faced object (cube, wall) the
-            // drone could be 0.4 m from a face but 0.9 m from the centroid;
-            // the avoider would treat that as "comfortably outside the bubble"
-            // and not engage close_regime until it was already touching the
-            // face.  Empirically reproduced as the "skipping to the side and
-            // hitting it" failure on TemplateCube_Rounded_66 in scenario 33.
-            //
-            // New behaviour: interpret `estimated_radius_m` as XY half-extent
-            // (square cross-section) and `estimated_height_m` as full Z extent.
-            // Compute the *nearest point on the AABB* to the drone and use
-            // that for distance + repulsion direction.  When extents are zero
-            // (default for centroid-only obstacles) the AABB collapses to a
-            // single point and the math reduces to legacy centroid-distance —
-            // backward compatible by construction.
-            // PR #657 P2 review: `hx` and `hy` were identical expressions
-            // (both `estimated_radius_m`) — restating the assumption inline so
-            // a future per-axis half-extent can replace either side without
-            // confusion.  The "square cross-section" wording is over-precise
-            // for centroid-only obstacles whose extents are 0; clarified.
-            //
-            // Issue #706 — when aabb_aware_distance is OFF, force extents to 0
-            // so the AABB collapses to the centroid and the math reduces to
-            // legacy point-to-point distance (pre-#657 behaviour).  The
-            // downstream inside-AABB logic naturally never triggers because
-            // the boundary is a single point.
-            const float radius_xy =
-                config_.aabb_aware_distance ? std::max(0.0f, obj.estimated_radius_m) : 0.0f;
-            const float hx = radius_xy;  // XY half-extent (square cross-section)
-            const float hy = radius_xy;  // identical to hx by construction
-            const float hz =
-                config_.aabb_aware_distance ? std::max(0.0f, 0.5f * obj.estimated_height_m) : 0.0f;
-            const float ax_min = ox - hx, ax_max = ox + hx;
-            const float ay_min = oy - hy, ay_max = oy + hy;
-            const float az_min = oz - hz, az_max = oz + hz;
-            const float nx = std::clamp(drone_x, ax_min, ax_max);
-            const float ny = std::clamp(drone_y, ay_min, ay_max);
-            const float nz = std::clamp(drone_z, az_min, az_max);
-
-            // Vector from drone INTO the AABB nearest point — same convention
-            // as the legacy `nearest_dx/dy/dz` (drone → obstacle).  When drone
-            // is outside the AABB this points perpendicular to the nearest face.
-            float dx = nx - drone_x;
-            float dy = ny - drone_y;
-            float dz = nz - drone_z;
+            // Drone-to-centroid distance + direction.  Treats each obstacle as
+            // a point at its position.  Repulsion direction = drone → centroid
+            // (negated downstream so the force pushes the drone away).
+            float dx = ox - drone_x;
+            float dy = oy - drone_y;
+            float dz = oz - drone_z;
 
             float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-            // PR #657 P1 review (SAFETY-CRITICAL): when the drone is INSIDE
-            // the AABB, the clamp above returns the drone's own position so
-            // `dx=dy=dz=0` and `dist=0`.  The downstream gate
-            // `dist > kMinDistGateM` then silences repulsion entirely —
-            // the avoider goes deaf at the moment we most need it.  This
-            // is the deepest possible interference state and must trigger
-            // MAXIMUM repulsion outward along the shortest-exit axis.
-            //
-            // Rule: when inside AABB, find the nearest exit face; set the
-            // (dx,dy,dz) vector to point AWAY from that face (so the
-            // existing repulsion negation `-(d/dist) * rep` pushes the
-            // drone OUT along the exit), and set `dist` to the depth
-            // along that axis (clamped to kMinDistGateM so the inverse-
-            // square below produces a finite-but-large repulsion).
-            // PR #685 Copilot review: use `<=` / `>=` so boundary contact
-            // (drone on AABB face) is also treated as inside — strict
-            // comparisons let dist=0 fall through to the gate below
-            // and re-introduced the silent dead zone for contact cases.
-            const bool inside_aabb = (drone_x >= ax_min && drone_x <= ax_max && drone_y >= ay_min &&
-                                      drone_y <= ay_max && drone_z >= az_min && drone_z <= az_max);
-            if (inside_aabb) {
-                struct ExitAxis {
-                    float depth;       // distance from drone to the face
-                    float ex, ey, ez;  // unit vector pointing TOWARD the exit face
-                };
-                const ExitAxis axes[6] = {
-                    {drone_x - ax_min, -1.0f, 0.0f, 0.0f},  // exit via -X face
-                    {ax_max - drone_x, +1.0f, 0.0f, 0.0f},  // exit via +X face
-                    {drone_y - ay_min, 0.0f, -1.0f, 0.0f},  // exit via -Y face
-                    {ay_max - drone_y, 0.0f, +1.0f, 0.0f},  // exit via +Y face
-                    {drone_z - az_min, 0.0f, 0.0f, -1.0f},  // exit via -Z face
-                    {az_max - drone_z, 0.0f, 0.0f, +1.0f},  // exit via +Z face
-                };
-                int best = 0;
-                for (int i = 1; i < 6; ++i) {
-                    if (axes[i].depth < axes[best].depth) best = i;
-                }
-                // PR #685 Copilot review: previous version set (dx,dy,dz)
-                // to a UNIT vector while `dist` was the depth, breaking the
-                // outside-AABB convention `magnitude(dx,dy,dz) == dist`.
-                // The downstream `(dx/dist) * repulsion` then produces a
-                // 1/dist^3 force scaling — wrong magnitude.  Set
-                // (dx,dy,dz) to the depth-scaled vector so the invariant
-                // holds and the inverse-square law works correctly.
-                //
-                // Floor depth strictly above the gate: previous
-                // `max(depth, kMinDistGateM)` produced exactly-floor
-                // values that the strict `> kMinDistGateM` gate then
-                // skipped — silent dead zone partially re-introduced.
-                // `nextafter(kMinDistGateM, +inf)` is the smallest float
-                // strictly greater than the gate.
-                const float depth_floored = std::nextafter(avoider_constants::kMinDistGateM,
-                                                           std::numeric_limits<float>::infinity());
-                dist                      = std::max(axes[best].depth, depth_floored);
-                dx = -axes[best].ex * dist;  // points INTO AABB; -(dx/dist) = +ex
-                dy = -axes[best].ey * dist;
-                dz = -axes[best].ez * dist;
-            }
 
             if (dist < config_.influence_radius_per_class[ci] &&
                 dist > avoider_constants::kMinDistGateM) {
@@ -383,8 +271,8 @@ public:
                 float repulsion = config_.repulsive_gain_per_class[ci] / (dist * dist);
 
                 // Per-obstacle contribution vector (so we can log its
-                // magnitude).  Direction: outward from the nearest AABB face,
-                // i.e. negative of (drone→nearest_point).
+                // magnitude).  Direction: outward from the obstacle centroid,
+                // i.e. negative of (drone→centroid).
                 const float cx = -(dx / dist) * repulsion;
                 const float cy = -(dy / dist) * repulsion;
                 const float cz = -(dz / dist) * repulsion * config_.vertical_gain;

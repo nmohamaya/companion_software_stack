@@ -29,11 +29,7 @@
             "waypoints": [
                 {"x": 10, "y": 0,  "z": 5, "yaw": 0,    "speed": 2.0, "payload_trigger": false},
                 {"x": 10, "y": 10, "z": 5, "yaw": 1.57,  "speed": 2.0, "payload_trigger": false}
-            ],
-            "obstacle_avoidance": {
-                "_comment_706": "Issue #706/#712 — aabb_aware_distance defaults to false. Explicit override kept here for documentation.",
-                "aabb_aware_distance": false
-            }
+            ]
         }
     },
     "fault_sequence": {

@@ -212,9 +212,7 @@
                 "vertical_gain": 0.0,
                 "path_aware": true,
                 "path_aware_bypass_hysteresis_m": 0.5,
-                "log_corrections": true,
-                "_comment_706_710": "Issue #710 — scenario 33 needs PR #657's AABB-aware avoider to handle the cube/pillar/wall geometry from Cosys ground-truth segmentation. The flag default flipped to false (Gazebo runtime perception over-engages on inflated AABBs) so this scenario explicitly opts in.",
-                "aabb_aware_distance": true
+                "log_corrections": true
             },
             "occupancy_grid": {
                 "resolution_m": 2.0,
