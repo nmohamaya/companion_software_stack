@@ -409,6 +409,13 @@ private:
                 s.satellites                              = kStubSatellites;
                 s.flight_mode                             = kSimpleFlightModeGuided;
 
+                // Issue #716 — SimpleFlight has no preflight health check; it
+                // accepts ARM unconditionally once the RPC connection is
+                // established.  We are inside the poll loop, which only runs
+                // when `client_->is_connected()` and the multirotor-state RPC
+                // succeeded — both conditions imply the FC is ready.
+                s.armable = true;
+
                 // Apply explicitly-requested mode override. requested_mode_
                 // is UINT8_MAX while no send_mode() has been called; any
                 // real code (0-3) takes precedence over the GUIDED default.

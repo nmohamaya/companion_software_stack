@@ -174,6 +174,12 @@ private:
 
     std::chrono::steady_clock::time_point last_arm_time_ = std::chrono::steady_clock::now() -
                                                            std::chrono::seconds(10);
+    // Issue #716 — wait-log throttle separate from `last_arm_time_` so the
+    // first ARM fires immediately when `fc_state.armable` transitions from
+    // false to true (without being gated by a stale arm-retry interval that
+    // was last touched by the wait-log path).
+    std::chrono::steady_clock::time_point last_wait_log_time_ = std::chrono::steady_clock::now() -
+                                                                std::chrono::seconds(10);
 
     // Collision recovery state (Issue #226)
     enum class RecoveryPhase : uint8_t { HOVER = 0, CLIMB = 1, REPLAN = 2 };
@@ -209,20 +215,43 @@ private:
             std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
     }
 
-    // ── PREFLIGHT: retry ARM until FC confirms ────────────────
+    // ── PREFLIGHT: wait for FC readiness, then ARM and retry every 3 s ────
+    // Issue #716 — gate ARM on `fc_state.armable` to avoid the cold-start
+    // `Arming denied: Resolve system health failures first` race on Gazebo
+    // SITL boots.  PX4's `Telemetry::health_all_ok` reports true once EKF2
+    // has converged, sensors are initialized, and GPS lock is acquired;
+    // sending ARM before that just generates log spam and (in degraded
+    // boot timing) can produce sloppy / crashing takeoffs once health
+    // later flickers through OK.  The 3 s retry stays as a safety net
+    // for the rare case PX4 drops the ARM message after armable went high.
     void tick_preflight(MissionFSM& fsm, const drone::ipc::FCState& fc_state,
                         const FCSendFn& send_fc) {
-        auto now_arm = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now_arm - last_arm_time_).count() >=
-            3) {
-            DRONE_LOG_INFO("[Planner] Sending ARM command");
-            send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
-            last_arm_time_ = now_arm;
-        }
         if (fc_state.armed) {
             DRONE_LOG_INFO("[Planner] Vehicle armed — initiating takeoff");
             fsm.on_takeoff();
             takeoff_sent_ = false;
+            return;
+        }
+        if (!fc_state.armable) {
+            // FC preflight not yet clear (EKF2 converging, sensors warming,
+            // GPS lock acquiring, etc.).  Log once per second so operators
+            // can see we are waiting on the FC and not stuck.  Uses a
+            // separate throttle from `last_arm_time_` so the first ARM
+            // fires immediately once `armable` transitions to true.
+            auto now_wait = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now_wait - last_wait_log_time_)
+                    .count() >= 1) {
+                DRONE_LOG_INFO("[Planner] Waiting for FC preflight (armable=false)");
+                last_wait_log_time_ = now_wait;
+            }
+            return;
+        }
+        auto now_arm = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now_arm - last_arm_time_).count() >=
+            3) {
+            DRONE_LOG_INFO("[Planner] FC armable — sending ARM command");
+            send_fc(drone::ipc::FCCommandType::ARM, 0.0f);
+            last_arm_time_ = now_arm;
         }
     }
 

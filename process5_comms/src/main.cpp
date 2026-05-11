@@ -53,7 +53,11 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
         state.satellites_visible = hb.satellites;
         state.flight_mode        = hb.flight_mode;
         state.armed              = hb.armed;
-        state.connected          = true;
+        // Issue #716 — propagate FC preflight readiness so P4 mission_planner
+        // can gate its ARM command on actual FC health instead of racing PX4's
+        // EKF2 init at cold-start.
+        state.armable   = hb.armable;
+        state.connected = true;
 
         // Apply fault-injection overrides (if any).
         drone::ipc::FaultOverrides ovr{};

@@ -23,6 +23,13 @@ struct FCState {
     uint8_t satellites{0};
     uint8_t flight_mode{0};  // 0=STAB, 1=GUIDED, 2=AUTO, 3=RTL
     bool    armed{false};
+    /// Issue #716 — true once the FC reports preflight checks have passed.
+    /// MavlinkFCLink sources this from MAVSDK Telemetry::subscribe_health_all_ok
+    /// (EKF2 converged, sensors initialized, GPS lock acquired, etc.).
+    /// CosysFCLink sets this to true once the RPC connection is established —
+    /// SimpleFlight has no real preflight check and accepts ARM unconditionally.
+    /// SimulatedFCLink mirrors that pattern (always armable when connected).
+    bool armable{false};
 };
 
 /// Abstract flight controller link interface.

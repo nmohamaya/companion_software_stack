@@ -86,6 +86,11 @@ public:
         state_.altitude_rel    = 100.0f + last_vz_ * 0.1f;
         state_.satellites =
             static_cast<uint8_t>(12 + static_cast<int>(std::sin(elapsed * 0.1) * 3));
+        // Issue #716 — SimulatedFCLink has no real preflight; mark armable
+        // once the link is open so unit tests and dev runs that use the
+        // simulated backend do not stall in PREFLIGHT waiting on a flag
+        // that real-hardware MAVSDK / Cosys backends actually populate.
+        state_.armable = connected_;
 
         return state_;
     }

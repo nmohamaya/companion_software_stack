@@ -466,8 +466,16 @@ struct FCState {
     uint8_t  flight_mode;
     bool     armed;
     bool     connected;
-    uint8_t  gps_fix_type;
-    uint8_t  satellites_visible;
+    // Issue #716 — true once FC preflight checks pass (PX4 EKF2 converged,
+    // sensors ready, etc.).  P4 mission_planner gates the ARM command on
+    // this flag to avoid racing PX4's `Arming denied: Resolve system health
+    // failures first` on cold-start Gazebo SITL boots.  MAVSDK source:
+    // `Telemetry::subscribe_health_all_ok`.  Cosys SimpleFlight has no
+    // real preflight check, so its backend reports armable=true once the
+    // RPC connection is established.
+    bool    armable;
+    uint8_t gps_fix_type;
+    uint8_t satellites_visible;
 
     [[nodiscard]] bool validate() const {
         return std::isfinite(battery_voltage) && battery_voltage >= 0.0f &&

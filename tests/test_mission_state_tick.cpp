@@ -46,10 +46,15 @@ Pose make_pose(float x, float y, float z) {
     return p;
 }
 
+// Issue #716 — `armable` defaults to true so the bulk of existing tests
+// (which exercise post-preflight behaviour) do not need to know about the
+// PREFLIGHT gate.  Tests that specifically exercise the gate override
+// `armable=false` after construction.
 FCState make_fc(bool armed, float rel_alt) {
     FCState fc{};
     fc.armed             = armed;
     fc.connected         = true;
+    fc.armable           = true;
     fc.rel_alt           = rel_alt;
     fc.battery_remaining = 80.0f;
     fc.timestamp_ns      = 1000;
@@ -112,6 +117,44 @@ TEST_F(MissionStateTickTest, PreflightTransitionsOnArmed) {
     do_tick(pose, fc);
 
     EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issue #716 — ARM gated on FC preflight readiness
+// ═══════════════════════════════════════════════════════════
+TEST_F(MissionStateTickTest, PreflightWaitsWhenFCNotArmable) {
+    // FC not yet ready (EKF2 converging, sensors warming).  Planner must
+    // NOT send ARM in this state — sending ARM produces PX4's
+    // "Arming denied: Resolve system health failures first" log spam and,
+    // worse, can arm the vehicle in a degraded state when health flickers
+    // through OK.  See #713 for the cold-start race this guards against.
+    auto pose  = make_pose(0, 0, 0);
+    auto fc    = make_fc(false, 0);
+    fc.armable = false;
+
+    do_tick(pose, fc);
+
+    // No ARM command should have been issued
+    EXPECT_TRUE(fc_calls.empty())
+        << "Planner sent ARM before FC reported armable=true (Issue #716 regression)";
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+TEST_F(MissionStateTickTest, PreflightSendsARMWhenFCBecomesArmable) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Tick 1: FC not yet armable — no ARM sent
+    auto fc_not_ready    = make_fc(false, 0);
+    fc_not_ready.armable = false;
+    do_tick(pose, fc_not_ready);
+    EXPECT_TRUE(fc_calls.empty());
+
+    // Tick 2: FC reports armable — ARM should be sent immediately
+    auto fc_ready = make_fc(false, 0);  // make_fc defaults armable=true
+    do_tick(pose, fc_ready);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
 }
 
 // ═══════════════════════════════════════════════════════════
