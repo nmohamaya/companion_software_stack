@@ -20,7 +20,6 @@
 #include "perception/ukf_fusion_engine.h"
 #include "perception/voxel_clusterer.h"
 #include "perception/voxel_instance_tracker.h"
-#include "perception/voxel_obstacle_snapshot.h"
 #include "util/config_keys.h"
 #include "util/diagnostic.h"
 #include "util/latency_profiler.h"
@@ -245,26 +244,21 @@ static void sam_thread(drone::ipc::ISubscriber<drone::ipc::VideoFrame>& video_su
 // three inputs.  If detections or depth are missing for this tick,
 // skip — the MaskDepthProjector needs both (masks alone can't produce
 // voxels without depth).
-static void mask_projection_thread(
-    drone::TripleBuffer<Masks2DList>&                       masks_queue,
-    drone::TripleBuffer<Detection2DList>&                   detections_queue,
-    drone::TripleBuffer<drone::hal::DepthMap>&              depth_queue,
-    drone::ipc::ISubscriber<drone::ipc::Pose>&              pose_sub,
-    drone::ipc::IPublisher<drone::ipc::SemanticVoxelBatch>& voxel_pub,
-    std::atomic<int>& shutdown_phase, drone::perception::MaskDepthProjector& projector,
-    drone::util::PathATrace* trace,
-    // Issue #638 Phase 1 — voxel clustering params.
-    // eps_m == 0 disables clustering (every voxel
-    // gets instance_id=0, current default).
-    float cluster_eps_m, int cluster_min_pts,
-    // Issue #638 Phase 2 — cross-frame instance tracker.
-    // Disabled when clustering is disabled (eps==0).
-    drone::perception::VoxelInstanceTracker* tracker,
-    // Issue #645 — snapshot of voxel-derived obstacles
-    // surfaced to the fusion thread for inclusion in the
-    // DetectedObjectList consumed by ObstacleAvoider3D.
-    // nullptr disables the surfacing path.
-    drone::TripleBuffer<drone::perception::VoxelObstacleSnapshot>* voxel_obstacle_buf) {
+static void mask_projection_thread(drone::TripleBuffer<Masks2DList>&          masks_queue,
+                                   drone::TripleBuffer<Detection2DList>&      detections_queue,
+                                   drone::TripleBuffer<drone::hal::DepthMap>& depth_queue,
+                                   drone::ipc::ISubscriber<drone::ipc::Pose>& pose_sub,
+                                   drone::ipc::IPublisher<drone::ipc::SemanticVoxelBatch>& voxel_pub,
+                                   std::atomic<int>&                      shutdown_phase,
+                                   drone::perception::MaskDepthProjector& projector,
+                                   drone::util::PathATrace*               trace,
+                                   // Issue #638 Phase 1 — voxel clustering params.
+                                   // eps_m == 0 disables clustering (every voxel
+                                   // gets instance_id=0, current default).
+                                   float cluster_eps_m, int cluster_min_pts,
+                                   // Issue #638 Phase 2 — cross-frame instance tracker.
+                                   // Disabled when clustering is disabled (eps==0).
+                                   drone::perception::VoxelInstanceTracker* tracker) {
     DRONE_LOG_INFO("[MaskProj] Thread started — publishing to {}",
                    drone::ipc::topics::SEMANTIC_VOXELS);
 
@@ -396,37 +390,6 @@ static void mask_projection_thread(
         // disabled (eps==0) so this is a no-op in legacy scenarios.
         if (tracker != nullptr && cluster_eps_m > 0.0f) {
             tracker->update(voxels, masks_opt->timestamp_ns);
-
-            // Issue #645 — surface stable voxel-derived tracks to the fusion
-            // thread so ObstacleAvoider3D can repel from non-COCO obstacles
-            // (cubes, pillars, walls) that are visible to PATH A but not to
-            // YOLO.  Lock-free hand-off via TripleBuffer: producer always
-            // writes, consumer always reads the latest.
-            if (voxel_obstacle_buf != nullptr) {
-                drone::perception::VoxelObstacleSnapshot snap{};
-                snap.timestamp_ns      = masks_opt->timestamp_ns;
-                const auto& tracks_map = tracker->tracks();
-                uint32_t    n          = 0;
-                for (const auto& [stable_id, tr] : tracks_map) {
-                    if (n >= drone::perception::kMaxVoxelObstacleEntries) break;
-                    auto& e             = snap.entries[n];
-                    e.stable_id         = stable_id;
-                    e.centroid_x        = tr.centroid_m.x();
-                    e.centroid_y        = tr.centroid_m.y();
-                    e.centroid_z        = tr.centroid_m.z();
-                    e.aabb_min_x        = tr.aabb_min_m.x();
-                    e.aabb_min_y        = tr.aabb_min_m.y();
-                    e.aabb_min_z        = tr.aabb_min_m.z();
-                    e.aabb_max_x        = tr.aabb_max_m.x();
-                    e.aabb_max_y        = tr.aabb_max_m.y();
-                    e.aabb_max_z        = tr.aabb_max_m.z();
-                    e.last_seen_ns      = tr.last_seen_ns;
-                    e.observation_count = tr.observation_count;
-                    ++n;
-                }
-                snap.num_entries = n;
-                voxel_obstacle_buf->write(std::move(snap));
-            }
         }
 
         if (cluster_eps_m > 0.0f && tick_count % 100 == 1) {
@@ -578,19 +541,13 @@ static void tracker_thread(drone::TripleBuffer<Detection2DList>&   input_queue,
 // radar_sub — IPC subscriber for radar detections (RadarDetectionList).
 //             Fed into fusion engine for camera+radar multi-sensor fusion.
 // @param profiler nullable — see inference_thread docstring and DR-022.
-static void fusion_thread(
-    drone::TripleBuffer<TrackedObjectList>&                  tracked_queue,
-    drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
-    drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
-    drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
-    std::atomic<int>& shutdown_phase, IFusionEngine& engine, int fusion_rate_hz,
-    drone::TripleBuffer<drone::hal::DepthMap>* depth_buf, int drain_timeout_ms,
-    drone::util::LatencyProfiler* profiler,
-    // Issue #645 — voxel-derived obstacles (PATH A) appended
-    // to the published DetectedObjectList so ObstacleAvoider3D
-    // sees non-COCO obstacles.  nullptr disables surfacing.
-    drone::TripleBuffer<drone::perception::VoxelObstacleSnapshot>* voxel_obstacle_buf,
-    uint32_t voxel_obstacle_min_observations, uint64_t voxel_obstacle_max_age_ns) {
+static void fusion_thread(drone::TripleBuffer<TrackedObjectList>&                  tracked_queue,
+                          drone::ipc::IPublisher<drone::ipc::DetectedObjectList>&  det_pub,
+                          drone::ipc::ISubscriber<drone::ipc::Pose>&               pose_sub,
+                          drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>& radar_sub,
+                          std::atomic<int>& shutdown_phase, IFusionEngine& engine,
+                          int fusion_rate_hz, drone::TripleBuffer<drone::hal::DepthMap>* depth_buf,
+                          int drain_timeout_ms, drone::util::LatencyProfiler* profiler) {
     DRONE_LOG_INFO("[Fusion] Thread started — backend: {}, rate: {} Hz", engine.name(),
                    fusion_rate_hz);
 
@@ -774,31 +731,6 @@ static void fusion_thread(
                     dc = src.confidence;
                 }
                 dst.depth_confidence = std::clamp(dc, 0.0f, 1.0f);
-            }
-
-            // Issue #645 — append voxel-derived obstacles from PATH A so
-            // ObstacleAvoider3D can repel from non-COCO geometry the
-            // detector path never produces (cubes, pillars, walls).  The
-            // mask_projection_thread writes a snapshot of stable Phase 2
-            // tracks; we read the latest snapshot and synthesise
-            // GEOMETRIC_OBSTACLE entries via a pure helper (testable
-            // without spinning up the full thread).
-            if (voxel_obstacle_buf != nullptr) {
-                if (auto snap_opt = voxel_obstacle_buf->read()) {
-                    const uint64_t now_ns = static_cast<uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch())
-                            .count());
-                    auto stats = drone::perception::append_voxel_obstacles_to_list(
-                        *snap_opt, shm_list, now_ns, voxel_obstacle_min_observations,
-                        voxel_obstacle_max_age_ns);
-                    if (stats.appended > 0 && fusion_count % 100 == 0) {
-                        DRONE_LOG_INFO("[Fusion] +{} voxel obstacles "
-                                       "(snap={} skipped_obs={} skipped_age={} skipped_full={})",
-                                       stats.appended, snap_opt->num_entries, stats.skipped_obs,
-                                       stats.skipped_age, stats.skipped_full);
-                    }
-                }
             }
 
             det_pub.publish(shm_list);
@@ -1315,11 +1247,6 @@ int main(int argc, char* argv[]) {
     drone::TripleBuffer<Detection2DList>      inference_to_projection;
     drone::TripleBuffer<Masks2DList>          sam_to_projection;
     drone::TripleBuffer<drone::hal::DepthMap> depth_to_projection;
-    // Issue #645 — voxel-derived obstacle snapshot from mask_projection_thread
-    // (producer) to fusion_thread (consumer).  Lock-free latest-value hand-off
-    // so the fusion thread can append GEOMETRIC_OBSTACLE entries to its
-    // DetectedObjectList publish (consumed by ObstacleAvoider3D).
-    drone::TripleBuffer<drone::perception::VoxelObstacleSnapshot> voxel_obstacle_to_fusion;
 
     // ── Optional benchmark profiler (Epic #523, Issue #571) ──────────
     // Opt-in via config (benchmark.profiler.enabled). Disabled by default
@@ -1359,32 +1286,10 @@ int main(int argc, char* argv[]) {
     const int fusion_rate_hz =
         std::clamp(ctx.cfg.get<int>(drone::cfg_key::perception::fusion::RATE_HZ, 30), 1, 100);
 
-    // Issue #645 — gating for voxel-derived obstacles surfaced to the avoider.
-    // min_observations matches the Phase 3 instance-promotion gate (#641) so the
-    // avoider only sees obstacles that have already passed the noise filter for
-    // grid promotion.  max_age_ms beyond track_max_age_s stops a flicker of a
-    // stale snapshot — the tracker itself ages tracks out via wall-clock.
-    const int voxel_obstacle_min_obs = std::clamp(
-        ctx.cfg.get<int>("perception.path_a.avoider_surface.min_observations", 3), 1, 1000);
-    const int voxel_obstacle_max_age_ms = std::clamp(
-        ctx.cfg.get<int>("perception.path_a.avoider_surface.max_age_ms", 1000), 50, 60000);
-    const uint64_t voxel_obstacle_max_age_ns = static_cast<uint64_t>(voxel_obstacle_max_age_ms) *
-                                               1'000'000ULL;
-    // Issue #706 — feature flag gating PR #647's voxel-snapshot append.  When
-    // OFF we pass nullptr to the fusion thread so the existing nullptr-skip
-    // path takes over (no branch in the hot path; behaviour matches pre-#647
-    // mainline).  Default ON preserves Cosys scenario 33 behaviour.
-    const bool avoider_surface_enabled =
-        ctx.cfg.get<bool>("perception.path_a.avoider_surface.enabled", true);
-    DRONE_LOG_INFO("[Fusion] Issue #706 flag: avoider_surface_enabled={}",
-                   avoider_surface_enabled ? "ON" : "OFF");
-
-    std::thread t_fusion(fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub),
-                         std::ref(*pose_sub), std::ref(*radar_sub), std::ref(g_shutdown_phase),
-                         std::ref(*fusion_engine), fusion_rate_hz,
-                         depth_enabled ? &depth_to_fusion : nullptr, drain_timeout_ms, profiler_ptr,
-                         avoider_surface_enabled ? &voxel_obstacle_to_fusion : nullptr,
-                         static_cast<uint32_t>(voxel_obstacle_min_obs), voxel_obstacle_max_age_ns);
+    std::thread t_fusion(
+        fusion_thread, std::ref(tracker_to_fusion), std::ref(*det_pub), std::ref(*pose_sub),
+        std::ref(*radar_sub), std::ref(g_shutdown_phase), std::ref(*fusion_engine), fusion_rate_hz,
+        depth_enabled ? &depth_to_fusion : nullptr, drain_timeout_ms, profiler_ptr);
 
     // Launch depth estimation thread if HAL is active (Issue #430)
     // Subscriber must outlive the thread — declare in outer scope (same pattern as pose_sub, radar_sub)
@@ -1521,7 +1426,7 @@ int main(int argc, char* argv[]) {
             mask_projection_thread, std::ref(sam_to_projection), std::ref(inference_to_projection),
             std::ref(depth_to_projection), std::ref(*pathA_pose_sub), std::ref(*voxel_pub),
             std::ref(g_shutdown_phase), std::ref(*mask_projector), path_a_trace.get(),
-            cluster_eps_m, cluster_min_pts, path_a_tracker.get(), &voxel_obstacle_to_fusion);
+            cluster_eps_m, cluster_min_pts, path_a_tracker.get());
     }
 
     // ── Thread watchdog + health publisher ──────────────────

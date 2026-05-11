@@ -35,14 +35,6 @@
                 "close_regime_final_clamp": false,
                 "aabb_aware_distance": false
             }
-        },
-        "perception": {
-            "path_a": {
-                "_comment_706": "Issue #706 — explicitly disable PR #647 voxel-snapshot append. PATH A inactive in this scenario, so mainly documentation.",
-                "avoider_surface": {
-                    "enabled": false
-                }
-            }
         }
     },
     "fault_sequence": {

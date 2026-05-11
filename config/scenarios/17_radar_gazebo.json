@@ -87,12 +87,6 @@
                     "promotion_hits": 8,
                     "_comment": "Camera+radar UKF fusion with ground filter + altitude gate. Tightened orphan params to reduce multipath ghost tracks (Issue #345)."
                 }
-            },
-            "path_a": {
-                "_comment_706": "Issue #706 — explicitly disable PR #647 voxel-snapshot append. PATH A inactive in this scenario (no SAM), so this is mainly documentation.",
-                "avoider_surface": {
-                    "enabled": false
-                }
             }
         }
     },
