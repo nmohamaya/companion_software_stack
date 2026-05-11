@@ -540,14 +540,6 @@ inline constexpr const char* MIN_BRAKE_SCALE = "mission_planner.obstacle_avoidan
 // and on Cosys scenarios.  Gazebo scenarios (02/17/26) override to false to
 // recover legacy main-branch behaviour for empirical comparison.
 //
-// CLOSE_REGIME_FINAL_CLAMP (PR #646) — when true, the avoider applies a
-// post-correction safety clamp after all repulsion + brake math: in close
-// regime, the *final* commanded velocity has its toward-obstacle component
-// zeroed.  Independent of brake_in_close_regime so pure-deflection scenarios
-// also benefit.  When false, the correction stops at the planned-velocity
-// cancellation step (legacy pre-#646 behaviour).
-inline constexpr const char* CLOSE_REGIME_FINAL_CLAMP =
-    "mission_planner.obstacle_avoidance.close_regime_final_clamp";
 // AABB_AWARE_DISTANCE (PR #657 + #685 + #692) — when true, the avoider
 // computes distance to the nearest face of each obstacle's AABB
 // (centroid ± estimated_radius_m XY, ± 0.5×estimated_height_m Z) and

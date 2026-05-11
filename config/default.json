@@ -246,8 +246,7 @@
             "min_confidence": 0.3,
             "prediction_dt_s": 0.5,
             "max_age_ms": 500,
-            "_comment_706": "Issue #706/#710 — scenario-33 safety-net flags. close_regime_final_clamp default is true (PR #646 — broadly safe, no Gazebo regression observed). aabb_aware_distance default flipped to FALSE after #710 bisect identified PR #657 as the regression source for sensor-driven Gazebo scenarios (camera+radar UKF fusion produces inflated AABB extents that the AABB-aware avoider over-engages on). Cosys scenario 33 explicitly opts in via its scenario JSON. See docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md.",
-            "close_regime_final_clamp": true,
+            "_comment_706": "Issue #706/#710 — scenario-33 safety-net flag. aabb_aware_distance default is false; Cosys scenario 33 explicitly opts in via its scenario JSON. See docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md and #712 cleanup commits.",
             "aabb_aware_distance": false,
             "per_class": {
                 "_comment": "Per-class overrides (Epic #519). Unspecified classes use 'default'.",

@@ -70,11 +70,11 @@ struct ObstacleAvoider3DConfig {
     // while rejecting one-tick noise events.  Default 0.1 (= 10 % of
     // cruise).
     float min_brake_scale = 0.1f;
-    // Issue #706 — scenario-33 safety-net feature flags.
-    // Default true; Gazebo scenarios override to false for main-parity
-    // behaviour.  See config_keys.h for full rationale.
-    bool close_regime_final_clamp = true;  // PR #646
-    bool aabb_aware_distance      = true;  // PR #657 + #685 + #692
+    // Issue #706 — scenario-33 safety-net feature flag.  PR #646's
+    // close_regime_final_clamp was removed by #712 after empirical sweep
+    // showed it never fired in scenario 33 (dead weight).  See
+    // docs/tracking/BISECT_REPORT_710_AABB_AWARE_REGRESSION.md.
+    bool aabb_aware_distance = true;  // PR #657 + #685 + #692
 
     // Per-class overrides (Epic #519).  Indexed by ObjectClass enum value (0-7).
     // Zero-initialized here; the ObstacleAvoider3D constructor fills them
@@ -163,16 +163,11 @@ public:
         config_.min_brake_scale =
             cfg.get<float>(drone::cfg_key::mission_planner::obstacle_avoidance::MIN_BRAKE_SCALE,
                            config_.min_brake_scale);
-        // Issue #706 — scenario-33 safety-net flags.
-        config_.close_regime_final_clamp = cfg.get<bool>(
-            drone::cfg_key::mission_planner::obstacle_avoidance::CLOSE_REGIME_FINAL_CLAMP,
-            config_.close_regime_final_clamp);
+        // Issue #706 — scenario-33 safety-net flag (remaining: aabb_aware_distance).
         config_.aabb_aware_distance =
             cfg.get<bool>(drone::cfg_key::mission_planner::obstacle_avoidance::AABB_AWARE_DISTANCE,
                           config_.aabb_aware_distance);
-        DRONE_LOG_INFO("[ObstacleAvoider3D] Issue #706 flags: "
-                       "close_regime_final_clamp={} aabb_aware_distance={}",
-                       config_.close_regime_final_clamp ? "ON" : "OFF",
+        DRONE_LOG_INFO("[ObstacleAvoider3D] Issue #706 flag: aabb_aware_distance={}",
                        config_.aabb_aware_distance ? "ON" : "OFF");
         // PR #617 review: a config mistake of min_distance_m=0 silently disables
         // BOTH the brake path (guarded by `min_distance_m > 0` inside avoid())
@@ -561,52 +556,6 @@ public:
         cmd.velocity_y += total_rep_y;
         cmd.velocity_z += total_rep_z;
 
-        // ── Post-correction toward-obstacle hard clamp (Issue #645) ────
-        // The brake-arbitration block above only zeroes the toward-obstacle
-        // component of the *planned* velocity.  After `total_rep` is added
-        // the *final* command can re-acquire a positive toward-component if
-        //   (a) repulsion was capped by max_correction_mps and isn't quite
-        //       enough to cancel forward momentum, or
-        //   (b) the sum of repulsions from multiple obstacles cancelled out
-        //       and left a net push toward the nearest one.
-        // Scenario 33 (run 2026-04-30_101126_FAIL) showed the drone making
-        // continuous contact with pillar_01 despite v_toward(planned) being
-        // cancelled — repulsion saturation alone wasn't enough.  This is the
-        // safety floor: in close regime, the *final* commanded velocity can
-        // never have a positive component toward the nearest obstacle.
-        // Independent of `brake_in_close_regime` so pure-deflection scenarios
-        // also benefit; gated only on `close_regime_active_`.
-        //
-        // Issue #706 — config_.close_regime_final_clamp gates this whole block
-        // so Gazebo scenarios can run with legacy pre-#646 behaviour.  When
-        // OFF the loop body is skipped (final_clamp_applied stays false,
-        // v_toward_final stays 0); the diagnostic log block downstream still
-        // compiles cleanly because the variables are declared regardless.
-        bool  final_clamp_applied = false;
-        float v_toward_final      = 0.0f;
-        if (config_.close_regime_final_clamp &&
-            close_regime_active_.load(std::memory_order_relaxed) &&
-            std::isfinite(min_active_dist) && min_active_dist > avoider_constants::kMinDistGateM) {
-            const float inv = 1.0f / min_active_dist;
-            const float nx  = nearest_dx * inv;
-            const float ny  = nearest_dy * inv;
-            const float nz  = nearest_dz * inv;
-            v_toward_final  = cmd.velocity_x * nx + cmd.velocity_y * ny + cmd.velocity_z * nz;
-            if (v_toward_final > 0.0f) {
-                cmd.velocity_x -= v_toward_final * nx;
-                cmd.velocity_y -= v_toward_final * ny;
-                cmd.velocity_z -= v_toward_final * nz;
-                final_clamp_applied = true;
-                // Issue #645 review fix (#646 P1): relaxed-ordering atomic
-                // increment.  Counter is read by external diagnostic
-                // accessor on potentially different threads (P7 monitor /
-                // logger).  Relaxed is sufficient because the counter is
-                // a pure observability signal — no synchronization with
-                // other state required.
-                final_clamp_count_.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-
         // Single-line summary at the end of every avoid() call (Issue #503).
         // INFO-gated on log_corrections + meaningful delta so quiet ticks stay
         // at DEBUG.  Magnitude is the Euclidean size of the total correction
@@ -629,14 +578,13 @@ public:
                 // ticks the three defaults (0, 0.0, 1.0) aren't informative.  This
                 // saves one fmt::format + alloc per active tick when the brake is
                 // idle (PR #617 perf review).
-                if (brake_applied || brake_scale < 1.0f || final_clamp_applied) {
+                if (brake_applied || brake_scale < 1.0f) {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={} brake={} v_toward={:.2f} "
-                                   "scale={:.2f} final_clamp={} v_toward_final={:.2f}",
+                                   "scale={:.2f}",
                                    considered, active, delta_mag, path_aware_strip_count,
                                    close_regime_active_.load(std::memory_order_relaxed) ? 1 : 0,
-                                   brake_applied ? 1 : 0, v_toward, brake_scale,
-                                   final_clamp_applied ? 1 : 0, v_toward_final);
+                                   brake_applied ? 1 : 0, v_toward, brake_scale);
                 } else {
                     DRONE_LOG_INFO("[Avoider] considered={} active={} |delta|={:.2f} m/s "
                                    "path_aware_strip={} close_regime={}",
@@ -660,15 +608,6 @@ public:
     /// Exposed for tests and diagnostics.
     [[nodiscard]] bool close_regime_active() const {
         return close_regime_active_.load(std::memory_order_relaxed);
-    }
-
-    /// Total number of avoid() calls in which the post-correction final clamp
-    /// (Issue #645) zeroed a positive toward-obstacle component on the final
-    /// command.  Persistently rising across ticks indicates the rest of the
-    /// pipeline (planner + brake + repulsion) was repeatedly trying to push
-    /// the drone into an obstacle and the safety floor caught it.
-    [[nodiscard]] uint64_t final_clamp_count() const noexcept {
-        return final_clamp_count_.load(std::memory_order_relaxed);
     }
 
     /// Mutable config access — for tests that need per-class overrides
@@ -696,13 +635,6 @@ private:
     // (run-report / P7).  See accessor doc above.  All in-place
     // mutations use `relaxed` (pure observability — no sync implied).
     std::atomic<bool> close_regime_active_{false};
-    // Diagnostic counter (Issue #645) — increments every avoid() call where
-    // the post-correction toward-obstacle clamp zeroed a positive component.
-    // Issue #645 review fix (#646 P1): atomic counter — written by avoid()
-    // on the planner thread, read by final_clamp_count() accessor which can
-    // be called from any thread (P7 health monitor, logger).  Relaxed
-    // ordering is sufficient — pure observability counter.
-    std::atomic<uint64_t> final_clamp_count_{0};
 };
 
 }  // namespace drone::planner
