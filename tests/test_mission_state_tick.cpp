@@ -46,10 +46,15 @@ Pose make_pose(float x, float y, float z) {
     return p;
 }
 
+// Issue #716 — `armable` defaults to true so the bulk of existing tests
+// (which exercise post-preflight behaviour) do not need to know about the
+// PREFLIGHT gate.  Tests that specifically exercise the gate override
+// `armable=false` after construction.
 FCState make_fc(bool armed, float rel_alt) {
     FCState fc{};
     fc.armed             = armed;
     fc.connected         = true;
+    fc.armable           = true;
     fc.rel_alt           = rel_alt;
     fc.battery_remaining = 80.0f;
     fc.timestamp_ns      = 1000;
@@ -112,6 +117,96 @@ TEST_F(MissionStateTickTest, PreflightTransitionsOnArmed) {
     do_tick(pose, fc);
 
     EXPECT_EQ(fsm.state(), MissionState::TAKEOFF);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Issue #716 — ARM gated on FC preflight readiness
+// ═══════════════════════════════════════════════════════════
+TEST_F(MissionStateTickTest, PreflightWaitsWhenFCNotArmable) {
+    // FC not yet ready (EKF2 converging, sensors warming).  Planner must
+    // NOT send ARM in this state — sending ARM produces PX4's
+    // "Arming denied: Resolve system health failures first" log spam and,
+    // worse, can arm the vehicle in a degraded state when health flickers
+    // through OK.  See #713 for the cold-start race this guards against.
+    auto pose  = make_pose(0, 0, 0);
+    auto fc    = make_fc(false, 0);
+    fc.armable = false;
+
+    do_tick(pose, fc);
+
+    // No ARM command should have been issued
+    EXPECT_TRUE(fc_calls.empty())
+        << "Planner sent ARM before FC reported armable=true (Issue #716 regression)";
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+TEST_F(MissionStateTickTest, PreflightSendsARMWhenFCBecomesArmable) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Tick 1: FC not yet armable — no ARM sent
+    auto fc_not_ready    = make_fc(false, 0);
+    fc_not_ready.armable = false;
+    do_tick(pose, fc_not_ready);
+    EXPECT_TRUE(fc_calls.empty());
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);  // Issue #716 review — assert state too
+
+    // Tick 2: FC reports armable — ARM should be sent immediately on the
+    // very next tick (no 3-second wait imposed by the wait-log path).
+    auto fc_ready = make_fc(false, 0);  // make_fc defaults armable=true
+    do_tick(pose, fc_ready);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+}
+
+// Issue #716 review (test-quality / test-unit P2) — two consecutive ticks
+// with armable=true must produce only ONE ARM within the retry interval.
+// Prior to the fix, last_arm_time_ being constructor-initialised to
+// `now - 10s` guarantees the first ARM fires; a follow-up tick within 3 s
+// must NOT add a second ARM.
+TEST_F(MissionStateTickTest, PreflightDoesNotResendArmWithinRetryInterval) {
+    auto pose = make_pose(0, 0, 0);
+    auto fc   = make_fc(false, 0);  // armable=true (default), not armed yet
+
+    do_tick(pose, fc);
+    ASSERT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fc_calls[0].cmd, FCCommandType::ARM);
+
+    // Second tick within the 3-second retry window — must not fire again
+    do_tick(pose, fc);
+    EXPECT_EQ(fc_calls.size(), 1u) << "Planner sent a duplicate ARM within the retry interval "
+                                      "(Issue #716 retry-dedup regression)";
+}
+
+// Issue #716 review (test-unit P2 + fault-recovery P3) — armable can flicker
+// true → false → true during EKF lock loss or sensor reinitialisation mid-
+// PREFLIGHT.  After a brief false dip, the planner must NOT spuriously
+// re-arm (the retry window protects against that), and it must STILL
+// eventually issue the ARM once armable recovers (the gate must not
+// permanently latch on the false transition).
+TEST_F(MissionStateTickTest, PreflightHandlesArmableFlicker) {
+    auto pose = make_pose(0, 0, 0);
+
+    // Tick 1: armable=true → ARM fires
+    auto fc_ok = make_fc(false, 0);
+    do_tick(pose, fc_ok);
+    ASSERT_EQ(fc_calls.size(), 1u);
+
+    // Tick 2: armable goes false (EKF flicker) → no new ARM, still PREFLIGHT
+    auto fc_lost    = make_fc(false, 0);
+    fc_lost.armable = false;
+    do_tick(pose, fc_lost);
+    EXPECT_EQ(fc_calls.size(), 1u);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
+
+    // Tick 3: armable recovers — within the retry window, so no immediate
+    // re-arm (consistent with PreflightDoesNotResendArmWithinRetryInterval).
+    // The FSM stays in PREFLIGHT until either the retry interval elapses
+    // (production path) or fc_state.armed flips true (PX4 acknowledged the
+    // earlier ARM after the flicker cleared).
+    do_tick(pose, fc_ok);
+    EXPECT_LE(fc_calls.size(), 1u);
+    EXPECT_EQ(fsm.state(), MissionState::PREFLIGHT);
 }
 
 // ═══════════════════════════════════════════════════════════

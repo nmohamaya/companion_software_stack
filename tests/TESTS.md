@@ -697,15 +697,18 @@ escalation-only policy (never downgrade from a previously applied action).
 
 ---
 
-### test_mission_state_tick.cpp — 15 tests
+### test_mission_state_tick.cpp — 24 tests
 
 **What it tests:** `MissionStateTick` — per-tick FSM logic for all mission
 states (PREFLIGHT, TAKEOFF, NAVIGATE, NAVIGATE_UNSTUCK, RTL, LAND) with
-tracking variables.
+tracking variables.  Issue #716 added ARM-gating on FC preflight readiness
+(`fc_state.armable`) and four PREFLIGHT-gate tests.
 
 | Suite | Tests | What is validated |
 |-------|-------|-------------------|
-| `MissionStateTickTest` | 15 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, NAVIGATE_UNSTUCK disarm-abort (#503), RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π] |
+| `MissionStateTickTest` | 20 | PREFLIGHT ARM retry, armed → TAKEOFF transition, takeoff altitude threshold, SURVEY yaw sweep + grid promotion, waypoint reached + payload trigger, mission complete → RTL, disarm detection during NAVIGATE, NAVIGATE_UNSTUCK disarm-abort (#503), RTL disarm → IDLE, landed transition → IDLE + fault reset, land_sent guard, waypoint overshoot advances to next, survey target_yaw wrapping to [-π,π], **Issue #716 PREFLIGHT ARM gating**: waits when `fc_state.armable=false`, fires ARM on armable transition true, does not resend ARM within retry interval, handles armable true→false→true flicker without spurious re-arm |
+| `MissionStateTickUnstuckTest` | 2 | NAVIGATE_UNSTUCK escalation behaviour (#503) |
+| `Issue624YawRefreshTest` | 2 | Post-avoider yaw-towards-velocity refresh (#624) |
 
 **Key files under test:** `planner/mission_state_tick.h`
 

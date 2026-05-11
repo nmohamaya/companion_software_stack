@@ -456,18 +456,34 @@ struct FCCommand {
 // FC State (Process 5 → Process 4)
 // ═══════════════════════════════════════════════════════════
 struct FCState {
-    uint64_t timestamp_ns;
-    float    gps_lat, gps_lon, gps_alt;
-    float    rel_alt;
-    float    roll, pitch, yaw;
-    float    vx, vy, vz;
-    float    battery_voltage;
-    float    battery_remaining;
-    uint8_t  flight_mode;
-    bool     armed;
-    bool     connected;
-    uint8_t  gps_fix_type;
-    uint8_t  satellites_visible;
+    uint64_t timestamp_ns{0};
+    float    gps_lat{0.0f}, gps_lon{0.0f}, gps_alt{0.0f};
+    float    rel_alt{0.0f};
+    float    roll{0.0f}, pitch{0.0f}, yaw{0.0f};
+    float    vx{0.0f}, vy{0.0f}, vz{0.0f};
+    float    battery_voltage{0.0f};
+    float    battery_remaining{0.0f};
+    uint8_t  flight_mode{0};
+    // Issue #716 review — default-initialise the boolean fields so flight-
+    // recorder replay logs from before this field existed deserialise to a
+    // safe default (`armable=false`, `armed=false`, `connected=false`)
+    // rather than uninitialised memory.  The PREFLIGHT gate at
+    // `tick_preflight` (mission_state_tick.h) treats `armable=false` as
+    // "wait" (correct conservative behaviour); old logs will sit in
+    // PREFLIGHT until a fresh FCState is published, which is preferable to
+    // a garbage bool that could spuriously trip the gate.
+    bool armed{false};
+    bool connected{false};
+    // Issue #716 — true once FC preflight checks pass (PX4 EKF2 converged,
+    // sensors ready, GPS lock acquired).  P4 mission_planner gates the ARM
+    // command on this flag.  Per-backend semantics:
+    //   - MavlinkFCLink: MAVSDK `Telemetry::subscribe_health_all_ok`
+    //   - CosysFCLink: true once the AirSim RPC poll loop is alive
+    //     (SimpleFlight has no real preflight check)
+    //   - SimulatedFCLink: mirrors `connected_` (no real preflight check)
+    bool    armable{false};
+    uint8_t gps_fix_type{0};
+    uint8_t satellites_visible{0};
 
     [[nodiscard]] bool validate() const {
         return std::isfinite(battery_voltage) && battery_voltage >= 0.0f &&
@@ -477,6 +493,16 @@ struct FCState {
                std::isfinite(vy) && std::isfinite(vz);
     }
 };
+// Issue #716 review — wire-format ABI guards, collocated with the struct
+// definition (matches the pattern used by SemanticVoxel / SemanticVoxelBatch /
+// IpcWaypoint / FaultOverrides etc).  A future field addition that changes
+// `sizeof(FCState)` MUST update the expected size here and bump kWireVersion
+// (see `topics::FC_STATE`).  Until #718 lands cross-version FCState
+// deserialisation, treat `sizeof(FCState)` as part of the public IPC ABI.
+static_assert(std::is_trivially_copyable_v<FCState>,
+              "FCState must be trivially copyable for Zenoh raw wire format");
+static_assert(std::is_standard_layout_v<FCState>,
+              "FCState must be standard-layout for cross-compiler offset stability");
 
 // ═══════════════════════════════════════════════════════════
 // GCS Commands (Process 5 → Process 4)

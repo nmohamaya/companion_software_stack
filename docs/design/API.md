@@ -585,6 +585,7 @@ Flight controller telemetry (P5 to P4, P7).
 | `flight_mode` | `uint8_t` | FC flight mode |
 | `armed` | `bool` | True if armed |
 | `connected` | `bool` | True if FC link active |
+| `armable` | `bool` | True once FC reports preflight checks passed (Issue #716). MAVSDK: `Telemetry::health_all_ok` (EKF2 converged + sensors initialized + GPS lock). Cosys/Simulated: true once connected (SimpleFlight has no real preflight check). P4 `mission_planner::tick_preflight` gates the ARM command on this flag to avoid racing PX4's EKF2 init on cold-start Gazebo SITL boots. |
 | `gps_fix_type` | `uint8_t` | GPS fix type |
 | `satellites_visible` | `uint8_t` | GPS satellite count |
 
