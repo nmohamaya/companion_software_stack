@@ -16,6 +16,28 @@ Running list of improvements noticed in passing while doing other work. Not urge
 
 ## Open
 
+### 2026-05-11 (#712 cleanup — residual concerns observed during scenario 18 testing)
+
+Items observed in the field during the #710 → #712 work but **outside the cleanup scope**.  Both pre-date commit 3 (they were observable across multiple commits today on the integration branch) and reproduce on a clean tree.
+
+#### Gazebo SITL — rotor-spin-up delay regression
+
+- **P1** — Scenario 18 (and likely 02/17) on the integration branch shows a **~5 s delay between PX4 arming and rotor engagement** at takeoff.  On `main` (commit `389089a`), rotors engage immediately.  Symptom: drone sometimes hits the ground before climbing, sometimes climbs in a degraded EKF state that destabilises later flight.
+  - **Evidence:** main scenario 18 run `2026-05-07_102520_PASS` shows clean immediate rotor spin-up; every integration-branch run today (commits 42e7af9, aa69d53, e6bf478) shows the 5 s delay.
+  - **Bisect range:** between `main` (`389089a`, Apr 21) and `c7d64fb` (Apr 30, our previous bisect's known-good baseline).  This range was never bisected — our earlier bisect started at `c7d64fb` and found PR #657 was the *avoider* regression, but the rotor-delay regression is older and separate.
+  - **Affected:** PX4 SITL takeoff stability in Gazebo scenarios.  Cosys-AirSim scenarios unaffected (different FC link path — `cosys_rpc` vs `mavlink`).
+  - **Suggested next step:** bisect `main..c7d64fb` on scenario 18 using the same methodology as the original #710 bisect.  Likely culprits to prioritise: anything touching `deploy/launch_gazebo.sh`, `common/hal/src/gazebo_*.cpp`, or `process5_comms/` initialisation order.
+  - **Tracker:** will be filed as a follow-up issue (#712 PR description references it).
+
+#### Gazebo runtime perception — ghost obstacles in DetectedObjectList
+
+- **P2** — Scenario 17 and 18 (sensor-driven, no HD-map) observe more obstacles in `[Avoider] considered=N` than there are physical objects in the scene.  Run `2026-05-07_101527_FAIL` on scenario 17 had `considered=6 active=5` with only 4 physical cylinders within range; commit 3 era scenario 18 runs show `considered=7-8` in similar geometries.
+  - **Root cause hypothesis:** camera+radar UKF fusion producing duplicate tracks of the same physical obstacle from radar multipath, ByteTrack retaining low-confidence tracks longer than expected, or `min_confidence` filtering being too lenient at the avoider's input gate.
+  - **Effect with PR #657 active (pre-#712):** AABB-aware avoider engaged early and pushed the drone away from ghost clusters, masking the over-publishing.
+  - **Effect with PR #657 removed (post-#712):** centroid-distance avoider engages later; drone passes closer; more ghosts accumulate; planner grid saturates → STUCK / hover-fallback.
+  - **Suggested next step:** add diagnostic counters per detection source (camera-only vs radar-only vs camera+radar) to identify which path inflates `considered`; tighten the UKF orphan/duplicate gates.
+  - **Tracker:** will be filed as a follow-up issue.
+
 ### 2026-05-05 (PR #704 second-round review — deferred follow-ups)
 
 Items from the second 9-agent review pass on PR #704, after the first-round fixes landed.  Top-4 items (config-key unit mismatch, fault propagation, header scrub) addressed in commit 593d38b.  The items below are correct-but-deferred:
