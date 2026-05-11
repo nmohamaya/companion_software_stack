@@ -70,12 +70,21 @@ static void fc_rx_thread(drone::hal::IFCLink& fc, drone::ipc::IPublisher<drone::
                 if (ovr.fc_connected == 0) {
                     // Simulate real link loss: freeze the timestamp so
                     // the FaultManager sees stale heartbeat data.
+                    // Issue #716 review — clear `armable` too.  A
+                    // disconnected FC cannot report its own health, so
+                    // preserving the stale armable from before the
+                    // simulated disconnect would let P4 send ARM during
+                    // a fault-injection test that's meant to simulate a
+                    // dead link.
                     if (frozen_ts == 0) frozen_ts = state.timestamp_ns;
                     state.timestamp_ns = frozen_ts;
                     state.connected    = false;
+                    state.armable      = false;
                 } else {
                     frozen_ts       = 0;  // link restored — resume live timestamps
                     state.connected = true;
+                    // armable will be repopulated from `hb.armable` on the
+                    // next tick — no need to force it here.
                 }
             }
         }

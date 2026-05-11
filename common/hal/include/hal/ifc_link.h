@@ -1,6 +1,8 @@
 // common/hal/include/hal/ifc_link.h
 // HAL interface: Flight Controller communication link.
-// Implementations: SimulatedFCLink (built-in), MavlinkV2Link (future).
+// Implementations: SimulatedFCLink (built-in, Tier 1 unit tests + dev runs),
+//                  MavlinkFCLink   (MAVSDK + PX4 SITL or real Pixhawk, Tier 2),
+//                  CosysFCLink     (AirSim SimpleFlight RPC,            Tier 3).
 #pragma once
 #include <cstdint>
 #include <string>
@@ -63,7 +65,17 @@ public:
     /// Command autonomous takeoff to a target altitude (m AGL).
     [[nodiscard]] virtual bool send_takeoff(float altitude_m) = 0;
 
-    /// Receive the latest FC state (heartbeat).
+    /// Receive the latest FC state (heartbeat).  Thread-safe — implementations
+    /// must serialise concurrent reads internally (typically with a mutex on
+    /// a cached snapshot updated by the link's callback / poll thread).
+    ///
+    /// Issue #716 — implementations MUST populate `FCState::armable`:
+    ///   - true when the FC reports preflight checks have passed and ARM
+    ///     is safe to send (e.g. PX4 EKF2 converged, sensors initialized).
+    ///   - false otherwise (FC still initializing, sensor fault, etc.).
+    /// Backends with no real preflight check (Simulated, Cosys SimpleFlight)
+    /// should report `armable=true` once connected — leaving it stuck at
+    /// `false` will block P4 mission_planner indefinitely in PREFLIGHT.
     [[nodiscard]] virtual FCState receive_state() = 0;
 
     /// Human-readable name.
