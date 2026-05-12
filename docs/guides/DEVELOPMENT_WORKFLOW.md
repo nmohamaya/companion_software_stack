@@ -158,7 +158,10 @@ gh pr create --base main --head feature/perception-avoidance-integration \
   --title "feat: Perception-driven obstacle avoidance (Issues #222, #224, #225)" \
   --body "Complete camera+radar perception pipeline with tuned avoidance."
 
-# After review + CI green → squash merge to main
+# After review + CI green → squash merge to main (small integration: ~few PRs)
+# For larger rollups (50+ commits / weeks of work), prefer a merge commit
+# instead — see "Integration-to-main rollup — review process" below for
+# the full rationale.
 # Delete the integration branch
 ```
 
@@ -182,7 +185,7 @@ main (demo-ready throughout)
 
 ### Integration-to-main rollup — review process
 
-When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks) and is ready to merge into `main`, follow this checklist.  Tracked end-to-end in a GitHub issue (`Integration → main merge` template).
+When an integration branch has accumulated significant work (typically 50+ commits and/or several weeks) and is ready to merge into `main`, follow this checklist.  Tracked end-to-end in a GitHub issue (use a plain bug-tracking issue — there is no dedicated template; tag it with `tech-debt` + `domain:integration` and link the relevant feature branch).
 
 #### Why a special process is needed
 
@@ -200,7 +203,7 @@ The standard `/review-pr` skill is designed for single-PR review (~hundreds of l
 
 Before kicking off agent reviews, get the branch into a clean baseline state:
 
-- [ ] **Resolve all known-failing tests.**  Either fix them or document acceptance.  `ctest` should be fully green.
+- [ ] **Resolve all failing tests** — `ctest -j$(nproc)` must be fully green at the integration HEAD.  A "fix" means either correcting the code-under-test or correcting the test itself with a documented rationale; **simply leaving a failing test in place is not acceptable**.  Tests that are intentionally inactive must be marked `GTEST_SKIP()` (counts as passed) or commented out with an explanation, not left as `FAILED`.
 - [ ] **Refresh `docs/tracking/PROGRESS.md`** with improvement entries for every PR landed since the last main merge.
 - [ ] **Refresh `docs/tracking/ROADMAP.md`** — mark issues done (strikethrough + checkmark), update metrics table.
 - [ ] **Refresh `docs/design/API.md`** if any IPC types or HAL interfaces changed.
@@ -232,16 +235,18 @@ Typical themes:
 6. **Safety / fault recovery changes**
 7. **Cross-cutting docs / tests / infra**
 
-For each pass, deliverables:
+For each pass, deliverables (follow the standard severity policy defined in the [Review Comment Handling](#review-comment-handling) section below):
 
 - [ ] All P1 findings either fixed inline or filed as merge-blockers
-- [ ] All P2 findings filed or fixed
-- [ ] All P3 findings logged to `docs/tracking/IMPROVEMENTS.md`
+- [ ] All P2 findings fixed inline (per the standard "within PR" policy); explicit deferrals require a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md`
+- [ ] All P3 findings fixed inline OR deferred with a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` — **NOT** filed to `IMPROVEMENTS.md`.  Review-flagged items always route to `DESIGN_RATIONALE.md` per the "Critical distinction" rule documented under Step 7 ("Update Documentation").  `IMPROVEMENTS.md` is reserved for proactive findings the agent noticed itself, not review comments.
 - [ ] Copilot findings overlap with agent findings — deduplicate
+
+> **Note:** Rollup reviews tend to surface more P2/P3 findings than per-PR reviews (larger surface, more cross-cutting context).  Use judgement — if a P3 finding is genuinely a "would be nice but won't change correctness" comment, a one-line DR-NNN entry is appropriate.  If it's actionable in <15 minutes, fix it inline.
 
 #### Phase 4 — Fix findings
 
-Address P1 findings before merge.  P2 findings either fixed or explicitly deferred with rationale in DESIGN_RATIONALE.md (DR-NNN).  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
+Address all P1 findings before merge.  Apply the same severity policy as standard PRs (see [Review Comment Handling](#review-comment-handling)) — P2/P3 should be fixed inline; any deferral must be recorded as a DR-NNN entry in `docs/tracking/DESIGN_RATIONALE.md` per the "Critical distinction" rule under Step 7.  Land fixes as small follow-up PRs against the integration branch — keeps the merge-to-main PR's diff stable.
 
 #### Phase 5 — Open the integration→main PR
 
@@ -261,10 +266,17 @@ Address P1 findings before merge.  P2 findings either fixed or explicitly deferr
 
 #### Phase 7 — Merge decision
 
-- **Squash** the rollup into one commit on main: keeps main linear, loses individual PR history
-- **Merge commit** (preserves all N commits): main retains the development arc, useful for `git log`/`bisect` on per-PR resolution
+Two options exist; the right one depends on the **size of the rollup**:
 
-**Default for integration rollups: merge commit.**  Each PR in the integration branch already had review evidence; squashing erases that audit trail.  Use squash only if a PR landed buggy and got rescued by follow-up commits that you don't want polluting `git log`.
+- **Squash** the integration branch into one commit on main: keeps main linear, loses individual PR history
+- **Merge commit** (preserves all N commits): main retains the development arc, useful for `git log` / `git bisect` on per-PR resolution
+
+| Rollup size | Default | Why |
+|-------------|---------|-----|
+| **Small** (a few related PRs, <2 weeks) | **Squash** | Short-lived integration branches have lower audit-trail value; squash keeps `git log` tidy on `main`.  This is what the example earlier in this doc ("Integration Branch Pattern (Multi-Issue Features)") uses for the perception-avoidance integration (3 issues, 1 week). |
+| **Large** (50+ commits / weeks of work, this rollup process) | **Merge commit** | Every PR already has review evidence; squashing erases that audit trail.  Future `git bisect` across hundreds of commits needs per-PR resolution.  Worth paying the "non-linear main" cost. |
+
+**Default for this checklist (large rollups): merge commit.**  Use squash only if a PR landed buggy and got rescued by follow-up commits that you don't want polluting `git log` — in which case, squash that specific PR's portion via interactive rebase before opening the integration-to-main PR, then keep the rest as merge commit.
 
 #### Phase 8 — Post-merge cleanup
 
