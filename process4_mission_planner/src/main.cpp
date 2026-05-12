@@ -19,6 +19,7 @@
 #include "util/config_keys.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
 #include "util/latency_profiler.h"
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
@@ -78,16 +79,18 @@ int main(int argc, char* argv[]) {
     // even ascended.  Drop any pose whose publisher timestamp predates this
     // planner process.
     //
-    // Provably correct because P3 sets `p.timestamp` via `steady_clock`
-    // (see ivio_backend.h::on_odom + simulated backend + Cosys backend).
-    // A pose with `timestamp_ns < planner_birth_ns` cannot have been
-    // published by the current P3 process.  Allow a 100 ms backwards
-    // slack for the rare case where P3 booted slightly before P4 and
-    // published its first pose during P4's MessageBus init.
-    const uint64_t planner_birth_ns =
-        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now().time_since_epoch())
-                                  .count());
+    // Provably correct because P3 sets `p.timestamp` via the project
+    // mockable clock (see ivio_backend.h::on_odom + simulated backend +
+    // Cosys backend — all read steady_clock under the hood).  A pose with
+    // `timestamp_ns < planner_birth_ns` cannot have been published by the
+    // current P3 process.  Allow a 100 ms backwards slack for the rare case
+    // where P3 booted slightly before P4 and published its first pose
+    // during P4's MessageBus init.
+    //
+    // Uses `drone::util::get_clock().now_ns()` per the project convention
+    // documented in util/iclock.h:24-37 — keeps the clock domain mockable
+    // for tests and consistent with FaultManager's `now_ns` reads.
+    const uint64_t     planner_birth_ns  = drone::util::get_clock().now_ns();
     constexpr uint64_t kPoseBirthSlackNs = 100'000'000ULL;  // 100 ms
     bool               stale_pose_logged = false;
 
@@ -668,8 +671,15 @@ int main(int argc, char* argv[]) {
         // message; treating it as fresh would let FaultManager compute a
         // multi-minute staleness and escalate to LOITER mid-takeoff.  See
         // `planner_birth_ns` declaration for the full rationale.
-        if (got_pose && pose.timestamp_ns > 0 &&
-            pose.timestamp_ns + kPoseBirthSlackNs < planner_birth_ns) {
+        //
+        // PR #721 Copilot review — overflow-safe subtraction form: avoids
+        // the uint64_t addition `timestamp_ns + slack` which could wrap
+        // for `timestamp_ns` near UINT64_MAX.  The guarded subtraction
+        // `(planner_birth_ns - pose.timestamp_ns)` only runs when
+        // `pose.timestamp_ns < planner_birth_ns`, so the subtraction
+        // is well-defined.
+        if (got_pose && pose.timestamp_ns > 0 && pose.timestamp_ns < planner_birth_ns &&
+            (planner_birth_ns - pose.timestamp_ns) > kPoseBirthSlackNs) {
             if (!stale_pose_logged) {
                 DRONE_LOG_WARN("[Planner] Discarded stale pose from previous publisher "
                                "session (age vs planner_start: {} ms) — waiting for fresh "
