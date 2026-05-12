@@ -495,6 +495,11 @@ pkill -9 -f "gz sim" 2>/dev/null || true
 pkill -9 -f "ruby.*gz" 2>/dev/null || true
 # Only kill PX4 process if it's our SITL instance (not system services)
 pkill -9 -f "px4.*sitl" 2>/dev/null || true
+# Issue #719 — PX4 leaves `/tmp/px4-sock-N` UNIX domain sockets when SIGKILLed
+# (no destructor runs).  The next PX4 boot detects the socket as a running
+# instance and exits with return code 2.  Remove pre-flight; wildcard covers
+# all multi-vehicle SITL instance IDs.
+rm -f /tmp/px4-sock-* 2>/dev/null || true
 # Issue #708 — also kill any leftover companion binaries from prior runs.
 # Without this loop, a stale `comms` process holding UDP 14540 (or any
 # other Zenoh-publishing companion left behind by a crashed/aborted run)
@@ -559,6 +564,10 @@ cleanup_scenario() {
           /dev/shm/fc_state /dev/shm/gcs_commands /dev/shm/payload_status \
           /dev/shm/system_health /dev/shm/fc_commands /dev/shm/mission_upload \
           /dev/shm/fault_overrides 2>/dev/null || true
+    # Issue #719 — PX4 leaves /tmp/px4-sock-N when SIGKILLed (no destructor
+    # runs).  Without this cleanup, the next PX4 boot detects the socket as
+    # a running instance and exits with return code 2.
+    rm -f /tmp/px4-sock-* 2>/dev/null || true
 }
 trap cleanup_scenario EXIT INT TERM
 

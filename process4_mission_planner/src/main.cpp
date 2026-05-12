@@ -19,6 +19,7 @@
 #include "util/config_keys.h"
 #include "util/correlation.h"
 #include "util/diagnostic.h"
+#include "util/iclock.h"
 #include "util/latency_profiler.h"
 #include "util/process_context.h"
 #include "util/scoped_timer.h"
@@ -67,6 +68,31 @@ int main(int argc, char* argv[]) {
                                                 drone::util::mission_planner_schema());
     if (!ctx_result.is_ok()) return ctx_result.error();
     auto& ctx = ctx_result.value();
+
+    // Issue #720 — subscriber-side stale-message filter for Pose.
+    //
+    // Zenoh's IPC layer can deliver the last-published pose from a previous
+    // P3 session before the fresh publisher emits its first new message
+    // (e.g. on session-restart with a gap > a few seconds).  Treating that
+    // historic pose as fresh causes FaultManager to compute a multi-minute
+    // staleness and raise FAULT_POSE_STALE → LOITER before the drone has
+    // even ascended.  Drop any pose whose publisher timestamp predates this
+    // planner process.
+    //
+    // Provably correct because P3 sets `p.timestamp` via the project
+    // mockable clock (see ivio_backend.h::on_odom + simulated backend +
+    // Cosys backend — all read steady_clock under the hood).  A pose with
+    // `timestamp_ns < planner_birth_ns` cannot have been published by the
+    // current P3 process.  Allow a 100 ms backwards slack for the rare case
+    // where P3 booted slightly before P4 and published its first pose
+    // during P4's MessageBus init.
+    //
+    // Uses `drone::util::get_clock().now_ns()` per the project convention
+    // documented in util/iclock.h:24-37 — keeps the clock domain mockable
+    // for tests and consistent with FaultManager's `now_ns` reads.
+    const uint64_t     planner_birth_ns  = drone::util::get_clock().now_ns();
+    constexpr uint64_t kPoseBirthSlackNs = 100'000'000ULL;  // 100 ms
+    bool               stale_pose_logged = false;
 
     // ── Subscribe to inputs ─────────────────────────────────
     auto pose_sub = ctx.bus.subscribe<drone::ipc::Pose>(drone::ipc::topics::SLAM_POSE);
@@ -552,10 +578,10 @@ int main(int argc, char* argv[]) {
     // not pay the per-tick drain cost of a feature that is inactive.
     // (Copilot review flagged the unconditional subscription on PR #704.)
     std::unique_ptr<drone::ipc::ISubscriber<drone::ipc::RadarDetectionList>> radar_dets_sub;
-    bool                                                                      radar_sub_failed = false;
+    bool radar_sub_failed = false;
     if (cross_veto_enabled) {
-        radar_dets_sub = ctx.bus.subscribe<drone::ipc::RadarDetectionList>(
-            drone::ipc::topics::RADAR_DETECTIONS);
+        radar_dets_sub =
+            ctx.bus.subscribe<drone::ipc::RadarDetectionList>(drone::ipc::topics::RADAR_DETECTIONS);
         if (!radar_dets_sub) {
             // Without a radar subscription the gate's `radar_initialized_`
             // stays false forever, every distant voxel promotion defers,
@@ -638,7 +664,32 @@ int main(int argc, char* argv[]) {
 
         // ── 1. Read inputs ──────────────────────────────────
         drone::ipc::Pose pose{};
-        const bool       got_pose = pose_sub->receive(pose);
+        bool             got_pose = pose_sub->receive(pose);
+        // Issue #720 — drop poses published before this planner process
+        // started.  Zenoh's last-value cache can deliver a stale pose from
+        // a previous P3 session before the fresh publisher emits its first
+        // message; treating it as fresh would let FaultManager compute a
+        // multi-minute staleness and escalate to LOITER mid-takeoff.  See
+        // `planner_birth_ns` declaration for the full rationale.
+        //
+        // PR #721 Copilot review — overflow-safe subtraction form: avoids
+        // the uint64_t addition `timestamp_ns + slack` which could wrap
+        // for `timestamp_ns` near UINT64_MAX.  The guarded subtraction
+        // `(planner_birth_ns - pose.timestamp_ns)` only runs when
+        // `pose.timestamp_ns < planner_birth_ns`, so the subtraction
+        // is well-defined.
+        if (got_pose && pose.timestamp_ns > 0 && pose.timestamp_ns < planner_birth_ns &&
+            (planner_birth_ns - pose.timestamp_ns) > kPoseBirthSlackNs) {
+            if (!stale_pose_logged) {
+                DRONE_LOG_WARN("[Planner] Discarded stale pose from previous publisher "
+                               "session (age vs planner_start: {} ms) — waiting for fresh "
+                               "pose from current P3 SLAM/VIO (Issue #720)",
+                               (planner_birth_ns - pose.timestamp_ns) / 1'000'000ULL);
+                stale_pose_logged = true;
+            }
+            got_pose = false;
+            pose     = drone::ipc::Pose{};  // clear so downstream sees no-pose-this-tick
+        }
         if (got_pose) {
             // Issue #698 Fix #1 — keep the cross-veto gate's pose cache fresh.
             // Cheap (vector + quaternion conjugate); safe to call every tick
@@ -709,9 +760,9 @@ int main(int argc, char* argv[]) {
                 // pose message (Copilot review on PR #704).
                 drone::planner::RadarFovGate* gate_for_veto = cross_veto_enabled ? &radar_fov_gate
                                                                                  : nullptr;
-                auto                          stats         = grid_planner->insert_voxels(
-                    batch.voxels, batch.num_voxels, voxel_input_clamp_m, voxel_input_min_confidence,
-                    gate_for_veto);
+                auto stats = grid_planner->insert_voxels(batch.voxels, batch.num_voxels,
+                                                         voxel_input_clamp_m,
+                                                         voxel_input_min_confidence, gate_for_veto);
                 inserted_total += static_cast<uint32_t>(stats.inserted);
                 dropped_total += static_cast<uint32_t>(
                     stats.clamped_dropped + stats.low_confidence_dropped + stats.out_of_bounds);
