@@ -73,9 +73,11 @@
 | Safety | **Geofence** (polygon + altitude) + 3-tier battery RTL + FC link-loss contingency |
 | Perception fusion | **UKF** (RGB camera), ITracker + O(n³) Hungarian, **ByteTrack** two-stage association |
 | VIO infrastructure | Feature extraction + stereo matching + IMU pre-integration + **covariance-derived quality** (`trace(P_position)` from IMU pre-integrator, configurable thresholds) |
-| Integration testing | **20 Tier 1 + 5 Tier 2 scenarios** on Zenoh; sideband fault injector CLI |
-| Test scenarios | 25 parameterized JSON configs with fault sequences + pass criteria |
-| Bug fixes | **50** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Integration testing | **24 Tier 1 + 6 Tier 2 scenarios** on Zenoh; sideband fault injector CLI; Cosys-AirSim Tier 3 added for non-COCO obstacles (scenario 33) |
+| Test scenarios | **30** parameterized JSON configs with fault sequences + pass criteria (Gazebo SITL + Cosys-AirSim) |
+| Bug fixes | **50+** total (see [BUG_FIXES.md](BUG_FIXES.md)) |
+| Preflight readiness | **PR #717** — ARM gated on FC `health_all_ok` (MAVSDK `subscribe_health_all_ok`); eliminates 3–5 `Arming denied` log entries per cold-start; closes #716 |
+| Stale-pose filter | **PR #721** — P4 drops pose readings older than `planner_birth_ns`; protects against Zenoh last-value-cache delivering stale frames from a previous P3 session; closes #720 |
 | Cosys-AirSim Tier 3 perception | **Phase 1 baseline locked** — sim-perfect ground-truth depth + segmentation + Echo radar (sensor type 7) end-to-end. Scenario 33 PASS, all 26 checks green, zero cube collisions ([PR #704](https://github.com/nmohamaya/companion_software_stack/pull/704)) |
 
 ---
